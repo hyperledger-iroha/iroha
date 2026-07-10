@@ -120,3 +120,83 @@ carga útil اگر manifiesto سے ہٹے تو فوراً fail ہو جائے۔
   ترجیح دینی چاہیے۔
 - **Automatización de CI** – اوپر دی گئی کمانڈز کو canalizaciones de lanzamiento میں شامل کریں تاکہ docs،
   accesorios، اور artefactos metadatos firmados کے ساتھ manifiestos deterministas شائع کریں۔
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

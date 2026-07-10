@@ -69,7 +69,7 @@ fn make_header() -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(b"IVM\0");
     v.extend_from_slice(&[1, 0, 0, 4]);
-    v.extend_from_slice(&0u64.to_le_bytes());
+    v.extend_from_slice(&1_000_000_u64.to_le_bytes());
     v.push(1);
     v
 }

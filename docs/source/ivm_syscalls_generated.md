@@ -41,6 +41,9 @@ This file is generated from `crates/ivm_abi/src/syscalls.rs`. Edit the source to
 | SYSCALL_STATE_HAS | 0x10031 |  |
 | SYSCALL_STATE_LEN | 0x10032 |  |
 | SYSCALL_STATE_COUNT | 0x10033 |  |
+| SYSCALL_STATE_MAP_KEY_AT | 0x10034 |  |
+| SYSCALL_STATE_VALUE_ENCODE | 0x10035 |  |
+| SYSCALL_STATE_VALUE_DECODE | 0x10036 |  |
 | SYSCALL_DECODE_INT | 0x53 |  |
 | SYSCALL_NUMERIC_FROM_INT | 0x69 |  |
 | SYSCALL_NUMERIC_TO_INT | 0x6A |  |
@@ -208,6 +211,7 @@ This file is generated from `crates/ivm_abi/src/syscalls.rs`. Edit the source to
 | SYSCALL_SYSVAR_AUTHORITY | 0x10023 |  |
 | SYSCALL_SYSVAR_CONTRACT_ADDRESS | 0x10024 |  |
 | SYSCALL_SYSVAR_ENTRYPOINT | 0x10025 |  |
+| SYSCALL_DECODE_ARGUMENT_RECORD | 0x10026 |  |
 | SYSCALL_KOTO_TEST_ACTOR_ACCOUNT | 0xFE0001 | host-private test helper; outside ABI |
 | SYSCALL_KOTO_TEST_ACTOR_PUBLIC_KEY | 0xFE0002 | host-private test helper; outside ABI |
 | SYSCALL_KOTO_TEST_ACTOR_SIGN | 0xFE0003 | host-private test helper; outside ABI |

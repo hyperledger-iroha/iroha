@@ -33,8 +33,10 @@ fn preload_blob(vm: &mut ivm::IVM, offset: &mut u64, payload: &[u8]) -> u64 {
 #[test]
 fn kotodama_sm3_hash_returns_expected_digest() {
     let src = r#"
-        fn sm_hash(msg: Blob) -> Blob {
-            return sm::hash(msg);
+        seiyaku Sm3Hash {
+        fn sm_hash(msg: bytes) -> bytes {
+            return crypto::sm3(msg);
+        }
         }
     "#;
     let code = KotodamaCompiler::new()
@@ -55,7 +57,7 @@ fn kotodama_sm3_hash_returns_expected_digest() {
     vm.run().expect("vm run");
 
     let out_ptr = vm.register(10);
-    assert_ne!(out_ptr, 0, "sm::hash should return Blob pointer");
+    assert_ne!(out_ptr, 0, "crypto::sm3 should return a bytes pointer");
     let tlv = vm
         .memory
         .validate_tlv(out_ptr)
@@ -66,8 +68,10 @@ fn kotodama_sm3_hash_returns_expected_digest() {
 
 fn compile_sm2_verify() -> Vec<u8> {
     let src = r#"
-        fn verify(msg: Blob, sig: Blob, pk: Blob) -> bool {
-            return sm::verify(msg, sig, pk);
+        seiyaku Sm2Verify {
+        fn verify(msg: bytes, sig: bytes, pk: bytes) -> bool {
+            return crypto::sm2::verify(msg, sig, pk);
+        }
         }
     "#;
     KotodamaCompiler::new()
@@ -77,8 +81,10 @@ fn compile_sm2_verify() -> Vec<u8> {
 
 fn compile_sm2_verify_with_distid() -> Vec<u8> {
     let src = r#"
-        fn verify_with_distid(msg: Blob, sig: Blob, pk: Blob, distid: Blob) -> bool {
-            return sm::verify(msg, sig, pk, distid);
+        seiyaku Sm2VerifyWithDistid {
+        fn verify_with_distid(msg: bytes, sig: bytes, pk: bytes, distid: bytes) -> bool {
+            return crypto::sm2::verify(msg, sig, pk, distid);
+        }
         }
     "#;
     KotodamaCompiler::new()
@@ -88,8 +94,10 @@ fn compile_sm2_verify_with_distid() -> Vec<u8> {
 
 fn compile_sm4_gcm_seal() -> Vec<u8> {
     let src = r#"
-        fn seal(key: Blob, nonce: Blob, aad: Blob, pt: Blob) -> Blob {
-            return sm::seal_gcm(key, nonce, aad, pt);
+        seiyaku Sm4GcmSeal {
+        fn seal(key: bytes, nonce: bytes, aad: bytes, pt: bytes) -> bytes {
+            return crypto::sm4_gcm::seal(key, nonce, aad, pt);
+        }
         }
     "#;
     KotodamaCompiler::new()
@@ -99,8 +107,10 @@ fn compile_sm4_gcm_seal() -> Vec<u8> {
 
 fn compile_sm4_gcm_open() -> Vec<u8> {
     let src = r#"
-        fn open(key: Blob, nonce: Blob, aad: Blob, ct: Blob) -> Blob {
-            return sm::open_gcm(key, nonce, aad, ct);
+        seiyaku Sm4GcmOpen {
+        fn open(key: bytes, nonce: bytes, aad: bytes, ct: bytes) -> bytes {
+            return crypto::sm4_gcm::open(key, nonce, aad, ct);
+        }
         }
     "#;
     KotodamaCompiler::new()
@@ -110,8 +120,10 @@ fn compile_sm4_gcm_open() -> Vec<u8> {
 
 fn compile_sm4_ccm_seal() -> Vec<u8> {
     let src = r#"
-        fn seal(key: Blob, nonce: Blob, aad: Blob, pt: Blob, tag_len: int) -> Blob {
-            return sm::seal_ccm(key, nonce, aad, pt, tag_len);
+        seiyaku Sm4CcmSeal {
+        fn seal(key: bytes, nonce: bytes, aad: bytes, pt: bytes, tag_len: i64) -> bytes {
+            return crypto::sm4_ccm::seal(key, nonce, aad, pt, tag_len);
+        }
         }
     "#;
     KotodamaCompiler::new()
@@ -121,8 +133,10 @@ fn compile_sm4_ccm_seal() -> Vec<u8> {
 
 fn compile_sm4_ccm_open() -> Vec<u8> {
     let src = r#"
-        fn open(key: Blob, nonce: Blob, aad: Blob, ct: Blob, tag_len: int) -> Blob {
-            return sm::open_ccm(key, nonce, aad, ct, tag_len);
+        seiyaku Sm4CcmOpen {
+        fn open(key: bytes, nonce: bytes, aad: bytes, ct: bytes, tag_len: i64) -> bytes {
+            return crypto::sm4_ccm::open(key, nonce, aad, ct, tag_len);
+        }
         }
     "#;
     KotodamaCompiler::new()
@@ -162,7 +176,7 @@ fn kotodama_sm2_verify_accepts_valid_signature() {
     vm.set_register(13, 0);
 
     vm.run().expect("vm run");
-    assert_eq!(vm.register(10), 1, "sm::verify should succeed");
+    assert_eq!(vm.register(10), 1, "crypto::sm2::verify should succeed");
 }
 
 #[test]

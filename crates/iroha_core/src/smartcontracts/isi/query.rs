@@ -627,7 +627,6 @@ impl ExecuteQueryBox for QueryBox<QueryOutputBatchBox> {
                 Err(err) => return Some(Err(err)),
             };
             let batch = tuple
-                .tuple
                 .into_iter()
                 .next()
                 .unwrap_or_else(|| QueryOutputBatchBox::from(Vec::<T>::new()));

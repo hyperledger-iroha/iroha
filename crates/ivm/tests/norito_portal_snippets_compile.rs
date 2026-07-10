@@ -59,10 +59,7 @@ fn snippet_paths() -> Vec<PathBuf> {
 }
 
 fn kotodama_compiler() -> KotodamaCompiler {
-    KotodamaCompiler::new_with_options(CompilerOptions {
-        enforce_on_chain_profile: false,
-        ..CompilerOptions::default()
-    })
+    KotodamaCompiler::new_with_options(CompilerOptions::default())
 }
 
 #[test]
@@ -163,6 +160,13 @@ impl LoggingCoreHost {
 }
 
 impl IVMHost for LoggingCoreHost {
+    fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+        match number {
+            syscalls::SYSCALL_DEBUG_PRINT | syscalls::SYSCALL_DEBUG_LOG => Ok(0),
+            _ => self.inner.prepare_syscall(number, vm),
+        }
+    }
+
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         match number {
             syscalls::SYSCALL_DEBUG_PRINT | syscalls::SYSCALL_DEBUG_LOG => Ok(0),
@@ -198,8 +202,8 @@ fn run_hajimari_snippet(compiler: &KotodamaCompiler, path: &Path) {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(LoggingCoreHost::new());
     vm.load_program(&program)
-        .expect("load hajimari snippet into IVM");
-    vm.run().expect("run hajimari snippet");
+        .expect("load initializer snippet into IVM");
+    vm.run().expect("run initializer snippet");
 }
 
 fn run_threshold_escrow_snippet(compiler: &KotodamaCompiler, path: &Path) {

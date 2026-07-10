@@ -9,11 +9,11 @@ use std::collections::{BTreeSet, HashMap};
 use iroha_primitives::numeric::Numeric;
 
 use super::{
-    ast::{BinaryOp, UnaryOp},
-    builtins::{Builtin, PointerConstructor},
+    ast::{BinaryOp, STATE_MAP_GET_INTRINSIC, UnaryOp},
+    builtins::{Builtin, BuiltinLowering, PointerConstructor},
     semantic::{
         self, Type, TypedBlock, TypedExpr, TypedFunction, TypedItem, TypedParam, TypedProgram,
-        TypedStatement, state_env_snapshot,
+        TypedStateDecl, TypedStatement,
     },
 };
 
@@ -21,30 +21,11 @@ pub const TEST_TRIGGER_EVENT_OVERRIDE_KEY: &str = "__koto_test_trigger_event_jso
 const INVOKE_ENTRYPOINT_PREFIX: &str = "__invoke_entrypoint__";
 
 fn state_map_base_name(expr: &semantic::TypedExpr) -> Option<String> {
-    fn rec(expr: &semantic::TypedExpr, indices: &mut Vec<usize>) -> Option<String> {
-        match &expr.expr {
-            semantic::ExprKind::Member { object, field } => {
-                let base = rec(object, indices)?;
-                let idx = field.parse::<usize>().ok()?;
-                indices.push(idx);
-                Some(base)
-            }
-            semantic::ExprKind::Ident(name) => Some(name.clone()),
-            _ => None,
-        }
+    if let semantic::ExprKind::Ident(name) = &expr.expr {
+        Some(name.clone())
+    } else {
+        None
     }
-
-    let mut path = Vec::new();
-    let base = rec(expr, &mut path)?;
-    if path.is_empty() {
-        return Some(base);
-    }
-    let mut name = base;
-    for idx in path {
-        name.push('#');
-        name.push_str(&idx.to_string());
-    }
-    Some(name)
 }
 
 #[derive(Clone, Debug)]
@@ -53,73 +34,79 @@ struct StateMapSpec {
     value: Type,
 }
 
-#[derive(Clone, Debug)]
-struct LoweredParamSpec {
-    name: String,
-    ty: Type,
-    is_state: bool,
+fn aggregate_components(ty: &Type) -> Option<Vec<Type>> {
+    match semantic::resolve_struct_type(ty) {
+        Type::Tuple(items) => Some(items),
+        Type::Option(value) => Some(vec![Type::Bool, *value]),
+        Type::Result(ok, err) => Some(vec![Type::Bool, *ok, *err]),
+        _ => None,
+    }
+}
+
+fn function_value_word_types(ty: &Type) -> Option<Vec<Type>> {
+    fn append(ty: &Type, words: &mut Vec<Type>) {
+        match semantic::resolve_struct_type(ty) {
+            Type::Struct { fields, .. } => {
+                for (_, field_ty) in fields {
+                    append(&field_ty, words);
+                }
+            }
+            Type::Tuple(items) => {
+                for item in items {
+                    append(&item, words);
+                }
+            }
+            Type::Option(inner) => {
+                words.push(Type::Bool);
+                append(&inner, words);
+            }
+            Type::Result(ok, err) => {
+                words.push(Type::Bool);
+                append(&ok, words);
+                append(&err, words);
+            }
+            leaf => words.push(leaf),
+        }
+    }
+
+    if !matches!(
+        semantic::resolve_struct_type(ty),
+        Type::Struct { .. } | Type::Tuple(_) | Type::Option(_) | Type::Result(_, _)
+    ) {
+        return None;
+    }
+    let mut words = Vec::new();
+    append(ty, &mut words);
+    Some(words)
+}
+
+fn function_param_word_name(param: &str, index: usize) -> String {
+    // `$` is not a source identifier character, so this compiler-owned name
+    // cannot collide with a user parameter.
+    format!("$abi${param}#{index}")
 }
 
 fn collect_state_handle_specs(name: &str, ty: &Type, out: &mut Vec<(String, Type)>) {
     let resolved = semantic::resolve_struct_type(ty);
     out.push((name.to_string(), resolved.clone()));
-    match &resolved {
-        Type::Struct { fields, .. } => {
-            for (index, (_, field_ty)) in fields.iter().enumerate() {
-                collect_state_handle_specs(&format!("{name}#{index}"), field_ty, out);
-            }
-        }
-        Type::Tuple(items) => {
-            for (index, item_ty) in items.iter().enumerate() {
-                collect_state_handle_specs(&format!("{name}#{index}"), item_ty, out);
-            }
-        }
-        Type::Map(_, value_ty) => {
-            collect_state_map_value_handle_specs(name, value_ty, out);
-        }
-        _ => {}
-    }
 }
 
-fn collect_state_map_value_handle_specs(name: &str, ty: &Type, out: &mut Vec<(String, Type)>) {
-    match semantic::resolve_struct_type(ty) {
-        Type::Struct { fields, .. } => {
-            for (index, (_, field_ty)) in fields.iter().enumerate() {
-                let child = format!("{name}#{index}");
-                let resolved = semantic::resolve_struct_type(field_ty);
-                out.push((child.clone(), resolved.clone()));
-                collect_state_map_value_handle_specs(&child, &resolved, out);
-            }
-        }
-        Type::Tuple(items) => {
-            for (index, item_ty) in items.iter().enumerate() {
-                let child = format!("{name}#{index}");
-                let resolved = semantic::resolve_struct_type(item_ty);
-                out.push((child.clone(), resolved.clone()));
-                collect_state_map_value_handle_specs(&child, &resolved, out);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn lowered_function_params(params: &[TypedParam]) -> Vec<LoweredParamSpec> {
+fn lowered_function_params(params: &[TypedParam]) -> Vec<String> {
     let mut lowered = Vec::new();
     for param in params {
         if param.is_state {
             let mut handles = Vec::new();
             collect_state_handle_specs(&param.name, &param.ty, &mut handles);
-            lowered.extend(handles.into_iter().map(|(name, ty)| LoweredParamSpec {
-                name,
-                ty,
-                is_state: true,
-            }));
+            lowered.extend(handles.into_iter().map(|(name, _)| name));
+        } else if let Some(word_types) = function_value_word_types(&param.ty) {
+            lowered.extend(
+                word_types
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, _)| function_param_word_name(&param.name, index)),
+            );
         } else {
-            lowered.push(LoweredParamSpec {
-                name: param.name.clone(),
-                ty: param.ty.clone(),
-                is_state: false,
-            });
+            lowered.push(param.name.clone());
         }
     }
     lowered
@@ -180,9 +167,21 @@ pub enum Instr {
         left: Temp,
         right: Temp,
     },
+    /// Explicit modular `i64` addition, subtraction, or multiplication.
+    WrappingBinary {
+        dest: Temp,
+        op: BinaryOp,
+        left: Temp,
+        right: Temp,
+    },
     Unary {
         dest: Temp,
         op: UnaryOp,
+        operand: Temp,
+    },
+    /// Explicit modular `i64` negation.
+    WrappingNeg {
+        dest: Temp,
         operand: Temp,
     },
     /// Convert a non-negative int (i64) to a Numeric NoritoBytes payload pointer (scale = 0).
@@ -478,11 +477,12 @@ pub enum Instr {
     Assert {
         cond: Temp,
     },
-    /// Abort execution and revert state changes if `cond` is non-zero.
+    /// Abort execution with a stable contract error code if `cond` is non-zero.
     ///
     /// This is a non-ZK assertion primitive intended for fast on-chain checks.
     AbortIf {
         cond: Temp,
+        code: Temp,
     },
     /// Log an info message (development only).
     Info {
@@ -831,9 +831,10 @@ pub enum Instr {
         dest: Temp,
         payload: Temp,
     },
-    /// Vendor bridge: SMARTCONTRACT_EXECUTE_INSTRUCTION with NoritoBytes `InstructionBox` in r10.
+    /// Operation-specific bridge to SMARTCONTRACT_EXECUTE_INSTRUCTION.
     VendorExecuteInstruction {
         payload: Temp,
+        kind: VendorInstructionKind,
     },
     /// Vendor bridge: SMARTCONTRACT_EXECUTE_QUERY with NoritoBytes `QueryRequest` in r10.
     VendorExecuteQuery {
@@ -917,6 +918,19 @@ pub enum Instr {
         prefix: Temp,
         offset: Temp,
         limit: Temp,
+    },
+    /// Decode a canonical map key from a page returned by `STATE_KEYS`.
+    StateMapKeyAt {
+        dest: Temp,
+        page: Temp,
+        base: Temp,
+        index: Temp,
+    },
+    /// Encode a compiler-flattened aggregate state value using a schema literal.
+    StateValueEncode {
+        dest: Temp,
+        schema: Temp,
+        words: Vec<Temp>,
     },
     /// Durable state key presence: r10 = &Name path; returns present flag in dest.
     StateHas {
@@ -1140,6 +1154,17 @@ pub enum Instr {
     },
 }
 
+/// Instruction kind authorized by the tagged smart-contract instruction bridge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VendorInstructionKind {
+    /// Governance `SubmitBallot`.
+    SubmitBallot,
+    /// ZK `Unshield`.
+    Unshield,
+    /// Bridge `RecordSccpMessage`.
+    RecordSccpMessage,
+}
+
 /// Kinds of typed data references supported by the pointer-ABI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DataRefKind {
@@ -1168,14 +1193,6 @@ enum KeyCodec {
     NoritoBytes,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum ValueCodec {
-    Int,
-    Pointer(DataRefKind),
-    Json,
-    NoritoBytes,
-}
-
 fn pointer_kind_for_type(ty: &Type) -> Option<DataRefKind> {
     match semantic::resolve_struct_type(ty) {
         Type::AccountId => Some(DataRefKind::Account),
@@ -1190,7 +1207,7 @@ fn pointer_kind_for_type(ty: &Type) -> Option<DataRefKind> {
         Type::ProofBlob => Some(DataRefKind::ProofBlob),
         Type::SoracloudRequest => Some(DataRefKind::SoracloudRequest),
         Type::SoracloudResponse => Some(DataRefKind::SoracloudResponse),
-        Type::Blob | Type::Bytes => Some(DataRefKind::Blob),
+        Type::String | Type::Bytes => Some(DataRefKind::Blob),
         _ => None,
     }
 }
@@ -1198,7 +1215,7 @@ fn pointer_kind_for_type(ty: &Type) -> Option<DataRefKind> {
 fn is_pointer_eq_type(ty: &Type) -> bool {
     matches!(
         semantic::resolve_struct_type(ty),
-        Type::String | Type::Blob | Type::Bytes | Type::Json
+        Type::String | Type::Bytes | Type::Json
     ) || semantic::is_pointer_type(ty)
 }
 
@@ -1234,63 +1251,478 @@ fn lower_map_key_eq(ctx: &mut LowerCtx, key_ty: &Type, left: Temp, right: Temp) 
 
 fn key_codec_for_type(ty: &Type) -> Option<KeyCodec> {
     match semantic::resolve_struct_type(ty) {
-        Type::Int => Some(KeyCodec::Int),
+        Type::Int | Type::Bool => Some(KeyCodec::Int),
         ty if semantic::is_wide_numeric_type(&ty) => Some(KeyCodec::NoritoBytes),
-        Type::String => Some(KeyCodec::Pointer),
+        Type::String | Type::Bytes => Some(KeyCodec::Pointer),
         other if semantic::is_pointer_type(&other) => Some(KeyCodec::Pointer),
         _ => None,
     }
 }
 
-fn value_codec_for_type(ty: &Type) -> Option<ValueCodec> {
+fn state_value_kind_for_type(ty: &Type) -> Option<ivm_abi::state_value::StateValueKindV1> {
+    use ivm_abi::state_value::StateValueKindV1 as Kind;
+
+    Some(match semantic::resolve_struct_type(ty) {
+        Type::Int => Kind::Int,
+        Type::FixedU128 => Kind::U128,
+        Type::Amount => Kind::Amount,
+        Type::Bool => Kind::Bool,
+        Type::String => Kind::String,
+        Type::Json => Kind::Json,
+        Type::Bytes => Kind::Bytes,
+        Type::AccountId => Kind::AccountId,
+        Type::AssetDefinitionId => Kind::AssetDefinitionId,
+        Type::AssetId => Kind::AssetId,
+        Type::DomainId => Kind::DomainId,
+        Type::NftId => Kind::NftId,
+        Type::Name => Kind::Name,
+        Type::DataSpaceId => Kind::DataSpaceId,
+        Type::AxtDescriptor => Kind::AxtDescriptor,
+        Type::AssetHandle => Kind::AssetHandle,
+        Type::ProofBlob => Kind::ProofBlob,
+        Type::SoracloudRequest => Kind::SoracloudRequest,
+        Type::SoracloudResponse => Kind::SoracloudResponse,
+        Type::Unit
+        | Type::Secret(_)
+        | Type::StateMap(_, _)
+        | Type::Option(_)
+        | Type::Result(_, _)
+        | Type::Tuple(_)
+        | Type::Struct { .. }
+        | Type::NamedStruct(_) => return None,
+    })
+}
+
+fn append_state_value_schema_nodes(
+    ty: &Type,
+    nodes: &mut Vec<ivm_abi::state_value::StateValueNodeV1>,
+) -> bool {
+    use ivm_abi::state_value::StateValueNodeV1 as Node;
+
     match semantic::resolve_struct_type(ty) {
-        Type::Int => Some(ValueCodec::Int),
-        ty if semantic::is_wide_numeric_type(&ty) => Some(ValueCodec::NoritoBytes),
-        Type::Bool => Some(ValueCodec::Int),
-        Type::Json => Some(ValueCodec::Json),
-        other if semantic::is_pointer_type(&other) => {
-            pointer_kind_for_type(&other).map(ValueCodec::Pointer)
+        Type::Struct { name, fields } => {
+            nodes.push(Node::Struct {
+                name,
+                fields: fields.iter().map(|(name, _)| name.clone()).collect(),
+            });
+            fields
+                .iter()
+                .all(|(_, field_ty)| append_state_value_schema_nodes(field_ty, nodes))
         }
-        Type::Blob | Type::Bytes => pointer_kind_for_type(&Type::Blob).map(ValueCodec::Pointer),
-        _ => None,
+        Type::Tuple(items) => {
+            let Ok(arity) = u16::try_from(items.len()) else {
+                return false;
+            };
+            nodes.push(Node::Tuple { arity });
+            items
+                .iter()
+                .all(|item| append_state_value_schema_nodes(item, nodes))
+        }
+        Type::Option(inner) => {
+            nodes.push(Node::Option);
+            append_state_value_schema_nodes(&inner, nodes)
+        }
+        Type::Result(ok, err) => {
+            nodes.push(Node::Result);
+            append_state_value_schema_nodes(&ok, nodes)
+                && append_state_value_schema_nodes(&err, nodes)
+        }
+        leaf => {
+            let Some(kind) = state_value_kind_for_type(&leaf) else {
+                return false;
+            };
+            nodes.push(Node::Leaf(kind));
+            true
+        }
     }
 }
 
-fn register_state_map_value_literals(ctx: &mut LowerCtx, name: &str, ty: &Type, literal: &str) {
-    let resolved = semantic::resolve_struct_type(ty);
-    match &resolved {
+fn state_value_schema(ty: &Type) -> Option<ivm_abi::state_value::StateValueSchemaV1> {
+    let mut nodes = Vec::new();
+    if !append_state_value_schema_nodes(ty, &mut nodes) {
+        return None;
+    }
+    let schema = ivm_abi::state_value::StateValueSchemaV1 { nodes };
+    schema.validate().then_some(schema)
+}
+
+fn emit_state_value_schema_ref(ctx: &mut LowerCtx, ty: &Type) -> Option<Temp> {
+    let schema = state_value_schema(ty)?;
+    let encoded = norito::to_bytes(&schema).ok()?;
+    if encoded.len() > ivm_abi::state_value::MAX_STATE_VALUE_SCHEMA_BYTES {
+        return None;
+    }
+    let schema_ref = ctx.new_temp();
+    ctx.current_instr(Instr::DataRef {
+        dest: schema_ref,
+        kind: DataRefKind::NoritoBytes,
+        value: format!("0x{}", hex::encode(encoded)),
+    });
+    Some(schema_ref)
+}
+
+fn collect_state_value_words(
+    ctx: &mut LowerCtx,
+    value: Temp,
+    ty: &Type,
+    words: &mut Vec<Temp>,
+) -> bool {
+    match semantic::resolve_struct_type(ty) {
+        Type::Struct { fields, .. } => fields.iter().enumerate().all(|(index, (_, field_ty))| {
+            let field = ctx.new_temp();
+            ctx.current_instr(Instr::TupleGet {
+                dest: field,
+                tuple: value,
+                index,
+            });
+            collect_state_value_words(ctx, field, field_ty, words)
+        }),
+        Type::Tuple(items) => items.iter().enumerate().all(|(index, item_ty)| {
+            let item = ctx.new_temp();
+            ctx.current_instr(Instr::TupleGet {
+                dest: item,
+                tuple: value,
+                index,
+            });
+            collect_state_value_words(ctx, item, item_ty, words)
+        }),
+        Type::Option(inner) => {
+            let tag = ctx.new_temp();
+            ctx.current_instr(Instr::TupleGet {
+                dest: tag,
+                tuple: value,
+                index: 0,
+            });
+            words.push(tag);
+            let payload = ctx.new_temp();
+            ctx.current_instr(Instr::TupleGet {
+                dest: payload,
+                tuple: value,
+                index: 1,
+            });
+            collect_state_value_words(ctx, payload, &inner, words)
+        }
+        Type::Result(ok, err) => {
+            let tag = ctx.new_temp();
+            ctx.current_instr(Instr::TupleGet {
+                dest: tag,
+                tuple: value,
+                index: 0,
+            });
+            words.push(tag);
+            let ok_value = ctx.new_temp();
+            ctx.current_instr(Instr::TupleGet {
+                dest: ok_value,
+                tuple: value,
+                index: 1,
+            });
+            let err_value = ctx.new_temp();
+            ctx.current_instr(Instr::TupleGet {
+                dest: err_value,
+                tuple: value,
+                index: 2,
+            });
+            collect_state_value_words(ctx, ok_value, &ok, words)
+                && collect_state_value_words(ctx, err_value, &err, words)
+        }
+        leaf => {
+            if state_value_kind_for_type(&leaf).is_none() {
+                return false;
+            }
+            words.push(value);
+            true
+        }
+    }
+}
+
+fn collect_function_value_words(ctx: &mut LowerCtx, value: Temp, ty: &Type, words: &mut Vec<Temp>) {
+    match semantic::resolve_struct_type(ty) {
         Type::Struct { fields, .. } => {
-            for (index, (field_name, field_ty)) in fields.iter().enumerate() {
-                let child = format!("{name}#{index}");
-                let child_literal = format!("{literal}_{field_name}");
-                ctx.state_name_literals
-                    .insert(child.clone(), child_literal.clone());
-                register_state_map_value_literals(ctx, &child, field_ty, &child_literal);
+            for (index, (_, field_ty)) in fields.iter().enumerate() {
+                let field = ctx.new_temp();
+                ctx.current_instr(Instr::TupleGet {
+                    dest: field,
+                    tuple: value,
+                    index,
+                });
+                collect_function_value_words(ctx, field, field_ty, words);
             }
         }
         Type::Tuple(items) => {
-            for (index, field_ty) in items.iter().enumerate() {
-                let child = format!("{name}#{index}");
-                let child_literal = format!("{literal}_{index}");
-                ctx.state_name_literals
-                    .insert(child.clone(), child_literal.clone());
-                register_state_map_value_literals(ctx, &child, field_ty, &child_literal);
+            for (index, item_ty) in items.iter().enumerate() {
+                let item = ctx.new_temp();
+                ctx.current_instr(Instr::TupleGet {
+                    dest: item,
+                    tuple: value,
+                    index,
+                });
+                collect_function_value_words(ctx, item, item_ty, words);
             }
         }
-        _ => {}
+        Type::Option(inner) => {
+            let tag = ctx.new_temp();
+            ctx.current_instr(Instr::TupleGet {
+                dest: tag,
+                tuple: value,
+                index: 0,
+            });
+            words.push(tag);
+            let payload = ctx.new_temp();
+            ctx.current_instr(Instr::TupleGet {
+                dest: payload,
+                tuple: value,
+                index: 1,
+            });
+            collect_function_value_words(ctx, payload, &inner, words);
+        }
+        Type::Result(ok, err) => {
+            let tag = ctx.new_temp();
+            ctx.current_instr(Instr::TupleGet {
+                dest: tag,
+                tuple: value,
+                index: 0,
+            });
+            words.push(tag);
+            let ok_value = ctx.new_temp();
+            ctx.current_instr(Instr::TupleGet {
+                dest: ok_value,
+                tuple: value,
+                index: 1,
+            });
+            let err_value = ctx.new_temp();
+            ctx.current_instr(Instr::TupleGet {
+                dest: err_value,
+                tuple: value,
+                index: 2,
+            });
+            collect_function_value_words(ctx, ok_value, &ok, words);
+            collect_function_value_words(ctx, err_value, &err, words);
+        }
+        _ => words.push(value),
     }
 }
 
-fn state_map_anchor_base_name(name: &str, ty: &Type) -> String {
-    match semantic::resolve_struct_type(ty) {
-        Type::Struct { fields, .. } if !fields.is_empty() => {
-            state_map_anchor_base_name(&format!("{name}#0"), &fields[0].1)
-        }
-        Type::Tuple(items) if !items.is_empty() => {
-            state_map_anchor_base_name(&format!("{name}#0"), &items[0])
-        }
-        _ => name.to_string(),
+fn encode_aggregate_state_value(ctx: &mut LowerCtx, value: Temp, ty: &Type) -> Option<Temp> {
+    let schema = emit_state_value_schema_ref(ctx, ty)?;
+    let mut words = Vec::new();
+    if !collect_state_value_words(ctx, value, ty, &mut words)
+        || words.len() > ivm_abi::state_value::MAX_STATE_VALUE_WORDS
+    {
+        return None;
     }
+    let dest = ctx.new_temp();
+    ctx.current_instr(Instr::StateValueEncode {
+        dest,
+        schema,
+        words,
+    });
+    Some(dest)
+}
+
+fn load_state_value_word(ctx: &mut LowerCtx, table: Temp, index: &mut usize) -> Option<Temp> {
+    let index_i16 = i16::try_from(*index).ok()?;
+    let imm = ivm_abi::state_value::DECODED_STATE_VALUE_TABLE_OFFSET.checked_add(
+        index_i16.checked_mul(ivm_abi::state_value::DECODED_STATE_VALUE_WORD_BYTES)?,
+    )?;
+    let dest = ctx.new_temp();
+    ctx.current_instr(Instr::Load64Imm {
+        dest,
+        base: table,
+        imm,
+    });
+    *index = index.saturating_add(1);
+    Some(dest)
+}
+
+fn rebuild_state_value_from_table(
+    ctx: &mut LowerCtx,
+    table: Temp,
+    ty: &Type,
+    index: &mut usize,
+) -> Option<Temp> {
+    match semantic::resolve_struct_type(ty) {
+        Type::Struct { fields, .. } => {
+            let items = fields
+                .iter()
+                .map(|(_, field_ty)| rebuild_state_value_from_table(ctx, table, field_ty, index))
+                .collect::<Option<Vec<_>>>()?;
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::TuplePack { dest, items });
+            Some(dest)
+        }
+        Type::Tuple(types) => {
+            let items = types
+                .iter()
+                .map(|item_ty| rebuild_state_value_from_table(ctx, table, item_ty, index))
+                .collect::<Option<Vec<_>>>()?;
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::TuplePack { dest, items });
+            Some(dest)
+        }
+        Type::Option(inner) => {
+            let tag = load_state_value_word(ctx, table, index)?;
+            let value = rebuild_state_value_from_table(ctx, table, &inner, index)?;
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::TuplePack {
+                dest,
+                items: vec![tag, value],
+            });
+            Some(dest)
+        }
+        Type::Result(ok, err) => {
+            let tag = load_state_value_word(ctx, table, index)?;
+            let ok_value = rebuild_state_value_from_table(ctx, table, &ok, index)?;
+            let err_value = rebuild_state_value_from_table(ctx, table, &err, index)?;
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::TuplePack {
+                dest,
+                items: vec![tag, ok_value, err_value],
+            });
+            Some(dest)
+        }
+        leaf => {
+            state_value_kind_for_type(&leaf)?;
+            load_state_value_word(ctx, table, index)
+        }
+    }
+}
+
+fn rebuild_state_value_from_words(
+    ctx: &mut LowerCtx,
+    ty: &Type,
+    words: &[Temp],
+    index: &mut usize,
+) -> Option<Temp> {
+    match semantic::resolve_struct_type(ty) {
+        Type::Struct { fields, .. } => {
+            let items = fields
+                .iter()
+                .map(|(_, field_ty)| rebuild_state_value_from_words(ctx, field_ty, words, index))
+                .collect::<Option<Vec<_>>>()?;
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::TuplePack { dest, items });
+            Some(dest)
+        }
+        Type::Tuple(types) => {
+            let items = types
+                .iter()
+                .map(|item_ty| rebuild_state_value_from_words(ctx, item_ty, words, index))
+                .collect::<Option<Vec<_>>>()?;
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::TuplePack { dest, items });
+            Some(dest)
+        }
+        Type::Option(inner) => {
+            let tag = *words.get(*index)?;
+            *index = index.saturating_add(1);
+            let value = rebuild_state_value_from_words(ctx, &inner, words, index)?;
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::TuplePack {
+                dest,
+                items: vec![tag, value],
+            });
+            Some(dest)
+        }
+        Type::Result(ok, err) => {
+            let tag = *words.get(*index)?;
+            *index = index.saturating_add(1);
+            let ok_value = rebuild_state_value_from_words(ctx, &ok, words, index)?;
+            let err_value = rebuild_state_value_from_words(ctx, &err, words, index)?;
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::TuplePack {
+                dest,
+                items: vec![tag, ok_value, err_value],
+            });
+            Some(dest)
+        }
+        leaf => {
+            state_value_kind_for_type(&leaf)?;
+            let word = *words.get(*index)?;
+            *index = index.saturating_add(1);
+            Some(word)
+        }
+    }
+}
+
+fn rebuild_function_value_from_words(
+    ctx: &mut LowerCtx,
+    ty: &Type,
+    words: &[Temp],
+    index: &mut usize,
+) -> Option<Temp> {
+    match semantic::resolve_struct_type(ty) {
+        Type::Struct { fields, .. } => {
+            let items = fields
+                .iter()
+                .map(|(_, field_ty)| rebuild_function_value_from_words(ctx, field_ty, words, index))
+                .collect::<Option<Vec<_>>>()?;
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::TuplePack { dest, items });
+            Some(dest)
+        }
+        Type::Tuple(types) => {
+            let items = types
+                .iter()
+                .map(|item_ty| rebuild_function_value_from_words(ctx, item_ty, words, index))
+                .collect::<Option<Vec<_>>>()?;
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::TuplePack { dest, items });
+            Some(dest)
+        }
+        Type::Option(inner) => {
+            let tag = *words.get(*index)?;
+            *index = index.saturating_add(1);
+            let value = rebuild_function_value_from_words(ctx, &inner, words, index)?;
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::TuplePack {
+                dest,
+                items: vec![tag, value],
+            });
+            Some(dest)
+        }
+        Type::Result(ok, err) => {
+            let tag = *words.get(*index)?;
+            *index = index.saturating_add(1);
+            let ok_value = rebuild_function_value_from_words(ctx, &ok, words, index)?;
+            let err_value = rebuild_function_value_from_words(ctx, &err, words, index)?;
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::TuplePack {
+                dest,
+                items: vec![tag, ok_value, err_value],
+            });
+            Some(dest)
+        }
+        _ => {
+            let word = *words.get(*index)?;
+            *index = index.saturating_add(1);
+            Some(word)
+        }
+    }
+}
+
+fn decode_aggregate_state_value(ctx: &mut LowerCtx, blob: Temp, ty: &Type) -> Option<Temp> {
+    let schema = emit_state_value_schema_ref(ctx, ty)?;
+    let table = ctx.new_temp();
+    ctx.current_instr(Instr::DirectHelperSyscall {
+        dest: table,
+        syscall: ivm_abi::syscalls::SYSCALL_STATE_VALUE_DECODE,
+        args: vec![schema, blob],
+    });
+    let mut index = 0;
+    let value = rebuild_state_value_from_table(ctx, table, ty, &mut index)?;
+    let expected = state_value_schema(ty)?.word_kinds()?.len();
+    (index == expected).then_some(value)
+}
+
+fn is_aggregate_state_value_type(ty: &Type) -> bool {
+    matches!(
+        semantic::resolve_struct_type(ty),
+        Type::Struct { .. } | Type::Tuple(_) | Type::Option(_) | Type::Result(_, _)
+    )
+}
+
+fn is_canonical_state_value_type(ty: &Type) -> bool {
+    state_value_schema(ty).is_some()
 }
 
 fn lower_state_map_get_value(
@@ -1300,50 +1732,19 @@ fn lower_state_map_get_value(
     key_ty: &Type,
     value_ty: &Type,
 ) -> Option<Temp> {
+    let key_codec = key_codec_for_type(key_ty)?;
+    let path = build_state_path(ctx, base_name, key_tmp, &key_codec);
+    let blob = ctx.new_temp();
+    ctx.current_instr(Instr::StateGet { dest: blob, path });
+    decode_state_map_value_blob(ctx, blob, value_ty)
+}
+
+fn decode_state_map_value_blob(ctx: &mut LowerCtx, blob: Temp, value_ty: &Type) -> Option<Temp> {
     let resolved = semantic::resolve_struct_type(value_ty);
-    match &resolved {
-        Type::Struct { fields, .. } => {
-            let mut items = Vec::with_capacity(fields.len());
-            for (index, (_, field_ty)) in fields.iter().enumerate() {
-                items.push(lower_state_map_get_value(
-                    ctx,
-                    &format!("{base_name}#{index}"),
-                    key_tmp,
-                    key_ty,
-                    field_ty,
-                )?);
-            }
-            let tuple = ctx.new_temp();
-            ctx.current_instr(Instr::TuplePack { dest: tuple, items });
-            Some(tuple)
-        }
-        Type::Tuple(items) => {
-            let mut values = Vec::with_capacity(items.len());
-            for (index, item_ty) in items.iter().enumerate() {
-                values.push(lower_state_map_get_value(
-                    ctx,
-                    &format!("{base_name}#{index}"),
-                    key_tmp,
-                    key_ty,
-                    item_ty,
-                )?);
-            }
-            let tuple = ctx.new_temp();
-            ctx.current_instr(Instr::TuplePack {
-                dest: tuple,
-                items: values,
-            });
-            Some(tuple)
-        }
-        _ => {
-            let key_codec = key_codec_for_type(key_ty)?;
-            let value_codec = value_codec_for_type(&resolved)?;
-            let path = build_state_path(ctx, base_name, key_tmp, &key_codec);
-            let blob = ctx.new_temp();
-            ctx.current_instr(Instr::StateGet { dest: blob, path });
-            Some(decode_value_from_norito(ctx, blob, &value_codec))
-        }
+    if !is_canonical_state_value_type(&resolved) {
+        return None;
     }
+    decode_aggregate_state_value(ctx, blob, &resolved)
 }
 
 fn lower_state_map_set_value(
@@ -1355,65 +1756,21 @@ fn lower_state_map_set_value(
     value_tmp: Temp,
 ) -> bool {
     let resolved = semantic::resolve_struct_type(value_ty);
-    match &resolved {
-        Type::Struct { fields, .. } => {
-            for (index, (_, field_ty)) in fields.iter().enumerate() {
-                let field_value = ctx.new_temp();
-                ctx.current_instr(Instr::TupleGet {
-                    dest: field_value,
-                    tuple: value_tmp,
-                    index,
-                });
-                if !lower_state_map_set_value(
-                    ctx,
-                    &format!("{base_name}#{index}"),
-                    key_tmp,
-                    key_ty,
-                    field_ty,
-                    field_value,
-                ) {
-                    return false;
-                }
-            }
-            true
-        }
-        Type::Tuple(items) => {
-            for (index, item_ty) in items.iter().enumerate() {
-                let field_value = ctx.new_temp();
-                ctx.current_instr(Instr::TupleGet {
-                    dest: field_value,
-                    tuple: value_tmp,
-                    index,
-                });
-                if !lower_state_map_set_value(
-                    ctx,
-                    &format!("{base_name}#{index}"),
-                    key_tmp,
-                    key_ty,
-                    item_ty,
-                    field_value,
-                ) {
-                    return false;
-                }
-            }
-            true
-        }
-        _ => {
-            let Some(key_codec) = key_codec_for_type(key_ty) else {
-                return false;
-            };
-            let Some(value_codec) = value_codec_for_type(&resolved) else {
-                return false;
-            };
-            let path = build_state_path(ctx, base_name, key_tmp, &key_codec);
-            let encoded = encode_value_to_norito(ctx, value_tmp, &value_codec);
-            ctx.current_instr(Instr::StateSet {
-                path,
-                value: encoded,
-            });
-            true
-        }
+    let Some(key_codec) = key_codec_for_type(key_ty) else {
+        return false;
+    };
+    let path = build_state_path(ctx, base_name, key_tmp, &key_codec);
+    if !is_canonical_state_value_type(&resolved) {
+        return false;
     }
+    let Some(encoded) = encode_aggregate_state_value(ctx, value_tmp, &resolved) else {
+        return false;
+    };
+    ctx.current_instr(Instr::StateSet {
+        path,
+        value: encoded,
+    });
+    true
 }
 
 /// Control-flow terminators for a block.
@@ -1434,7 +1791,10 @@ pub enum Terminator {
 
 /// Lower a semantically checked program into IR.
 pub fn lower(program: &TypedProgram) -> Result<Program, String> {
-    lower_with_cap(program, crate::semantic::DYNAMIC_ITERATION_LIMIT as usize)
+    lower_with_cap(
+        program,
+        crate::semantic::COLLECTION_ITERATION_LIMIT as usize,
+    )
 }
 
 /// Lower with the first-release dynamic-iteration cap.
@@ -1448,39 +1808,84 @@ pub fn lower_with_cap_and_test_mode(
     dyn_iter_cap: usize,
     test_mode: bool,
 ) -> Result<Program, String> {
+    lower_with_cap_and_test_mode_diagnostics(program, dyn_iter_cap, test_mode).map_err(|failures| {
+        failures
+            .into_iter()
+            .map(|failure| failure.message)
+            .collect::<Vec<_>>()
+            .join("\n")
+    })
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct LoweringFailure {
+    pub(crate) message: String,
+    pub(crate) location: super::ast::SourceLocation,
+}
+
+pub(crate) fn lower_with_cap_and_test_mode_diagnostics(
+    program: &TypedProgram,
+    dyn_iter_cap: usize,
+    test_mode: bool,
+) -> Result<Program, Vec<LoweringFailure>> {
     let call_renames = build_entrypoint_call_renames(program);
     let function_param_specs = build_function_param_specs(program);
     let mut functions = Vec::new();
+    let mut failures = Vec::new();
     for item in &program.items {
         let TypedItem::Function(f) = item;
         if needs_entrypoint_wrapper(f) {
             let impl_name = entrypoint_impl_symbol(&f.name);
-            functions.push(lower_function_named(
+            match lower_function_named(
                 f,
                 &impl_name,
+                &program.states,
                 dyn_iter_cap,
                 &call_renames,
                 &function_param_specs,
-            )?);
-            functions.push(lower_entrypoint_wrapper(
+            ) {
+                Ok(function) => functions.push(function),
+                Err(message) => failures.push(LoweringFailure {
+                    message,
+                    location: f.location,
+                }),
+            }
+            match lower_entrypoint_wrapper(
                 f,
                 &impl_name,
                 dyn_iter_cap,
                 &call_renames,
                 &function_param_specs,
                 test_mode,
-            )?);
+            ) {
+                Ok(function) => functions.push(function),
+                Err(message) => failures.push(LoweringFailure {
+                    message,
+                    location: f.location,
+                }),
+            }
         } else {
-            functions.push(lower_function_named(
+            match lower_function_named(
                 f,
                 &f.name,
+                &program.states,
                 dyn_iter_cap,
                 &call_renames,
                 &function_param_specs,
-            )?);
+            ) {
+                Ok(function) => functions.push(function),
+                Err(message) => failures.push(LoweringFailure {
+                    message,
+                    location: f.location,
+                }),
+            }
         }
     }
-    Ok(Program { functions })
+    if failures.is_empty() {
+        Ok(Program { functions })
+    } else {
+        Err(failures)
+    }
 }
 
 fn build_entrypoint_call_renames(program: &TypedProgram) -> HashMap<String, String> {
@@ -1518,6 +1923,7 @@ fn needs_entrypoint_wrapper(func: &TypedFunction) -> bool {
 fn lower_function_named(
     func: &TypedFunction,
     symbol_name: &str,
+    states: &[TypedStateDecl],
     dyn_iter_cap: usize,
     call_renames: &HashMap<String, String>,
     function_param_specs: &HashMap<String, Vec<TypedParam>>,
@@ -1533,24 +1939,38 @@ fn lower_function_named(
     let mut vars = HashMap::new();
     let mut param_temps = Vec::new();
     let lowered_params = lowered_function_params(&func.param_types);
+    if lowered_params.len() > crate::regalloc::MAX_ARGUMENT_VALUES {
+        return Err(format!(
+            "function `{}` requires {} flattened argument words, exceeding the Kotodama V1 limit of {}",
+            func.name,
+            lowered_params.len(),
+            crate::regalloc::MAX_ARGUMENT_VALUES,
+        ));
+    }
     for param in &lowered_params {
         let tmp = ctx.new_temp();
         param_temps.push((param.clone(), tmp));
         ctx.current_instr(Instr::LoadVar {
             dest: tmp,
-            name: param.name.clone(),
+            name: param.clone(),
         });
     }
-    let state_env = state_env_snapshot();
-    let mut state_entries = state_env.iter().collect::<Vec<_>>();
-    state_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-    for (name, ty) in state_entries {
-        register_state_value_metadata(&mut ctx, name, ty, name);
+    let mut state_entries = states.iter().collect::<Vec<_>>();
+    state_entries.sort_by(|left, right| left.name.cmp(&right.name));
+    for state in state_entries {
+        register_state_value_metadata(&mut ctx, &state.name, &state.ty, &state.name);
     }
-    for (param, tmp) in param_temps {
+    let loaded_params = param_temps.into_iter().collect::<HashMap<_, _>>();
+    for param in &func.param_types {
         if param.is_state {
+            let tmp = *loaded_params.get(&param.name).ok_or_else(|| {
+                format!(
+                    "internal error: missing lowered state parameter `{}`",
+                    param.name
+                )
+            })?;
             ctx.state_runtime_roots.insert(param.name.clone(), tmp);
-            if let Type::Map(key, value) = semantic::resolve_struct_type(&param.ty) {
+            if let Type::StateMap(key, value) = semantic::resolve_struct_type(&param.ty) {
                 ctx.state_map_configs.insert(
                     param.name.clone(),
                     StateMapSpec {
@@ -1559,8 +1979,40 @@ fn lower_function_named(
                     },
                 );
             }
+        } else if let Some(word_types) = function_value_word_types(&param.ty) {
+            let words = (0..word_types.len())
+                .map(|index| {
+                    loaded_params
+                        .get(&function_param_word_name(&param.name, index))
+                        .copied()
+                        .ok_or_else(|| {
+                            format!(
+                                "internal error: missing ABI word {index} for parameter `{}`",
+                                param.name
+                            )
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut index = 0;
+            let value = rebuild_function_value_from_words(&mut ctx, &param.ty, &words, &mut index)
+                .ok_or_else(|| {
+                    format!(
+                        "internal error: cannot rebuild aggregate parameter `{}`",
+                        param.name
+                    )
+                })?;
+            if index != words.len() {
+                return Err(format!(
+                    "internal error: aggregate parameter `{}` ABI word count mismatch",
+                    param.name
+                ));
+            }
+            vars.insert(param.name.clone(), value);
         } else {
-            vars.insert(param.name, tmp);
+            let tmp = *loaded_params.get(&param.name).ok_or_else(|| {
+                format!("internal error: missing lowered parameter `{}`", param.name)
+            })?;
+            vars.insert(param.name.clone(), tmp);
         }
     }
 
@@ -1569,7 +2021,7 @@ fn lower_function_named(
 
     let function = Function {
         name: symbol_name.to_string(),
-        params: lowered_params.into_iter().map(|param| param.name).collect(),
+        params: lowered_params,
         blocks: ctx.blocks,
         entry,
         location: func.location,
@@ -1603,14 +2055,6 @@ fn lower_entrypoint_wrapper(
         Some(load_entrypoint_payload(&mut ctx, test_mode))
     };
 
-    let pass_through_json_payload = func.param_types.len() == 1
-        && !func.param_types[0].is_state
-        && matches!(
-            semantic::resolve_struct_type(&func.param_types[0].ty),
-            Type::Json
-        );
-
-    let mut args = Vec::with_capacity(func.param_types.len());
     for param in &func.param_types {
         if param.is_state {
             return Err(format!(
@@ -1618,56 +2062,105 @@ fn lower_entrypoint_wrapper(
                 func.name, param.name
             ));
         }
-        let param_name = &param.name;
-        let param_ty = &param.ty;
-        let payload = payload.ok_or_else(|| {
-            format!("internal error: missing payload for entrypoint parameter `{param_name}`")
-        })?;
-        if pass_through_json_payload {
-            args.push(payload);
-            continue;
-        }
-        let key = ctx.new_temp();
-        ctx.current_instr(Instr::DataRef {
-            dest: key,
-            kind: DataRefKind::Name,
-            value: param_name.clone(),
-        });
-        args.push(lower_entrypoint_param(
-            &mut ctx, payload, key, param_name, param_ty,
-        )?);
     }
 
-    let term = match func.ret_ty.as_ref().unwrap_or(&Type::Unit) {
-        Type::Unit => {
-            ctx.current_instr(Instr::Call {
-                callee: impl_name.to_string(),
-                args,
-                dest: None,
-            });
-            Terminator::Return(None)
-        }
-        Type::Tuple(items) => {
-            let mut dests = Vec::with_capacity(items.len());
-            for _ in items {
-                dests.push(ctx.new_temp());
+    let payload = payload.ok_or_else(|| {
+        format!(
+            "internal error: missing payload for parameterized entrypoint `{}`",
+            func.name
+        )
+    })?;
+    let args = {
+        let schema = entrypoint_argument_schema(&func.param_types)?.ok_or_else(|| {
+            format!(
+                "internal error: parameterized entrypoint `{}` has no argument schema",
+                func.name
+            )
+        })?;
+        let encoded_schema = norito::to_bytes(&schema)
+            .map_err(|error| format!("failed to encode entrypoint argument schema: {error}"))?;
+        let schema_temp = ctx.new_temp();
+        ctx.current_instr(Instr::DataRef {
+            dest: schema_temp,
+            kind: DataRefKind::NoritoBytes,
+            value: format!("0x{}", hex::encode(encoded_schema)),
+        });
+        let decoded_table = ctx.new_temp();
+        ctx.current_instr(Instr::DirectHelperSyscall {
+            dest: decoded_table,
+            syscall: ivm_abi::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD,
+            args: vec![payload, schema_temp],
+        });
+        let mut word_offset = 0_usize;
+        let mut args = Vec::with_capacity(func.param_types.len());
+        for (param, field) in func.param_types.iter().zip(&schema.fields) {
+            let word_count = field.ty.word_count().ok_or_else(|| {
+                format!(
+                    "entrypoint parameter `{}` has an invalid ABI v1 type schema",
+                    param.name
+                )
+            })?;
+            let mut words = Vec::with_capacity(word_count);
+            for _ in 0..word_count {
+                let dest = ctx.new_temp();
+                let index = i16::try_from(word_offset)
+                    .map_err(|_| "entrypoint argument index exceeds i16".to_owned())?;
+                let imm = ivm_abi::entrypoint::DECODED_ARGUMENT_TABLE_OFFSET
+                    .checked_add(
+                        index
+                            .checked_mul(ivm_abi::entrypoint::DECODED_ARGUMENT_WORD_BYTES)
+                            .ok_or_else(|| "entrypoint argument offset overflow".to_owned())?,
+                    )
+                    .ok_or_else(|| "entrypoint argument offset overflow".to_owned())?;
+                ctx.current_instr(Instr::Load64Imm {
+                    dest,
+                    base: decoded_table,
+                    imm,
+                });
+                words.push(dest);
+                word_offset = word_offset.saturating_add(1);
             }
-            ctx.current_instr(Instr::CallMulti {
-                callee: impl_name.to_string(),
-                args,
-                dests: dests.clone(),
-            });
-            Terminator::ReturnN(dests)
+            // Aggregate values have no runtime tuple allocation. Carry their
+            // canonical words across the internal call boundary and rebuild
+            // the compiler-only tuple shape in the implementation prologue.
+            args.extend(words);
         }
-        _ => {
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::Call {
-                callee: impl_name.to_string(),
-                args,
-                dest: Some(dest),
-            });
-            Terminator::Return(Some(dest))
+        if Some(word_offset) != schema.word_count() {
+            return Err(format!(
+                "entrypoint `{}` ABI v1 argument table word count mismatch",
+                func.name
+            ));
         }
+        args
+    };
+
+    let return_ty = func.ret_ty.as_ref().unwrap_or(&Type::Unit);
+    let term = if *return_ty == Type::Unit {
+        ctx.current_instr(Instr::Call {
+            callee: impl_name.to_string(),
+            args,
+            dest: None,
+        });
+        Terminator::Return(None)
+    } else if let Some(items) = aggregate_components(return_ty) {
+        let mut dests = Vec::with_capacity(items.len());
+        for _ in items {
+            dests.push(ctx.new_temp());
+        }
+        ctx.current_instr(Instr::CallMulti {
+            callee: impl_name.to_string(),
+            args,
+            dests: dests.clone(),
+        });
+        Terminator::ReturnN(dests)
+    } else {
+        let dest = ctx.new_temp();
+        ctx.current_instr(Instr::Call {
+            callee: impl_name.to_string(),
+            args,
+            dest: Some(dest),
+        });
+        Terminator::Return(Some(dest))
     };
     ctx.finish_current(term);
 
@@ -1782,46 +2275,42 @@ fn lower_invoke_entrypoint_call(
         value: encoded_payload,
     });
 
-    let result = match result_ty {
-        semantic::Type::Unit => {
-            ctx.current_instr(Instr::Call {
-                callee: entrypoint.to_string(),
-                args: Vec::new(),
-                dest: None,
-            });
-            let unit = ctx.new_temp();
-            ctx.current_instr(Instr::Const {
-                dest: unit,
-                value: 0,
-            });
-            unit
+    let result = if *result_ty == semantic::Type::Unit {
+        ctx.current_instr(Instr::Call {
+            callee: entrypoint.to_string(),
+            args: Vec::new(),
+            dest: None,
+        });
+        let unit = ctx.new_temp();
+        ctx.current_instr(Instr::Const {
+            dest: unit,
+            value: 0,
+        });
+        unit
+    } else if let Some(items) = aggregate_components(result_ty) {
+        let mut dests = Vec::with_capacity(items.len());
+        for _ in items {
+            dests.push(ctx.new_temp());
         }
-        semantic::Type::Tuple(items) => {
-            let mut dests = Vec::with_capacity(items.len());
-            for _ in items {
-                dests.push(ctx.new_temp());
-            }
-            ctx.current_instr(Instr::CallMulti {
-                callee: entrypoint.to_string(),
-                args: Vec::new(),
-                dests: dests.clone(),
-            });
-            let tuple = ctx.new_temp();
-            ctx.current_instr(Instr::TuplePack {
-                dest: tuple,
-                items: dests,
-            });
-            tuple
-        }
-        _ => {
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::Call {
-                callee: entrypoint.to_string(),
-                args: Vec::new(),
-                dest: Some(dest),
-            });
-            dest
-        }
+        ctx.current_instr(Instr::CallMulti {
+            callee: entrypoint.to_string(),
+            args: Vec::new(),
+            dests: dests.clone(),
+        });
+        let tuple = ctx.new_temp();
+        ctx.current_instr(Instr::TuplePack {
+            dest: tuple,
+            items: dests,
+        });
+        tuple
+    } else {
+        let dest = ctx.new_temp();
+        ctx.current_instr(Instr::Call {
+            callee: entrypoint.to_string(),
+            args: Vec::new(),
+            dest: Some(dest),
+        });
+        dest
     };
 
     let zero = ctx.new_temp();
@@ -1873,66 +2362,116 @@ fn lower_blob_literal(ctx: &mut LowerCtx, value: &str) -> Temp {
     dest
 }
 
-fn lower_entrypoint_param(
-    ctx: &mut LowerCtx,
-    payload: Temp,
-    key: Temp,
+fn entrypoint_argument_kind(
     param_name: &str,
     ty: &Type,
-) -> Result<Temp, String> {
+) -> Result<ivm_abi::entrypoint::EntrypointArgumentKindV1, String> {
+    use ivm_abi::entrypoint::EntrypointArgumentKindV1 as Kind;
+
     let resolved = semantic::resolve_struct_type(ty);
-    let dest = ctx.new_temp();
-    match resolved {
-        Type::Int => ctx.current_instr(Instr::JsonGetInt {
-            dest,
-            json: payload,
-            key,
-        }),
-        Type::FixedU128 | Type::Amount | Type::Balance => {
-            ctx.current_instr(Instr::JsonGetNumeric {
-                dest,
-                json: payload,
-                key,
-            })
-        }
-        Type::Json => ctx.current_instr(Instr::JsonGetJson {
-            dest,
-            json: payload,
-            key,
-        }),
-        Type::Name => ctx.current_instr(Instr::JsonGetName {
-            dest,
-            json: payload,
-            key,
-        }),
-        Type::AccountId => ctx.current_instr(Instr::JsonGetAccountId {
-            dest,
-            json: payload,
-            key,
-        }),
-        Type::AssetDefinitionId => ctx.current_instr(Instr::JsonGetAssetDefinitionId {
-            dest,
-            json: payload,
-            key,
-        }),
-        Type::NftId => ctx.current_instr(Instr::JsonGetNftId {
-            dest,
-            json: payload,
-            key,
-        }),
-        Type::Blob | Type::Bytes => ctx.current_instr(Instr::JsonGetBlobHex {
-            dest,
-            json: payload,
-            key,
-        }),
+    Ok(match resolved {
+        Type::Int => Kind::Int,
+        Type::FixedU128 => Kind::U128,
+        Type::Amount => Kind::Numeric,
+        Type::Bool => Kind::Bool,
+        Type::String => Kind::String,
+        Type::Json => Kind::Json,
+        Type::Name => Kind::Name,
+        Type::AccountId => Kind::AccountId,
+        Type::AssetDefinitionId => Kind::AssetDefinitionId,
+        Type::AssetId => Kind::AssetId,
+        Type::DomainId => Kind::DomainId,
+        Type::NftId => Kind::NftId,
+        Type::DataSpaceId => Kind::DataSpaceId,
+        Type::Bytes => Kind::Blob,
         other => {
             return Err(format!(
                 "entrypoint parameter `{param_name}` uses unsupported public type {:?}",
                 other
             ));
         }
+    })
+}
+
+fn append_entrypoint_argument_type_nodes(
+    param_name: &str,
+    ty: &Type,
+    nodes: &mut Vec<ivm_abi::entrypoint::EntrypointArgumentTypeNodeV1>,
+) -> Result<(), String> {
+    use ivm_abi::entrypoint::EntrypointArgumentTypeNodeV1 as Node;
+
+    match semantic::resolve_struct_type(ty) {
+        Type::Struct { name, fields } => {
+            nodes.push(Node::Struct {
+                name,
+                fields: fields.iter().map(|(name, _)| name.clone()).collect(),
+            });
+            for (_, field_ty) in fields {
+                append_entrypoint_argument_type_nodes(param_name, &field_ty, nodes)?;
+            }
+        }
+        Type::Tuple(items) => {
+            let arity = u16::try_from(items.len()).map_err(|_| {
+                format!("entrypoint parameter `{param_name}` tuple arity exceeds u16")
+            })?;
+            nodes.push(Node::Tuple { arity });
+            for item in items {
+                append_entrypoint_argument_type_nodes(param_name, &item, nodes)?;
+            }
+        }
+        Type::Option(inner) => {
+            nodes.push(Node::Option);
+            append_entrypoint_argument_type_nodes(param_name, &inner, nodes)?;
+        }
+        Type::Result(ok, err) => {
+            nodes.push(Node::Result);
+            append_entrypoint_argument_type_nodes(param_name, &ok, nodes)?;
+            append_entrypoint_argument_type_nodes(param_name, &err, nodes)?;
+        }
+        leaf => nodes.push(Node::Leaf(entrypoint_argument_kind(param_name, &leaf)?)),
     }
-    Ok(dest)
+    Ok(())
+}
+
+fn entrypoint_argument_type(
+    param_name: &str,
+    ty: &Type,
+) -> Result<ivm_abi::entrypoint::EntrypointArgumentTypeV1, String> {
+    let mut nodes = Vec::new();
+    append_entrypoint_argument_type_nodes(param_name, ty, &mut nodes)?;
+    let ty = ivm_abi::entrypoint::EntrypointArgumentTypeV1 { nodes };
+    if !ty.validate() {
+        return Err(format!(
+            "entrypoint parameter `{param_name}` exceeds ABI v1 type depth, node, or word limits"
+        ));
+    }
+    Ok(ty)
+}
+
+pub(crate) fn entrypoint_argument_schema(
+    params: &[TypedParam],
+) -> Result<Option<ivm_abi::entrypoint::EntrypointArgumentSchemaV1>, String> {
+    if params.is_empty() {
+        return Ok(None);
+    }
+    let fields = params
+        .iter()
+        .map(|param| {
+            Ok(ivm_abi::entrypoint::EntrypointArgumentFieldV1 {
+                name: param.name.clone(),
+                ty: entrypoint_argument_type(&param.name, &param.ty)?,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let schema = ivm_abi::entrypoint::EntrypointArgumentSchemaV1 { fields };
+    if !schema.validate() {
+        return Err(format!(
+            "entrypoint exceeds the ABI v1 limit of {} source parameters and {} flattened words",
+            ivm_abi::entrypoint::MAX_ENTRYPOINT_ARGUMENTS,
+            ivm_abi::entrypoint::MAX_ENTRYPOINT_ARGUMENT_WORDS,
+        ));
+    }
+    Ok(Some(schema))
 }
 
 fn register_state_value_metadata(ctx: &mut LowerCtx, name: &str, ty: &Type, literal: &str) {
@@ -1940,10 +2479,9 @@ fn register_state_value_metadata(ctx: &mut LowerCtx, name: &str, ty: &Type, lite
         .insert(name.to_string(), literal.to_string());
     let resolved = semantic::resolve_struct_type(ty);
     match &resolved {
-        Type::Map(k, v) => {
+        Type::StateMap(k, v) => {
             let key_ty = semantic::resolve_struct_type(k);
             let value_ty = semantic::resolve_struct_type(v);
-            register_state_map_value_literals(ctx, name, &value_ty, literal);
             ctx.state_map_configs.insert(
                 name.to_string(),
                 StateMapSpec {
@@ -1952,20 +2490,7 @@ fn register_state_value_metadata(ctx: &mut LowerCtx, name: &str, ty: &Type, lite
                 },
             );
         }
-        Type::Struct { fields, .. } => {
-            for (i, (fname, fty)) in fields.iter().enumerate() {
-                let child = format!("{name}#{i}");
-                let child_literal = format!("{literal}_{fname}");
-                register_state_value_metadata(ctx, &child, fty, &child_literal);
-            }
-        }
-        Type::Tuple(ts) => {
-            for (i, fty) in ts.iter().enumerate() {
-                let child = format!("{name}#{i}");
-                let child_literal = format!("{literal}_{i}");
-                register_state_value_metadata(ctx, &child, fty, &child_literal);
-            }
-        }
+        Type::Struct { .. } | Type::Tuple(_) | Type::Option(_) | Type::Result(_, _) => {}
         _ => {}
     }
 }
@@ -1977,19 +2502,240 @@ fn push_copy(block: &mut BasicBlock, dest: Temp, src: Temp) {
     block.instrs.push(Instr::Copy { dest, src });
 }
 
-fn initialize_loop_phi(ctx: &mut LowerCtx, vars: &HashMap<String, Temp>) -> HashMap<String, Temp> {
+fn collect_expr_reads(expr: &TypedExpr, reads: &mut BTreeSet<String>) {
+    match &expr.expr {
+        semantic::ExprKind::Binary { left, right, .. } => {
+            collect_expr_reads(left, reads);
+            collect_expr_reads(right, reads);
+        }
+        semantic::ExprKind::Unary { expr, .. } | semantic::ExprKind::NumericCast { expr } => {
+            collect_expr_reads(expr, reads);
+        }
+        semantic::ExprKind::Conditional {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            collect_expr_reads(cond, reads);
+            collect_expr_reads(then_expr, reads);
+            collect_expr_reads(else_expr, reads);
+        }
+        semantic::ExprKind::Call { args, .. } | semantic::ExprKind::Tuple(args) => {
+            for arg in args {
+                collect_expr_reads(arg, reads);
+            }
+        }
+        semantic::ExprKind::Member { object, .. } => collect_expr_reads(object, reads),
+        semantic::ExprKind::Index { target, index } => {
+            collect_expr_reads(target, reads);
+            collect_expr_reads(index, reads);
+        }
+        semantic::ExprKind::Ident(name) => {
+            reads.insert(name.clone());
+        }
+        semantic::ExprKind::Number(_)
+        | semantic::ExprKind::Decimal(_)
+        | semantic::ExprKind::Bool(_)
+        | semantic::ExprKind::String(_)
+        | semantic::ExprKind::Bytes(_) => {}
+    }
+}
+
+fn collect_block_reads(block: &TypedBlock, reads: &mut BTreeSet<String>) {
+    for statement in &block.statements {
+        collect_statement_reads(statement, reads);
+    }
+}
+
+fn collect_statement_reads(statement: &TypedStatement, reads: &mut BTreeSet<String>) {
+    match statement {
+        TypedStatement::Let { value, .. } | TypedStatement::Expr(value) => {
+            collect_expr_reads(value, reads);
+        }
+        TypedStatement::Return(Some(value)) => collect_expr_reads(value, reads),
+        TypedStatement::Return(None) | TypedStatement::Break | TypedStatement::Continue => {}
+        TypedStatement::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            collect_expr_reads(cond, reads);
+            collect_block_reads(then_branch, reads);
+            if let Some(else_branch) = else_branch {
+                collect_block_reads(else_branch, reads);
+            }
+        }
+        TypedStatement::While { cond, body } => {
+            collect_expr_reads(cond, reads);
+            collect_block_reads(body, reads);
+        }
+        TypedStatement::For {
+            init,
+            cond,
+            step,
+            body,
+            ..
+        } => {
+            if let Some(init) = init {
+                collect_statement_reads(init, reads);
+            }
+            if let Some(cond) = cond {
+                collect_expr_reads(cond, reads);
+            }
+            if let Some(step) = step {
+                collect_statement_reads(step, reads);
+            }
+            collect_block_reads(body, reads);
+        }
+        TypedStatement::ForEachMap { map, body, .. } => {
+            collect_expr_reads(map, reads);
+            collect_block_reads(body, reads);
+        }
+        TypedStatement::MapSet { map, key, value } => {
+            collect_expr_reads(map, reads);
+            collect_expr_reads(key, reads);
+            collect_expr_reads(value, reads);
+        }
+    }
+}
+
+fn collect_block_mutations(block: &TypedBlock, mutations: &mut BTreeSet<String>) {
+    for statement in &block.statements {
+        collect_statement_mutations(statement, mutations);
+    }
+}
+
+fn collect_statement_mutations(statement: &TypedStatement, mutations: &mut BTreeSet<String>) {
+    match statement {
+        TypedStatement::Let { name, .. } => {
+            mutations.insert(name.clone());
+        }
+        TypedStatement::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            collect_block_mutations(then_branch, mutations);
+            if let Some(else_branch) = else_branch {
+                collect_block_mutations(else_branch, mutations);
+            }
+        }
+        TypedStatement::While { body, .. } => collect_block_mutations(body, mutations),
+        TypedStatement::For {
+            init, step, body, ..
+        } => {
+            if let Some(init) = init {
+                collect_statement_mutations(init, mutations);
+            }
+            if let Some(step) = step {
+                collect_statement_mutations(step, mutations);
+            }
+            collect_block_mutations(body, mutations);
+        }
+        TypedStatement::ForEachMap {
+            key, value, body, ..
+        } => {
+            mutations.insert(key.clone());
+            if let Some(value) = value {
+                mutations.insert(value.clone());
+            }
+            collect_block_mutations(body, mutations);
+        }
+        TypedStatement::Expr(_)
+        | TypedStatement::Return(_)
+        | TypedStatement::Break
+        | TypedStatement::Continue
+        | TypedStatement::MapSet { .. } => {}
+    }
+}
+
+fn live_before_statement(
+    statement: &TypedStatement,
+    live_after: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let mut live = match statement {
+        // A return has no fallthrough edge. Keeping only its expression reads
+        // prevents unreachable trailing statements from extending lifetimes.
+        TypedStatement::Return(_) => BTreeSet::new(),
+        _ => live_after.clone(),
+    };
+    if let TypedStatement::Let { name, .. } = statement {
+        live.remove(name);
+    }
+    collect_statement_reads(statement, &mut live);
+    live
+}
+
+fn block_live_after_sets(
+    block: &TypedBlock,
+    outer_live_after: &BTreeSet<String>,
+) -> Vec<BTreeSet<String>> {
+    let mut live = outer_live_after.clone();
+    let mut result = vec![BTreeSet::new(); block.statements.len()];
+    for (index, statement) in block.statements.iter().enumerate().rev() {
+        result[index] = live.clone();
+        live = if matches!(statement, TypedStatement::Break | TypedStatement::Continue) {
+            // Neither statement falls through to the remaining source block.
+            // The caller supplies the union of loop-header and loop-exit
+            // liveness, which is conservative for both target kinds.
+            outer_live_after.clone()
+        } else {
+            live_before_statement(statement, &live)
+        };
+    }
+    result
+}
+
+fn loop_phi_names(
+    vars: &HashMap<String, Temp>,
+    mutations: &BTreeSet<String>,
+    loop_reads: &BTreeSet<String>,
+    live_after: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    mutations
+        .iter()
+        .filter(|name| {
+            vars.contains_key(*name) && (loop_reads.contains(*name) || live_after.contains(*name))
+        })
+        .cloned()
+        .collect()
+}
+
+fn initialize_loop_phi(
+    ctx: &mut LowerCtx,
+    vars: &HashMap<String, Temp>,
+    names: &BTreeSet<String>,
+) -> HashMap<String, Temp> {
     let mut phi = HashMap::new();
-    let mut entries = vars.iter().collect::<Vec<_>>();
-    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-    for (name, temp) in entries {
+    for name in names {
+        let Some(temp) = vars.get(name).copied() else {
+            continue;
+        };
         let slot = ctx.new_temp();
         ctx.current_instr(Instr::Copy {
             dest: slot,
-            src: *temp,
+            src: temp,
         });
         phi.insert(name.clone(), slot);
     }
     phi
+}
+
+fn env_with_loop_phi(
+    base: &HashMap<String, Temp>,
+    phi: &HashMap<String, Temp>,
+) -> HashMap<String, Temp> {
+    let mut env = base.clone();
+    for (name, temp) in phi {
+        env.insert(name.clone(), *temp);
+    }
+    env
+}
+
+fn apply_loop_phi(env: &mut HashMap<String, Temp>, phi: &HashMap<String, Temp>) {
+    for (name, temp) in phi {
+        env.insert(name.clone(), *temp);
+    }
 }
 
 fn copy_env_to_loop_phi(ctx: &mut LowerCtx, env: &HashMap<String, Temp>) {
@@ -1998,7 +2744,9 @@ fn copy_env_to_loop_phi(ctx: &mut LowerCtx, env: &HashMap<String, Temp>) {
         let mut entries = phi.iter().collect::<Vec<_>>();
         entries.sort_by(|(left, _), (right, _)| left.cmp(right));
         for (name, dest) in entries {
-            if let Some(src) = env.get(name) {
+            if let Some(src) = env.get(name)
+                && dest != src
+            {
                 copies.push((*dest, *src));
             }
         }
@@ -2009,12 +2757,27 @@ fn copy_env_to_loop_phi(ctx: &mut LowerCtx, env: &HashMap<String, Temp>) {
 }
 
 fn lower_block(ctx: &mut LowerCtx, block: &TypedBlock, vars: &mut HashMap<String, Temp>) {
-    for stmt in &block.statements {
-        lower_statement(ctx, stmt, vars);
+    lower_block_with_live_after(ctx, block, vars, &BTreeSet::new());
+}
+
+fn lower_block_with_live_after(
+    ctx: &mut LowerCtx,
+    block: &TypedBlock,
+    vars: &mut HashMap<String, Temp>,
+    outer_live_after: &BTreeSet<String>,
+) {
+    let live_after = block_live_after_sets(block, outer_live_after);
+    for (statement, statement_live_after) in block.statements.iter().zip(live_after.iter()) {
+        lower_statement(ctx, statement, vars, statement_live_after);
     }
 }
 
-fn lower_statement(ctx: &mut LowerCtx, stmt: &TypedStatement, vars: &mut HashMap<String, Temp>) {
+fn lower_statement(
+    ctx: &mut LowerCtx,
+    stmt: &TypedStatement,
+    vars: &mut HashMap<String, Temp>,
+    live_after: &BTreeSet<String>,
+) {
     match stmt {
         TypedStatement::Let { name, value } => {
             let t = lower_expr(ctx, value, vars);
@@ -2044,14 +2807,14 @@ fn lower_statement(ctx: &mut LowerCtx, stmt: &TypedStatement, vars: &mut HashMap
 
             ctx.start_block(then_label);
             let mut then_vars = entry_env.clone();
-            lower_block(ctx, then_branch, &mut then_vars);
+            lower_block_with_live_after(ctx, then_branch, &mut then_vars, live_after);
             ctx.finish_current(Terminator::Jump(end_label));
             let then_idx = ctx.blocks.len() - 1;
 
             ctx.start_block(else_label);
             let mut else_vars = entry_env.clone();
             if let Some(b) = else_branch {
-                lower_block(ctx, b, &mut else_vars);
+                lower_block_with_live_after(ctx, b, &mut else_vars, live_after);
             }
             ctx.finish_current(Terminator::Jump(end_label));
             let else_idx = ctx.blocks.len() - 1;
@@ -2087,13 +2850,21 @@ fn lower_statement(ctx: &mut LowerCtx, stmt: &TypedStatement, vars: &mut HashMap
             let cond_label = ctx.new_label();
             let body_label = ctx.new_label();
             let end_label = ctx.new_label();
-            let loop_phi = initialize_loop_phi(ctx, vars);
+            let entry_vars = vars.clone();
+            let mut mutations = BTreeSet::new();
+            collect_block_mutations(body, &mut mutations);
+            let mut loop_reads = BTreeSet::new();
+            collect_expr_reads(cond, &mut loop_reads);
+            collect_block_reads(body, &mut loop_reads);
+            let phi_names = loop_phi_names(vars, &mutations, &loop_reads, live_after);
+            let loop_phi = initialize_loop_phi(ctx, vars, &phi_names);
+            let loop_env = env_with_loop_phi(&entry_vars, &loop_phi);
             ctx.push_loop(cond_label, end_label);
             ctx.set_loop_phi(loop_phi.clone());
             ctx.finish_current(Terminator::Jump(cond_label));
 
             ctx.start_block(cond_label);
-            let mut cond_vars = loop_phi.clone();
+            let mut cond_vars = loop_env;
             let cond_t = lower_expr(ctx, cond, &mut cond_vars);
             ctx.finish_current(Terminator::Branch {
                 cond: cond_t,
@@ -2103,13 +2874,16 @@ fn lower_statement(ctx: &mut LowerCtx, stmt: &TypedStatement, vars: &mut HashMap
 
             ctx.start_block(body_label);
             let mut body_vars = cond_vars;
-            lower_block(ctx, body, &mut body_vars);
+            let mut body_live_after = loop_reads;
+            body_live_after.extend(live_after.iter().cloned());
+            lower_block_with_live_after(ctx, body, &mut body_vars, &body_live_after);
             copy_env_to_loop_phi(ctx, &body_vars);
             ctx.finish_current(Terminator::Jump(cond_label));
 
             ctx.pop_loop();
             ctx.start_block(end_label);
-            *vars = loop_phi;
+            *vars = entry_vars;
+            apply_loop_phi(vars, &loop_phi);
         }
         TypedStatement::For {
             line: _,
@@ -2119,19 +2893,35 @@ fn lower_statement(ctx: &mut LowerCtx, stmt: &TypedStatement, vars: &mut HashMap
             body,
         } => {
             if let Some(s) = init {
-                lower_statement(ctx, s, vars);
+                lower_statement(ctx, s, vars, &BTreeSet::new());
             }
             let cond_label = ctx.new_label();
             let body_label = ctx.new_label();
             let step_label = ctx.new_label();
             let end_label = ctx.new_label();
-            let loop_phi = initialize_loop_phi(ctx, vars);
+            let entry_vars = vars.clone();
+            let mut mutations = BTreeSet::new();
+            collect_block_mutations(body, &mut mutations);
+            if let Some(step) = step {
+                collect_statement_mutations(step, &mut mutations);
+            }
+            let mut loop_reads = BTreeSet::new();
+            if let Some(cond) = cond {
+                collect_expr_reads(cond, &mut loop_reads);
+            }
+            if let Some(step) = step {
+                collect_statement_reads(step, &mut loop_reads);
+            }
+            collect_block_reads(body, &mut loop_reads);
+            let phi_names = loop_phi_names(vars, &mutations, &loop_reads, live_after);
+            let loop_phi = initialize_loop_phi(ctx, vars, &phi_names);
+            let loop_env = env_with_loop_phi(&entry_vars, &loop_phi);
             ctx.push_loop(step_label, end_label);
             ctx.set_loop_phi(loop_phi.clone());
             ctx.finish_current(Terminator::Jump(cond_label));
 
             ctx.start_block(cond_label);
-            let mut cond_vars = loop_phi.clone();
+            let mut cond_vars = loop_env;
             let cond_t = if let Some(c) = cond {
                 lower_expr(ctx, c, &mut cond_vars)
             } else {
@@ -2147,21 +2937,24 @@ fn lower_statement(ctx: &mut LowerCtx, stmt: &TypedStatement, vars: &mut HashMap
 
             ctx.start_block(body_label);
             let mut body_vars = cond_vars;
-            lower_block(ctx, body, &mut body_vars);
+            let mut body_live_after = loop_reads.clone();
+            body_live_after.extend(live_after.iter().cloned());
+            lower_block_with_live_after(ctx, body, &mut body_vars, &body_live_after);
             copy_env_to_loop_phi(ctx, &body_vars);
             ctx.finish_current(Terminator::Jump(step_label));
 
             ctx.start_block(step_label);
             if let Some(s) = step {
-                let mut step_vars = loop_phi.clone();
-                lower_statement(ctx, s, &mut step_vars);
+                let mut step_vars = env_with_loop_phi(&entry_vars, &loop_phi);
+                lower_statement(ctx, s, &mut step_vars, &body_live_after);
                 copy_env_to_loop_phi(ctx, &step_vars);
             }
             ctx.finish_current(Terminator::Jump(cond_label));
 
             ctx.pop_loop();
             ctx.start_block(end_label);
-            *vars = loop_phi;
+            *vars = entry_vars;
+            apply_loop_phi(vars, &loop_phi);
         }
         TypedStatement::Break => {
             if let Some((_, brk)) = ctx.loop_targets() {
@@ -2181,11 +2974,11 @@ fn lower_statement(ctx: &mut LowerCtx, stmt: &TypedStatement, vars: &mut HashMap
         }
         TypedStatement::Return(opt) => {
             if let Some(e) = opt {
-                // If return type is a tuple, extract elements via TupleGet regardless of expression form
-                if let semantic::Type::Tuple(ts) = &e.ty {
+                // Aggregate returns use the V1 multi-register return convention.
+                if let Some(components) = aggregate_components(&e.ty) {
                     let tup = lower_expr(ctx, e, vars);
-                    let mut outs = Vec::with_capacity(ts.len());
-                    for i in 0..ts.len() {
+                    let mut outs = Vec::with_capacity(components.len());
+                    for i in 0..components.len() {
                         let d = ctx.new_temp();
                         ctx.current_instr(Instr::TupleGet {
                             dest: d,
@@ -2212,146 +3005,6 @@ fn lower_statement(ctx: &mut LowerCtx, stmt: &TypedStatement, vars: &mut HashMap
             let cont = ctx.new_label();
             ctx.start_block(cont);
         }
-        #[cfg(feature = "kotodama_dynamic_bounds")]
-        TypedStatement::ForEachMap {
-            key,
-            value,
-            map,
-            body,
-            start,
-            bound: _,
-            dyn_count: Some(dyn_n),
-            dyn_start,
-        } => {
-            // Lower dynamic `n` once
-            let n = lower_expr(ctx, dyn_n, vars);
-            if let Some(base_name) = state_map_base_name(map)
-                && let Some(spec) = ctx.state_map_configs.get(&base_name)
-                && matches!(key_codec_for_type(&spec.key), Some(KeyCodec::Int))
-                && let Some(value_codec) = value_codec_for_type(&spec.value)
-            {
-                let start_temp = if let Some(ds) = dyn_start {
-                    lower_expr(ctx, ds, vars)
-                } else {
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const {
-                        dest: t,
-                        value: (*start).min(i64::MAX as usize) as i64,
-                    });
-                    t
-                };
-                lower_state_foreach_int_map_dynamic(
-                    ctx,
-                    key,
-                    value,
-                    body,
-                    start_temp,
-                    n,
-                    &base_name,
-                    value_codec,
-                    vars,
-                );
-                return;
-            }
-
-            let base = lower_expr(ctx, map, vars);
-            let base_start_lit: i16 = (*start as i16).max(0);
-            // Guarded unrolling up to cap
-            for i in 0..ctx._dyn_iter_cap {
-                // cond = (i < n)
-                let ti = ctx.new_temp();
-                ctx.current_instr(Instr::Const {
-                    dest: ti,
-                    value: i as i64,
-                });
-                let cond_t = ctx.new_temp();
-                ctx.current_instr(Instr::Binary {
-                    dest: cond_t,
-                    op: BinaryOp::Lt,
-                    left: ti,
-                    right: n,
-                });
-                let then_bb = ctx.new_label();
-                let cont_bb = ctx.new_label();
-                ctx.finish_current(Terminator::Branch {
-                    cond: cond_t,
-                    then_bb,
-                    else_bb: cont_bb,
-                });
-
-                // Then block: perform iteration i
-                ctx.start_block(then_bb);
-                // Compute j = dyn_start.unwrap_or(literal_start) + i
-                let mut index_temp = ti;
-                if let Some(ds) = dyn_start {
-                    let ds_t = lower_expr(ctx, ds, vars);
-                    let sum = ctx.new_temp();
-                    ctx.current_instr(Instr::Binary {
-                        dest: sum,
-                        op: BinaryOp::Add,
-                        left: ds_t,
-                        right: index_temp,
-                    });
-                    index_temp = sum;
-                } else if base_start_lit != 0 {
-                    // add literal start
-                    let s = ctx.new_temp();
-                    ctx.current_instr(Instr::Const {
-                        dest: s,
-                        value: base_start_lit as i64,
-                    });
-                    let sum = ctx.new_temp();
-                    ctx.current_instr(Instr::Binary {
-                        dest: sum,
-                        op: BinaryOp::Add,
-                        left: s,
-                        right: index_temp,
-                    });
-                    index_temp = sum;
-                }
-                // bytes = index_temp * 16
-                let sixteen = ctx.new_temp();
-                ctx.current_instr(Instr::Const {
-                    dest: sixteen,
-                    value: 16,
-                });
-                let bytes = ctx.new_temp();
-                ctx.current_instr(Instr::Binary {
-                    dest: bytes,
-                    op: BinaryOp::Mul,
-                    left: index_temp,
-                    right: sixteen,
-                });
-                // addr = base + bytes
-                let addr = ctx.new_temp();
-                ctx.current_instr(Instr::Binary {
-                    dest: addr,
-                    op: BinaryOp::Add,
-                    left: base,
-                    right: bytes,
-                });
-                let k = ctx.new_temp();
-                let v = ctx.new_temp();
-                // Load key and value using addr + 0 and addr + 8
-                ctx.current_instr(Instr::Load64Imm {
-                    dest: k,
-                    base: addr,
-                    imm: 0,
-                });
-                ctx.current_instr(Instr::Load64Imm {
-                    dest: v,
-                    base: addr,
-                    imm: 8,
-                });
-                vars.insert(key.clone(), k);
-                if let Some(val_name) = value {
-                    vars.insert(val_name.clone(), v);
-                }
-                lower_block(ctx, body, vars);
-                ctx.finish_current(Terminator::Jump(cont_bb));
-                ctx.start_block(cont_bb);
-            }
-        }
         TypedStatement::ForEachMap {
             key,
             value,
@@ -2362,11 +3015,10 @@ fn lower_statement(ctx: &mut LowerCtx, stmt: &TypedStatement, vars: &mut HashMap
             ..
         } => {
             if let Some(base_name) = state_map_base_name(map)
-                && let Some(spec) = ctx.state_map_configs.get(&base_name)
-                && matches!(key_codec_for_type(&spec.key), Some(KeyCodec::Int))
-                && let Some(value_codec) = value_codec_for_type(&spec.value)
+                && let Some(spec) = ctx.state_map_configs.get(&base_name).cloned()
+                && key_codec_for_type(&spec.key).is_some()
             {
-                lower_state_foreach_int_map(
+                lower_state_foreach_map(
                     ctx,
                     key,
                     value,
@@ -2375,8 +3027,10 @@ fn lower_statement(ctx: &mut LowerCtx, stmt: &TypedStatement, vars: &mut HashMap
                     *start,
                     *bound,
                     &base_name,
-                    value_codec,
+                    &spec.key,
+                    &spec.value,
                     vars,
+                    live_after,
                 );
                 return;
             }
@@ -2416,6 +3070,16 @@ fn lower_statement(ctx: &mut LowerCtx, stmt: &TypedStatement, vars: &mut HashMap
             let body_label = ctx.new_label();
             let step_label = ctx.new_label();
             let exit_label = ctx.new_label();
+            let entry_vars = vars.clone();
+            let mut mutations = BTreeSet::new();
+            collect_block_mutations(body, &mut mutations);
+            let mut loop_reads = BTreeSet::new();
+            collect_block_reads(body, &mut loop_reads);
+            let phi_names = loop_phi_names(vars, &mutations, &loop_reads, live_after);
+            let loop_phi = initialize_loop_phi(ctx, vars, &phi_names);
+            let loop_env = env_with_loop_phi(&entry_vars, &loop_phi);
+            ctx.push_loop(step_label, exit_label);
+            ctx.set_loop_phi(loop_phi.clone());
             ctx.finish_current(Terminator::Jump(loop_label));
 
             ctx.start_block(loop_label);
@@ -2433,7 +3097,7 @@ fn lower_statement(ctx: &mut LowerCtx, stmt: &TypedStatement, vars: &mut HashMap
             });
 
             ctx.start_block(body_label);
-            let mut body_vars = vars.clone();
+            let mut body_vars = loop_env;
             let offset_bytes = ctx.new_temp();
             ctx.current_instr(Instr::Binary {
                 dest: offset_bytes,
@@ -2464,9 +3128,10 @@ fn lower_statement(ctx: &mut LowerCtx, stmt: &TypedStatement, vars: &mut HashMap
             if let Some(val_name) = value {
                 body_vars.insert(val_name.clone(), value_temp);
             }
-            ctx.push_loop(step_label, exit_label);
-            lower_block(ctx, body, &mut body_vars);
-            ctx.pop_loop();
+            let mut body_live_after = loop_reads;
+            body_live_after.extend(live_after.iter().cloned());
+            lower_block_with_live_after(ctx, body, &mut body_vars, &body_live_after);
+            copy_env_to_loop_phi(ctx, &body_vars);
             ctx.finish_current(Terminator::Jump(step_label));
 
             ctx.start_block(step_label);
@@ -2478,7 +3143,10 @@ fn lower_statement(ctx: &mut LowerCtx, stmt: &TypedStatement, vars: &mut HashMap
             });
             ctx.finish_current(Terminator::Jump(loop_label));
 
+            ctx.pop_loop();
             ctx.start_block(exit_label);
+            *vars = entry_vars;
+            apply_loop_phi(vars, &loop_phi);
         }
         TypedStatement::MapSet { map, key, value } => {
             let key_tmp = lower_expr(ctx, key, vars);
@@ -2501,7 +3169,7 @@ fn lower_statement(ctx: &mut LowerCtx, stmt: &TypedStatement, vars: &mut HashMap
 }
 
 #[allow(clippy::too_many_arguments)]
-fn lower_state_foreach_int_map(
+fn lower_state_foreach_map(
     ctx: &mut LowerCtx,
     key: &str,
     value: &Option<String>,
@@ -2510,127 +3178,87 @@ fn lower_state_foreach_int_map(
     start: usize,
     bound: Option<usize>,
     base_name: &str,
-    value_codec: ValueCodec,
+    key_ty: &Type,
+    value_ty: &Type,
     vars: &mut HashMap<String, Temp>,
+    live_after: &BTreeSet<String>,
 ) {
-    let max_iters = bound.unwrap_or(2);
-    let max_iters_i64 = (max_iters.min(i64::MAX as usize)) as i64;
-    let base_start_i64 = (start.min(i64::MAX as usize)) as i64;
-    let limit_value = base_start_i64.saturating_add(max_iters_i64);
-
-    let index = ctx.new_temp();
+    let offset = ctx.new_temp();
     ctx.current_instr(Instr::Const {
-        dest: index,
-        value: base_start_i64,
+        dest: offset,
+        value: start.min(i64::MAX as usize) as i64,
     });
     let limit = ctx.new_temp();
     ctx.current_instr(Instr::Const {
         dest: limit,
-        value: limit_value,
+        value: bound.unwrap_or(0).min(i64::MAX as usize) as i64,
     });
-    let one = ctx.new_temp();
-    ctx.current_instr(Instr::Const {
-        dest: one,
-        value: 1,
-    });
+    lower_state_foreach_page(
+        ctx, key, value, body, offset, limit, base_name, key_ty, value_ty, vars, live_after,
+    );
+}
 
-    let loop_label = ctx.new_label();
-    let body_label = ctx.new_label();
-    let step_label = ctx.new_label();
-    let exit_label = ctx.new_label();
-    ctx.finish_current(Terminator::Jump(loop_label));
-
-    ctx.start_block(loop_label);
-    let cond_t = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: cond_t,
-        op: BinaryOp::Lt,
-        left: index,
-        right: limit,
-    });
-    ctx.finish_current(Terminator::Branch {
-        cond: cond_t,
-        then_bb: body_label,
-        else_bb: exit_label,
-    });
-
-    ctx.start_block(body_label);
-    // Build path for current index and fetch durable value: Name(base/index) -> NoritoBytes
-    let path = build_state_path(ctx, base_name, index, &KeyCodec::Int);
-    let blob = ctx.new_temp();
-    ctx.current_instr(Instr::StateGet { dest: blob, path });
-    // Skip body when entry is absent (blob == 0).
-    let zero = ctx.new_temp();
-    ctx.current_instr(Instr::Const {
-        dest: zero,
-        value: 0,
-    });
-    let has_value = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: has_value,
-        op: BinaryOp::Ne,
-        left: blob,
-        right: zero,
-    });
-    let present_bb = ctx.new_label();
-    ctx.finish_current(Terminator::Branch {
-        cond: has_value,
-        then_bb: present_bb,
-        else_bb: step_label,
-    });
-
-    ctx.start_block(present_bb);
-    let value_temp = decode_value_from_norito(ctx, blob, &value_codec);
-    let key_temp = ctx.new_temp();
-    ctx.current_instr(Instr::Copy {
-        dest: key_temp,
-        src: index,
-    });
-    let mut body_vars = vars.clone();
-    body_vars.insert(key.to_string(), key_temp);
-    if let Some(val_name) = value {
-        body_vars.insert(val_name.clone(), value_temp);
+fn decode_state_map_key(ctx: &mut LowerCtx, key_blob: Temp, key_ty: &Type) -> Option<Temp> {
+    match semantic::resolve_struct_type(key_ty) {
+        Type::Int | Type::Bool => {
+            let key = ctx.new_temp();
+            ctx.current_instr(Instr::DecodeInt {
+                dest: key,
+                blob: key_blob,
+            });
+            Some(key)
+        }
+        ty if semantic::is_wide_numeric_type(&ty) => Some(key_blob),
+        Type::String | Type::Bytes => {
+            let key = ctx.new_temp();
+            ctx.current_instr(Instr::PointerFromNorito {
+                dest: key,
+                blob: key_blob,
+                kind: DataRefKind::Blob,
+            });
+            Some(key)
+        }
+        ty if semantic::is_pointer_type(&ty) => {
+            let kind = pointer_kind_for_type(&ty)?;
+            let key = ctx.new_temp();
+            ctx.current_instr(Instr::PointerFromNorito {
+                dest: key,
+                blob: key_blob,
+                kind,
+            });
+            Some(key)
+        }
+        _ => None,
     }
-    ctx.push_loop(step_label, exit_label);
-    lower_block(ctx, body, &mut body_vars);
-    ctx.pop_loop();
-    ctx.finish_current(Terminator::Jump(step_label));
-
-    ctx.start_block(step_label);
-    ctx.current_instr(Instr::Binary {
-        dest: index,
-        op: BinaryOp::Add,
-        left: index,
-        right: one,
-    });
-    ctx.finish_current(Terminator::Jump(loop_label));
-
-    ctx.start_block(exit_label);
 }
 
 #[allow(clippy::too_many_arguments)]
-fn lower_state_foreach_int_map_dynamic(
+fn lower_state_foreach_page(
     ctx: &mut LowerCtx,
-    key: &str,
-    value: &Option<String>,
+    key_name: &str,
+    value_name: &Option<String>,
     body: &TypedBlock,
-    start: Temp,
-    count: Temp,
+    offset: Temp,
+    limit: Temp,
     base_name: &str,
-    value_codec: ValueCodec,
+    key_ty: &Type,
+    value_ty: &Type,
     vars: &mut HashMap<String, Temp>,
+    live_after: &BTreeSet<String>,
 ) {
-    let index = ctx.new_temp();
-    ctx.current_instr(Instr::Copy {
-        dest: index,
-        src: start,
+    let prefix = build_state_base(ctx, base_name);
+    let page = ctx.new_temp();
+    ctx.current_instr(Instr::StateKeys {
+        dest: page,
+        prefix,
+        offset,
+        limit,
     });
-    let limit = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: limit,
-        op: BinaryOp::Add,
-        left: start,
-        right: count,
+
+    let index = ctx.new_temp();
+    ctx.current_instr(Instr::Const {
+        dest: index,
+        value: 0,
     });
     let one = ctx.new_temp();
     ctx.current_instr(Instr::Const {
@@ -2642,6 +3270,16 @@ fn lower_state_foreach_int_map_dynamic(
     let body_label = ctx.new_label();
     let step_label = ctx.new_label();
     let exit_label = ctx.new_label();
+    let entry_vars = vars.clone();
+    let mut mutations = BTreeSet::new();
+    collect_block_mutations(body, &mut mutations);
+    let mut loop_reads = BTreeSet::new();
+    collect_block_reads(body, &mut loop_reads);
+    let phi_names = loop_phi_names(vars, &mutations, &loop_reads, live_after);
+    let loop_phi = initialize_loop_phi(ctx, vars, &phi_names);
+    let loop_env = env_with_loop_phi(&entry_vars, &loop_phi);
+    ctx.push_loop(step_label, exit_label);
+    ctx.set_loop_phi(loop_phi.clone());
     ctx.finish_current(Terminator::Jump(loop_label));
 
     ctx.start_block(loop_label);
@@ -2659,43 +3297,51 @@ fn lower_state_foreach_int_map_dynamic(
     });
 
     ctx.start_block(body_label);
-    let path = build_state_path(ctx, base_name, index, &KeyCodec::Int);
-    let blob = ctx.new_temp();
-    ctx.current_instr(Instr::StateGet { dest: blob, path });
+    let key_blob = ctx.new_temp();
+    ctx.current_instr(Instr::StateMapKeyAt {
+        dest: key_blob,
+        page,
+        base: prefix,
+        index,
+    });
     let zero = ctx.new_temp();
     ctx.current_instr(Instr::Const {
         dest: zero,
         value: 0,
     });
-    let has_value = ctx.new_temp();
+    let has_key = ctx.new_temp();
     ctx.current_instr(Instr::Binary {
-        dest: has_value,
+        dest: has_key,
         op: BinaryOp::Ne,
-        left: blob,
+        left: key_blob,
         right: zero,
     });
     let present_bb = ctx.new_label();
     ctx.finish_current(Terminator::Branch {
-        cond: has_value,
+        cond: has_key,
         then_bb: present_bb,
-        else_bb: step_label,
+        else_bb: exit_label,
     });
 
     ctx.start_block(present_bb);
-    let value_temp = decode_value_from_norito(ctx, blob, &value_codec);
-    let key_temp = ctx.new_temp();
-    ctx.current_instr(Instr::Copy {
-        dest: key_temp,
-        src: index,
+    let key_temp = decode_state_map_key(ctx, key_blob, key_ty).unwrap_or_else(|| {
+        ctx.record_error("durable StateMap iteration key type is not decodable".into());
+        zero
     });
-    let mut body_vars = vars.clone();
-    body_vars.insert(key.to_string(), key_temp);
-    if let Some(val_name) = value {
+    let value_temp = lower_state_map_get_value(ctx, base_name, key_temp, key_ty, value_ty)
+        .unwrap_or_else(|| {
+            ctx.record_error("durable StateMap iteration value type is not decodable".into());
+            zero
+        });
+    let mut body_vars = loop_env;
+    body_vars.insert(key_name.to_string(), key_temp);
+    if let Some(val_name) = value_name {
         body_vars.insert(val_name.clone(), value_temp);
     }
-    ctx.push_loop(step_label, exit_label);
-    lower_block(ctx, body, &mut body_vars);
-    ctx.pop_loop();
+    let mut body_live_after = loop_reads;
+    body_live_after.extend(live_after.iter().cloned());
+    lower_block_with_live_after(ctx, body, &mut body_vars, &body_live_after);
+    copy_env_to_loop_phi(ctx, &body_vars);
     ctx.finish_current(Terminator::Jump(step_label));
 
     ctx.start_block(step_label);
@@ -2707,7 +3353,10 @@ fn lower_state_foreach_int_map_dynamic(
     });
     ctx.finish_current(Terminator::Jump(loop_label));
 
+    ctx.pop_loop();
     ctx.start_block(exit_label);
+    *vars = entry_vars;
+    apply_loop_phi(vars, &loop_phi);
 }
 
 fn lower_expr_as_int(
@@ -2740,104 +3389,25 @@ fn lower_expr_as_numeric(
     }
 }
 
-fn query_get_syscall(builtin: Builtin) -> u32 {
-    match builtin {
-        Builtin::QueryGetAccount => crate::syscalls::SYSCALL_QUERY_GET_ACCOUNT,
-        Builtin::QueryGetAsset => crate::syscalls::SYSCALL_QUERY_GET_ASSET,
-        Builtin::QueryGetAssetDefinition => crate::syscalls::SYSCALL_QUERY_GET_ASSET_DEFINITION,
-        Builtin::QueryGetDomain => crate::syscalls::SYSCALL_QUERY_GET_DOMAIN,
-        Builtin::QueryGetNft => crate::syscalls::SYSCALL_QUERY_GET_NFT,
-        Builtin::QueryGetParameter => crate::syscalls::SYSCALL_QUERY_GET_PARAMETER,
-        Builtin::QueryGetContractManifest => crate::syscalls::SYSCALL_QUERY_GET_CONTRACT_MANIFEST,
-        Builtin::QueryGetContractInstance => crate::syscalls::SYSCALL_QUERY_GET_CONTRACT_INSTANCE,
-        _ => unreachable!("query_get_syscall called for non-query builtin"),
-    }
-}
-
-fn zk_verify_syscall(builtin: Builtin) -> u32 {
-    match builtin {
-        Builtin::ZkVerifyTransfer => crate::syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
-        Builtin::ZkVerifyUnshield => crate::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD,
-        Builtin::ZkVerifyBatch => crate::syscalls::SYSCALL_ZK_VERIFY_BATCH,
-        Builtin::ZkVoteVerifyBallot => crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT,
-        Builtin::ZkVoteVerifyTally => crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY,
-        _ => unreachable!("zk_verify_syscall called for non-ZK-verify builtin"),
-    }
-}
-
-fn soracloud_syscall(builtin: Builtin) -> u32 {
-    match builtin {
-        Builtin::SoracloudReadCommittedState => {
-            crate::syscalls::SYSCALL_SORACLOUD_READ_COMMITTED_STATE
-        }
-        Builtin::SoracloudEmitStateMutation => {
-            crate::syscalls::SYSCALL_SORACLOUD_EMIT_STATE_MUTATION
-        }
-        Builtin::SoracloudEmitMailboxMessage => {
-            crate::syscalls::SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE
-        }
-        Builtin::SoracloudAppendJournal => crate::syscalls::SYSCALL_SORACLOUD_APPEND_JOURNAL,
-        Builtin::SoracloudPublishCheckpoint => {
-            crate::syscalls::SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT
-        }
-        Builtin::SoracloudReadSecret => crate::syscalls::SYSCALL_SORACLOUD_READ_SECRET,
-        Builtin::SoracloudReadCredential => crate::syscalls::SYSCALL_SORACLOUD_READ_CREDENTIAL,
-        Builtin::SoracloudEgressFetch => crate::syscalls::SYSCALL_SORACLOUD_EGRESS_FETCH,
-        Builtin::SoracloudReadConfig => crate::syscalls::SYSCALL_SORACLOUD_READ_CONFIG,
-        Builtin::SoracloudReadSecretEnvelope => {
-            crate::syscalls::SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE
-        }
-        _ => unreachable!("soracloud_syscall called for non-Soracloud builtin"),
-    }
-}
-
-fn smart_contract_lifecycle_syscall(builtin: Builtin) -> u32 {
-    match builtin {
-        Builtin::DeactivateContractInstance => {
-            crate::syscalls::SYSCALL_DEACTIVATE_CONTRACT_INSTANCE
-        }
-        Builtin::RemoveSmartContractBytes => crate::syscalls::SYSCALL_REMOVE_SMART_CONTRACT_BYTES,
-        Builtin::RegisterSmartContractCode => crate::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_CODE,
-        Builtin::RegisterSmartContractBytes => {
-            crate::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES
-        }
-        Builtin::ActivateContractInstance => crate::syscalls::SYSCALL_ACTIVATE_CONTRACT_INSTANCE,
-        _ => unreachable!("smart_contract_lifecycle_syscall called for non-lifecycle builtin"),
-    }
-}
-
-fn direct_helper_syscall(builtin: Builtin) -> Option<u32> {
-    Some(match builtin {
-        Builtin::JsonGetIntDirect => crate::syscalls::SYSCALL_JSON_GET_I64_DIRECT,
-        Builtin::JsonGetJsonDirect => crate::syscalls::SYSCALL_JSON_GET_JSON_DIRECT,
-        Builtin::JsonGetNameDirect => crate::syscalls::SYSCALL_JSON_GET_NAME_DIRECT,
-        Builtin::JsonGetAccountIdDirect => crate::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT,
-        Builtin::JsonGetNftIdDirect => crate::syscalls::SYSCALL_JSON_GET_NFT_ID_DIRECT,
-        Builtin::JsonGetBlobHexDirect => crate::syscalls::SYSCALL_JSON_GET_BLOB_HEX_DIRECT,
-        Builtin::JsonGetNumericDirect => crate::syscalls::SYSCALL_JSON_GET_NUMERIC_DIRECT,
-        Builtin::JsonGetAssetDefinitionIdDirect => {
-            crate::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT
-        }
-        Builtin::JsonSetIntDirect => crate::syscalls::SYSCALL_JSON_SET_I64_DIRECT,
-        Builtin::JsonSetAccountIdDirect => crate::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT,
-        Builtin::BuildPathKeyNoritoDirect => crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT,
-        Builtin::SchemaInfoDirect => crate::syscalls::SYSCALL_SCHEMA_INFO_DIRECT,
-        Builtin::SchemaEncodeDirect => crate::syscalls::SYSCALL_SCHEMA_ENCODE_DIRECT,
-        Builtin::SchemaDecodeDirect => crate::syscalls::SYSCALL_SCHEMA_DECODE_DIRECT,
-        Builtin::NumericToIntDirect => crate::syscalls::SYSCALL_NUMERIC_TO_INT_DIRECT,
-        Builtin::NumericAddDirect => crate::syscalls::SYSCALL_NUMERIC_ADD_DIRECT,
-        Builtin::NumericSubDirect => crate::syscalls::SYSCALL_NUMERIC_SUB_DIRECT,
-        Builtin::NumericMulDirect => crate::syscalls::SYSCALL_NUMERIC_MUL_DIRECT,
-        Builtin::NumericDivDirect => crate::syscalls::SYSCALL_NUMERIC_DIV_DIRECT,
-        Builtin::NumericRemDirect => crate::syscalls::SYSCALL_NUMERIC_REM_DIRECT,
-        Builtin::NumericNegDirect => crate::syscalls::SYSCALL_NUMERIC_NEG_DIRECT,
-        Builtin::NumericEqDirect => crate::syscalls::SYSCALL_NUMERIC_EQ_DIRECT,
-        Builtin::NumericNeDirect => crate::syscalls::SYSCALL_NUMERIC_NE_DIRECT,
-        Builtin::NumericLtDirect => crate::syscalls::SYSCALL_NUMERIC_LT_DIRECT,
-        Builtin::NumericLeDirect => crate::syscalls::SYSCALL_NUMERIC_LE_DIRECT,
-        Builtin::NumericGtDirect => crate::syscalls::SYSCALL_NUMERIC_GT_DIRECT,
-        Builtin::NumericGeDirect => crate::syscalls::SYSCALL_NUMERIC_GE_DIRECT,
-        _ => return None,
+/// Select a source builtin's direct host operation exclusively through its
+/// canonical registry record.
+///
+/// This is deliberately fail-closed: passing an instruction-only or derived
+/// builtin is a compiler invariant violation, not an opportunity for lowering
+/// to invent an unregistered syscall number.
+fn direct_builtin_syscall(builtin: Builtin) -> u32 {
+    let spec = builtin.spec();
+    assert_eq!(
+        spec.lowering,
+        BuiltinLowering::DirectSyscall,
+        "IR lowering requested a direct syscall for non-direct builtin {}",
+        spec.name
+    );
+    spec.syscall.unwrap_or_else(|| {
+        panic!(
+            "direct builtin {} has no syscall in the canonical registry",
+            spec.name
+        )
     })
 }
 
@@ -2980,7 +3550,7 @@ fn lower_direct_helper_call(
     args: &[semantic::TypedExpr],
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
-    let syscall = direct_helper_syscall(builtin).expect("direct helper syscall");
+    let syscall = direct_builtin_syscall(builtin);
     let mut lowered_args = Vec::with_capacity(args.len());
     for (idx, arg) in args.iter().enumerate() {
         let temp = if builtin == Builtin::JsonSetIntDirect && idx == 2 {
@@ -3075,7 +3645,7 @@ fn lower_pointer_constructor_call(
     let src = lower_expr(ctx, arg, vars);
     let resolved_arg = semantic::resolve_struct_type(&arg.ty);
     match (target_ty.clone(), resolved_arg.clone()) {
-        (Type::Blob | Type::Bytes, _) => src,
+        (Type::Bytes, _) => src,
         (t, arg_ty) if t == arg_ty => src,
         (Type::Json, ty) if semantic::is_blob_like(&ty) => {
             let dest = ctx.new_temp();
@@ -3435,7 +4005,7 @@ fn lower_surface_builtin_call(
                     key_blob: blob,
                 });
             } else {
-                panic!("path expects int-like or blob-like key")
+                panic!("path expects an i64-like or bytes-like key")
             }
             d
         }
@@ -3498,6 +4068,30 @@ fn lower_surface_builtin_call(
             ctx.current_instr(Instr::NumericCompare {
                 dest,
                 op: numeric_compare_builtin_op(builtin).expect("numeric compare builtin op"),
+                left,
+                right,
+            });
+            dest
+        }
+        Builtin::WrappingNeg => {
+            let operand = lower_expr_as_int(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::WrappingNeg { dest, operand });
+            dest
+        }
+        builtin @ (Builtin::WrappingAdd | Builtin::WrappingSub | Builtin::WrappingMul) => {
+            let left = lower_expr_as_int(ctx, &args[0], vars);
+            let right = lower_expr_as_int(ctx, &args[1], vars);
+            let op = match builtin {
+                Builtin::WrappingAdd => BinaryOp::Add,
+                Builtin::WrappingSub => BinaryOp::Sub,
+                Builtin::WrappingMul => BinaryOp::Mul,
+                _ => unreachable!(),
+            };
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::WrappingBinary {
+                dest,
+                op,
                 left,
                 right,
             });
@@ -3663,7 +4257,7 @@ fn lower_surface_builtin_call(
             ctx.current_instr(Instr::QueryGet {
                 dest,
                 key,
-                syscall: query_get_syscall(builtin),
+                syscall: direct_builtin_syscall(builtin),
             });
             dest
         }
@@ -3713,11 +4307,17 @@ fn lower_surface_builtin_call(
             });
             dest
         }
-        Builtin::ExecuteInstruction
+        Builtin::RecordSccpMessage
         | Builtin::ScExecuteSubmitBallot
         | Builtin::ScExecuteUnshield => {
             let payload = lower_expr(ctx, &args[0], vars);
-            ctx.current_instr(Instr::VendorExecuteInstruction { payload });
+            let kind = match builtin {
+                Builtin::RecordSccpMessage => VendorInstructionKind::RecordSccpMessage,
+                Builtin::ScExecuteSubmitBallot => VendorInstructionKind::SubmitBallot,
+                Builtin::ScExecuteUnshield => VendorInstructionKind::Unshield,
+                _ => unreachable!("matched operation-specific instruction bridge"),
+            };
+            ctx.current_instr(Instr::VendorExecuteInstruction { payload, kind });
             let temp = ctx.new_temp();
             ctx.current_instr(Instr::Const {
                 dest: temp,
@@ -3811,16 +4411,14 @@ fn lower_surface_builtin_call(
         }
         Builtin::Require => {
             let cond = lower_expr(ctx, &args[0], vars);
-            if args.len() > 1 {
-                let _ = lower_expr(ctx, &args[1], vars);
-            }
+            let code = lower_expr_as_int(ctx, &args[1], vars);
             let reject = ctx.new_temp();
             ctx.current_instr(Instr::Unary {
                 dest: reject,
                 op: UnaryOp::Not,
                 operand: cond,
             });
-            ctx.current_instr(Instr::AbortIf { cond: reject });
+            ctx.current_instr(Instr::AbortIf { cond: reject, code });
             let t = ctx.new_temp();
             ctx.current_instr(Instr::Const { dest: t, value: 0 });
             t
@@ -4334,7 +4932,7 @@ fn lower_surface_builtin_call(
             let payload = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::SmartContractLifecycle {
                 payload,
-                syscall: smart_contract_lifecycle_syscall(builtin),
+                syscall: direct_builtin_syscall(builtin),
             });
             let t = ctx.new_temp();
             ctx.current_instr(Instr::Const { dest: t, value: 0 });
@@ -4359,7 +4957,7 @@ fn lower_surface_builtin_call(
         | Builtin::ZkVoteVerifyTally) => {
             let payload = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::ZkVerify {
-                number: zk_verify_syscall(builtin),
+                number: direct_builtin_syscall(builtin),
                 payload,
             });
             let temp = ctx.new_temp();
@@ -4483,7 +5081,7 @@ fn lower_surface_builtin_call(
             ctx.current_instr(Instr::SoracloudHostCall {
                 dest,
                 request,
-                syscall: soracloud_syscall(builtin),
+                syscall: direct_builtin_syscall(builtin),
             });
             dest
         }
@@ -4515,8 +5113,7 @@ fn lower_surface_builtin_call(
                 && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
                 && let Some(key_codec) = key_codec_for_type(&spec.key)
             {
-                let anchor = state_map_anchor_base_name(&bn, &spec.value);
-                let t_path = build_state_path(ctx, &anchor, key_tmp, &key_codec);
+                let t_path = build_state_path(ctx, &bn, key_tmp, &key_codec);
                 let t_blob = ctx.new_temp();
                 ctx.current_instr(Instr::StateGet {
                     dest: t_blob,
@@ -4556,8 +5153,7 @@ fn lower_surface_builtin_call(
                 && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
                 && let Some(key_codec) = key_codec_for_type(&spec.key)
             {
-                let anchor = state_map_anchor_base_name(&bn, &spec.value);
-                let t_path = build_state_path(ctx, &anchor, key_tmp, &key_codec);
+                let t_path = build_state_path(ctx, &bn, key_tmp, &key_codec);
                 let t_blob = ctx.new_temp();
                 ctx.current_instr(Instr::StateGet {
                     dest: t_blob,
@@ -4585,7 +5181,7 @@ fn lower_surface_builtin_call(
                     else_bb,
                 });
                 ctx.start_block(then_bb);
-                let decoded = lower_state_map_get_value(ctx, &bn, key_tmp, &spec.key, &spec.value)
+                let decoded = decode_state_map_value_blob(ctx, t_blob, &spec.value)
                     .expect("durable map value should decode");
                 ctx.current_instr(Instr::Copy {
                     dest: result,
@@ -4652,11 +5248,8 @@ fn lower_surface_builtin_call(
             let dexpr = &args[2];
             let key_tmp = lower_expr(ctx, kexpr, vars);
             if let Some(bn) = state_map_base_name(mexpr)
-                && let Some(spec) = ctx.state_map_configs.get(&bn)
-                && let (Some(key_codec), Some(value_codec)) = (
-                    key_codec_for_type(&spec.key),
-                    value_codec_for_type(&spec.value),
-                )
+                && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
+                && let Some(key_codec) = key_codec_for_type(&spec.key)
             {
                 let t_path = build_state_path(ctx, &bn, key_tmp, &key_codec);
                 let t_blob = ctx.new_temp();
@@ -4686,21 +5279,18 @@ fn lower_surface_builtin_call(
                     else_bb,
                 });
                 ctx.start_block(then_bb);
-                let existing = decode_value_from_norito(ctx, t_blob, &value_codec);
-                ctx.current_instr(Instr::Binary {
+                let existing = decode_state_map_value_blob(ctx, t_blob, &spec.value)
+                    .expect("durable map value should decode");
+                ctx.current_instr(Instr::Copy {
                     dest: result,
-                    op: BinaryOp::Add,
-                    left: existing,
-                    right: zero,
+                    src: existing,
                 });
                 ctx.finish_current(Terminator::Jump(end_bb));
                 ctx.start_block(else_bb);
                 let def = lower_expr(ctx, dexpr, vars);
-                ctx.current_instr(Instr::Binary {
+                ctx.current_instr(Instr::Copy {
                     dest: result,
-                    op: BinaryOp::Add,
-                    left: def,
-                    right: zero,
+                    src: def,
                 });
                 ctx.finish_current(Terminator::Jump(end_bb));
                 ctx.start_block(end_bb);
@@ -4759,8 +5349,7 @@ fn lower_surface_builtin_call(
                 && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
                 && let Some(key_codec) = key_codec_for_type(&spec.key)
             {
-                let anchor = state_map_anchor_base_name(&bn, &spec.value);
-                let t_path = build_state_path(ctx, &anchor, key_tmp, &key_codec);
+                let t_path = build_state_path(ctx, &bn, key_tmp, &key_codec);
                 let t_blob = ctx.new_temp();
                 ctx.current_instr(Instr::StateGet {
                     dest: t_blob,
@@ -4788,7 +5377,7 @@ fn lower_surface_builtin_call(
                     else_bb,
                 });
                 ctx.start_block(then_bb);
-                let existing = lower_state_map_get_value(ctx, &bn, key_tmp, &spec.key, &spec.value)
+                let existing = decode_state_map_value_blob(ctx, t_blob, &spec.value)
                     .expect("durable map value should decode");
                 ctx.current_instr(Instr::Copy {
                     dest: result,
@@ -4855,6 +5444,7 @@ fn lower_surface_builtin_call(
             ctx.start_block(end_bb);
             result
         }
+        Builtin::StateMapRemove => lower_state_map_remove_option(ctx, args, vars),
         Builtin::KeysTake2 | Builtin::ValuesTake2 => {
             let base = lower_expr(ctx, &args[0], vars);
             let start_t = lower_expr_as_int(ctx, &args[1], vars);
@@ -4972,6 +5562,14 @@ fn lower_surface_builtin_call(
             });
             tup
         }
+        Builtin::TestInvokeEntrypoint
+        | Builtin::TestInvokeEntrypointAs
+        | Builtin::TestExpectRejectAs
+        | Builtin::TestActorAccount
+        | Builtin::TestActorPublicKey
+        | Builtin::TestActorSign => {
+            unreachable!("test helpers use their dedicated lowering paths")
+        }
     }
 }
 
@@ -4993,24 +5591,17 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
         }
         semantic::ExprKind::Decimal(raw) => {
             let t = ctx.new_temp();
-            match raw.parse::<Numeric>() {
-                Ok(numeric) => {
-                    if numeric.scale() != 0 || numeric.mantissa().is_negative() {
-                        ctx.record_error(format!(
-                            "numeric literal `{raw}` must be an unsigned integer (scale=0)"
-                        ));
-                        ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    } else {
-                        let hex = hex::encode(numeric.encode());
-                        ctx.current_instr(Instr::DataRef {
-                            dest: t,
-                            kind: DataRefKind::NoritoBytes,
-                            value: format!("0x{hex}"),
-                        });
-                    }
+            match raw.parse::<u128>() {
+                Ok(value) => {
+                    let hex = hex::encode(Numeric::new(value, 0).encode());
+                    ctx.current_instr(Instr::DataRef {
+                        dest: t,
+                        kind: DataRefKind::NoritoBytes,
+                        value: format!("0x{hex}"),
+                    });
                 }
-                Err(err) => {
-                    ctx.record_error(format!("invalid numeric literal `{raw}`: {err}"));
+                Err(_) => {
+                    ctx.record_error(format!("u128 literal `{raw}` is outside 0..={}", u128::MAX));
                     ctx.current_instr(Instr::Const { dest: t, value: 0 });
                 }
             }
@@ -5061,6 +5652,24 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             }
         }
         semantic::ExprKind::Unary { op, expr: inner } => {
+            if matches!(op, UnaryOp::Neg)
+                && matches!(semantic::resolve_struct_type(&expr.ty), Type::Int)
+            {
+                match crate::checked_arithmetic::evaluate_checked_i64(expr) {
+                    Ok(Some(value)) => {
+                        let dest = ctx.new_temp();
+                        ctx.current_instr(Instr::Const { dest, value });
+                        return dest;
+                    }
+                    Err(error) => {
+                        ctx.record_error(error.to_string());
+                        let dest = ctx.new_temp();
+                        ctx.current_instr(Instr::Const { dest, value: 0 });
+                        return dest;
+                    }
+                    Ok(None) => {}
+                }
+            }
             let v = lower_expr(ctx, inner, vars);
             if matches!(op, UnaryOp::Neg) && semantic::is_wide_numeric_type(&inner.ty) {
                 let zero_int = ctx.new_temp();
@@ -5108,6 +5717,27 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             v
         }
         semantic::ExprKind::Binary { op, left, right } => {
+            if matches!(op, BinaryOp::And | BinaryOp::Or) {
+                return lower_short_circuit_bool(ctx, *op, left, right, vars);
+            }
+            if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
+                && matches!(semantic::resolve_struct_type(&expr.ty), Type::Int)
+            {
+                match crate::checked_arithmetic::evaluate_checked_i64(expr) {
+                    Ok(Some(value)) => {
+                        let dest = ctx.new_temp();
+                        ctx.current_instr(Instr::Const { dest, value });
+                        return dest;
+                    }
+                    Err(error) => {
+                        ctx.record_error(error.to_string());
+                        let dest = ctx.new_temp();
+                        ctx.current_instr(Instr::Const { dest, value: 0 });
+                        return dest;
+                    }
+                    Ok(None) => {}
+                }
+            }
             let l = lower_expr(ctx, left, vars);
             let r = lower_expr(ctx, right, vars);
             let lhs_wide = semantic::is_wide_numeric_type(&left.ty);
@@ -5233,7 +5863,20 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             if let Some(entrypoint) = name.strip_prefix(INVOKE_ENTRYPOINT_PREFIX) {
                 return lower_invoke_entrypoint_call(ctx, entrypoint, &args[0], &expr.ty, vars);
             }
-            if let Some(builtin) = Builtin::from_name(name) {
+            if let Some(value) = lower_sum_type_call(ctx, name, args, vars) {
+                return value;
+            }
+            if let Some(builtin) = Builtin::from_name(name)
+                && !matches!(
+                    builtin,
+                    Builtin::TestInvokeEntrypoint
+                        | Builtin::TestInvokeEntrypointAs
+                        | Builtin::TestExpectRejectAs
+                        | Builtin::TestActorAccount
+                        | Builtin::TestActorPublicKey
+                        | Builtin::TestActorSign
+                )
+            {
                 return lower_surface_builtin_call(ctx, builtin, args, vars);
             }
             match name.as_str() {
@@ -5265,7 +5908,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                             ctx.current_instr(Instr::Const { dest: t, value: 0 });
                             t
                         }
-                        semantic::Type::Tuple(items) => {
+                        aggregate if aggregate_components(aggregate).is_some() => {
+                            let items = aggregate_components(aggregate)
+                                .expect("aggregate return components checked");
                             let dests: Vec<Temp> = items.iter().map(|_| ctx.new_temp()).collect();
                             let mut return_pointer_mask = 0u64;
                             for (idx, item_ty) in items.iter().enumerate() {
@@ -5371,6 +6016,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                                 .and_then(|params| params.get(idx))
                                 .expect("checked state parameter");
                             arg_tmps.extend(lower_state_handle_args(ctx, a, &param.ty, vars));
+                        } else if let Some(param) =
+                            signature.as_ref().and_then(|params| params.get(idx))
+                            && function_value_word_types(&param.ty).is_some()
+                        {
+                            let value = lower_expr(ctx, a, vars);
+                            collect_function_value_words(ctx, value, &param.ty, &mut arg_tmps);
                         } else {
                             arg_tmps.push(lower_expr(ctx, a, vars));
                         }
@@ -5386,7 +6037,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                             ctx.current_instr(Instr::Const { dest: t, value: 0 });
                             t
                         }
-                        semantic::Type::Tuple(ts) => {
+                        aggregate if aggregate_components(aggregate).is_some() => {
+                            let ts = aggregate_components(aggregate)
+                                .expect("aggregate return components checked");
                             // Multi-return: move r10.. into temps, then pack to a tuple temp
                             let mut items = Vec::with_capacity(ts.len());
                             for _ in 0..ts.len() {
@@ -5414,46 +6067,20 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 }
             }
         }
-        semantic::ExprKind::Index { target, index } => {
-            let key_tmp = lower_expr(ctx, index, vars);
-            // Durable read path for tracked state maps when target matches tracked map names.
-            if let Some(bn) = state_map_base_name(target)
-                && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
-                && key_codec_for_type(&spec.key).is_some()
-                && let Some(decoded) =
-                    lower_state_map_get_value(ctx, &bn, key_tmp, &spec.key, &spec.value)
-            {
-                return decoded;
-            }
-            // Fallback to ephemeral map get
-            let m = lower_expr(ctx, target, vars);
-            if is_pointer_eq_type(&index.ty) || semantic::is_wide_numeric_type(&index.ty) {
-                let sk = ctx.new_temp();
-                let sv = ctx.new_temp();
-                ctx.current_instr(Instr::MapLoadPair {
-                    dest_key: sk,
-                    dest_val: sv,
-                    map: m,
-                    offset: 0,
-                });
-                let flag = lower_map_key_eq(ctx, &index.ty, sk, key_tmp);
-                let out = ctx.new_temp();
-                ctx.current_instr(Instr::Binary {
-                    dest: out,
-                    op: BinaryOp::Mul,
-                    left: sv,
-                    right: flag,
-                });
-                out
-            } else {
-                let d = ctx.new_temp();
-                ctx.current_instr(Instr::MapGet {
-                    dest: d,
-                    map: m,
-                    key: key_tmp,
-                });
-                d
-            }
+        semantic::ExprKind::Index { .. } => {
+            // Typed source lowering never contains an rvalue map index: an
+            // absent durable key must be represented by Option<V>. Keep this
+            // fail-closed guard for callers that construct typed HIR directly.
+            ctx.record_error(
+                "E_STATE_MAP_OPTIONAL_READ: StateMap rvalue indexing is invalid; use `map.get(key)`"
+                    .into(),
+            );
+            let invalid = ctx.new_temp();
+            ctx.current_instr(Instr::Const {
+                dest: invalid,
+                value: 0,
+            });
+            invalid
         }
         semantic::ExprKind::Member { object, field } => {
             // Support nested struct field access via flattened variables: base#i#j
@@ -5540,6 +6167,372 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
     }
 }
 
+fn lower_sum_type_call(
+    ctx: &mut LowerCtx,
+    name: &str,
+    args: &[semantic::TypedExpr],
+    vars: &mut HashMap<String, Temp>,
+) -> Option<Temp> {
+    let tagged = |ctx: &mut LowerCtx, tag: i64, values: Vec<Temp>| {
+        let tag_temp = ctx.new_temp();
+        ctx.current_instr(Instr::Const {
+            dest: tag_temp,
+            value: tag,
+        });
+        let mut items = Vec::with_capacity(values.len() + 1);
+        items.push(tag_temp);
+        items.extend(values);
+        let result = ctx.new_temp();
+        ctx.current_instr(Instr::TuplePack {
+            dest: result,
+            items,
+        });
+        result
+    };
+
+    Some(match name {
+        "option_some" => {
+            let value = lower_expr(ctx, &args[0], vars);
+            tagged(ctx, 1, vec![value])
+        }
+        "option_none" => {
+            let placeholder = lower_expr(ctx, &args[0], vars);
+            tagged(ctx, 0, vec![placeholder])
+        }
+        "result_ok" => {
+            let value = lower_expr(ctx, &args[0], vars);
+            let error_placeholder = lower_expr(ctx, &args[1], vars);
+            tagged(ctx, 1, vec![value, error_placeholder])
+        }
+        "result_err" => {
+            let value_placeholder = lower_expr(ctx, &args[0], vars);
+            let error = lower_expr(ctx, &args[1], vars);
+            tagged(ctx, 0, vec![value_placeholder, error])
+        }
+        STATE_MAP_GET_INTRINSIC => lower_state_map_get_option(ctx, args, vars),
+        "is_some" | "is_ok" => {
+            let tagged_value = lower_expr(ctx, &args[0], vars);
+            let tag = ctx.new_temp();
+            ctx.current_instr(Instr::TupleGet {
+                dest: tag,
+                tuple: tagged_value,
+                index: 0,
+            });
+            tag
+        }
+        "is_none" | "is_err" => {
+            let tagged_value = lower_expr(ctx, &args[0], vars);
+            let tag = ctx.new_temp();
+            ctx.current_instr(Instr::TupleGet {
+                dest: tag,
+                tuple: tagged_value,
+                index: 0,
+            });
+            let inverted = ctx.new_temp();
+            ctx.current_instr(Instr::Unary {
+                dest: inverted,
+                op: UnaryOp::Not,
+                operand: tag,
+            });
+            inverted
+        }
+        "unwrap_or" => lower_tagged_unwrap(ctx, &args[0], &args[1], 1, true, vars),
+        "unwrap_err_or" => lower_tagged_unwrap(ctx, &args[0], &args[1], 2, false, vars),
+        _ => return None,
+    })
+}
+
+fn lower_tagged_unwrap(
+    ctx: &mut LowerCtx,
+    tagged_expr: &semantic::TypedExpr,
+    fallback_expr: &semantic::TypedExpr,
+    payload_index: usize,
+    payload_when_tagged: bool,
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    let tagged = lower_expr(ctx, tagged_expr, vars);
+    let tag = ctx.new_temp();
+    ctx.current_instr(Instr::TupleGet {
+        dest: tag,
+        tuple: tagged,
+        index: 0,
+    });
+    let payload = ctx.new_temp();
+    ctx.current_instr(Instr::TupleGet {
+        dest: payload,
+        tuple: tagged,
+        index: payload_index,
+    });
+    let payload_block = ctx.new_label();
+    let fallback_block = ctx.new_label();
+    let end_block = ctx.new_label();
+    let (then_bb, else_bb) = if payload_when_tagged {
+        (payload_block, fallback_block)
+    } else {
+        (fallback_block, payload_block)
+    };
+
+    let payload_ty = semantic::resolve_struct_type(&fallback_expr.ty);
+    if is_aggregate_state_value_type(&payload_ty) {
+        let Some(word_count) = state_value_schema(&payload_ty)
+            .and_then(|schema| schema.word_kinds())
+            .map(|words| words.len())
+        else {
+            ctx.record_error("aggregate sum payload is not lowerable".into());
+            return payload;
+        };
+        let result_words = (0..word_count).map(|_| ctx.new_temp()).collect::<Vec<_>>();
+        ctx.finish_current(Terminator::Branch {
+            cond: tag,
+            then_bb,
+            else_bb,
+        });
+
+        ctx.start_block(payload_block);
+        let mut payload_words = Vec::with_capacity(word_count);
+        if !collect_state_value_words(ctx, payload, &payload_ty, &mut payload_words)
+            || payload_words.len() != word_count
+        {
+            ctx.record_error("aggregate sum payload has an invalid runtime shape".into());
+        }
+        for (dest, src) in result_words.iter().zip(payload_words) {
+            ctx.current_instr(Instr::Copy { dest: *dest, src });
+        }
+        ctx.finish_current(Terminator::Jump(end_block));
+
+        ctx.start_block(fallback_block);
+        let fallback = lower_expr(ctx, fallback_expr, vars);
+        let mut fallback_words = Vec::with_capacity(word_count);
+        if !collect_state_value_words(ctx, fallback, &payload_ty, &mut fallback_words)
+            || fallback_words.len() != word_count
+        {
+            ctx.record_error("aggregate fallback has an invalid runtime shape".into());
+        }
+        for (dest, src) in result_words.iter().zip(fallback_words) {
+            ctx.current_instr(Instr::Copy { dest: *dest, src });
+        }
+        ctx.finish_current(Terminator::Jump(end_block));
+
+        ctx.start_block(end_block);
+        let mut index = 0;
+        let result = rebuild_state_value_from_words(ctx, &payload_ty, &result_words, &mut index)
+            .unwrap_or_else(|| {
+                ctx.record_error("aggregate sum result cannot be reconstructed".into());
+                payload
+            });
+        if index != word_count {
+            ctx.record_error("aggregate sum result word count mismatch".into());
+        }
+        return result;
+    }
+
+    ctx.finish_current(Terminator::Branch {
+        cond: tag,
+        then_bb,
+        else_bb,
+    });
+
+    let result = ctx.new_temp();
+    ctx.start_block(payload_block);
+    ctx.current_instr(Instr::Copy {
+        dest: result,
+        src: payload,
+    });
+    ctx.finish_current(Terminator::Jump(end_block));
+
+    ctx.start_block(fallback_block);
+    let fallback = lower_expr(ctx, fallback_expr, vars);
+    ctx.current_instr(Instr::Copy {
+        dest: result,
+        src: fallback,
+    });
+    ctx.finish_current(Terminator::Jump(end_block));
+    ctx.start_block(end_block);
+    result
+}
+
+/// Decode a present durable value and merge it with the unique all-zero/null
+/// placeholder used by the inactive arm of `Option`.  The host codec rejects a
+/// zero record pointer, so the presence branch is semantically significant: a
+/// missing map key must never be mistaken for an initialized aggregate value.
+fn lower_present_or_inactive_state_value(
+    ctx: &mut LowerCtx,
+    blob: Temp,
+    present: Temp,
+    value_ty: &Type,
+    delete_when_present: Option<Temp>,
+) -> Option<Temp> {
+    let resolved = semantic::resolve_struct_type(value_ty);
+    let word_count = state_value_schema(&resolved)?.word_kinds()?.len();
+    let result_words = (0..word_count).map(|_| ctx.new_temp()).collect::<Vec<_>>();
+    let present_block = ctx.new_label();
+    let absent_block = ctx.new_label();
+    let end_block = ctx.new_label();
+    ctx.finish_current(Terminator::Branch {
+        cond: present,
+        then_bb: present_block,
+        else_bb: absent_block,
+    });
+
+    ctx.start_block(present_block);
+    let mut decoded_words = Vec::with_capacity(word_count);
+    if let Some(decoded) = decode_aggregate_state_value(ctx, blob, &resolved) {
+        if !collect_state_value_words(ctx, decoded, &resolved, &mut decoded_words)
+            || decoded_words.len() != word_count
+        {
+            ctx.record_error("durable state value has an invalid runtime shape".into());
+            decoded_words.clear();
+        }
+    } else {
+        ctx.record_error("durable state value is not decodable".into());
+    }
+    if decoded_words.len() != word_count {
+        let zero = ctx.new_temp();
+        ctx.current_instr(Instr::Const {
+            dest: zero,
+            value: 0,
+        });
+        decoded_words.resize(word_count, zero);
+    }
+    for (dest, src) in result_words.iter().zip(decoded_words) {
+        ctx.current_instr(Instr::Copy { dest: *dest, src });
+    }
+    if let Some(path) = delete_when_present {
+        ctx.current_instr(Instr::StateDel { path });
+    }
+    ctx.finish_current(Terminator::Jump(end_block));
+
+    ctx.start_block(absent_block);
+    let zero = ctx.new_temp();
+    ctx.current_instr(Instr::Const {
+        dest: zero,
+        value: 0,
+    });
+    for dest in &result_words {
+        ctx.current_instr(Instr::Copy {
+            dest: *dest,
+            src: zero,
+        });
+    }
+    ctx.finish_current(Terminator::Jump(end_block));
+
+    ctx.start_block(end_block);
+    let mut index = 0;
+    let value = rebuild_state_value_from_words(ctx, &resolved, &result_words, &mut index)?;
+    (index == word_count).then_some(value)
+}
+
+fn lower_state_map_get_option(
+    ctx: &mut LowerCtx,
+    args: &[semantic::TypedExpr],
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    let map = &args[0];
+    let key = lower_expr(ctx, &args[1], vars);
+    let Some(base) = state_map_base_name(map) else {
+        ctx.record_error("StateMap.get receiver is not a durable state map".into());
+        return lower_absent_option(ctx);
+    };
+    let Some(spec) = ctx.state_map_configs.get(&base).cloned() else {
+        ctx.record_error(format!("StateMap.get receiver `{base}` is not declared"));
+        return lower_absent_option(ctx);
+    };
+    let Some(key_codec) = key_codec_for_type(&spec.key) else {
+        ctx.record_error("StateMap.get key type is not lowerable".into());
+        return lower_absent_option(ctx);
+    };
+    let path = build_state_path(ctx, &base, key, &key_codec);
+    let blob = ctx.new_temp();
+    ctx.current_instr(Instr::StateGet { dest: blob, path });
+    let zero = ctx.new_temp();
+    ctx.current_instr(Instr::Const {
+        dest: zero,
+        value: 0,
+    });
+    let present = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: present,
+        op: BinaryOp::Ne,
+        left: blob,
+        right: zero,
+    });
+
+    let value = lower_present_or_inactive_state_value(ctx, blob, present, &spec.value, None)
+        .unwrap_or_else(|| {
+            ctx.record_error("StateMap.get value type is not lowerable".into());
+            zero
+        });
+
+    let option = ctx.new_temp();
+    ctx.current_instr(Instr::TuplePack {
+        dest: option,
+        items: vec![present, value],
+    });
+    option
+}
+
+fn lower_state_map_remove_option(
+    ctx: &mut LowerCtx,
+    args: &[semantic::TypedExpr],
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    let map = &args[0];
+    let key = lower_expr(ctx, &args[1], vars);
+    let Some(base) = state_map_base_name(map) else {
+        ctx.record_error("StateMap.remove receiver is not a durable state map".into());
+        return lower_absent_option(ctx);
+    };
+    let Some(spec) = ctx.state_map_configs.get(&base).cloned() else {
+        ctx.record_error(format!("StateMap.remove receiver `{base}` is not declared"));
+        return lower_absent_option(ctx);
+    };
+    let Some(key_codec) = key_codec_for_type(&spec.key) else {
+        ctx.record_error("StateMap.remove key type is not lowerable".into());
+        return lower_absent_option(ctx);
+    };
+    let path = build_state_path(ctx, &base, key, &key_codec);
+    let blob = ctx.new_temp();
+    ctx.current_instr(Instr::StateGet { dest: blob, path });
+    let zero = ctx.new_temp();
+    ctx.current_instr(Instr::Const {
+        dest: zero,
+        value: 0,
+    });
+    let present = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: present,
+        op: BinaryOp::Ne,
+        left: blob,
+        right: zero,
+    });
+
+    let value = lower_present_or_inactive_state_value(ctx, blob, present, &spec.value, Some(path))
+        .unwrap_or_else(|| {
+            ctx.record_error("StateMap.remove value type is not lowerable".into());
+            zero
+        });
+    let option = ctx.new_temp();
+    ctx.current_instr(Instr::TuplePack {
+        dest: option,
+        items: vec![present, value],
+    });
+    option
+}
+
+fn lower_absent_option(ctx: &mut LowerCtx) -> Temp {
+    let zero = ctx.new_temp();
+    ctx.current_instr(Instr::Const {
+        dest: zero,
+        value: 0,
+    });
+    let option = ctx.new_temp();
+    ctx.current_instr(Instr::TuplePack {
+        dest: option,
+        items: vec![zero, zero],
+    });
+    option
+}
+
 fn account_id_literal_uses_alias_resolution(raw: &str) -> bool {
     if iroha_data_model::account::AccountId::parse_encoded(raw).is_ok() {
         return false;
@@ -5553,95 +6546,11 @@ fn account_id_literal_uses_alias_resolution(raw: &str) -> bool {
 
 fn lower_state_binding_value(ctx: &mut LowerCtx, name: &str, ty: &Type) -> Option<Temp> {
     let resolved = semantic::resolve_struct_type(ty);
-    match resolved {
-        Type::Struct { fields, .. } => {
-            let mut items = Vec::with_capacity(fields.len());
-            for (idx, (_field_name, field_ty)) in fields.iter().enumerate() {
-                let child = format!("{name}#{idx}");
-                items.push(lower_state_binding_value(ctx, &child, field_ty)?);
-            }
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::TuplePack { dest, items });
-            Some(dest)
-        }
-        Type::Tuple(items_ty) => {
-            let mut items = Vec::with_capacity(items_ty.len());
-            for (idx, item_ty) in items_ty.iter().enumerate() {
-                let child = format!("{name}#{idx}");
-                items.push(lower_state_binding_value(ctx, &child, item_ty)?);
-            }
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::TuplePack { dest, items });
-            Some(dest)
-        }
-        Type::Int => {
-            let blob = state_get_blob_for_name(ctx, name);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::DecodeInt { dest, blob });
-            Some(dest)
-        }
-        ty if semantic::is_wide_numeric_type(&ty) => Some(state_get_blob_for_name(ctx, name)),
-        Type::Bool => {
-            let blob = state_get_blob_for_name(ctx, name);
-            let decoded = ctx.new_temp();
-            ctx.current_instr(Instr::DecodeInt {
-                dest: decoded,
-                blob,
-            });
-            let zero = ctx.new_temp();
-            ctx.current_instr(Instr::Const {
-                dest: zero,
-                value: 0,
-            });
-            let out = ctx.new_temp();
-            ctx.current_instr(Instr::Binary {
-                dest: out,
-                op: BinaryOp::Ne,
-                left: decoded,
-                right: zero,
-            });
-            Some(out)
-        }
-        Type::Json => {
-            let blob = state_get_blob_for_name(ctx, name);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::JsonDecode { dest, blob });
-            Some(dest)
-        }
-        Type::Name => {
-            let blob = state_get_blob_for_name(ctx, name);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::NameDecode { dest, blob });
-            Some(dest)
-        }
-        Type::Blob | Type::Bytes => {
-            if let Some(kind) = pointer_kind_for_type(&resolved) {
-                let blob = state_get_blob_for_name(ctx, name);
-                let dest = ctx.new_temp();
-                ctx.current_instr(Instr::PointerFromNorito { dest, blob, kind });
-                Some(dest)
-            } else {
-                Some(state_get_blob_for_name(ctx, name))
-            }
-        }
-        Type::String => Some(state_get_blob_for_name(ctx, name)),
-        Type::AccountId
-        | Type::AssetDefinitionId
-        | Type::AssetId
-        | Type::DomainId
-        | Type::NftId => {
-            if let Some(kind) = pointer_kind_for_type(&resolved) {
-                let blob = state_get_blob_for_name(ctx, name);
-                let dest = ctx.new_temp();
-                ctx.current_instr(Instr::PointerFromNorito { dest, blob, kind });
-                Some(dest)
-            } else {
-                // Fallback: treat as raw blob if pointer kind resolution fails.
-                Some(state_get_blob_for_name(ctx, name))
-            }
-        }
-        _ => None,
+    let blob = state_get_blob_for_name(ctx, name);
+    if !is_canonical_state_value_type(&resolved) {
+        return None;
     }
+    decode_aggregate_state_value(ctx, blob, &resolved)
 }
 
 fn state_get_blob_for_name(ctx: &mut LowerCtx, name: &str) -> Temp {
@@ -5663,9 +6572,9 @@ struct LowerCtx {
     blocks: Vec<BasicBlock>,
     current: Option<BasicBlock>,
     loop_stack: Vec<LoopContext>,
-    /// Metadata for state maps lowered to durable state syscalls, keyed by flattened name.
+    /// Metadata for top-level state maps lowered to durable state syscalls.
     state_map_configs: HashMap<String, StateMapSpec>,
-    /// Mapping from flattened state identifiers (e.g., `s#0#1`) to Name literals used in TLVs.
+    /// Mapping from top-level state identifiers to Name literals used in TLVs.
     state_name_literals: HashMap<String, String>,
     /// Runtime Name roots for `state` helper parameters.
     state_runtime_roots: HashMap<String, Temp>,
@@ -5806,11 +6715,16 @@ fn build_state_path(ctx: &mut LowerCtx, name: &str, key: Temp, key_codec: &KeyCo
     let t_base = build_state_base(ctx, name);
     match key_codec {
         KeyCodec::Int => {
+            let key_blob = ctx.new_temp();
+            ctx.current_instr(Instr::EncodeInt {
+                dest: key_blob,
+                value: key,
+            });
             let t_path = ctx.new_temp();
-            ctx.current_instr(Instr::PathMapKey {
+            ctx.current_instr(Instr::PathMapKeyNorito {
                 dest: t_path,
                 base: t_base,
-                key,
+                key_blob,
             });
             t_path
         }
@@ -5843,19 +6757,69 @@ fn build_state_path(ctx: &mut LowerCtx, name: &str, key: Temp, key_codec: &KeyCo
 fn lowerable_state_handle_name(ctx: &LowerCtx, expr: &semantic::TypedExpr) -> Option<String> {
     match &expr.expr {
         semantic::ExprKind::Ident(name) => {
-            if ctx.state_runtime_roots.contains_key(name) {
+            if ctx.state_runtime_roots.contains_key(name)
+                || ctx.state_name_literals.contains_key(name)
+            {
                 Some(name.clone())
             } else {
-                semantic::typed_state_handle_name(expr)
+                None
             }
-        }
-        semantic::ExprKind::Member { object, field } => {
-            let base = lowerable_state_handle_name(ctx, object)?;
-            let idx = field.parse::<usize>().ok()?;
-            Some(format!("{base}#{idx}"))
         }
         _ => None,
     }
+}
+
+fn lower_short_circuit_bool(
+    ctx: &mut LowerCtx,
+    op: BinaryOp,
+    left: &semantic::TypedExpr,
+    right: &semantic::TypedExpr,
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    debug_assert!(matches!(op, BinaryOp::And | BinaryOp::Or));
+
+    let left_value = lower_expr(ctx, left, vars);
+    let rhs_label = ctx.new_label();
+    let short_label = ctx.new_label();
+    let join_label = ctx.new_label();
+    let result = ctx.new_temp();
+    let (then_bb, else_bb, short_value) = match op {
+        BinaryOp::And => (rhs_label, short_label, 0),
+        BinaryOp::Or => (short_label, rhs_label, 1),
+        _ => unreachable!("short-circuit lowering only accepts logical operators"),
+    };
+
+    ctx.finish_current(Terminator::Branch {
+        cond: left_value,
+        then_bb,
+        else_bb,
+    });
+
+    // Materialize the short-circuit result without evaluating the right-hand side.
+    // Both predecessors use `Copy` so compiler fact propagation treats `result` as
+    // a genuine control-flow merge rather than a block-local constant.
+    ctx.start_block(short_label);
+    let short_result = ctx.new_temp();
+    ctx.current_instr(Instr::Const {
+        dest: short_result,
+        value: short_value,
+    });
+    ctx.current_instr(Instr::Copy {
+        dest: result,
+        src: short_result,
+    });
+    ctx.finish_current(Terminator::Jump(join_label));
+
+    ctx.start_block(rhs_label);
+    let right_value = lower_expr(ctx, right, &mut vars.clone());
+    ctx.current_instr(Instr::Copy {
+        dest: result,
+        src: right_value,
+    });
+    ctx.finish_current(Terminator::Jump(join_label));
+
+    ctx.start_block(join_label);
+    result
 }
 
 fn lower_state_handle_arg(
@@ -5892,109 +6856,50 @@ fn lower_state_handle_args(
         .collect()
 }
 
-fn encode_scalar_state_value(ctx: &mut LowerCtx, value: Temp, ty: &Type) -> Option<Temp> {
-    let codec = value_codec_for_type(ty)?;
-    Some(encode_value_to_norito(ctx, value, &codec))
-}
-
-fn emit_scalar_state_set(ctx: &mut LowerCtx, name: &str, ty: &Type, value: Temp) {
-    let Some(encoded) = encode_scalar_state_value(ctx, value, ty) else {
+fn emit_state_set(ctx: &mut LowerCtx, name: &str, ty: &Type, value: Temp) {
+    let resolved = semantic::resolve_struct_type(ty);
+    let Some(encoded) = encode_aggregate_state_value(ctx, value, &resolved) else {
+        ctx.record_error("durable state value is not encodable".into());
         return;
     };
-    let path = build_state_name_literal(ctx, name);
+    let path = build_state_base(ctx, name);
     ctx.current_instr(Instr::StateSet {
         path,
         value: encoded,
     });
 }
 
-fn emit_state_set(ctx: &mut LowerCtx, name: &str, ty: &Type, value: Temp) {
-    match semantic::resolve_struct_type(ty) {
-        Type::Struct { fields, .. } => {
-            for (idx, (_field_name, field_ty)) in fields.iter().enumerate() {
-                let child = format!("{name}#{idx}");
-                let child_value = ctx.new_temp();
-                ctx.current_instr(Instr::TupleGet {
-                    dest: child_value,
-                    tuple: value,
-                    index: idx,
-                });
-                emit_state_set(ctx, &child, field_ty, child_value);
-            }
-        }
-        Type::Tuple(items) => {
-            for (idx, item_ty) in items.iter().enumerate() {
-                let child = format!("{name}#{idx}");
-                let child_value = ctx.new_temp();
-                ctx.current_instr(Instr::TupleGet {
-                    dest: child_value,
-                    tuple: value,
-                    index: idx,
-                });
-                emit_state_set(ctx, &child, item_ty, child_value);
-            }
-        }
-        _ => emit_scalar_state_set(ctx, name, ty, value),
-    }
-}
-
-fn encode_value_to_norito(ctx: &mut LowerCtx, value: Temp, codec: &ValueCodec) -> Temp {
-    match codec {
-        ValueCodec::Int => {
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::EncodeInt { dest: t, value });
-            t
-        }
-        ValueCodec::Json => {
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::JsonEncode {
-                dest: t,
-                json: value,
-            });
-            t
-        }
-        ValueCodec::Pointer(_) => {
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::PointerToNorito { dest: t, value });
-            t
-        }
-        ValueCodec::NoritoBytes => value,
-    }
-}
-
-fn decode_value_from_norito(ctx: &mut LowerCtx, blob: Temp, codec: &ValueCodec) -> Temp {
-    match codec {
-        ValueCodec::Int => {
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::DecodeInt { dest: t, blob });
-            t
-        }
-        ValueCodec::Json => {
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::JsonDecode { dest: t, blob });
-            t
-        }
-        ValueCodec::Pointer(kind) => {
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::PointerFromNorito {
-                dest: t,
-                blob,
-                kind: *kind,
-            });
-            t
-        }
-        ValueCodec::NoritoBytes => blob,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{parser::parse, semantic::analyze};
+    use crate::{parser::parse_test_fragment as parse, semantic::analyze};
+
+    #[test]
+    fn direct_syscall_lowering_is_exhaustively_registry_driven_and_fail_closed() {
+        for &builtin in Builtin::ALL {
+            let spec = builtin.spec();
+            let selected = std::panic::catch_unwind(|| direct_builtin_syscall(builtin));
+            match spec.lowering {
+                BuiltinLowering::DirectSyscall => {
+                    assert_eq!(
+                        Some(selected.expect("direct builtin must select a syscall")),
+                        spec.syscall
+                    );
+                }
+                BuiltinLowering::Instructions | BuiltinLowering::DerivedSyscalls => {
+                    assert!(
+                        selected.is_err(),
+                        "non-direct builtin {} selected an undeclared direct syscall",
+                        spec.name
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn lower_simple_function() {
-        let src = "fn add(a, b) { let c = a + b; }";
+        let src = "fn add(a: i64, b: i64) { let c = a + b; }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -6004,10 +6909,39 @@ mod tests {
     }
 
     #[test]
+    fn require_lowers_declared_error_code_into_abort_ir() {
+        let src = r#"
+            error enum PaymentError { Unauthorized = 1001 }
+            fn authorize_payment(allowed: bool) {
+                require(allowed, PaymentError::Unauthorized);
+            }
+        "#;
+        let prog = parse(src).expect("parse error enum");
+        let typed = analyze(&prog).expect("analyze stable require");
+        let ir = lower(&typed).expect("lower stable require");
+        let function = &ir.functions[0];
+        let mut constants = HashMap::new();
+        let mut abort_code = None;
+        for block in &function.blocks {
+            for instruction in &block.instrs {
+                match instruction {
+                    Instr::Const { dest, value } => {
+                        constants.insert(*dest, *value);
+                    }
+                    Instr::AbortIf { code, .. } => abort_code = Some(*code),
+                    _ => {}
+                }
+            }
+        }
+        let abort_code = abort_code.expect("require must lower to AbortIf");
+        assert_eq!(constants.get(&abort_code), Some(&1001));
+    }
+
+    #[test]
     fn test_mode_entrypoint_wrapper_checks_override_state_first() {
         let src = r#"
             seiyaku Demo {
-                kotoage fn run(count: int) -> int { return count; }
+                kotoage fn run(count: i64) -> i64 authorize("Entry") { return count; }
             }
         "#;
         let prog = parse(src).expect("parse wrapper test");
@@ -6049,10 +6983,10 @@ mod tests {
     }
 
     #[test]
-    fn single_json_entrypoint_receives_whole_payload() {
+    fn single_json_entrypoint_uses_the_same_one_shot_argument_record() {
         let src = r#"
             seiyaku Demo {
-                kotoage fn run(ev: Json) { let _payload = ev; }
+                kotoage fn run(ev: Json) authorize("Entry") { let _payload = ev; }
             }
         "#;
         let prog = parse(src).expect("parse single json entrypoint");
@@ -6066,21 +7000,240 @@ mod tests {
             .expect("wrapper function");
 
         let mut saw_get_trigger = false;
-        let mut saw_json_field_decode = false;
+        let mut record_decodes = 0;
+        let mut json_field_getters = 0;
         for block in &wrapper.blocks {
             for instr in &block.instrs {
                 match instr {
                     Instr::GetTriggerEvent { .. } => saw_get_trigger = true,
-                    Instr::JsonGetJson { .. } => saw_json_field_decode = true,
+                    Instr::DirectHelperSyscall { syscall, .. }
+                        if *syscall == ivm_abi::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD =>
+                    {
+                        record_decodes += 1;
+                    }
+                    Instr::JsonGetJson { .. } => json_field_getters += 1,
                     _ => {}
                 }
             }
         }
 
         assert!(saw_get_trigger, "wrapper should load the trigger payload");
+        assert_eq!(record_decodes, 1, "Json must use the canonical record ABI");
+        assert_eq!(
+            json_field_getters, 0,
+            "the wrapper must not decode the transport JSON per parameter"
+        );
+    }
+
+    #[test]
+    fn public_wrapper_decodes_one_complete_norito_argument_record() {
+        let src = r#"
+            seiyaku Demo {
+                kotoage fn run(
+                    count: i64,
+                    total: u128,
+                    ready: bool,
+                    text: string,
+                    label: Name,
+                    asset: AssetId,
+                    domain: DomainId,
+                    dataspace: DataSpaceId,
+                    bytes: bytes
+                ) authorize("Entry") {
+                    let _count = count;
+                    let _total = total;
+                    let _ready = ready;
+                    let _text = text;
+                    let _label = label;
+                    let _asset = asset;
+                    let _domain = domain;
+                    let _dataspace = dataspace;
+                    let _bytes = bytes;
+                }
+            }
+        "#;
+        let prog = parse(src).expect("parse parameterized entrypoint");
+        let typed = analyze(&prog).expect("analyze parameterized entrypoint");
+        let ir = lower(&typed).expect("lower parameterized entrypoint");
+        let wrapper = ir
+            .functions
+            .iter()
+            .find(|function| function.name == "run")
+            .expect("wrapper function");
+
+        let mut record_decodes = 0;
+        let mut table_loads = 0;
+        let mut json_field_getters = 0;
+        let mut decoded_schema = None;
+        for block in &wrapper.blocks {
+            for instr in &block.instrs {
+                match instr {
+                    Instr::DirectHelperSyscall { syscall, .. }
+                        if *syscall == ivm_abi::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD =>
+                    {
+                        record_decodes += 1;
+                    }
+                    Instr::Load64Imm { .. } => table_loads += 1,
+                    Instr::JsonGetInt { .. }
+                    | Instr::JsonGetNumeric { .. }
+                    | Instr::JsonGetJson { .. }
+                    | Instr::JsonGetName { .. }
+                    | Instr::JsonGetAccountId { .. }
+                    | Instr::JsonGetAssetDefinitionId { .. }
+                    | Instr::JsonGetNftId { .. }
+                    | Instr::JsonGetBlobHex { .. } => json_field_getters += 1,
+                    Instr::DataRef {
+                        kind: DataRefKind::NoritoBytes,
+                        value,
+                        ..
+                    } => {
+                        let bytes = hex::decode(value.strip_prefix("0x").expect("hex schema"))
+                            .expect("decode schema hex");
+                        decoded_schema = Some(
+                            norito::decode_from_bytes::<
+                                ivm_abi::entrypoint::EntrypointArgumentSchemaV1,
+                            >(&bytes)
+                            .expect("decode argument schema"),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        assert_eq!(record_decodes, 1, "wrapper must decode the payload once");
+        assert_eq!(table_loads, 9, "one fixed table load per parameter");
+        assert_eq!(
+            json_field_getters, 0,
+            "wrapper must not re-decode JSON per field"
+        );
+        let schema = decoded_schema.expect("compiler-emitted Norito schema");
+        assert_eq!(
+            schema
+                .fields
+                .iter()
+                .map(|field| {
+                    let [ivm_abi::entrypoint::EntrypointArgumentTypeNodeV1::Leaf(kind)] =
+                        field.ty.nodes.as_slice()
+                    else {
+                        panic!("scalar test parameter must use one leaf node");
+                    };
+                    (&*field.name, *kind)
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                ("count", ivm_abi::entrypoint::EntrypointArgumentKindV1::Int),
+                ("total", ivm_abi::entrypoint::EntrypointArgumentKindV1::U128),
+                ("ready", ivm_abi::entrypoint::EntrypointArgumentKindV1::Bool),
+                (
+                    "text",
+                    ivm_abi::entrypoint::EntrypointArgumentKindV1::String
+                ),
+                ("label", ivm_abi::entrypoint::EntrypointArgumentKindV1::Name),
+                (
+                    "asset",
+                    ivm_abi::entrypoint::EntrypointArgumentKindV1::AssetId
+                ),
+                (
+                    "domain",
+                    ivm_abi::entrypoint::EntrypointArgumentKindV1::DomainId
+                ),
+                (
+                    "dataspace",
+                    ivm_abi::entrypoint::EntrypointArgumentKindV1::DataSpaceId
+                ),
+                ("bytes", ivm_abi::entrypoint::EntrypointArgumentKindV1::Blob),
+            ]
+        );
+    }
+
+    #[test]
+    fn public_aggregate_arguments_cross_internal_calls_as_flat_words() {
+        let src = r#"
+            seiyaku Demo {
+                struct Request { count: i64, ready: bool }
+
+                view fn run(
+                    request: Request,
+                    pair: (i64, bool),
+                    maybe: Option<i64>,
+                    outcome: Result<i64, bool>
+                ) -> i64 {
+                    return request.count + pair.0
+                        + maybe.unwrap_or(0) + outcome.unwrap_or(0);
+                }
+            }
+        "#;
+        let prog = parse(src).expect("parse aggregate entrypoint");
+        let typed = analyze(&prog).expect("analyze aggregate entrypoint");
+        let ir = lower(&typed).expect("lower aggregate entrypoint");
+        let wrapper = ir
+            .functions
+            .iter()
+            .find(|function| function.name == "run")
+            .expect("wrapper function");
+        let implementation = ir
+            .functions
+            .iter()
+            .find(|function| function.name == "__entrypoint_impl__run")
+            .expect("implementation function");
+
+        let call_args = wrapper
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .find_map(|instr| match instr {
+                Instr::Call { callee, args, .. } if callee == "__entrypoint_impl__run" => {
+                    Some(args)
+                }
+                _ => None,
+            })
+            .expect("wrapper implementation call");
+        assert_eq!(
+            call_args.len(),
+            9,
+            "all recursive ABI words must cross the call"
+        );
+        assert_eq!(implementation.params.len(), 9);
         assert!(
-            !saw_json_field_decode,
-            "single Json entrypoints should receive the whole payload, not payload.ev"
+            implementation
+                .params
+                .iter()
+                .all(|name| name.starts_with("$abi$")),
+            "aggregate implementation parameters must use collision-proof compiler names"
+        );
+        assert_eq!(
+            implementation
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instrs)
+                .filter(|instr| matches!(instr, Instr::TuplePack { .. }))
+                .count(),
+            4,
+            "struct, tuple, Option, and Result shapes must be rebuilt in the callee"
+        );
+    }
+
+    #[test]
+    fn aggregate_argument_words_over_register_window_fail_during_lowering() {
+        let src = r#"
+            seiyaku WideCall {
+                struct Wide {
+                    f00: i64, f01: i64, f02: i64, f03: i64, f04: i64,
+                    f05: i64, f06: i64, f07: i64, f08: i64, f09: i64,
+                    f10: i64, f11: i64, f12: i64, f13: i64
+                }
+                view fn inspect(value: Wide) -> i64 { return value.f00; }
+            }
+        "#;
+        let prog = parse(src).expect("parse oversized aggregate call");
+        let typed = analyze(&prog).expect("analyze oversized aggregate call");
+        let failure = lower(&typed).expect_err("lowering must reject an oversized call ABI");
+        assert!(
+            failure.contains(
+                "requires 14 flattened argument words, exceeding the Kotodama V1 limit of 13"
+            ),
+            "unexpected lowering failure: {failure}"
         );
     }
 
@@ -6088,17 +7241,19 @@ mod tests {
     fn invoke_entrypoint_lowers_to_wrapper_call_with_override_restore() {
         let src = r#"
             seiyaku Demo {
-                kotoage fn run(count: int) -> int { return count + 1; }
+                kotoage fn run(count: i64) -> i64 authorize("Entry") { return count + 1; }
 
                 #[test]
                 fn drive_run() {
-                    let next = invoke_entrypoint("run", json("{\"count\": 7}"));
-                    assert_eq(next, 8);
+                    let next = test::invoke_entrypoint("run", Json::parse("{\"count\": 7}"));
+                    test::assert_eq(next, 8);
                 }
             }
         "#;
         let prog = parse(src).expect("parse invoke_entrypoint");
-        let typed = analyze(&prog).expect("analyze invoke_entrypoint");
+        let typed = semantic::SemanticContext::with_capabilities(false, true)
+            .analyze(&prog)
+            .expect("analyze invoke_entrypoint");
         let ir = lower_with_cap_and_test_mode(&typed, 2, true).expect("lower invoke_entrypoint");
         let test_fn = ir
             .functions
@@ -6152,18 +7307,20 @@ mod tests {
     fn invoke_entrypoint_tuple_return_uses_wrapper_callmulti() {
         let src = r#"
             seiyaku Demo {
-                kotoage fn run(count: int) -> (int, int) { return (count, count + 1); }
+                kotoage fn run(count: i64) -> (i64, i64) authorize("Entry") { return (count, count + 1); }
 
                 #[test]
                 fn drive_run() {
-                    let pair = invoke_entrypoint("run", json("{\"count\": 7}"));
-                    assert_eq(pair.0, 7);
-                    assert_eq(pair.1, 8);
+                    let pair = test::invoke_entrypoint("run", Json::parse("{\"count\": 7}"));
+                    test::assert_eq(pair.0, 7);
+                    test::assert_eq(pair.1, 8);
                 }
             }
         "#;
         let prog = parse(src).expect("parse tuple invoke_entrypoint");
-        let typed = analyze(&prog).expect("analyze tuple invoke_entrypoint");
+        let typed = semantic::SemanticContext::with_capabilities(false, true)
+            .analyze(&prog)
+            .expect("analyze tuple invoke_entrypoint");
         let ir =
             lower_with_cap_and_test_mode(&typed, 2, true).expect("lower tuple invoke_entrypoint");
         let test_fn = ir
@@ -6200,18 +7357,20 @@ mod tests {
     fn invoke_entrypoint_as_lowers_to_test_host_intrinsics() {
         let src = r#"
             seiyaku Demo {
-                kotoage fn run(count: int) -> int { return count + 1; }
+                kotoage fn run(count: i64) -> i64 authorize("Entry") { return count + 1; }
 
                 #[test]
                 fn drive_run() {
-                    let next = invoke_entrypoint_as("issuer", "run", json("{\"count\": 7}"));
-                    expect_reject_as("issuer", "run", json("{\"count\": -1}"));
+                    let next = test::invoke_entrypoint_as("issuer", "run", Json::parse("{\"count\": 7}"));
+                    test::expect_reject_as("issuer", "run", Json::parse("{\"count\": -1}"));
                     let _ = next;
                 }
             }
         "#;
         let prog = parse(src).expect("parse invoke_entrypoint_as");
-        let typed = analyze(&prog).expect("analyze invoke_entrypoint_as");
+        let typed = semantic::SemanticContext::with_capabilities(false, true)
+            .analyze(&prog)
+            .expect("analyze invoke_entrypoint_as");
         let ir = lower_with_cap_and_test_mode(&typed, 2, true).expect("lower invoke_entrypoint_as");
         let test_fn = ir
             .functions
@@ -6249,18 +7408,20 @@ mod tests {
     fn invoke_entrypoint_as_tuple_return_lowers_to_multi_intrinsic() {
         let src = r#"
             seiyaku Demo {
-                kotoage fn run(count: int) -> (int, int) { return (count, count + 1); }
+                kotoage fn run(count: i64) -> (i64, i64) authorize("Entry") { return (count, count + 1); }
 
                 #[test]
                 fn drive_run() {
-                    let pair = invoke_entrypoint_as("issuer", "run", json("{\"count\": 7}"));
-                    assert_eq(pair.0, 7);
-                    assert_eq(pair.1, 8);
+                    let pair = test::invoke_entrypoint_as("issuer", "run", Json::parse("{\"count\": 7}"));
+                    test::assert_eq(pair.0, 7);
+                    test::assert_eq(pair.1, 8);
                 }
             }
         "#;
         let prog = parse(src).expect("parse tuple invoke_entrypoint_as");
-        let typed = analyze(&prog).expect("analyze tuple invoke_entrypoint_as");
+        let typed = semantic::SemanticContext::with_capabilities(false, true)
+            .analyze(&prog)
+            .expect("analyze tuple invoke_entrypoint_as");
         let ir = lower_with_cap_and_test_mode(&typed, 2, true)
             .expect("lower tuple invoke_entrypoint_as");
         let test_fn = ir
@@ -6300,15 +7461,17 @@ mod tests {
             seiyaku Demo {
                 #[test]
                 fn drive_helpers() {
-                    let acct = actor_account("issuer");
-                    let pk = actor_public_key("issuer");
-                    let sig = actor_sign("issuer", b"demo");
+                    let acct = test::actor_account("issuer");
+                    let pk = test::actor_public_key("issuer");
+                    let sig = test::actor_sign("issuer", b"demo");
                     let _ = (acct, pk, sig);
                 }
             }
         "#;
         let prog = parse(src).expect("parse actor helpers");
-        let typed = analyze(&prog).expect("analyze actor helpers");
+        let typed = semantic::SemanticContext::with_capabilities(false, true)
+            .analyze(&prog)
+            .expect("analyze actor helpers");
         let ir = lower_with_cap_and_test_mode(&typed, 2, true).expect("lower actor helpers");
         let test_fn = ir
             .functions
@@ -6340,21 +7503,323 @@ mod tests {
 
     #[test]
     fn lower_if() {
-        let src = "fn f(a, b) { if a == b { let c = a; } else { let c = b; } }";
+        let src = "fn f(a: i64, b: i64) { if a == b { let c = a; } else { let c = b; } }";
         let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
         assert_eq!(ir.functions[0].blocks.len(), 4); // entry, then, else, end
     }
 
     #[test]
-    fn lower_while() {
-        let src = "fn f() { while 1 < 2 { let a = 2; } }";
+    fn logical_operators_lower_to_short_circuit_cfg() {
+        let src = r#"
+fn rhs() -> bool { return true; }
+fn both(value: bool) -> bool { return value && rhs(); }
+fn either(value: bool) -> bool { return value || rhs(); }
+"#;
+        let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower logical operators");
+
+        for (name, short_value, rhs_on_then) in [("both", 0, true), ("either", 1, false)] {
+            let function = ir
+                .functions
+                .iter()
+                .find(|function| function.name == name)
+                .expect("logical function");
+            assert!(
+                function
+                    .blocks
+                    .iter()
+                    .all(|block| block.instrs.iter().all(|instr| !matches!(
+                        instr,
+                        Instr::Binary {
+                            op: BinaryOp::And | BinaryOp::Or,
+                            ..
+                        }
+                    ))),
+                "{name} must not eagerly evaluate logical operands"
+            );
+
+            let rhs_block = function
+                .blocks
+                .iter()
+                .find(|block| {
+                    block
+                        .instrs
+                        .iter()
+                        .any(|instr| matches!(instr, Instr::Call { callee, .. } if callee == "rhs"))
+                })
+                .expect("right-hand-side call block");
+            let short_block = function
+                .blocks
+                .iter()
+                .find(|block| {
+                    block.instrs.iter().any(|instr| {
+                        matches!(instr, Instr::Const { value, .. } if *value == short_value)
+                    }) && block
+                        .instrs
+                        .iter()
+                        .any(|instr| matches!(instr, Instr::Copy { .. }))
+                })
+                .expect("short-circuit result block");
+            let entry = function
+                .blocks
+                .iter()
+                .find(|block| block.label == function.entry)
+                .expect("entry block");
+            let Terminator::Branch {
+                then_bb, else_bb, ..
+            } = &entry.terminator
+            else {
+                panic!("{name} entry must branch before evaluating rhs");
+            };
+            if rhs_on_then {
+                assert_eq!(*then_bb, rhs_block.label);
+                assert_eq!(*else_bb, short_block.label);
+            } else {
+                assert_eq!(*then_bb, short_block.label);
+                assert_eq!(*else_bb, rhs_block.label);
+            }
+
+            let result = function
+                .blocks
+                .iter()
+                .find_map(|block| match &block.terminator {
+                    Terminator::Return(Some(result)) => Some(*result),
+                    _ => None,
+                })
+                .expect("logical result return");
+            for predecessor in [rhs_block, short_block] {
+                assert!(
+                    predecessor
+                        .instrs
+                        .iter()
+                        .any(|instr| matches!(instr, Instr::Copy { dest, .. } if *dest == result),),
+                    "{name} predecessor must merge into the returned result"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn lower_bounded_range_loop() {
+        let src = "fn f() { for index in range(2) { let value = index; } }";
         let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
-        assert_eq!(ir.functions[0].blocks.len(), 4); // entry, cond, body, end
+        assert!(ir.functions[0].blocks.len() >= 4);
+    }
+
+    #[test]
+    fn bounded_loop_only_materializes_live_mutated_phi_slots() {
+        let src = r#"
+            fn f() -> i64 {
+                let invariant = 7;
+                var carried = 0;
+                var overwritten = 0;
+                for index in range(3) {
+                    carried = carried + index;
+                    overwritten = 99;
+                    let observed = invariant;
+                }
+                overwritten = 5;
+                return carried + overwritten + invariant;
+            }
+        "#;
+        let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
+        let function = &ir.functions[0];
+        let entry = function
+            .blocks
+            .iter()
+            .find(|block| block.label == function.entry)
+            .expect("entry block");
+        let invariant = entry
+            .instrs
+            .iter()
+            .find_map(|instruction| match instruction {
+                Instr::Const { dest, value: 7 } => Some(*dest),
+                _ => None,
+            })
+            .expect("invariant constant");
+        let entry_copies = entry
+            .instrs
+            .iter()
+            .filter_map(|instruction| match instruction {
+                Instr::Copy { dest, src } => Some((*dest, *src)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            entry_copies.len(),
+            2,
+            "only the range index and carried accumulator need loop phi slots"
+        );
+        assert!(
+            entry_copies.iter().all(|(_, src)| *src != invariant),
+            "an immutable local must not be copied into loop-carried state"
+        );
+    }
+
+    #[test]
+    fn break_and_continue_update_only_selected_loop_phi_slots() {
+        let src = r#"
+            fn f() -> i64 {
+                let invariant = 10;
+                var carried = 0;
+                for index in range(4) {
+                    if index == 2 { break; }
+                    carried = carried + 1;
+                    if index == 1 { continue; }
+                }
+                return carried + invariant;
+            }
+        "#;
+        let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
+        let function = &ir.functions[0];
+        let entry = function
+            .blocks
+            .iter()
+            .find(|block| block.label == function.entry)
+            .expect("entry block");
+        let phi_destinations = entry
+            .instrs
+            .iter()
+            .filter_map(|instruction| match instruction {
+                Instr::Copy { dest, .. } => Some(*dest),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(phi_destinations.len(), 2);
+        assert!(phi_destinations.iter().all(|destination| {
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| block.instrs.iter())
+                .filter(|instruction| {
+                    matches!(instruction, Instr::Copy { dest, .. } if dest == destination)
+                })
+                .count()
+                >= 2
+        }));
+    }
+
+    #[test]
+    fn state_map_foreach_carries_mutated_locals_through_break_and_continue() {
+        let src = r#"
+            seiyaku ForeachPhi {
+                state Values: StateMap<i64, i64>;
+
+                kotoage fn f() -> i64 authorize("WriteState") {
+                    var seen = 0;
+                    for (key, value) in Values.take(2) {
+                        seen = seen + 1;
+                        if (key == value) { continue; }
+                        if (seen == 2) { break; }
+                    }
+                    return seen;
+                }
+            }
+        "#;
+        let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
+        let function = ir
+            .functions
+            .iter()
+            .find(|function| function.name == "f")
+            .expect("foreach function");
+        let returned = function
+            .blocks
+            .iter()
+            .find_map(|block| match &block.terminator {
+                Terminator::Return(Some(result)) => Some(*result),
+                _ => None,
+            })
+            .expect("returned accumulator");
+        let entry = function
+            .blocks
+            .iter()
+            .find(|block| block.label == function.entry)
+            .expect("entry block");
+
+        assert!(
+            entry.instrs.iter().any(
+                |instruction| matches!(instruction, Instr::Copy { dest, .. } if *dest == returned)
+            ),
+            "the returned accumulator must be initialized as a loop phi"
+        );
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| block.instrs.iter())
+                .filter(|instruction| {
+                    matches!(instruction, Instr::Copy { dest, .. } if *dest == returned)
+                })
+                .count()
+                >= 3,
+            "normal, break, and continue paths must update the loop accumulator"
+        );
+    }
+
+    #[test]
+    fn nested_loops_do_not_carry_outer_invariants() {
+        let src = r#"
+            fn f() -> i64 {
+                let invariant = 9;
+                var total = 0;
+                for outer in range(2) {
+                    for inner in range(2) {
+                        total = total + outer + inner;
+                        let observed = invariant;
+                    }
+                }
+                return total + invariant;
+            }
+        "#;
+        let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
+        let function = &ir.functions[0];
+        let invariant = function
+            .blocks
+            .iter()
+            .flat_map(|block| block.instrs.iter())
+            .find_map(|instruction| match instruction {
+                Instr::Const { dest, value: 9 } => Some(*dest),
+                _ => None,
+            })
+            .expect("invariant constant");
+
+        assert!(function.blocks.iter().all(|block| {
+            block.instrs.iter().all(
+                |instruction| !matches!(instruction, Instr::Copy { src, .. } if *src == invariant),
+            )
+        }));
+    }
+
+    #[test]
+    fn leaf_identity_ir_has_no_copy_or_stack_pseudo_traffic() {
+        let src = "fn identity(value: i64) -> i64 { return value; }";
+        let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
+        let function = &ir.functions[0];
+
+        assert_eq!(
+            function.blocks.len(),
+            2,
+            "return creates one dead continuation"
+        );
+        assert!(function.blocks.iter().all(|block| {
+            block
+                .instrs
+                .iter()
+                .all(|instruction| !matches!(instruction, Instr::Copy { .. }))
+        }));
+        assert!(function.blocks.iter().any(|block| {
+            matches!(block.terminator, Terminator::Return(Some(_)))
+                && block
+                    .instrs
+                    .iter()
+                    .all(|instruction| matches!(instruction, Instr::LoadVar { .. }))
+        }));
     }
 
     #[test]
     fn lower_return() {
-        let src = "fn f() -> int { return 1; let x = 2; }";
+        let src = "fn f() -> i64 { return 1; let x = 2; }";
         let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
         // Expect at least a Return terminator in one block, and a following unreachable block
         let f = &ir.functions[0];
@@ -6369,9 +7834,9 @@ mod tests {
     fn lower_pointer_constructors_to_datarefs() {
         let src = r#"
             fn main() {
-                let k = name("cursor");
-                let v = json("{}\n");
-                let d = domain("wonderland.universal");
+                let k = Name::parse("cursor");
+                let v = Json::parse("{}\n");
+                let d = DomainId::parse("wonderland.universal");
             }
         "#;
         let prog = parse(src).unwrap();
@@ -6422,27 +7887,16 @@ mod tests {
     }
 
     #[test]
-    fn lower_setvl_builtin() {
-        let src = "fn main() { setvl(8); }";
+    fn source_cannot_lower_setvl_builtin() {
+        let src = "fn main() { runtime::set_vector_length(8); }";
         let prog = parse(src).unwrap();
-        let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed).expect("lower");
-        let f = &ir.functions[0];
-        let mut saw_setvl = false;
-        for bb in &f.blocks {
-            for instr in &bb.instrs {
-                if let Instr::SetVl { .. } = instr {
-                    saw_setvl = true;
-                }
-            }
-        }
-        assert!(saw_setvl, "expected SetVl instruction in lowered IR");
+        let error = analyze(&prog).expect_err("vector length is compiler-owned");
+        assert!(error.message.contains("unknown function or builtin"));
     }
 
     #[test]
     fn lower_trigger_event_builtin() {
-        let src =
-            "fn main() { let ev = trigger_event(); let _kind = ev.get_name(name(\"kind\")); }";
+        let src = "fn main() { let ev = context::trigger_event(); let _kind = ev.get_name(Name::parse(\"kind\")); }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -6463,7 +7917,8 @@ mod tests {
 
     #[test]
     fn lower_resolve_account_alias_builtin() {
-        let src = "fn main() { let _acct = resolve_account_alias(\"banking@centralbank\"); }";
+        let src =
+            "fn main() { let _acct = ledger::account::resolve_alias(\"banking@centralbank\"); }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -6484,7 +7939,7 @@ mod tests {
 
     #[test]
     fn lower_resolve_account_alias_builtin_uses_string_literal() {
-        let src = r#"fn main() { let _acct = resolve_account_alias("merchant@paynet"); }"#;
+        let src = r#"fn main() { let _acct = ledger::account::resolve_alias("merchant@paynet"); }"#;
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -6522,7 +7977,7 @@ mod tests {
 
     #[test]
     fn lower_resolve_account_alias_invalid_literal_uses_string_literal() {
-        let src = r#"fn main() { let _acct = resolve_account_alias("merchant@"); }"#;
+        let src = r#"fn main() { let _acct = ledger::account::resolve_alias("merchant@"); }"#;
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -6560,7 +8015,8 @@ mod tests {
 
     #[test]
     fn lower_resolve_account_alias_domain_qualified_builtin_uses_string_literal() {
-        let src = r#"fn main() { let _acct = resolve_account_alias("merchant@bank.paynet"); }"#;
+        let src =
+            r#"fn main() { let _acct = ledger::account::resolve_alias("merchant@bank.paynet"); }"#;
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -6598,7 +8054,7 @@ mod tests {
 
     #[test]
     fn lower_resolve_account_alias_invalid_domain_qualified_literal_uses_string_literal() {
-        let src = r#"fn main() { let _acct = resolve_account_alias("merchant@bank."); }"#;
+        let src = r#"fn main() { let _acct = ledger::account::resolve_alias("merchant@bank."); }"#;
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -6636,7 +8092,7 @@ mod tests {
 
     #[test]
     fn lower_account_id_alias_literal_to_resolve_account_alias() {
-        let src = r#"fn main() { let _acct = account_id("merchant@paynet"); }"#;
+        let src = r#"fn main() { let _acct = AccountId::parse("merchant@paynet"); }"#;
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -6673,7 +8129,7 @@ mod tests {
 
     #[test]
     fn lower_account_id_domain_qualified_alias_literal_to_resolve_account_alias() {
-        let src = r#"fn main() { let _acct = account_id("merchant@bank.paynet"); }"#;
+        let src = r#"fn main() { let _acct = AccountId::parse("merchant@bank.paynet"); }"#;
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -6713,7 +8169,7 @@ mod tests {
 
     #[test]
     fn lower_account_id_invalid_non_alias_literal_keeps_static_account_dataref() {
-        let src = r#"fn main() { let _acct = account_id("merchant"); }"#;
+        let src = r#"fn main() { let _acct = AccountId::parse("merchant"); }"#;
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -6751,7 +8207,7 @@ mod tests {
                 .expect("public key"),
         )
         .to_string();
-        let src = format!(r#"fn main() {{ let _acct = account_id("{canonical}"); }}"#);
+        let src = format!(r#"fn main() {{ let _acct = AccountId::parse("{canonical}"); }}"#);
         let prog = parse(&src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -6783,7 +8239,7 @@ mod tests {
 
     #[test]
     fn lower_account_id_invalid_alias_shaped_literal_to_resolve_account_alias() {
-        let src = r#"fn main() { let _acct = account_id("merchant@"); }"#;
+        let src = r#"fn main() { let _acct = AccountId::parse("merchant@"); }"#;
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -6813,7 +8269,7 @@ mod tests {
 
     #[test]
     fn lower_account_id_invalid_domain_qualified_alias_literal_to_resolve_account_alias() {
-        let src = r#"fn main() { let _acct = account_id("merchant@bank."); }"#;
+        let src = r#"fn main() { let _acct = AccountId::parse("merchant@bank."); }"#;
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -6843,7 +8299,7 @@ mod tests {
 
     #[test]
     fn lower_get_numeric_builtin() {
-        let src = "fn main() { let ev = trigger_event(); let _amount: Amount = ev.get_numeric(name(\"amount\")); }";
+        let src = "fn main() { let ev = context::trigger_event(); let _amount: Amount = ev.get_numeric(Name::parse(\"amount\")); }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -6864,7 +8320,7 @@ mod tests {
 
     #[test]
     fn lower_get_asset_definition_id_builtin() {
-        let src = "fn main() { let ev = trigger_event(); let _asset = ev.get_asset_definition_id(name(\"asset_definition_id\")); }";
+        let src = "fn main() { let ev = context::trigger_event(); let _asset = ev.get_asset_definition_id(Name::parse(\"asset_definition_id\")); }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -6887,33 +8343,35 @@ mod tests {
     fn lower_state_map_sets_keep_declared_base_names() {
         let src = r#"
             seiyaku StagedMintRequest {
-              state int MintRequestNextSequence;
-              state MintRequestSequenceById: Map<Name, int>;
-              state MintRequestSequences: Map<int, int>;
-              state MintRequestRequestIds: Map<int, Name>;
-              state MintRequestFiIds: Map<int, Name>;
-              state MintRequestFiAuthorities: Map<int, AccountId>;
-              state MintRequestToAccounts: Map<int, AccountId>;
-              state MintRequestAmounts: Map<int, int>;
-              state MintRequestRequestedBy: Map<int, Json>;
-              state MintRequestStates: Map<int, int>;
-              state MintRequestCreatedAt: Map<int, int>;
-              state MintRequestExpiresAt: Map<int, int>;
-              state MintRequestFinalizedAt: Map<int, int>;
-              state MintRequestCanceledAt: Map<int, int>;
+              state MintRequestNextSequence: i64;
+              state MintRequestSequenceById: StateMap<Name, i64>;
+              state MintRequestSequences: StateMap<i64, i64>;
+              state MintRequestRequestIds: StateMap<i64, Name>;
+              state MintRequestFiIds: StateMap<i64, Name>;
+              state MintRequestFiAuthorities: StateMap<i64, AccountId>;
+              state MintRequestToAccounts: StateMap<i64, AccountId>;
+              state MintRequestAmounts: StateMap<i64, i64>;
+              state MintRequestRequestedBy: StateMap<i64, Json>;
+              state MintRequestStates: StateMap<i64, i64>;
+              state MintRequestCreatedAt: StateMap<i64, i64>;
+              state MintRequestExpiresAt: StateMap<i64, i64>;
+              state MintRequestFinalizedAt: StateMap<i64, i64>;
+              state MintRequestCanceledAt: StateMap<i64, i64>;
 
-              fn update_record(sequence: int,
+              hajimari() { MintRequestNextSequence = 0; }
+
+              fn update_record(sequence: i64,
                                request_id: Name,
                                fi_id: Name,
                                fi_multisig_account_id: AccountId,
                                to_account_id: AccountId,
-                               amount_i64: int,
+                               amount_i64: i64,
                                requested_by_actor_id: Json,
-                               state_code: int,
-                               created_at_ms: int,
-                               expires_at_ms: int,
-                               finalized_at_ms: int,
-                               canceled_at_ms: int) {
+                               state_code: i64,
+                               created_at_ms: i64,
+                               expires_at_ms: i64,
+                               finalized_at_ms: i64,
+                               canceled_at_ms: i64) {
                 MintRequestSequences[sequence] = sequence;
                 MintRequestRequestIds[sequence] = request_id;
                 MintRequestFiIds[sequence] = fi_id;
@@ -6950,7 +8408,8 @@ mod tests {
                 {
                     name_literals.insert(*dest, value.clone());
                 }
-                if let Instr::PathMapKey { base, .. } = instr {
+                if let Instr::PathMapKey { base, .. } | Instr::PathMapKeyNorito { base, .. } = instr
+                {
                     let base_name = name_literals
                         .get(base)
                         .cloned()
@@ -6980,32 +8439,32 @@ mod tests {
     }
 
     #[test]
-    fn lower_norito_bytes_literal_to_dataref() {
-        let src = r#"fn main() { let _b = norito_bytes(b"ab"); }"#;
+    fn lower_bytes_literal_to_blob_dataref() {
+        let src = r#"fn main() { let _b = b"ab"; }"#;
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
         let f = &ir.functions[0];
-        let mut saw_norito = false;
+        let mut saw_blob = false;
         for bb in &f.blocks {
             for instr in &bb.instrs {
                 if let Instr::DataRef { kind, value, .. } = instr
-                    && *kind == DataRefKind::NoritoBytes
+                    && *kind == DataRefKind::Blob
                     && value == "0x6162"
                 {
-                    saw_norito = true;
+                    saw_blob = true;
                 }
             }
         }
-        assert!(saw_norito, "expected NoritoBytes dataref for bytes literal");
+        assert!(saw_blob, "expected Blob dataref for bytes literal");
     }
 
     #[test]
     fn lower_trigger_aliases() {
         let src = r#"
             fn main() {
-                register_trigger(json("{}"));
-                unregister_trigger(name("wake"));
+                ledger::trigger::register(Json::parse("{}"));
+                ledger::trigger::remove(Name::parse("wake"));
             }
         "#;
         let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
@@ -7030,8 +8489,8 @@ mod tests {
             seiyaku C {
                 struct TransferArgs { domain: DomainId; to: AccountId; }
                 fn main() {
-                    let args = TransferArgs(domain("wonderland.universal"), account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
-                    transfer_domain(authority(), args.domain, args.to);
+                    let args = TransferArgs(DomainId::parse("wonderland.universal"), AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
+                    ledger::domain::transfer(context::authority(), args.domain, args.to);
                 }
             }
         "#;
@@ -7052,7 +8511,7 @@ mod tests {
 
     #[test]
     fn lower_info_int_encodes_to_norito() {
-        let src = "fn f() { info(7); }";
+        let src = "fn f() { debug::info(7); }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -7073,37 +8532,21 @@ mod tests {
     }
 
     #[test]
-    fn lower_encode_int_literal_uses_encode_int() {
-        let src = "fn f() { let _b = encode_int(7); }";
+    fn source_cannot_lower_internal_encode_i64_builtin() {
+        let src = "fn f() { let _b = codec::encode_i64(7); }";
         let prog = parse(src).unwrap();
-        let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed).expect("lower");
-        let f = &ir.functions[0];
-        let mut saw_encode = false;
-        let mut saw_literal = false;
-        for bb in &f.blocks {
-            for instr in &bb.instrs {
-                match instr {
-                    Instr::EncodeInt { .. } => saw_encode = true,
-                    Instr::DataRef { kind, value, .. }
-                        if *kind == DataRefKind::NoritoBytes && value == "7" =>
-                    {
-                        saw_literal = true;
-                    }
-                    _ => {}
-                }
-            }
-        }
-        assert!(saw_encode, "expected EncodeInt for literal encode_int");
+        let error = analyze(&prog).expect_err("codec builtin is compiler-owned");
         assert!(
-            !saw_literal,
-            "unexpected literal NoritoBytes dataref for encode_int"
+            error.message.contains("compiler-internal")
+                || error.message.contains("unknown function or builtin"),
+            "unexpected error: {}",
+            error.message
         );
     }
 
     #[test]
-    fn lower_blob_equality_uses_pointer_eq() {
-        let src = "fn f() { let a = blob(\"hi\"); let b = blob(\"hi\"); let _x = a == b; }";
+    fn lower_bytes_equality_uses_pointer_eq() {
+        let src = r#"fn f() { let a = b"hi"; let b = b"hi"; let _x = a == b; }"#;
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -7129,68 +8572,9 @@ mod tests {
     }
 
     #[test]
-    fn lower_map_get_pointer_key_uses_pointer_eq() {
-        let src = "fn f() { let m: Map<Name, int> = Map::new(); let k = name(\"alice\"); let _v = m[k]; }";
-        let prog = parse(src).unwrap();
-        let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed).expect("lower");
-        let f = &ir.functions[0];
-        let mut saw_pointer_eq = false;
-        let mut saw_map_get = false;
-        for bb in &f.blocks {
-            for instr in &bb.instrs {
-                match instr {
-                    Instr::PointerEq { .. } => saw_pointer_eq = true,
-                    Instr::MapGet { .. } => saw_map_get = true,
-                    _ => {}
-                }
-            }
-        }
-        assert!(saw_pointer_eq, "expected PointerEq for pointer map key");
-        assert!(
-            !saw_map_get,
-            "pointer-key map lookup should not use integer MapGet"
-        );
-    }
-
-    #[test]
-    fn lower_map_get_numeric_key_uses_numeric_compare() {
-        let src =
-            "fn f() { let m: Map<Amount, int> = Map::new(); let k: Amount = 7; let _v = m[k]; }";
-        let prog = parse(src).unwrap();
-        let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed).expect("lower");
-        let f = &ir.functions[0];
-        let mut saw_numeric_compare = false;
-        let mut saw_map_get = false;
-        let mut saw_map_load_pair = false;
-        for bb in &f.blocks {
-            for instr in &bb.instrs {
-                match instr {
-                    Instr::NumericCompare { .. } => saw_numeric_compare = true,
-                    Instr::MapGet { .. } => saw_map_get = true,
-                    Instr::MapLoadPair { .. } => saw_map_load_pair = true,
-                    _ => {}
-                }
-            }
-        }
-        assert!(
-            saw_numeric_compare,
-            "expected NumericCompare for numeric map key"
-        );
-        assert!(
-            saw_map_load_pair,
-            "expected MapLoadPair for numeric map key"
-        );
-        assert!(
-            !saw_map_get,
-            "numeric-key map lookup should not use integer MapGet"
-        );
-    }
-
-    #[test]
     fn lower_get_or_on_state_map_reads_without_writing() {
-        let src = "state balances: Map<int, int>; fn f() -> int { return balances.get_or(1, 7); }";
+        let src =
+            "state balances: StateMap<i64, i64>; fn f() -> i64 { return balances.get_or(1, 7); }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -7214,451 +8598,53 @@ mod tests {
     }
 
     #[test]
-    fn lower_state_map_helper_param_round_trips_root_handle() {
-        let src = r#"
-            seiyaku Demo {
-                state Balances: Map<Name, int>;
-
-                fn ensure_balance(state Map<Name, int> balances, key: Name) -> int {
-                    return balances.ensure(key, 0);
-                }
-
-                fn main() -> int {
-                    return ensure_balance(Balances, name("alice"));
-                }
-            }
-        "#;
-        let prog = parse(src).unwrap();
-        let typed = analyze(&prog).unwrap();
+    fn scalar_state_map_get_reuses_presence_blob() {
+        let src = "state balances: StateMap<i64, i64>; fn f() { let _value = balances.get(1); }";
+        let typed = analyze(&parse(src).expect("parse StateMap.get")).expect("analyze");
         let ir = lower(&typed).expect("lower");
-        let main_fn = ir
-            .functions
+        let state_gets = ir.functions[0]
+            .blocks
             .iter()
-            .find(|f| f.name == "main")
-            .expect("main function");
-        let helper_fn = ir
-            .functions
-            .iter()
-            .find(|f| f.name == "ensure_balance")
-            .expect("helper function");
-
-        let mut balance_handle_temps = Vec::new();
-        for bb in &main_fn.blocks {
-            for instr in &bb.instrs {
-                if let Instr::DataRef {
-                    dest,
-                    kind: DataRefKind::Name,
-                    value,
-                } = instr
-                    && value == "Balances"
-                {
-                    balance_handle_temps.push(*dest);
-                }
-            }
-        }
-        let mut main_passes_balance_literal = false;
-        for bb in &main_fn.blocks {
-            for instr in &bb.instrs {
-                if let Instr::Call { callee, args, .. } = instr
-                    && callee == "ensure_balance"
-                    && args
-                        .first()
-                        .is_some_and(|arg| balance_handle_temps.contains(arg))
-                {
-                    main_passes_balance_literal = true;
-                }
-            }
-        }
-        assert!(
-            main_passes_balance_literal,
-            "expected caller to pass the durable state root as a Name handle"
-        );
-
-        let mut helper_uses_runtime_root = false;
-        for bb in &helper_fn.blocks {
-            for instr in &bb.instrs {
-                if let Instr::PathMapKeyNorito { base, .. } = instr
-                    && helper_fn.blocks.iter().flat_map(|block| block.instrs.iter()).any(|candidate| {
-                        matches!(
-                            candidate,
-                            Instr::LoadVar { dest, name } if *dest == *base && name == "balances"
-                        )
-                    })
-                {
-                    helper_uses_runtime_root = true;
-                }
-            }
-        }
-        assert!(
-            helper_uses_runtime_root,
-            "expected helper to build durable paths from its state parameter handle"
-        );
+            .flat_map(|block| &block.instrs)
+            .filter(|instruction| matches!(instruction, Instr::StateGet { .. }))
+            .count();
+        assert_eq!(state_gets, 1, "presence and scalar value share one read");
     }
 
     #[test]
-    fn lower_state_scalar_helper_param_round_trips_root_handle() {
-        let src = r#"
-            seiyaku Demo {
-                state Counter: int;
-
-                fn read_counter(state int counter) -> int {
-                    return counter;
-                }
-
-                fn main() -> int {
-                    return read_counter(Counter);
-                }
-            }
-        "#;
-        let prog = parse(src).unwrap();
-        let typed = analyze(&prog).unwrap();
+    fn scalar_state_map_remove_reads_and_deletes_once() {
+        let src = "state balances: StateMap<i64, i64>; fn f() { let _value = balances.remove(1); }";
+        let typed = analyze(&parse(src).expect("parse StateMap.remove")).expect("analyze");
         let ir = lower(&typed).expect("lower");
-        let main_fn = ir
-            .functions
+        let instructions = ir.functions[0]
+            .blocks
             .iter()
-            .find(|f| f.name == "main")
-            .expect("main function");
-        let helper_fn = ir
-            .functions
-            .iter()
-            .find(|f| f.name == "read_counter")
-            .expect("helper function");
-
-        let mut counter_handle_temps = Vec::new();
-        for bb in &main_fn.blocks {
-            for instr in &bb.instrs {
-                if let Instr::DataRef {
-                    dest,
-                    kind: DataRefKind::Name,
-                    value,
-                } = instr
-                    && value == "Counter"
-                {
-                    counter_handle_temps.push(*dest);
-                }
-            }
-        }
-        let mut main_passes_counter_literal = false;
-        for bb in &main_fn.blocks {
-            for instr in &bb.instrs {
-                if let Instr::Call { callee, args, .. } = instr
-                    && callee == "read_counter"
-                    && args
-                        .first()
-                        .is_some_and(|arg| counter_handle_temps.contains(arg))
-                {
-                    main_passes_counter_literal = true;
-                }
-            }
-        }
-        assert!(
-            main_passes_counter_literal,
-            "expected caller to pass the durable scalar state root as a Name handle"
-        );
-
-        let mut helper_reads_runtime_root = false;
-        for bb in &helper_fn.blocks {
-            for instr in &bb.instrs {
-                if let Instr::StateGet { path, .. } = instr
-                    && helper_fn
-                        .blocks
-                        .iter()
-                        .flat_map(|block| block.instrs.iter())
-                        .any(|candidate| {
-                            matches!(
-                                candidate,
-                                Instr::LoadVar { dest, name } if *dest == *path && name == "counter"
-                            )
-                        })
-                {
-                    helper_reads_runtime_root = true;
-                }
-            }
-        }
-        assert!(
-            helper_reads_runtime_root,
-            "expected scalar helper to read durable state through its runtime state handle"
-        );
-    }
-
-    #[test]
-    fn lower_state_struct_helper_param_expands_child_handles() {
-        let src = r#"
-            seiyaku Demo {
-                struct Ledger { counter: int; flag: bool; }
-                state Ledger ledger;
-
-                fn read_counter(state Ledger entry) -> int {
-                    return entry.counter;
-                }
-
-                fn main() -> int {
-                    return read_counter(ledger);
-                }
-            }
-        "#;
-        let prog = parse(src).unwrap();
-        let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed).expect("lower");
-        let main_fn = ir
-            .functions
-            .iter()
-            .find(|f| f.name == "main")
-            .expect("main function");
-        let helper_fn = ir
-            .functions
-            .iter()
-            .find(|f| f.name == "read_counter")
-            .expect("helper function");
-
+            .flat_map(|block| &block.instrs)
+            .collect::<Vec<_>>();
         assert_eq!(
-            helper_fn.params,
-            vec![
-                "entry".to_string(),
-                "entry#0".to_string(),
-                "entry#1".to_string()
-            ],
-            "aggregate state parameters should lower to root plus flattened children"
+            instructions
+                .iter()
+                .filter(|instruction| matches!(instruction, Instr::StateGet { .. }))
+                .count(),
+            1
         );
-
-        let mut ledger_handle_temps = Vec::new();
-        let mut counter_handle_temps = Vec::new();
-        let mut flag_handle_temps = Vec::new();
-        for bb in &main_fn.blocks {
-            for instr in &bb.instrs {
-                if let Instr::DataRef {
-                    dest,
-                    kind: DataRefKind::Name,
-                    value,
-                } = instr
-                {
-                    match value.as_str() {
-                        "ledger" => ledger_handle_temps.push(*dest),
-                        "ledger_counter" => counter_handle_temps.push(*dest),
-                        "ledger_flag" => flag_handle_temps.push(*dest),
-                        _ => {}
-                    }
-                }
-            }
-        }
-
-        let mut main_passes_flattened_handles = false;
-        for bb in &main_fn.blocks {
-            for instr in &bb.instrs {
-                if let Instr::Call { callee, args, .. } = instr
-                    && callee == "read_counter"
-                    && args.len() == 3
-                    && ledger_handle_temps.contains(&args[0])
-                    && counter_handle_temps.contains(&args[1])
-                    && flag_handle_temps.contains(&args[2])
-                {
-                    main_passes_flattened_handles = true;
-                }
-            }
-        }
-        assert!(
-            main_passes_flattened_handles,
-            "expected caller to pass root and flattened state child handles"
-        );
-
-        let mut helper_reads_counter_child = false;
-        for bb in &helper_fn.blocks {
-            for instr in &bb.instrs {
-                if let Instr::StateGet { path, .. } = instr
-                    && helper_fn
-                        .blocks
-                        .iter()
-                        .flat_map(|block| block.instrs.iter())
-                        .any(|candidate| {
-                            matches!(
-                                candidate,
-                                Instr::LoadVar { dest, name } if *dest == *path && name == "entry#0"
-                            )
-                        })
-                {
-                    helper_reads_counter_child = true;
-                }
-            }
-        }
-        assert!(
-            helper_reads_counter_child,
-            "expected helper member access to read through the flattened child handle"
-        );
-    }
-
-    #[test]
-    fn lower_state_struct_helper_param_forwards_runtime_handles() {
-        let src = r#"
-            seiyaku Demo {
-                struct Ledger { counter: int; flag: bool; }
-                state Ledger ledger;
-
-                fn read_counter(state Ledger entry) -> int {
-                    return entry.counter;
-                }
-
-                fn forward(state Ledger entry) -> int {
-                    return read_counter(entry);
-                }
-
-                fn main() -> int {
-                    return forward(ledger);
-                }
-            }
-        "#;
-        let prog = parse(src).unwrap();
-        let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed).expect("lower");
-        let forward_fn = ir
-            .functions
-            .iter()
-            .find(|f| f.name == "forward")
-            .expect("forward function");
-
-        let mut entry_handle = None;
-        let mut counter_handle = None;
-        let mut flag_handle = None;
-        for bb in &forward_fn.blocks {
-            for instr in &bb.instrs {
-                if let Instr::LoadVar { dest, name } = instr {
-                    match name.as_str() {
-                        "entry" => entry_handle = Some(*dest),
-                        "entry#0" => counter_handle = Some(*dest),
-                        "entry#1" => flag_handle = Some(*dest),
-                        _ => {}
-                    }
-                }
-            }
-        }
-
-        let mut forwards_flattened_handles = false;
-        for bb in &forward_fn.blocks {
-            for instr in &bb.instrs {
-                if let Instr::Call { callee, args, .. } = instr
-                    && callee == "read_counter"
-                    && args.len() == 3
-                    && Some(args[0]) == entry_handle
-                    && Some(args[1]) == counter_handle
-                    && Some(args[2]) == flag_handle
-                {
-                    forwards_flattened_handles = true;
-                }
-            }
-        }
-        assert!(
-            forwards_flattened_handles,
-            "expected forwarded state parameter to pass the current runtime handles"
-        );
-    }
-
-    #[test]
-    fn lower_state_map_struct_value_helper_param_expands_value_handles() {
-        let src = r#"
-            seiyaku Demo {
-                struct Entry { amount: int; }
-                state Entries: Map<Name, Entry>;
-
-                fn read_amount(state Map<Name, Entry> entries, key: Name) -> int {
-                    return entries[key].amount;
-                }
-
-                fn main() -> int {
-                    return read_amount(Entries, name("alice"));
-                }
-            }
-        "#;
-        let prog = parse(src).unwrap();
-        let typed = analyze(&prog).unwrap();
-        let ir = lower(&typed).expect("lower");
-        let main_fn = ir
-            .functions
-            .iter()
-            .find(|f| f.name == "main")
-            .expect("main function");
-        let helper_fn = ir
-            .functions
-            .iter()
-            .find(|f| f.name == "read_amount")
-            .expect("helper function");
-
         assert_eq!(
-            helper_fn.params,
-            vec![
-                "entries".to_string(),
-                "entries#0".to_string(),
-                "key".to_string()
-            ],
-            "state maps with aggregate values should lower value-field handles"
-        );
-
-        let mut entries_handle_temps = Vec::new();
-        let mut amount_handle_temps = Vec::new();
-        for bb in &main_fn.blocks {
-            for instr in &bb.instrs {
-                if let Instr::DataRef {
-                    dest,
-                    kind: DataRefKind::Name,
-                    value,
-                } = instr
-                {
-                    match value.as_str() {
-                        "Entries" => entries_handle_temps.push(*dest),
-                        "Entries_amount" => amount_handle_temps.push(*dest),
-                        _ => {}
-                    }
-                }
-            }
-        }
-
-        let mut main_passes_map_value_handles = false;
-        for bb in &main_fn.blocks {
-            for instr in &bb.instrs {
-                if let Instr::Call { callee, args, .. } = instr
-                    && callee == "read_amount"
-                    && args.len() == 3
-                    && entries_handle_temps.contains(&args[0])
-                    && amount_handle_temps.contains(&args[1])
-                {
-                    main_passes_map_value_handles = true;
-                }
-            }
-        }
-        assert!(
-            main_passes_map_value_handles,
-            "expected caller to pass map root and aggregate value child handles"
-        );
-
-        let mut helper_builds_amount_path_from_runtime_root = false;
-        for bb in &helper_fn.blocks {
-            for instr in &bb.instrs {
-                if let Instr::PathMapKeyNorito { base, .. } = instr
-                    && helper_fn
-                        .blocks
-                        .iter()
-                        .flat_map(|block| block.instrs.iter())
-                        .any(|candidate| {
-                            matches!(
-                                candidate,
-                                Instr::LoadVar { dest, name } if *dest == *base && name == "entries#0"
-                            )
-                        })
-                {
-                    helper_builds_amount_path_from_runtime_root = true;
-                }
-            }
-        }
-        assert!(
-            helper_builds_amount_path_from_runtime_root,
-            "expected helper map value field access to use the flattened value child handle"
+            instructions
+                .iter()
+                .filter(|instruction| matches!(instruction, Instr::StateDel { .. }))
+                .count(),
+            1
         );
     }
 
     #[test]
-    fn lower_state_struct_ident_reconstructs_tuple_from_host() {
+    fn lower_state_struct_ident_decodes_one_schema_bound_record() {
         let src = r#"
             seiyaku C {
-                struct Ledger { counter: int; flag: bool; }
-                state Ledger ledger;
+                struct Ledger { counter: i64; flag: bool; }
+                state ledger: Ledger;
+
+                hajimari() { ledger = Ledger(0, false); }
 
                 fn main() {
                     let snapshot = ledger;
@@ -7672,8 +8658,8 @@ mod tests {
         let main_fn = ir.functions.iter().find(|f| f.name == "main").unwrap();
 
         let mut saw_tuple_pack = false;
-        let mut saw_counter_path = false;
-        let mut saw_flag_path = false;
+        let mut saw_root_path = false;
+        let mut saw_aggregate_decode = false;
         let mut state_gets = 0;
 
         for bb in &main_fn.blocks {
@@ -7684,12 +8670,12 @@ mod tests {
                         kind: DataRefKind::Name,
                         value,
                         ..
-                    } if value == "ledger_counter" => saw_counter_path = true,
-                    Instr::DataRef {
-                        kind: DataRefKind::Name,
-                        value,
-                        ..
-                    } if value == "ledger_flag" => saw_flag_path = true,
+                    } if value == "ledger" => saw_root_path = true,
+                    Instr::DirectHelperSyscall { syscall, .. }
+                        if *syscall == ivm_abi::syscalls::SYSCALL_STATE_VALUE_DECODE =>
+                    {
+                        saw_aggregate_decode = true;
+                    }
                     Instr::StateGet { .. } => state_gets += 1,
                     _ => {}
                 }
@@ -7700,20 +8686,19 @@ mod tests {
             saw_tuple_pack,
             "expected TuplePack when reconstructing struct state"
         );
-        assert!(saw_counter_path, "missing durable read for ledger.counter");
-        assert!(saw_flag_path, "missing durable read for ledger.flag");
-        assert!(
-            state_gets >= 2,
-            "expected durable reads for all struct fields"
-        );
+        assert!(saw_root_path, "missing durable read for ledger root");
+        assert!(saw_aggregate_decode, "missing aggregate state decoder");
+        assert_eq!(state_gets, 1, "aggregate state must be read exactly once");
     }
 
     #[test]
-    fn lower_state_struct_assignment_persists_child_fields() {
+    fn lower_state_struct_assignment_encodes_and_writes_once() {
         let src = r#"
             seiyaku C {
-                struct Ledger { counter: int; flag: bool; }
-                state Ledger ledger;
+                struct Ledger { counter: i64; flag: bool; }
+                state ledger: Ledger;
+
+                hajimari() { ledger = Ledger(0, false); }
 
                 fn main() {
                     ledger = Ledger(7, true);
@@ -7725,10 +8710,10 @@ mod tests {
         let ir = lower(&typed).expect("lower");
         let main_fn = ir.functions.iter().find(|f| f.name == "main").unwrap();
 
-        let mut saw_counter_path = false;
-        let mut saw_flag_path = false;
+        let mut saw_root_path = false;
         let mut state_sets = 0;
         let mut tuple_gets = 0;
+        let mut aggregate_encodes = 0;
 
         for bb in &main_fn.blocks {
             for instr in &bb.instrs {
@@ -7737,46 +8722,39 @@ mod tests {
                         kind: DataRefKind::Name,
                         value,
                         ..
-                    } if value == "ledger_counter" => saw_counter_path = true,
-                    Instr::DataRef {
-                        kind: DataRefKind::Name,
-                        value,
-                        ..
-                    } if value == "ledger_flag" => saw_flag_path = true,
+                    } if value == "ledger" => saw_root_path = true,
                     Instr::StateSet { .. } => state_sets += 1,
                     Instr::TupleGet { .. } => tuple_gets += 1,
+                    Instr::StateValueEncode { .. } => aggregate_encodes += 1,
                     _ => {}
                 }
             }
         }
 
-        assert!(saw_counter_path, "missing durable write for ledger.counter");
-        assert!(saw_flag_path, "missing durable write for ledger.flag");
-        assert!(
-            state_sets >= 2,
-            "expected child StateSet instructions for struct assignment"
+        assert!(saw_root_path, "missing durable write for ledger root");
+        assert_eq!(
+            state_sets, 1,
+            "aggregate state must be written exactly once"
         );
+        assert_eq!(aggregate_encodes, 1, "aggregate state must be encoded once");
         assert!(
             tuple_gets >= 2,
-            "expected tuple extraction when flattening struct assignment"
+            "expected tuple extraction for the canonical aggregate record"
         );
     }
 
     #[test]
-    fn lower_state_struct_field_reads_from_host() {
+    fn aggregate_state_map_entry_uses_one_read_and_one_write() {
         let src = r#"
             seiyaku C {
-                struct Ledger { counter: int; flag: bool; metadata: Json; label: Name; raw: Blob; owner: AccountId; }
-                state Ledger ledger;
+                struct Ledger { counter: i64; flag: bool; }
+                state ledgers: StateMap<i64, Ledger>;
+
+                hajimari() {}
 
                 fn main() {
-                    let c = ledger.counter;
-                    let f = ledger.flag;
-                    let m = ledger.metadata;
-                    let l = ledger.label;
-                    let r = ledger.raw;
-                    let o = ledger.owner;
-                    let _ = (c, f, m, l, r, o);
+                    ledgers[7] = Ledger(9, true);
+                    let _snapshot = ledgers.get(7);
                 }
             }
         "#;
@@ -7785,19 +8763,11 @@ mod tests {
         let ir = lower(&typed).expect("lower");
         let main_fn = ir.functions.iter().find(|f| f.name == "main").unwrap();
 
-        let mut saw_counter_path = false;
-        let mut saw_flag_path = false;
-        let mut saw_metadata_path = false;
-        let mut saw_label_path = false;
-        let mut saw_raw_path = false;
-        let mut saw_owner_path = false;
         let mut state_gets = 0;
-        let mut decode_ints = 0;
-        let mut saw_bool_ne = false;
-        let mut saw_json_decode = false;
-        let mut saw_name_decode = false;
-        let mut saw_blob_pointer_decode = false;
-        let mut saw_pointer_decode = false;
+        let mut state_sets = 0;
+        let mut aggregate_encodes = 0;
+        let mut aggregate_decodes = 0;
+        let mut child_paths = Vec::new();
 
         for bb in &main_fn.blocks {
             for instr in &bb.instrs {
@@ -7806,79 +8776,230 @@ mod tests {
                         kind: DataRefKind::Name,
                         value,
                         ..
-                    } if value == "ledger_counter" => saw_counter_path = true,
-                    Instr::DataRef {
-                        kind: DataRefKind::Name,
-                        value,
-                        ..
-                    } if value == "ledger_flag" => saw_flag_path = true,
-                    Instr::DataRef {
-                        kind: DataRefKind::Name,
-                        value,
-                        ..
-                    } if value == "ledger_metadata" => saw_metadata_path = true,
-                    Instr::DataRef {
-                        kind: DataRefKind::Name,
-                        value,
-                        ..
-                    } if value == "ledger_label" => saw_label_path = true,
-                    Instr::DataRef {
-                        kind: DataRefKind::Name,
-                        value,
-                        ..
-                    } if value == "ledger_raw" => saw_raw_path = true,
-                    Instr::DataRef {
-                        kind: DataRefKind::Name,
-                        value,
-                        ..
-                    } if value == "ledger_owner" => saw_owner_path = true,
-                    Instr::StateGet { .. } => state_gets += 1,
-                    Instr::DecodeInt { .. } => decode_ints += 1,
-                    Instr::Binary {
-                        op: BinaryOp::Ne, ..
-                    } => saw_bool_ne = true,
-                    Instr::JsonDecode { .. } => saw_json_decode = true,
-                    Instr::NameDecode { .. } => saw_name_decode = true,
-                    Instr::PointerFromNorito { kind, .. } if *kind == DataRefKind::Blob => {
-                        saw_blob_pointer_decode = true;
+                    } if value.contains('#') || value.contains("ledgers_") => {
+                        child_paths.push(value.clone());
                     }
-                    Instr::PointerFromNorito { kind, .. } if *kind == DataRefKind::Account => {
-                        saw_pointer_decode = true;
+                    Instr::StateGet { .. } => state_gets += 1,
+                    Instr::StateSet { .. } => state_sets += 1,
+                    Instr::StateValueEncode { .. } => aggregate_encodes += 1,
+                    Instr::DirectHelperSyscall { syscall, .. }
+                        if *syscall == ivm_abi::syscalls::SYSCALL_STATE_VALUE_DECODE =>
+                    {
+                        aggregate_decodes += 1;
                     }
                     _ => {}
                 }
             }
         }
 
-        assert!(saw_counter_path, "missing DataRef for ledger.counter path");
-        assert!(saw_flag_path, "missing DataRef for ledger.flag path");
+        assert_eq!(state_sets, 1, "StateMap aggregate must use one host write");
+        assert_eq!(state_gets, 1, "StateMap aggregate must use one host read");
+        assert_eq!(aggregate_encodes, 1);
+        assert_eq!(aggregate_decodes, 1);
         assert!(
-            saw_metadata_path,
-            "missing DataRef for ledger.metadata path"
-        );
-        assert!(saw_label_path, "missing DataRef for ledger.label path");
-        assert!(saw_raw_path, "missing DataRef for ledger.raw path");
-        assert!(saw_owner_path, "missing DataRef for ledger.owner path");
-        assert!(state_gets >= 6, "expected durable reads for struct fields");
-        assert!(decode_ints >= 2, "expected DecodeInt for persisted scalars");
-        assert!(saw_bool_ne, "expected bool normalization via Binary::Ne");
-        assert!(saw_json_decode, "expected JsonDecode for persisted Json");
-        assert!(saw_name_decode, "expected NameDecode for persisted Name");
-        assert!(
-            saw_blob_pointer_decode,
-            "expected PointerFromNorito for persisted blob field"
-        );
-        assert!(
-            saw_pointer_decode,
-            "expected PointerFromNorito for pointer field"
+            child_paths.is_empty(),
+            "unexpected child paths: {child_paths:?}"
         );
     }
 
     #[test]
-    fn value_codec_supports_blob_state_maps() {
-        assert!(matches!(
-            value_codec_for_type(&Type::Blob),
-            Some(ValueCodec::Pointer(DataRefKind::Blob))
-        ));
+    fn scalar_state_read_after_write_reuses_the_live_value() {
+        let src = r#"
+            seiyaku C {
+                state counter: i64;
+                hajimari() { counter = 0; }
+                fn main() -> i64 {
+                    counter = 7;
+                    return counter;
+                }
+            }
+        "#;
+        let prog = parse(src).expect("parse scalar state root");
+        let typed = analyze(&prog).expect("analyze scalar state root");
+        let ir = lower(&typed).expect("lower scalar state root");
+        let main_fn = ir.functions.iter().find(|f| f.name == "main").unwrap();
+
+        let encodes = main_fn
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .filter(|instr| matches!(instr, Instr::StateValueEncode { .. }))
+            .count();
+        let decodes = main_fn
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .filter(|instr| {
+                matches!(
+                    instr,
+                    Instr::DirectHelperSyscall { syscall, .. }
+                        if *syscall == ivm_abi::syscalls::SYSCALL_STATE_VALUE_DECODE
+                )
+            })
+            .count();
+        assert_eq!(encodes, 1, "scalar root must be encoded exactly once");
+        assert_eq!(
+            decodes, 0,
+            "a scalar read immediately after its write must reuse the live value"
+        );
+    }
+
+    #[test]
+    fn missing_aggregate_map_entry_branches_before_typed_decode() {
+        let src = r#"
+            seiyaku C {
+                struct Pair { count: i64; ready: bool }
+                state values: StateMap<i64, Pair>;
+                hajimari() {}
+                fn main() { let _missing = values.get(7); }
+            }
+        "#;
+        let prog = parse(src).expect("parse aggregate map read");
+        let typed = analyze(&prog).expect("analyze aggregate map read");
+        let ir = lower(&typed).expect("lower aggregate map read");
+        let main_fn = ir.functions.iter().find(|f| f.name == "main").unwrap();
+
+        let decode_block = main_fn
+            .blocks
+            .iter()
+            .find(|block| {
+                block.instrs.iter().any(|instr| {
+                    matches!(
+                        instr,
+                        Instr::DirectHelperSyscall { syscall, .. }
+                            if *syscall == ivm_abi::syscalls::SYSCALL_STATE_VALUE_DECODE
+                    )
+                })
+            })
+            .expect("present branch must decode the typed record");
+        let presence_branch = main_fn
+            .blocks
+            .iter()
+            .find_map(|block| match &block.terminator {
+                Terminator::Branch {
+                    then_bb, else_bb, ..
+                } if *then_bb == decode_block.label => Some((*then_bb, *else_bb)),
+                _ => None,
+            })
+            .expect("typed decode must be guarded by presence");
+        assert_ne!(presence_branch.0, presence_branch.1);
+        let absent = main_fn
+            .blocks
+            .iter()
+            .find(|block| block.label == presence_branch.1)
+            .expect("absent branch");
+        assert!(
+            absent.instrs.iter().all(|instr| !matches!(
+                instr,
+                Instr::DirectHelperSyscall { syscall, .. }
+                    if *syscall == ivm_abi::syscalls::SYSCALL_STATE_VALUE_DECODE
+            )),
+            "missing entries must never be passed to the typed decoder"
+        );
+    }
+
+    #[test]
+    fn bytes_state_map_uses_the_schema_bound_record_codec() {
+        let source = r#"
+            seiyaku C {
+                state values: StateMap<i64, bytes>;
+                hajimari() {}
+                fn main() {
+                    values[7] = b"payload";
+                    let _stored = values.get(7);
+                }
+            }
+        "#;
+        let program = parse(source).expect("parse bytes state map");
+        let typed = analyze(&program).expect("analyze bytes state map");
+        let ir = lower(&typed).expect("lower bytes state map");
+        let main = ir
+            .functions
+            .iter()
+            .find(|function| function.name == "main")
+            .expect("main function");
+
+        let encodes = main
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .filter(|instruction| matches!(instruction, Instr::StateValueEncode { .. }))
+            .count();
+        let decodes = main
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .filter(|instruction| {
+                matches!(
+                    instruction,
+                    Instr::DirectHelperSyscall { syscall, .. }
+                        if *syscall == ivm_abi::syscalls::SYSCALL_STATE_VALUE_DECODE
+                )
+            })
+            .count();
+        assert_eq!(encodes, 1, "bytes map writes must use the typed codec");
+        assert_eq!(decodes, 1, "bytes map reads must use the typed codec");
+    }
+
+    #[test]
+    fn checked_integer_constants_fold_without_wrapping() {
+        let safe = parse("fn main() -> i64 { return (9223372036854775807 - 1) + 1; }")
+            .expect("parse safe constant expression");
+        let safe = lower(&analyze(&safe).expect("analyze safe constant expression"))
+            .expect("lower safe constant expression");
+        assert!(safe.functions[0].blocks.iter().any(|block| {
+            block
+                .instrs
+                .iter()
+                .any(|instr| matches!(instr, Instr::Const { value, .. } if *value == i64::MAX))
+        }));
+
+        let overflow = parse("fn main() -> i64 { return 9223372036854775807 + 1; }")
+            .expect("parse overflowing constant expression");
+        let error =
+            lower(&analyze(&overflow).expect("ordinary type analysis accepts runtime arithmetic"))
+                .expect_err("constant overflow must not wrap");
+        assert!(
+            error.contains("E_INT_OVERFLOW"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn wrapping_builtins_have_distinct_ir() {
+        let program = parse(
+            r#"
+fn main(left: i64, right: i64) -> (i64, i64, i64, i64) {
+    return (
+        math::wrapping_add(left, right),
+        math::wrapping_sub(left, right),
+        math::wrapping_mul(left, right),
+        math::wrapping_neg(left)
+    );
+}
+"#,
+        )
+        .expect("parse wrapping builtins");
+        let program = lower(&analyze(&program).expect("analyze wrapping builtins"))
+            .expect("lower wrapping builtins");
+        let instructions = program.functions[0]
+            .blocks
+            .iter()
+            .flat_map(|block| block.instrs.iter())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            instructions
+                .iter()
+                .filter(|instr| matches!(instr, Instr::WrappingBinary { .. }))
+                .count(),
+            3
+        );
+        assert_eq!(
+            instructions
+                .iter()
+                .filter(|instr| matches!(instr, Instr::WrappingNeg { .. }))
+                .count(),
+            1
+        );
     }
 }

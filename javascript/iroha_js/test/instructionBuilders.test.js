@@ -1262,7 +1262,7 @@ test("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () 
       entrypoints: [
         {
           name: "upgrade_ledger",
-          kind: "Kaizen",
+          kind: "Upgrade",
           permission: "can_upgrade",
         },
       ],
@@ -1308,7 +1308,7 @@ test("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () 
         entrypoints: [
           {
             name: "upgrade_ledger",
-            kind: { kind: "Kaizen" },
+            kind: { kind: "Upgrade" },
             permission: "can_upgrade",
           },
         ],
@@ -1333,7 +1333,7 @@ test("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () 
           {
             access_hints_complete: null,
             access_hints_skipped: [],
-            kind: { kind: "Kaizen", value: null },
+            kind: { kind: "Upgrade", value: null },
             name: "upgrade_ledger",
             params: [],
             permission: "can_upgrade",
@@ -1350,6 +1350,30 @@ test("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () 
   assert.deepEqual(instruction, expected);
   const decoded = encodeAndDecode(instruction);
   assert.deepEqual(decoded, expectedDecoded);
+});
+
+test("smart-contract entrypoint kinds use only the V1 interface names", () => {
+  const view = buildRegisterSmartContractCodeInstruction({
+    manifest: {
+      entrypoints: [{ name: "read", kind: "View" }],
+    },
+  });
+  assert.equal(
+    view.RegisterSmartContractCode.manifest.entrypoints[0].kind.kind,
+    "View",
+  );
+
+  for (const retired of ["kotoage", "hajimari", "kaizen"]) {
+    assert.throws(
+      () =>
+        buildRegisterSmartContractCodeInstruction({
+          manifest: {
+            entrypoints: [{ name: "legacy", kind: retired }],
+          },
+        }),
+      /must be one of 'Public', 'View', 'Init', or 'Upgrade'/,
+    );
+  }
 });
 
 test("buildRegisterSmartContractBytesInstruction encodes bytes deterministically", () => {

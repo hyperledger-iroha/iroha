@@ -5080,8 +5080,8 @@ mod tests {
         nexus::LaneLifecyclePlan,
         peer::PeerId,
         query::{
-            QueryOutput, QueryOutputBatchBoxTuple, QueryRequest, executor::FindExecutorDataModel,
-            prelude::SingularQueryBox,
+            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest,
+            executor::FindExecutorDataModel, prelude::SingularQueryBox,
         },
         transaction::signed::TransactionBuilder,
     };
@@ -7613,7 +7613,11 @@ mod tests {
         let Some(server) = try_start_mock_server() else {
             return;
         };
-        let query_output = QueryOutput::new(QueryOutputBatchBoxTuple::new(vec![]), 0, None);
+        let query_output = QueryOutput::new(
+            QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::String(Vec::new())),
+            0,
+            None,
+        );
         let encoded = norito::to_bytes(&query_output).expect("encode query output");
 
         let mock = server.mock(|when, then| {

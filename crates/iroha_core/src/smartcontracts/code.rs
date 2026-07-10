@@ -7,8 +7,6 @@
 //! process-global map and ensures every node observes the same registry
 //! contents.
 
-use std::collections::BTreeMap;
-
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
@@ -164,6 +162,17 @@ pub struct BoundContractRecord {
     pub code_bytes: Vec<u8>,
 }
 
+/// Lightweight bound-instance identity that never copies contract bytecode.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoundContractIdentity {
+    /// Canonical instance address used to resolve the binding.
+    pub contract_address: ContractAddress,
+    /// Optional stable alias currently bound to the instance.
+    pub contract_alias: Option<ContractAlias>,
+    /// Code hash currently bound to the instance.
+    pub code_hash: Hash,
+}
+
 /// Fetch manifest, code bytes, and instance binding in a single pass.
 #[must_use]
 pub fn fetch_artifacts(
@@ -198,6 +207,41 @@ pub fn fetch_instance_binding(
         .contract_instances()
         .get(contract_address)
         .copied()
+}
+
+/// Resolve a bound instance without cloning its manifest or bytecode.
+#[must_use]
+pub fn fetch_bound_contract_identity(
+    state: &impl StateReadOnly,
+    contract_address: &ContractAddress,
+) -> Option<BoundContractIdentity> {
+    let code_hash = fetch_instance_binding(state, contract_address)?;
+    let contract_alias = state
+        .world()
+        .contract_alias_bindings()
+        .get(contract_address)
+        .map(|binding| binding.alias.clone());
+    Some(BoundContractIdentity {
+        contract_address: contract_address.clone(),
+        contract_alias,
+        code_hash,
+    })
+}
+
+/// Borrow stored bytecode only for the duration of `use_bytes`.
+///
+/// This lets content-addressed cache misses prepare directly from world state
+/// without first cloning the complete deployable image.
+pub fn with_code_bytes<T>(
+    state: &impl StateReadOnly,
+    code_hash: &Hash,
+    use_bytes: impl FnOnce(&[u8]) -> T,
+) -> Option<T> {
+    state
+        .world()
+        .contract_code()
+        .get(code_hash)
+        .map(|bytes| use_bytes(bytes.as_ref()))
 }
 
 /// Resolve the fully bound contract instance record for `contract_address`.
@@ -239,22 +283,6 @@ pub fn fetch_bound_contract_record_by_subject(
                 (candidate.subject_id() == *contract_subject).then(|| candidate.clone())
             })?;
     fetch_bound_contract_record(state, &contract_address)
-}
-
-/// Snapshot all deployed contract instance records keyed by deterministic contract subject.
-#[must_use]
-pub fn snapshot_bound_contract_records_by_subject(
-    state: &impl StateReadOnly,
-) -> BTreeMap<AccountId, BoundContractRecord> {
-    state
-        .world()
-        .contract_instances()
-        .iter()
-        .filter_map(|(contract_address, _)| {
-            fetch_bound_contract_record(state, contract_address)
-                .map(|record| (contract_address.subject_id(), record))
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -304,6 +332,7 @@ mod tests {
             name: "main".to_owned(),
             kind: EntryPointKind::Public,
             params: Vec::new(),
+            argument_schema: None,
             return_type: None,
             permission: None,
             read_keys: Vec::new(),
@@ -313,6 +342,7 @@ mod tests {
             triggers: Vec::new(),
         };
         let interface = ivm::EmbeddedContractInterfaceV1 {
+            contract_name: "TestContract".to_owned(),
             compiler_fingerprint: "iroha-core-test".to_owned(),
             features_bitmap: 0,
             access_set_hints: None,
@@ -321,6 +351,7 @@ mod tests {
                 name: entrypoint.name.clone(),
                 kind: entrypoint.kind,
                 params: entrypoint.params.clone(),
+                argument_schema: None,
                 return_type: entrypoint.return_type.clone(),
                 permission: entrypoint.permission.clone(),
                 read_keys: entrypoint.read_keys.clone(),
@@ -330,6 +361,7 @@ mod tests {
                 triggers: entrypoint.triggers.clone(),
                 entry_pc: 0,
             }],
+            error_codes: Vec::new(),
             states: Vec::new(),
         };
         let mut code = Vec::new();
@@ -410,6 +442,21 @@ mod tests {
         // Instance binding fetch
         let bound = fetch_instance_binding(&view, &contract_address).expect("binding exists");
         assert_eq!(bound, code_hash);
+        let identity = fetch_bound_contract_identity(&view, &contract_address)
+            .expect("lightweight binding exists");
+        assert_eq!(identity.contract_address, contract_address);
+        assert_eq!(identity.code_hash, code_hash);
+        assert_eq!(identity.contract_alias, None);
+        let borrowed = with_code_bytes(&view, &code_hash, |bytes| (bytes.as_ptr(), bytes.to_vec()))
+            .expect("borrow stored bytes");
+        assert_eq!(borrowed.1, code);
+        let stored_ptr = view
+            .world()
+            .contract_code()
+            .get(&code_hash)
+            .expect("stored bytes")
+            .as_ptr();
+        assert_eq!(borrowed.0, stored_ptr, "borrow helper must not clone bytes");
     }
 
     #[test]
@@ -490,12 +537,60 @@ mod tests {
     }
 
     #[test]
+    fn register_code_rejects_zero_cycle_ceiling() {
+        let (state, authority, _kp) = test_state();
+        let mut block = state.block(default_header(1));
+        let mut stx = block.transaction();
+        let (mut code, _) = minimal_contract_artifact(1);
+        code[8..16].copy_from_slice(&0_u64.to_le_bytes());
+        let code_hash = ivm::contract_code_hash(&code);
+
+        let error = register_code_bytes(&authority, code, &mut stx)
+            .expect_err("zero-cycle artifact registration must fail closed");
+        assert!(
+            error.to_string().contains("omits a non-zero `max_cycles`"),
+            "unexpected registration error: {error}"
+        );
+        assert!(
+            stx.world.contract_code.get(&code_hash).is_none(),
+            "rejected artifact must not enter world state"
+        );
+    }
+
+    #[test]
+    fn register_code_rejects_cycle_ceiling_above_node_policy() {
+        let (mut state, authority, _kp) = test_state();
+        let mut pipeline = state.pipeline.clone();
+        pipeline.ivm_max_cycles_upper_bound =
+            core::num::NonZeroU64::new(1).expect("test ceiling is non-zero");
+        state.set_pipeline(pipeline);
+        let mut block = state.block(default_header(1));
+        let mut stx = block.transaction();
+        let (mut code, _) = minimal_contract_artifact(1);
+        code[8..16].copy_from_slice(&2_u64.to_le_bytes());
+        let code_hash = ivm::contract_code_hash(&code);
+
+        let error = register_code_bytes(&authority, code, &mut stx)
+            .expect_err("over-ceiling artifact registration must fail closed");
+        let message = error.to_string();
+        assert!(
+            message.contains("`max_cycles` exceeds upper bound"),
+            "unexpected registration error: {message}"
+        );
+        assert!(
+            stx.world.contract_code.get(&code_hash).is_none(),
+            "rejected artifact must not enter world state"
+        );
+    }
+
+    #[test]
     fn register_manifest_requires_code_hash() {
         let (state, authority, _kp) = test_state();
         let mut block = state.block(default_header(1));
         let mut stx = block.transaction();
 
         let manifest = ContractManifest {
+            contract_name: None,
             code_hash: None,
             abi_hash: None,
             compiler_fingerprint: None,
@@ -504,6 +599,7 @@ mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_codes: None,
             provenance: None,
         };
         let err = register_manifest(&authority, manifest, &mut stx).unwrap_err();

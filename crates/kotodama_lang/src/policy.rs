@@ -1,9 +1,9 @@
 //! Compile-time enforcement for Kotodama's on-chain safety profile.
 //!
-//! The on-chain profile forbids map key types that do not have a stable,
-//! deterministic ordering across heterogeneous hardware. This first pass checks
-//! typed programs after semantic analysis and emits deterministic errors when
-//! contracts attempt to use unsupported key types (e.g., `string`).
+//! The on-chain profile permits every scalar key with canonical Norito bytes and
+//! forbids aggregate, optional, result, JSON, secret, and state-map keys. Runtime
+//! iteration orders the encoded key bytes, so peers do not depend on host locale,
+//! hash iteration order, or numeric representation.
 
 use std::collections::HashSet;
 
@@ -22,7 +22,7 @@ pub struct PolicyError {
 /// Run the on-chain profile enforcement against a typed Kotodama program.
 pub fn enforce_on_chain_profile(program: &TypedProgram) -> Result<(), Vec<PolicyError>> {
     let mut checker = Checker::default();
-    checker.check_state_env();
+    checker.check_states(program);
     for item in &program.items {
         checker.visit_item(item);
     }
@@ -41,10 +41,10 @@ struct Checker {
 }
 
 impl Checker {
-    fn check_state_env(&mut self) {
-        for (name, ty) in semantic::state_env_snapshot() {
-            let origin = format!("state `{name}`");
-            self.visit_type(&ty, &origin);
+    fn check_states(&mut self, program: &TypedProgram) {
+        for state in &program.states {
+            let origin = format!("state `{}`", state.name);
+            self.visit_type(&state.ty, &origin);
         }
     }
 
@@ -173,7 +173,7 @@ impl Checker {
     fn visit_type(&mut self, ty: &Type, origin: &str) {
         let resolved = semantic::resolve_struct_type(ty);
         match &resolved {
-            Type::Map(key, value) => {
+            Type::StateMap(key, value) => {
                 self.check_map_key(origin, key, value);
                 self.visit_type(key, origin);
                 self.visit_type(value, origin);
@@ -198,10 +198,10 @@ impl Checker {
         }
         let key_name = display_type(key);
         let value_name = display_type(value);
-        let map_desc = format!("Map<{key_name}, {value_name}>");
+        let map_desc = format!("StateMap<{key_name}, {value_name}>");
         if self.seen.insert((origin.to_string(), map_desc.clone())) {
             let message = format!(
-                "on-chain profile forbids map with key type `{key_name}` in {origin}. Supported key types: int, AccountId, AssetDefinitionId, AssetId, NftId, DomainId, Name, DataSpaceId, AxtDescriptor, AssetHandle, ProofBlob, SoracloudRequest, SoracloudResponse."
+                "on-chain profile forbids map with key type `{key_name}` in {origin}. Supported key types: i64, u128, Amount, bool, string, bytes, and typed Iroha IDs."
             );
             self.errors.push(PolicyError { message });
         }
@@ -209,33 +209,16 @@ impl Checker {
 }
 
 fn is_allowed_map_key_type(ty: &Type) -> bool {
-    matches!(
-        semantic::resolve_struct_type(ty),
-        Type::Int
-            | Type::AccountId
-            | Type::AssetDefinitionId
-            | Type::AssetId
-            | Type::NftId
-            | Type::DomainId
-            | Type::Name
-            | Type::DataSpaceId
-            | Type::AxtDescriptor
-            | Type::AssetHandle
-            | Type::ProofBlob
-            | Type::SoracloudRequest
-            | Type::SoracloudResponse
-    )
+    semantic::is_supported_durable_key_type(ty)
 }
 
 fn display_type(ty: &Type) -> String {
     match semantic::resolve_struct_type(ty) {
-        Type::Int => "int".to_string(),
-        Type::FixedU128 => "fixed_u128".to_string(),
+        Type::Int => "i64".to_string(),
+        Type::FixedU128 => "u128".to_string(),
         Type::Amount => "Amount".to_string(),
-        Type::Balance => "Balance".to_string(),
         Type::Bool => "bool".to_string(),
         Type::String => "string".to_string(),
-        Type::Blob => "Blob".to_string(),
         Type::Bytes => "bytes".to_string(),
         Type::AccountId => "AccountId".to_string(),
         Type::AssetDefinitionId => "AssetDefinitionId".to_string(),
@@ -251,13 +234,16 @@ fn display_type(ty: &Type) -> String {
         Type::SoracloudResponse => "SoracloudResponse".to_string(),
         Type::Json => "Json".to_string(),
         Type::Unit => "()".to_string(),
-        Type::Map(k, v) => format!("Map<{}, {}>", display_type(&k), display_type(&v)),
+        Type::Secret(inner) => format!("Secret<{}>", display_type(&inner)),
+        Type::StateMap(k, v) => format!("StateMap<{}, {}>", display_type(&k), display_type(&v)),
+        Type::Option(inner) => format!("Option<{}>", display_type(&inner)),
+        Type::Result(ok, err) => format!("Result<{}, {}>", display_type(&ok), display_type(&err)),
         Type::Tuple(elems) => {
             let parts: Vec<String> = elems.iter().map(display_type).collect();
             format!("({})", parts.join(", "))
         }
         Type::Struct { name, .. } => format!("struct {name}"),
-        Type::Opaque(name) => name,
+        Type::NamedStruct(name) => name,
     }
 }
 
@@ -273,7 +259,7 @@ mod tests {
         let mut checker = Checker::default();
         let stmt = TypedStatement::Expr(TypedExpr {
             expr: ExprKind::Ident("bad_map".into()),
-            ty: Type::Map(Box::new(Type::String), Box::new(Type::Int)),
+            ty: Type::StateMap(Box::new(Type::Json), Box::new(Type::Int)),
         });
 
         checker.visit_statement(&stmt, "foo");
@@ -282,7 +268,28 @@ mod tests {
         assert_eq!(errors.len(), 1);
         assert_eq!(
             errors[0].message,
-            "on-chain profile forbids map with key type `string` in expression in `foo`. Supported key types: int, AccountId, AssetDefinitionId, AssetId, NftId, DomainId, Name, DataSpaceId, AxtDescriptor, AssetHandle, ProofBlob, SoracloudRequest, SoracloudResponse."
+            "on-chain profile forbids map with key type `Json` in expression in `foo`. Supported key types: i64, u128, Amount, bool, string, bytes, and typed Iroha IDs."
         );
+    }
+
+    #[test]
+    fn every_canonical_scalar_map_key_is_allowed() {
+        for ty in [
+            Type::Int,
+            Type::FixedU128,
+            Type::Amount,
+            Type::Bool,
+            Type::String,
+            Type::Bytes,
+            Type::AccountId,
+            Type::AssetDefinitionId,
+            Type::AssetId,
+            Type::NftId,
+            Type::DomainId,
+            Type::Name,
+            Type::DataSpaceId,
+        ] {
+            assert!(is_allowed_map_key_type(&ty), "rejected {ty:?}");
+        }
     }
 }

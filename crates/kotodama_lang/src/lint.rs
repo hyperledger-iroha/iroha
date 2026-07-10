@@ -50,6 +50,22 @@ impl LintWarning {
     pub fn localized_message(&self, lang: Language) -> String {
         self.message.translate(lang)
     }
+
+    /// Stable unified diagnostic code used by `koto check`, LSP, and SDK tools.
+    pub fn diagnostic_code(&self) -> &'static str {
+        match self.code {
+            "unused-state" => "K5001",
+            "state-shadowed" => "K5002",
+            "unused-parameter" => "K5003",
+            "unreachable-return" => "K5004",
+            "duplicate-pointer-literal" => "K5005",
+            "unused-pointer-constructor" => "K5006",
+            "nonliteral-trigger-spec" => "K5007",
+            "nonliteral-state-path" => "K5008",
+            "opaque-access-hints" => "K5009",
+            _ => "K5099",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -175,41 +191,41 @@ pub fn lint_program(program: &Program) -> Vec<LintWarning> {
 }
 
 const OPAQUE_ACCESS_HINT_CALLS: &[&str] = &[
-    "escrow_open_offer",
-    "escrow_accept",
-    "escrow_mark_payment_sent",
-    "escrow_release",
-    "escrow_cancel",
-    "escrow_open_dispute",
-    "escrow_resolve_dispute",
-    "anonymous_escrow_open_offer",
-    "anonymous_escrow_accept",
-    "anonymous_escrow_mark_payment_sent",
-    "anonymous_escrow_release",
-    "anonymous_escrow_cancel",
-    "anonymous_escrow_open_dispute",
-    "anonymous_escrow_resolve_dispute",
-    "soracloud_read_committed_state",
-    "soracloud_emit_state_mutation",
-    "soracloud_emit_mailbox_message",
-    "soracloud_append_journal",
-    "soracloud_publish_checkpoint",
-    "soracloud_read_secret",
-    "soracloud_read_credential",
-    "soracloud_egress_fetch",
-    "soracloud_read_config",
-    "soracloud_read_secret_envelope",
-    "transfer_domain",
-    "register_peer",
-    "unregister_peer",
-    "sc_execute_submit_ballot",
-    "sc_execute_unshield",
-    "resolve_account_alias",
-    "axt_begin",
-    "axt_touch",
-    "verify_ds_proof",
-    "use_asset_handle",
-    "axt_commit",
+    Builtin::EscrowOpenOffer.source_name(),
+    Builtin::EscrowAccept.source_name(),
+    Builtin::EscrowMarkPaymentSent.source_name(),
+    Builtin::EscrowRelease.source_name(),
+    Builtin::EscrowCancel.source_name(),
+    Builtin::EscrowOpenDispute.source_name(),
+    Builtin::EscrowResolveDispute.source_name(),
+    Builtin::AnonymousEscrowOpenOffer.source_name(),
+    Builtin::AnonymousEscrowAccept.source_name(),
+    Builtin::AnonymousEscrowMarkPaymentSent.source_name(),
+    Builtin::AnonymousEscrowRelease.source_name(),
+    Builtin::AnonymousEscrowCancel.source_name(),
+    Builtin::AnonymousEscrowOpenDispute.source_name(),
+    Builtin::AnonymousEscrowResolveDispute.source_name(),
+    Builtin::SoracloudReadCommittedState.source_name(),
+    Builtin::SoracloudEmitStateMutation.source_name(),
+    Builtin::SoracloudEmitMailboxMessage.source_name(),
+    Builtin::SoracloudAppendJournal.source_name(),
+    Builtin::SoracloudPublishCheckpoint.source_name(),
+    Builtin::SoracloudReadSecret.source_name(),
+    Builtin::SoracloudReadCredential.source_name(),
+    Builtin::SoracloudEgressFetch.source_name(),
+    Builtin::SoracloudReadConfig.source_name(),
+    Builtin::SoracloudReadSecretEnvelope.source_name(),
+    Builtin::TransferDomain.source_name(),
+    Builtin::RegisterPeer.source_name(),
+    Builtin::UnregisterPeer.source_name(),
+    Builtin::ScExecuteSubmitBallot.source_name(),
+    Builtin::ScExecuteUnshield.source_name(),
+    Builtin::ResolveAccountAlias.source_name(),
+    Builtin::AxtBegin.source_name(),
+    Builtin::AxtTouch.source_name(),
+    Builtin::VerifyDsProof.source_name(),
+    Builtin::UseAssetHandle.source_name(),
+    Builtin::AxtCommit.source_name(),
 ];
 
 const EXECUTE_INSTRUCTION_CALL: &str = "execute_instruction";
@@ -232,15 +248,13 @@ fn decode_hex_or_raw_bytes(raw: &str) -> Option<Vec<u8>> {
 }
 
 fn decode_norito_bytes_literal(expr: &Expr) -> Option<Vec<u8>> {
-    let Expr::Call { name, args } = expr else {
-        return None;
-    };
-    if name != "norito_bytes" || args.len() != 1 {
-        return None;
-    }
-    let raw = match &args[0] {
-        Expr::String(value) => decode_hex_or_raw_bytes(value)?,
+    let raw = match expr {
         Expr::Bytes(value) => value.clone(),
+        Expr::Call { name, args } if name == "norito_bytes" && args.len() == 1 => match &args[0] {
+            Expr::String(value) => decode_hex_or_raw_bytes(value)?,
+            Expr::Bytes(value) => value.clone(),
+            _ => return None,
+        },
         _ => return None,
     };
     let payload = match pointer_abi::validate_tlv_bytes(&raw) {
@@ -354,7 +368,9 @@ fn is_literal_name_expr(expr: &Expr) -> bool {
     matches!(
         expr,
         Expr::Call { name, args }
-            if name == "name" && args.len() == 1 && matches!(args.first(), Some(Expr::String(_)))
+            if name == Builtin::PointerConstructor(PointerConstructor::Name).source_name()
+                && args.len() == 1
+                && matches!(args.first(), Some(Expr::String(_)))
     )
 }
 
@@ -365,16 +381,16 @@ fn anonymous_escrow_request_literal_is_hintable(name: &str, args: &[Expr]) -> bo
         return false;
     };
     match name {
-        "anonymous_escrow_open_offer" => {
+        name if name == Builtin::AnonymousEscrowOpenOffer.source_name() => {
             norito::decode_from_bytes::<DMEscrow::OpenAnonymousAssetEscrow>(&payload).is_ok()
         }
-        "anonymous_escrow_release" => {
+        name if name == Builtin::AnonymousEscrowRelease.source_name() => {
             norito::decode_from_bytes::<DMEscrow::ReleaseAnonymousAssetEscrow>(&payload).is_ok()
         }
-        "anonymous_escrow_cancel" => {
+        name if name == Builtin::AnonymousEscrowCancel.source_name() => {
             norito::decode_from_bytes::<DMEscrow::CancelAnonymousAssetEscrow>(&payload).is_ok()
         }
-        "anonymous_escrow_resolve_dispute" => {
+        name if name == Builtin::AnonymousEscrowResolveDispute.source_name() => {
             norito::decode_from_bytes::<DMEscrow::ResolveAnonymousEscrowDispute>(&payload).is_ok()
         }
         _ => false,
@@ -382,24 +398,34 @@ fn anonymous_escrow_request_literal_is_hintable(name: &str, args: &[Expr]) -> bo
 }
 
 fn escrow_call_is_hintable(name: &str, args: &[Expr]) -> Option<bool> {
-    match name {
-        "escrow_open_offer"
-        | "escrow_accept"
-        | "escrow_mark_payment_sent"
-        | "escrow_release"
-        | "escrow_cancel"
-        | "escrow_open_dispute"
-        | "escrow_resolve_dispute"
-        | "anonymous_escrow_accept"
-        | "anonymous_escrow_mark_payment_sent"
-        | "anonymous_escrow_open_dispute" => Some(args.first().is_some_and(is_literal_name_expr)),
-        "anonymous_escrow_open_offer"
-        | "anonymous_escrow_release"
-        | "anonymous_escrow_cancel"
-        | "anonymous_escrow_resolve_dispute" => {
-            Some(anonymous_escrow_request_literal_is_hintable(name, args))
-        }
-        _ => None,
+    if [
+        Builtin::EscrowOpenOffer,
+        Builtin::EscrowAccept,
+        Builtin::EscrowMarkPaymentSent,
+        Builtin::EscrowRelease,
+        Builtin::EscrowCancel,
+        Builtin::EscrowOpenDispute,
+        Builtin::EscrowResolveDispute,
+        Builtin::AnonymousEscrowAccept,
+        Builtin::AnonymousEscrowMarkPaymentSent,
+        Builtin::AnonymousEscrowOpenDispute,
+    ]
+    .into_iter()
+    .any(|builtin| builtin.source_name() == name)
+    {
+        Some(args.first().is_some_and(is_literal_name_expr))
+    } else if [
+        Builtin::AnonymousEscrowOpenOffer,
+        Builtin::AnonymousEscrowRelease,
+        Builtin::AnonymousEscrowCancel,
+        Builtin::AnonymousEscrowResolveDispute,
+    ]
+    .into_iter()
+    .any(|builtin| builtin.source_name() == name)
+    {
+        Some(anonymous_escrow_request_literal_is_hintable(name, args))
+    } else {
+        None
     }
 }
 
@@ -407,7 +433,7 @@ fn is_literal_domain_expr(expr: &Expr) -> bool {
     let Expr::Call { name, args } = expr else {
         return false;
     };
-    matches!(name.as_str(), "domain" | "domain_id")
+    name == Builtin::PointerConstructor(PointerConstructor::DomainId).source_name()
         && args.len() == 1
         && matches!(
             args.first(),
@@ -420,10 +446,10 @@ fn is_account_access_hint_expr(expr: &Expr) -> bool {
     let Expr::Call { name, args } = expr else {
         return false;
     };
-    if name == "authority" && args.is_empty() {
+    if name == Builtin::Authority.source_name() && args.is_empty() {
         return true;
     }
-    name == "account_id"
+    name == Builtin::PointerConstructor(PointerConstructor::AccountId).source_name()
         && args.len() == 1
         && matches!(
             args.first(),
@@ -633,7 +659,7 @@ fn lint_opaque_access_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
                 !decode_query_request_literal(args)
                     .map(|query| query_request_is_hintable(&query))
                     .unwrap_or(false)
-            } else if name == "transfer_domain" {
+            } else if name == Builtin::TransferDomain.source_name() {
                 !transfer_domain_call_is_hintable(args)
             } else if let Some(hintable) = escrow_call_is_hintable(name, args) {
                 !hintable
@@ -697,7 +723,7 @@ fn is_literal_state_key(expr: &Expr) -> bool {
             }
             name == "account"
                 || matches!(
-                    Builtin::from_name(name),
+                    Builtin::from_source_name(name),
                     Some(Builtin::PointerConstructor(
                         PointerConstructor::AccountId
                             | PointerConstructor::AssetDefinition
@@ -723,7 +749,7 @@ fn is_literal_state_key(expr: &Expr) -> bool {
 fn is_literal_state_path(expr: &Expr) -> bool {
     match expr {
         Expr::String(_) | Expr::Bytes(_) => true,
-        Expr::Call { name, args } => match Builtin::from_name(name) {
+        Expr::Call { name, args } => match Builtin::from_source_name(name) {
             Some(Builtin::PointerConstructor(PointerConstructor::Name)) => {
                 args.len() == 1
                     && matches!(args.first(), Some(Expr::String(_)) | Some(Expr::Bytes(_)))
@@ -1196,23 +1222,16 @@ const POINTER_CONSTRUCTORS: &[PointerConstructor] = &[
     PointerConstructor::AssetDefinition,
     PointerConstructor::AssetId,
     PointerConstructor::NftId,
-    PointerConstructor::Domain,
+    PointerConstructor::Name,
     PointerConstructor::DomainId,
     PointerConstructor::Json,
-    PointerConstructor::Blob,
-    PointerConstructor::NoritoBytes,
     PointerConstructor::DataSpaceId,
-    PointerConstructor::AxtDescriptor,
-    PointerConstructor::AssetHandle,
-    PointerConstructor::ProofBlob,
-    PointerConstructor::SoracloudRequest,
-    PointerConstructor::SoracloudResponse,
 ];
 
 fn lint_pointer_constructor_usage(program: &Program, warnings: &mut Vec<LintWarning>) {
     let constructors: HashSet<&str> = POINTER_CONSTRUCTORS
         .iter()
-        .map(|constructor| constructor.name())
+        .map(|constructor| Builtin::PointerConstructor(*constructor).source_name())
         .collect();
     let mut literal_counts: HashMap<String, usize> = HashMap::new();
 
@@ -1229,7 +1248,7 @@ fn lint_pointer_constructor_usage(program: &Program, warnings: &mut Vec<LintWarn
                 "duplicate-pointer-literal",
                 LintMessage::Custom {
                     message: format!(
-                        "literal `{literal}` appears multiple times in pointer constructors; bind it once (for example, `let id = account!(\"{literal}\");`) and reuse the binding"
+                        "literal `{literal}` appears multiple times in pointer constructors; bind it once (for example, `let id = AccountId::parse(\"{literal}\");`) and reuse the binding"
                     ),
                 },
             ));
@@ -1307,14 +1326,16 @@ fn lint_trigger_specs_in_stmt(stmt: &Statement, func_name: &str, warnings: &mut 
 fn lint_trigger_specs_in_expr(expr: &Expr, func_name: &str, warnings: &mut Vec<LintWarning>) {
     match expr {
         Expr::Call { name, args } => {
-            if matches!(name.as_str(), "create_trigger" | "register_trigger") {
+            if name == Builtin::CreateTrigger.source_name()
+                || name == Builtin::RegisterTrigger.source_name()
+            {
                 let literal = args.first().is_some_and(is_literal_trigger_spec);
                 if !literal {
                     warnings.push(LintWarning::new(
                         "nonliteral-trigger-spec",
                         LintMessage::Custom {
                             message: format!(
-                                "trigger spec in `{func_name}` is non-literal; production access metadata requires json!(...) or json(\"...\") literals"
+                                "trigger spec in `{func_name}` is non-literal; production access metadata requires a canonical Json::parse(\"...\") literal"
                             ),
                         },
                     ));
@@ -1359,7 +1380,9 @@ fn lint_trigger_specs_in_expr(expr: &Expr, func_name: &str, warnings: &mut Vec<L
 
 fn is_literal_trigger_spec(expr: &Expr) -> bool {
     match expr {
-        Expr::Call { name, args } if name == "json" => {
+        Expr::Call { name, args }
+            if name == Builtin::PointerConstructor(PointerConstructor::Json).source_name() =>
+        {
             matches!(args.first(), Some(Expr::String(_)))
         }
         _ => false,
@@ -1451,7 +1474,13 @@ fn collect_pointer_literals_from_expr(
             {
                 *counts.entry(lit.clone()).or_default() += 1;
             }
-            for arg in args {
+            for (index, arg) in args.iter().enumerate() {
+                if index == 1
+                    && (name == Builtin::JsonSetInt.source_name()
+                        || name == Builtin::JsonSetAccountId.source_name())
+                {
+                    continue;
+                }
                 collect_pointer_literals_from_expr(arg, constructors, counts);
             }
         }
@@ -1567,7 +1596,7 @@ fn warn_if_unused_pointer_call(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{i18n::Language, parser::parse};
+    use crate::{i18n::Language, parser::parse_test_fragment as parse};
     use iroha_data_model::DomainId;
 
     #[test]
@@ -1588,7 +1617,7 @@ mod tests {
 
     #[test]
     fn lint_unused_state_flags_state() {
-        let program = parse("state int counter; fn main() { let x = 1; }").unwrap();
+        let program = parse("state counter: i64; fn main() { let x = 1; }").unwrap();
         let mut warnings = Vec::new();
         lint_unused_state(&program, &mut warnings);
         assert!(warnings.iter().any(|w| w.code == "unused-state"));
@@ -1604,7 +1633,7 @@ mod tests {
 
     #[test]
     fn lint_program_combines_checks() {
-        let program = parse("state int counter; fn main() { return; let x = counter; }").unwrap();
+        let program = parse("state counter: i64; fn main() { return; let x = counter; }").unwrap();
         let warnings = lint_program(&program);
         assert_eq!(warnings.len(), 1, "only unreachable code should remain");
         assert_eq!(warnings[0].code, "unreachable-return");
@@ -1612,7 +1641,7 @@ mod tests {
 
     #[test]
     fn lint_state_shadowing_flags_parameter() {
-        let program = parse("state int balance; fn main(balance: int) {}").unwrap();
+        let program = parse("state balance: i64; fn main(balance: i64) {}").unwrap();
         let warnings = lint_program(&program);
         assert!(
             warnings.iter().any(|w| w.code == "state-shadowed"),
@@ -1622,17 +1651,18 @@ mod tests {
 
     #[test]
     fn lint_unused_parameters_flags_param() {
-        let program = parse("fn main(amount: int) { return; }").unwrap();
+        let program = parse("fn main(amount: i64) { return; }").unwrap();
         let warnings = lint_program(&program);
-        assert!(
-            warnings.iter().any(|w| w.code == "unused-parameter"),
-            "expected unused-parameter lint for unused argument"
-        );
+        let warning = warnings
+            .iter()
+            .find(|warning| warning.code == "unused-parameter")
+            .expect("expected unused-parameter lint for unused argument");
+        assert_eq!(warning.diagnostic_code(), "K5003");
     }
 
     #[test]
     fn lint_unused_parameters_ignores_underscore() {
-        let program = parse("fn main(_unused: int) {}").unwrap();
+        let program = parse("fn main(_unused: i64) {}").unwrap();
         let warnings = lint_program(&program);
         assert!(
             !warnings.iter().any(|w| w.code == "unused-parameter"),
@@ -1642,7 +1672,7 @@ mod tests {
 
     #[test]
     fn lint_warning_localizes_message() {
-        let program = parse("state int counter; fn main() {}").unwrap();
+        let program = parse("state counter: i64; fn main() {}").unwrap();
         let warnings = lint_program(&program);
         let msg = warnings
             .iter()
@@ -1658,7 +1688,7 @@ mod tests {
     #[test]
     fn lint_duplicate_pointer_literals_warns() {
         let program = parse(
-            "fn main() { let a = account_id(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"); let b = account_id(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"); }",
+            "fn main() { let a = AccountId::parse(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"); let b = AccountId::parse(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"); }",
         )
         .unwrap();
         let warnings = lint_program(&program);
@@ -1672,7 +1702,7 @@ mod tests {
     #[test]
     fn lint_duplicate_json_name_literals_are_allowed() {
         let program = parse(
-            r#"fn main() { let p = json_object(); let p = json_set_int(p, name("amount"), 1); let q = json_object(); let q = json_set_int(q, name("amount"), 2); }"#,
+            r#"fn main() { var p = json::object(); p = json::set_i64(p, Name::parse("amount"), 1); var q = json::object(); q = json::set_i64(q, Name::parse("amount"), 2); }"#,
         )
         .unwrap();
         let warnings = lint_program(&program);
@@ -1687,7 +1717,7 @@ mod tests {
     #[test]
     fn lint_unused_pointer_constructor_warns() {
         let program = parse(
-            "fn main() { account_id(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"); }",
+            "fn main() { AccountId::parse(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"); }",
         )
         .unwrap();
         let warnings = lint_program(&program);
@@ -1700,31 +1730,34 @@ mod tests {
 
     #[test]
     fn lint_nonliteral_trigger_spec_warns() {
-        let program = parse("fn main() { let spec = json(\"{}\"); create_trigger(spec); }")
-            .expect("parse trigger");
+        let program =
+            parse("fn main() { let spec = Json::parse(\"{}\"); ledger::trigger::create(spec); }")
+                .expect("parse trigger");
         let warnings = lint_program(&program);
         assert!(warnings.iter().any(|w| w.code == "nonliteral-trigger-spec"));
     }
 
     #[test]
     fn lint_literal_trigger_spec_is_silent() {
-        let program = parse("fn main() { create_trigger(json(\"{}\")); }").expect("parse trigger");
+        let program = parse("fn main() { ledger::trigger::create(Json::parse(\"{}\")); }")
+            .expect("parse trigger");
         let warnings = lint_program(&program);
         assert!(!warnings.iter().any(|w| w.code == "nonliteral-trigger-spec"));
     }
 
     #[test]
     fn lint_nonliteral_state_map_key_is_silent() {
-        let program = parse("state Foo: Map<int, int>; fn main() { let k = 1; let _x = Foo[k]; }")
-            .expect("parse map");
+        let program =
+            parse("state Foo: StateMap<i64, i64>; fn main() { let k = 1; let _x = Foo.get(k); }")
+                .expect("parse map");
         let warnings = lint_program(&program);
         assert!(warnings.is_empty());
     }
 
     #[test]
     fn lint_literal_state_map_key_is_silent() {
-        let program =
-            parse("state Foo: Map<int, int>; fn main() { let _x = Foo[1]; }").expect("parse map");
+        let program = parse("state Foo: StateMap<i64, i64>; fn main() { let _x = Foo.get(1); }")
+            .expect("parse map");
         let warnings = lint_program(&program);
         assert!(warnings.is_empty());
     }
@@ -1732,9 +1765,9 @@ mod tests {
     #[test]
     fn lint_nonliteral_state_map_key_with_explicit_access_is_rejected() {
         let err = parse(
-            r#"state Foo: Map<Name, int>;
+            r#"state Foo: StateMap<Name, i64>;
 #[access(read="*", write="*")]
-fn main(k: Name) { let _x = Foo[k]; }"#,
+fn main(k: Name) { let _x = Foo.get(k); }"#,
         )
         .expect_err("manual access hints should be rejected");
         assert!(err.contains("access metadata is generated by the compiler"));
@@ -1742,16 +1775,16 @@ fn main(k: Name) { let _x = Foo[k]; }"#,
 
     #[test]
     fn lint_nonliteral_state_path_warns() {
-        let program =
-            parse("fn main() { let p = name(\"foo\"); state_get(p); }").expect("parse state path");
+        let program = parse("fn main() { let p = Name::parse(\"foo\"); state_get(p); }")
+            .expect("parse state path");
         let warnings = lint_program(&program);
         assert!(warnings.iter().any(|w| w.code == "nonliteral-state-path"));
     }
 
     #[test]
     fn lint_literal_state_path_is_silent() {
-        let program =
-            parse("fn main() { let _x = state_get(name(\"foo\")); }").expect("parse state path");
+        let program = parse("fn main() { let _x = state_get(Name::parse(\"foo\")); }")
+            .expect("parse state path");
         let warnings = lint_program(&program);
         assert!(!warnings.iter().any(|w| w.code == "nonliteral-state-path"));
     }
@@ -1759,7 +1792,7 @@ fn main(k: Name) { let _x = Foo[k]; }"#,
     #[test]
     fn lint_opaque_access_hints_warns() {
         let program =
-            parse("fn main() { execute_query(json(\"{}\")); }").expect("parse opaque call");
+            parse("fn main() { execute_query(Json::parse(\"{}\")); }").expect("parse opaque call");
         let warnings = lint_program(&program);
         assert!(warnings.iter().any(|w| w.code == "opaque-access-hints"));
     }
@@ -1768,7 +1801,7 @@ fn main(k: Name) { let _x = Foo[k]; }"#,
     fn lint_nft_set_metadata_is_precise_access() {
         let program = parse(
             r#"fn main() {
-  nft_set_metadata(nft_id("n0$wonderland.universal"), name("dpn_metadata"), json("{}"));
+  nft_set_metadata(NftId::parse("n0$wonderland.universal"), Name::parse("dpn_metadata"), Json::parse("{}"));
 }"#,
         )
         .expect("parse nft_set_metadata call");
@@ -1826,7 +1859,7 @@ fn main() {
     blob("vk")
   );
   let _unshield = build_unshield_inline(
-    asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+    AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
     authority(),
     1,
     blob("0000000000000000000000000000000000000000000000000000000000000000"),
@@ -1850,10 +1883,10 @@ fn main() {
         let program = parse(
             r#"
 fn main() {
-  transfer_domain(
-    authority(),
-    domain("wonderland.universal"),
-    account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
+  ledger::domain::transfer(
+    context::authority(),
+    DomainId::parse("wonderland.universal"),
+    AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
   );
 }
 "#,
@@ -1871,8 +1904,8 @@ fn main() {
         let program = parse(
             r#"
 fn main() {
-  let target = authority();
-  transfer_domain(authority(), domain("wonderland.universal"), target);
+  let target = context::authority();
+  ledger::domain::transfer(context::authority(), DomainId::parse("wonderland.universal"), target);
 }
 "#,
         )
@@ -1889,13 +1922,13 @@ fn main() {
         let program = parse(
             r#"
 fn main() {
-  escrow_open_offer(name("aitai_offer"), asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), 10);
-  escrow_accept(name("aitai_offer"));
-  escrow_mark_payment_sent(name("aitai_offer"));
-  escrow_release(name("aitai_offer"));
-  escrow_cancel(name("aitai_offer"));
-  escrow_open_dispute(name("aitai_offer"));
-  escrow_resolve_dispute(name("aitai_offer"), 6, 4);
+  ledger::escrow::open_offer(Name::parse("aitai_offer"), AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), Amount::from_i64(10));
+  ledger::escrow::accept(Name::parse("aitai_offer"));
+  ledger::escrow::mark_payment_sent(Name::parse("aitai_offer"));
+  ledger::escrow::release(Name::parse("aitai_offer"));
+  ledger::escrow::cancel(Name::parse("aitai_offer"));
+  ledger::escrow::open_dispute(Name::parse("aitai_offer"));
+  ledger::escrow::resolve_dispute(Name::parse("aitai_offer"), Amount::from_i64(6), Amount::from_i64(4));
 }
 "#,
         )
@@ -1912,8 +1945,8 @@ fn main() {
         let program = parse(
             r#"
 fn main() {
-  let deal = name("aitai_offer");
-  escrow_accept(deal);
+  let deal = Name::parse("aitai_offer");
+  ledger::escrow::accept(deal);
 }
 "#,
         )
@@ -1930,9 +1963,9 @@ fn main() {
         let program = parse(
             r#"
 fn main() {
-  anonymous_escrow_accept(name("shielded_offer"));
-  anonymous_escrow_mark_payment_sent(name("shielded_offer"));
-  anonymous_escrow_open_dispute(name("shielded_offer"));
+  ledger::escrow::anonymous::accept(Name::parse("shielded_offer"));
+  ledger::escrow::anonymous::mark_payment_sent(Name::parse("shielded_offer"));
+  ledger::escrow::anonymous::open_dispute(Name::parse("shielded_offer"));
 }
 "#,
         )
@@ -1972,12 +2005,13 @@ fn main() {
             proof,
             None,
         );
-        let request_hex = format!(
-            "0x{}",
-            hex::encode(norito::to_bytes(&request).expect("encode anonymous escrow request"))
-        );
+        let request_literal = norito::to_bytes(&request)
+            .expect("encode anonymous escrow request")
+            .into_iter()
+            .map(|byte| format!("\\x{byte:02x}"))
+            .collect::<String>();
         let src = format!(
-            r#"fn main() {{ anonymous_escrow_open_offer(norito_bytes("{request_hex}")); }}"#
+            r#"fn main() {{ ledger::escrow::anonymous::open_offer(b"{request_literal}"); }}"#
         );
         let program = parse(&src).expect("parse anonymous escrow request helper");
         let warnings = lint_program(&program);
@@ -1989,7 +2023,7 @@ fn main() {
 
     #[test]
     fn lint_anonymous_escrow_malformed_request_still_warns() {
-        let program = parse(r#"fn main() { anonymous_escrow_open_offer(norito_bytes("00")); }"#)
+        let program = parse(r#"fn main() { ledger::escrow::anonymous::open_offer(b"\x00"); }"#)
             .expect("parse malformed anonymous escrow request helper");
         let warnings = lint_program(&program);
         assert!(

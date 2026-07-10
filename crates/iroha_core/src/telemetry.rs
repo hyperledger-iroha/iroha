@@ -4058,12 +4058,7 @@ impl StateTelemetry {
                 .query_snapshot_lane_first_batch_ms
                 .with_label_values(&[mode_label])
                 .observe(elapsed_ms);
-            let first_batch_items: u64 = output
-                .batch
-                .tuple
-                .iter()
-                .map(|entry| entry.len() as u64)
-                .sum();
+            let first_batch_items: u64 = output.batch.iter().map(|entry| entry.len() as u64).sum();
             self.metrics
                 .query_snapshot_lane_first_batch_items
                 .with_label_values(&[mode_label])

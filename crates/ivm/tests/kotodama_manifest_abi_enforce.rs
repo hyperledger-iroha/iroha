@@ -1,38 +1,16 @@
-//! Kotodama manifest ABI enforcement tests (first release policy).
-//!
-//! For the first release, only `abi_version = 1` is supported for manifests
-//! emitted by the compiler. Attempting to produce a manifest for any other
-//! version must return an error.
+//! Kotodama compiler-owned first-release metadata tests.
 
 #[test]
-fn compile_source_with_manifest_rejects_non_v1_abi() {
-    use ivm::kotodama::compiler::{Compiler, CompilerOptions};
+fn compiler_emits_fixed_v1_abi_and_inferred_vector_metadata() {
+    use ivm::{ProgramMetadata, kotodama::compiler::Compiler};
 
-    // Program is trivial; we only care about header `abi_version` plumbing.
-    let src = "fn f() { let x = 1 + 2; }";
-
-    // Request abi_version = 2 via compiler options; the compiler should reject
-    // manifest emission for the first release policy.
-    let opts = CompilerOptions {
-        abi_version: 2,
-        ..Default::default()
-    };
-    let compiler = Compiler::new_with_options(opts);
-    let err = compiler
+    let src = "seiyaku FixedHeader { view fn f() -> i64 { return 3; } }";
+    let (artifact, manifest) = Compiler::new()
         .compile_source_with_manifest(src)
-        .expect_err("expected rejection for abi_version != 1");
-    assert!(
-        err.contains("unsupported abi_version 2") && err.contains("expected 1"),
-        "unexpected error: {err}"
-    );
+        .expect("compile first-release artifact");
+    let parsed = ProgramMetadata::parse(&artifact).expect("parse compiler artifact");
 
-    // Compiling without a manifest must also reject non-v1 ABI, because the
-    // bytecode header is part of the on-chain safety surface.
-    let err = compiler
-        .compile_source(src)
-        .expect_err("expected rejection for abi_version != 1");
-    assert!(
-        err.contains("unsupported abi_version 2") && err.contains("expected 1"),
-        "unexpected error: {err}"
-    );
+    assert_eq!(parsed.metadata.abi_version, 1);
+    assert_eq!(parsed.metadata.vector_length, 0);
+    assert!(manifest.abi_hash.is_some());
 }

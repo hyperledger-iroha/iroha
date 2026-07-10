@@ -3,9 +3,21 @@
 
 use std::num::NonZeroU64;
 
-use iroha_core::{kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute, state::State};
+use iroha_core::{
+    kura::Kura,
+    query::store::LiveQueryStore,
+    smartcontracts::Execute,
+    state::{
+        SccpGovernedLaneV1, SccpLaneActivationV1, SccpOnChainRegistryV1, State,
+        ValidatedSccpRegistryV1,
+    },
+};
 use iroha_data_model::{
     block::BlockHeader,
+    bridge::{
+        BridgeNativeProofBackendV1, SccpEvmSourceEmitterV1, SccpLaneIdV1, SccpNativeTrustAnchorV1,
+        SccpNetworkV1, SccpSourceEmitterV1, SccpSourceIdentityV1,
+    },
     isi::{
         Grant,
         bridge::{
@@ -15,16 +27,45 @@ use iroha_data_model::{
     },
     permission::Permission,
 };
+use iroha_executor_data_model::permission::sccp::CanManageSccpGovernance;
 use iroha_primitives::json::Json;
 use iroha_test_samples::ALICE_ID;
 
 #[path = "common/world_fixture.rs"]
 mod test_world;
 
-const CAN_MANAGE_SCCP_ROUTE_MANIFESTS: &str = "CanManageSccpRouteManifests";
-
 fn hex32(byte: u8) -> String {
     format!("0x{}", hex::encode([byte; 32]))
+}
+
+fn canonical_json_hash(value: &Json) -> String {
+    let value = norito::json::parse_value(value.get()).expect("fixture JSON parses");
+    let canonical = Json::from_norito_value_ref(&value).expect("fixture JSON canonicalizes");
+    format!(
+        "0x{}",
+        hex::encode(iroha_crypto::sha256(canonical.get().as_bytes()))
+    )
+}
+
+fn staging_route(mut manifest: SccpRouteManifest) -> SccpRouteManifest {
+    manifest.production_ready = false;
+    manifest.disabled_reason = Some("awaiting governed lane activation".to_owned());
+    if manifest.counterparty_domain == iroha_sccp::SCCP_DOMAIN_BSC {
+        manifest.network = "bsc-testnet".to_owned();
+        manifest.chain = "bsc-testnet".to_owned();
+        manifest.chain_id_hex = "0x61".to_owned();
+        manifest.explorer_url = Some("https://testnet.bscscan.com".to_owned());
+        manifest.explorer_host = Some("testnet.bscscan.com".to_owned());
+        if let Some(transaction_id) = manifest.post_deploy_source_event_transaction_id.as_deref() {
+            manifest.post_deploy_source_event_explorer_url =
+                Some(format!("https://testnet.bscscan.com/tx/{transaction_id}"));
+        }
+        if let Some(transaction_id) = manifest.post_deploy_route_canary_transaction_id.as_deref() {
+            manifest.post_deploy_route_canary_explorer_url =
+                Some(format!("https://testnet.bscscan.com/tx/{transaction_id}"));
+        }
+    }
+    manifest
 }
 
 fn browser_prover_ref(
@@ -51,31 +92,23 @@ fn production_bsc_route_manifest() -> SccpRouteManifest {
     let proof_artifact_hash = hex32(0x4c);
     let source_event_transaction_id = hex32(0x4b);
     let route_canary_transaction_id = hex32(0x4d);
-    let source_deployment_receipt_hash = hex32(0x51);
-    let source_material = Json::new(norito::json!({
-        "version": 1,
-        "source_domain": 2,
-        "target_domain": 0,
-        "source_chain": "bsc"
+    let native_evm_prover_bundle = Json::new(norito::json!({
+        "schema": "sccp-bsc-native-evm-prover-bundle/v1",
+        "routeId": "taira_bsc_xor",
+        "assetKey": "xor"
     }));
-    let source_deployment = Json::new(norito::json!({
-        "version": 1,
-        "source_domain": 2,
-        "target_domain": 0,
-        "source_chain": "bsc",
-        "deployment_receipt_hash": source_deployment_receipt_hash
-    }));
+    let native_evm_prover_bundle_hash = canonical_json_hash(&native_evm_prover_bundle);
     SccpRouteManifest {
         version: 1,
         route_id: "taira_bsc_xor".to_owned(),
         asset_key: "xor".to_owned(),
-        network: "bsc-testnet".to_owned(),
-        chain: "bsc-testnet".to_owned(),
-        chain_id_hex: "0x61".to_owned(),
-        explorer_url: Some("https://testnet.bscscan.com".to_owned()),
-        explorer_host: Some("testnet.bscscan.com".to_owned()),
+        network: "bsc-mainnet".to_owned(),
+        chain: "bsc-mainnet".to_owned(),
+        chain_id_hex: "0x38".to_owned(),
+        explorer_url: Some("https://bscscan.com".to_owned()),
+        explorer_host: Some("bscscan.com".to_owned()),
         counterparty_account_codec: Some(2),
-        counterparty_account_codec_key: Some("evm_hex".to_owned()),
+        counterparty_account_codec_key: Some("evm_address20".to_owned()),
         counterparty_domain: iroha_sccp::SCCP_DOMAIN_BSC,
         verifier_target: "EvmContract".to_owned(),
         production_ready: true,
@@ -90,15 +123,8 @@ fn production_bsc_route_manifest() -> SccpRouteManifest {
         verifier_key_hash: hex32(0x46),
         proof_artifact_hash: Some(proof_artifact_hash.clone()),
         proving_key_hash: Some(hex32(0x55)),
-        native_evm_prover_bundle_hash: Some(hex32(0x50)),
-        native_evm_prover_bundle: Some(iroha_primitives::json::Json::new(norito::json!({
-            "schema": "sccp-bsc-native-evm-prover-bundle/v1",
-            "routeId": "taira_bsc_xor",
-            "assetKey": "xor"
-        }))),
-        source_verifier_material: Some(source_material.clone()),
-        source_adapter_engine_deployment: Some(source_deployment),
-        source_adapter_engine: Some(source_material),
+        native_evm_prover_bundle_hash: Some(native_evm_prover_bundle_hash),
+        native_evm_prover_bundle: Some(native_evm_prover_bundle),
         destination_browser_prover: Some(browser_prover_ref(
             0x60,
             &destination_binding_hash,
@@ -112,31 +138,25 @@ fn production_bsc_route_manifest() -> SccpRouteManifest {
         deployment_evidence_sha256: Some(hex32(0x4f)),
         destination_binding_key: "evm:0:2:test-binding".to_owned(),
         destination_binding_hash,
-        taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw".to_owned(),
-        taira_burn_record_contract_artifact_b64: "QUJDREVGRw==".to_owned(),
-        taira_burn_record_artifact_sha256: hex32(0x48),
-        taira_burn_record_code_hash: hex32(0x49),
-        taira_burn_record_vk_backend: "halo2_ipa".to_owned(),
-        taira_burn_record_vk_name: "taira_bsc_xor_burn_record_v1".to_owned(),
-        taira_burn_record_gas_limit: 2_000_000,
-        settlement_contract_address: None,
-        settlement_contract_alias: None,
+        sora_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw".to_owned(),
+        sora_custody_account_id: ALICE_ID.to_string(),
+        payload_amount_scale: 9,
         post_deploy_full_toml_ready: Some(true),
-        post_deploy_source_bridge_config_hash: Some(hex32(0x4a)),
+        post_deploy_source_identity_hash: Some(hex32(0x4a)),
         post_deploy_source_event_transaction_id: Some(source_event_transaction_id.clone()),
         post_deploy_source_event_explorer_url: Some(format!(
-            "https://testnet.bscscan.com/tx/{source_event_transaction_id}"
+            "https://bscscan.com/tx/{source_event_transaction_id}"
         )),
         post_deploy_route_canary_evidence_hash: Some(hex32(0x4e)),
         post_deploy_route_canary_transaction_id: Some(route_canary_transaction_id.clone()),
         post_deploy_route_canary_explorer_url: Some(format!(
-            "https://testnet.bscscan.com/tx/{route_canary_transaction_id}"
+            "https://bscscan.com/tx/{route_canary_transaction_id}"
         )),
         post_deploy_offline_full_toml_sha256: Some(hex32(0x56)),
     }
 }
 
-fn ton_raw(seed: u8) -> String {
+fn ton_account36(seed: u8) -> String {
     format!("0:{}", hex::encode([seed; 32]))
 }
 
@@ -144,42 +164,28 @@ fn production_ton_route_manifest() -> SccpRouteManifest {
     let destination_binding_hash =
         "0x8651c1b818973f92050f69e66e8491e9681d23db1cb37393b9ea15c5e7e02799".to_owned();
     let proof_artifact_hash = hex32(0xcc);
-    let source_deployment_receipt_hash = hex32(0x51);
-    let source_material = Json::new(norito::json!({
-        "version": 1,
-        "source_domain": 4,
-        "target_domain": 0,
-        "source_chain": "ton-testnet"
-    }));
-    let source_deployment = Json::new(norito::json!({
-        "version": 1,
-        "source_domain": 4,
-        "target_domain": 0,
-        "source_chain": "ton-testnet",
-        "deployment_receipt_hash": source_deployment_receipt_hash
-    }));
     SccpRouteManifest {
         version: 1,
         route_id: "taira_ton_xor".to_owned(),
         asset_key: "xor".to_owned(),
-        network: "testnet".to_owned(),
-        chain: "ton-testnet".to_owned(),
-        chain_id_hex: "0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd"
+        network: "mainnet".to_owned(),
+        chain: "ton-mainnet".to_owned(),
+        chain_id_hex: "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff11"
             .to_owned(),
-        explorer_url: Some("https://testnet.tonscan.org".to_owned()),
-        explorer_host: Some("testnet.tonscan.org".to_owned()),
+        explorer_url: Some("https://tonscan.org".to_owned()),
+        explorer_host: Some("tonscan.org".to_owned()),
         counterparty_account_codec: Some(4),
-        counterparty_account_codec_key: Some("ton_raw".to_owned()),
+        counterparty_account_codec_key: Some("ton_account36".to_owned()),
         counterparty_domain: iroha_sccp::SCCP_DOMAIN_TON,
         verifier_target: "TonContract".to_owned(),
         production_ready: true,
         disabled_reason: None,
-        network_id_hex: "0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd"
+        network_id_hex: "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff11"
             .to_owned(),
-        taira_xor_token_address: ton_raw(0x11),
-        taira_xor_bridge_address: ton_raw(0x22),
-        source_bridge_address: ton_raw(0x33),
-        destination_verifier_address: ton_raw(0x44),
+        taira_xor_token_address: ton_account36(0x11),
+        taira_xor_bridge_address: ton_account36(0x22),
+        source_bridge_address: ton_account36(0x33),
+        destination_verifier_address: ton_account36(0x44),
         ton_finalize_message_value_nano: Some("100000000".to_owned()),
         verifier_code_hash: hex32(0xca),
         verifier_key_hash: hex32(0xcb),
@@ -187,9 +193,6 @@ fn production_ton_route_manifest() -> SccpRouteManifest {
         proving_key_hash: Some(hex32(0xcd)),
         native_evm_prover_bundle_hash: None,
         native_evm_prover_bundle: None,
-        source_verifier_material: Some(source_material.clone()),
-        source_adapter_engine_deployment: Some(source_deployment),
-        source_adapter_engine: Some(source_material),
         destination_browser_prover: Some(browser_prover_ref(
             0x60,
             &destination_binding_hash,
@@ -203,17 +206,11 @@ fn production_ton_route_manifest() -> SccpRouteManifest {
         deployment_evidence_sha256: Some(hex32(0xce)),
         destination_binding_key: "sccp:0:4:ton:ton-contract-v1:3".to_owned(),
         destination_binding_hash,
-        taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw".to_owned(),
-        taira_burn_record_contract_artifact_b64: "QUJDREVGRw==".to_owned(),
-        taira_burn_record_artifact_sha256: hex32(0xcf),
-        taira_burn_record_code_hash: hex32(0xd1),
-        taira_burn_record_vk_backend: "halo2/ipa".to_owned(),
-        taira_burn_record_vk_name: "taira_xor_burn_record_v1".to_owned(),
-        taira_burn_record_gas_limit: 2_000_000,
-        settlement_contract_address: None,
-        settlement_contract_alias: Some("taira_ton_xor_burn_record".to_owned()),
+        sora_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw".to_owned(),
+        sora_custody_account_id: ALICE_ID.to_string(),
+        payload_amount_scale: 9,
         post_deploy_full_toml_ready: Some(true),
-        post_deploy_source_bridge_config_hash: Some(hex32(0xd2)),
+        post_deploy_source_identity_hash: Some(hex32(0xd2)),
         post_deploy_source_event_transaction_id: Some(hex32(0xd3)),
         post_deploy_source_event_explorer_url: None,
         post_deploy_route_canary_evidence_hash: Some(hex32(0xd4)),
@@ -243,8 +240,8 @@ fn production_tron_route_manifest() -> SccpRouteManifest {
         chain_id_hex: "0x2b6653dc".to_owned(),
         explorer_url: None,
         explorer_host: None,
-        counterparty_account_codec: None,
-        counterparty_account_codec_key: None,
+        counterparty_account_codec: Some(iroha_sccp::SCCP_CODEC_TRON_ADDRESS21),
+        counterparty_account_codec_key: Some("tron_address21".to_owned()),
         counterparty_domain: iroha_sccp::SCCP_DOMAIN_TRON,
         verifier_target: "TronContract".to_owned(),
         production_ready: true,
@@ -261,26 +258,17 @@ fn production_tron_route_manifest() -> SccpRouteManifest {
         proving_key_hash: None,
         native_evm_prover_bundle_hash: None,
         native_evm_prover_bundle: None,
-        source_verifier_material: None,
-        source_adapter_engine_deployment: None,
-        source_adapter_engine: None,
         destination_browser_prover: None,
         source_browser_prover: None,
         deployment_evidence_sha256: None,
         destination_binding_key,
         destination_binding_hash:
             "0x4c5b208d148cee784d611f77434a7dfac6b22a37b86faf82063d371ba7d3a1bc".to_owned(),
-        taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw".to_owned(),
-        taira_burn_record_contract_artifact_b64: "QUJDREVGRw==".to_owned(),
-        taira_burn_record_artifact_sha256: hex32(0xae),
-        taira_burn_record_code_hash: hex32(0xaf),
-        taira_burn_record_vk_backend: "halo2/ipa".to_owned(),
-        taira_burn_record_vk_name: "taira_xor_burn_record_v1".to_owned(),
-        taira_burn_record_gas_limit: 2_000_000,
-        settlement_contract_address: None,
-        settlement_contract_alias: Some("taira_xor_burn_record".to_owned()),
+        sora_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw".to_owned(),
+        sora_custody_account_id: ALICE_ID.to_string(),
+        payload_amount_scale: 9,
         post_deploy_full_toml_ready: Some(true),
-        post_deploy_source_bridge_config_hash: Some(hex32(0xb1)),
+        post_deploy_source_identity_hash: Some(hex32(0xb1)),
         post_deploy_source_event_transaction_id: Some(hex32(0xb2)),
         post_deploy_source_event_explorer_url: None,
         post_deploy_route_canary_evidence_hash: Some(hex32(0xb3)),
@@ -298,44 +286,80 @@ fn test_state() -> State {
 }
 
 fn test_header() -> BlockHeader {
-    BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0)
+    BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0)
 }
 
 fn grant_route_manifest_permission(stx: &mut iroha_core::state::StateTransaction<'_, '_>) {
-    let permission = Permission::new(
-        CAN_MANAGE_SCCP_ROUTE_MANIFESTS.parse().unwrap(),
-        Json::new(()),
-    );
+    let permission = Permission::from(CanManageSccpGovernance);
     Grant::account_permission(permission, ALICE_ID.clone())
         .execute(&ALICE_ID.clone(), stx)
         .expect("grant route manifest permission");
+}
+
+fn bsc_testnet_lane_id() -> SccpLaneIdV1 {
+    SccpLaneIdV1 {
+        source: SccpNetworkV1::BscTestnet,
+        target: SccpNetworkV1::SoraTaira,
+    }
+}
+
+fn install_staged_bsc_native_lane(stx: &mut iroha_core::state::StateTransaction<'_, '_>) {
+    let lane_id = bsc_testnet_lane_id();
+    let registry = SccpOnChainRegistryV1 {
+        version: 1,
+        lanes: vec![SccpGovernedLaneV1 {
+            lane_id,
+            source_identity: SccpSourceIdentityV1 {
+                lane: lane_id,
+                emitter: SccpSourceEmitterV1::Evm(SccpEvmSourceEmitterV1 {
+                    address: [0x33; 20],
+                    runtime_code_hash: [0x34; 32],
+                    route_config_hash: [0x35; 32],
+                }),
+            },
+            activation: SccpLaneActivationV1::Staged,
+            native_trust_anchor: Some(SccpNativeTrustAnchorV1 {
+                backend: BridgeNativeProofBackendV1::BscParlia,
+                anchor_hash: [0x36; 32],
+            }),
+            destination_rollout: None,
+            route_allowlist: None,
+            route_manifest: None,
+        }],
+    };
+    stx.sccp_registry =
+        ValidatedSccpRegistryV1::try_from_wire(registry).expect("staged typed BSC lane registry");
 }
 
 #[test]
 fn sccp_route_manifest_isi_requires_permission_and_mutates_state_transaction() {
     let state = test_state();
     let mut block = state.block(test_header());
-    let manifest = production_bsc_route_manifest();
+    let manifest = staging_route(production_bsc_route_manifest());
 
     {
         let mut denied_tx = block.transaction();
         let denied = UpsertSccpRouteManifest::new(manifest.clone())
             .execute(&ALICE_ID.clone(), &mut denied_tx)
-            .expect_err("upsert must require CanManageSccpRouteManifests");
+            .expect_err("upsert must require CanManageSccpGovernance");
         assert!(
-            format!("{denied:?}").contains(CAN_MANAGE_SCCP_ROUTE_MANIFESTS),
+            format!("{denied:?}").contains("CanManageSccpGovernance"),
             "unexpected denial: {denied:?}"
         );
     }
 
     let mut stx = block.transaction();
     grant_route_manifest_permission(&mut stx);
+    install_staged_bsc_native_lane(&mut stx);
     UpsertSccpRouteManifest::new(manifest.clone())
         .execute(&ALICE_ID.clone(), &mut stx)
         .expect("upsert with permission");
-    assert_eq!(stx.zk.sccp_route_manifests.len(), 1);
-    assert_eq!(stx.zk.sccp_route_manifests[0].route_id, "taira_bsc_xor");
-    assert_eq!(stx.zk.sccp_route_manifests[0].chain_id_hex, "0x61");
+    let installed = stx
+        .sccp_registry
+        .route_manifest_for_lane(bsc_testnet_lane_id())
+        .expect("installed BSC route");
+    assert_eq!(installed.route_id, "taira_bsc_xor");
+    assert_eq!(installed.chain_id_hex, "0x61");
 
     let mut replacement = manifest.clone();
     replacement.taira_xor_bridge_address = "0x5555555555555555555555555555555555555555".to_owned();
@@ -343,24 +367,41 @@ fn sccp_route_manifest_isi_requires_permission_and_mutates_state_transaction() {
         .execute(&ALICE_ID.clone(), &mut stx)
         .expect("replace same route key");
     assert_eq!(
-        stx.zk.sccp_route_manifests.len(),
-        1,
-        "same route_id/asset/domain/chain key must replace, not append"
-    );
-    assert_eq!(
-        stx.zk.sccp_route_manifests[0].taira_xor_bridge_address,
+        stx.sccp_registry
+            .route_manifest_for_lane(bsc_testnet_lane_id())
+            .expect("replaced BSC route")
+            .taira_xor_bridge_address,
         "0x5555555555555555555555555555555555555555"
     );
 
-    RemoveSccpRouteManifest::new(
+    let noncanonical = RemoveSccpRouteManifest::new(
         "taira_bsc_xor".to_owned(),
         "xor".to_owned(),
         iroha_sccp::SCCP_DOMAIN_BSC,
         "0X61".to_owned(),
     )
     .execute(&ALICE_ID.clone(), &mut stx)
-    .expect("remove with case-normalized chain id");
-    assert!(stx.zk.sccp_route_manifests.is_empty());
+    .expect_err("uppercase chain ids must not be normalized at consensus ingress");
+    assert!(format!("{noncanonical:?}").contains("canonical lowercase"));
+    assert!(
+        stx.sccp_registry
+            .route_manifest_for_lane(bsc_testnet_lane_id())
+            .is_some()
+    );
+
+    RemoveSccpRouteManifest::new(
+        "taira_bsc_xor".to_owned(),
+        "xor".to_owned(),
+        iroha_sccp::SCCP_DOMAIN_BSC,
+        "0x61".to_owned(),
+    )
+    .execute(&ALICE_ID.clone(), &mut stx)
+    .expect("remove with canonical chain id");
+    assert!(
+        stx.sccp_registry
+            .route_manifest_for_lane(bsc_testnet_lane_id())
+            .is_none()
+    );
 }
 
 #[test]
@@ -386,7 +427,8 @@ fn production_bsc_route_manifest_isi_rejects_incomplete_or_foreign_payloads() {
         .execute(&ALICE_ID.clone(), &mut stx)
         .expect_err("production BSC route must be taira_bsc_xor/xor");
     assert!(
-        format!("{err:?}").contains("taira_bsc_xor/xor"),
+        format!("{err:?}").contains("taira_bsc_xor")
+            || format!("{err:?}").contains("native_evm_prover_bundle"),
         "unexpected error: {err:?}"
     );
 
@@ -397,57 +439,44 @@ fn production_bsc_route_manifest_isi_rejects_incomplete_or_foreign_payloads() {
         .execute(&ALICE_ID.clone(), &mut stx)
         .expect_err("deployment evidence hash must not replay verifier code hash");
     assert!(
-        format!("{err:?}").contains("deployment_evidence_sha256 must not equal verifier_code_hash"),
+        format!("{err:?}").contains("deployment_evidence_sha256")
+            && format!("{err:?}").contains("distinct from verifier_code_hash"),
         "unexpected error: {err:?}"
     );
 
     let mut replayed_post_deploy_hash = production_bsc_route_manifest();
     replayed_post_deploy_hash.post_deploy_route_canary_evidence_hash = replayed_post_deploy_hash
-        .post_deploy_source_bridge_config_hash
+        .post_deploy_source_identity_hash
         .clone();
     let err = UpsertSccpRouteManifest::new(replayed_post_deploy_hash)
         .execute(&ALICE_ID.clone(), &mut stx)
-        .expect_err("route canary evidence hash must not replay source bridge config hash");
+        .expect_err("route canary evidence hash must not replay source identity hash");
     assert!(
-        format!("{err:?}").contains(
-            "post_deploy_route_canary_evidence_hash must not equal \
-             post_deploy_source_bridge_config_hash"
-        ),
+        format!("{err:?}").contains("post_deploy_route_canary_evidence_hash")
+            && format!("{err:?}").contains("post_deploy_source_identity_hash"),
         "unexpected error: {err:?}"
     );
 
     assert!(
-        stx.zk.sccp_route_manifests.is_empty(),
+        stx.sccp_registry.lanes().is_empty(),
         "rejected route manifests must not mutate state transaction"
     );
 }
 
 #[test]
-fn production_ton_route_manifest_isi_accepts_and_rejects_foreign_payloads() {
+fn production_ton_route_manifest_isi_requires_governed_native_lane_and_rejects_foreign_payloads() {
     let state = test_state();
     let mut block = state.block(test_header());
     let mut stx = block.transaction();
     grant_route_manifest_permission(&mut stx);
 
     let manifest = production_ton_route_manifest();
-    UpsertSccpRouteManifest::new(manifest.clone())
+    let missing_governance = UpsertSccpRouteManifest::new(manifest.clone())
         .execute(&ALICE_ID.clone(), &mut stx)
-        .expect("production TON route manifest should parse and insert");
-    assert_eq!(stx.zk.sccp_route_manifests.len(), 1);
-    assert_eq!(stx.zk.sccp_route_manifests[0].route_id, "taira_ton_xor");
-    assert_eq!(
-        stx.zk.sccp_route_manifests[0].counterparty_domain,
-        iroha_sccp::SCCP_DOMAIN_TON
-    );
-    assert_eq!(
-        stx.zk.sccp_route_manifests[0].chain_id_hex,
-        "0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd"
-    );
-    assert_eq!(
-        stx.zk.sccp_route_manifests[0]
-            .ton_finalize_message_value_nano
-            .as_deref(),
-        Some("100000000")
+        .expect_err("production TON route must be bound to an active governed native lane");
+    assert!(
+        format!("{missing_governance:?}").contains("no active exact lane"),
+        "unexpected error: {missing_governance:?}"
     );
 
     let mut wrong_route = manifest.clone();
@@ -470,9 +499,8 @@ fn production_ton_route_manifest_isi_accepts_and_rejects_foreign_payloads() {
         "unexpected error: {err:?}"
     );
 
-    assert_eq!(
-        stx.zk.sccp_route_manifests.len(),
-        1,
+    assert!(
+        stx.sccp_registry.lanes().is_empty(),
         "rejected TON route manifests must not mutate state transaction"
     );
 }
@@ -483,7 +511,8 @@ fn sccp_route_manifest_remove_missing_target_errors_without_mutating_state() {
     let mut block = state.block(test_header());
     let mut stx = block.transaction();
     grant_route_manifest_permission(&mut stx);
-    let manifest = production_bsc_route_manifest();
+    install_staged_bsc_native_lane(&mut stx);
+    let manifest = staging_route(production_bsc_route_manifest());
     UpsertSccpRouteManifest::new(manifest.clone())
         .execute(&ALICE_ID.clone(), &mut stx)
         .expect("insert route manifest");
@@ -501,12 +530,10 @@ fn sccp_route_manifest_remove_missing_target_errors_without_mutating_state() {
         "unexpected error: {err:?}"
     );
     assert_eq!(
-        stx.zk.sccp_route_manifests.len(),
-        1,
-        "failed removal must preserve existing route manifest"
-    );
-    assert_eq!(
-        stx.zk.sccp_route_manifests[0].taira_xor_bridge_address,
+        stx.sccp_registry
+            .route_manifest_for_lane(bsc_testnet_lane_id())
+            .expect("preserved BSC route")
+            .taira_xor_bridge_address,
         manifest.taira_xor_bridge_address
     );
 }
@@ -519,9 +546,6 @@ fn production_bsc_route_manifest_isi_rejects_untrusted_browser_prover_material_w
     let mut stx = block.transaction();
     grant_route_manifest_permission(&mut stx);
     let manifest = production_bsc_route_manifest();
-    UpsertSccpRouteManifest::new(manifest.clone())
-        .execute(&ALICE_ID.clone(), &mut stx)
-        .expect("insert route manifest");
 
     let mut credentialed_url = manifest.clone();
     credentialed_url
@@ -632,37 +656,30 @@ fn production_bsc_route_manifest_isi_rejects_untrusted_browser_prover_material_w
         .execute(&ALICE_ID.clone(), &mut stx)
         .expect_err("browser prover module hash must not replay verifier code hash");
     assert!(
-        format!("{err:?}")
-            .contains("destination_browser_prover.module_hash must not equal verifier_code_hash"),
+        format!("{err:?}").contains("destination_browser_prover")
+            && format!("{err:?}").contains("distinct from verifier_code_hash"),
         "unexpected error: {err:?}"
     );
 
-    assert_eq!(
-        stx.zk.sccp_route_manifests.len(),
-        1,
-        "rejected browser prover material must not replace the existing manifest"
-    );
-    assert_eq!(
-        stx.zk.sccp_route_manifests[0].taira_xor_bridge_address,
-        manifest.taira_xor_bridge_address
+    assert!(
+        stx.sccp_registry.lanes().is_empty(),
+        "rejected browser prover material must not insert a manifest"
     );
 }
 
 #[test]
-fn production_tron_route_manifest_isi_enforces_mainnet_binding_without_mutating_state() {
+fn production_tron_route_manifest_isi_requires_governed_native_lane_and_rejects_drift() {
     let state = test_state();
     let mut block = state.block(test_header());
     let mut stx = block.transaction();
     grant_route_manifest_permission(&mut stx);
     let manifest = production_tron_route_manifest();
-    UpsertSccpRouteManifest::new(manifest.clone())
+    let missing_governance = UpsertSccpRouteManifest::new(manifest.clone())
         .execute(&ALICE_ID.clone(), &mut stx)
-        .expect("insert TRON route manifest");
-    assert_eq!(stx.zk.sccp_route_manifests.len(), 1);
-    assert_eq!(stx.zk.sccp_route_manifests[0].route_id, "taira_tron_xor");
-    assert_eq!(
-        stx.zk.sccp_route_manifests[0].counterparty_domain,
-        iroha_sccp::SCCP_DOMAIN_TRON
+        .expect_err("production TRON route must be bound to an active governed native lane");
+    assert!(
+        format!("{missing_governance:?}").contains("no active exact lane"),
+        "unexpected error: {missing_governance:?}"
     );
 
     let mut wrong_route = manifest.clone();
@@ -671,7 +688,7 @@ fn production_tron_route_manifest_isi_enforces_mainnet_binding_without_mutating_
         .execute(&ALICE_ID.clone(), &mut stx)
         .expect_err("production TRON route must be taira_tron_xor/xor");
     assert!(
-        format!("{err:?}").contains("production_ready requires route_id = taira_tron_xor"),
+        format!("{err:?}").contains("taira_tron_xor"),
         "unexpected error: {err:?}"
     );
 
@@ -681,32 +698,25 @@ fn production_tron_route_manifest_isi_enforces_mainnet_binding_without_mutating_
         .execute(&ALICE_ID.clone(), &mut stx)
         .expect_err("production TRON route must keep the TRON counterparty domain");
     assert!(
-        format!("{err:?}").contains("production_ready requires counterparty_domain = 5"),
+        format!("{err:?}").contains("counterparty_domain"),
         "unexpected error: {err:?}"
     );
 
     let mut replayed_post_deploy_hash = manifest.clone();
     replayed_post_deploy_hash.post_deploy_route_canary_evidence_hash = replayed_post_deploy_hash
-        .post_deploy_source_bridge_config_hash
+        .post_deploy_source_identity_hash
         .clone();
     let err = UpsertSccpRouteManifest::new(replayed_post_deploy_hash)
         .execute(&ALICE_ID.clone(), &mut stx)
-        .expect_err("TRON route canary evidence hash must not replay source bridge config hash");
+        .expect_err("TRON route canary evidence hash must not replay source identity hash");
     assert!(
-        format!("{err:?}").contains(
-            "post_deploy_route_canary_evidence_hash must not equal \
-             post_deploy_source_bridge_config_hash"
-        ),
+        format!("{err:?}").contains("post_deploy_route_canary_evidence_hash")
+            && format!("{err:?}").contains("post_deploy_source_identity_hash"),
         "unexpected error: {err:?}"
     );
 
-    assert_eq!(
-        stx.zk.sccp_route_manifests.len(),
-        1,
-        "rejected TRON route manifests must not replace the existing manifest"
-    );
-    assert_eq!(
-        stx.zk.sccp_route_manifests[0].destination_binding_hash,
-        manifest.destination_binding_hash
+    assert!(
+        stx.sccp_registry.lanes().is_empty(),
+        "rejected TRON route manifests must not mutate state"
     );
 }

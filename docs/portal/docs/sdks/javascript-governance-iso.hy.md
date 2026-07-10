@@ -107,32 +107,25 @@ node javascript/iroha_js/recipes/iso_bridge.mjs
 
 ### ISO alias օգնական
 
-`recipes/iso_alias.mjs`-ը թիրախավորում է ISO կեղծանունների վերջնակետերը, որպեսզի փորձերը կարողանան ծածկել
-կուրացած տարրերի հեշավորում և այլանունների որոնումներ՝ առանց պատվերով գործիքներ գրելու: Այն
-զանգեր `ToriiClient.evaluateAliasVoprf` գումարած `resolveAlias` / `resolveAliasByIndex`
-և տպում է հետնամասը, digest-ը, հաշվի կապը, աղբյուրը և դետերմինիստական ինդեքսը
-վերադարձված Torii-ի կողմից:
+`recipes/iso_alias.mjs`-ը փորձարկում է ISO կեղծանունների որոնումները՝ առանց հատուկ գործիքներ պահանջելու։
+Այն կանչում է `resolveAlias` և `resolveAliasByIndex`, ապա տպում է Torii-ի վերադարձրած հաշվի կապը, աղբյուրը և դետերմինիստական ինդեքսը։
 
 Շրջակա միջավայրի փոփոխականներ.
 
 - `TORII_URL` — Torii վերջնակետը, որը բացահայտում է այլանունների օգնականները:
-- `ISO_VOPRF_INPUT` - վեցանկյուն կոդավորված կույր տարր (կանխադրված է `deadbeef`):
-- `ISO_SKIP_VOPRF=1` — բաց թողեք VOPRF զանգը միայն որոնումների փորձարկման ժամանակ:
 - `ISO_ALIAS_LABEL` — բառացի այլանուններ՝ լուծելու համար (օրինակ՝ IBAN ոճի տողեր):
 - `ISO_ALIAS_INDEX` — տասնորդական կամ `0x` նախածանցով ինդեքսը փոխանցվել է `resolveAliasByIndex`-ին:
 - `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — կամընտիր վերնագրեր ապահովված Torii տեղադրումների համար:
 
 ```bash
-# Evaluate a blinded element and resolve an alias literal + deterministic index.
+# Resolve an alias literal + deterministic index.
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeefcafebabe \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node javascript/iroha_js/recipes/iso_alias.mjs
 
 # Only perform literal resolution.
 TORII_URL=https://torii.testnet.sora \
-ISO_SKIP_VOPRF=1 \
 ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```

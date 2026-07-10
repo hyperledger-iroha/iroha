@@ -35,6 +35,7 @@ fn checked_random_keypair() -> KeyPair {
 fn manifest_pointer_roundtrip() {
     let account_id = AccountId::new(checked_random_keypair().public_key().clone());
     let manifest = ContractManifest {
+        contract_name: None,
         code_hash: Some(Hash::new(b"code-bytes")),
         abi_hash: Some(Hash::new(b"abi-policy")),
         compiler_fingerprint: Some("kotodama-1.2.3+nightly".to_owned()),
@@ -51,6 +52,7 @@ fn manifest_pointer_roundtrip() {
         entrypoints: None,
         states: None,
         kotoba: None,
+        error_codes: None,
         provenance: None,
     };
 

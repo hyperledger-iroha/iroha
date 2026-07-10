@@ -1,4 +1,4 @@
-//! Verify Kotodama lowering of `state Map<int,int>` writes into durable host state.
+//! Verify Kotodama lowering of `StateMap<i64, i64>` into durable host state.
 
 use std::{collections::HashMap, str::FromStr};
 
@@ -10,7 +10,6 @@ use ivm::{
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     syscalls,
 };
-use norito::{decode_from_bytes, to_bytes};
 mod common;
 
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -25,8 +24,9 @@ fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     v
 }
 
-fn encoded_state_path(name: &str, key: impl std::fmt::Display) -> String {
-    format!("{name}/{}", key)
+fn encoded_state_path(name: &str, key: i64) -> String {
+    let key = norito::to_bytes(&key).expect("encode canonical StateMap key");
+    format!("{name}/{}", hex::encode(key))
 }
 
 fn account(_domain: &str, public_key: &str) -> AccountId {
@@ -38,10 +38,10 @@ fn account(_domain: &str, public_key: &str) -> AccountId {
 fn kotodama_state_map_set_writes_corehost_state() {
     let src = r#"
         seiyaku C {
-            state Map<int, int> M;
-            fn main() {
-                M[1] = 7; // should lower to host::STATE_SET("M/1", Norito(i64=7)) plus ephemeral.
-                let _x = M[1];
+            state M: StateMap<i64, i64>;
+            kotoage fn main() authorize("WriteState") {
+                M[1] = 7;
+                let _x = M.get(1);
             }
         }
     "#;
@@ -53,8 +53,8 @@ fn kotodama_state_map_set_writes_corehost_state() {
     vm.load_program(&code).expect("load");
     vm.run().expect("run kotodama");
 
-    // Query CoreHost state via STATE_GET for namespaced path "M/1" and expect payload "7"
-    let path = Name::from_str("M/1").expect("valid path");
+    // Query CoreHost state via its reversible canonical-Norito key path.
+    let path = Name::from_str(&encoded_state_path("M", 1)).expect("valid path");
     let path_tlv = make_tlv(PointerType::Name, path.as_ref().as_bytes());
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
     let mut get_prog_bytes = Vec::new();
@@ -71,20 +71,19 @@ fn kotodama_state_map_set_writes_corehost_state() {
     let p_out = vm.register(10);
     let tlv = vm.memory.validate_tlv(p_out).expect("validate out");
     assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-    let stored: i64 = decode_from_bytes(tlv.payload).expect("decode stored int");
-    assert_eq!(stored, 7);
+    assert_eq!(common::decode_i64_state_value(tlv.payload), 7);
 }
 
 #[test]
 fn kotodama_nested_struct_map_roundtrip() {
     let src = r#"
         seiyaku C {
-            struct Inner { map: Map<int, int>; }
+            struct Inner { value: i64; }
             struct Outer { inner: Inner; }
-            state Outer state_outer;
-            fn main() -> int {
-                state_outer.inner.map[7] = 33;
-                return state_outer.inner.map[7];
+            state state_outer: StateMap<i64, Outer>;
+            kotoage fn main() -> i64 authorize("WriteState") {
+                state_outer[7] = Outer(Inner(33));
+                return state_outer.get(7).unwrap_or(Outer(Inner(0))).inner.value;
             }
         }
     "#;
@@ -102,9 +101,9 @@ fn kotodama_nested_struct_map_roundtrip() {
 fn kotodama_foreach_map_lowering_uses_compact_loop() {
     let src = r#"
         seiyaku LoopDemo {
-            state Map<int, int> M;
-            fn main() {
-                for (k, v) in M #[bounded(16)] {
+            state M: StateMap<i64, i64>;
+            view fn main() {
+                for (k, v) in M.take(16) {
                     let _tmp = k + v;
                 }
             }
@@ -146,10 +145,10 @@ fn kotodama_foreach_map_lowering_uses_compact_loop() {
 fn kotodama_foreach_reads_durable_state_map_entries() {
     let src = r#"
         seiyaku LoopDemo {
-            state Map<int, int> M;
-            state Map<int, int> Mirror;
-            fn main() {
-                for (k, v) in M #[bounded(4)] {
+            state M: StateMap<i64, i64>;
+            state Mirror: StateMap<i64, i64>;
+            kotoage fn main() authorize("WriteState") {
+                for (k, v) in M.take(4) {
                     Mirror[k] = v;
                 }
             }
@@ -162,12 +161,12 @@ fn kotodama_foreach_reads_durable_state_map_entries() {
     let mut wsv = MockWorldStateView::new();
     wsv.sc_set(
         &encoded_state_path("M", 0),
-        to_bytes(&5_i64).expect("encode state value 5"),
+        common::encode_i64_state_value(5),
     )
     .expect("write state index 0");
     wsv.sc_set(
         &encoded_state_path("M", 1),
-        to_bytes(&9_i64).expect("encode state value 9"),
+        common::encode_i64_state_value(9),
     )
     .expect("write state index 1");
     let alice = account(
@@ -200,7 +199,6 @@ fn kotodama_foreach_reads_durable_state_map_entries() {
         let out = vm.register(10);
         let tlv = vm.memory.validate_tlv(out).expect("validate out");
         assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-        let stored: i64 = decode_from_bytes(tlv.payload).expect("decode mirrored int");
-        assert_eq!(stored, expected);
+        assert_eq!(common::decode_i64_state_value(tlv.payload), expected);
     }
 }

@@ -105,32 +105,25 @@ node javascript/iroha_js/recipes/iso_bridge.mjs
 
 ### ISO མིང་གཞན་རོགས་སྐྱོར།
 
-I18NI0000005X གིས་ ISO alias མཐའ་མཚམས་ལུ་དམིགས་གཏད་བསྐྱེདཔ་ལས་ བསྐྱར་སྦྱོང་གིས་ ཁྱབ་ཚུགས།
-མིག་མེད་བཟོ་བའི་ཧ་ཤིང་དང་ མིང་གཞན་བལྟ་སྟངས་ཚུ་ བེ་སི་པོཀ་ལག་ཆས་ཚུ་ མ་བྲིས་པས། འདི
-འབོད་བརྡ་ `ToriiClient.evaluateAliasVoprf` དང་ `resolveAlias` / `resolveAliasByIndex` ཟེར་སླབ་ཨིན།
-དེ་ལས་ རྒྱབ་ཐག་དང་ བཞུ་བཅོས་ རྩིས་ཐོ་ མཐུད་བྱེད་འབྱུང་ཁུངས་ དེ་ལས་ གཏན་འབེབས་ཟུར་ཐོ་ཚུ་ དཔར་བསྐྲུན་འབདཝ་ཨིན།
-Torii གིས་ལོག་འོང་ཡོདཔ།
+`recipes/iso_alias.mjs` གིས་ སྒེར་གྱི་ལག་ཆས་མ་དགོས་པར་ ISO མིང་གཞན་འཚོལ་ཞིབ་ཚུ་བརྟགཔ་ཨིན།
+འདི་གིས་ `resolveAlias` དང་ `resolveAliasByIndex` ལུ་འབོད་བརྡ་འབད་ཞིནམ་ལས་ Torii གིས་ལོག་བཏང་མི་རྩིས་ཐོའི་མཐུད་སྦྲེལ་ འབྱུང་ཁུངས་ དང་གཏན་འབེབས་ཟུར་ཐོ་དཔར་བསྐྲུན་འབདཝ་ཨིན།
 
 ཁོར་ཡུག་འགྱུར་ལྡོག་ཅན།
 
 - I18NI000000059X — Torii མཐའ་མའི་གྲོགས་རམ་པ་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
-- I18NI0000000060X — ཧེགསི་ཨེན་ཀོཌ་མེད་པའི་ཆ་ཤས་ (I18NI000000061X ལུ་སྔོན་སྒྲིག་)།
-- I18NI000000062X — བརྟག་ཞིབ་ཚུ་རྐྱངམ་ཅིག་འབད་བའི་སྐབས་ VOPRF འབོད་བརྡ་འདི་ གོམ་འགྱོཝ་ཨིན།
 - I18NI000000063X — ཐག་གཅོད་འབད་ནི་ལུ་ ངོ་མ་མིང་གཞན་ (དཔེར་ན་ IBAN-style ཡིག་རྒྱུན་ཚུ་)།
 - I18NI000000064X — ཚག་ཡང་ན་ `0x`-སྔོན་སྒྲིག་ཟུར་ཐོ་ I18NI000000066X ལུ་སྤྲོད་ཡོདཔ་ཨིན།
 - I18NI0000000067X / `TORII_API_TOKEN` — བདེ་སྲུང་དོན་ལུ་ གདམ་ཁ་ཅན་གྱི་མགོ་ཡིག་ I18NT0000008X བཀྲམ་སྤེལ་ཚུ།
 
 ```bash
-# Evaluate a blinded element and resolve an alias literal + deterministic index.
+# Resolve an alias literal + deterministic index.
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeefcafebabe \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node javascript/iroha_js/recipes/iso_alias.mjs
 
 # Only perform literal resolution.
 TORII_URL=https://torii.testnet.sora \
-ISO_SKIP_VOPRF=1 \
 ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```

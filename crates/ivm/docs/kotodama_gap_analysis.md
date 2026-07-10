@@ -1,109 +1,183 @@
-# Kotodama Gap Analysis
+# Kotodama V1 implementation alignment
 
-This document compares the current Kotodama syntax/grammar documentation with the implementation in `crates/kotodama_lang/src` and outlines where the implementation should go to meet the design goals of clarity, safety, and ease of use.
+This is a non-normative guide for contributors aligning the implementation
+with the first release. The sole source-language specification is
+[`docs/source/kotodama_grammar.md`](../../../docs/source/kotodama_grammar.md).
+`status.md` records verified work and `roadmap.md` records only outstanding
+work.
 
-Paths for reference:
-- Lexer: `crates/kotodama_lang/src/lexer.rs`
-- AST: `crates/kotodama_lang/src/ast.rs`
-- Parser: `crates/kotodama_lang/src/parser.rs`
-- Semantic/type check: `crates/kotodama_lang/src/semantic.rs`
-- IR + lowering: `crates/kotodama_lang/src/ir.rs`
-- Codegen: `crates/kotodama_lang/src/compiler.rs`
-- Samples: `crates/kotodama_lang/src/samples/*.ko`
+Kotodama targets deterministic Iroha Virtual Machine bytecode (`.to`). It does
+not target RISC-V as a standalone architecture.
 
-## Summary
-- The current implementation parses and lowers both free and contract functions (including `seiyaku`, `kotoage`, `hajimari`, and `kaizen` items), performs type checking for ints/bools/strings/pointer-ABI handles/structs/maps, and emits full multi-function IVM bytecode with durable `state` overlays when ABI v1 is selected. ✔
-- Contract-level localization (`kotoba { ... }`) is parsed, validated for duplicates/empties, and emitted into manifest translation tables for tooling. ✔
-- Metadata and manifest wiring now surface `meta { features: ["zk","simd"] }` toggles plus compiler-generated per-entrypoint permission/read/write hints. Core direct dispatch and nested `CALL_CONTRACT` dispatch consume entrypoint permission metadata and require the caller to hold the named permission directly or through a role before invocation. Static ISI keys, literal map keys, dynamic map paths, bounded dynamic state-map iteration, literal nullifiers, decodable transfer batches, native/anonymous escrow helpers, and static smart-contract lifecycle requests with decodable Norito payloads are represented precisely when possible. Manual `#[access(...)]` annotations are rejected; opaque dynamic ledger access may emit compiler-owned wildcard hints so the scheduler can use its dynamic prepass or conservative serialization path. ✔
-- The compiler scans emitted bytecode for ZK/vector opcodes, auto-enables header bits, and rejects `meta` feature requests that do not match actual opcode usage. ✔
-- Numeric aliases (`fixed_u128`, `Amount`, `Balance`) are distinct `Numeric`-backed scalar types (mantissa+scale) restricted to unsigned, scale‑0 values. Decimal literals are rejected in v1; arithmetic preserves the alias and mixing aliases is rejected unless routed through an `int` binding. Conversions to/from `int` are checked at runtime (range‑limited, non‑negative). Trigger declarations (`register_trigger`) now parse time/execute/data filters plus deterministic approved block/transaction pipeline filters, lower structured data-trigger blocks into manifest `EventFilterBox` values, support explicit trigger authority overrides, attach metadata to entrypoint manifests, and are auto-registered when a contract instance is activated (removed on deactivation). Namespaced trigger callbacks resolve at activation time to an already active contract address or alias and fail closed when the target or entrypoint is unavailable. Inline ZK unshield builders now encode one or more input nullifier chunks plus optional private change output chunks. ✔
+## Release surface
 
-Note: Kotodama compiles to Iroha Virtual Machine (IVM) bytecode (`.to`). It does not target “risc5”/RISC‑V as a standalone ISA. Any RISC‑V–like encodings mentioned in the compiler are IVM’s mixed instruction format and an implementation detail.
+The V1 parser accepts one branded source unit:
 
-## Current Implementation vs. Grammar
+- one deployable `seiyaku Name { ... }`/`誓約 Name { ... }`, or
+- one reusable `module Name { ... }` linked before code generation.
 
-### Lexing
-- Implemented: identifiers, decimal/hex/binary integers (plus decimal fractions) with `_` separators, string literals with rich escapes (`\n`, `\t`, `\r`, `\0`, `\xNN`, `\u{…}`, `\"`, `\\`), raw strings, byte literals, booleans, logical operators, and keyword aliases (`seiyaku`/`誓約`, `kotoage`/`言挙げ`, etc.).
+Contracts use private `fn`, authorized mutating `kotoage fn`/`言挙げ fn`,
+read-only `view fn`, and the dedicated `hajimari`/`始まり`, `kaizen`/`改善`,
+and `trigger` declarations. English `contract`, `entry`, `init`, and `upgrade`
+are not source keywords. Parameters, fields, constants, and state use
+`name: Type`. Locals use immutable `let` or mutable `var`; duplicate names and
+shadowing are errors.
 
-### Parsing and AST
-- Implemented:
-  - Full contract surface: `seiyaku`, `kotoage fn`, `hajimari`, `kaizen`, `struct`, and `state` items all produce AST nodes and flow into lowering.
-  - Parameter grammar accepts `Type name`, `name: Type`, or bare identifiers everywhere; return types (`fn foo() -> Type`) are recorded; tuple destructuring, assignments, compound assignments, `return/break/continue`, ternary `cond ? a : b`, and `call foo()` sugar are available.
-  - `permission(Role)` markers, `#[bounded(N)]` attributes, and `meta { key: value; features: ["zk","simd"] }` blocks are parsed and stored.
-  - Contract-level localization (`kotoba { ... }`) is parsed, validated, and emitted into manifest translations.
+There is no compatibility grammar, source edition, implicit entrypoint,
+source-order dispatch, raw-call sugar, typeless parameter, wildcard import, or
+source `meta` block. ABI v1 is unconditional. Execution capabilities and vector
+metadata are derived by the compiler or supplied through trusted build
+configuration, never selected by contract source.
 
-### Semantic Analysis (Typing)
-- Implemented:
-  - Type checking for ints, bools (with implicit promotion to int when needed), strings, pointer-ABI handles (`AccountId`, `Name`, etc.), structs, tuples, and `Map<K,V>`.
-  - Norito pointer-wrapper helpers (`json`, `name`, `blob`, `norito_bytes`, and the other pointer constructors) accept string bindings, matching pointer values, and Blob/bytes payloads where appropriate; method-call sugar such as `payload.json()` and `payload.name()` lowers through the same typed constructor paths.
-  - Durable `state` bindings are injected into each function’s scope, so accessing `state Foo ledger;` compiles without extra boilerplate.
-  - Internal helper functions can accept durable `state` parameters for scalar, map, struct, and tuple state handles. Callers must pass a durable state binding or durable member expression, and aggregate handles use deterministic flattened child handles.
-  - Primitive effect analysis guards privileged syscalls: public (`kotoage`) functions that call mutating ledger helpers or ZK verify latch helpers must declare `permission(...)` or compilation fails, and `view` functions cannot call them transitively.
-  - Runtime contract dispatch enforces entrypoint `permission(...)` manifest metadata against direct and role-derived account permissions before invoking a VM, including nested `CALL_CONTRACT` child VMs.
-  - Numeric aliases (`fixed_u128`, `Amount`, `Balance`) are distinct `Numeric`-backed scalars; arithmetic preserves the alias and mixing alias types is rejected unless converted through `int`.
-- Ongoing policy:
-  - New helper surfaces should add capability/effect and access-hint tests when they are introduced, so mutating or externally visible behavior does not bypass first-release manifest metadata.
+## Compiler pipeline
 
-### IR and Codegen
-- Implemented:
-  - All parsed functions lower to SSA IR and are emitted, with the entrypoint chosen by `main` > `hajimari` > first function.
-  - Pointer literals propagate across calls, durable `state` accesses turn into `STATE_GET/SET/DEL` syscalls when ABI v1 is requested, string/data sections are deduplicated, and manifests supply code/ABI hashes.
-  - Emitted bytecode is scanned for ZK/vector opcodes; header bits are auto-enabled and mismatched `meta` requests are rejected.
-  - Inline ZK ISI builders emit canonical Norito `InstructionBox` payloads; `build_unshield_inline` supports multiple 32-byte input chunks and optional 32-byte private change output chunks.
-  - Cross-contract trigger callbacks (`call alias::fn`) are recorded in manifests and resolved by core activation against active contract addresses or aliases. Bare namespaces resolve as `<name>::universal`; fully qualified contract aliases and contract-address literals are also accepted.
-  - Aggregate `state` parameters lower to hidden root plus flattened child handle arguments, so helpers can read `entry.counter` and `entries[key].amount` through the same deterministic durable paths as direct state access.
-- Access-set hints now include static ISI WSV keys, native/anonymous escrow record keys, static smart-contract manifest/code/instance lifecycle keys, literal nullifier keys, decoded transfer-batch asset keys, literal map keys, dynamic map paths via map-level conflict keys, and bounded dynamic state-map iteration descriptors. Manual access annotations are no longer part of the release language; compiler-owned wildcard fallbacks remain available for dynamic ledger helper calls that cannot be described precisely yet.
+The implementation is organized around these boundaries:
 
-## Samples vs. Implementation
-Modern samples compile, and the following grammar-level expectations are now covered:
-- `permission(Role)` metadata reaches manifests and core dispatch enforces the named permission for direct contract calls, metadata-dispatched IVM calls, and nested `CALL_CONTRACT` calls.
-- Trigger registration works via `register_trigger`/`create_trigger`; DSL trigger declarations now emit manifest metadata and are auto-registered on contract instance activation.
-- Cross-contract trigger callbacks resolve during contract activation. General
-  deployed-contract calls are available through the `call_contract(...)` helper,
-  with CoreHost enforcing the callee entrypoint permission metadata.
+1. lossless CST and spanned AST preserve source identity and locations;
+2. resolution produces a named HIR and rejects unknown, duplicate, reserved,
+   cyclic, and ambiguous symbols;
+3. type and effect analysis produces typed HIR and computes transitive effects
+   and access through the complete call graph;
+4. SSA MIR is optimized before register allocation and bytecode emission;
+5. the assembler relaxes branches and calls and emits the canonical V1
+   artifact plus hash-keyed debug sidecars.
 
-## Completed Implementation Checkpoints
-The first-release implementation checkpoints aligned with the designed grammar
-and safety goals are:
+`CompilerSession` owns reusable compiler state. Public driver APIs return either
+a `CompileOutput` or a `DiagnosticBundle`; diagnostics have stable codes,
+phases, severities, spans, labels, notes, help, and optional fixes. Human, JSON,
+and SARIF renderings carry the same semantic fields.
 
-1) Metadata + manifest parity
-- Done: compiler-generated hints cover static ISI targets, literal state paths, dynamic map-level state keys, and bounded dynamic state-map iteration descriptors.
-- Done: production artifacts carry compiler-generated access metadata, using compiler-owned wildcard manifests for dynamic ledger access that cannot be derived precisely yet.
+Hard parser budgets are part of the release contract: 1 MiB of UTF-8 source,
+250,000 tokens including EOF, and 256 levels of delimiter/parse nesting.
+Recursive value types, recursive calls, `while`, and unproved loop bounds fail
+closed.
 
-2) Permission and trigger plumbing
-- Done: runtime direct and nested contract dispatch consume manifest entrypoint `permission(...)` metadata and reject callers missing the named direct or role-derived permission.
-- Done: extend trigger DSL support to data filters, deterministic approved block/transaction pipeline filters, and explicit authority overrides.
-- Done: wire manifest trigger descriptors into runtime registration on activation/deactivation, including activation-time resolution for cross-contract callbacks.
+Every artifact carries a positive `max_cycles` value in its hash-covered
+execution header. The node's `pipeline.ivm_max_cycles_upper_bound` is a
+mandatory non-zero configuration value (default `1_000_000`) used by admission
+and every execution path. The value is file-configured only: a zero
+configuration value is rejected, and neither environment variables nor
+on-chain custom parameters can override the node policy.
 
-3) Type system extensions
-- Done: numeric aliases (`fixed_u128`, `Amount`, `Balance`) now use deterministic `Numeric` syscalls with unsigned, scale‑0 values; decimal literals are rejected in v1.
-- Done: Norito pointer-wrapper constructors and method-call sugar accept string bindings, matching pointer types, and Blob/bytes payloads so grammar-level builders compile without manual casts.
-- Done: durable `state` helper parameters now support aggregate struct/tuple state handles and maps with aggregate values through flattened child handles.
+## Security boundaries
 
-4) Access hints and host integration
-- Done: production artifacts must carry compiler-generated access metadata, with wildcard fallbacks limited to compiler-diagnosed dynamic ledger access.
-- Done: native and anonymous escrow helper syscalls now emit stable escrow record access keys when Kotodama names are literal, and anonymous escrow request-backed helpers decode literal Norito payloads for precise keys.
-- Done: static smart-contract lifecycle helper requests for manifest registration, bytecode registration, instance activation, and bytecode removal now decode literal Norito payloads into contract manifest/code/instance access keys.
-- Done: literal `use_nullifier(...)` calls and decodable `transfer_v1_batch_apply(...)` payloads now emit exact nullifier and asset access keys.
-- Conservative access-hint cases are intentionally dynamic or test-only:
-  unresolved smart-contract lifecycle payloads, malformed request bytes, and
-  actor-helper intrinsics produce incomplete access metadata instead of
-  guessing.
-- Done: literal `create_trigger(json(...))` specs that cannot be decoded now emit a dedicated access-hint diagnostic and manifest skip reason; lint still covers non-literal trigger specs.
+The canonical artifact hash covers every deployable byte: all execution-header
+fields, the embedded CNTR interface, typed literals, and executable code.
+Source maps and debug data are sidecars keyed by that hash.
 
-5) Tooling separation
-- Done: the Kotodama compiler, parser, semantic analysis, IR, linting, and tooling support now live in `crates/kotodama_lang`.
+The compiler uses one exhaustive builtin registry for signature, effect,
+syscall, scheduler access, gas class, and allowed execution modes. Source code
+uses namespaces such as `context`, `ledger`, `state`, and `crypto`; allocation,
+raw pointers, direct syscall variants, and opaque instruction submission are
+not source capabilities.
 
-## Quick Wins (Low Risk, High Impact)
-- Done: lint now reports dynamic state paths and opaque host reads, while staying silent for compiler-hintable asset registration, literal transfer-domain routing, subscription context, inline ZK builders, and escrow helpers (non-literal trigger specs and state-map keys were already covered).
-- Done: compiler diagnostics now count literal trigger spec decode failures and production rejections include the trigger-specific access-hint reason.
+CNTR is an interface, not a trust root. Admission validates control-flow
+targets and ABI-v1 operations, then derives transitive effects and access from
+bytecode. Dynamic or incomplete access forces conservative serialization.
+Compiler fingerprints and access summaries remain informational until they are
+independently verified.
 
-## Deterministic Boundaries
-- Access hints cover static ISI targets, native/anonymous escrow helpers with literal or decodable request inputs, static smart-contract lifecycle requests, literal nullifier use, decodable transfer batches, dynamic map paths via map-level keys, and bounded dynamic state-map iteration. Opaque dynamic ledger helper syscalls may still use compiler-owned wildcard hints until they have precise compiler-derived access descriptors.
-- Entrypoint manifests emit complete hints for production artifacts.
-- Meta feature flags (`zk`, `vector`, `features`) are validated against emitted opcodes; requesting features that are unused now fails compilation.
-- Numeric aliases (e.g., `fixed_u128`) are distinct `Numeric` types; v1 restricts them to unsigned integers (scale = 0), rejecting fractional values and decimal literals.
-- `permission(...)` annotations are enforced by compiler diagnostics, written into manifests, and consumed by core direct and nested contract dispatch before VM invocation.
-- Trigger declarations support time/execute/data filters plus deterministic approved block/transaction pipeline filters and explicit authority overrides; cross-contract callbacks must resolve to an already active contract address or alias during activation.
+Host operations follow prepare/quote, gas debit, then execute. Query,
+allocation, nested invocation, and state effects must not happen before the
+caller can afford the quoted cost.
 
-Keeping these limitations explicit helps set expectations and aids contributors in targeting the most valuable next steps.
+## Language safety
+
+Arithmetic is checked by default; explicit `math::wrapping_*` operations are the only
+modular arithmetic. Comparisons preserve signed `i64` ordering at the complete
+integer boundary. `&&` and `||` short-circuit and therefore do not execute an
+unneeded right-hand side.
+
+Durable scalar state is initialized in `hajimari`. `StateMap.get` and the mutating
+`StateMap.remove` return `Option<V>`, iteration is in canonical Norito key
+byte order, and collection iteration is capped at 64 items. Top-level structs,
+tuples, `Option`, and `Result` values use one schema-bound canonical Norito
+record and therefore one host read or write per state/StateMap entry. Nested
+`StateMap` values and schema mismatches are rejected.
+
+Public failure behavior uses explicitly numbered `error enum` variants and
+`require(condition, Error::Variant)`. Stable error codes are exported in the
+seiyaku interface; free-form strings are not a public error protocol.
+
+Private input exists only as `Secret<T>` for a ZK-enabled build. Secret values
+can flow only into approved proof or commitment operations. They cannot affect
+public returns, logs, error selection, control flow, state, ledger writes, host
+queries, or contract calls.
+
+## Runtime and tooling
+
+Public calls carry one canonical Norito argument record. The wrapper decodes it
+once and then reads typed ABI words; JSON is confined to Torii and CLI
+boundaries.
+
+Validated bytecode is cached as an immutable `PreparedContract` containing the
+interface, metadata, predecode, and CFG. Warm execution reuses prepared state
+and resets only dirty memory instead of cloning the full VM memory and Merkle
+tree.
+
+`koto check|build|test|fmt|doc|explain|lsp` is the single command surface. The
+Rust compiler library is canonical for `koto`, `iroha contract dev`,
+Musubi, and the Node native bridge. Browsers use a compiler service; there is
+no independent JavaScript or offline browser compiler.
+
+Generated keyword and operator tables are consumed by formatting, syntax
+highlighting, documentation, and LSP completion. CI compiles every current
+`kotodama` documentation fence so examples cannot silently define a second
+dialect.
+
+The formatter is a canonical lossless-token consumer: it preserves comments
+and literal spelling, emits deterministic four-space block layout, is
+idempotent, and refuses invalid or post-format sources larger than 1 MiB.
+The reusable module driver caps one graph at 512 source units/16 MiB and keeps
+only a 64-entry/4 MiB exact-source LRU of parsed modules, so long-lived compiler
+services cannot accumulate attacker-controlled ASTs without bound.
+
+## Performance gate
+
+`crates/ivm/benches/bench_kotodama.rs` measures parsing, semantic analysis, IR
+lowering, end-to-end code generation, cold execution, and warm prepared
+execution separately. The runtime samples explicitly select the embedded CNTR
+entrypoint, use the canonical Norito argument record, and validate the result
+before Criterion starts sampling. The warm sample prepares and loads its
+immutable contract once, builds its reset template once, and measures only
+dirty-state reset plus invocation.
+
+The canonical golden pipeline also applies deterministic artifact gates before
+publishing anything. Every compiler-generated instruction region must contain
+strictly less than 1% unresolved relocation NOPs. Representative padding-heavy
+checked-in samples must be at least 50% smaller than the audited pre-reset code
+regions recorded in `scripts/kotodama_v1_size_baseline.json`. These checks run
+for both `--check` and `--write`:
+
+```console
+make kotodama-goldens-check
+```
+
+An authenticated second build in the same pipeline must report every source as
+`fresh` and preserve every generated file's modification time, proving that a
+no-op graph performs zero compilation and zero rewrites.
+
+Capture a reference on the same controlled runner, then compare a candidate:
+
+```console
+cargo bench -p ivm --bench bench_kotodama
+python3 scripts/check_kotodama_perf.py \
+  --write-baseline target/kotodama-perf-baseline.json
+# Build and benchmark the candidate on the same runner.
+cargo bench -p ivm --bench bench_kotodama
+python3 scripts/check_kotodama_perf.py \
+  --baseline target/kotodama-perf-baseline.json
+```
+
+The checker fails closed on missing/malformed samples or benchmark coverage
+changes. Its threshold cannot be loosened above 5%; a stable release runner may
+set a tighter threshold with `--threshold`. The
+`.github/workflows/kotodama_perf.yml` gate checks out the pull request base and
+candidate, measures both on the same runner with Criterion's named baseline,
+and applies this checker to every representative median. Timing baselines are
+deliberately runner-local; they are not portable across CPU models or loaded
+hosts. The reset's initial pull request cannot compare against the retired
+compiler because that base has no equivalent phase suite or language input; CI
+detects that one bootstrap case and checks a candidate self-baseline. Once the
+suite lands, absence of any representative base or candidate sample fails
+closed and every later change is subject to the 5% ceiling.

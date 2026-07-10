@@ -36,3 +36,22 @@ source: crates/ivm/docs/examples/13_register_and_mint.ko
 [Скачать источник Kotodama] (/norito-snippets/register-and-mint.ko)
 
 18НФ00000001Х
+
+```kotodama
+// Register a new asset and mint some to the specified account.
+seiyaku RegisterAndMint {
+    kotoage fn register_and_mint() authorize("AssetManager") {
+        // name, symbol, quantity (precision or supply depending on host), mintable flag
+        let asset = AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
+        let symbol = "ROSE";
+        let qty = 1000;
+        // interpretation depends on data model (example only)
+        let mintable = 1;
+        // 1 = mintable, 0 = fixed
+        ledger::asset::register(asset, symbol, qty, mintable);
+        // Mint 250 ROSE to Alice
+        let to = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
+        ledger::asset::mint(to, asset, Amount::from_i64(250));
+    }
+}
+```

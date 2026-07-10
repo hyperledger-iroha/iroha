@@ -22,10 +22,10 @@ translation_last_reviewed: 2026-02-07
 
 - [Docker](https://docs.docker.com/engine/install/) جس ميں Compose V2 فعال (اسے `defaults/docker-compose.single.yml` هو عبارة عن نموذج نظير لبدء الاستخدام).
 - سلسلة أدوات الصدأ (1.76+) هي ثنائيات مساعدة متاحة للجميع إذا كانت الثنائيات شائعة الاستخدام.
-- `koto_compile` و`ivm_run` و`iroha_cli` الثنائيات. يمكنك أيضًا إجراء عملية الخروج من مساحة العمل من خلال مطابقة عناصر الإصدار أو تنزيلها:
+- `koto build` و`ivm_run` و`iroha_cli` الثنائيات. يمكنك أيضًا إجراء عملية الخروج من مساحة العمل من خلال مطابقة عناصر الإصدار أو تنزيلها:
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -47,22 +47,22 @@ docker compose -f defaults/docker-compose.single.yml up --build
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -74,15 +74,14 @@ KO
 الكود الثانوي IVM/Norito (`.to`) هو محرك أقراص محمول وهو يقوم بعمل ما هو جديد أول مكالمات نظام المضيف التي يتم تصديقها:
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-عداء `info("Hello from Kotodama")` لاغ پرنٹ كرتا ومضيف ساخر کے خلاف `SET_ACCOUNT_DETAIL` syscall انجام ديتا . إذا قمت باختراع `ivm_tool` الجهاز الثنائي أو إلى `ivm_tool inspect target/quickstart/hello.to` رأس ABI، وبتات الميزات ونقاط الدخول المُصدَّرة متاحة أيضًا.
+عداء `debug::info("Hello from Kotodama")` لاغ پرنٹ كرتا ومضيف ساخر کے خلاف `SET_ACCOUNT_DETAIL` syscall انجام ديتا . إذا قمت باختراع `ivm_tool` الجهاز الثنائي أو إلى `ivm_tool inspect target/quickstart/hello.to` رأس ABI، وبتات الميزات ونقاط الدخول المُصدَّرة متاحة أيضًا.
 
 ## 4. Torii يتم تفعيل الرمز الثانوي
 
@@ -128,3 +127,63 @@ iroha --config defaults/client.toml \
   أدوات المترجم/العداء ونشر البيان وبيانات تعريف IVM واضحة المعالم.
 - التكرار التكراري لمساحة العمل `npm run sync-norito-snippets`
   المقتطفات القابلة للتنزيل هي نسخ مكررة من المستندات والمستندات والعناصر، `crates/ivm/docs/examples/` تلك المصادر التي تمت مزامنتها تلقائيًا.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

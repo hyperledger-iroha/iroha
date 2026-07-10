@@ -21,7 +21,7 @@ artifacts/*
 artifacts/sccp-bsc/*
 !artifacts/sccp-bsc/circuits/
 artifacts/sccp-bsc/circuits/*
-!artifacts/sccp-bsc/circuits/sccp-bsc-full-message-v1.circom
+!artifacts/sccp-bsc/circuits/sccp-bsc-labeled-signal-binding-v1.circom
 fake_home/*
 ./artifacts/nsc/*
 artifacts/nsc/rans_compare/*
@@ -293,3 +293,7 @@ artifacts/*.json
 
 # Local executable (repo root)
 /priv
+
+# Deployment manifests are signed with runtime-only operator material and must
+# be regenerated for the exact deployable artifact rather than checked in.
+/demo/*.deploy.manifest.json

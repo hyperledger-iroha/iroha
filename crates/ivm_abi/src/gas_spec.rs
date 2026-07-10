@@ -37,6 +37,13 @@ pub static GAS_ASSETS: &[GasAsset] = &[
         group: "syscall",
     },
     GasAsset {
+        key: "G_argument_decode",
+        asset_id: "asset:gas/G_argument_decode@ivm.core/v2",
+        unit: "gas",
+        version: "v1",
+        group: "syscall",
+    },
+    GasAsset {
         key: "G_axt",
         asset_id: "asset:gas/G_axt@ivm.core/v2",
         unit: "gas",
@@ -473,6 +480,13 @@ pub static GAS_ASSETS: &[GasAsset] = &[
     GasAsset {
         key: "G_state_set",
         asset_id: "asset:gas/G_state_set@ivm.core/v2",
+        unit: "gas",
+        version: "v1",
+        group: "syscall",
+    },
+    GasAsset {
+        key: "G_state_value",
+        asset_id: "asset:gas/G_state_value@ivm.core/v2",
         unit: "gas",
         version: "v1",
         group: "syscall",

@@ -125,3 +125,83 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
 - **Автоматизация CI** – передние команды и конвейеры выпуска для того, что
   la documentación, светильники и артефакты, публично объявленные детерминистами, объединенными
   метаданные фирмы.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

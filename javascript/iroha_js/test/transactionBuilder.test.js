@@ -16,10 +16,8 @@ import {
   buildPrivateCreateKaigiTransaction,
   buildPrivateJoinKaigiTransaction,
   buildPrivateEndKaigiTransaction,
-  buildUpsertSccpRouteManifestInstruction,
-  buildRemoveSccpRouteManifestInstruction,
-  buildUpsertSccpRouteManifestTransaction,
-  buildRemoveSccpRouteManifestTransaction,
+  buildApplySccpRouteGovernanceInstruction,
+  buildApplySccpRouteGovernanceTransaction,
   buildPrivateKaigiFeeSpend,
   buildMintAssetTransaction,
   buildMintAndTransferTransaction,
@@ -163,68 +161,18 @@ function hex32(byte) {
   return `0x${Buffer.alloc(32, byte).toString("hex")}`;
 }
 
-function buildSampleSccpRouteManifest() {
-  const destinationBindingHash = hex32(0x47);
-  const proofArtifactHash = hex32(0x4c);
-  const browserProverRef = (seed) => ({
-    module_url: `https://provers.sora.org/bsc-${seed}.js`,
-    module_specifier: `@sora/sccp-bsc-prover/${seed}`,
-    module_hash: hex32(seed),
-    manifest_hash: hex32(seed + 1),
-    expected_exports: [
-      "bscSccpProve",
-      "bscSccpNativeProverSelfTest",
-    ],
-    bound_route_hash: destinationBindingHash,
-    bound_proof_hash: proofArtifactHash,
-  });
+function buildSampleSccpRemoveAction() {
   return {
-    version: 1,
-    route_id: "taira_bsc_xor",
-    asset_key: "xor",
-    tron_network: "bsc-testnet",
-    chain: "bsc-testnet",
-    chain_id_hex: "0x61",
-    counterparty_domain: 2,
-    verifier_target: "EvmContract",
-    production_ready: true,
-    disabled_reason: null,
-    network_id_hex: hex32(0x61),
-    taira_xor_token_address: "0x1111111111111111111111111111111111111111",
-    taira_xor_bridge_address: "0x2222222222222222222222222222222222222222",
-    sccp_tron_source_bridge_address:
-      "0x3333333333333333333333333333333333333333",
-    tron_verifier_address: "0x4444444444444444444444444444444444444444",
-    verifier_code_hash: hex32(0x45),
-    verifier_key_hash: hex32(0x46),
-    proof_artifact_hash: proofArtifactHash,
-    proving_key_hash: hex32(0x55),
-    native_evm_prover_bundle_hash: hex32(0x50),
-    destination_browser_prover: browserProverRef(0x60),
-    source_browser_prover: browserProverRef(0x70),
-    deployment_evidence_sha256: hex32(0x4f),
-    destination_binding_key: "evm:0:2:test-binding",
-    destination_binding_hash: destinationBindingHash,
-    taira_burn_record_settlement_asset_definition_id:
-      "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-    taira_burn_record_contract_artifact_b64: "QUJDREVGRw==",
-    taira_burn_record_artifact_sha256: hex32(0x48),
-    taira_burn_record_code_hash: hex32(0x49),
-    taira_burn_record_vk_backend: "halo2_ipa",
-    taira_burn_record_vk_name: "taira_bsc_xor_burn_record_v1",
-    taira_burn_record_gas_limit: 2_000_000,
-    settlement_contract_address: null,
-    settlement_contract_alias: null,
-    post_deploy_full_toml_ready: true,
-    post_deploy_source_bridge_config_hash: hex32(0x4a),
-    post_deploy_source_event_transaction_id: hex32(0x4b),
-    post_deploy_source_event_explorer_url:
-      `https://testnet.bscscan.com/tx/${hex32(0x4b)}`,
-    post_deploy_route_canary_evidence_hash: hex32(0x4e),
-    post_deploy_route_canary_transaction_id: hex32(0x4d),
-    post_deploy_route_canary_explorer_url:
-      `https://testnet.bscscan.com/tx/${hex32(0x4d)}`,
-    post_deploy_offline_full_toml_sha256: hex32(0x56),
+    action: "Remove",
+    route: {
+      lane_id: {
+        source: { network: "bsc_testnet", profile: null },
+        target: { network: "sora_taira", profile: null },
+      },
+      route_id: "taira_bsc_xor",
+      asset_key: "xor",
+      revision: 1,
+    },
   };
 }
 
@@ -373,82 +321,26 @@ test("buildTransaction normalizes instruction objects", () => {
   assert.equal(call.privateKeyAlgorithm, "secp256k1");
 });
 
-test("buildUpsertSccpRouteManifestInstruction wraps canonical manifests", () => {
-  const manifest = buildSampleSccpRouteManifest();
-
-  assert.deepEqual(buildUpsertSccpRouteManifestInstruction({ manifest }), {
-    UpsertSccpRouteManifest: { manifest },
-  });
-  assert.deepEqual(buildUpsertSccpRouteManifestInstruction(manifest), {
-    UpsertSccpRouteManifest: { manifest },
-  });
-});
-
-test("buildUpsertSccpRouteManifestInstruction rejects missing explicit manifests", () => {
-  assert.throws(
-    () => buildUpsertSccpRouteManifestInstruction({ manifest: null }),
-    /manifest must be a non-null object/u,
-  );
-  assert.throws(
-    () => buildUpsertSccpRouteManifestInstruction("not-an-object"),
-    /input must be a non-null object/u,
-  );
-});
-
-test("buildRemoveSccpRouteManifestInstruction normalizes aliases", () => {
+test("buildApplySccpRouteGovernanceInstruction wraps one exact closed action", () => {
+  const action = buildSampleSccpRemoveAction();
   assert.deepEqual(
-    buildRemoveSccpRouteManifestInstruction({
-      routeId: " taira_bsc_xor ",
-      assetKey: " xor ",
-      counterpartyDomain: "2",
-      chainIdHex: " 0X61 ",
-    }),
-    {
-      RemoveSccpRouteManifest: {
-        route_id: "taira_bsc_xor",
-        asset_key: "xor",
-        counterparty_domain: 2,
-        chain_id_hex: "0X61",
-      },
-    },
+    buildApplySccpRouteGovernanceInstruction(action),
+    { ApplySccpRouteGovernance: { action } },
   );
 });
 
-test("buildRemoveSccpRouteManifestInstruction rejects invalid removal keys", () => {
-  assert.throws(
-    () =>
-      buildRemoveSccpRouteManifestInstruction({
-        route_id: "",
-        asset_key: "xor",
-        counterparty_domain: 2,
-        chain_id_hex: "0x61",
-      }),
-    /routeId must be a non-empty string/u,
-  );
-  assert.throws(
-    () =>
-      buildRemoveSccpRouteManifestInstruction({
-        route_id: "taira_bsc_xor",
-        asset_key: "xor",
-        counterparty_domain: "2.5",
-        chain_id_hex: "0x61",
-      }),
-    /counterpartyDomain must be a uint32 integer/u,
-  );
-  assert.throws(
-    () =>
-      buildRemoveSccpRouteManifestInstruction({
-        route_id: "taira_bsc_xor",
-        asset_key: "xor",
-        counterparty_domain: 0x1_0000_0000n,
-        chain_id_hex: "0x61",
-      }),
-    /counterpartyDomain must be between 0 and 4294967295/u,
-  );
+test("SCCP route governance action rejects aliases and retired manifests", () => {
+  for (const action of [
+    { ...buildSampleSccpRemoveAction(), manifest: {} },
+    { action: "Remove", route: { ...buildSampleSccpRemoveAction().route, routeId: "alias" } },
+    { action: "UpsertManifest", route: {} },
+  ]) {
+    assert.throws(() => buildApplySccpRouteGovernanceInstruction(action));
+  }
 });
 
-test("SCCP route manifest transaction wrappers submit one typed instruction", () => {
-  const manifest = buildSampleSccpRouteManifest();
+test("SCCP route governance transaction submits one typed atomic action", () => {
+  const action = buildSampleSccpRemoveAction();
   const captures = [];
   const fakeResult = {
     signed_transaction: Buffer.from([0x10, 0x20]),
@@ -481,52 +373,31 @@ test("SCCP route manifest transaction wrappers submit one typed instruction", ()
       },
     },
     () => {
-      const upsert = buildUpsertSccpRouteManifestTransaction({
+      const built = buildApplySccpRouteGovernanceTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
-        manifest,
-        metadata: { op: "upsert-sccp-route" },
+        action,
+        metadata: { op: "apply-sccp-route-governance" },
         creationTimeMs: 1_700_000_000_000,
         ttlMs: 5_000,
         nonce: 7,
         privateKey: PRIVATE_KEY,
       });
-      assert.deepEqual(upsert.hash, Buffer.from(fakeResult.hash));
-
-      const remove = buildRemoveSccpRouteManifestTransaction({
-        chainId: "test-chain",
-        authority: AUTHORITY_ID_INPUT,
-        route_id: "taira_bsc_xor",
-        asset_key: "xor",
-        counterparty_domain: 2,
-        chain_id_hex: "0x61",
-        privateKey: PRIVATE_KEY,
-      });
-      assert.deepEqual(remove.signedTransaction, Buffer.from([0x10, 0x20]));
+      assert.deepEqual(built.hash, Buffer.from(fakeResult.hash));
     },
   );
 
-  assert.equal(captures.length, 2);
+  assert.equal(captures.length, 1);
   assert.deepEqual(captures[0].instructions, [
-    { UpsertSccpRouteManifest: { manifest } },
+    { ApplySccpRouteGovernance: { action } },
   ]);
   assert.deepEqual(JSON.parse(captures[0].metadataPayload), {
-    op: "upsert-sccp-route",
+    op: "apply-sccp-route-governance",
   });
   assert.equal(captures[0].creationTimeMs, 1_700_000_000_000);
   assert.equal(captures[0].ttlMs, 5_000);
   assert.equal(captures[0].nonce, 7);
   assert.equal(captures[0].secret.equals(PRIVATE_KEY), true);
-  assert.deepEqual(captures[1].instructions, [
-    {
-      RemoveSccpRouteManifest: {
-        route_id: "taira_bsc_xor",
-        asset_key: "xor",
-        counterparty_domain: 2,
-        chain_id_hex: "0x61",
-      },
-    },
-  ]);
 });
 
 test("transaction helper wrappers forward privateKeyAlgorithm", () => {

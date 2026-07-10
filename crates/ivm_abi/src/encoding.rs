@@ -10,6 +10,8 @@ pub const fn encode_halt() -> u32 {
 
 /// Helpers for the wide 8-bit opcode layout (three 8-bit operand fields).
 pub mod wide {
+    use crate::instruction;
+
     #[inline]
     pub const fn encode_rr(op: u8, rd: u8, rs1: u8, rs2: u8) -> u32 {
         ((op as u32) << 24) | ((rd as u32) << 16) | ((rs1 as u32) << 8) | (rs2 as u32)
@@ -23,6 +25,36 @@ pub mod wide {
             ((word >> 8) & 0xFF) as u8,
             (word & 0xFF) as u8,
         )
+    }
+
+    /// Encode `POSEIDON2 rd, rs1, rs2` using two scalar-register inputs.
+    #[inline]
+    pub const fn encode_poseidon2(rd: u8, rs1: u8, rs2: u8) -> u32 {
+        encode_rr(instruction::wide::crypto::POSEIDON2, rd, rs1, rs2)
+    }
+
+    /// Encode `POSEIDON6 rd, rs_base`, consuming `rs_base..=rs_base+5`.
+    ///
+    /// The final operand slot is reserved as zero so malformed encodings are
+    /// rejected instead of acquiring an accidental second interpretation.
+    #[inline]
+    pub const fn encode_poseidon6(rd: u8, rs_base: u8) -> u32 {
+        assert!(rs_base <= instruction::wide::crypto::POSEIDON6_MAX_INPUT_BASE);
+        encode_rr(instruction::wide::crypto::POSEIDON6, rd, rs_base, 0)
+    }
+
+    /// Decode and validate the canonical `POSEIDON6` register-window form.
+    #[inline]
+    pub fn decode_poseidon6(word: u32) -> Option<(u8, u8)> {
+        let (op, rd, rs_base, reserved) = decode_rr(word);
+        if op == instruction::wide::crypto::POSEIDON6
+            && reserved == 0
+            && rs_base <= instruction::wide::crypto::POSEIDON6_MAX_INPUT_BASE
+        {
+            Some((rd, rs_base))
+        } else {
+            None
+        }
     }
 
     #[inline]
@@ -90,6 +122,22 @@ pub mod wide {
         )
     }
 
+    /// Encode a typed literal-table load with an unsigned 16-bit index.
+    #[inline]
+    pub const fn encode_literal(op: u8, rd: u8, index: u16) -> u32 {
+        ((op as u32) << 24) | ((rd as u32) << 16) | index as u32
+    }
+
+    /// Decode a typed literal-table load.
+    #[inline]
+    pub const fn decode_literal(word: u32) -> (u8, u8, u16) {
+        (
+            (word >> 24) as u8,
+            ((word >> 16) & 0xFF) as u8,
+            (word & 0xFFFF) as u16,
+        )
+    }
+
     #[inline]
     pub const fn encode_branch(op: u8, rs1: u8, rs2: u8, offset_words: i8) -> u32 {
         ((op as u32) << 24)
@@ -98,11 +146,15 @@ pub mod wide {
             | (offset_words as u8 as u32)
     }
 
+    /// Encode `JAL` with an explicit link register and signed 16-bit word offset.
+    /// Use [`encode_offset24`] for `JMP` and `JALS`.
     #[inline]
     pub const fn encode_jump(op: u8, rd: u8, offset_words: i16) -> u32 {
+        assert!(op == instruction::wide::control::JAL);
         ((op as u32) << 24) | ((rd as u32) << 16) | (offset_words as u16 as u32)
     }
 
+    /// Decode the explicit link register and signed 16-bit word offset of `JAL`.
     #[inline]
     pub fn decode_jump(word: u32) -> (u8, u8, i16) {
         (
@@ -110,6 +162,19 @@ pub mod wide {
             ((word >> 16) & 0xFF) as u8,
             (word & 0xFFFF) as u16 as i16,
         )
+    }
+
+    /// Encode a signed 24-bit word-relative transfer used by `JMP` and `JALS`.
+    #[inline]
+    pub const fn encode_offset24(op: u8, offset_words: i32) -> u32 {
+        assert!(offset_words >= -0x80_0000 && offset_words <= 0x7f_ffff);
+        ((op as u32) << 24) | ((offset_words as u32) & 0x00ff_ffff)
+    }
+
+    /// Decode a signed 24-bit word-relative transfer offset.
+    #[inline]
+    pub const fn decode_offset24(word: u32) -> (u8, i32) {
+        ((word >> 24) as u8, ((word << 8) as i32) >> 8)
     }
 
     #[inline]
@@ -180,6 +245,66 @@ mod tests {
         assert_eq!(base, 3);
         assert_eq!(rs_lo, 5);
         assert_eq!(rs_hi, 6);
+    }
+
+    #[test]
+    fn poseidon_register_encodings_are_canonical() {
+        let word = wide::encode_poseidon2(9, 10, 11);
+        assert_eq!(
+            wide::decode_rr(word),
+            (instruction::wide::crypto::POSEIDON2, 9, 10, 11)
+        );
+
+        let word = wide::encode_poseidon6(9, 250);
+        assert_eq!(
+            wide::decode_rr(word),
+            (instruction::wide::crypto::POSEIDON6, 9, 250, 0)
+        );
+        assert_eq!(wide::decode_poseidon6(word), Some((9, 250)));
+        assert_eq!(
+            wide::decode_poseidon6(wide::encode_rr(
+                instruction::wide::crypto::POSEIDON6,
+                9,
+                10,
+                1,
+            )),
+            None
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn poseidon6_encoder_rejects_register_window_overflow() {
+        let _ = wide::encode_poseidon6(9, 251);
+    }
+
+    #[test]
+    fn literal_index_roundtrips_full_u16_range() {
+        for index in [0, 1, 255, 256, u16::MAX] {
+            let word = wide::encode_literal(instruction::wide::memory::LDLIT, 23, index);
+            let (op, rd, decoded) = wide::decode_literal(word);
+            assert_eq!(op, instruction::wide::memory::LDLIT);
+            assert_eq!(rd, 23);
+            assert_eq!(decoded, index);
+            assert_eq!(instruction::wide::literal_index(word), usize::from(index));
+        }
+    }
+
+    #[test]
+    fn signed_offset24_roundtrips_boundaries() {
+        for offset in [-0x80_0000, -1, 0, 1, 0x7f_ffff] {
+            let word = wide::encode_offset24(instruction::wide::control::JMP, offset);
+            let (op, decoded) = wide::decode_offset24(word);
+            assert_eq!(op, instruction::wide::control::JMP);
+            assert_eq!(decoded, offset);
+            assert_eq!(instruction::wide::imm24(word), offset);
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn signed16_jump_encoder_rejects_long_transfer_opcode() {
+        let _ = wide::encode_jump(instruction::wide::control::JMP, 0, -1);
     }
 
     #[test]

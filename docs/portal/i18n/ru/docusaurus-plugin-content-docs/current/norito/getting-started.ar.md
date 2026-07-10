@@ -16,14 +16,14 @@ translation_last_reviewed: 2026-02-07
 
 1. Добавлена версия Rust (1.76 в версии) и добавлена версия.
 2. В случае необходимости:
-   - `koto_compile` - مترجم Kotodama Загрузка байт-кода IVM/Norito
+   - `koto build` - مترجم Kotodama Загрузка байт-кода IVM/Norito
    - `ivm_run` и `ivm_tool` - ادوات التشغيل المحلي والفحص
    - `iroha_cli` - يستخدم لنشر العقود عبر Torii
 
    Создан Makefile в программе, созданной в формате `PATH`. Он представляет собой артефакты, сделанные в Сан-Франциско в Нью-Йорке. Для создания набора инструментов необходимо создать файл Makefile:
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. Установите флажок Iroha и установите флажок для проверки. Создайте ссылку на Torii для получения URL-адреса по ссылке. `iroha_cli` (`~/.config/iroha/cli.toml`).
@@ -34,16 +34,15 @@ translation_last_reviewed: 2026-02-07
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
 Уважаемый:
 
-- `--abi 1` используется для работы с ABI 1 (с помощью функции "открыть окно").
-- `--max-cycles 0` يطلب تنفيذا غير محدود؛ Вы можете использовать прокладку, чтобы сохранить форму.
+- `ABI V1` используется для работы с ABI 1 (с помощью функции "открыть окно").
+- `--max-cycles 1000000` يطلب تنفيذا غير محدود؛ Вы можете использовать прокладку, чтобы сохранить форму.
 
 ## 2. فحص اثر Norito (اختياري)
 
@@ -70,7 +69,7 @@ ivm_run target/examples/hello.to --args '{}'
 Он сказал, что работает с CLI. Для создания полезной нагрузки используется Base64:
 
 ```sh
-iroha_cli app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -79,8 +78,8 @@ iroha_cli app contracts deploy \
 В пакете используется манифест Norito + байт-код Torii, который необходимо выполнить. Вы можете использовать хеш-код, который будет использоваться для проверки хеш-файла, когда он проявляется. Примеры:
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha contract manifest get --code-hash 0x<hash>
+iroha contract instances --namespace apps --table
 ```
 
 ## 5. Дополнительная информация Torii
@@ -90,7 +89,7 @@ iroha_cli app contracts instances --namespace apps --table
 ## نصائح واستكشاف الاعطال
 
 - Установите `make examples-run` для получения дополнительной информации. Для этого необходимо установить `KOTO`/`IVM`. `PATH`.
-- Для `koto_compile` используется ABI, который используется в программе ABI v1 (شغّل) `koto_compile --abi` بدون معاملات لعرض الدعم).
+- Для `koto build` используется ABI, который используется в программе ABI v1 (شغّل) `koto build --help` بدون معاملات لعرض الدعم).
 - В CLI используется шестнадцатеричное значение в Base64. Установите флажок `iroha_cli tools crypto keypair`.
 - Загрузка полезных данных Norito, а также `ivm_tool disassemble` для проверки работоспособности. Kotodama.Он был отправлен в Центр по связям с общественностью (CI). Чтобы вызвать Kotodama, выполните системные вызовы Norito, выполните следующие действия:
 

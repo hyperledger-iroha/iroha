@@ -19,8 +19,10 @@ Torii when the `app_api` feature is enabled.
   canonical bundle receipt shape used by `POST /v1/contracts/deploy-bundle`
   with exactly one `contracts[]` entry.
 - Runtime calls no longer resend full bytecode or manifests. Torii now builds
-  `Executable::ContractCall(ContractInvocation)` and only keeps fee/gas fields
-  in transaction metadata.
+  `Executable::ContractCall(ContractInvocation)`, converts boundary JSON into
+  one bounded, schema-hashed canonical Norito argument record before signing,
+  and only keeps fee/gas fields in transaction metadata. Validators never
+  interpret JSON as contract argument transport.
 - Contract-call and contract-view target selectors require exactly one of
   `contract_address` or `contract_alias`.
 - `POST /v1/contracts/call` supports three submission modes:
@@ -76,7 +78,7 @@ Validation and execution rules:
 | `completed_stages` | `Vec<String>` | Completed pipeline stages; single deploys normally return `["plan", "deploy"]`. |
 | `failure_point` | `Option<String>` | Populated only when a persisted receipt records a failure. |
 | `contracts` | `Vec<DeployContractBundleContractReceiptDto>` | Always contains exactly one contract receipt for this route. |
-| `init_calls` | `Vec<DeployContractBundleCallReceiptDto>` | Empty on this shortcut. |
+| `hajimari_calls` | `Vec<DeployContractBundleCallReceiptDto>` | Empty on this shortcut. |
 | `assertions` | `Vec<DeployContractBundleAssertionReceiptDto>` | Empty on this shortcut. |
 
 For `POST /v1/contracts/deploy`, the sole `contracts[0]` entry carries the
@@ -85,12 +87,12 @@ fresh immutable `contract_address`, the stable `contract_alias`, any
 the consumed `deploy_nonce`, `tx_hash_hex`, `code_hash_hex`, `abi_hash_hex`,
 and the current receipt `status`. Single deploy receipts normally return
 `status = "submitted"` because the route returns after queue admission; bundle
-flows that continue into init/assertion stages may advance that status to
+flows that continue into hajimari/assertion stages may advance that status to
 `"deployed"` before returning.
 
 ## `POST /v1/contracts/call`
 
-Prepares or submits a public contract call against an active deployed contract.
+Prepares or submits a `kotoage` call against an active deployed contract.
 
 ### Request (`ContractCallDto`)
 
@@ -102,7 +104,7 @@ Prepares or submits a public contract call against an active deployed contract.
 | `signature_b64` | `Option<String>` | Detached Ed25519 signature over `signing_message_b64`. |
 | `contract_address` | `Option<ContractAddress>` | Canonical target address. |
 | `contract_alias` | `Option<ContractAlias>` | Stable alias target. |
-| `entrypoint` | `Option<String>` | Defaults to `main`. Must resolve to a public entrypoint. |
+| `entrypoint` | `String` | Required. Must resolve to a `kotoage` declaration. |
 | `payload` | `Option<IrohaJson>` | Optional Norito JSON payload normalized against the manifest schema. |
 | `creation_time_ms` | `Option<u64>` | Optional fixed timestamp for deterministic detached flows. |
 | `gas_asset_id` | `Option<String>` | Optional metadata override. |
@@ -123,7 +125,7 @@ Submission-mode fields:
 
 ## `POST /v1/contracts/call/simulate`
 
-Executes a public contract entrypoint locally without queueing a transaction.
+Executes a `kotoage` entrypoint locally without queueing a transaction.
 
 - Request type: `ContractCallSimulateDto`.
 - Uses the same address-or-alias selector, entrypoint validation, payload

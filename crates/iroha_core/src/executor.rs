@@ -4,9 +4,13 @@
 //! Structures and impls related to processing Iroha Virtual Machine (IVM)
 //! runtime executors.
 
-use core::{convert::TryFrom, str::FromStr};
+use core::{
+    convert::TryFrom,
+    ops::{Deref, DerefMut},
+    str::FromStr,
+};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{Arc, Mutex},
 };
 
@@ -53,7 +57,7 @@ use iroha_primitives::{
     numeric::{Numeric, NumericSpec},
 };
 use ivm::runtime::IvmConfig;
-use ivm::{IVM, Memory, VMError};
+use ivm::{IVM, Memory, RuntimeTemplate, VMError};
 use mv::storage::StorageReadOnly;
 use norito::{
     codec::{Decode, Encode},
@@ -1431,6 +1435,7 @@ pub struct ContractCallExecutionContext {
     entrypoint_pc: Option<u64>,
     entrypoint_permission: Option<String>,
     args: Json,
+    argument_record: Option<ivm::PreparedArgumentRecord>,
 }
 
 impl ContractCallExecutionContext {
@@ -1455,15 +1460,114 @@ impl ContractCallExecutionContext {
     pub(crate) fn args(&self) -> &Json {
         &self.args
     }
+
+    pub(crate) fn argument_record(&self) -> Option<&[u8]> {
+        self.argument_record
+            .as_ref()
+            .map(ivm::PreparedArgumentRecord::canonical_bytes)
+    }
+
+    pub(crate) fn prepared_argument_record(&self) -> Option<&ivm::PreparedArgumentRecord> {
+        self.argument_record.as_ref()
+    }
 }
 
-fn resolve_public_contract_entrypoint(
+pub(crate) fn encode_contract_argument_record(
+    schema: Option<&ivm::EntrypointArgumentSchemaV1>,
+    payload: Option<&Json>,
+) -> Result<Option<Vec<u8>>, ValidationFail> {
+    match (schema, payload) {
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err(ValidationFail::NotPermitted(
+            "zero-parameter entrypoint must not receive a payload".to_owned(),
+        )),
+        (Some(_), None) => Err(ValidationFail::NotPermitted(
+            "parameterized entrypoint requires a payload".to_owned(),
+        )),
+        (Some(schema), Some(payload)) => ivm::encode_argument_record_from_json(schema, payload)
+            .map(Some)
+            .map_err(|error| {
+                ValidationFail::NotPermitted(format!(
+                    "contract payload does not match the entrypoint argument schema: {error}"
+                ))
+            }),
+    }
+}
+
+pub(crate) fn validate_contract_argument_record(
+    schema: Option<&ivm::EntrypointArgumentSchemaV1>,
+    arguments: Option<&[u8]>,
+) -> Result<Option<Vec<u8>>, ValidationFail> {
+    match (schema, arguments) {
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err(ValidationFail::NotPermitted(
+            "zero-parameter entrypoint must not carry an argument record".to_owned(),
+        )),
+        (Some(_), None) => Err(ValidationFail::NotPermitted(
+            "parameterized entrypoint requires an argument record".to_owned(),
+        )),
+        (Some(schema), Some(arguments)) => {
+            ivm::validate_argument_record(schema, arguments).map_err(|error| {
+                ValidationFail::NotPermitted(format!("invalid contract argument record: {error}"))
+            })?;
+            Ok(Some(arguments.to_vec()))
+        }
+    }
+}
+
+fn prepare_contract_argument_record_from_json(
+    schema: Option<&ivm::EntrypointArgumentSchemaV1>,
+    payload: Option<&Json>,
+) -> Result<Option<ivm::PreparedArgumentRecord>, ValidationFail> {
+    let canonical = encode_contract_argument_record(schema, payload)?;
+    match (schema, canonical) {
+        (None, None) => Ok(None),
+        (Some(schema), Some(canonical)) => {
+            ivm::prepare_argument_record(schema, Arc::from(canonical))
+                .map(Some)
+                .map_err(|error| {
+                    ValidationFail::NotPermitted(format!(
+                        "failed to prepare canonical contract arguments: {error}"
+                    ))
+                })
+        }
+        _ => Err(ValidationFail::InternalError(
+            "contract argument schema and canonical record diverged".to_owned(),
+        )),
+    }
+}
+
+fn prepare_validated_contract_argument_record(
+    schema: Option<&ivm::EntrypointArgumentSchemaV1>,
+    arguments: Option<&[u8]>,
+) -> Result<Option<ivm::PreparedArgumentRecord>, ValidationFail> {
+    match (schema, arguments) {
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err(ValidationFail::NotPermitted(
+            "zero-parameter entrypoint must not carry an argument record".to_owned(),
+        )),
+        (Some(_), None) => Err(ValidationFail::NotPermitted(
+            "parameterized entrypoint requires an argument record".to_owned(),
+        )),
+        (Some(schema), Some(arguments)) => {
+            ivm::prepare_argument_record(schema, Arc::<[u8]>::from(arguments))
+                .map(Some)
+                .map_err(|error| {
+                    ValidationFail::NotPermitted(format!(
+                        "invalid contract argument record: {error}"
+                    ))
+                })
+        }
+    }
+}
+
+type ResolvedContractEntrypoint = (u64, Option<String>, Option<ivm::EntrypointArgumentSchemaV1>);
+
+fn resolve_callable_contract_entrypoint(
     bytecode: &[u8],
     selector: &str,
     interface_required_message: &'static str,
-) -> Result<(u64, Option<String>), ValidationFail> {
-    use iroha_data_model::smart_contract::manifest::EntryPointKind;
-
+) -> Result<ResolvedContractEntrypoint, ValidationFail> {
     let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
         ValidationFail::NotPermitted(format!(
             "invalid contract artifact for contract call dispatch: {err}"
@@ -1481,54 +1585,169 @@ fn resolve_public_contract_entrypoint(
         .ok_or_else(|| {
             ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
         })?;
-    if !matches!(descriptor.kind, EntryPointKind::Public) {
-        return Err(ValidationFail::NotPermitted(format!(
-            "contract entrypoint `{selector}` is not public"
-        )));
-    }
+    let permission = callable_contract_entrypoint_permission(descriptor, selector)?;
     Ok((
         prefix_len + descriptor.entry_pc,
-        descriptor.permission.clone(),
+        permission,
+        descriptor.argument_schema.clone(),
     ))
 }
 
-fn resolve_default_public_contract_entrypoint(
-    bytecode: &[u8],
-) -> Result<Option<(u64, Option<String>)>, ValidationFail> {
-    use iroha_data_model::smart_contract::manifest::EntryPointKind;
-
-    let parsed = match ivm::ProgramMetadata::parse(bytecode) {
-        Ok(parsed) => parsed,
-        Err(_) => return Ok(None),
-    };
-    let Some(contract_interface) = parsed.contract_interface.as_ref() else {
-        return Ok(None);
-    };
-    let selector = "main";
-    let descriptor = contract_interface
-        .entrypoints
-        .iter()
-        .find(|candidate| candidate.name == selector)
-        .ok_or_else(|| {
-            ValidationFail::NotPermitted(
-                "contract call without contract_entrypoint metadata requires a public `main` entrypoint"
-                    .to_owned(),
-            )
-        })?;
-    if !matches!(descriptor.kind, EntryPointKind::Public) {
-        return Err(ValidationFail::NotPermitted(
-            "contract entrypoint `main` is not public".to_owned(),
-        ));
-    }
-    Ok(Some((
-        parsed.prefix_len() as u64 + descriptor.entry_pc,
-        descriptor.permission.clone(),
-    )))
+fn resolve_prepared_contract_entrypoint(
+    contract: &ivm::PreparedContract,
+    selector: &str,
+) -> Result<ResolvedContractEntrypoint, ValidationFail> {
+    let descriptor = contract.entrypoint_descriptor(selector).ok_or_else(|| {
+        ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
+    })?;
+    let entrypoint_pc = contract.entrypoint_pc(selector).ok_or_else(|| {
+        ValidationFail::NotPermitted(format!(
+            "contract entrypoint `{selector}` has no validated program counter"
+        ))
+    })?;
+    let permission = callable_contract_entrypoint_permission(descriptor, selector)?;
+    Ok((
+        entrypoint_pc,
+        permission,
+        descriptor.argument_schema.clone(),
+    ))
 }
 
+fn callable_contract_entrypoint_permission(
+    descriptor: &ivm::EmbeddedEntrypointDescriptor,
+    selector: &str,
+) -> Result<Option<String>, ValidationFail> {
+    use iroha_data_model::smart_contract::manifest::EntryPointKind;
+
+    let permission = match descriptor.kind {
+        EntryPointKind::Public => descriptor.permission.clone(),
+        EntryPointKind::Init => {
+            Some(iroha_data_model::smart_contract::CONTRACT_INIT_PERMISSION_NAME.to_owned())
+        }
+        EntryPointKind::Upgrade => {
+            Some(iroha_data_model::smart_contract::CONTRACT_UPGRADE_PERMISSION_NAME.to_owned())
+        }
+        EntryPointKind::View => {
+            return Err(ValidationFail::NotPermitted(format!(
+                "contract entrypoint `{selector}` is read-only and cannot be invoked as a transaction"
+            )));
+        }
+    };
+    Ok(permission)
+}
+
+fn is_self_describing_contract(bytecode: &[u8]) -> bool {
+    ivm::ProgramMetadata::parse(bytecode)
+        .ok()
+        .and_then(|parsed| parsed.contract_interface)
+        .is_some()
+}
+
+enum ContractDispatchSource<'a> {
+    Bytecode(&'a [u8]),
+    Prepared(&'a ivm::PreparedContract),
+}
+
+impl ContractDispatchSource<'_> {
+    fn resolve(
+        &self,
+        selector: &str,
+        interface_required_message: &'static str,
+    ) -> Result<ResolvedContractEntrypoint, ValidationFail> {
+        match self {
+            Self::Bytecode(bytecode) => {
+                resolve_callable_contract_entrypoint(bytecode, selector, interface_required_message)
+            }
+            Self::Prepared(contract) => resolve_prepared_contract_entrypoint(contract, selector),
+        }
+    }
+
+    fn is_self_describing(&self) -> bool {
+        match self {
+            Self::Bytecode(bytecode) => is_self_describing_contract(bytecode),
+            Self::Prepared(_) => true,
+        }
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn parse_contract_call_execution_context(
     metadata: &Metadata,
     bytecode: &[u8],
+) -> Result<Option<ContractCallExecutionContext>, ValidationFail> {
+    parse_contract_call_execution_context_from_source(
+        metadata,
+        ContractDispatchSource::Bytecode(bytecode),
+        ContractArgumentSource::Metadata,
+    )
+}
+
+pub(crate) fn parse_prepared_contract_call_execution_context(
+    metadata: &Metadata,
+    contract: &ivm::PreparedContract,
+) -> Result<Option<ContractCallExecutionContext>, ValidationFail> {
+    parse_contract_call_execution_context_from_source(
+        metadata,
+        ContractDispatchSource::Prepared(contract),
+        ContractArgumentSource::Metadata,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum ContractArgumentSource<'a> {
+    Metadata,
+    TriggerEvent(&'a Json),
+    SchemaOnly,
+}
+
+/// Resolve a self-describing IVM trigger callback and bind the current event
+/// arguments to its compiler-emitted schema.
+///
+/// Trigger actions select the callback with `contract_entrypoint` metadata, but
+/// their payload is supplied by the event that fired the trigger. The payload
+/// is converted here, once, into the same schema-bound canonical Norito record
+/// used by ordinary contract calls. A fixed `contract_payload` in trigger
+/// metadata is rejected so it cannot shadow the signed event arguments.
+pub(crate) fn parse_prepared_trigger_call_execution_context(
+    metadata: &Metadata,
+    contract: &ivm::PreparedContract,
+    event_args: &Json,
+) -> Result<ContractCallExecutionContext, ValidationFail> {
+    parse_contract_call_execution_context_from_source(
+        metadata,
+        ContractDispatchSource::Prepared(contract),
+        ContractArgumentSource::TriggerEvent(event_args),
+    )?
+    .ok_or_else(|| {
+        ValidationFail::NotPermitted(
+            "self-describing IVM trigger action did not resolve a callback".to_owned(),
+        )
+    })
+}
+
+/// Validate trigger callback selection at registration without fabricating an
+/// event payload for a parameterized callback.
+pub(crate) fn validate_trigger_call_execution_context(
+    metadata: &Metadata,
+    bytecode: &[u8],
+) -> Result<(), ValidationFail> {
+    parse_contract_call_execution_context_from_source(
+        metadata,
+        ContractDispatchSource::Bytecode(bytecode),
+        ContractArgumentSource::SchemaOnly,
+    )?
+    .ok_or_else(|| {
+        ValidationFail::NotPermitted(
+            "self-describing IVM trigger action did not resolve a callback".to_owned(),
+        )
+    })?;
+    Ok(())
+}
+
+fn parse_contract_call_execution_context_from_source(
+    metadata: &Metadata,
+    source: ContractDispatchSource<'_>,
+    argument_source: ContractArgumentSource<'_>,
 ) -> Result<Option<ContractCallExecutionContext>, ValidationFail> {
     let contract_address = metadata
         .get("contract_address")
@@ -1591,11 +1810,16 @@ pub(crate) fn parse_contract_call_execution_context(
         ));
     }
 
-    let payload = metadata.get("contract_payload").cloned();
-    let (entrypoint, entrypoint_pc, entrypoint_permission) =
+    let metadata_payload = metadata.get("contract_payload").cloned();
+    if !matches!(argument_source, ContractArgumentSource::Metadata) && metadata_payload.is_some() {
+        return Err(ValidationFail::NotPermitted(
+            "IVM trigger actions must take arguments from the triggering event, not contract_payload metadata"
+                .to_owned(),
+        ));
+    }
+    let (entrypoint, entrypoint_pc, entrypoint_permission, argument_schema) =
         if let Some(selector) = entrypoint.as_deref() {
-            let (entrypoint_pc, entrypoint_permission) = resolve_public_contract_entrypoint(
-                bytecode,
+            let (entrypoint_pc, entrypoint_permission, argument_schema) = source.resolve(
                 selector,
                 "contract call entrypoint metadata requires a self-describing contract artifact",
             )?;
@@ -1603,20 +1827,37 @@ pub(crate) fn parse_contract_call_execution_context(
                 Some(selector.to_owned()),
                 Some(entrypoint_pc),
                 entrypoint_permission,
+                argument_schema,
             )
-        } else if let Some((entrypoint_pc, entrypoint_permission)) =
-            resolve_default_public_contract_entrypoint(bytecode)?
-        {
-            (
-                Some("main".to_owned()),
-                Some(entrypoint_pc),
-                entrypoint_permission,
-            )
-        } else if payload.is_none() {
+        } else if source.is_self_describing() {
+            return Err(ValidationFail::NotPermitted(
+                "self-describing contract calls require explicit contract_entrypoint metadata"
+                    .to_owned(),
+            ));
+        } else if metadata_payload.is_none() {
             return Ok(None);
         } else {
-            (None, None, None)
+            (None, None, None, None)
         };
+
+    let payload = match argument_source {
+        ContractArgumentSource::Metadata => metadata_payload,
+        ContractArgumentSource::TriggerEvent(event_args) => {
+            argument_schema.as_ref().map(|_| event_args.clone())
+        }
+        ContractArgumentSource::SchemaOnly => None,
+    };
+    let argument_record = if matches!(argument_source, ContractArgumentSource::SchemaOnly) {
+        None
+    } else {
+        prepare_contract_argument_record_from_json(argument_schema.as_ref(), payload.as_ref())?
+    };
+    let args = match argument_source {
+        ContractArgumentSource::TriggerEvent(event_args) => event_args.clone(),
+        ContractArgumentSource::Metadata | ContractArgumentSource::SchemaOnly => {
+            payload.unwrap_or_default()
+        }
+    };
 
     Ok(Some(ContractCallExecutionContext {
         contract_address,
@@ -1624,10 +1865,12 @@ pub(crate) fn parse_contract_call_execution_context(
         entrypoint,
         entrypoint_pc,
         entrypoint_permission,
-        args: payload.unwrap_or_default(),
+        args,
+        argument_record,
     }))
 }
 
+#[cfg(test)]
 pub(crate) fn parse_contract_invocation_execution_context(
     invocation: &ContractInvocation,
     bytecode: &[u8],
@@ -1640,10 +1883,16 @@ pub(crate) fn parse_contract_invocation_execution_context(
         ));
     }
 
-    let (entrypoint_pc, entrypoint_permission) = resolve_public_contract_entrypoint(
-        bytecode,
-        selector,
-        "contract call requires a self-describing contract artifact",
+    let (entrypoint_pc, entrypoint_permission, argument_schema) =
+        resolve_callable_contract_entrypoint(
+            bytecode,
+            selector,
+            "contract call requires a self-describing contract artifact",
+        )?;
+    let args = Json::default();
+    let argument_record = prepare_validated_contract_argument_record(
+        argument_schema.as_ref(),
+        invocation.arguments.as_deref(),
     )?;
 
     Ok(ContractCallExecutionContext {
@@ -1652,7 +1901,38 @@ pub(crate) fn parse_contract_invocation_execution_context(
         entrypoint: Some(selector.to_owned()),
         entrypoint_pc: Some(entrypoint_pc),
         entrypoint_permission,
-        args: invocation.payload.clone().unwrap_or_default(),
+        args,
+        argument_record,
+    })
+}
+
+pub(crate) fn parse_prepared_contract_invocation_execution_context(
+    invocation: &ContractInvocation,
+    contract: &ivm::PreparedContract,
+    contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+) -> Result<ContractCallExecutionContext, ValidationFail> {
+    let selector = invocation.entrypoint.trim();
+    if selector.is_empty() {
+        return Err(ValidationFail::NotPermitted(
+            "contract entrypoint must not be empty".to_owned(),
+        ));
+    }
+
+    let (entrypoint_pc, entrypoint_permission, argument_schema) =
+        resolve_prepared_contract_entrypoint(contract, selector)?;
+    let args = Json::default();
+    let argument_record = prepare_validated_contract_argument_record(
+        argument_schema.as_ref(),
+        invocation.arguments.as_deref(),
+    )?;
+    Ok(ContractCallExecutionContext {
+        contract_address: Some(invocation.contract_address.clone()),
+        contract_alias,
+        entrypoint: Some(selector.to_owned()),
+        entrypoint_pc: Some(entrypoint_pc),
+        entrypoint_permission,
+        args,
+        argument_record,
     })
 }
 
@@ -2686,7 +2966,6 @@ impl Executor {
         tx_hash: iroha_crypto::HashOf<SignedTransaction>,
         gas_limit_md: Option<u64>,
         require_gas_limit: bool,
-        sccp_recording_proof_verified: bool,
         gas_asset_opt: Option<String>,
         fee_sponsor: Option<AccountId>,
         skip_nexus_fee: bool,
@@ -2718,16 +2997,9 @@ impl Executor {
             .sum::<u64>();
 
         // 3) Execute ISIs in order.
-        let prior_sccp_recording_proof_verified = state_transaction.sccp_recording_proof_verified;
-        state_transaction.sccp_recording_proof_verified = sccp_recording_proof_verified;
-        let execution_result = (|| -> Result<(), ValidationFail> {
-            for isi in instructions {
-                self.execute_instruction(state_transaction, authority, isi)?;
-            }
-            Ok(())
-        })();
-        state_transaction.sccp_recording_proof_verified = prior_sccp_recording_proof_verified;
-        execution_result?;
+        for isi in instructions {
+            self.execute_instruction(state_transaction, authority, isi)?;
+        }
 
         // Track confidential gas after successful execution.
         if confidential_delta > 0 {
@@ -3261,7 +3533,6 @@ impl Executor {
                     tx_hash,
                     gas_limit_md,
                     false,
-                    false,
                     gas_asset_opt,
                     fee_sponsor,
                     skip_nexus_fee,
@@ -3282,7 +3553,6 @@ impl Executor {
                     settlement_source_id,
                     tx_hash,
                     gas_limit_md,
-                    true,
                     true,
                     gas_asset_opt,
                     fee_sponsor,
@@ -3306,49 +3576,65 @@ impl Executor {
                         .saturating_sub(state_transaction.gas_used_in_block_so_far)
                 };
                 let effective_limit = gas_limit_md.min(block_remaining);
-                let record =
-                    code::fetch_bound_contract_record(state_transaction, &call.contract_address)
+                let identity =
+                    code::fetch_bound_contract_identity(state_transaction, &call.contract_address)
                         .ok_or_else(|| {
                             ValidationFail::NotPermitted(format!(
                                 "contract instance `{}` not found in WSV",
                                 call.contract_address
                             ))
                         })?;
-                let mut runtime = ivm_cache
-                    .take_or_create_cached_runtime(record.code_bytes.as_ref(), effective_limit)
-                    .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
-                let contract_call_context = parse_contract_invocation_execution_context(
+                let summary = if let Some(summary) = ivm_cache
+                    .cached_program_summary(identity.code_hash)
+                    .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+                {
+                    summary
+                } else {
+                    code::with_code_bytes(state_transaction, &identity.code_hash, |bytecode| {
+                        ivm_cache.summarize_program_with_hash(identity.code_hash, bytecode)
+                    })
+                    .ok_or_else(|| {
+                        ValidationFail::NotPermitted(format!(
+                            "contract bytecode `{}` not found in WSV",
+                            identity.code_hash
+                        ))
+                    })?
+                    .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+                };
+                let contract_call_context = parse_prepared_contract_invocation_execution_context(
                     &call,
-                    record.code_bytes.as_ref(),
-                    record.contract_alias.clone(),
+                    summary.prepared_contract(),
+                    identity.contract_alias.clone(),
                 )?;
                 enforce_contract_entrypoint_permission(
                     &state_transaction.world,
                     authority,
                     &contract_call_context,
                 )?;
+                let mut runtime = summary
+                    .checkout_runtime(effective_limit)
+                    .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
                 if let Some(entrypoint_pc) = contract_call_context.entrypoint_pc {
-                    runtime.vm.set_register(1, runtime.vm.memory.code_len());
-                    runtime
-                        .vm
-                        .set_program_counter(entrypoint_pc)
-                        .map_err(|err| {
-                            let selector = contract_call_context
-                                .entrypoint
-                                .as_deref()
-                                .unwrap_or("main");
-                            ValidationFail::NotPermitted(format!(
-                                "contract entrypoint `{selector}` resolved to invalid pc: {err}"
-                            ))
-                        })?;
+                    let code_len = runtime.memory.code_len();
+                    runtime.set_register(1, code_len);
+                    runtime.set_program_counter(entrypoint_pc).map_err(|err| {
+                        let selector = contract_call_context
+                            .entrypoint
+                            .as_deref()
+                            .unwrap_or("main");
+                        ValidationFail::NotPermitted(format!(
+                            "contract entrypoint `{selector}` resolved to invalid pc: {err}"
+                        ))
+                    })?;
                 }
                 let contract_runtime_context = contract_call_context.runtime_context();
                 let accounts = state_transaction.accounts_snapshot();
-                let mut host = CoreCoreHost::with_accounts_and_args(
+                let mut host = CoreCoreHost::with_accounts_and_argument_record(
                     authority.clone(),
                     Arc::clone(&accounts),
-                    contract_call_context.args,
+                    contract_call_context.argument_record,
                 );
+                host.set_prepared_contract_cache(summary.prepared_contract_cache());
                 // User contract calls execute before the enclosing block has a finalized
                 // creation timestamp, so expose the transaction creation time as the
                 // logical "current time" seen by `current_time_ms()`.
@@ -3366,16 +3652,15 @@ impl Executor {
                     .map_err(|err| {
                         ValidationFail::InternalError(format!("invalid ZK snapshot state: {err}"))
                     })?;
-                runtime.vm.set_gas_limit(effective_limit);
-                if let Err(err) = runtime.vm.run_with_host(&mut host) {
+                runtime.set_gas_limit(effective_limit);
+                if let Err(err) = runtime.run_with_host(&mut host) {
                     return Err(
                         crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
-                            &runtime.vm,
-                            &err,
+                            &runtime, &err,
                         ),
                     );
                 }
-                let gas_used = effective_limit.saturating_sub(runtime.vm.remaining_gas());
+                let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
                 let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
                 let _executed = artifacts.apply_to_transaction(state_transaction, authority)?;
                 state_transaction.last_tx_gas_used = gas_used;
@@ -3421,11 +3706,16 @@ impl Executor {
                         .saturating_sub(state_transaction.gas_used_in_block_so_far)
                 };
                 let effective_limit = gas_limit_md.min(block_remaining);
-                let mut runtime = ivm_cache
-                    .take_or_create_cached_runtime(bytes.as_ref(), effective_limit)
+                let summary = ivm_cache
+                    .summarize_program(bytes.as_ref())
                     .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
-                let contract_call_context =
-                    parse_contract_call_execution_context(&md, bytes.as_ref())?;
+                let mut runtime = summary
+                    .checkout_runtime(effective_limit)
+                    .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                let contract_call_context = parse_prepared_contract_call_execution_context(
+                    &md,
+                    summary.prepared_contract(),
+                )?;
                 if let Some(context) = contract_call_context.as_ref() {
                     enforce_contract_entrypoint_permission(
                         &state_transaction.world,
@@ -3433,16 +3723,14 @@ impl Executor {
                         context,
                     )?;
                     if let Some(entrypoint_pc) = context.entrypoint_pc {
-                        runtime.vm.set_register(1, runtime.vm.memory.code_len());
-                        runtime
-                            .vm
-                            .set_program_counter(entrypoint_pc)
-                            .map_err(|err| {
-                                let selector = context.entrypoint.as_deref().unwrap_or("main");
-                                ValidationFail::NotPermitted(format!(
-                                    "contract entrypoint `{selector}` resolved to invalid pc: {err}"
-                                ))
-                            })?;
+                        let code_len = runtime.memory.code_len();
+                        runtime.set_register(1, code_len);
+                        runtime.set_program_counter(entrypoint_pc).map_err(|err| {
+                            let selector = context.entrypoint.as_deref().unwrap_or("main");
+                            ValidationFail::NotPermitted(format!(
+                                "contract entrypoint `{selector}` resolved to invalid pc: {err}"
+                            ))
+                        })?;
                     }
                 }
                 let contract_runtime_context = contract_call_context
@@ -3451,14 +3739,15 @@ impl Executor {
                 // Attach host with a snapshot of known accounts for vendor helpers when present.
                 let accounts = state_transaction.accounts_snapshot();
                 let mut host = if let Some(context) = contract_call_context {
-                    CoreCoreHost::with_accounts_and_args(
+                    CoreCoreHost::with_accounts_and_argument_record(
                         authority.clone(),
                         Arc::clone(&accounts),
-                        context.args,
+                        context.argument_record,
                     )
                 } else {
                     CoreCoreHost::with_accounts(authority.clone(), Arc::clone(&accounts))
                 };
+                host.set_prepared_contract_cache(summary.prepared_contract_cache());
                 host.set_crypto_config(Arc::clone(&state_transaction.crypto));
                 host.set_zk_config(&state_transaction.zk);
                 host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
@@ -3474,16 +3763,15 @@ impl Executor {
                     .map_err(|err| {
                         ValidationFail::InternalError(format!("invalid ZK snapshot state: {err}"))
                     })?;
-                runtime.vm.set_gas_limit(effective_limit);
-                if let Err(err) = runtime.vm.run_with_host(&mut host) {
+                runtime.set_gas_limit(effective_limit);
+                if let Err(err) = runtime.run_with_host(&mut host) {
                     return Err(
                         crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
-                            &runtime.vm,
-                            &err,
+                            &runtime, &err,
                         ),
                     );
                 }
-                let gas_used = effective_limit.saturating_sub(runtime.vm.remaining_gas());
+                let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
 
                 // Drain and apply queued ISIs deterministically via executor.
                 let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
@@ -3521,7 +3809,6 @@ impl Executor {
                     gas_used,
                     false,
                 )?;
-                ivm_cache.put_cached_runtime(&runtime);
                 Ok(())
             }
         }
@@ -4466,7 +4753,7 @@ where
     ValidatePayload<T>: Encode,
 {
     let mut ivm = executor
-        .clone_runtime_for_gas_limit(gas_limit)
+        .checkout_runtime_for_gas_limit(gas_limit)
         .map_err(|err| ValidationFail::InternalError(err.to_string()))?;
     ivm.set_host(ivm::host::DefaultHost::default());
 
@@ -4553,7 +4840,7 @@ fn run_executor_migration(
     gas_limit: u64,
 ) -> Result<Option<ExecutorDataModel>, ValidationFail> {
     let mut ivm = executor
-        .clone_runtime_for_gas_limit(gas_limit)
+        .checkout_runtime_for_gas_limit(gas_limit)
         .map_err(|err| ValidationFail::InternalError(err.to_string()))?;
     ivm.set_host(ivm::host::DefaultHost::default());
 
@@ -5863,15 +6150,203 @@ fn execute_wat_embedded_instructions(
 #[derive(Debug, Clone)]
 #[debug("LoadedExecutor {{ runtime: <IVM> }}")]
 pub struct LoadedExecutor {
-    runtime: Arc<Mutex<ExecutorRuntime>>,
+    runtime_pool: Arc<Mutex<ExecutorRuntimePool>>,
     /// Arc is needed so cloning of executor will be fast.
     /// See [`crate::tx::TransactionExecutor::validate_with_runtime_executor`].
     raw_executor: Arc<data_model_executor::Executor>,
 }
 
-struct ExecutorRuntime {
+// Stack sizing is the only gas-derived property that changes the VM allocation.
+// Keep a small bounded LRU so adversarial gas-limit variation cannot retain an
+// unbounded number of complete memory images and Merkle baselines.
+const EXECUTOR_RUNTIME_VARIANT_CAPACITY: usize = 4;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ExecutorRuntimeKey {
     stack_limit: u64,
-    vm: IVM,
+}
+
+impl ExecutorRuntimeKey {
+    fn for_gas_limit(gas_limit: u64) -> Self {
+        // The exact gas limit is replenished on every checkout. Keying by it
+        // would create distinct variants with identical memory layouts.
+        Self {
+            stack_limit: stack_limit_for_gas(gas_limit),
+        }
+    }
+}
+
+struct ExecutorRuntimeVariant {
+    baseline: Arc<RuntimeTemplate>,
+    available: Option<IVM>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ExecutorRuntimePoolStats {
+    hits: u64,
+    misses: u64,
+    program_loads: u64,
+    template_builds: u64,
+    dirty_resets: u64,
+    evictions: u64,
+}
+
+#[derive(Clone, Copy)]
+enum ExecutorRuntimePoolEvent {
+    Hit,
+    Miss,
+    ProgramLoad,
+    TemplateBuild,
+    DirtyReset,
+    Eviction,
+}
+
+struct ExecutorRuntimePool {
+    variants: BTreeMap<ExecutorRuntimeKey, ExecutorRuntimeVariant>,
+    order: VecDeque<ExecutorRuntimeKey>,
+    capacity: usize,
+    #[cfg(test)]
+    stats: ExecutorRuntimePoolStats,
+}
+
+impl ExecutorRuntimePool {
+    fn new(
+        key: ExecutorRuntimeKey,
+        baseline: Arc<RuntimeTemplate>,
+        vm: IVM,
+        capacity: usize,
+    ) -> Self {
+        let capacity = capacity.max(1);
+        let mut variants = BTreeMap::new();
+        variants.insert(
+            key,
+            ExecutorRuntimeVariant {
+                baseline,
+                available: Some(vm),
+            },
+        );
+        Self {
+            variants,
+            order: VecDeque::from([key]),
+            capacity,
+            #[cfg(test)]
+            stats: ExecutorRuntimePoolStats {
+                program_loads: 1,
+                template_builds: 1,
+                ..ExecutorRuntimePoolStats::default()
+            },
+        }
+    }
+
+    fn record(&mut self, event: ExecutorRuntimePoolEvent) {
+        #[cfg(test)]
+        match event {
+            ExecutorRuntimePoolEvent::Hit => {
+                self.stats.hits = self.stats.hits.saturating_add(1);
+            }
+            ExecutorRuntimePoolEvent::Miss => {
+                self.stats.misses = self.stats.misses.saturating_add(1);
+            }
+            ExecutorRuntimePoolEvent::ProgramLoad => {
+                self.stats.program_loads = self.stats.program_loads.saturating_add(1);
+            }
+            ExecutorRuntimePoolEvent::TemplateBuild => {
+                self.stats.template_builds = self.stats.template_builds.saturating_add(1);
+            }
+            ExecutorRuntimePoolEvent::DirtyReset => {
+                self.stats.dirty_resets = self.stats.dirty_resets.saturating_add(1);
+            }
+            ExecutorRuntimePoolEvent::Eviction => {
+                self.stats.evictions = self.stats.evictions.saturating_add(1);
+            }
+        }
+        #[cfg(not(test))]
+        let _ = event;
+    }
+
+    fn touch(&mut self, key: ExecutorRuntimeKey) {
+        if let Some(position) = self.order.iter().position(|candidate| *candidate == key) {
+            self.order.remove(position);
+        }
+        self.order.push_back(key);
+    }
+
+    fn insert_variant(&mut self, key: ExecutorRuntimeKey, baseline: Arc<RuntimeTemplate>) {
+        while self.variants.len() >= self.capacity {
+            let Some(evicted) = self.order.pop_front() else {
+                break;
+            };
+            if self.variants.remove(&evicted).is_some() {
+                self.record(ExecutorRuntimePoolEvent::Eviction);
+            }
+        }
+        self.variants.insert(
+            key,
+            ExecutorRuntimeVariant {
+                baseline,
+                available: None,
+            },
+        );
+        self.touch(key);
+    }
+}
+
+struct ExecutorRuntimeLease {
+    pool: Arc<Mutex<ExecutorRuntimePool>>,
+    key: ExecutorRuntimeKey,
+    baseline: Arc<RuntimeTemplate>,
+    vm: Option<IVM>,
+}
+
+impl Deref for ExecutorRuntimeLease {
+    type Target = IVM;
+
+    fn deref(&self) -> &Self::Target {
+        self.vm
+            .as_ref()
+            .expect("executor runtime lease always owns a VM")
+    }
+}
+
+impl DerefMut for ExecutorRuntimeLease {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.vm
+            .as_mut()
+            .expect("executor runtime lease always owns a VM")
+    }
+}
+
+impl Drop for ExecutorRuntimeLease {
+    fn drop(&mut self) {
+        let Some(mut vm) = self.vm.take() else {
+            return;
+        };
+
+        let can_return = {
+            let pool = self.pool.lock().unwrap_or_else(|error| error.into_inner());
+            pool.variants.get(&self.key).is_some_and(|variant| {
+                Arc::ptr_eq(&variant.baseline, &self.baseline) && variant.available.is_none()
+            })
+        };
+        if !can_return {
+            return;
+        }
+
+        vm.reset_from_runtime_template(&self.baseline);
+        let mut pool = self.pool.lock().unwrap_or_else(|error| error.into_inner());
+        let stored = pool.variants.get_mut(&self.key).is_some_and(|variant| {
+            if !Arc::ptr_eq(&variant.baseline, &self.baseline) || variant.available.is_some() {
+                return false;
+            }
+            variant.available = Some(vm);
+            true
+        });
+        if stored {
+            pool.record(ExecutorRuntimePoolEvent::DirtyReset);
+            pool.touch(self.key);
+        }
+    }
 }
 
 fn stack_limit_for_gas(gas_limit: u64) -> u64 {
@@ -5883,28 +6358,102 @@ impl LoadedExecutor {
         let gas_limit = iroha_data_model::parameter::SmartContractParameters::default()
             .fuel
             .get();
-        let stack_limit = stack_limit_for_gas(gas_limit);
-        let mut ivm = IVM::new(gas_limit);
-        ivm.load_program(raw_executor.bytecode().as_ref())?;
+        let key = ExecutorRuntimeKey::for_gas_limit(gas_limit);
+        let raw_executor = Arc::new(raw_executor);
+        let ivm = Self::load_runtime(raw_executor.as_ref(), gas_limit)?;
+        let baseline = Arc::new(ivm.runtime_template());
         Ok(Self {
-            runtime: Arc::new(Mutex::new(ExecutorRuntime {
-                stack_limit,
-                vm: ivm,
-            })),
-            raw_executor: Arc::new(raw_executor),
+            runtime_pool: Arc::new(Mutex::new(ExecutorRuntimePool::new(
+                key,
+                baseline,
+                ivm,
+                EXECUTOR_RUNTIME_VARIANT_CAPACITY,
+            ))),
+            raw_executor,
         })
     }
 
-    fn clone_runtime_for_gas_limit(&self, gas_limit: u64) -> Result<IVM, VMError> {
-        let stack_limit = stack_limit_for_gas(gas_limit);
-        let mut runtime = self.runtime.lock().expect("executor template poisoned");
-        if runtime.stack_limit != stack_limit {
-            let mut ivm = IVM::new(gas_limit);
-            ivm.load_program(self.raw_executor.bytecode().as_ref())?;
-            runtime.vm = ivm;
-            runtime.stack_limit = stack_limit;
-        }
-        Ok(runtime.vm.clone())
+    fn load_runtime(
+        raw_executor: &data_model_executor::Executor,
+        gas_limit: u64,
+    ) -> Result<IVM, VMError> {
+        let mut vm = IVM::new(gas_limit);
+        vm.load_program(raw_executor.bytecode().as_ref())?;
+        vm.set_gas_limit(gas_limit);
+        Ok(vm)
+    }
+
+    fn checkout_runtime_for_gas_limit(
+        &self,
+        gas_limit: u64,
+    ) -> Result<ExecutorRuntimeLease, VMError> {
+        let key = ExecutorRuntimeKey::for_gas_limit(gas_limit);
+        let (baseline, vm) = {
+            let mut pool = self
+                .runtime_pool
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if pool.variants.contains_key(&key) {
+                let (baseline, vm) = {
+                    let variant = pool
+                        .variants
+                        .get_mut(&key)
+                        .expect("checked executor runtime variant exists");
+                    (Arc::clone(&variant.baseline), variant.available.take())
+                };
+                if vm.is_some() {
+                    pool.record(ExecutorRuntimePoolEvent::Hit);
+                } else {
+                    pool.record(ExecutorRuntimePoolEvent::Miss);
+                }
+                pool.touch(key);
+                (baseline, vm)
+            } else {
+                pool.record(ExecutorRuntimePoolEvent::Miss);
+                let vm = Self::load_runtime(self.raw_executor.as_ref(), gas_limit)?;
+                let baseline = Arc::new(vm.runtime_template());
+                pool.record(ExecutorRuntimePoolEvent::ProgramLoad);
+                pool.record(ExecutorRuntimePoolEvent::TemplateBuild);
+                pool.insert_variant(key, Arc::clone(&baseline));
+                (baseline, Some(vm))
+            }
+        };
+
+        let mut vm = if let Some(vm) = vm {
+            vm
+        } else {
+            let vm = Self::load_runtime(self.raw_executor.as_ref(), gas_limit)?;
+            let mut pool = self
+                .runtime_pool
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            pool.record(ExecutorRuntimePoolEvent::ProgramLoad);
+            vm
+        };
+        vm.set_gas_limit(gas_limit);
+        Ok(ExecutorRuntimeLease {
+            pool: Arc::clone(&self.runtime_pool),
+            key,
+            baseline,
+            vm: Some(vm),
+        })
+    }
+
+    #[cfg(test)]
+    fn runtime_pool_snapshot(&self) -> (ExecutorRuntimePoolStats, usize) {
+        let pool = self
+            .runtime_pool
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        (pool.stats, pool.variants.len())
+    }
+
+    #[cfg(test)]
+    fn runtime_variant_capacity(&self) -> usize {
+        self.runtime_pool
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .capacity
     }
 }
 
@@ -7885,7 +8434,7 @@ mod tests {
         let call = iroha_data_model::transaction::executable::ContractInvocation {
             contract_address: contract_address.clone(),
             entrypoint: entrypoint.to_owned(),
-            payload: None,
+            arguments: None,
         };
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -10817,12 +11366,22 @@ mod tests {
         permission: Option<&str>,
     ) -> (Vec<u8>, u64) {
         use iroha_data_model::smart_contract::manifest::EntryPointKind;
+
+        contract_program_with_entrypoint_kind(entrypoint, EntryPointKind::Public, permission)
+    }
+
+    fn contract_program_with_entrypoint_kind(
+        entrypoint: &str,
+        kind: iroha_data_model::smart_contract::manifest::EntryPointKind,
+        permission: Option<&str>,
+    ) -> (Vec<u8>, u64) {
         use ivm::{EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, ProgramMetadata};
 
         let descriptor = EmbeddedEntrypointDescriptor {
             name: entrypoint.to_owned(),
-            kind: EntryPointKind::Public,
+            kind,
             params: Vec::new(),
+            argument_schema: None,
             return_type: None,
             permission: permission.map(str::to_owned),
             read_keys: Vec::new(),
@@ -10833,11 +11392,13 @@ mod tests {
             entry_pc: 0,
         };
         let interface = EmbeddedContractInterfaceV1 {
+            contract_name: "TestContract".to_owned(),
             compiler_fingerprint: "executor-test".to_owned(),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
             entrypoints: vec![descriptor],
+            error_codes: Vec::new(),
             states: Vec::new(),
         };
         let interface_section = interface.encode_section();
@@ -10857,6 +11418,21 @@ mod tests {
         (program, expected_entrypoint_pc)
     }
 
+    fn prepared_parameterized_trigger_contract() -> ivm::PreparedContract {
+        let source = r#"
+seiyaku TriggerArguments {
+  kotoage fn run(val: Amount) authorize("Admin") {
+    let _val = val;
+  }
+}
+"#;
+        let code = ivm::KotodamaCompiler::new()
+            .compile_source(source)
+            .expect("compile parameterized trigger callback");
+        ivm::prepare_contract(Arc::<[u8]>::from(code))
+            .expect("prepare parameterized trigger callback")
+    }
+
     fn contract_permission_context(permission: &str) -> ContractCallExecutionContext {
         ContractCallExecutionContext {
             contract_address: None,
@@ -10865,6 +11441,7 @@ mod tests {
             entrypoint_pc: Some(0),
             entrypoint_permission: Some(permission.to_owned()),
             args: Json::new(()),
+            argument_record: None,
         }
     }
 
@@ -10901,7 +11478,7 @@ mod tests {
         let invocation = ContractInvocation {
             contract_address,
             entrypoint: "admin".to_owned(),
-            payload: None,
+            arguments: None,
         };
         let invocation_context =
             parse_contract_invocation_execution_context(&invocation, &program, None)
@@ -10917,45 +11494,73 @@ mod tests {
     }
 
     #[test]
-    fn contract_dispatch_context_defaults_to_main_permission_for_self_describing_artifact() {
-        let (program, expected_entrypoint_pc) =
-            contract_program_with_entrypoint("main", Some("ContractAdmin"));
-        let metadata = Metadata::default();
+    fn contract_lifecycle_entrypoints_use_runtime_defined_permissions() {
+        use iroha_data_model::smart_contract::{
+            CONTRACT_INIT_PERMISSION_NAME, CONTRACT_UPGRADE_PERMISSION_NAME,
+            manifest::EntryPointKind,
+        };
 
-        let context = parse_contract_call_execution_context(&metadata, &program)
-            .expect("parse default main dispatch")
-            .expect("default main context");
+        for (selector, kind, expected_permission) in [
+            (
+                "hajimari",
+                EntryPointKind::Init,
+                CONTRACT_INIT_PERMISSION_NAME,
+            ),
+            (
+                "kaizen",
+                EntryPointKind::Upgrade,
+                CONTRACT_UPGRADE_PERMISSION_NAME,
+            ),
+        ] {
+            let (program, expected_entrypoint_pc) =
+                contract_program_with_entrypoint_kind(selector, kind, None);
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                Name::from_str("contract_entrypoint").expect("static name"),
+                Json::new(selector.to_owned()),
+            );
 
-        assert_eq!(context.entrypoint.as_deref(), Some("main"));
-        assert_eq!(context.entrypoint_pc(), Some(expected_entrypoint_pc));
-        assert_eq!(context.entrypoint_permission(), Some("ContractAdmin"));
+            let context = parse_contract_call_execution_context(&metadata, &program)
+                .expect("parse lifecycle dispatch")
+                .expect("lifecycle dispatch context");
+            assert_eq!(context.entrypoint_pc(), Some(expected_entrypoint_pc));
+            assert_eq!(context.entrypoint_permission(), Some(expected_permission));
+        }
+    }
 
-        let authority = ALICE_ID.clone();
-        let account = Account::new(authority.clone()).build(&authority);
-        let world = World::with([], [account], []);
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
+    #[test]
+    fn contract_transaction_dispatch_rejects_view_entrypoints() {
+        use iroha_data_model::smart_contract::manifest::EntryPointKind;
 
-        let err = enforce_contract_entrypoint_permission(&tx.world, &authority, &context)
-            .expect_err("missing default main permission should reject");
+        let (program, _) =
+            contract_program_with_entrypoint_kind("inspect", EntryPointKind::View, None);
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("contract_entrypoint").expect("static name"),
+            Json::new("inspect".to_owned()),
+        );
+
+        let err = parse_contract_call_execution_context(&metadata, &program)
+            .expect_err("view transaction dispatch must reject");
         assert!(matches!(
             err,
             ValidationFail::NotPermitted(message)
-                if message.contains("contract entrypoint `main` requires permission `ContractAdmin`")
+                if message.contains("read-only")
         ));
+    }
 
-        Grant::account_permission(
-            Permission::new("ContractAdmin".to_owned(), Json::new(())),
-            authority.clone(),
-        )
-        .execute(&authority, &mut tx)
-        .expect("grant default main permission");
-        enforce_contract_entrypoint_permission(&tx.world, &authority, &context)
-            .expect("granted default main permission should allow dispatch");
+    #[test]
+    fn contract_dispatch_context_rejects_implicit_main_for_self_describing_artifact() {
+        let (program, _) = contract_program_with_entrypoint("main", Some("ContractAdmin"));
+        let metadata = Metadata::default();
+
+        let err = parse_contract_call_execution_context(&metadata, &program)
+            .expect_err("implicit main dispatch must reject");
+        assert!(matches!(
+            err,
+            ValidationFail::NotPermitted(message)
+                if message.contains("require explicit contract_entrypoint")
+        ));
     }
 
     #[test]
@@ -10978,7 +11583,7 @@ mod tests {
         assert!(matches!(
             err,
             ValidationFail::NotPermitted(message)
-                if message.contains("requires a public `main` entrypoint")
+                if message.contains("require explicit contract_entrypoint")
         ));
 
         let mut metadata = Metadata::default();
@@ -10992,6 +11597,120 @@ mod tests {
         assert_eq!(context.entrypoint.as_deref(), Some("run"));
         assert_eq!(context.entrypoint_pc(), Some(expected_entrypoint_pc));
         assert_eq!(context.entrypoint_permission(), Some("RunPermission"));
+    }
+
+    #[test]
+    fn trigger_dispatch_encodes_event_args_as_one_canonical_record() {
+        let contract = prepared_parameterized_trigger_contract();
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("contract_entrypoint").expect("static name"),
+            Json::new("run".to_owned()),
+        );
+        let event_args = Json::from(norito::json!({"val": "1.25"}));
+
+        validate_trigger_call_execution_context(&metadata, contract.artifact())
+            .expect("registration validates the typed callback without a fabricated payload");
+
+        let context =
+            parse_prepared_trigger_call_execution_context(&metadata, &contract, &event_args)
+                .expect("bind typed trigger arguments");
+        let descriptor = contract
+            .entrypoint_descriptor("run")
+            .expect("run descriptor");
+        let schema = descriptor
+            .argument_schema
+            .as_ref()
+            .expect("run argument schema");
+        let expected = ivm::encode_argument_record_from_json(schema, &event_args)
+            .expect("encode expected canonical record");
+
+        assert_eq!(context.argument_record(), Some(expected.as_slice()));
+        ivm::validate_argument_record(
+            schema,
+            context.argument_record().expect("trigger argument record"),
+        )
+        .expect("roundtrip canonical trigger argument record");
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn malformed_invocation_arguments_fail_during_context_preparation() {
+        let contract = prepared_parameterized_trigger_contract();
+        let schema = contract
+            .entrypoint_descriptor("run")
+            .and_then(|descriptor| descriptor.argument_schema.as_ref())
+            .expect("run argument schema");
+        let mut malformed = ivm::encode_argument_record_from_json(
+            schema,
+            &Json::from(norito::json!({"val": "1.25"})),
+        )
+        .expect("encode valid argument fixture");
+        *malformed.last_mut().expect("record hash byte") ^= 0x80;
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &ALICE_ID,
+            19,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let invocation = ContractInvocation {
+            contract_address,
+            entrypoint: "run".to_owned(),
+            arguments: Some(
+                iroha_data_model::transaction::executable::ContractArgumentRecord::try_new(
+                    malformed,
+                )
+                .expect("bounded malformed fixture"),
+            ),
+        };
+
+        ivm::reset_argument_record_decode_count();
+        let error =
+            parse_prepared_contract_invocation_execution_context(&invocation, &contract, None)
+                .expect_err("malformed arguments must fail before a VM is constructed or entered");
+
+        assert!(matches!(
+            error,
+            ValidationFail::NotPermitted(message)
+                if message.contains("invalid contract argument record")
+        ));
+        assert_eq!(ivm::argument_record_decode_count(), 1);
+    }
+
+    #[test]
+    fn trigger_dispatch_rejects_static_payload_and_implicit_entrypoint() {
+        let contract = prepared_parameterized_trigger_contract();
+        let event_args = Json::from(norito::json!({"val": 7}));
+
+        let err = parse_prepared_trigger_call_execution_context(
+            &Metadata::default(),
+            &contract,
+            &event_args,
+        )
+        .expect_err("trigger callback selection must be explicit");
+        assert!(matches!(
+            err,
+            ValidationFail::NotPermitted(message)
+                if message.contains("explicit contract_entrypoint")
+        ));
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("contract_entrypoint").expect("static name"),
+            Json::new("run".to_owned()),
+        );
+        metadata.insert(
+            Name::from_str("contract_payload").expect("static name"),
+            Json::from(norito::json!({"val": 99})),
+        );
+        let err = parse_prepared_trigger_call_execution_context(&metadata, &contract, &event_args)
+            .expect_err("fixed metadata payload must not shadow event arguments");
+        assert!(matches!(
+            err,
+            ValidationFail::NotPermitted(message)
+                if message.contains("triggering event")
+        ));
     }
 
     #[test]
@@ -11094,21 +11813,115 @@ mod tests {
         let small_limit = 10_000;
         let large_limit = 50_000;
 
-        let vm_small = loaded
-            .clone_runtime_for_gas_limit(small_limit)
-            .expect("clone small");
-        assert_eq!(
-            vm_small.memory.stack_limit(),
-            super::stack_limit_for_gas(small_limit)
-        );
+        {
+            let vm_small = loaded
+                .checkout_runtime_for_gas_limit(small_limit)
+                .expect("checkout small");
+            assert_eq!(
+                vm_small.memory.stack_limit(),
+                super::stack_limit_for_gas(small_limit)
+            );
+            assert_eq!(vm_small.remaining_gas(), small_limit);
+        }
 
-        let vm_large = loaded
-            .clone_runtime_for_gas_limit(large_limit)
-            .expect("clone large");
+        {
+            let vm_large = loaded
+                .checkout_runtime_for_gas_limit(large_limit)
+                .expect("checkout large");
+            assert_eq!(
+                vm_large.memory.stack_limit(),
+                super::stack_limit_for_gas(large_limit)
+            );
+            assert_eq!(vm_large.remaining_gas(), large_limit);
+        }
+    }
+
+    #[test]
+    fn loaded_executor_reuses_and_resets_runtime_after_error_return() {
+        const GAS_LIMIT: u64 = 10_000;
+
+        fn dirty_then_fail(loaded: &super::LoadedExecutor) -> Result<(), *const u8> {
+            let mut runtime = loaded
+                .checkout_runtime_for_gas_limit(GAS_LIMIT)
+                .expect("checkout runtime");
+            let allocation = runtime
+                .memory
+                .load_region(0, 1)
+                .expect("code memory")
+                .as_ptr();
+            runtime.set_register(7, 99);
+            runtime
+                .memory
+                .preload_input(0, &[0xA5])
+                .expect("dirty input memory");
+            Err(allocation)
+        }
+
+        let raw =
+            data_model_executor::Executor::new(IvmBytecode::from_compiled(generate_ok_program()));
+        let loaded = super::LoadedExecutor::load(raw).expect("load");
+        let (before, _) = loaded.runtime_pool_snapshot();
+
+        let allocation = dirty_then_fail(&loaded).expect_err("synthetic validation failure");
+        let (after_error, _) = loaded.runtime_pool_snapshot();
+        assert_eq!(after_error.dirty_resets, before.dirty_resets + 1);
+
+        let runtime = loaded
+            .checkout_runtime_for_gas_limit(GAS_LIMIT)
+            .expect("warm checkout");
+        assert_eq!(runtime.register(7), 0);
+        assert_eq!(runtime.remaining_gas(), GAS_LIMIT);
         assert_eq!(
-            vm_large.memory.stack_limit(),
-            super::stack_limit_for_gas(large_limit)
+            runtime
+                .memory
+                .load_region(0, 1)
+                .expect("code memory")
+                .as_ptr(),
+            allocation,
+            "warm executor validation must reuse the same memory allocation"
         );
+        assert_eq!(
+            runtime
+                .memory
+                .load_region(Memory::INPUT_START, 1)
+                .expect("input memory"),
+            &[0],
+            "dirty input must be restored before reuse"
+        );
+        let (after_reuse, _) = loaded.runtime_pool_snapshot();
+        assert_eq!(after_reuse.hits, after_error.hits + 1);
+        assert_eq!(after_reuse.program_loads, after_error.program_loads);
+        assert_eq!(after_reuse.template_builds, after_error.template_builds);
+    }
+
+    #[test]
+    fn loaded_executor_runtime_variants_are_bounded() {
+        let raw =
+            data_model_executor::Executor::new(IvmBytecode::from_compiled(generate_ok_program()));
+        let loaded = super::LoadedExecutor::load(raw).expect("load");
+        let capacity = loaded.runtime_variant_capacity();
+        let (before, _) = loaded.runtime_pool_snapshot();
+        let multiplier = ivm::gas_to_stack_multiplier().max(1);
+        let mut observed_keys = BTreeSet::new();
+        for index in 0..capacity.saturating_add(3) {
+            let target_stack = 64_u64
+                .saturating_mul(1024)
+                .saturating_mul(u64::try_from(index).unwrap_or(u64::MAX).saturating_add(1));
+            let gas_limit = target_stack.saturating_add(multiplier.saturating_sub(1)) / multiplier;
+            let key = super::ExecutorRuntimeKey::for_gas_limit(gas_limit);
+            assert!(
+                observed_keys.insert(key),
+                "test gas limits must resolve to distinct stack variants"
+            );
+            let runtime = loaded
+                .checkout_runtime_for_gas_limit(gas_limit)
+                .expect("checkout gas/stack variant");
+            assert_eq!(runtime.memory.stack_limit(), key.stack_limit);
+        }
+
+        let (after, variant_count) = loaded.runtime_pool_snapshot();
+        assert_eq!(variant_count, capacity);
+        assert!(after.evictions > before.evictions);
     }
 
     #[test]

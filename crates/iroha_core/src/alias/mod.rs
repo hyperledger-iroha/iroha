@@ -1,8 +1,9 @@
 //! Alias management service primitives.
 //!
 //! This module wires the data-model types into a runtime friendly storage
-//! container. The full VOPRF/STARK pipeline is tracked in roadmap notes to keep
-//! incremental progress manageable.
+//! container. Iroha v1 deliberately does not expose an OPRF/VOPRF service; a
+//! future privacy-preserving lookup protocol must ship as a complete, keyed,
+//! verifiable construction rather than a hash-shaped placeholder.
 
 use std::{
     collections::BTreeMap,
@@ -10,10 +11,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use iroha_crypto::{
-    HashOf, KeyPair, Signature,
-    blake2::{Blake2b512, Digest as _},
-};
+use iroha_crypto::{HashOf, KeyPair, Signature};
 use iroha_data_model::{
     account::{AccountId, rekey::AccountAlias},
     alias::{
@@ -32,9 +30,7 @@ use tracing::{Level, event, instrument};
 
 use crate::state::WorldReadOnly;
 
-const MOCK_VOPRF_DOMAIN: &[u8] = b"iroha.alias.voprf.mock.v1";
 const ALIAS_ATTESTATION_SIGNATURE_DOMAIN: &[u8] = b"iroha:alias:attestation:v1";
-const MAX_VOPRF_INPUT_BYTES: usize = 4096;
 
 fn alias_attestation_signature_preimage(record: &AliasRecord, attester: &AccountId) -> Vec<u8> {
     let attester_bytes = norito::to_bytes(attester).expect("AccountId must encode");
@@ -271,57 +267,6 @@ pub fn authority_can_manage_account_alias(
     }
 }
 
-/// Supported alias VOPRF backend (placeholder).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VoprfBackend {
-    /// Blake2b-based deterministic mock evaluator.
-    Blake2b512Mock,
-}
-
-impl VoprfBackend {
-    /// Stable backend identifier.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Blake2b512Mock => "blake2b512-mock",
-        }
-    }
-}
-
-/// Result of an alias VOPRF evaluation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VoprfEvaluation {
-    /// Backend that produced the result.
-    pub backend: VoprfBackend,
-    /// Evaluated (unblinded) element bytes.
-    pub evaluated_element: Vec<u8>,
-}
-
-/// Evaluate the mock alias VOPRF used by the current pipeline.
-///
-/// This is a deterministic placeholder that domain-separates inputs with
-/// `iroha.alias.voprf.mock.v1` and hashes them with BLAKE2b-512.
-///
-/// # Errors
-///
-/// Returns [`AliasError::Voprf`] when the blinded element is empty or exceeds the maximum length.
-pub fn evaluate_alias_voprf(blinded: &[u8]) -> Result<VoprfEvaluation, AliasError> {
-    if blinded.is_empty() {
-        return Err(AliasError::Voprf("blinded element must not be empty"));
-    }
-    if blinded.len() > MAX_VOPRF_INPUT_BYTES {
-        return Err(AliasError::Voprf("blinded element exceeds maximum length"));
-    }
-
-    let mut hasher = Blake2b512::new();
-    hasher.update(MOCK_VOPRF_DOMAIN);
-    hasher.update(blinded);
-    let evaluated_element = hasher.finalize().to_vec();
-    Ok(VoprfEvaluation {
-        backend: VoprfBackend::Blake2b512Mock,
-        evaluated_element,
-    })
-}
-
 /// Metric categories emitted by the alias service.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AliasMetricKind {
@@ -437,15 +382,6 @@ impl AliasStorage {
         alias.map_or_else(|| Ok(None), |name| self.resolve(&name))
     }
 
-    /// Apply the mock VOPRF hash used by the current alias pipeline.
-    ///
-    /// # Errors
-    ///
-    /// Propagates [`AliasError::Voprf`] for invalid blinded inputs.
-    pub fn voprf_evaluate(&self, blinded_element: &[u8]) -> Result<VoprfEvaluation, AliasError> {
-        evaluate_alias_voprf(blinded_element)
-    }
-
     /// Record a Merkle attestation hash for an alias if present.
     ///
     /// # Errors
@@ -506,9 +442,6 @@ pub enum AliasError {
     /// Storage lock poisoned.
     #[error("alias storage poisoned: {0}")]
     Poison(&'static str),
-    /// Alias VOPRF input failed validation.
-    #[error("alias voprf error: {0}")]
-    Voprf(&'static str),
     /// Alias attestation signing failed.
     #[error("alias attestation signing failed: {0}")]
     Signing(String),
@@ -731,16 +664,6 @@ mod tests {
         assert!(matches!(err, AliasError::Poison("alias")));
     }
 
-    #[test]
-    fn voprf_evaluate_matches_helper() {
-        let storage = alias_storage();
-        let blinded = b"deadbeef";
-        let expected = evaluate_alias_voprf(blinded).expect("evaluates");
-        assert_eq!(
-            storage.voprf_evaluate(blinded).expect("evaluates"),
-            expected
-        );
-    }
     #[test]
     fn emit_metrics_records_usage_counter() {
         let metrics = Arc::new(Metrics::default());

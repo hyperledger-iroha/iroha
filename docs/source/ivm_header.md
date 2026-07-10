@@ -37,13 +37,33 @@ Durable state helpers and ABI surface
 - CoreHost wires STATE_{GET,SET,DEL} to WSV-backed durable smart-contract state; dev/test hosts may use overlays or local persistence but must preserve the same observable behavior.
 
 Validation
-- Generic IVM parsing accepts only `version_major = 1`, `version_minor = 1` headers.
-- Contract artifacts must embed a `CNTR` section immediately after the fixed header and are rejected if that section is missing or inconsistent with the executable stream.
-- If a `LTLB` literal table is present after the fixed header or `CNTR` section,
+- Generic IVM parsing accepts `version_major = 1` with `version_minor = 0` or
+  `1`. Deployable contract artifacts require version `1.1`.
+- Deployable contract artifacts must embed a `CNTR` section immediately after
+  the fixed header and are rejected if that section is missing or inconsistent
+  with the executable stream. Embedded `DBG1` metadata is forbidden for
+  deployable contracts; source maps and debug data belong in hash-keyed
+  sidecars. The generic metadata parser may still locate a structurally valid
+  `DBG1` section for low-level tooling.
+- If a `LTLB` literal table is present after the fixed header, or after the
+  required `CNTR` section in a deployable artifact,
   its post-table padding must be canonical for the section offset: at most three
   zero bytes, exactly the alignment length implied by the literal header,
   entries, and data.
-- `mode` must only contain known bits: `ZK`, `VECTOR`, `HTM` (unknown bits are rejected).
+- `LTLB` contains a 16-byte header (`"LTLB"`, `count: u32`, `post_pad: u32`,
+  `data_len: u32`), followed by `count` little-endian `u64` offsets relative to
+  the `LTLB` marker, then the typed-TLV data and canonical zero padding. ABI v1
+  permits at most 65,536 entries. The loader requires every offset to point
+  at an exact envelope boundary in the packed typed-data range and requires
+  offsets to be strictly increasing (duplicates and reordered aliases are
+  rejected). It validates that stream and its checksums in linear time and
+  rejects any `LDLIT` whose unsigned 16-bit index is out of range. Pointer-ABI
+  code provenance accepts only these exact loader-validated literal starts;
+  instruction bytes, section headers, and interior literal addresses are not
+  pointer objects.
+- Generic `mode` parsing permits only known bits: `ZK`, `VECTOR`, `HTM`
+  (unknown bits are rejected). Deployable contracts permit only `ZK` and
+  `VECTOR`; `HTM` is rejected.
 - `vector_length` is `0` or `1..=64`; `0` selects the runtime default and the field may be non-zero even if the `VECTOR` bit is not set.
 - Supported `abi_version` values: first release accepts only `1` (V1); other values are rejected at admission.
 
@@ -66,10 +86,13 @@ The following table is generated from the implementation and lists canonical `ab
 <!-- BEGIN GENERATED ABI HASHES -->
 | Policy | abi_hash (hex) |
 |---|---|
-| ABI v1 | cfedd3f16e55a2db43076d7ac0daabc92c19684143af89594b841234ca17037d |
+| ABI v1 | d69058daf6b88f54cf9991d5e2847e8246968569b9f4214454fa9995c4238451 |
 <!-- END GENERATED ABI HASHES -->
 
-- Minor updates may add instructions behind `feature_bits` and reserved opcode space; major updates may change encodings or remove/repurpose only together with a protocol upgrade.
+- ABI v1 is the sole first-release policy. Its `LDLIT`, `JAL`, `JMP`, and
+  `JALS` extensions are unconditional rather than feature-gated. A future
+  post-release encoding break requires an explicit protocol/ABI upgrade; it
+  must not silently reinterpret ABI-v1 opcode space.
 - Syscall ranges are stable; unknown for the active `abi_version` yields `E_SCALL_UNKNOWN`.
 - Gas schedules are bound to the `version` and require golden vectors on change.
 

@@ -17076,7 +17076,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Entrypoints = new[] { entrypoint },
             Warnings = Array.Empty<string>(),
             RenderedSourceKind = "verified_source",
-            RenderedSourceText = "kotoage fn main() {}",
+            RenderedSourceText = "seiyaku Demo { view fn main() {} }",
         };
 
         var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
@@ -18560,7 +18560,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                   "analysis": null,
                   "warnings": ["verified source record loaded"],
                   "rendered_source_kind": "verified_source",
-                  "rendered_source_text": "kotoage fn main() {}",
+                  "rendered_source_text": "seiyaku Demo { view fn main() {} }",
                   "verified_source_ref": {
                     "language": "kotodama",
                     "source_name": "demo.ko",
@@ -18578,7 +18578,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
         Assert.Equal(ContractCodeHashHex, view.CodeHash);
         Assert.Equal("verified_source", view.RenderedSourceKind);
-        Assert.Equal("kotoage fn main() {}", view.RenderedSourceText);
+        Assert.Equal("seiyaku Demo { view fn main() {} }", view.RenderedSourceText);
         Assert.Equal((ulong)24, view.VerifiedSourceReference!.ContentLength);
         Assert.Equal($"/v1/contracts/code/{ContractCodeHashHex}/contract-view", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
@@ -18634,7 +18634,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Analysis = analysis,
             Warnings = warnings,
             RenderedSourceKind = "verified_source",
-            RenderedSourceText = "kotoage fn main() {}",
+            RenderedSourceText = "seiyaku Demo { view fn main() {} }",
         };
 
         accessReadKeys[0] = "mutated";
@@ -21888,7 +21888,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Analysis = ValidContractViewAnalysis(),
             Warnings = ["static_analysis_warning"],
             RenderedSourceKind = "verified_source",
-            RenderedSourceText = "kotoage fn main() {}",
+            RenderedSourceText = "seiyaku Demo { view fn main() {} }",
             VerifiedSourceReference = ValidContractVerifiedSourceReference(),
         };
     }
@@ -29476,7 +29476,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             },
             ["warnings"] = new JsonArray(JsonValue.Create("verified source record loaded")),
             ["rendered_source_kind"] = "verified_source",
-            ["rendered_source_text"] = "kotoage fn main() {}",
+            ["rendered_source_text"] = "seiyaku Demo { view fn main() {} }",
             ["verified_source_ref"] = ContractVerifiedSourceReferenceJson(
                 verifiedSourceLanguage,
                 verifiedSourceName,

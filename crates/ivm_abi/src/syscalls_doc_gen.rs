@@ -705,7 +705,7 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
     },
     crate::syscalls::SyscallDoc {
         number: 160,
-        args: "r10=&NoritoBytes(InstructionBox)",
+        args: "r10=&NoritoBytes(InstructionBox), r11=operation_tag(1=SubmitBallot,2=Unshield,3=RecordSccpMessage)",
         ret: "u64=0",
         gas: "asset:gas/G_sci@ivm.core/v2",
     },
@@ -761,7 +761,7 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
         number: 169,
         args: "r10=&Blob(contract_address), r11=&Blob(entrypoint), r12=&Json(payload)",
         ret: "r10=ptr (&NoritoBytes(return)) or 0",
-        gas: "asset:gas/G_call_contract@ivm.core/v2 + request bytes + return bytes",
+        gas: "asset:gas/G_call_contract@ivm.core/v2 + request bytes + return bytes + child gas",
     },
     crate::syscalls::SyscallDoc {
         number: 170,
@@ -1202,8 +1202,14 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
         gas: "asset:gas/G_sysvar@ivm.core/v2 + bytes",
     },
     crate::syscalls::SyscallDoc {
+        number: 65574,
+        args: "r10=&NoritoBytes(EntrypointArgumentRecordV1), r11=&NoritoBytes(EntrypointArgumentSchemaV1)",
+        ret: "r10=ptr (&Blob(pad:u8 then [u64; word_count]))",
+        gas: "asset:gas/G_argument_decode@ivm.core/v2 + record + schema + output",
+    },
+    crate::syscalls::SyscallDoc {
         number: 65584,
-        args: "r10=&Name(prefix), r11=offset:u64, r12=limit:u64",
+        args: "r10=&Name(prefix), r11=offset:u64, r12=limit:u64 (0..=64)",
         ret: "r10=ptr (&NoritoBytes(Vec<Name>)), r11=total:u64, r12=count:u64",
         gas: "asset:gas/G_state_keys@ivm.core/v2 + count + bytes",
     },
@@ -1224,5 +1230,23 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
         args: "r10=&Name(prefix)",
         ret: "r10=total:u64",
         gas: "asset:gas/G_state_count@ivm.core/v2 + count",
+    },
+    crate::syscalls::SyscallDoc {
+        number: 65588,
+        args: "r10=&NoritoBytes(Vec<Name>), r11=&Name(base), r12=index:u64",
+        ret: "r10=ptr (&NoritoBytes(canonical key)) or 0",
+        gas: "asset:gas/G_path@ivm.core/v2 + bytes",
+    },
+    crate::syscalls::SyscallDoc {
+        number: 65589,
+        args: "r10=&NoritoBytes(StateValueSchemaV1), r11=&[u64], r12=word_count:u64",
+        ret: "r10=ptr (&NoritoBytes(StateValueRecordV1))",
+        gas: "asset:gas/G_state_value@ivm.core/v2 + schema + words + pointers + output",
+    },
+    crate::syscalls::SyscallDoc {
+        number: 65590,
+        args: "r10=&NoritoBytes(StateValueSchemaV1), r11=&NoritoBytes(StateValueRecordV1)",
+        ret: "r10=ptr (&Blob(pad:u8 then [u64; word_count]))",
+        gas: "asset:gas/G_state_value@ivm.core/v2 + schema + record + pointers + output",
     },
 ];

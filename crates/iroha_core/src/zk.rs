@@ -22288,7 +22288,7 @@ const TRACE_QUEUE_SLEEP_MS: u64 = 10;
 #[derive(Clone)]
 pub struct TraceForProving {
     digest: [u8; 32],
-    program: Arc<Vec<u8>>,
+    program: Arc<[u8]>,
     trace: Vec<ivm::zk::RegisterState>,
     constraints: Vec<ivm::zk::Constraint>,
     code_hash: [u8; 32],
@@ -22314,7 +22314,7 @@ impl TraceForProving {
     }
 
     fn validate(&self) -> Result<(), String> {
-        VMExecutionCircuit::new(self.program.as_slice(), &self.trace, &self.constraints)
+        VMExecutionCircuit::new(self.program.as_ref(), &self.trace, &self.constraints)
             .verify()
             .map_err(|err| err.to_string())
     }
@@ -79977,9 +79977,7 @@ mod trace_proving_queue_tests {
     fn sample_zk_task() -> crate::pipeline::zk_lane::ZkTask {
         let halt = encoding::wide::encode_halt().to_le_bytes();
         let program = assemble_zk(&halt, 4);
-        let metadata = ivm::ProgramMetadata::parse(&program).expect("metadata parse");
-        let code_bytes = &program[metadata.code_offset..];
-        let code_hash = Hash::new(code_bytes);
+        let code_hash = ivm::contract_code_hash(&program);
         let trace = vec![
             ivm::zk::RegisterState {
                 pc: 0,
@@ -79999,7 +79997,7 @@ mod trace_proving_queue_tests {
         crate::pipeline::zk_lane::ZkTask {
             tx_hash: None,
             code_hash: *code_hash.as_ref(),
-            program: Arc::new(program),
+            program: Arc::from(program),
             header: None,
             trace,
             constraints,
@@ -80021,6 +80019,7 @@ mod trace_proving_queue_tests {
         assert_eq!(collected.len(), 1);
         assert_eq!(collected[0].digest, digest);
         assert_eq!(collected[0].code_hash, task.code_hash);
+        assert!(Arc::ptr_eq(&collected[0].program, &task.program));
     }
 
     #[test]

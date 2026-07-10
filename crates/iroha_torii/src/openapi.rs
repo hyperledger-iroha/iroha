@@ -520,10 +520,6 @@ fn event_stream_response(description: &str) -> Value {
 fn alias_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/aliases/voprf/evaluate".to_owned(),
-        Value::Object(alias_voprf_evaluate_operation()),
-    );
-    paths.insert(
         "/v1/aliases/resolve".to_owned(),
         Value::Object(alias_resolve_operation()),
     );
@@ -6292,16 +6288,37 @@ fn sumeragi_paths() -> Map {
         Value::Object(sccp_capabilities_operation()),
     );
     paths.insert(
-        "/v1/sccp/manifests".to_owned(),
-        Value::Object(sccp_manifests_operation()),
+        "/v1/sccp/registry".to_owned(),
+        Value::Object(sccp_registry_operation()),
     );
     paths.insert(
-        "/v1/sccp/artifacts/message/{message_id}".to_owned(),
-        Value::Object(sccp_message_artifact_operation()),
+        "/v1/sccp/proofs/message/{message_id}".to_owned(),
+        Value::Object(sccp_message_bundle_operation()),
     );
     paths.insert(
-        "/v1/sccp/jobs/message/{message_id}".to_owned(),
-        Value::Object(sccp_message_job_operation()),
+        "/v1/sccp/proof-requests/{message_id}".to_owned(),
+        Value::Object(sccp_proof_request_operation()),
+    );
+    paths.insert(
+        "/v1/sccp/messages/recent".to_owned(),
+        Value::Object(json_get_operation(
+            "Bridge",
+            "List recent finalized SCCP outbound messages.",
+            "Returns at most 50 newest messages from the authoritative height-ordered outbound index.",
+            "#/components/schemas/JsonValue",
+            vec![
+                Value::Object(integer_query_param(
+                    "from",
+                    "Optional inclusive maximum recorded block height.",
+                    Some("uint64"),
+                )),
+                Value::Object(integer_query_param(
+                    "limit",
+                    "Optional result limit, clamped to 50.",
+                    Some("uint64"),
+                )),
+            ],
+        )),
     );
     paths.insert(
         "/v1/sumeragi/validator-sets".to_owned(),
@@ -6530,10 +6547,9 @@ fn sccp_capabilities_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Returns the local SCCP domain id, legacy proof backends, generic message proof \
-             family, supported codecs, and the per-counterparty backend labels relayers should \
-             use for the current launch networks: Ethereum, BSC, Solana, TON, and Tron. SCCP \
-             will not support Sub&#115;trate/Pol&#107;adot networks for now."
+            "Returns only the stable first-release registry, bundle, proof-request, submission, \
+             and native-admission endpoint paths, bound to the current authoritative registry \
+             revision."
                 .to_owned(),
         ),
     );
@@ -6553,7 +6569,7 @@ fn sccp_capabilities_operation() -> Map {
     methods
 }
 
-fn sccp_manifests_operation() -> Map {
+fn sccp_registry_operation() -> Map {
     let mut operation = Map::new();
     operation.insert(
         "tags".into(),
@@ -6561,26 +6577,24 @@ fn sccp_manifests_operation() -> Map {
     );
     operation.insert(
         "summary".into(),
-        Value::String("Discover SCCP proof manifests.".to_owned()),
+        Value::String("Fetch the authoritative typed SCCP registry.".to_owned()),
     );
     operation.insert(
         "description".into(),
         Value::String(
-            "Returns the typed per-counterparty SCCP proof manifests used to derive chain-specific \
-             backend labels, verifier targets, finality models, public inputs, and manifest seeds \
-             for the current launch networks: Ethereum, BSC, Solana, TON, and Tron. SCCP will not \
-             support Sub&#115;trate/Pol&#107;adot networks for now."
+            "Returns the complete consensus-governed exact-lane registry. Static Torii manifests \
+             and caller-selected deployment material are not part of the first-release API."
                 .to_owned(),
         ),
     );
     operation.insert(
         "operationId".into(),
-        Value::String("sccpProofManifests".to_owned()),
+        Value::String("sccpRegistry".to_owned()),
     );
     let mut responses = Map::new();
     responses.insert(
         "200".into(),
-        json_response("SCCP proof manifest collection.", schema_ref("JsonValue")),
+        json_response("Authoritative SCCP registry.", schema_ref("JsonValue")),
     );
     responses.insert("406".into(), not_acceptable_response());
     operation.insert("responses".into(), Value::Object(responses));
@@ -6589,7 +6603,7 @@ fn sccp_manifests_operation() -> Map {
     methods
 }
 
-fn sccp_message_artifact_operation() -> Map {
+fn sccp_message_bundle_operation() -> Map {
     let mut operation = Map::new();
     operation.insert(
         "tags".into(),
@@ -6597,21 +6611,20 @@ fn sccp_message_artifact_operation() -> Map {
     );
     operation.insert(
         "summary".into(),
-        Value::String("Fetch a typed SCCP transparent proof artifact.".to_owned()),
+        Value::String("Fetch a finalized SCCP message bundle.".to_owned()),
     );
     operation.insert(
         "description".into(),
         Value::String(
-            "Returns the typed transparent SCCP proof artifact for a canonical message id, \
-             including the chain profile, public inputs, verifier-backend metadata, generated \
-             counterparty submission package, real proof bytes, and embedded Nexus message bundle. \
-             Supports JSON or Norito content negotiation via the `Accept` header."
+            "Resolves the global outbound locator, reads exactly its indexed finalized block, and \
+             returns the canonical Merkle and finality bundle. The endpoint accepts no query \
+             parameters and supports JSON or Norito content negotiation."
                 .to_owned(),
         ),
     );
     operation.insert(
         "operationId".into(),
-        Value::String("sccpMessageArtifact".to_owned()),
+        Value::String("sccpMessageBundle".to_owned()),
     );
     operation.insert(
         "parameters".into(),
@@ -6624,7 +6637,7 @@ fn sccp_message_artifact_operation() -> Map {
     responses.insert(
         "200".into(),
         json_response(
-            "Typed SCCP transparent proof artifact.",
+            "Canonical finalized SCCP message bundle.",
             schema_ref("JsonValue"),
         ),
     );
@@ -6639,7 +6652,7 @@ fn sccp_message_artifact_operation() -> Map {
     methods
 }
 
-fn sccp_message_job_operation() -> Map {
+fn sccp_proof_request_operation() -> Map {
     let mut operation = Map::new();
     operation.insert(
         "tags".into(),
@@ -6647,20 +6660,20 @@ fn sccp_message_job_operation() -> Map {
     );
     operation.insert(
         "summary".into(),
-        Value::String("Fetch a normalized SCCP counterparty proof job.".to_owned()),
+        Value::String("Fetch an exact SCCP Groth16 proof request.".to_owned()),
     );
     operation.insert(
         "description".into(),
         Value::String(
-            "Returns a prover-oriented SCCP job for a canonical message id, including the \
-             chain-specific normalized payload projection plus the original typed Nexus message \
-             bundle. Supports JSON or Norito content negotiation via the `Accept` header."
+            "Derives the canonical proof request from the finalized message record and the unique \
+             historical governed route selected by both its destination-binding and \
+             route-configuration hashes. Caller-selected route or proof query fields are rejected."
                 .to_owned(),
         ),
     );
     operation.insert(
         "operationId".into(),
-        Value::String("sccpMessageJob".to_owned()),
+        Value::String("sccpProofRequest".to_owned()),
     );
     operation.insert(
         "parameters".into(),
@@ -6673,7 +6686,7 @@ fn sccp_message_job_operation() -> Map {
     responses.insert(
         "200".into(),
         json_response(
-            "Normalized SCCP counterparty proof job.",
+            "Canonical state-derived SCCP Groth16 proof request.",
             schema_ref("JsonValue"),
         ),
     );
@@ -7963,75 +7976,6 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/zk/verify-batch"
                     | "/v1/zk/vote/tally"
             ))
-}
-
-fn alias_voprf_evaluate_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Aliases".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("Evaluate the mock alias VOPRF helper.".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String(
-            "Takes a blinded alias element (hex) and returns the deterministically \
-             evaluated mock response used by tooling."
-                .to_owned(),
-        ),
-    );
-    operation.insert(
-        "operationId".into(),
-        Value::String("aliasVoprfEvaluate".to_owned()),
-    );
-    operation.insert("requestBody".into(), alias_voprf_request_body());
-    operation.insert("responses".into(), Value::Object(alias_voprf_responses()));
-    let mut methods = Map::new();
-    methods.insert("post".to_owned(), Value::Object(operation));
-    methods
-}
-
-fn alias_voprf_request_body() -> Value {
-    let mut media = Map::new();
-    media.insert(
-        "application/json".into(),
-        Value::Object({
-            let mut schema = Map::new();
-            schema.insert("schema".into(), schema_ref("AliasVoprfEvaluateRequest"));
-            schema
-        }),
-    );
-
-    let mut body = Map::new();
-    body.insert("required".into(), Value::Bool(true));
-    body.insert("content".into(), Value::Object(media));
-    Value::Object(body)
-}
-
-fn alias_voprf_responses() -> Map {
-    let mut responses = Map::new();
-    responses.insert(
-        "200".to_owned(),
-        json_response(
-            "Blinded element successfully evaluated.",
-            schema_ref("AliasVoprfEvaluateResponse"),
-        ),
-    );
-    responses.insert(
-        "400".to_owned(),
-        json_response(
-            "Malformed request (invalid hex encoding).",
-            error_schema_reference(),
-        ),
-    );
-    responses.insert(
-        "500".to_owned(),
-        json_response("Internal server error.", error_schema_reference()),
-    );
-    responses
 }
 
 fn alias_resolve_operation() -> Map {
@@ -10321,39 +10265,6 @@ fn openapi_schemas() -> Map {
                     "type": "array",
                     "items": { "type": "string" },
                     "description": "Optional topic labels stored with the device; bounded by torii.push.max_topics_per_device."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "AliasVoprfEvaluateRequest".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["blinded_element_hex"],
-            "additionalProperties": false,
-            "properties": {
-                "blinded_element_hex": {
-                    "type": "string",
-                    "description": "Hex-encoded blinded element to evaluate."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "AliasVoprfEvaluateResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["evaluated_element_hex", "backend"],
-            "additionalProperties": false,
-            "properties": {
-                "evaluated_element_hex": {
-                    "type": "string",
-                    "description": "Hex-encoded evaluated element."
-                },
-                "backend": {
-                    "type": "string",
-                    "enum": ["blake2b512-mock"],
-                    "description": "Name of the evaluator implementation."
                 }
             }
         }),
@@ -13470,16 +13381,14 @@ mod tests {
     }
 
     #[test]
-    fn generated_spec_sccp_discovery_descriptions_publish_no_support_note() {
+    fn generated_spec_sccp_discovery_is_state_derived_and_closed() {
         let doc = generate_spec();
         let paths = doc
             .get("paths")
             .and_then(Value::as_object)
             .expect("paths section");
-        let no_support_note =
-            "SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now.";
 
-        for path in ["/v1/sccp/capabilities", "/v1/sccp/manifests"] {
+        for path in ["/v1/sccp/capabilities", "/v1/sccp/registry"] {
             let description = paths
                 .get(path)
                 .and_then(Value::as_object)
@@ -13488,15 +13397,37 @@ mod tests {
                 .and_then(|get| get.get("description"))
                 .and_then(Value::as_str)
                 .expect("SCCP OpenAPI discovery description");
-            assert!(
-                description.contains("Ethereum, BSC, Solana, TON, and Tron"),
-                "{path} OpenAPI description must publish active SCCP launch lanes"
-            );
-            assert!(
-                description.contains(no_support_note),
-                "{path} OpenAPI description must publish retired-network no-support note"
-            );
+            assert!(!description.contains("Solana"));
+            assert!(!description.contains("TON"));
+            assert!(!description.contains("legacy proof backends"));
         }
+    }
+
+    #[test]
+    fn retired_alias_voprf_surface_does_not_reappear() {
+        fn assert_absent(surface: &str, source: &str, forbidden: &[&str]) {
+            for needle in forbidden {
+                assert!(
+                    !source.contains(needle),
+                    "retired alias VOPRF surface `{needle}` reappeared in {surface}"
+                );
+            }
+        }
+
+        assert_absent(
+            "Torii runtime",
+            include_str!("lib.rs"),
+            &["/v1/aliases/voprf/evaluate", "handler_alias_voprf_evaluate"],
+        );
+        assert_absent(
+            "Torii request DTOs",
+            include_str!("routing.rs"),
+            &[
+                "AliasVoprfBackendDto",
+                "AliasVoprfEvaluateRequestDto",
+                "AliasVoprfEvaluateResponseDto",
+            ],
+        );
     }
 
     #[test]
@@ -13511,7 +13442,19 @@ mod tests {
             .get("paths")
             .and_then(Value::as_object)
             .expect("paths section");
-        assert!(paths.contains_key("/v1/aliases/voprf/evaluate"));
+        assert!(!paths.contains_key("/v1/aliases/voprf/evaluate"));
+        let schemas = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("schemas section");
+        for retired_schema in ["AliasVoprfEvaluateRequest", "AliasVoprfEvaluateResponse"] {
+            assert!(
+                !schemas.contains_key(retired_schema),
+                "retired alias VOPRF schema {retired_schema} reappeared"
+            );
+        }
         assert!(paths.contains_key("/v1/aliases/resolve"));
         assert!(paths.contains_key("/v1/aliases/resolve_index"));
         assert!(paths.contains_key("/v1/aliases/by_account"));
@@ -13532,9 +13475,13 @@ mod tests {
         assert!(paths.contains_key("/v1/bridge/finality/{height}"));
         assert!(paths.contains_key("/v1/bridge/finality/bundle/{height}"));
         assert!(paths.contains_key("/v1/sccp/capabilities"));
-        assert!(paths.contains_key("/v1/sccp/manifests"));
-        assert!(paths.contains_key("/v1/sccp/artifacts/message/{message_id}"));
-        assert!(paths.contains_key("/v1/sccp/jobs/message/{message_id}"));
+        assert!(paths.contains_key("/v1/sccp/registry"));
+        assert!(paths.contains_key("/v1/sccp/proofs/message/{message_id}"));
+        assert!(paths.contains_key("/v1/sccp/proof-requests/{message_id}"));
+        assert!(paths.contains_key("/v1/sccp/messages/recent"));
+        assert!(!paths.contains_key("/v1/sccp/manifests"));
+        assert!(!paths.contains_key("/v1/sccp/artifacts/message/{message_id}"));
+        assert!(!paths.contains_key("/v1/sccp/jobs/message/{message_id}"));
         assert!(paths.contains_key("/v1/sumeragi/validator-sets"));
         assert!(paths.contains_key("/v1/sumeragi/validator-sets/{height}"));
         assert!(paths.contains_key("/v1/sumeragi/rbc/sessions"));

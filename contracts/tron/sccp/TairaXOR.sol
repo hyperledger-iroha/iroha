@@ -1,52 +1,34 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.7.4;
 
-import "../../evm/sccp/Ownable.sol";
-
 /**
  * @title TairaXOR
  * @dev TRC20-compatible bridged XOR token for the TAIRA -> TRON SCCP route.
  *
- * Minting and bridge burns are intentionally delegated to one bridge contract.
- * The deployer can set that bridge during deployment and then lock it, so
- * production deployments do not depend on end-user key custody or generated
- * wallets.
+ * Minting and bridge burns are delegated to one constructor-immutable route.
+ * There is no owner, initialization window, bridge setter, or upgrade hook.
  */
-contract TairaXOR is Ownable {
+contract TairaXOR {
     string public constant name = "TAIRA XOR";
     string public constant symbol = "TairaXOR";
     uint8 public constant decimals = 18;
 
     uint256 public totalSupply;
-    address public bridge;
-    bool public bridgeLocked;
+    address public immutable bridge;
 
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
 
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
-    event BridgeUpdated(address indexed previousBridge, address indexed newBridge);
-    event BridgeLocked(address indexed bridge);
-
     modifier onlyBridge() {
         require(msg.sender == bridge, "Caller is not the bridge");
         _;
     }
 
-    function setBridge(address newBridge) external onlyOwner {
-        require(!bridgeLocked, "Bridge is locked");
-        require(newBridge != address(0), "Bridge address is required");
-        address previousBridge = bridge;
-        bridge = newBridge;
-        emit BridgeUpdated(previousBridge, newBridge);
-    }
-
-    function lockBridge() external onlyOwner {
-        require(!bridgeLocked, "Bridge is already locked");
-        require(bridge != address(0), "Bridge address is required");
-        bridgeLocked = true;
-        emit BridgeLocked(bridge);
+    constructor(address routeBridge) {
+        require(routeBridge != address(0), "Bridge address is required");
+        bridge = routeBridge;
     }
 
     function transfer(address to, uint256 value) external returns (bool) {

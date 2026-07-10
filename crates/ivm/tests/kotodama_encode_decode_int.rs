@@ -5,10 +5,12 @@ use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 #[test]
 fn kotodama_encode_decode_int_roundtrip() {
     let src = r#"
-        fn main() {
-            let b = encode_int(7);
-            let x = decode_int(b);
-            assert_eq(x, 7);
+        seiyaku IntegerCodecRoundtrip {
+            view fn main() {
+                let encoded = codec::encode_i64(7);
+                let decoded = codec::decode_i64(encoded);
+                test::assert_eq(decoded, 7);
+            }
         }
     "#;
     let code = KotodamaCompiler::new()

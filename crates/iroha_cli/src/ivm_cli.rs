@@ -146,7 +146,7 @@ impl Run for ManifestGenArgs {
                 meta.abi_version
             ));
         }
-        let code_hash: iroha_crypto::Hash = iroha_crypto::Hash::new(&bytes[parsed.header_len..]);
+        let code_hash = ivm::contract_code_hash(&bytes);
         let abi_hash: [u8; 32] = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         // Build a small JSON object for convenience
         let mut manifest = norito::json::Map::new();

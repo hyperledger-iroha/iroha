@@ -27,11 +27,11 @@ Norito және Kotodama бірінші рет: детерминирленген
   `defaults/docker-compose.single.yml` ішінде анықталған тең үлгіні бастау үшін).
 - Жүктеп алмасаңыз, көмекші екілік файлдарды құруға арналған Rust құралдар тізбегі (1.76+).
   жарияланғандары.
-- `koto_compile`, `ivm_run` және `iroha` екілік файлдары. Сіз оларды мына жерден құрастыра аласыз
+- `koto build`, `ivm_run` және `iroha` екілік файлдары. Сіз оларды мына жерден құрастыра аласыз
   төменде көрсетілгендей жұмыс кеңістігін тексеру немесе сәйкес шығарылым артефактілерін жүктеп алыңыз:
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -58,28 +58,22 @@ docker compose -f defaults/docker-compose.single.yml up --build
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Default raw-IVM entrypoint used by ivm_run / transaction ivm.
-  kotoage fn main() permission(Admin) {
-    info("Hello from Kotodama");
-    write_detail();
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() permission(Admin) {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -94,15 +88,14 @@ IVM/Norito байт кодына (`.to`) келісім-шартты құрас�
 желіге қол тигізбес бұрын хост жүйесін шақыруларының сәтті екенін растаңыз:
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-Жүгіруші `info("Hello from Kotodama")` журналын басып шығарады және орындайды
+Жүгіруші `debug::info("Hello from Kotodama")` журналын басып шығарады және орындайды
 `SET_ACCOUNT_DETAIL` келекеленген хостқа қарсы жүйе қоңырауы. Қосымша `ivm_tool` болса
 екілік қол жетімді, `ivm_tool inspect target/quickstart/hello.to` көрсетеді
 ABI тақырыбы, мүмкіндік биттері және экспортталған кіру нүктелері.
@@ -161,3 +154,63 @@ Norito қолдайтын JSON пайдалы жүктемесін көруің�
 - Өз келісім-шарттарыңызды қайталау кезінде `npm run sync-norito-snippets` пайдаланыңыз
   Портал құжаттары мен артефактілер қалуы үшін жүктеп алынатын үзінділерді қалпына келтіруге арналған жұмыс кеңістігі
   `crates/ivm/docs/examples/` астындағы көздермен синхрондалған.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

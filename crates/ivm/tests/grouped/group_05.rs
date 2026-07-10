@@ -2,6 +2,10 @@
 
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
+#[path = "../kotodama_argument_record.rs"]
+mod kotodama_argument_record;
+#[path = "../kotodama_checked_arithmetic.rs"]
+mod kotodama_checked_arithmetic;
 #[path = "../kotodama_state_map_lowering.rs"]
 mod kotodama_state_map_lowering;
 #[path = "../kotodama_state_map_pointer.rs"]
@@ -22,6 +26,8 @@ mod kotodama_ternary_lowering;
 mod kotodama_tuple_codegen_neg;
 #[path = "../kotodama_tuple_lowering.rs"]
 mod kotodama_tuple_lowering;
+#[path = "../kotodama_v1_runtime_acceptance.rs"]
+mod kotodama_v1_runtime_acceptance;
 #[path = "../kotodama_wrappers.rs"]
 mod kotodama_wrappers;
 #[path = "../kotodama_zk_syscalls.rs"]

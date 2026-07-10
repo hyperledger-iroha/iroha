@@ -389,12 +389,14 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
     let compiler = Compiler::new();
     let src = format!(
         r#"
-        fn main() {{
-            let ev = json("{{\"kind\":\"asset_change\",\"op\":\"added\",\"asset_definition_id\":\"{aed}\",\"account_domain\":\"{domain}\",\"account_id\":\"{dst}\",\"amount_i64\":1}}");
-            let recipient = json_get_account_id(ev, name("account_id"));
-            let amount = json_get_int(ev, name("amount_i64"));
-            transfer_asset(recipient, account_id("{reserve}"), asset_definition("{aed}"), amount, dataspace_id("0"));
-            transfer_asset(account_id("{reserve}"), recipient, asset_definition("{cbdc}"), amount * {ratio}, dataspace_id("0"));
+        seiyaku DebugTransfer {{
+          kotoage fn main() authorize("TransferAsset") {{
+            let ev = Json::parse("{{\"kind\":\"asset_change\",\"op\":\"added\",\"asset_definition_id\":\"{aed}\",\"account_domain\":\"{domain}\",\"account_id\":\"{dst}\",\"amount_i64\":1}}");
+            let recipient = json::get_account_id(ev, Name::parse("account_id"));
+            let amount = Amount::from_i64(json::get_i64(ev, Name::parse("amount_i64")));
+            ledger::asset::transfer(recipient, AccountId::parse("{reserve}"), AssetDefinitionId::parse("{aed}"), amount, DataSpaceId::parse("0"));
+            ledger::asset::transfer(AccountId::parse("{reserve}"), recipient, AssetDefinitionId::parse("{cbdc}"), amount * Amount::from_i64({ratio}), DataSpaceId::parse("0"));
+          }}
         }}
         "#,
         aed = aed_asset_raw,

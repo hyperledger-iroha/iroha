@@ -221,7 +221,6 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   norito build \
   --source contracts/register_domain.ko \
   --bytecode-out artifacts/register_domain.to \
-  --abi-version=1 \
   --summary-out artifacts/register_domain.bytecode.json
 ```
 

@@ -53,7 +53,7 @@ use iroha_data_model::{
     },
 };
 use iroha_version::codec::EncodeVersioned;
-use ivm::kotodama::compiler::Compiler;
+use ivm::kotodama::session::{CompileRequest, CompilerSession};
 use norito::{
     core::DecodeFromSlice,
     decode_from_bytes,
@@ -135,37 +135,29 @@ const MODERATION_REGISTRY_DEFAULT_LISTEN: &str = "127.0.0.1:9198";
 
 fn parse_u32_arg(flag: &str, raw: &str, context: &str) -> Result<u32, String> {
     require_canonical_unsigned_decimal(flag, raw, context)?;
-    raw
-        .parse::<u32>()
+    raw.parse::<u32>()
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
 
 fn parse_u64_arg(flag: &str, raw: &str, context: &str) -> Result<u64, String> {
     require_canonical_unsigned_decimal(flag, raw, context)?;
-    raw
-        .parse::<u64>()
+    raw.parse::<u64>()
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
 
 fn parse_u16_arg(flag: &str, raw: &str, context: &str) -> Result<u16, String> {
     require_canonical_unsigned_decimal(flag, raw, context)?;
-    raw
-        .parse::<u16>()
+    raw.parse::<u16>()
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
 
 fn parse_decimal_arg(flag: &str, raw: &str, context: &str) -> Result<Decimal, String> {
     require_canonical_decimal_token(flag, raw, context)?;
-    raw
-        .parse::<Decimal>()
+    raw.parse::<Decimal>()
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
 
-fn require_canonical_unsigned_decimal(
-    flag: &str,
-    raw: &str,
-    context: &str,
-) -> Result<(), String> {
+fn require_canonical_unsigned_decimal(flag: &str, raw: &str, context: &str) -> Result<(), String> {
     let digits = raw.as_bytes();
     if digits.is_empty()
         || !digits.iter().all(u8::is_ascii_digit)
@@ -3299,7 +3291,7 @@ fn format_car_error(err: CarWriteError) -> String {
 
 fn usage() -> String {
     "Usage:
-  sorafs_cli norito build --source=PATH --bytecode-out=PATH [--abi-version=N] [--summary-out=PATH]
+  sorafs_cli norito build --source=PATH --bytecode-out=PATH [--summary-out=PATH]
   sorafs_cli deploy --payload=PATH --client-config=PATH [--torii-url=URL] [--submitted-epoch=EPOCH] [--name=NAME] [--out-dir=PATH] [--gateway-base-url=URL] [--pin-torii-url=URL...] [--no-peer-discovery] [--summary-out=PATH]
   sorafs_cli car pack --input=PATH --car-out=PATH [--chunker-handle=HANDLE] [--plan-out=PATH] [--summary-out=PATH]
   sorafs_cli manifest build --summary=PATH --manifest-out=PATH [--manifest-json-out=PATH] [--pin-min-replicas=N] [--pin-storage-class=hot|warm|cold] [--pin-retention-epoch=EPOCH] [--metadata key=value]
@@ -11800,7 +11792,6 @@ fn manifest_build(raw_args: Vec<String>) -> Result<(), String> {
 fn norito_build(raw_args: Vec<String>) -> Result<(), String> {
     let mut source_spec: Option<String> = None;
     let mut bytecode_out: Option<PathBuf> = None;
-    let mut abi_version: Option<u8> = None;
     let mut summary_out: Option<PathBuf> = None;
 
     for arg in raw_args {
@@ -11810,12 +11801,6 @@ fn norito_build(raw_args: Vec<String>) -> Result<(), String> {
         match key {
             "--source" => source_spec = Some(value.to_string()),
             "--bytecode-out" => bytecode_out = Some(PathBuf::from(value)),
-            "--abi-version" => {
-                let parsed: u8 = value
-                    .parse()
-                    .map_err(|err| format!("invalid `--abi-version` value: {err}"))?;
-                abi_version = Some(parsed);
-            }
             "--summary-out" => summary_out = Some(PathBuf::from(value)),
             _ => {
                 return Err(format!(
@@ -11831,11 +11816,6 @@ fn norito_build(raw_args: Vec<String>) -> Result<(), String> {
     let bytecode_out = bytecode_out.ok_or_else(|| {
         "missing required `--bytecode-out=PATH` for `sorafs_cli norito build`".to_string()
     })?;
-    let abi_version = abi_version.unwrap_or(1);
-    if abi_version != 1 {
-        return Err(format!("unsupported abi_version {abi_version}; expected 1"));
-    }
-
     let (source_text, source_path) = if source_spec == "-" {
         let mut buf = String::new();
         io::stdin()
@@ -11849,10 +11829,26 @@ fn norito_build(raw_args: Vec<String>) -> Result<(), String> {
         (contents, Some(path))
     };
 
-    let compiler = Compiler::new().with_abi_version(abi_version);
-    let bytecode = compiler
-        .compile_source(&source_text)
-        .map_err(|err| format!("failed to compile Kotodama source: {err}"))?;
+    let source_name = source_path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "<stdin>".to_owned());
+    let bytecode = CompilerSession::default()
+        .build(CompileRequest {
+            source: &source_text,
+            source_name: Some(&source_name),
+        })
+        .map_err(|diagnostics| {
+            format!(
+                "failed to compile Kotodama source:\n{}",
+                diagnostics.render_human()
+            )
+        })?
+        .artifact;
+    let abi_version = ivm::ProgramMetadata::parse(&bytecode)
+        .map_err(|err| format!("compiler produced invalid Kotodama artifact: {err}"))?
+        .metadata
+        .abi_version;
 
     write_bytes(&bytecode_out, &bytecode)?;
 

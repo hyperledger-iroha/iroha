@@ -563,7 +563,7 @@ fn finality_proof_rejects_missing_validator_pop() {
 }
 
 #[test]
-fn finality_proof_respects_commit_qc_retention_cap() {
+fn historical_finality_proof_survives_process_commit_qc_retention() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(2);
 
@@ -576,7 +576,7 @@ fn finality_proof_respects_commit_qc_retention_cap() {
     let query = LiveQueryStore::start_test();
     let mut world = World::new();
     seed_validator_pops(&mut world, std::slice::from_ref(&kp));
-    let state = State::new_for_testing(world, kura.clone(), query);
+    let mut state = State::new_for_testing(world, kura.clone(), query);
 
     let mut parent = None;
     for height in 1..=3 {
@@ -603,14 +603,38 @@ fn finality_proof_respects_commit_qc_retention_cap() {
             &validator_set,
             &keypairs,
         );
-        record_commit_qc(cert);
+        record_commit_qc(cert.clone());
+        state.insert_commit_qc_for_testing(block_hash, cert);
     }
 
+    assert!(
+        iroha_core::sumeragi::status::commit_qc_history()
+            .iter()
+            .all(|qc| qc.height != 1),
+        "fixture must evict the oldest QC from process history"
+    );
+    let oldest_hash = kura
+        .get_block(NonZeroUsize::new(1).expect("nonzero height"))
+        .expect("oldest block")
+        .hash();
+    assert!(
+        state
+            .commit_roster_snapshot_for_block(1, oldest_hash)
+            .is_none(),
+        "fixture must have no retained journal or Kura roster sidecar for the oldest block"
+    );
     let view = state.view();
-    assert!(matches!(
-        build_finality_proof(&view, 1),
-        Err(BridgeFinalityError::QcNotFound(1))
-    ));
+    let oldest = build_finality_proof(&view, 1)
+        .expect("oldest proof should fall back to the durable commit-QC archive");
+    verify_finality_proof(
+        &oldest,
+        verification_config(
+            &oldest.chain_id,
+            Some(1),
+            Some(oldest.commit_qc.validator_set_hash),
+        ),
+    )
+    .expect("historical fallback proof must still verify cryptographically");
     build_finality_proof(&view, 2).expect("recent proof should be retained");
     build_finality_proof(&view, 3).expect("newest proof should be retained");
 }

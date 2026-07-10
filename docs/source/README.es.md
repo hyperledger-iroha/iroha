@@ -44,7 +44,7 @@ Kotodama y el pipeline centrado en la IVM. Para una versión en japonés, consul
 Consejos de uso
 
 - Compila y ejecuta ejemplos en `examples/` usando las herramientas externas
-  (`koto_compile`, `ivm_run`):
+  (`koto build`, `ivm_run`):
   - `make examples-run` (y `make examples-inspect` si `ivm_tool` está disponible).
 - Las pruebas de integración opcionales (ignoradas por defecto) para ejemplos y
   comprobaciones de cabecera viven en `integration_tests/tests/`.

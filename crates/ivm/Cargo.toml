@@ -74,7 +74,7 @@ hex-literal = "1.1.0"
 # selected at runtime based on hardware capabilities.
 # - `metal`: enables Apple Metal GPU kernels on macOS. Ignored on other OSes.
 # - `cuda`: enables CUDA PTX kernels when available. Falls back to CPU otherwise.
-default = ["halo2", "kotodama_dynamic_bounds"]
+default = ["halo2"]
 bench = []
 ## Hardware transactional memory experiments on x86_64 (requires nightly RTM intrinsics).
 htm = []
@@ -93,7 +93,6 @@ metal = [
 ## Expose the optional circuit-params hook from halo2. Enabled when downstream
 ## users compile us alongside backends that expect the associated `Params` type.
 halo2-params = []
-kotodama_dynamic_bounds = ["kotodama_lang/kotodama_dynamic_bounds"]
 ## Allow development fallback behavior for schema decode helpers when running
 ## experiments without registry-backed schema resolution. Disable this in
 ## strict/production builds.

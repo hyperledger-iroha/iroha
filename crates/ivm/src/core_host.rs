@@ -37,10 +37,14 @@ use crate::{
     VMError,
     axt::{self, AxtPolicy},
     gas,
-    host::{AccessLog, IVMHost},
+    host::{
+        AccessLog, IVMHost, canonical_state_map_key_at, canonical_state_map_path,
+        checked_state_keys_limit, common_syscall_gas_quote, conservative_syscall_gas_quote,
+        is_sm_syscall, preflight_reserved_syscall_gas, quote_tlv_payload_len_at,
+        reserve_available_syscall_gas,
+    },
     ivm::IVM,
     memory::Memory,
-    metadata::{CONTRACT_INTERFACE_SECTION_MAGIC, LITERAL_SECTION_MAGIC},
     mock_wsv::{MockWorldStateView, SpaceDirectoryAxtPolicy},
     parallel::StateUpdate,
     pointer_abi::{self, PointerType},
@@ -127,10 +131,11 @@ impl CachedProofEntry {
     }
 }
 
+#[derive(Clone)]
 pub struct CoreHost {
     // Simple in-memory state for STATE_{GET,SET,DEL} syscalls keyed by path.
     state: DurableStateOverlay,
-    schema: Box<dyn SchemaRegistry + Send + Sync>,
+    schema: Arc<dyn SchemaRegistry + Send + Sync>,
     axt_state: Option<axt::HostAxtState>,
     axt_policy: Arc<dyn AxtPolicy>,
     axt_policy_snapshot: Option<AxtPolicySnapshot>,
@@ -177,7 +182,7 @@ impl CoreHost {
     pub fn new() -> Self {
         Self {
             state: DurableStateOverlay::in_memory(),
-            schema: Box::new(DefaultRegistry::new()),
+            schema: Arc::new(DefaultRegistry::new()),
             axt_state: None,
             axt_policy: Arc::new(axt::AllowAllAxtPolicy),
             axt_policy_snapshot: None,
@@ -198,7 +203,7 @@ impl CoreHost {
     pub fn new_with_registry(reg: Box<dyn SchemaRegistry + Send + Sync>) -> Self {
         Self {
             state: DurableStateOverlay::in_memory(),
-            schema: reg,
+            schema: Arc::from(reg),
             axt_state: None,
             axt_policy: Arc::new(axt::AllowAllAxtPolicy),
             axt_policy_snapshot: None,
@@ -312,17 +317,13 @@ impl CoreHost {
         Ok(keys.into_iter().collect())
     }
 
-    fn paged_state_keys(keys: &[Name], offset: u64, limit: u64) -> Vec<Name> {
+    fn paged_state_keys(keys: &[Name], offset: u64, limit: u64) -> Result<Vec<Name>, VMError> {
+        let take = checked_state_keys_limit(limit)?;
         let offset = usize::try_from(offset).unwrap_or(usize::MAX);
         if offset >= keys.len() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
-        let take = if limit == 0 {
-            keys.len().saturating_sub(offset)
-        } else {
-            usize::try_from(limit).unwrap_or(usize::MAX)
-        };
-        keys.iter().skip(offset).take(take).cloned().collect()
+        Ok(keys.iter().skip(offset).take(take).cloned().collect())
     }
 
     /// Borrow the raw Norito payload stored under `path`, if present.
@@ -651,16 +652,23 @@ impl CoreHost {
         Ok(Self::axt_gas(gas_len))
     }
 
-    fn handle_axt_commit(&mut self) -> Result<u64, VMError> {
-        let state = self.axt_state.take().ok_or(VMError::PermissionDenied)?;
-        let gas = Self::axt_commit_gas(&state);
+    fn handle_axt_commit(&mut self, vm: &IVM) -> Result<u64, VMError> {
+        let gas = self
+            .axt_state
+            .as_ref()
+            .map(Self::axt_commit_gas)
+            .ok_or(VMError::PermissionDenied)?;
+        preflight_reserved_syscall_gas(vm, gas)?;
+        self.axt_state
+            .take()
+            .expect("axt_state checked before gas preflight");
         self.axt_active = false;
         Ok(gas)
     }
 
     /// Attach a schema registry implementation.
     pub fn with_schema_registry(mut self, reg: Box<dyn SchemaRegistry + Send + Sync>) -> Self {
-        self.schema = reg;
+        self.schema = Arc::from(reg);
         self
     }
 
@@ -800,130 +808,14 @@ impl CoreHost {
         njson::Value::Object(map)
     }
 
-    fn load_u64(vm: &IVM, addr: usize) -> Option<u64> {
-        let slice = vm.memory.load_region(addr as u64, 8).ok()?;
-        Some(u64::from_le_bytes(slice.try_into().ok()?))
-    }
-
-    fn literal_table_info(vm: &IVM) -> Option<(usize, usize, usize, usize, usize)> {
-        let limit = vm.pc() as usize;
-        let prefix = vm.memory.load_region(0, limit as u64).ok()?;
-        let mut literal_start = 0usize;
-        if vm.metadata().version_minor == 1
-            && limit >= 8
-            && prefix[0..4] == CONTRACT_INTERFACE_SECTION_MAGIC
-        {
-            let contract_payload_len = u32::from_le_bytes(prefix[4..8].try_into().ok()?) as usize;
-            let contract_section_len = 8usize.checked_add(contract_payload_len)?;
-            literal_start = contract_section_len;
-        }
-        if literal_start + 4 > limit
-            || prefix[literal_start..literal_start + 4] != LITERAL_SECTION_MAGIC
-        {
-            if crate::dev_env::decode_trace_enabled() {
-                eprintln!("[CoreHost] literal table not found (limit=0x{limit:08x})");
-            }
-            return None;
-        }
-        if literal_start + 16 > limit {
-            return None;
-        }
-        let literal_count = u32::from_le_bytes(
-            prefix[literal_start + 4..literal_start + 8]
-                .try_into()
-                .ok()?,
-        ) as usize;
-        let post_pad = u32::from_le_bytes(
-            prefix[literal_start + 8..literal_start + 12]
-                .try_into()
-                .ok()?,
-        ) as usize;
-        let data_len = u32::from_le_bytes(
-            prefix[literal_start + 12..literal_start + 16]
-                .try_into()
-                .ok()?,
-        ) as usize;
-        let offsets_start = literal_start + 16;
-        let lits_bytes = literal_count.checked_mul(8)?;
-        let data_start = offsets_start.checked_add(lits_bytes)?;
-        let data_end = data_start.checked_add(data_len)?.checked_add(post_pad)?;
-        if data_end > limit {
-            return None;
-        }
-        Some((
-            literal_start,
-            offsets_start,
-            data_start,
-            data_end,
-            literal_count,
-        ))
-    }
-
     fn resolve_literal_pointer(vm: &IVM, src: usize) -> Option<usize> {
-        let (start, offsets_start, data_start, data_end, count) = Self::literal_table_info(vm)?;
-        if crate::dev_env::decode_trace_enabled() {
-            eprintln!(
-                "[CoreHost] literal table start=0x{start:08x} offsets=0x{offsets_start:08x} data=0x{data_start:08x}..0x{data_end:08x} count={count} src=0x{src:08x}"
-            );
-        }
-        if src >= data_start && src < data_end {
-            return Some(src);
-        }
-        if count == 0 {
-            return None;
-        }
-        if src >= offsets_start && src < data_start {
-            let idx = (src - offsets_start) / 8;
-            if idx >= count {
-                return None;
-            }
-            let offset = Self::load_u64(vm, offsets_start + idx * 8)? as usize;
-            let target = start.checked_add(offset)?;
-            if target >= data_start && target < data_end {
-                if crate::dev_env::decode_trace_enabled() {
-                    eprintln!("[CoreHost] literal pointer via table idx={idx} -> 0x{target:08x}");
-                }
-                return Some(target);
-            }
-            return None;
-        }
-        if src < offsets_start {
-            // Interpret as relative offset or header pointer; fall back to first entry.
-            let rel = start.checked_add(src)?;
-            if rel >= data_start && rel < data_end {
-                if crate::dev_env::decode_trace_enabled() {
-                    eprintln!("[CoreHost] literal pointer relative -> 0x{rel:08x}");
-                }
-                return Some(rel);
-            }
-            let offset = Self::load_u64(vm, offsets_start)? as usize;
-            let target = start.checked_add(offset)?;
-            if target >= data_start && target < data_end {
-                if crate::dev_env::decode_trace_enabled() {
-                    eprintln!("[CoreHost] literal pointer fallback first -> 0x{target:08x}");
-                }
-                return Some(target);
-            }
-        }
-        None
+        let address = u64::try_from(src).ok()?;
+        vm.is_validated_literal_pointer(address).then_some(src)
     }
 
     fn expect_tlv(vm: &IVM, reg: usize, ty: PointerType) -> Result<(), VMError> {
         let addr = Self::resolve_code_tlv_addr(vm, vm.register(reg));
-        // First, check type id directly from the TLV header to catch mismatches deterministically
-        let hdr = vm.memory.load_region(addr, 7)?;
-        let raw_type = u16::from_be_bytes([hdr[0], hdr[1]]);
-        if raw_type != ty as u16 {
-            if crate::dev_env::decode_trace_enabled() {
-                eprintln!(
-                    "[CoreHost] type mismatch at r{reg}: expect=0x{:04x} got=0x{:04x}",
-                    ty as u16, raw_type
-                );
-            }
-            return Err(VMError::NoritoInvalid);
-        }
-        // Then validate full TLV envelope and hash
-        let tlv = vm.memory.validate_tlv(addr)?;
+        let tlv = vm.validate_tlv(addr)?;
         if crate::dev_env::decode_trace_enabled() {
             eprintln!(
                 "[CoreHost] reg r{reg} expect={:?} got={:?} addr=0x{addr:08x}",
@@ -934,17 +826,16 @@ impl CoreHost {
         if tlv.type_id != ty {
             return Err(VMError::NoritoInvalid);
         }
-        Self::enforce_pointer_policy(vm, tlv)?;
         Ok(())
     }
 
     fn expect_tlv_payload_len(vm: &IVM, reg: usize, ty: PointerType) -> Result<usize, VMError> {
         let addr = Self::resolve_code_tlv_addr(vm, vm.register(reg));
         Self::expect_tlv(vm, reg, ty)?;
-        Ok(vm.memory.validate_tlv(addr)?.payload.len())
+        Ok(vm.validate_tlv(addr)?.payload.len())
     }
 
-    fn resolve_code_tlv_addr(vm: &IVM, addr: u64) -> u64 {
+    pub(crate) fn resolve_code_tlv_addr(vm: &IVM, addr: u64) -> u64 {
         let input_lo = Memory::INPUT_START;
         let input_hi = Memory::INPUT_START + Memory::INPUT_SIZE;
         if addr >= input_lo && addr < input_hi {
@@ -961,18 +852,7 @@ impl CoreHost {
         addr: u64,
         expected: PointerType,
     ) -> Result<pointer_abi::Tlv<'a>, VMError> {
-        let input_lo = Memory::INPUT_START;
-        let input_hi = Memory::INPUT_START + Memory::INPUT_SIZE;
-        let tlv = if addr >= input_lo && addr + 7 <= input_hi {
-            let tlv = vm.memory.validate_tlv(addr)?;
-            if tlv.type_id != expected {
-                return Err(VMError::NoritoInvalid);
-            }
-            Self::enforce_pointer_policy(vm, tlv)?
-        } else {
-            self.decode_tlv_from_code(vm, addr, expected)?
-        };
-        Ok(tlv)
+        self.decode_tlv_any_region(vm, addr, expected)
     }
 
     fn decode_tlv_any_region<'a>(
@@ -981,91 +861,10 @@ impl CoreHost {
         addr: u64,
         expected: PointerType,
     ) -> Result<pointer_abi::Tlv<'a>, VMError> {
-        let tlv = match self.decode_tlv_from_memory(vm, addr, expected) {
-            Ok(tlv) => tlv,
-            Err(err @ VMError::AbiTypeNotAllowed { .. }) => return Err(err),
-            Err(_) => self.decode_tlv_from_code(vm, addr, expected)?,
-        };
-        Ok(tlv)
-    }
-
-    fn decode_tlv_from_memory<'a>(
-        &self,
-        vm: &'a IVM,
-        addr: u64,
-        expected: PointerType,
-    ) -> Result<pointer_abi::Tlv<'a>, VMError> {
-        let hdr = vm
-            .memory
-            .load_region(addr, 7)
-            .map_err(|_| VMError::NoritoInvalid)?;
-        let type_id = u16::from_be_bytes([hdr[0], hdr[1]]);
-        if type_id != expected as u16 || hdr[2] != 1 {
+        let resolved = Self::resolve_code_tlv_addr(vm, addr);
+        let tlv = vm.validate_tlv(resolved)?;
+        if tlv.type_id != expected {
             return Err(VMError::NoritoInvalid);
-        }
-        let len = u32::from_be_bytes([hdr[3], hdr[4], hdr[5], hdr[6]]) as usize;
-        let total = 7usize
-            .checked_add(len)
-            .and_then(|size| size.checked_add(iroha_crypto::Hash::LENGTH))
-            .ok_or(VMError::NoritoInvalid)?;
-        let envelope = vm
-            .memory
-            .load_region(addr, total as u64)
-            .map_err(|_| VMError::NoritoInvalid)?;
-        let tlv = pointer_abi::validate_tlv_bytes(envelope)?;
-        Self::enforce_pointer_policy(vm, tlv)
-    }
-
-    fn decode_tlv_from_code<'a>(
-        &self,
-        vm: &'a IVM,
-        addr: u64,
-        expected: PointerType,
-    ) -> Result<pointer_abi::Tlv<'a>, VMError> {
-        let resolved_addr = Self::resolve_code_tlv_addr(vm, addr);
-        let code_len = vm.memory.code_len();
-        if resolved_addr >= code_len || resolved_addr + 7 > code_len {
-            return Err(VMError::NoritoInvalid);
-        }
-        let mut hdr = [0u8; 7];
-        vm.memory
-            .load_bytes(resolved_addr, &mut hdr)
-            .map_err(|_| VMError::NoritoInvalid)?;
-        let type_id = u16::from_be_bytes([hdr[0], hdr[1]]);
-        if type_id != expected as u16 {
-            return Err(VMError::NoritoInvalid);
-        }
-        if hdr[2] != 1 {
-            return Err(VMError::NoritoInvalid);
-        }
-        let len = u32::from_be_bytes([hdr[3], hdr[4], hdr[5], hdr[6]]) as usize;
-        let total = 7usize
-            .checked_add(len)
-            .and_then(|x| x.checked_add(IrohaHash::LENGTH))
-            .ok_or(VMError::NoritoInvalid)?;
-        let code_len = code_len as usize;
-        if resolved_addr as usize + total > code_len {
-            return Err(VMError::NoritoInvalid);
-        }
-        let envelope = vm
-            .memory
-            .load_region(resolved_addr, total as u64)
-            .map_err(|_| VMError::NoritoInvalid)?;
-        let tlv = pointer_abi::validate_tlv_bytes(envelope)?;
-        Self::enforce_pointer_policy(vm, tlv)
-    }
-
-    fn enforce_pointer_policy<'a>(
-        vm: &IVM,
-        tlv: pointer_abi::Tlv<'a>,
-    ) -> Result<pointer_abi::Tlv<'a>, VMError> {
-        let (policy, abi_version) = pointer_abi::current_policy()
-            .unwrap_or_else(|| (vm.syscall_policy(), vm.abi_version()));
-        if abi_version != 1 || !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-            return Err(VMError::AbiTypeNotAllowed {
-                abi: abi_version,
-                type_id: tlv.type_id as u16,
-            });
         }
         Ok(tlv)
     }
@@ -1196,6 +995,173 @@ impl CoreHost {
         TLV_LEN_GAS_BASE.saturating_add(TLV_LEN_GAS_PER_BYTE.saturating_mul(bytes))
     }
 
+    /// Read only a pointer-ABI header and its declared extent for preparation.
+    ///
+    /// This deliberately does not decode the payload, verify its digest, or
+    /// allocate an owned envelope. Full validation remains in the post-debit
+    /// syscall path. Literal pointers are resolved without copying code.
+    pub(crate) fn quote_codec_tlv_payload_len(
+        vm: &IVM,
+        register: usize,
+        expected: PointerType,
+        nullable: bool,
+    ) -> Result<usize, VMError> {
+        let pointer = vm.register(register);
+        if pointer == 0 {
+            return if nullable {
+                Ok(0)
+            } else {
+                Err(VMError::NoritoInvalid)
+            };
+        }
+        match quote_tlv_payload_len_at(vm, pointer, expected) {
+            Ok(payload_len) => Ok(payload_len),
+            Err(raw_error) => {
+                let resolved = Self::resolve_code_tlv_addr(vm, pointer);
+                if resolved == pointer {
+                    Err(raw_error)
+                } else {
+                    quote_tlv_payload_len_at(vm, resolved, expected)
+                }
+            }
+        }
+    }
+
+    fn quote_codec_any_tlv_payload_len(
+        vm: &IVM,
+        register: usize,
+        nullable: bool,
+    ) -> Result<usize, VMError> {
+        let pointer = vm.register(register);
+        if pointer == 0 {
+            return if nullable {
+                Ok(0)
+            } else {
+                Err(VMError::NoritoInvalid)
+            };
+        }
+        let payload_len_at = |address: u64| -> Result<usize, VMError> {
+            let header = vm.memory.load_region(address, 7)?;
+            if header[2] != 1 {
+                return Err(VMError::NoritoInvalid);
+            }
+            let payload_len =
+                u32::from_be_bytes([header[3], header[4], header[5], header[6]]) as usize;
+            let envelope_len = 7usize
+                .checked_add(payload_len)
+                .and_then(|len| len.checked_add(IrohaHash::LENGTH))
+                .ok_or(VMError::NoritoInvalid)?;
+            vm.memory.load_region(
+                address,
+                u64::try_from(envelope_len).map_err(|_| VMError::NoritoInvalid)?,
+            )?;
+            Ok(payload_len)
+        };
+        let raw = payload_len_at(pointer);
+        if raw.is_ok() {
+            return raw;
+        }
+        let resolved = Self::resolve_code_tlv_addr(vm, pointer);
+        if resolved == pointer {
+            return raw;
+        }
+        payload_len_at(resolved)
+    }
+
+    fn maximum_host_output_payload() -> usize {
+        usize::try_from(Memory::INPUT_SIZE).unwrap_or(usize::MAX)
+    }
+
+    /// Return a payload-length upper bound for the response-producing codec
+    /// helpers without running the helper against a cloned VM.
+    pub(crate) fn codec_gas_quote(number: u32, vm: &IVM) -> Result<Option<u64>, VMError> {
+        let canonical = syscalls::canonical_helper_syscall(number);
+        let maximum_output = Self::maximum_host_output_payload();
+        let quote = match canonical {
+            syscalls::SYSCALL_DECODE_INT => {
+                let input =
+                    Self::quote_codec_tlv_payload_len(vm, 10, PointerType::NoritoBytes, true)?;
+                Self::numeric_payload_gas(input, 0)
+            }
+            syscalls::SYSCALL_BUILD_PATH_MAP_KEY => {
+                let input = Self::quote_codec_tlv_payload_len(vm, 10, PointerType::Name, false)?;
+                Self::path_gas(input, maximum_output)
+            }
+            syscalls::SYSCALL_ENCODE_INT => Self::numeric_payload_gas(0, 64),
+            syscalls::SYSCALL_JSON_ENCODE => {
+                let input = Self::quote_codec_tlv_payload_len(vm, 10, PointerType::Json, false)?;
+                Self::json_gas(input, maximum_output)
+            }
+            syscalls::SYSCALL_JSON_DECODE => {
+                let input = Self::quote_codec_any_tlv_payload_len(vm, 10, true)?;
+                Self::json_gas(input, maximum_output)
+            }
+            syscalls::SYSCALL_JSON_OBJECT => Self::json_gas(0, maximum_output),
+            syscalls::SYSCALL_JSON_SET_I64 | syscalls::SYSCALL_JSON_SET_ACCOUNT_ID => {
+                let json = Self::quote_codec_tlv_payload_len(vm, 10, PointerType::Json, false)?;
+                let key = Self::quote_codec_tlv_payload_len(vm, 11, PointerType::Name, false)?;
+                let value = if canonical == syscalls::SYSCALL_JSON_SET_ACCOUNT_ID {
+                    Self::quote_codec_tlv_payload_len(vm, 12, PointerType::AccountId, false)?
+                } else {
+                    core::mem::size_of::<i64>()
+                };
+                Self::json_gas(
+                    json.saturating_add(key).saturating_add(value),
+                    maximum_output,
+                )
+            }
+            syscalls::SYSCALL_JSON_GET_I64
+            | syscalls::SYSCALL_JSON_GET_JSON
+            | syscalls::SYSCALL_JSON_GET_NAME
+            | syscalls::SYSCALL_JSON_GET_ACCOUNT_ID
+            | syscalls::SYSCALL_JSON_GET_NFT_ID
+            | syscalls::SYSCALL_JSON_GET_BLOB_HEX
+            | syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID
+            | syscalls::SYSCALL_JSON_GET_NUMERIC => {
+                let json = Self::quote_codec_tlv_payload_len(vm, 10, PointerType::Json, false)?;
+                let key = Self::quote_codec_tlv_payload_len(vm, 11, PointerType::Name, false)?;
+                let output = if canonical == syscalls::SYSCALL_JSON_GET_I64 {
+                    core::mem::size_of::<i64>()
+                } else {
+                    maximum_output
+                };
+                Self::json_gas(json.saturating_add(key), output)
+            }
+            syscalls::SYSCALL_NAME_DECODE => {
+                let input =
+                    Self::quote_codec_tlv_payload_len(vm, 10, PointerType::NoritoBytes, true)?;
+                Self::name_decode_gas(input, maximum_output)
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(quote))
+    }
+
+    fn schema_gas_quote(number: u32, vm: &IVM) -> Result<Option<u64>, VMError> {
+        let (value_type, has_value) = match number {
+            syscalls::SYSCALL_SCHEMA_ENCODE | syscalls::SYSCALL_SCHEMA_ENCODE_DIRECT => {
+                (PointerType::Json, true)
+            }
+            syscalls::SYSCALL_SCHEMA_DECODE | syscalls::SYSCALL_SCHEMA_DECODE_DIRECT => {
+                (PointerType::NoritoBytes, true)
+            }
+            syscalls::SYSCALL_SCHEMA_INFO | syscalls::SYSCALL_SCHEMA_INFO_DIRECT => {
+                (PointerType::NoritoBytes, false)
+            }
+            _ => return Ok(None),
+        };
+        let schema = Self::quote_codec_tlv_payload_len(vm, 10, PointerType::Name, false)?;
+        let value = if has_value {
+            Self::quote_codec_tlv_payload_len(vm, 11, value_type, false)?
+        } else {
+            0
+        };
+        Ok(Some(Self::schema_gas(
+            schema.saturating_add(value),
+            Self::maximum_host_output_payload(),
+        )))
+    }
+
     fn numeric_gas() -> u64 {
         NUMERIC_GAS
     }
@@ -1210,25 +1176,80 @@ impl CoreHost {
         MUTATION_GAS.saturating_add(MUTATION_GAS_PER_BYTE.saturating_mul(bytes))
     }
 
-    fn ensure_unsigned_scale0(numeric: Numeric) -> Result<Numeric, VMError> {
-        if numeric.scale() != 0 || numeric.mantissa().is_negative() {
+    fn ensure_u128_integer(numeric: Numeric) -> Result<Numeric, VMError> {
+        if numeric.scale() != 0 || numeric.try_mantissa_u128().is_none() {
             return Err(VMError::AssertionFailed);
         }
         Ok(numeric)
+    }
+
+    fn quote_canonical_state_map_path(vm: &IVM) -> Result<u64, VMError> {
+        let base_len = quote_tlv_payload_len_at(
+            vm,
+            Self::resolve_code_tlv_addr(vm, vm.register(10)),
+            PointerType::Name,
+        )?;
+        let key_len = quote_tlv_payload_len_at(
+            vm,
+            Self::resolve_code_tlv_addr(vm, vm.register(11)),
+            PointerType::NoritoBytes,
+        )?;
+        if base_len > syscalls::STATE_MAP_MAX_BASE_BYTES
+            || key_len == 0
+            || key_len > syscalls::STATE_MAP_MAX_KEY_BYTES
+        {
+            return Err(VMError::NoritoInvalid);
+        }
+        let output_bound = base_len
+            .saturating_add(1)
+            .saturating_add(key_len.saturating_mul(2))
+            .saturating_add(16);
+        Ok(Self::path_gas(
+            base_len.saturating_add(key_len),
+            output_bound,
+        ))
+    }
+
+    fn quote_state_map_key_at(vm: &IVM) -> Result<u64, VMError> {
+        let page_len = quote_tlv_payload_len_at(
+            vm,
+            Self::resolve_code_tlv_addr(vm, vm.register(10)),
+            PointerType::NoritoBytes,
+        )?;
+        let base_len = quote_tlv_payload_len_at(
+            vm,
+            Self::resolve_code_tlv_addr(vm, vm.register(11)),
+            PointerType::Name,
+        )?;
+        if page_len > syscalls::STATE_MAP_MAX_PAGE_BYTES
+            || base_len > syscalls::STATE_MAP_MAX_BASE_BYTES
+        {
+            return Err(VMError::NoritoInvalid);
+        }
+        Ok(Self::path_gas(
+            page_len.saturating_add(base_len),
+            syscalls::STATE_MAP_MAX_KEY_BYTES,
+        ))
     }
 
     fn decode_numeric(&self, vm: &IVM, ptr: u64) -> Result<Numeric, VMError> {
         let tlv = self.decode_tlv(vm, ptr, PointerType::NoritoBytes)?;
         let numeric =
             decode_from_bytes::<Numeric>(tlv.payload).map_err(|_| VMError::DecodeError)?;
-        Self::ensure_unsigned_scale0(numeric)
+        if to_bytes(&numeric).map_err(|_| VMError::DecodeError)? != tlv.payload {
+            return Err(VMError::DecodeError);
+        }
+        Self::ensure_u128_integer(numeric)
     }
 
     fn decode_numeric_any(&self, vm: &IVM, ptr: u64) -> Result<Numeric, VMError> {
         let tlv = self.decode_tlv_any_region(vm, ptr, PointerType::NoritoBytes)?;
         let numeric =
             decode_from_bytes::<Numeric>(tlv.payload).map_err(|_| VMError::DecodeError)?;
-        Self::ensure_unsigned_scale0(numeric)
+        if to_bytes(&numeric).map_err(|_| VMError::DecodeError)? != tlv.payload {
+            return Err(VMError::DecodeError);
+        }
+        Self::ensure_u128_integer(numeric)
     }
 }
 
@@ -1240,6 +1261,63 @@ impl Default for CoreHost {
 }
 
 impl IVMHost for CoreHost {
+    fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+        if !crate::syscalls::is_syscall_allowed(vm.syscall_policy(), number) {
+            return Err(VMError::UnknownSyscall(number));
+        }
+        if is_sm_syscall(number) && !self.sm_enabled {
+            return Ok(0);
+        }
+        let quote = match number {
+            syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
+            | syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT => {
+                Self::quote_canonical_state_map_path(vm)?
+            }
+            syscalls::SYSCALL_STATE_MAP_KEY_AT => Self::quote_state_map_key_at(vm)?,
+            syscalls::SYSCALL_STATE_GET
+            | syscalls::SYSCALL_STATE_LEN
+            | syscalls::SYSCALL_STATE_KEYS
+            | syscalls::SYSCALL_STATE_COUNT => reserve_available_syscall_gas(vm)?,
+            syscalls::SYSCALL_STATE_SET => {
+                quote_tlv_payload_len_at(
+                    vm,
+                    Self::resolve_code_tlv_addr(vm, vm.register(10)),
+                    PointerType::Name,
+                )?;
+                let value_len = quote_tlv_payload_len_at(
+                    vm,
+                    Self::resolve_code_tlv_addr(vm, vm.register(11)),
+                    PointerType::NoritoBytes,
+                )?;
+                Self::state_query_gas(value_len)
+            }
+            syscalls::SYSCALL_STATE_DEL | syscalls::SYSCALL_STATE_HAS => STATE_QUERY_GAS_BASE,
+            syscalls::SYSCALL_SCHEMA_ENCODE
+            | syscalls::SYSCALL_SCHEMA_ENCODE_DIRECT
+            | syscalls::SYSCALL_SCHEMA_DECODE
+            | syscalls::SYSCALL_SCHEMA_DECODE_DIRECT
+            | syscalls::SYSCALL_SCHEMA_INFO
+            | syscalls::SYSCALL_SCHEMA_INFO_DIRECT => {
+                Self::schema_gas_quote(number, vm)?.ok_or(VMError::UnknownSyscall(number))?
+            }
+            syscalls::SYSCALL_ALLOC => 1,
+            syscalls::SYSCALL_AXT_COMMIT => reserve_available_syscall_gas(vm)?,
+            _ => {
+                if let Some(quote) = common_syscall_gas_quote(number, vm)? {
+                    quote
+                } else if let Some(quote) = Self::codec_gas_quote(number, vm)? {
+                    quote
+                } else {
+                    // Stateful policy hooks and proof paths keep the generic
+                    // deterministic bound; response-producing codec helpers
+                    // above use header-only payload bounds.
+                    conservative_syscall_gas_quote(vm)
+                }
+            }
+        };
+        Ok(quote)
+    }
+
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         if crate::dev_env::decode_trace_enabled() {
             eprintln!("[CoreHost] syscall number=0x{number:02x}");
@@ -1260,6 +1338,8 @@ impl IVMHost for CoreHost {
                 let path = self.decode_name_payload(tlv.payload)?;
                 self.log_read_key(path.as_ref());
                 if let Some(val) = self.state.get(path.as_ref()) {
+                    let gas = Self::state_query_gas(val.len());
+                    preflight_reserved_syscall_gas(vm, gas)?;
                     if crate::dev_env::decode_trace_enabled() {
                         eprintln!(
                             "[CoreHost] STATE_GET path='{}' hit bytes={}",
@@ -1279,8 +1359,9 @@ impl IVMHost for CoreHost {
                     if crate::dev_env::decode_trace_enabled() {
                         eprintln!("[CoreHost] STATE_GET returned r10=0x{p:08x}");
                     }
-                    Ok(Self::state_query_gas(val.len()))
+                    Ok(gas)
                 } else {
+                    preflight_reserved_syscall_gas(vm, STATE_QUERY_GAS_BASE)?;
                     if crate::dev_env::decode_trace_enabled() {
                         eprintln!("[CoreHost] STATE_GET path='{path}' miss");
                     }
@@ -1340,13 +1421,15 @@ impl IVMHost for CoreHost {
                 let prefix = self.decode_name_payload(p_prefix.payload)?;
                 self.log_read_key(prefix.as_ref());
                 let keys = self.state_keys_with_prefix(&prefix)?;
-                let selected = Self::paged_state_keys(&keys, vm.register(11), vm.register(12));
+                let selected = Self::paged_state_keys(&keys, vm.register(11), vm.register(12))?;
                 let payload = to_bytes(&selected).map_err(|_| VMError::NoritoInvalid)?;
+                let gas = Self::state_keys_gas(selected.len(), payload.len());
+                preflight_reserved_syscall_gas(vm, gas)?;
                 let out = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, out);
                 vm.set_register(11, u64::try_from(keys.len()).unwrap_or(u64::MAX));
                 vm.set_register(12, u64::try_from(selected.len()).unwrap_or(u64::MAX));
-                Ok(Self::state_keys_gas(selected.len(), payload.len()))
+                Ok(gas)
             }
             syscalls::SYSCALL_STATE_HAS => {
                 let ptr = vm.register(10);
@@ -1368,10 +1451,13 @@ impl IVMHost for CoreHost {
                 let path = self.decode_name_payload(p_path.payload)?;
                 self.log_read_key(path.as_ref());
                 if let Some(value) = self.state.get(path.as_ref()) {
+                    let gas = Self::state_query_gas(value.len());
+                    preflight_reserved_syscall_gas(vm, gas)?;
                     vm.set_register(10, u64::try_from(value.len()).unwrap_or(u64::MAX));
                     vm.set_register(11, 1);
-                    Ok(Self::state_query_gas(value.len()))
+                    Ok(gas)
                 } else {
+                    preflight_reserved_syscall_gas(vm, STATE_QUERY_GAS_BASE)?;
                     vm.set_register(10, 0);
                     vm.set_register(11, 0);
                     Ok(STATE_QUERY_GAS_BASE)
@@ -1386,8 +1472,10 @@ impl IVMHost for CoreHost {
                 let prefix = self.decode_name_payload(p_prefix.payload)?;
                 self.log_read_key(prefix.as_ref());
                 let total = self.state_keys_with_prefix(&prefix)?.len();
+                let gas = Self::state_count_gas(total);
+                preflight_reserved_syscall_gas(vm, gas)?;
                 vm.set_register(10, u64::try_from(total).unwrap_or(u64::MAX));
-                Ok(Self::state_count_gas(total))
+                Ok(gas)
             }
             syscalls::SYSCALL_ALLOC => {
                 // r10 = number of bytes to allocate on the VM heap.
@@ -1406,7 +1494,7 @@ impl IVMHost for CoreHost {
                     vm.set_register(10, 0);
                     return Ok(Self::numeric_payload_gas(0, 0));
                 }
-                let tlv = vm.memory.validate_tlv(addr)?;
+                let tlv = vm.validate_tlv(addr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(VMError::NoritoInvalid);
                 }
@@ -1458,10 +1546,10 @@ impl IVMHost for CoreHost {
                 out.extend_from_slice(&body);
                 let h: [u8; 32] = IrohaHash::new(&body).into();
                 out.extend_from_slice(&h);
-                let p = vm.alloc_input_tlv(&out)?;
+                let p = vm.alloc_host_tlv(&out)?;
                 vm.set_register(10, p);
                 if crate::dev_env::decode_trace_enabled() {
-                    let tlv2 = vm.memory.validate_tlv(p)?;
+                    let tlv2 = vm.validate_tlv(p)?;
                     if let Ok(name) = decode_from_bytes::<Name>(tlv2.payload) {
                         eprintln!(
                             "[CoreHost] BUILD_PATH_MAP_KEY exit r10=0x{p:08x} -> {}",
@@ -1482,7 +1570,7 @@ impl IVMHost for CoreHost {
                 out.extend_from_slice(&body);
                 let h: [u8; 32] = IrohaHash::new(&body).into();
                 out.extend_from_slice(&h);
-                let p = vm.alloc_input_tlv(&out)?;
+                let p = vm.alloc_host_tlv(&out)?;
                 vm.set_register(10, p);
                 Ok(Self::numeric_payload_gas(0, body.len()))
             }
@@ -1528,7 +1616,9 @@ impl IVMHost for CoreHost {
                 } else {
                     self.decode_numeric(vm, vm.register(11))?
                 };
-                let out = lhs.checked_add(rhs).ok_or(VMError::AssertionFailed)?;
+                let out = Self::ensure_u128_integer(
+                    lhs.checked_add(rhs).ok_or(VMError::AssertionFailed)?,
+                )?;
                 let payload = to_bytes(&out).map_err(|_| VMError::NoritoInvalid)?;
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
@@ -1546,10 +1636,9 @@ impl IVMHost for CoreHost {
                 } else {
                     self.decode_numeric(vm, vm.register(11))?
                 };
-                let out = lhs.checked_sub(rhs).ok_or(VMError::AssertionFailed)?;
-                if out.mantissa().is_negative() {
-                    return Err(VMError::AssertionFailed);
-                }
+                let out = Self::ensure_u128_integer(
+                    lhs.checked_sub(rhs).ok_or(VMError::AssertionFailed)?,
+                )?;
                 let payload = to_bytes(&out).map_err(|_| VMError::NoritoInvalid)?;
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
@@ -1567,9 +1656,10 @@ impl IVMHost for CoreHost {
                 } else {
                     self.decode_numeric(vm, vm.register(11))?
                 };
-                let out = lhs
-                    .checked_mul(rhs, NumericSpec::unconstrained())
-                    .ok_or(VMError::AssertionFailed)?;
+                let out = Self::ensure_u128_integer(
+                    lhs.checked_mul(rhs, NumericSpec::unconstrained())
+                        .ok_or(VMError::AssertionFailed)?,
+                )?;
                 let payload = to_bytes(&out).map_err(|_| VMError::NoritoInvalid)?;
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
@@ -1587,9 +1677,10 @@ impl IVMHost for CoreHost {
                 } else {
                     self.decode_numeric(vm, vm.register(11))?
                 };
-                let out = lhs
-                    .checked_div(rhs, NumericSpec::unconstrained())
-                    .ok_or(VMError::AssertionFailed)?;
+                let out = Self::ensure_u128_integer(
+                    lhs.checked_div(rhs, NumericSpec::unconstrained())
+                        .ok_or(VMError::AssertionFailed)?,
+                )?;
                 let payload = to_bytes(&out).map_err(|_| VMError::NoritoInvalid)?;
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
@@ -1607,9 +1698,10 @@ impl IVMHost for CoreHost {
                 } else {
                     self.decode_numeric(vm, vm.register(11))?
                 };
-                let out = lhs
-                    .checked_rem(rhs, NumericSpec::unconstrained())
-                    .ok_or(VMError::AssertionFailed)?;
+                let out = Self::ensure_u128_integer(
+                    lhs.checked_rem(rhs, NumericSpec::unconstrained())
+                        .ok_or(VMError::AssertionFailed)?,
+                )?;
                 let payload = to_bytes(&out).map_err(|_| VMError::NoritoInvalid)?;
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
@@ -1671,37 +1763,15 @@ impl IVMHost for CoreHost {
             }
             syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
             | syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT => {
-                // r10 = &Name base; r11 = &NoritoBytes key -> r10 = &Name("<base>/<hex(hash))>")
-                let direct = number == syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT;
-                let base_tlv = if direct {
-                    self.decode_tlv_any_region(vm, vm.register(10), PointerType::Name)?
-                } else {
-                    let tlv = vm.memory.validate_tlv(vm.register(10))?;
-                    if tlv.type_id != PointerType::Name {
-                        return Err(VMError::NoritoInvalid);
-                    }
-                    tlv
-                };
-                let key_tlv = if direct {
-                    self.decode_tlv_any_region(vm, vm.register(11), PointerType::NoritoBytes)?
-                } else {
-                    let tlv = vm.memory.validate_tlv(vm.register(11))?;
-                    if tlv.type_id != PointerType::NoritoBytes {
-                        return Err(VMError::NoritoInvalid);
-                    }
-                    tlv
-                };
+                // r10 = &Name base; r11 = &NoritoBytes key
+                // -> r10 = &Name("<base>/<lowercase hex(canonical key)>")
+                let base_tlv =
+                    self.decode_tlv_any_region(vm, vm.register(10), PointerType::Name)?;
+                let key_tlv =
+                    self.decode_tlv_any_region(vm, vm.register(11), PointerType::NoritoBytes)?;
                 let base_name = self.decode_name_payload(base_tlv.payload)?;
                 let input_len = base_tlv.payload.len().saturating_add(key_tlv.payload.len());
-                let base = base_name.as_ref();
-                let h: [u8; 32] = IrohaHash::new(key_tlv.payload).into();
-                let mut s = String::with_capacity(base.len() + 1 + 64);
-                use core::fmt::Write as _;
-                let _ = write!(&mut s, "{base}/");
-                for b in &h {
-                    let _ = write!(&mut s, "{b:02x}");
-                }
-                let path_name = Name::from_str(&s).map_err(|_| VMError::NoritoInvalid)?;
+                let path_name = canonical_state_map_path(&base_name, key_tlv.payload)?;
                 let body = to_bytes(&path_name).map_err(|_| VMError::NoritoInvalid)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Name as u16).to_be_bytes());
@@ -1710,9 +1780,28 @@ impl IVMHost for CoreHost {
                 out.extend_from_slice(&body);
                 let hh: [u8; 32] = IrohaHash::new(&body).into();
                 out.extend_from_slice(&hh);
-                let p = vm.alloc_input_tlv(&out)?;
+                let p = vm.alloc_host_tlv(&out)?;
                 vm.set_register(10, p);
                 Ok(Self::path_gas(input_len, body.len()))
+            }
+            syscalls::SYSCALL_STATE_MAP_KEY_AT => {
+                let page =
+                    self.decode_tlv_any_region(vm, vm.register(10), PointerType::NoritoBytes)?;
+                let base_tlv =
+                    self.decode_tlv_any_region(vm, vm.register(11), PointerType::Name)?;
+                let base = self.decode_name_payload(base_tlv.payload)?;
+                let key = canonical_state_map_key_at(page.payload, &base, vm.register(12))?;
+                let gas = Self::path_gas(
+                    page.payload.len().saturating_add(base_tlv.payload.len()),
+                    key.as_ref().map_or(0, Vec::len),
+                );
+                if let Some(key) = key {
+                    let ptr = Self::alloc_norito_bytes_tlv(vm, &key)?;
+                    vm.set_register(10, ptr);
+                } else {
+                    vm.set_register(10, 0);
+                }
+                Ok(gas)
             }
             syscalls::SYSCALL_JSON_ENCODE => {
                 // r10 = &Json (Norito-framed) -> r10 = &NoritoBytes (same payload)
@@ -1917,6 +2006,15 @@ impl IVMHost for CoreHost {
                 let payload_len = tlv.payload.len();
                 vm.set_register(10, payload_len as u64);
                 Ok(Self::tlv_len_gas(payload_len))
+            }
+            syscalls::SYSCALL_DECODE_ARGUMENT_RECORD => {
+                crate::argument_record::decode_argument_record(vm)
+            }
+            syscalls::SYSCALL_STATE_VALUE_ENCODE => {
+                crate::state_value::encode_state_value(vm, Self::resolve_code_tlv_addr)
+            }
+            syscalls::SYSCALL_STATE_VALUE_DECODE => {
+                crate::state_value::decode_state_value(vm, Self::resolve_code_tlv_addr)
             }
             syscalls::SYSCALL_JSON_GET_I64
             | syscalls::SYSCALL_JSON_GET_JSON
@@ -2161,6 +2259,8 @@ impl IVMHost for CoreHost {
                             len = bytes.len()
                         );
                     }
+                    let gas = Self::schema_gas(input_len, bytes.len());
+                    preflight_reserved_syscall_gas(vm, gas)?;
                     let mut out = Vec::with_capacity(7 + bytes.len() + 32);
                     out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
                     out.push(1);
@@ -2176,7 +2276,7 @@ impl IVMHost for CoreHost {
                             len = bytes.len()
                         );
                     }
-                    Ok(Self::schema_gas(input_len, bytes.len()))
+                    Ok(gas)
                 } else {
                     Err(VMError::NoritoInvalid)
                 }
@@ -2231,6 +2331,8 @@ impl IVMHost for CoreHost {
                     let json =
                         Json::from_str_norito(json_str).map_err(|_| VMError::NoritoInvalid)?;
                     let body = to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
+                    let gas = Self::schema_gas(input_len, body.len());
+                    preflight_reserved_syscall_gas(vm, gas)?;
                     let mut out = Vec::with_capacity(7 + body.len() + 32);
                     out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
                     out.push(1);
@@ -2240,11 +2342,13 @@ impl IVMHost for CoreHost {
                     out.extend_from_slice(&h);
                     let p = vm.alloc_input_tlv(&out)?;
                     vm.set_register(10, p);
-                    Ok(Self::schema_gas(input_len, body.len()))
+                    Ok(gas)
                 } else {
                     let fallback = self.build_schema_fallback(&schema, b_tlv.payload);
                     let json = Json::from(&fallback);
                     let body = to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
+                    let gas = Self::schema_gas(input_len, body.len());
+                    preflight_reserved_syscall_gas(vm, gas)?;
                     let mut out = Vec::with_capacity(7 + body.len() + 32);
                     out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
                     out.push(1);
@@ -2254,7 +2358,7 @@ impl IVMHost for CoreHost {
                     out.extend_from_slice(&h);
                     let p = vm.alloc_input_tlv(&out)?;
                     vm.set_register(10, p);
-                    Ok(Self::schema_gas(input_len, body.len()))
+                    Ok(gas)
                 }
             }
             syscalls::SYSCALL_SCHEMA_INFO | syscalls::SYSCALL_SCHEMA_INFO_DIRECT => {
@@ -2306,6 +2410,8 @@ impl IVMHost for CoreHost {
                 };
                 let json = Json::from(&body_value);
                 let body = to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
+                let gas = Self::schema_gas(input_len, body.len());
+                preflight_reserved_syscall_gas(vm, gas)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
                 out.push(1);
@@ -2315,7 +2421,7 @@ impl IVMHost for CoreHost {
                 out.extend_from_slice(&h);
                 let p = vm.alloc_input_tlv(&out)?;
                 vm.set_register(10, p);
-                Ok(Self::schema_gas(input_len, body.len()))
+                Ok(gas)
             }
             syscalls::SYSCALL_NAME_DECODE => {
                 // r10 = &NoritoBytes (prefer Norito Name; legacy UTF-8 string is also accepted)
@@ -2480,7 +2586,7 @@ impl IVMHost for CoreHost {
                 Ok(DEBUG_GAS)
             }
             syscalls::SYSCALL_ABORT => {
-                vm.set_register(10, 0);
+                // Preserve r10 as the stable contract-provided abort code.
                 vm.request_abort();
                 Ok(DEBUG_GAS)
             }
@@ -2673,55 +2779,23 @@ impl IVMHost for CoreHost {
                 Ok(Self::mutation_gas(0))
             }
             syscalls::SYSCALL_INPUT_PUBLISH_TLV => {
-                // Mirror TLV into INPUT (no-op if already INPUT); validate envelope/policy.
+                // Validate host-owned public TLVs in place; materialize immutable
+                // literals into the host arena.
                 let original = vm.register(10);
                 if original == 0 {
                     vm.set_register(10, 0);
                     return Ok(Self::input_publish_gas(0));
                 }
-                let input_lo = Memory::INPUT_START;
-                let input_hi = Memory::INPUT_START + Memory::INPUT_SIZE;
-                let mut src = original;
-                // Fast-path: if `src` already points to a valid INPUT TLV, keep it.
-                if src >= input_lo && src < input_hi {
-                    let tlv = vm.memory.validate_tlv(src)?;
-                    let policy = vm.syscall_policy();
-                    if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-                        return Err(VMError::AbiTypeNotAllowed {
-                            abi: vm.abi_version(),
-                            type_id: tlv.type_id as u16,
-                        });
-                    }
+                if original >= Memory::HEAP_START {
+                    let tlv = vm.validate_tlv(original)?;
                     let envelope_len = 7usize.saturating_add(tlv.payload.len()).saturating_add(32);
                     return Ok(Self::input_publish_gas(envelope_len));
                 }
-                if let Some(resolved) = Self::resolve_literal_pointer(vm, src as usize) {
-                    src = resolved as u64;
-                }
-                let mut header = [0u8; 7];
-                let read_ok = vm.memory.load_bytes(src, &mut header).is_ok();
-                if !read_ok || header[2] != 1 {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let len = u32::from_be_bytes([header[3], header[4], header[5], header[6]]) as usize;
-                let total = 7usize
-                    .checked_add(len)
-                    .and_then(|v| v.checked_add(32))
-                    .ok_or(VMError::NoritoInvalid)?;
-                let bytes_vec = vm
-                    .memory
-                    .load_region(src, total as u64)
-                    .map_err(|_| VMError::NoritoInvalid)?
-                    .to_vec();
-                let tlv = pointer_abi::validate_tlv_bytes(&bytes_vec)?;
-                let policy = vm.syscall_policy();
-                if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
-                        abi: vm.abi_version(),
-                        type_id: tlv.type_id as u16,
-                    });
-                }
-                let dst = vm.alloc_input_tlv(&bytes_vec)?;
+                let resolved = Self::resolve_literal_pointer(vm, original as usize)
+                    .ok_or(VMError::NoritoInvalid)? as u64;
+                let bytes_vec = vm.clone_tlv(resolved)?;
+                let total = bytes_vec.len();
+                let dst = vm.alloc_host_tlv(&bytes_vec)?;
                 vm.set_register(10, dst);
                 Ok(Self::input_publish_gas(total))
             }
@@ -2762,7 +2836,7 @@ impl IVMHost for CoreHost {
             syscalls::SYSCALL_AXT_TOUCH => self.handle_axt_touch(vm),
             syscalls::SYSCALL_VERIFY_DS_PROOF => self.handle_axt_verify_ds_proof(vm),
             syscalls::SYSCALL_USE_ASSET_HANDLE => self.handle_axt_use_asset_handle(vm),
-            syscalls::SYSCALL_AXT_COMMIT => self.handle_axt_commit(),
+            syscalls::SYSCALL_AXT_COMMIT => self.handle_axt_commit(vm),
             _ => Err(Self::unsupported_syscall_error(number)),
         }
     }
@@ -2916,6 +2990,37 @@ mod tests {
     }
 
     #[test]
+    fn durable_state_accepts_validated_public_heap_tlvs() {
+        let mut vm = IVM::new(u64::MAX);
+        let mut host = CoreHost::new();
+        let path = Name::from_str("heap_state").expect("valid state path");
+        let path_payload = norito::to_bytes(&path).expect("encode state path");
+        let path_envelope = make_pointer_tlv(PointerType::Name, &path_payload);
+        let path_pointer = vm
+            .alloc_heap(path_envelope.len() as u64)
+            .expect("allocate path envelope");
+        vm.store_bytes(path_pointer, &path_envelope)
+            .expect("store path envelope");
+
+        let value_payload = norito::to_bytes(&17_i64).expect("encode state value");
+        let value_envelope = make_pointer_tlv(PointerType::NoritoBytes, &value_payload);
+        let value_pointer = vm
+            .alloc_heap(value_envelope.len() as u64)
+            .expect("allocate value envelope");
+        vm.store_bytes(value_pointer, &value_envelope)
+            .expect("store value envelope");
+        vm.set_register(10, path_pointer);
+        vm.set_register(11, value_pointer);
+
+        host.syscall(syscalls::SYSCALL_STATE_SET, &mut vm)
+            .expect("set state from public heap TLVs");
+        assert_eq!(
+            host.state.get(path.as_ref()).as_deref(),
+            Some(value_payload.as_slice())
+        );
+    }
+
+    #[test]
     fn state_keys_syscall_returns_sorted_prefix_page() {
         let mut host = CoreHost::new();
         host.insert_state_value("orders/2", b"two");
@@ -2948,6 +3053,30 @@ mod tests {
         let keys: Vec<Name> = norito::decode_from_bytes(tlv.payload).expect("decode keys");
         assert_eq!(keys, vec!["orders/2".parse::<Name>().expect("second key")]);
 
+        vm.set_register(10, prefix_ptr);
+        vm.set_register(11, 0);
+        vm.set_register(12, 0);
+        host.syscall(syscalls::SYSCALL_STATE_KEYS, &mut vm)
+            .expect("zero-sized state page");
+        assert_eq!(vm.register(12), 0);
+        let empty_page = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("empty state keys page");
+        assert!(
+            norito::decode_from_bytes::<Vec<Name>>(empty_page.payload)
+                .expect("decode empty page")
+                .is_empty()
+        );
+
+        vm.set_register(10, prefix_ptr);
+        vm.set_register(11, 0);
+        vm.set_register(12, syscalls::STATE_KEYS_MAX_ITEMS + 1);
+        assert!(matches!(
+            host.syscall(syscalls::SYSCALL_STATE_KEYS, &mut vm),
+            Err(VMError::NoritoInvalid)
+        ));
+
         let key: Name = "orders/2".parse().expect("state key");
         let key_ptr = vm
             .alloc_input_tlv(&make_pointer_tlv(
@@ -2973,6 +3102,177 @@ mod tests {
             Ok(CoreHost::state_count_gas(2))
         );
         assert_eq!(vm.register(10), 2);
+    }
+
+    #[test]
+    fn state_map_key_at_decodes_canonical_hex_and_returns_null_past_page() {
+        let mut host = CoreHost::new();
+        let mut vm = IVM::new(u64::MAX);
+        let base: Name = "orders".parse().expect("map base");
+        let key = norito::to_bytes(&-7_i64).expect("encode key");
+        let path = canonical_state_map_path(&base, &key).expect("canonical path");
+        let page = norito::to_bytes(&vec![path]).expect("encode state key page");
+        let page_ptr = vm
+            .alloc_host_tlv(&make_pointer_tlv(PointerType::NoritoBytes, &page))
+            .expect("allocate page");
+        let base_ptr = vm
+            .alloc_host_tlv(&make_pointer_tlv(
+                PointerType::Name,
+                &norito::to_bytes(&base).expect("encode base"),
+            ))
+            .expect("allocate base");
+
+        vm.set_register(10, page_ptr);
+        vm.set_register(11, base_ptr);
+        vm.set_register(12, 0);
+        host.syscall(syscalls::SYSCALL_STATE_MAP_KEY_AT, &mut vm)
+            .expect("decode first key");
+        let output = vm.memory.validate_tlv(vm.register(10)).expect("key output");
+        assert_eq!(output.payload, key);
+
+        vm.set_register(10, page_ptr);
+        vm.set_register(11, base_ptr);
+        vm.set_register(12, 1);
+        host.syscall(syscalls::SYSCALL_STATE_MAP_KEY_AT, &mut vm)
+            .expect("past-end lookup");
+        assert_eq!(vm.register(10), 0);
+    }
+
+    #[test]
+    fn state_map_key_at_prepare_is_length_only_and_execution_fails_closed() {
+        let host = CoreHost::new();
+        let mut vm = IVM::new(u64::MAX);
+        let malformed_page = vm
+            .alloc_host_tlv(&make_pointer_tlv(PointerType::NoritoBytes, &[0xff]))
+            .expect("allocate malformed page");
+        let base: Name = "orders".parse().expect("map base");
+        let base_ptr = vm
+            .alloc_host_tlv(&make_pointer_tlv(
+                PointerType::Name,
+                &norito::to_bytes(&base).expect("encode base"),
+            ))
+            .expect("allocate base");
+        vm.set_register(10, malformed_page);
+        vm.set_register(11, base_ptr);
+        vm.set_register(12, 0);
+
+        assert!(
+            host.prepare_syscall(syscalls::SYSCALL_STATE_MAP_KEY_AT, &vm)
+                .is_ok(),
+            "prepare must not decode the guest page"
+        );
+        let mut execution_host = host.clone();
+        assert!(matches!(
+            execution_host.syscall(syscalls::SYSCALL_STATE_MAP_KEY_AT, &mut vm),
+            Err(VMError::DecodeError)
+        ));
+    }
+
+    #[test]
+    fn state_map_key_at_rejects_oversized_page_before_decoding() {
+        let host = CoreHost::new();
+        let mut vm = IVM::new(u64::MAX);
+        let oversized = vec![0xff; syscalls::STATE_MAP_MAX_PAGE_BYTES + 1];
+        let page_ptr = vm
+            .alloc_host_tlv(&make_pointer_tlv(PointerType::NoritoBytes, &oversized))
+            .expect("allocate oversized page");
+        let base: Name = "orders".parse().expect("map base");
+        let base_ptr = vm
+            .alloc_host_tlv(&make_pointer_tlv(
+                PointerType::Name,
+                &norito::to_bytes(&base).expect("encode base"),
+            ))
+            .expect("allocate base");
+        vm.set_register(10, page_ptr);
+        vm.set_register(11, base_ptr);
+        vm.set_register(12, 0);
+
+        assert!(matches!(
+            host.prepare_syscall(syscalls::SYSCALL_STATE_MAP_KEY_AT, &vm),
+            Err(VMError::NoritoInvalid)
+        ));
+    }
+
+    #[test]
+    fn state_get_preflights_exact_gas_before_guest_output() {
+        let mut host = CoreHost::new();
+        host.insert_state_value("large", [0xabu8; 128]);
+        let mut vm = IVM::new(u64::MAX);
+        let key: Name = "large".parse().expect("state key");
+        let key_ptr = vm
+            .alloc_input_tlv(&make_pointer_tlv(
+                PointerType::Name,
+                &norito::to_bytes(&key).expect("encode key"),
+            ))
+            .expect("alloc key");
+        let program = assemble_program(&[
+            encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                syscalls::SYSCALL_STATE_GET as u8,
+            ),
+            encoding::wide::encode_halt(),
+        ]);
+        vm.load_program(&program).expect("load program");
+        vm.set_register(10, key_ptr);
+        vm.set_register(11, 0xfeed);
+        vm.set_gas_limit(20);
+
+        let error = vm
+            .run_with_host(&mut host)
+            .expect_err("response cost exceeds the available syscall reserve");
+
+        assert_eq!(error, VMError::OutOfGas);
+        assert_eq!(vm.remaining_gas(), 0);
+        assert!(
+            host.access_log.read_keys.contains("large"),
+            "host must reach the post-debit state read before preflight rejects the output"
+        );
+        assert_eq!(
+            vm.register(10),
+            key_ptr,
+            "STATE_GET must not allocate output"
+        );
+        assert_eq!(vm.register(11), 0xfeed, "STATE_GET must not mutate outputs");
+    }
+
+    #[test]
+    fn unaffordable_state_set_does_not_decode_or_mutate_before_quote_debit() {
+        let mut vm = IVM::new(u64::MAX);
+        let program = assemble_program(&[
+            encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                syscalls::SYSCALL_STATE_SET as u8,
+            ),
+            encoding::wide::encode_halt(),
+        ]);
+        vm.load_program(&program).expect("load program");
+        let path_ptr = vm
+            .alloc_input_tlv(&make_pointer_tlv(
+                PointerType::Name,
+                b"hash-valid but not a Norito Name",
+            ))
+            .expect("allocate malformed state path");
+        let value_ptr = vm
+            .alloc_input_tlv(&make_pointer_tlv(PointerType::NoritoBytes, &[0xabu8; 128]))
+            .expect("allocate state value");
+        vm.set_register(10, path_ptr);
+        vm.set_register(11, value_ptr);
+        let mut host = CoreHost::new();
+        let quote = host
+            .prepare_syscall(syscalls::SYSCALL_STATE_SET, &vm)
+            .expect("preparation must inspect headers only");
+        vm.set_gas_limit(quote.saturating_add(4));
+
+        let error = vm
+            .run_with_host(&mut host)
+            .expect_err("the state quote is one gas beyond the post-SCALL budget");
+
+        assert_eq!(error, VMError::OutOfGas);
+        assert!(host.state.keys().next().is_none());
+        assert!(host.access_log.read_keys.is_empty());
+        assert!(host.access_log.write_keys.is_empty());
+        assert_eq!(vm.register(10), path_ptr);
+        assert_eq!(vm.register(11), value_ptr);
     }
 
     #[test]
@@ -3052,6 +3352,141 @@ mod tests {
     }
 
     #[test]
+    fn schema_prepare_reserves_without_side_effects() {
+        let host = CoreHost::new();
+        let mut vm = IVM::new(u64::MAX);
+        let schema: Name = "Order".parse().expect("schema name");
+        let json = Json::from_str_norito(&format!(
+            r#"{{"payload":"{}","quantity":18446744073709551615}}"#,
+            "cd".repeat(8 * 1024)
+        ))
+        .expect("large JSON");
+        let schema_payload = norito::to_bytes(&schema).expect("encode schema");
+        let json_payload = norito::to_bytes(&json).expect("encode JSON");
+        let schema_ptr = vm
+            .alloc_input_tlv(&make_pointer_tlv(PointerType::Name, &schema_payload))
+            .expect("allocate schema TLV");
+        let json_ptr = vm
+            .alloc_input_tlv(&make_pointer_tlv(PointerType::Json, &json_payload))
+            .expect("allocate JSON TLV");
+        vm.set_register(10, schema_ptr);
+        vm.set_register(11, json_ptr);
+        let r10_before = vm.register(10);
+        let r11_before = vm.register(11);
+        let paths_before = host.state_paths();
+        let writes_before = vm.memory.write_log();
+        crate::memory::reset_memory_clone_count();
+
+        let quote = host
+            .prepare_syscall(syscalls::SYSCALL_SCHEMA_ENCODE, &vm)
+            .expect("quote schema encode");
+        assert_eq!(crate::memory::memory_clone_count(), 0);
+        assert_eq!(vm.memory.write_log(), writes_before);
+        assert_eq!(vm.register(10), r10_before, "quote must not mutate r10");
+        assert_eq!(vm.register(11), r11_before, "quote must not mutate r11");
+        assert_eq!(
+            host.state_paths(),
+            paths_before,
+            "quote must not mutate state"
+        );
+
+        let mut execution_host = host.clone();
+        let mut execution_vm = vm.clone();
+        let actual = execution_host
+            .syscall(syscalls::SYSCALL_SCHEMA_ENCODE, &mut execution_vm)
+            .expect("execute schema encode");
+        assert!(actual <= quote);
+        assert!(quote < vm.remaining_gas());
+        assert!(quote > u64::try_from(json_payload.len()).expect("length fits"));
+    }
+
+    #[test]
+    fn schema_prepare_validates_headers_without_decoding_payloads() {
+        let host = CoreHost::new();
+        let schema: Name = "Order".parse().expect("schema name");
+        let schema_payload = norito::to_bytes(&schema).expect("encode schema");
+
+        let mut wrong_type_vm = IVM::new(10_000);
+        let schema_ptr = wrong_type_vm
+            .alloc_input_tlv(&make_pointer_tlv(PointerType::Name, &schema_payload))
+            .expect("allocate schema TLV");
+        let value_ptr = wrong_type_vm
+            .alloc_input_tlv(&make_pointer_tlv(PointerType::Blob, b"{}"))
+            .expect("allocate wrong value TLV");
+        wrong_type_vm.set_register(10, schema_ptr);
+        wrong_type_vm.set_register(11, value_ptr);
+        assert!(matches!(
+            host.prepare_syscall(syscalls::SYSCALL_SCHEMA_ENCODE, &wrong_type_vm),
+            Err(VMError::NoritoInvalid)
+        ));
+
+        let mut malformed_vm = IVM::new(10_000);
+        let schema_ptr = malformed_vm
+            .alloc_input_tlv(&make_pointer_tlv(PointerType::Name, &schema_payload))
+            .expect("allocate schema TLV");
+        let value_ptr = malformed_vm
+            .alloc_input_tlv(&make_pointer_tlv(PointerType::Json, &[0xff, 0x00, 0x80]))
+            .expect("allocate malformed JSON TLV");
+        malformed_vm.set_register(10, schema_ptr);
+        malformed_vm.set_register(11, value_ptr);
+        let quote = host
+            .prepare_syscall(syscalls::SYSCALL_SCHEMA_ENCODE, &malformed_vm)
+            .expect("header-valid malformed payload receives a safe bound");
+        assert!(quote > 3);
+        assert!(quote > malformed_vm.remaining_gas());
+        assert_eq!(malformed_vm.register(10), schema_ptr);
+        assert_eq!(malformed_vm.register(11), value_ptr);
+    }
+
+    #[test]
+    fn schema_encode_preflights_exact_gas_before_guest_output() {
+        let mut host = CoreHost::new();
+        let mut vm = IVM::new(u64::MAX);
+        let schema: Name = "Order".parse().expect("schema name");
+        let json = Json::from_str_norito(&format!(
+            r#"{{"payload":"{}","quantity":18446744073709551615}}"#,
+            "cd".repeat(1024)
+        ))
+        .expect("large JSON");
+        let schema_ptr = vm
+            .alloc_input_tlv(&make_pointer_tlv(
+                PointerType::Name,
+                &norito::to_bytes(&schema).expect("encode schema"),
+            ))
+            .expect("allocate schema TLV");
+        let json_ptr = vm
+            .alloc_input_tlv(&make_pointer_tlv(
+                PointerType::Json,
+                &norito::to_bytes(&json).expect("encode JSON"),
+            ))
+            .expect("allocate JSON TLV");
+        let program = assemble_program(&[
+            encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscalls::SYSCALL_SCHEMA_ENCODE).expect("syscall id fits in u8"),
+            ),
+            encoding::wide::encode_halt(),
+        ]);
+        vm.load_program(&program).expect("load schema program");
+        vm.set_register(10, schema_ptr);
+        vm.set_register(11, json_ptr);
+        vm.set_gas_limit(20);
+
+        let error = vm
+            .run_with_host(&mut host)
+            .expect_err("schema response exceeds the syscall reserve");
+
+        assert_eq!(error, VMError::OutOfGas);
+        assert_eq!(vm.remaining_gas(), 0);
+        assert_eq!(
+            vm.register(10),
+            schema_ptr,
+            "must not allocate guest output"
+        );
+        assert_eq!(vm.register(11), json_ptr, "must not mutate arguments");
+    }
+
+    #[test]
     fn core_host_codec_helpers_charge_payload_bytes() {
         let mut vm = IVM::new(u64::MAX);
         let mut host = CoreHost::new();
@@ -3099,6 +3534,12 @@ mod tests {
             .memory
             .validate_tlv(vm.register(10))
             .expect("path norito tlv");
+        let path_name: Name =
+            norito::decode_from_bytes(path_norito_tlv.payload).expect("decode canonical path");
+        assert_eq!(
+            path_name.as_ref(),
+            format!("orders/{}", hex::encode(&key_bytes))
+        );
         assert_eq!(
             path_norito_gas,
             CoreHost::path_gas(

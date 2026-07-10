@@ -1,308 +1,160 @@
-# Kotodama Examples Overview
+# Kotodama V1 examples
 
-This page shows concise Kotodama examples and how they map to IVM syscalls and pointer‑ABI arguments. See also:
-- `examples/` for runnable sources
-- `docs/source/ivm_syscalls.md` for the canonical syscall ABI
-- `kotodama_grammar.md` for the full language specification
+These examples use the branded V1 declaration vocabulary. The normative grammar is
+[`kotodama_grammar.md`](./kotodama_grammar.md); the canonical syscall and
+pointer-ABI tables are in [`ivm_syscalls.md`](./ivm_syscalls.md).
 
-## Hello + Account Detail
+Every deployable `.ko` file contains exactly one named `seiyaku`/`誓約` unit. Reusable
+source contains one `module` and is linked at typed HIR before the deployable
+artifact is emitted.
 
-Source: `examples/hello/hello.ko`
+## Check and build
 
+Use the unified Rust compiler driver:
+
+```sh
+koto check examples/hello/hello.ko
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to \
+  --manifest-out target/examples/hello.manifest.json
 ```
-seiyaku Hello {
-  hajimari() { info("Hello from Kotodama"); }
 
-  kotoage fn write_detail() permission(Admin) {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+ABI v1 is unconditional. Source cannot select an ABI, vector width, or
+execution feature. `--max-cycles` selects a positive ceiling, up to node
+admission policy, that is embedded in the execution header and covered by the
+artifact hash.
+
+ZK contracts are checked, built, and documented with `--zk`. The flag selects a
+compiler capability; the source still cannot override execution-header metadata.
+
+## State, errors, entries, and views
+
+`hajimari`/`始まり` establishes scalar state. Mutating public calls use
+`kotoage fn`/`言挙げ fn` and an explicit caller permission. Read-only calls use
+`view fn`; views are public unless they also declare `authorize`.
+
+```kotodama
+seiyaku Counter {
+    error enum CounterError {
+        NonPositiveDelta = 1,
+    }
+
+    state value: i64;
+
+    hajimari() {
+        value = 0;
+    }
+
+    kotoage fn increment(delta: i64) -> i64 authorize("CanIncrementCounter") {
+        require(delta > 0, CounterError::NonPositiveDelta);
+        let next = value + delta;
+        value = next;
+        return next;
+    }
+
+    view fn current() -> i64 {
+        return value;
+    }
 }
 ```
 
-Mapping (pointer‑ABI):
-- `authority()` → `SCALL 0xA4` (host writes `&AccountId` into `r10`)
-- `set_account_detail(a, k, v)` → move `r10=&AccountId`, `r11=&Name`, `r12=&Json`, then `SCALL 0x1A`
+Error variants have explicit, stable, non-zero `u32` codes. Public failures use
+`require(condition, Error::Variant)`; free-form strings are not a contract error
+protocol. Arithmetic is checked, so `value + delta` deterministically fails and
+reverts if it overflows. Use an explicit `math::wrapping_*` operation only when
+modular arithmetic is the intended protocol.
 
-## Asset Transfer
+## Namespaced ledger operations
 
-Source: `examples/transfer/transfer.ko`
+Host capabilities are namespaced. Typed constructors produce validated
+pointer-ABI values; source cannot allocate host memory, construct raw pointers,
+select direct syscalls, or submit opaque instruction bytes.
 
-```
+```kotodama
 seiyaku TransferDemo {
-  kotoage fn do_transfer() permission(AssetTransferRole) {
-    transfer_asset(
-      account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
-      account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
-      asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-      10,
-      dataspace_id("0")
-    );
-  }
+    kotoage fn transfer() authorize("AssetTransferRole") {
+        ledger::asset::transfer(
+            AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
+            AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
+            AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+            Amount::from_i64(10),
+            DataSpaceId::parse("0")
+        );
+    }
 }
 ```
 
-Mapping (pointer‑ABI):
-- `transfer_asset(from, to, def, amt, dataspace)` → `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, `r13=&NoritoBytes(Numeric)`, `r14=&DataSpaceId(dataspace)`, then `SCALL 0x2C`
+The `authorize` permission is caller authorization. It does not replace the
+host's operation-specific authorization, and it is separate from the
+compiler-derived effect and scheduler-access summaries.
 
-## Native Asset Escrow
+## Triggers
 
-Source: `crates/kotodama_lang/src/samples/native_escrow.ko`
+A trigger names its callback in the declaration header. Its event filter and
+repeat policy are declarative manifest data; the callback remains an ordinary
+typed entrypoint.
 
-```
-seiyaku NativeEscrowAitai {
-  meta { abi_version: 1; }
+```kotodama
+seiyaku ScheduledSettlement {
+    kotoage fn settle() authorize("CanSettle") {
+        debug::info("settlement tick");
+    }
 
-  kotoage fn open_offer(offer: Name,
-                         asset_definition: AssetDefinitionId,
-                         amount: int) permission(Admin) {
-    assert(amount > 0, "amount must be positive");
-    escrow_open_offer(offer, asset_definition, amount);
-  }
-
-  kotoage fn accept(offer: Name) permission(Admin) {
-    escrow_accept(offer);
-  }
-
-  kotoage fn mark_payment_sent(offer: Name) permission(Admin) {
-    escrow_mark_payment_sent(offer);
-  }
-
-  kotoage fn release(offer: Name) permission(Admin) {
-    escrow_release(offer);
-  }
+    trigger hourly -> settle {
+        on time schedule(0, 3600000);
+        repeats indefinitely;
+        metadata {
+            purpose: "settlement";
+        }
+    }
 }
 ```
 
-This sample models the Aitai-style fiat settlement corridor with the native
-ledger escrow ISIs. `open_offer` locks the seller's numeric asset into a
-deterministic protocol custody account. `accept`, `mark_payment_sent`, and
-`release` move the lifecycle forward without giving any contract account or role
-generic authority to debit custody. Dispute entrypoints can call
-`escrow_open_dispute` and `escrow_resolve_dispute`; the latter still requires a
-ledger permission token named `CanResolveEscrowDispute`.
+Trigger filters also cover explicit trigger execution, supported ledger data
+events, and approved transaction or block pipeline events. Trigger authority
+and lifecycle policy are enforced by the runtime.
 
-Mapping (pointer‑ABI):
-- `escrow_open_offer(offer, def, amt)` → `r10=&Name`, `r11=&AssetDefinitionId`, `r12=amount`, optional `r13=&NoritoBytes` evidence, then `SCALL 0xB8`
-- `escrow_accept(offer)` → `r10=&Name`, then `SCALL 0xB9`
-- `escrow_mark_payment_sent(offer)` → `r10=&Name`, then `SCALL 0xBA`
-- `escrow_release(offer)` → `r10=&Name`, then `SCALL 0xBB`
-- `escrow_cancel(offer)` → `r10=&Name`, then `SCALL 0xBC`
-- `escrow_open_dispute(offer)` → `r10=&Name`, optional `r11=&NoritoBytes` evidence, then `SCALL 0xBD`
-- `escrow_resolve_dispute(offer, buyer, seller)` → `r10=&Name`, `r11=buyer`, `r12=seller`, optional `r13=&NoritoBytes` evidence, then `SCALL 0xBE`
+## Durable maps
 
-## Threshold Escrow
+`StateMap<K, V>` is host-backed durable state. `get` returns `Option<V>` so an
+absent key cannot be confused with a zero value. Writes and removals operate on
+one key, preserving scheduler precision. Iteration follows canonical Norito key
+order and must be compiler-proven bounded; V1 admits at most 64 items.
 
-Source: `crates/kotodama_lang/src/samples/threshold_escrow.ko`
+In-memory `Map`, implicit defaults, unbounded iteration, recursive calls, and
+`while` are not V1 language features.
 
-```
-seiyaku ThresholdEscrow {
-  state AccountId payer_account;
-  state AccountId recipient_account;
-  state AccountId escrow_account_id;
-  state AssetDefinitionId escrow_asset_definition;
-  state int target_amount_value;
-  state int funded_amount_value;
-  state bool is_open;
-  state bool is_released;
-  state bool is_refunded;
+## Modules
 
-  kotoage fn open_escrow(recipient: AccountId,
-                         escrow_account: AccountId,
-                         asset_definition: AssetDefinitionId,
-                         target_amount: int) permission(Admin) {
-    payer_account = authority();
-    recipient_account = recipient;
-    escrow_account_id = escrow_account;
-    escrow_asset_definition = asset_definition;
-    target_amount_value = target_amount;
-    funded_amount_value = 0;
-    is_open = true;
-  }
+A reusable source has this shape:
 
-  kotoage fn deposit(amount: int) permission(Admin) {
-    transfer_asset(payer_account, escrow_account_id, escrow_asset_definition, amount, dataspace_id("0"));
-    funded_amount_value = funded_amount_value + amount;
-  }
+```kotodama
+module AmountRules {
+    fn is_positive(amount: i64) -> bool {
+        return amount > 0;
+    }
 }
 ```
 
-This legacy sample models one escrow per deployed contract instance. New
-numeric-asset custody flows should prefer the native escrow ISIs above because
-they do not require a contract-controlled escrow account. `open_escrow`
-binds the payer to `authority()`, stores the payer/recipient/escrow/asset
-configuration in durable state, and opens the escrow with an exact target
-amount. `deposit` only accepts positive payer top-ups and rejects deposits that
-would exceed the target. `release_if_ready` transfers the full funded amount
-from the escrow account to the recipient once
-`funded_amount_value == target_amount_value`,
-and `refund` returns the funded amount to the payer while the escrow is still
-open.
+Modules are resolved and type-checked once in the content-addressed build graph,
+then linked at HIR. Kotodama has no wildcard imports or textual AST rewriting.
 
-Mapping (pointer‑ABI):
-- `authority()` → `SCALL 0xA4` (host writes `&AccountId` into `r10`)
-- `transfer_asset(from, to, def, amt, dataspace)` → `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, `r13=&NoritoBytes(Numeric)`, `r14=&DataSpaceId(dataspace)`, then `SCALL 0x2C`
-- Declared durable state is persisted under logical paths such as `payer_account`, `recipient_account`, `escrow_account_id`, `escrow_asset_definition`, `target_amount_value`, `funded_amount_value`, `is_open`, `is_released`, and `is_refunded`, which Torii exposes through `GET /v1/contracts/state?...&decode=json`
+## Boundary arguments and artifacts
 
-## NFT Create + Transfer
+Torii and CLI users may supply JSON keyed by parameter name. The boundary
+converts that object into one canonical Norito argument record. The public
+wrapper decodes the record once and reads typed ABI words; it does not reparse
+the payload for every parameter.
 
-Source: `examples/nft/nft.ko`
+`code_hash` is a domain-separated hash of the complete deployable `.to`,
+including every execution-header field, CNTR, literals, and code. Source maps
+and debug information are hash-keyed sidecars, not unhashed deployable
+sections. Nodes independently validate control flow and derive transitive
+effects/access instead of trusting compiler claims in CNTR.
 
-```
-seiyaku NftDemo {
-  kotoage fn create() permission(NftAuthority) {
-    let owner = account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
-    let nft = nft_id!("dragon$wonderland");
-    nft_mint_asset(nft, owner);
-  }
-
-  kotoage fn transfer() permission(NftAuthority) {
-    let owner = account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
-    let recipient = account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76");
-    let nft = nft_id!("dragon$wonderland");
-    nft_transfer_asset(owner, nft, recipient);
-  }
-}
-```
-
-Mapping (pointer‑ABI):
-- `nft_mint_asset(id, owner)` → `r10=&NftId`, `r11=&AccountId(owner)`, `SCALL 0x25`
-- `nft_transfer_asset(from, id, to)` → `r10=&AccountId(from)`, `r11=&NftId`, `r12=&AccountId(to)`, `SCALL 0x26`
-
-## Pointer Norito Helpers
-
-Pointer-valued durable state requires converting typed TLVs to and from the
-`NoritoBytes` envelope that hosts persist. Kotodama now wires these helpers
-directly through the compiler so builders can use pointer defaults and map
-lookups without manual FFI glue:
-
-```
-seiyaku PointerDemo {
-  state Owners: Map<int, AccountId>;
-
-  fn owner_at(state Map<int, AccountId> owners, slot: int, fallback: AccountId) -> AccountId {
-    return owners.ensure(slot, fallback);
-  }
-
-  fn hajimari() {
-    let alice = account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
-    let first = owner_at(Owners, 7, alice);
-    assert(first == alice);
-
-    // The second call decodes the stored pointer and re-encodes the input.
-    let bob = account_id("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76");
-    let again = owner_at(Owners, 7, bob);
-    assert(again == alice);
-  }
-}
-```
-
-Lowering:
-
-- Pointer defaults emit `POINTER_TO_NORITO` after publishing the typed TLV, so
-  the host receives a canonical `NoritoBytes` payload for storage.
-- Reads perform the reverse operation with `POINTER_FROM_NORITO`, supplying the
-  expected pointer type id in `r11`.
-- Both paths automatically publish literal TLVs into the INPUT region, allowing
-  contracts to mix string literals and runtime pointers transparently.
-
-See `crates/ivm/tests/kotodama_pointer_args.rs` for a runtime regression that
-exercises the round-trip against the `MockWorldStateView`.
-
-## Deterministic Map Iteration (design)
-
-Deterministic map for‑each requires a bound. Multi-entry iteration requires a state map; the compiler accepts `.take(n)` or a declared maximum length.
-
-```
-// design example (iteration requires bounds and state storage)
-state M: Map<int, int>;
-
-fn sum_first_two() -> int {
-  let s = 0;
-  for (k, v) in M.take(2) {
-    s = s + v;
-  }
-  return s;
-}
-```
-
-Semantics:
-- Iteration set is a snapshot at loop entry; order is lexicographic by Norito bytes of the key.
-- Structural mutations to `M` in the loop trap with `E_ITER_MUTATION`.
-- Without a bound the compiler emits `E_UNBOUNDED_ITERATION`.
-
-## Compiler/host internals (Rust, not Kotodama source)
-
-The snippets below live on the Rust side of the toolchain. They illustrate compiler helpers and VM lowering mechanics and are **not** valid Kotodama `.ko` source.
-
-## Wide Opcode Chunked Frame Updates
-
-Kotodama’s wide opcode helpers target the 8-bit operand layout used by the IVM
-wide encoding. Loads and stores that move 128-bit values reuse the third operand
-slot for the high register, so the base register must already hold the final
-address. Adjust the base with an `ADDI` before issuing the load/store:
-
-```
-use ivm::kotodama::wide::{encode_addi_checked, encode_load128, encode_store128};
-
-fn emit_store_pair(base: u8, lo: u8, hi: u8) -> [u32; 2] {
-    let adjust = encode_addi_checked(base, base, 16).expect("16-byte chunk");
-    let store = encode_store128(base, lo, hi);
-    [adjust, store]
-}
-```
-
-Chunked frame updates advance the base in 16-byte steps, ensuring the register
-pair committed by `STORE128` lands on the required alignment boundary. The same
-pattern applies to `LOAD128`; issuing an `ADDI` with the desired stride before
-each load keeps the high destination register bound to the third operand slot.
-Misaligned addresses trap with `VMError::MisalignedAccess`, matching the VM
-behaviour exercised in `crates/ivm/tests/wide_memory128.rs`.
-
-Programs that emit these 128-bit helpers must advertise vector capability.
-The Kotodama compiler enables the `VECTOR` mode bit automatically whenever
-`LOAD128`/`STORE128` appear; the VM traps with
-`VMError::VectorExtensionDisabled` if a program attempts to execute them
-without that bit set.
-
-## Wide Conditional Branch Lowering
-
-When Kotodama lowers an `if`/`else` or ternary branch to wide bytecode it emits a
-fixed `BNE cond, zero, +2` sequence followed by a pair of `JAL` instructions:
-
-1. The short `BNE` keeps the conditional branch within the 8-bit immediate lane
-   by jumping over the fallthrough `JAL`.
-2. The first `JAL` targets the `else` block (executed when the condition is
-   false).
-3. The second `JAL` jumps to the `then` block (taken when the condition is
-   true).
-
-This pattern guarantees the condition check never needs to encode offsets larger
-than ±127 words while still supporting arbitrarily large bodies for the `then`
-and `else` blocks via the wide `JAL` helper. See
-`crates/ivm/tests/kotodama.rs::branch_lowering_uses_short_bne_and_dual_jal` for
-the regression test that locks in the sequence.
-
-### Example Lowering
-
-```
-fn branch(b: bool) -> int {
-    if b { 1 } else { 2 }
-}
-```
-
-Compiles to the following wide instruction skeleton (register numbers and
-absolute offsets depend on the enclosing function):
-
-```
-BNE cond_reg, x0, +2    # skip the fallthrough jump when the condition is true
-JAL x0, else_offset     # execute when the condition is false
-JAL x0, then_offset     # execute when the condition is true
-```
-
-Subsequent instructions materialise the constants and write the return value.
-Because the `BNE` jumps over the first `JAL`, the conditional offset is always
-`+2` words, keeping the branch within range even when the block bodies expand.
+For larger checked-in examples, see `examples/`,
+`crates/ivm/docs/examples/`, and `crates/kotodama_lang/src/samples/`. The
+machine-readable [`kotodama_v1_docs.json`](./kotodama_v1_docs.json) policy
+identifies the normative grammar and documentation roots. CI discovers every
+tracked `kotodama`/`ko` fence and documented `*.ko` heredoc below those roots.

@@ -705,7 +705,7 @@ fn proof_stream_command_consumes_ndjson() {
 #[test]
 fn norito_build_compiles_contract() {
     let tempdir = tempdir().expect("tempdir");
-    let source_path = PathBuf::from("../kotodama_lang/src/samples/kotodama_jp.ko");
+    let source_path = PathBuf::from("../kotodama_lang/src/samples/kotodama_swap.ko");
     assert!(
         source_path.exists(),
         "expected Kotodama sample `{}` to exist",
@@ -720,7 +720,6 @@ fn norito_build_compiles_contract() {
         .arg("build")
         .arg(format!("--source={}", source_path.display()))
         .arg(format!("--bytecode-out={}", bytecode_path.display()))
-        .arg("--abi-version=1")
         .arg(format!("--summary-out={}", summary_path.display()))
         .assert()
         .success();
@@ -758,6 +757,36 @@ fn norito_build_compiles_contract() {
     assert_eq!(
         summary_stdout.get("source_kind").and_then(Value::as_str),
         Some("file")
+    );
+    assert_eq!(
+        summary_stdout.get("abi_version").and_then(Value::as_u64),
+        Some(1),
+        "the first-release compiler owns and reports ABI v1"
+    );
+}
+
+#[test]
+fn norito_build_rejects_removed_abi_selection() {
+    let tempdir = tempdir().expect("tempdir");
+    let source_path = PathBuf::from("../kotodama_lang/src/samples/kotodama_swap.ko");
+    let bytecode_path = tempdir.path().join("contract.to");
+
+    let assert = sorafs_cli_cmd()
+        .arg("norito")
+        .arg("build")
+        .arg(format!("--source={}", source_path.display()))
+        .arg(format!("--bytecode-out={}", bytecode_path.display()))
+        .arg("--abi-version=1")
+        .assert()
+        .failure();
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).expect("stderr utf8");
+    assert!(
+        stderr.contains("unrecognised option `--abi-version`"),
+        "unexpected stderr: {stderr}"
+    );
+    assert!(
+        !bytecode_path.exists(),
+        "rejected ABI selection must not publish an artifact"
     );
 }
 

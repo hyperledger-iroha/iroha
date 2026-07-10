@@ -35,6 +35,17 @@ use crate::triggers::get_asset_value;
 
 const TRIGGER_NAME: &str = "mint_rose";
 
+fn contract_entrypoint_metadata(entrypoint: &str) -> Metadata {
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        "contract_entrypoint"
+            .parse::<Name>()
+            .expect("static contract entrypoint metadata key is valid"),
+        Json::new(entrypoint.to_owned()),
+    );
+    metadata
+}
+
 async fn start_network(context: &'static str) -> Result<Option<sandbox::SerializedNetwork>> {
     sandbox::start_network_async_or_skip(NetworkBuilder::new(), context).await
 }
@@ -980,7 +991,8 @@ async fn trigger_in_genesis() -> Result<()> {
             ExecuteTriggerEventFilter::new()
                 .for_trigger(trigger_id.clone())
                 .under_authority(account_id.clone()),
-        ),
+        )
+        .with_metadata(contract_entrypoint_metadata("run")),
     );
 
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -1376,7 +1388,8 @@ async fn unregistering_one_of_two_triggers_with_identical_contract_should_not_ca
                         ExecuteTriggerEventFilter::new()
                             .for_trigger(trigger_id)
                             .under_authority(account_id.clone()),
-                    ),
+                    )
+                    .with_metadata(contract_entrypoint_metadata("run")),
                 )
             };
 
@@ -1480,7 +1493,8 @@ async fn call_execute_trigger_with_args() -> Result<()> {
                 ExecuteTriggerEventFilter::new()
                     .for_trigger(trigger_id.clone())
                     .under_authority(account_id.clone()),
-            ),
+            )
+            .with_metadata(contract_entrypoint_metadata("run")),
         );
 
         submit_instruction_and_wait(

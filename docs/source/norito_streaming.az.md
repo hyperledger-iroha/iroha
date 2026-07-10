@@ -176,7 +176,7 @@ captures the key points so implementers can line them up with the codec spec.
   MTU values and rejects zero-length DATAGRAM requests when the transport stays in
   DATAGRAM mode; integration tests cover the negotiated limit as well as the
   DATAGRAM-off path.【F:crates/iroha_p2p/src/streaming/quic.rs:982】
-- Restricted environments (enterprise firewalls, TURN relays) should enable the
+- Restricted environments (enterprise firewalls and other restricted networks) should enable the
   deterministic fallback by muxing chunk payloads over per-segment unidirectional
   streams or tunnelling the QUIC control plane through the existing `/p2p` TCP
   listener. Chunk framing, Norito manifest commitments, and privacy masks must be

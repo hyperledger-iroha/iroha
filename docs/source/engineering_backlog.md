@@ -121,7 +121,7 @@ the last default run before the quorum-history hardening exited `ok` with only
 3/10 soak iterations passing, so it remains a stress signal rather than release
 evidence.
 
-## SCCP launch-scope note
+## SCCP launch scope and external deployment follow-ups
 
 The active SCCP launch scope is Ethereum, BSC, Solana, TON, and TRON.
 Retired runtime-network families outside that launch scope are not supported for now.
@@ -136,6 +136,30 @@ launch readiness until governance explicitly re-opens support.
 Backlog notes for unsupported network families are diagnostic only; they should
 not be treated as release blockers or advertised as production network support
 unless governance explicitly re-opens that scope.
+
+The first-release authority and activation design is complete in code. SCCP
+lane material and wallet route manifests are fields of one versioned on-chain
+custom parameter, `sccp_registry_v1`. The typed route-manifest instructions
+validate and replace that aggregate rather than writing side state. Non-empty
+node-local `zk.sccp_*` values are rejected. Direct mutations require
+`CanManageSccpGovernance`; the entire registry is included in the ZK consensus
+policy hash and read from one atomic state generation. Because it is a
+journaled world parameter, validation precedes installation and the whole
+aggregate commits or rolls back with the transaction, block, MVCC soft fork,
+or snapshot. Route conversion is fallible, canonical, and bounded rather than
+normalization- or panic-based. Lane activation requires exactly one
+production-ready wallet route manifest bound to that lane in the same
+aggregate.
+
+There is no first-release launch-mode selector. Each supported lane is admitted
+independently under `GovernanceAllowlist` when its own governed evidence is
+complete; the all-lanes result is diagnostic only. The checked-in BSC
+signal-binding and labeled-signal-binding profiles are classified as
+`public-signal-binding-material-only` and cannot satisfy a production route.
+Remaining SCCP work in this backlog is external: obtain audited, semantically
+complete verifier deployments, live trust anchors/readbacks, transaction-bound
+route canaries, and signed rollout evidence for each lane governance chooses to
+activate.
 The retired-network surface scan now rejects separator-, zero-width-, nested
 HTML-entity-, URL-percent-, Unicode-confusable-, compatibility-form-, and
 combining-mark-obfuscated references to that family, so slash-, colon-, table-,
@@ -1094,8 +1118,8 @@ mutations. Core admission now also rejects noncanonical source verifier
 material and source-adapter deployment hex
 spellings, including uppercase hash/address text and repeated `0x` prefixes,
 before decoded bytes can satisfy governed production material matching.
-User-level SCCP route
-manifest admission now applies the same canonical spelling rule to BSC/TRON
+On-chain SCCP route-manifest admission applies the same canonical spelling rule
+to BSC/TRON
 route hashes, BSC EVM addresses, chain ids, optional proof/deployment evidence
 hashes, and BSC explorer transaction hashes, so uppercase, padded, or repeated
 prefix operator input cannot be normalized into production readiness. EVM
@@ -2452,8 +2476,8 @@ rendering, and the strict release/source-inventory gates pin the implementation
 plus direct adversarial tests.
 BSC/TRON production route manifests must also keep deployment evidence hashes
 role-separated from verifier code, verifier key, destination binding, proof
-artifact, and proving-key hashes before runtime config admission or route
-manifest ISI execution can accept a production-ready route.
+artifact, and proving-key hashes before route-manifest ISI execution can accept
+a production-ready route.
 BSC/TRON runtime route-manifest admission also rejects copied post-deploy
 source/route-canary evidence roles: `post_deploy_route_canary_evidence_hash`
 cannot replay `post_deploy_source_bridge_config_hash`, and
@@ -2464,10 +2488,10 @@ state. TRON route-manifest ISI coverage now also proves production-ready
 mainnet binding reaches the on-chain registry only for the canonical
 `taira_tron_xor`/TRON-domain route, and wrong route ids, wrong domains, or
 copied post-deploy canary hashes leave existing state untouched.
-TRON runtime route-manifest admission also mirrors the generated
-postDeployLiveEvidence blocker boundary at config load: scalar or non-string
-TOML blocker containers fail before parsing, empty/padded/non-ASCII/duplicate
-blocker entries fail during route normalization, and production-ready TRON
+TRON on-chain route-manifest admission also mirrors the generated
+`postDeployLiveEvidence` blocker boundary: scalar or non-string blocker
+containers fail before semantic validation, empty/padded/non-ASCII/duplicate
+blocker entries fail without normalization, and production-ready TRON
 routes cannot carry non-empty post-deploy blocker lists. The release inventory
 now pins the exact non-empty, padded, non-ASCII, and duplicate blocker
 diagnostics so those runtime guards cannot silently lose coverage.

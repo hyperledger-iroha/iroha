@@ -1,25 +1,11 @@
 seiyaku AssetOps {
-  kotoage fn execute() permission(Admin) {
-    // Typed pointer‑ABI arguments via constructors
-    let alice = authority();
-    let bob = authority();
-    let coin = asset_definition!("6pEP9RjNoZ7beWkT3pLfKoM1dyfi");
-    mint_asset(
-      alice,
-      coin,
-      1000
-    );
-    transfer_asset(
-      alice,
-      bob,
-      coin,
-      500,
-      dataspace_id("0")
-    );
-    burn_asset(
-      bob,
-      coin,
-      100
-    );
-  }
+    kotoage fn execute() authorize("Admin") {
+        // Typed pointer‑ABI arguments via constructors
+        let alice = context::authority();
+        let bob = context::authority();
+        let coin = AssetDefinitionId::parse("6pEP9RjNoZ7beWkT3pLfKoM1dyfi");
+        ledger::asset::mint(alice, coin, Amount::from_i64(1000));
+        ledger::asset::transfer(alice, bob, coin, Amount::from_i64(500), DataSpaceId::parse("0"));
+        ledger::asset::burn(bob, coin, Amount::from_i64(100));
+    }
 }

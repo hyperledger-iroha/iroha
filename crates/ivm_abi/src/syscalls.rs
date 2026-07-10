@@ -81,7 +81,8 @@ pub const SYSCALL_STATE_SET: u32 = 0x51;
 pub const SYSCALL_STATE_DEL: u32 = 0x52;
 /// Enumerate durable-state keys under a prefix.
 ///
-/// Args: r10 = &Name prefix, r11 = offset, r12 = limit (0 = unbounded)
+/// Args: r10 = &Name prefix, r11 = offset, r12 = limit (0 returns an empty page;
+/// limits above [`STATE_KEYS_MAX_ITEMS`] are rejected)
 /// Ret:  r10 = &NoritoBytes(Vec<Name>), r11 = total matching keys, r12 = returned keys
 pub const SYSCALL_STATE_KEYS: u32 = 0x01_0030;
 /// Test whether a durable-state key is currently present.
@@ -99,6 +100,33 @@ pub const SYSCALL_STATE_LEN: u32 = 0x01_0032;
 /// Args: r10 = &Name prefix
 /// Ret:  r10 = total matching keys
 pub const SYSCALL_STATE_COUNT: u32 = 0x01_0033;
+/// Decode one canonical Kotodama `StateMap` key from a page returned by
+/// [`SYSCALL_STATE_KEYS`].
+///
+/// Args: r10 = &NoritoBytes(Vec<Name>), r11 = &Name(base), r12 = index
+/// Ret:  r10 = &NoritoBytes(canonical key), or 0 when index is out of range
+pub const SYSCALL_STATE_MAP_KEY_AT: u32 = 0x01_0034;
+/// Encode one compiler-flattened typed durable value.
+///
+/// Args: r10 = &NoritoBytes(StateValueSchemaV1), r11 = aligned raw word table,
+/// r12 = word count
+/// Ret: r10 = &NoritoBytes(StateValueRecordV1)
+pub const SYSCALL_STATE_VALUE_ENCODE: u32 = 0x01_0035;
+/// Decode one typed durable value into an aligned compiler word table.
+///
+/// Args: r10 = &NoritoBytes(StateValueSchemaV1),
+/// r11 = &NoritoBytes(StateValueRecordV1); zero is rejected because absence is
+/// represented by `StateMap.get`'s outer `Option`, never by a typed value
+/// Ret: r10 = &Blob(pad:u8 then flattened u64 words)
+pub const SYSCALL_STATE_VALUE_DECODE: u32 = 0x01_0036;
+/// Maximum number of entries returned by one V1 durable-state key page.
+pub const STATE_KEYS_MAX_ITEMS: u64 = 64;
+/// Maximum canonical Norito key payload accepted by V1 `StateMap` paths.
+pub const STATE_MAP_MAX_KEY_BYTES: usize = 4 * 1024;
+/// Maximum UTF-8 byte length of a V1 `StateMap` base path.
+pub const STATE_MAP_MAX_BASE_BYTES: usize = 4 * 1024;
+/// Maximum encoded `Vec<Name>` page accepted by `STATE_MAP_KEY_AT`.
+pub const STATE_MAP_MAX_PAGE_BYTES: usize = 1024 * 1024;
 /// Decode a NoritoBytes value containing a signed decimal ASCII integer and return
 /// the value in `x10` as a 64-bit signed integer (two's complement).
 ///
@@ -236,7 +264,11 @@ pub const SYSCALL_BUILD_PATH_MAP_KEY: u32 = 0x54;
 /// Ret:  r10 = &NoritoBytes (ASCII decimal)
 pub const SYSCALL_ENCODE_INT: u32 = 0x55;
 /// Build a state path from a base Name and a NoritoBytes key by appending
-/// `"/" + hex(hash32(payload))` where `hash32` is `iroha_crypto::Hash` of the payload bytes.
+/// `"/" + lowercase_hex(payload)`.
+///
+/// The encoding is injective and its lexical order is the unsigned bytewise
+/// order of canonical Norito key payloads. Payloads larger than
+/// [`STATE_MAP_MAX_KEY_BYTES`] are rejected.
 ///
 /// Args: r10 = &Name base, r11 = &NoritoBytes key
 /// Ret:  r10 = &Name (INPUT pointer)
@@ -415,16 +447,23 @@ pub const SYSCALL_BLAKE2B256_HASH: u32 = 0x98;
 pub const SYSCALL_KECCAK256_HASH: u32 = 0x99;
 /// Compute Iroha's canonical ledger hash (`Hash::new`) of a blob (`&Blob` -> `&Blob`).
 pub const SYSCALL_IROHA_HASH: u32 = 0x9A;
-/// Developer helper: copy a TLV from program memory into the INPUT region and return its pointer.
+/// Developer helper: validate a public TLV and return a host-usable pointer.
 ///
-/// Expects `x10` to hold a pointer to a valid TLV in program memory (data/heap). The host validates
-/// the header and payload and mirrors it into INPUT via the internal allocator, returning the new
-/// INPUT pointer in `x10`.
+/// Expects `x10` to hold a pointer to a valid public TLV. INPUT and allocated-HEAP host results are
+/// retained in place. Immutable program literals are materialized in the host arena (INPUT when
+/// space remains, otherwise allocated HEAP). Stack/output, private, unallocated, malformed, and
+/// ABI-disallowed envelopes are rejected.
 pub const SYSCALL_INPUT_PUBLISH_TLV: u32 = 0xE0;
 
 // Smart-contract host shims (development API)
 /// Execute a built-in instruction from an IVM smart contract (pointer-ABI).
 pub const SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION: u32 = 0xA0;
+/// `r11` operation tag authorizing a decoded `SubmitBallot` instruction for syscall `0xA0`.
+pub const SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT: u64 = 1;
+/// `r11` operation tag authorizing a decoded `Unshield` instruction for syscall `0xA0`.
+pub const SMARTCONTRACT_INSTRUCTION_TAG_UNSHIELD: u64 = 2;
+/// `r11` operation tag authorizing a decoded `RecordSccpMessage` instruction for syscall `0xA0`.
+pub const SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE: u64 = 3;
 /// Execute a query from an IVM smart contract (pointer-ABI).
 pub const SYSCALL_SMARTCONTRACT_EXECUTE_QUERY: u32 = 0xA1;
 /// Convenience syscall used by samples: create one NFT per known account.
@@ -537,6 +576,14 @@ pub const SYSCALL_SYSVAR_AUTHORITY: u32 = 0x01_0023;
 pub const SYSCALL_SYSVAR_CONTRACT_ADDRESS: u32 = 0x01_0024;
 /// Return the current contract entrypoint name as a `Blob` TLV, or zero when not in a contract scope.
 pub const SYSCALL_SYSVAR_ENTRYPOINT: u32 = 0x01_0025;
+/// Decode a complete schema-bound public argument record.
+///
+/// Args: r10 = `&NoritoBytes(EntrypointArgumentRecordV1)`,
+/// r11 = `&NoritoBytes(EntrypointArgumentSchemaV1)`.
+/// Ret: r10 = `&Blob(0u8 || [u64; word_count])`; the leading byte aligns the
+/// declaration-ordered flattened words, which contain sum tags, canonical
+/// scalar bits, or validated pointer-ABI addresses.
+pub const SYSCALL_DECODE_ARGUMENT_RECORD: u32 = 0x01_0026;
 
 /// Kotodama test-runner helper: resolve a fixture actor alias to an `AccountId` TLV.
 ///
@@ -613,6 +660,273 @@ pub const fn canonical_helper_syscall(number: u32) -> u32 {
 /// rejected with `VMError::UnknownSyscall`.
 pub fn is_syscall_allowed(policy: crate::SyscallPolicy, number: u32) -> bool {
     syscalls_for_policy(policy).binary_search(&number).is_ok()
+}
+
+/// Host-state access conservatively implied by an ABI syscall.
+///
+/// This classification is intentionally independent of compiler metadata. It
+/// is used by admission and the parallel scheduler to reject or serialize
+/// bytecode whose declared access set cannot be proven from its instructions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SyscallAccess {
+    /// The call only touches VM-local data or immutable execution context.
+    None,
+    /// Contract-owned durable state read.
+    StateRead,
+    /// Contract-owned durable state write.
+    StateWrite,
+    /// Ledger/world-state read with arguments not proven by the bytecode scanner.
+    LedgerRead,
+    /// Ledger/world-state write with arguments not proven by the bytecode scanner.
+    LedgerWrite,
+    /// Nested, opaque, or externally routed access; serialize conservatively.
+    Dynamic,
+}
+
+/// Return the conservative host-state access class for an ABI v1 syscall.
+///
+/// The fallback is [`SyscallAccess::Dynamic`]. New syscalls therefore fail
+/// closed for scheduling until their access behavior is classified here.
+#[must_use]
+pub const fn syscall_access(number: u32) -> SyscallAccess {
+    if matches!(
+        number,
+        SYSCALL_STATE_MAP_KEY_AT | SYSCALL_STATE_VALUE_ENCODE | SYSCALL_STATE_VALUE_DECODE
+    ) {
+        return SyscallAccess::None;
+    }
+    if matches!(
+        number,
+        SYSCALL_STATE_GET
+            | SYSCALL_STATE_KEYS
+            | SYSCALL_STATE_HAS
+            | SYSCALL_STATE_LEN
+            | SYSCALL_STATE_COUNT
+    ) {
+        return SyscallAccess::StateRead;
+    }
+    if matches!(number, SYSCALL_STATE_SET | SYSCALL_STATE_DEL) {
+        return SyscallAccess::StateWrite;
+    }
+    if matches!(
+        number,
+        SYSCALL_SMARTCONTRACT_EXECUTE_QUERY
+            | SYSCALL_QUERY_EXECUTE_NORITO
+            | SYSCALL_QUERY_GET_ACCOUNT
+            | SYSCALL_QUERY_GET_ASSET
+            | SYSCALL_QUERY_GET_ASSET_DEFINITION
+            | SYSCALL_QUERY_GET_DOMAIN
+            | SYSCALL_QUERY_GET_NFT
+            | SYSCALL_QUERY_GET_PARAMETER
+            | SYSCALL_QUERY_GET_CONTRACT_MANIFEST
+            | SYSCALL_QUERY_GET_CONTRACT_INSTANCE
+            | SYSCALL_GET_ACCOUNT_BALANCE
+            | SYSCALL_RESOLVE_ACCOUNT_ALIAS
+            | SYSCALL_VRF_EPOCH_SEED
+            | SYSCALL_ZK_ROOTS_GET
+            | SYSCALL_ZK_VOTE_GET_TALLY
+            | SYSCALL_SORACLOUD_READ_COMMITTED_STATE
+            | SYSCALL_SORACLOUD_READ_SECRET
+            | SYSCALL_SORACLOUD_READ_CREDENTIAL
+            | SYSCALL_SORACLOUD_EGRESS_FETCH
+            | SYSCALL_SORACLOUD_READ_CONFIG
+            | SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE
+    ) {
+        return SyscallAccess::LedgerRead;
+    }
+    if matches!(
+        number,
+        SYSCALL_REGISTER_DOMAIN
+            | SYSCALL_UNREGISTER_DOMAIN
+            | SYSCALL_TRANSFER_DOMAIN
+            | SYSCALL_REGISTER_PEER
+            | SYSCALL_UNREGISTER_PEER
+            | SYSCALL_REGISTER_ACCOUNT
+            | SYSCALL_UNREGISTER_ACCOUNT
+            | SYSCALL_ADD_SIGNATORY
+            | SYSCALL_REMOVE_SIGNATORY
+            | SYSCALL_SET_ACCOUNT_QUORUM
+            | SYSCALL_SET_ACCOUNT_DETAIL
+            | SYSCALL_REGISTER_ASSET
+            | SYSCALL_UNREGISTER_ASSET
+            | SYSCALL_MINT_ASSET
+            | SYSCALL_BURN_ASSET
+            | SYSCALL_TRANSFER_V1
+            | SYSCALL_TRANSFER_V1_BATCH_BEGIN
+            | SYSCALL_TRANSFER_V1_BATCH_END
+            | SYSCALL_TRANSFER_V1_BATCH_APPLY
+            | SYSCALL_TRANSFER_ASSET_SCOPED
+            | SYSCALL_NFT_MINT_ASSET
+            | SYSCALL_NFT_TRANSFER_ASSET
+            | SYSCALL_NFT_SET_METADATA
+            | SYSCALL_NFT_BURN_ASSET
+            | SYSCALL_CREATE_ROLE
+            | SYSCALL_DELETE_ROLE
+            | SYSCALL_GRANT_ROLE
+            | SYSCALL_REVOKE_ROLE
+            | SYSCALL_GRANT_PERMISSION
+            | SYSCALL_REVOKE_PERMISSION
+            | SYSCALL_CREATE_TRIGGER
+            | SYSCALL_REMOVE_TRIGGER
+            | SYSCALL_SET_TRIGGER_ENABLED
+            | SYSCALL_REGISTER_SMART_CONTRACT_CODE
+            | SYSCALL_REGISTER_SMART_CONTRACT_BYTES
+            | SYSCALL_ACTIVATE_CONTRACT_INSTANCE
+            | SYSCALL_DEACTIVATE_CONTRACT_INSTANCE
+            | SYSCALL_REMOVE_SMART_CONTRACT_BYTES
+            | SYSCALL_ZK_VERIFY_TRANSFER
+            | SYSCALL_ZK_VERIFY_UNSHIELD
+            | SYSCALL_ZK_VOTE_VERIFY_BALLOT
+            | SYSCALL_ZK_VOTE_VERIFY_TALLY
+            | SYSCALL_ZK_VERIFY_BATCH
+            | SYSCALL_USE_NULLIFIER
+            | SYSCALL_AXT_BEGIN
+            | SYSCALL_AXT_TOUCH
+            | SYSCALL_AXT_COMMIT
+            | SYSCALL_VERIFY_DS_PROOF
+            | SYSCALL_USE_ASSET_HANDLE
+            | SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER
+            | SYSCALL_ANONYMOUS_ESCROW_ACCEPT
+            | SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT
+            | SYSCALL_ANONYMOUS_ESCROW_RELEASE
+            | SYSCALL_ANONYMOUS_ESCROW_CANCEL
+            | SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE
+            | SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE
+            | SYSCALL_ESCROW_OPEN_OFFER
+            | SYSCALL_ESCROW_ACCEPT
+            | SYSCALL_ESCROW_MARK_PAYMENT_SENT
+            | SYSCALL_ESCROW_RELEASE
+            | SYSCALL_ESCROW_CANCEL
+            | SYSCALL_ESCROW_OPEN_DISPUTE
+            | SYSCALL_ESCROW_RESOLVE_DISPUTE
+            | SYSCALL_SUBSCRIPTION_BILL
+            | SYSCALL_SUBSCRIPTION_RECORD_USAGE
+            | SYSCALL_SORACLOUD_EMIT_STATE_MUTATION
+            | SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE
+            | SYSCALL_SORACLOUD_APPEND_JOURNAL
+            | SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT
+    ) {
+        return SyscallAccess::LedgerWrite;
+    }
+    if matches!(
+        number,
+        SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION
+            | SYSCALL_CALL_CONTRACT
+            | SYSCALL_CREATE_NFTS_FOR_ALL_USERS
+            | SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH
+            | SYSCALL_COMMIT_OUTPUT
+    ) {
+        return SyscallAccess::Dynamic;
+    }
+    if matches!(
+        number,
+        SYSCALL_EXIT
+            | SYSCALL_ABORT
+            | SYSCALL_DEBUG_PRINT
+            | SYSCALL_DEBUG_LOG
+            | SYSCALL_ALLOC
+            | SYSCALL_GROW_HEAP
+            | SYSCALL_GET_PUBLIC_INPUT
+            | SYSCALL_GET_PRIVATE_INPUT
+            | SYSCALL_VERIFY_SIGNATURE
+            | SYSCALL_INPUT_PUBLISH_TLV
+            | SYSCALL_SM3_HASH
+            | SYSCALL_SM2_VERIFY
+            | SYSCALL_SM4_GCM_SEAL
+            | SYSCALL_SM4_GCM_OPEN
+            | SYSCALL_SM4_CCM_SEAL
+            | SYSCALL_SM4_CCM_OPEN
+            | SYSCALL_SHA256_HASH
+            | SYSCALL_SHA3_HASH
+            | SYSCALL_BLAKE2B256_HASH
+            | SYSCALL_KECCAK256_HASH
+            | SYSCALL_IROHA_HASH
+            | SYSCALL_PROVE_EXECUTION
+            | SYSCALL_VERIFY_PROOF
+            | SYSCALL_GET_MERKLE_PATH
+            | SYSCALL_GET_MERKLE_COMPACT
+            | SYSCALL_GET_REGISTER_MERKLE_COMPACT
+            | SYSCALL_JSON_ENCODE
+            | SYSCALL_JSON_DECODE
+            | SYSCALL_TLV_LEN
+            | SYSCALL_JSON_GET_I64
+            | SYSCALL_JSON_GET_JSON
+            | SYSCALL_JSON_GET_NAME
+            | SYSCALL_JSON_GET_ACCOUNT_ID
+            | SYSCALL_JSON_GET_NFT_ID
+            | SYSCALL_JSON_GET_BLOB_HEX
+            | SYSCALL_JSON_GET_NUMERIC
+            | SYSCALL_JSON_GET_ASSET_DEFINITION_ID
+            | SYSCALL_JSON_OBJECT
+            | SYSCALL_JSON_SET_I64
+            | SYSCALL_JSON_SET_ACCOUNT_ID
+            | SYSCALL_JSON_GET_I64_DIRECT
+            | SYSCALL_JSON_GET_JSON_DIRECT
+            | SYSCALL_JSON_GET_NAME_DIRECT
+            | SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT
+            | SYSCALL_JSON_GET_NFT_ID_DIRECT
+            | SYSCALL_JSON_GET_BLOB_HEX_DIRECT
+            | SYSCALL_JSON_GET_NUMERIC_DIRECT
+            | SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT
+            | SYSCALL_JSON_SET_I64_DIRECT
+            | SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT
+            | SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT
+            | SYSCALL_SCHEMA_INFO_DIRECT
+            | SYSCALL_SCHEMA_ENCODE
+            | SYSCALL_SCHEMA_DECODE
+            | SYSCALL_SCHEMA_INFO
+            | SYSCALL_NUMERIC_FROM_INT
+            | SYSCALL_NUMERIC_TO_INT
+            | SYSCALL_NUMERIC_ADD
+            | SYSCALL_NUMERIC_SUB
+            | SYSCALL_NUMERIC_MUL
+            | SYSCALL_NUMERIC_DIV
+            | SYSCALL_NUMERIC_REM
+            | SYSCALL_NUMERIC_NEG
+            | SYSCALL_NUMERIC_EQ
+            | SYSCALL_NUMERIC_NE
+            | SYSCALL_NUMERIC_LT
+            | SYSCALL_NUMERIC_LE
+            | SYSCALL_NUMERIC_GT
+            | SYSCALL_NUMERIC_GE
+            | SYSCALL_SCHEMA_ENCODE_DIRECT
+            | SYSCALL_SCHEMA_DECODE_DIRECT
+            | SYSCALL_NUMERIC_TO_INT_DIRECT
+            | SYSCALL_NUMERIC_ADD_DIRECT
+            | SYSCALL_NUMERIC_SUB_DIRECT
+            | SYSCALL_NUMERIC_MUL_DIRECT
+            | SYSCALL_NUMERIC_DIV_DIRECT
+            | SYSCALL_NUMERIC_REM_DIRECT
+            | SYSCALL_NUMERIC_NEG_DIRECT
+            | SYSCALL_NUMERIC_EQ_DIRECT
+            | SYSCALL_NUMERIC_NE_DIRECT
+            | SYSCALL_NUMERIC_LT_DIRECT
+            | SYSCALL_NUMERIC_LE_DIRECT
+            | SYSCALL_NUMERIC_GT_DIRECT
+            | SYSCALL_NUMERIC_GE_DIRECT
+            | SYSCALL_NAME_DECODE
+            | SYSCALL_BUILD_PATH_MAP_KEY
+            | SYSCALL_BUILD_PATH_KEY_NORITO
+            | SYSCALL_ENCODE_INT
+            | SYSCALL_DECODE_INT
+            | SYSCALL_POINTER_TO_NORITO
+            | SYSCALL_POINTER_FROM_NORITO
+            | SYSCALL_TLV_EQ
+            | SYSCALL_VRF_VERIFY
+            | SYSCALL_VRF_VERIFY_BATCH
+            | SYSCALL_GET_AUTHORITY
+            | SYSCALL_CURRENT_TIME_MS
+            | SYSCALL_SYSVAR_CHAIN_ID
+            | SYSCALL_SYSVAR_BLOCK_HEIGHT
+            | SYSCALL_SYSVAR_BLOCK_TIME_MS
+            | SYSCALL_SYSVAR_AUTHORITY
+            | SYSCALL_SYSVAR_CONTRACT_ADDRESS
+            | SYSCALL_SYSVAR_ENTRYPOINT
+            | SYSCALL_DECODE_ARGUMENT_RECORD
+    ) {
+        return SyscallAccess::None;
+    }
+    SyscallAccess::Dynamic
 }
 
 /// Return a sorted list of syscall numbers considered for ABI hashing.
@@ -764,6 +1078,9 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
         v.push(SYSCALL_STATE_HAS);
         v.push(SYSCALL_STATE_LEN);
         v.push(SYSCALL_STATE_COUNT);
+        v.push(SYSCALL_STATE_MAP_KEY_AT);
+        v.push(SYSCALL_STATE_VALUE_ENCODE);
+        v.push(SYSCALL_STATE_VALUE_DECODE);
         v.push(SYSCALL_BUILD_PATH_MAP_KEY);
         v.push(SYSCALL_BUILD_PATH_KEY_NORITO);
         v.push(SYSCALL_ENCODE_INT);
@@ -829,6 +1146,7 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_SYSVAR_AUTHORITY,
             SYSCALL_SYSVAR_CONTRACT_ADDRESS,
             SYSCALL_SYSVAR_ENTRYPOINT,
+            SYSCALL_DECODE_ARGUMENT_RECORD,
             SYSCALL_SUBSCRIPTION_BILL,
             SYSCALL_SUBSCRIPTION_RECORD_USAGE,
             SYSCALL_RESOLVE_ACCOUNT_ALIAS,
@@ -957,6 +1275,9 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_STATE_HAS => "STATE_HAS",
         SYSCALL_STATE_LEN => "STATE_LEN",
         SYSCALL_STATE_COUNT => "STATE_COUNT",
+        SYSCALL_STATE_MAP_KEY_AT => "STATE_MAP_KEY_AT",
+        SYSCALL_STATE_VALUE_ENCODE => "STATE_VALUE_ENCODE",
+        SYSCALL_STATE_VALUE_DECODE => "STATE_VALUE_DECODE",
         SYSCALL_DECODE_INT => "DECODE_INT",
         SYSCALL_BUILD_PATH_MAP_KEY => "BUILD_PATH_MAP_KEY",
         SYSCALL_ENCODE_INT => "ENCODE_INT",
@@ -1076,6 +1397,7 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_SYSVAR_AUTHORITY => "SYSVAR_AUTHORITY",
         SYSCALL_SYSVAR_CONTRACT_ADDRESS => "SYSVAR_CONTRACT_ADDRESS",
         SYSCALL_SYSVAR_ENTRYPOINT => "SYSVAR_ENTRYPOINT",
+        SYSCALL_DECODE_ARGUMENT_RECORD => "DECODE_ARGUMENT_RECORD",
         SYSCALL_SUBSCRIPTION_BILL => "SUBSCRIPTION_BILL",
         SYSCALL_SUBSCRIPTION_RECORD_USAGE => "SUBSCRIPTION_RECORD_USAGE",
         SYSCALL_RESOLVE_ACCOUNT_ALIAS => "RESOLVE_ACCOUNT_ALIAS",
@@ -1298,6 +1620,49 @@ mod tests {
             assert!(is_koto_test_syscall(syscall));
             assert!(!is_syscall_allowed(crate::SyscallPolicy::AbiV1, syscall));
             assert!(syscall > u8::MAX as u32);
+        }
+    }
+
+    #[test]
+    fn syscall_access_classification_is_conservative() {
+        assert_eq!(syscall_access(SYSCALL_STATE_GET), SyscallAccess::StateRead);
+        assert_eq!(syscall_access(SYSCALL_STATE_SET), SyscallAccess::StateWrite);
+        assert_eq!(
+            syscall_access(SYSCALL_STATE_MAP_KEY_AT),
+            SyscallAccess::None
+        );
+        assert_eq!(
+            syscall_access(SYSCALL_STATE_VALUE_ENCODE),
+            SyscallAccess::None
+        );
+        assert_eq!(
+            syscall_access(SYSCALL_STATE_VALUE_DECODE),
+            SyscallAccess::None
+        );
+        assert_eq!(
+            syscall_access(SYSCALL_QUERY_GET_ACCOUNT),
+            SyscallAccess::LedgerRead
+        );
+        assert_eq!(
+            syscall_access(SYSCALL_VRF_EPOCH_SEED),
+            SyscallAccess::LedgerRead
+        );
+        assert_eq!(
+            syscall_access(SYSCALL_TRANSFER_ASSET_SCOPED),
+            SyscallAccess::LedgerWrite
+        );
+        assert_eq!(
+            syscall_access(SYSCALL_CALL_CONTRACT),
+            SyscallAccess::Dynamic
+        );
+        assert_eq!(syscall_access(SYSCALL_SHA256_HASH), SyscallAccess::None);
+        assert_eq!(syscall_access(0x00ff_fffe), SyscallAccess::Dynamic);
+
+        for number in abi_syscall_list() {
+            assert!(
+                syscall_name(*number).is_some(),
+                "ABI syscall 0x{number:06x} lacks a registry name"
+            );
         }
     }
 }

@@ -300,6 +300,23 @@ fn box_roundtrip() {
     assert_eq!(str_box, decoded);
 }
 
+#[derive(Encode, Decode, PartialEq, Debug)]
+enum RecursiveExpression {
+    Literal(u32),
+    Nested(Box<RecursiveExpression>),
+}
+
+#[test]
+fn concrete_recursive_derive_roundtrip() {
+    let value = RecursiveExpression::Nested(Box::new(RecursiveExpression::Nested(Box::new(
+        RecursiveExpression::Literal(77),
+    ))));
+    let bytes = value.encode();
+    let decoded = RecursiveExpression::decode_all(&mut &bytes[..])
+        .expect("recursive expression decode");
+    assert_eq!(value, decoded);
+}
+
 #[test]
 fn rc_arc_roundtrip() {
     use std::{rc::Rc, sync::Arc};

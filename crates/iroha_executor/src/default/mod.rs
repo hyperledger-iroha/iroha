@@ -19,8 +19,8 @@ pub use asset_definition::{
     visit_set_asset_definition_key_value, visit_transfer_asset_definition,
     visit_unregister_asset_definition,
 };
-/// Re-export bridge receipt visitor helper.
-pub use bridge::visit_record_bridge_receipt;
+/// Re-export bridge visitor helpers.
+pub use bridge::{visit_apply_sccp_route_governance, visit_record_bridge_receipt};
 /// Re-export domain visitor helpers used by the default executor.
 pub use domain::{
     visit_register_domain, visit_remove_domain_key_value, visit_set_domain_key_value,
@@ -28,6 +28,8 @@ pub use domain::{
 };
 /// Re-export upgrade visitor helper.
 pub use executor::visit_upgrade;
+/// Re-export governance visitors handled by the default executor.
+pub use governance::{visit_enact_referendum, visit_propose_sccp_route_governance};
 use iroha_smart_contract::data_model::{
     isi::{
         ActivatePublicLaneValidator, ApprovePinManifest, BindManifestAlias,
@@ -37,8 +39,9 @@ use iroha_smart_contract::data_model::{
         RegisterPublicLaneValidator, RemoveAssetKeyValue, RetirePinManifest, SetAssetKeyValue,
         SetLaneRelayEmergencyValidators, SetPricingSchedule, UnregisterProviderOwner,
         UpsertProviderCredit,
-        bridge::RecordBridgeReceipt,
+        bridge::{ApplySccpRouteGovernance, RecordBridgeReceipt},
         defi::DeFiInstructionBox,
+        governance::{EnactReferendum, ProposeSccpRouteGovernance},
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
     },
     prelude::*,
@@ -342,6 +345,18 @@ impl InstructionDispatch for InstructionBox {
             bridge::visit_record_bridge_receipt(executor, isi);
             return;
         }
+        if let Some(isi) = any.downcast_ref::<ApplySccpRouteGovernance>() {
+            bridge::visit_apply_sccp_route_governance(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<ProposeSccpRouteGovernance>() {
+            governance::visit_propose_sccp_route_governance(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<EnactReferendum>() {
+            governance::visit_enact_referendum(executor, isi);
+            return;
+        }
         if let Some(isi) = any.downcast_ref::<RegisterProviderOwner>() {
             sorafs::visit_register_provider_owner(executor, isi);
             return;
@@ -372,6 +387,29 @@ impl InstructionDispatch for InstructionBox {
         }
 
         deny!(executor, "unexpected instruction type");
+    }
+}
+
+/// Permission-aware dispatch for SCCP governance proposal instructions.
+pub mod governance {
+    use super::*;
+
+    /// Dispatch a typed SCCP route-governance proposal to Core, which admits registered citizens
+    /// or holders of `CanProposeSccpRouteGovernance` (including role grants).
+    pub fn visit_propose_sccp_route_governance<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &ProposeSccpRouteGovernance,
+    ) {
+        execute!(executor, isi)
+    }
+
+    /// Dispatch referendum enactment to Core, which enforces the typed enactment permission and
+    /// idempotent proposal lifecycle.
+    pub fn visit_enact_referendum<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &EnactReferendum,
+    ) {
+        execute!(executor, isi)
     }
 }
 
@@ -895,6 +933,7 @@ pub mod domain {
             | AnyPermission::CanManageLaneRelayEmergency(_)
             | AnyPermission::CanRegisterDomain(_)
             | AnyPermission::CanSetParameters(_)
+            | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
@@ -1187,6 +1226,7 @@ pub mod account {
             | AnyPermission::CanTransferNft(_)
             | AnyPermission::CanModifyNftMetadata(_)
             | AnyPermission::CanSetParameters(_)
+            | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
@@ -1424,6 +1464,7 @@ pub mod asset_definition {
             | AnyPermission::CanTransferNft(_)
             | AnyPermission::CanModifyNftMetadata(_)
             | AnyPermission::CanSetParameters(_)
+            | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
@@ -2174,8 +2215,24 @@ pub mod parameter {
 
     use super::*;
 
+    const SCCP_REGISTRY_PARAMETER_ID: &str = "sccp_registry_v1";
+
+    fn updates_sccp_governance(isi: &SetParameter) -> bool {
+        matches!(
+            isi.inner(),
+            Parameter::Custom(parameter)
+                if parameter.id().name().as_ref() == SCCP_REGISTRY_PARAMETER_ID
+        )
+    }
+
     /// Applies a network parameter change when genesis or a parameter manager invokes it.
     pub fn visit_set_parameter<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &SetParameter) {
+        if updates_sccp_governance(isi) {
+            deny!(
+                executor,
+                "The reserved SCCP registry cannot be changed through SetParameter; use ApplySccpRouteGovernance"
+            );
+        }
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
@@ -2629,6 +2686,7 @@ pub mod trigger {
             | AnyPermission::CanTransferAsset(_)
             | AnyPermission::CanManageZkAceIdentityForAccount(_)
             | AnyPermission::CanSetParameters(_)
+            | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanRegisterNft(_)
             | AnyPermission::CanUnregisterNft(_)
@@ -2670,6 +2728,7 @@ pub mod trigger {
             account::{AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias},
             asset::{CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition},
             nexus::CanUseFeeSponsor,
+            sccp::CanManageSccpGovernance,
             sorafs::{
                 CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
                 CanDeclareSorafsCapacity, CanFileSorafsCapacityDispute,
@@ -2723,6 +2782,7 @@ pub mod trigger {
                 AnyPermission::CanRegisterSorafsProviderOwner(CanRegisterSorafsProviderOwner),
                 AnyPermission::CanUnregisterSorafsProviderOwner(CanUnregisterSorafsProviderOwner),
                 AnyPermission::CanIngestSoranetPrivacy(CanIngestSoranetPrivacy),
+                AnyPermission::CanManageSccpGovernance(CanManageSccpGovernance),
             ]
         }
 
@@ -2925,6 +2985,9 @@ mod sorafs_permission_tests {
         CanRegisterSorafsProviderOwner, CanRetireSorafsPin, CanSetSorafsPricing,
         CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
     };
+    use iroha_executor_data_model::permission::{
+        parameter::CanSetParameters, sccp::CanManageSccpGovernance,
+    };
 
     use super::*;
     use crate::{Iroha, prelude, tests::with_mock_permissions};
@@ -3040,6 +3103,21 @@ mod sorafs_permission_tests {
             assert!(
                 executor.verdict().is_ok(),
                 "expected instruction to be permitted with permission"
+            );
+        });
+    }
+
+    fn assert_denied_with_permission<T: Clone>(
+        instruction: T,
+        permission: PermissionObject,
+        visit: impl Fn(&mut MockExecutor, &T),
+    ) {
+        with_mock_permissions(vec![permission], || {
+            let mut executor = MockExecutor::new(false);
+            visit(&mut executor, &instruction);
+            assert!(
+                executor.verdict().is_err(),
+                "expected instruction to remain denied with unrelated permission"
             );
         });
     }
@@ -3300,6 +3378,100 @@ mod sorafs_permission_tests {
         CanUpsertSorafsProviderCredit,
         sorafs::visit_upsert_provider_credit
     );
+
+    fn custom_parameter(name: &str) -> SetParameter {
+        let id = iroha_smart_contract::data_model::parameter::CustomParameterId::new(
+            name.parse().expect("test custom parameter id"),
+        );
+        SetParameter::new(Parameter::Custom(
+            iroha_smart_contract::data_model::parameter::CustomParameter::new(id, Json::new(())),
+        ))
+    }
+
+    fn remove_sccp_route() -> ApplySccpRouteGovernance {
+        ApplySccpRouteGovernance::new(
+            iroha_smart_contract::data_model::isi::bridge::SccpRouteGovernanceActionV1::Remove(
+                iroha_smart_contract::data_model::bridge::SccpRouteKeyV1 {
+                    lane_id: iroha_smart_contract::data_model::bridge::SccpLaneIdV1 {
+                        source:
+                            iroha_smart_contract::data_model::bridge::SccpNetworkV1::EthereumMainnet,
+                        target: iroha_smart_contract::data_model::bridge::SccpNetworkV1::SoraTaira,
+                    },
+                    route_id: "taira_eth_xor".to_owned(),
+                    asset_key: "xor".to_owned(),
+                    revision: 1,
+                },
+            ),
+        )
+    }
+
+    #[test]
+    fn sccp_route_governance_dispatch_requires_dedicated_permission() {
+        let instruction = remove_sccp_route();
+        assert_denied_without_permission(
+            instruction.clone(),
+            bridge::visit_apply_sccp_route_governance,
+        );
+        assert_denied_with_permission(
+            instruction.clone(),
+            PermissionObject::from(CanSetParameters),
+            bridge::visit_apply_sccp_route_governance,
+        );
+        assert_allowed_with_permission(
+            instruction.clone(),
+            PermissionObject::from(CanManageSccpGovernance),
+            bridge::visit_apply_sccp_route_governance,
+        );
+
+        with_mock_permissions(
+            vec![PermissionObject::from(CanManageSccpGovernance)],
+            || {
+                let mut executor = MockExecutor::new(false);
+                visit_instruction(&mut executor, &InstructionBox::from(instruction));
+                assert!(
+                    executor.verdict().is_ok(),
+                    "known SCCP governance ISI must reach its permission-checked dispatcher"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn sccp_and_generic_parameter_permissions_are_separated() {
+        let sccp = custom_parameter("sccp_registry_v1");
+        assert_denied_with_permission(
+            sccp.clone(),
+            PermissionObject::from(CanSetParameters),
+            parameter::visit_set_parameter,
+        );
+        assert_denied_with_permission(
+            sccp.clone(),
+            PermissionObject::from(CanManageSccpGovernance),
+            parameter::visit_set_parameter,
+        );
+        let mut genesis = MockExecutor::new(true);
+        parameter::visit_set_parameter(&mut genesis, &sccp);
+        assert!(genesis.verdict().is_err());
+
+        let unrelated = custom_parameter("unrelated_parameter");
+        assert_denied_with_permission(
+            unrelated.clone(),
+            PermissionObject::from(CanManageSccpGovernance),
+            parameter::visit_set_parameter,
+        );
+        assert_allowed_with_permission(
+            unrelated,
+            PermissionObject::from(CanSetParameters),
+            parameter::visit_set_parameter,
+        );
+    }
+
+    #[test]
+    fn genesis_can_apply_typed_sccp_governance_without_seeded_permission() {
+        let mut executor = MockExecutor::new(true);
+        bridge::visit_apply_sccp_route_governance(&mut executor, &remove_sccp_route());
+        assert!(executor.verdict().is_ok());
+    }
 }
 
 /// Permission-checked visitors for direct permission grants and revocations.
@@ -3380,9 +3552,26 @@ pub mod log {
     }
 }
 
-/// Visitor for bridge receipt instructions which are always permitted.
+/// Permission-checked visitors for bridge instructions.
 pub mod bridge {
+    use iroha_executor_data_model::permission::sccp::CanManageSccpGovernance;
+
     use super::*;
+
+    fn visit_sccp_governance<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &(impl BuiltInInstruction + NoritoSerialize),
+    ) {
+        if executor.context().curr_block.is_genesis()
+            || CanManageSccpGovernance.is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+        deny!(
+            executor,
+            "Can't apply SCCP route governance without CanManageSccpGovernance"
+        );
+    }
 
     /// Records a bridge receipt without additional permission gates.
     pub fn visit_record_bridge_receipt<V: Execute + Visit + ?Sized>(
@@ -3390,5 +3579,13 @@ pub mod bridge {
         isi: &RecordBridgeReceipt,
     ) {
         execute!(executor, isi)
+    }
+
+    /// Applies one typed governed SCCP registry action.
+    pub fn visit_apply_sccp_route_governance<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &ApplySccpRouteGovernance,
+    ) {
+        visit_sccp_governance(executor, isi)
     }
 }

@@ -28,10 +28,10 @@ slug: /norito/quickstart
 
 - [Docker](https://docs.docker.com/engine/install/) עם Compose V2 פעיל (משמש להפעלת ה-peer לדוגמה שמוגדר ב-`defaults/docker-compose.single.yml`).
 - Rust toolchain (1.76+) לבניית הבינארים המסייעים אם אינכם מורידים את המפורסמים.
-- בינארים `koto_compile`, `ivm_run` ו-`iroha_cli`. אפשר לבנות אותם מה-checkout של ה-workspace כפי שמוצג למטה או להוריד את release artifacts המתאימים:
+- בינארים `koto build`, `ivm_run` ו-`iroha_cli`. אפשר לבנות אותם מה-checkout של ה-workspace כפי שמוצג למטה או להוריד את release artifacts המתאימים:
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -55,22 +55,22 @@ docker compose -f defaults/docker-compose.single.yml up --build
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -82,15 +82,14 @@ KO
 קמפלו את החוזה לבייטקוד IVM/Norito (`.to`) והריצו אותו מקומית כדי לוודא ש-syscalls של ה-host מצליחים לפני שנוגעים ברשת:
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-ה-runner מדפיס את הלוג `info("Hello from Kotodama")` ומבצע את syscall `SET_ACCOUNT_DETAIL` מול host מדומה. אם הבינארי האופציונלי `ivm_tool` זמין, `ivm_tool inspect target/quickstart/hello.to` מציג את ABI header, את feature bits ואת ה-entrypoints המיוצאים.
+ה-runner מדפיס את הלוג `debug::info("Hello from Kotodama")` ומבצע את syscall `SET_ACCOUNT_DETAIL` מול host מדומה. אם הבינארי האופציונלי `ivm_tool` זמין, `ivm_tool inspect target/quickstart/hello.to` מציג את ABI header, את feature bits ואת ה-entrypoints המיוצאים.
 
 ## 4. שליחת הבייטקוד דרך Torii
 
@@ -138,3 +137,63 @@ iroha --config defaults/client.toml \
   של כלי הקומפיילר/runner, פריסת manifests ומטא-דאטה של IVM.
 - כאשר אתם עובדים על החוזים שלכם, השתמשו ב-`npm run sync-norito-snippets` בתוך ה-workspace כדי
   לחדש את ה-snippets להורדה כך שמסמכי הפורטל והארטיפקטים יישארו מסונכרנים עם המקורות תחת `crates/ivm/docs/examples/`.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

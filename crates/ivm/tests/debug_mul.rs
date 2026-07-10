@@ -1,9 +1,13 @@
+//! Regression coverage for scalar multiplication in compiled Kotodama.
+
 #[test]
 fn debug_mul() {
     let src = r#"
-        fn f() -> int {
-            let t = 1;
-            return t * 2;
+        seiyaku Multiply {
+            fn f() -> i64 {
+                let t = 1;
+                return t * 2;
+            }
         }
     "#;
     let code = ivm::KotodamaCompiler::new()

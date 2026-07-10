@@ -1,14 +1,28 @@
 # Kotodama Compiler Error Codes
 
 The Kotodama compiler emits stable error codes so that tooling and CLI users can
-quickly understand the cause of a failure. Use `koto_compile --explain <code>`
+quickly understand the cause of a failure. Use `koto explain <code>`
 to print the corresponding hint.
 
-| Code  | Description | Typical Fix |
-|-------|-------------|-------------|
-| `E0001` | Branch target is out of range for the IVM jump encoding. | Split very large functions or reduce inlining so basic block distances stay within ±1 MiB. |
-| `E0002` | Call sites reference a function that was never defined. | Check for typos, visibility modifiers, or feature flags that removed the callee. |
-| `E0003` | Durable state syscalls were emitted without ABI v1 enabled. | Set `CompilerOptions::abi_version = 1` or add `meta { abi_version: 1 }` inside the `seiyaku` contract. |
-| `E0004` | Asset-related syscalls received non-literal pointers. | Use `account_id(...)`, `asset_definition(...)`, etc., or pass 0 sentinels for host defaults. |
-| `E0005` | `for`-loop initializer is more complex than supported today. | Move complex setup before the loop; only simple `let`/expression initialisers are currently accepted. |
-| `E0006` | `for`-loop step clause is more complex than supported today. | Update the loop counter with a simple expression (e.g. `i = i + 1`). |
+The canonical registry lives in `kotodama_lang::diagnostic`; `koto explain`
+reads that registry directly, so CLI guidance cannot drift from compiler codes.
+
+| Code range | Phase | Meaning |
+|------------|-------|---------|
+| `K0000`–`K0100` | lex/budget | Source I/O, size, token count, nesting, diagnostic fanout, or invalid-token failures. |
+| `K1001` | parse | The source does not match the V1 grammar. |
+| `K2001`–`K2100` | semantic | Duplicate or unknown symbols, type, authorization, state, recursion, or deterministic-profile failures. |
+| `K3001`–`K3099` | lowering | Typed-HIR, SSA-MIR, code generation, or assembly failures. |
+| `K4001`–`K4003` | artifact | Compiler-owned header, manifest, deployable artifact construction, or standalone-module build failures. |
+| `K5001`–`K5099` | semantic warning | Unified `koto check` lints for unused/unreachable declarations and operations whose access behavior is not statically transparent; `K5099` is the fail-closed adapter for a finding awaiting a dedicated code. |
+| `E_ACCESS_INCOMPLETE` | semantic | Static access derivation is incomplete, so runtime scheduling must be conservative. |
+| `E_UNBOUNDED_LOOP`, `E_UNBOUNDED_ITERATION` | semantic | A loop or collection traversal lacks a compiler-proven V1 bound. |
+| `E_INT_OVERFLOW` | semantic/runtime | Checked arithmetic overflowed; wrapping requires an explicit operation. |
+| `E_INTERNAL_BUILTIN` | semantic | Source attempted to use allocation, pointers, raw syscalls, or another compiler-only capability. |
+| `E_SECRET_*` | semantic | Secret information-flow policy rejected a public sink, control-flow dependency, or unapproved operation. |
+
+For the precise summary and remediation of any registered code, run:
+
+```sh
+koto explain K2003
+```

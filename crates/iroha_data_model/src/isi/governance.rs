@@ -18,7 +18,7 @@ pub use self::at_window_placeholder::AtWindow;
 #[cfg(feature = "governance")]
 pub use crate::governance::types::AtWindow;
 use crate::{
-    isi::bridge::SccpRouteManifest, prelude::*, runtime::RuntimeUpgradeManifest,
+    isi::bridge::SccpRouteGovernanceActionV1, prelude::*, runtime::RuntimeUpgradeManifest,
     smart_contract::manifest::ManifestProvenance,
 };
 
@@ -134,18 +134,18 @@ pub struct ProposeRuntimeUpgradeProposal {
 
 impl crate::seal::Instruction for ProposeRuntimeUpgradeProposal {}
 
-/// Propose publication of an SCCP route manifest through governance.
+/// Propose one closed SCCP registry action through governance.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
-pub struct ProposeSccpRouteManifest {
-    /// Canonical route manifest to publish if the referendum is enacted.
-    pub manifest: SccpRouteManifest,
+pub struct ProposeSccpRouteGovernance {
+    /// Atomic closed registry action to execute if enacted.
+    pub action: SccpRouteGovernanceActionV1,
     /// Optional referendum window override (inclusive).
     pub window: Option<AtWindow>,
     /// Optional voting mode for the referendum created by this proposal (default Zk).
     pub mode: Option<VotingMode>,
 }
 
-impl crate::seal::Instruction for ProposeSccpRouteManifest {}
+impl crate::seal::Instruction for ProposeSccpRouteGovernance {}
 
 /// Cast a ZK ballot (default voting mode)
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
@@ -507,8 +507,8 @@ impl_governance_decode_from_slice!(ProposeRuntimeUpgradeProposal {
     mode: Option<VotingMode>,
 });
 
-impl_governance_decode_from_slice!(ProposeSccpRouteManifest {
-    manifest: SccpRouteManifest,
+impl_governance_decode_from_slice!(ProposeSccpRouteGovernance {
+    action: SccpRouteGovernanceActionV1,
     window: Option<AtWindow>,
     mode: Option<VotingMode>,
 });
@@ -628,61 +628,16 @@ mod tests {
         }
     }
 
-    fn sccp_route_manifest() -> SccpRouteManifest {
-        SccpRouteManifest {
-            version: 1,
-            route_id: "taira_sol_xor".to_string(),
-            asset_key: "xor".to_string(),
-            network: "testnet".to_string(),
-            chain: "solana-testnet".to_string(),
-            chain_id_hex: "0x736f6c616e612d746573746e6574".to_string(),
-            explorer_url: Some("https://explorer.solana.com?cluster=testnet".to_string()),
-            explorer_host: Some("explorer.solana.com".to_string()),
-            counterparty_account_codec: Some(6),
-            counterparty_account_codec_key: Some("solana_base58".to_string()),
-            counterparty_domain: 3,
-            verifier_target: "SolanaProgram".to_string(),
-            production_ready: false,
-            disabled_reason: Some("test fixture".to_string()),
-            network_id_hex: "0x736f6c616e612d746573746e6574".to_string(),
-            taira_xor_token_address: "So11111111111111111111111111111111111111112".to_string(),
-            taira_xor_bridge_address: "Br11111111111111111111111111111111111111111".to_string(),
-            source_bridge_address: "Src111111111111111111111111111111111111111".to_string(),
-            destination_verifier_address: "Vrf111111111111111111111111111111111111111".to_string(),
-            ton_finalize_message_value_nano: None,
-            verifier_code_hash: "11".repeat(32),
-            verifier_key_hash: "22".repeat(32),
-            proof_artifact_hash: None,
-            proving_key_hash: None,
-            native_evm_prover_bundle_hash: None,
-            native_evm_prover_bundle: None,
-            source_verifier_material: None,
-            source_adapter_engine_deployment: None,
-            source_adapter_engine: None,
-            destination_browser_prover: None,
-            source_browser_prover: None,
-            deployment_evidence_sha256: None,
-            destination_binding_key: "solana:testnet:test-fixture".to_string(),
-            destination_binding_hash: "33".repeat(32),
-            taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
-                .to_string(),
-            taira_burn_record_contract_artifact_b64: "AQID".to_string(),
-            taira_burn_record_artifact_sha256: "44".repeat(32),
-            taira_burn_record_code_hash: "55".repeat(32),
-            taira_burn_record_vk_backend: "halo2/ipa".to_string(),
-            taira_burn_record_vk_name: "taira_xor_burn_record_v1".to_string(),
-            taira_burn_record_gas_limit: 2_000_000,
-            settlement_contract_address: None,
-            settlement_contract_alias: None,
-            post_deploy_full_toml_ready: None,
-            post_deploy_source_bridge_config_hash: None,
-            post_deploy_source_event_transaction_id: None,
-            post_deploy_source_event_explorer_url: None,
-            post_deploy_route_canary_evidence_hash: None,
-            post_deploy_route_canary_transaction_id: None,
-            post_deploy_route_canary_explorer_url: None,
-            post_deploy_offline_full_toml_sha256: None,
-        }
+    fn sccp_route_action() -> SccpRouteGovernanceActionV1 {
+        SccpRouteGovernanceActionV1::Remove(crate::bridge::SccpRouteKeyV1 {
+            lane_id: crate::bridge::SccpLaneIdV1 {
+                source: crate::bridge::SccpNetworkV1::EthereumSepolia,
+                target: crate::bridge::SccpNetworkV1::SoraTaira,
+            },
+            route_id: "taira_eth_xor".to_owned(),
+            asset_key: "xor".to_owned(),
+            revision: 1,
+        })
     }
 
     fn assert_slice_roundtrip<T>(value: T)
@@ -745,15 +700,15 @@ mod tests {
     }
 
     #[test]
-    fn sccp_route_manifest_proposal_roundtrip() {
-        let ins = ProposeSccpRouteManifest {
-            manifest: sccp_route_manifest(),
+    fn sccp_route_governance_proposal_roundtrip() {
+        let ins = ProposeSccpRouteGovernance {
+            action: sccp_route_action(),
             window: Some(window()),
             mode: Some(VotingMode::Plain),
         };
         let enc = norito::codec::Encode::encode(&ins);
         let mut cur = enc.as_slice();
-        let dec = ProposeSccpRouteManifest::decode(&mut cur).unwrap();
+        let dec = ProposeSccpRouteGovernance::decode(&mut cur).unwrap();
         assert_eq!(ins, dec);
     }
 
@@ -808,8 +763,8 @@ mod tests {
             window: Some(window()),
             mode: Some(VotingMode::Plain),
         });
-        assert_slice_roundtrip(ProposeSccpRouteManifest {
-            manifest: sccp_route_manifest(),
+        assert_slice_roundtrip(ProposeSccpRouteGovernance {
+            action: sccp_route_action(),
             window: Some(window()),
             mode: Some(VotingMode::Plain),
         });

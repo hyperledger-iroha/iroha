@@ -1,7 +1,7 @@
-// Public entrypoint using `kotoage fn` inside a contract.
-seiyaku PublicIncrement {
-  kotoage fn inc(n: int) -> int {
-    let one = 1;
-    return n + one;
-  }
+// Canonical authorized 言挙げ declaration.
+誓約 PublicIncrement {
+    言挙げ fn inc(n: i64) -> i64 authorize("Entry") {
+        let one = 1;
+        return n + one;
+    }
 }

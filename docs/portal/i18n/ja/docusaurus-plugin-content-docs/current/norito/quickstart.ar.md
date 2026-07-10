@@ -22,10 +22,10 @@ translation_last_reviewed: 2026-02-07
 
 - [Docker](https://docs.docker.com/engine/install/) Compose V2 (ピア العينة المحدد في `defaults/docker-compose.single.yml`)。
 - Rust (1.76+) をインストールしてください。
-- `koto_compile` و`ivm_run` و`iroha_cli`。チェックアウト ワークスペース ワークスペース アーティファクト ワークスペース:
+- `koto build` و`ivm_run` و`iroha_cli`。チェックアウト ワークスペース ワークスペース アーティファクト ワークスペース:
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -49,22 +49,22 @@ Kotodama 番号:
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -76,15 +76,14 @@ KO
 バイトコード IVM/Norito (`.to`) のシステムコールを実行します。意味:
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-ランナー `info("Hello from Kotodama")` syscall `SET_ACCOUNT_DETAIL` を実行します。 `ivm_tool` セキュリティ `ivm_tool inspect target/quickstart/hello.to` セキュリティ ABI ヘッダー、機能ビット、エントリ ポイント。
+ランナー `debug::info("Hello from Kotodama")` syscall `SET_ACCOUNT_DETAIL` を実行します。 `ivm_tool` セキュリティ `ivm_tool inspect target/quickstart/hello.to` セキュリティ ABI ヘッダー、機能ビット、エントリ ポイント。
 
 ## 4. バイトコード Torii
 
@@ -133,3 +132,63 @@ iroha --config defaults/client.toml \
 - عند التكرار على عقودك، استخدم `npm run sync-norito-snippets` في
   ワークスペース ワークスペース ワークスペース ワークスペース ワークスペース ワークスペース ワークスペース ワークスペース ワークスペース ワークスペース ワークスペース ワークスペース ワークスペース ワークスペース ワークスペース ワークスペース ワークスペース ワークスペース ワークスペース ワークスペース ワークスペース ワークスペース ワークスペース ワークスペース ワークスペース ワークスペース
   `crates/ivm/docs/examples/` を確認してください。
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

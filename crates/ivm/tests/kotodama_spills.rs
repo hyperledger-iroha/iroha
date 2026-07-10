@@ -12,7 +12,7 @@ fn many_locals_force_spills_and_compute() {
         body.push_str(&format!("let a{} = a{} + 1;\n", i, i - 1));
     }
     body.push_str("return a39;\n");
-    let src = format!("fn main() -> int {{\n{body}\n}}");
+    let src = format!("seiyaku SpillChain {{ fn main() -> i64 {{\n{body}\n}} }}");
     let code = KotodamaCompiler::new()
         .compile_source(&src)
         .expect("compile spills");
@@ -25,13 +25,13 @@ fn many_locals_force_spills_and_compute() {
 #[test]
 fn literal_heavy_set_account_detail_compiles_under_spill_pressure() {
     const COUNT: usize = 256;
-    let mut src = String::from("fn main() {\n");
+    let mut src = String::from("seiyaku SpillLiterals { kotoage fn main() authorize(\"Test\") {\n");
     for i in 0..COUNT {
         src.push_str(&format!(
-            "  set_account_detail(authority(), name(\"literal{i}\"), json(\"{{\\\"value\\\":{i}}}\"));\n"
+            "  ledger::account::set_detail(context::authority(), Name::parse(\"literal{i}\"), Json::parse(\"{{\\\"value\\\":{i}}}\"));\n"
         ));
     }
-    src.push_str("}\n");
+    src.push_str("}\n}\n");
 
     KotodamaCompiler::new()
         .compile_source(&src)

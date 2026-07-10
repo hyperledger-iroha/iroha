@@ -56,6 +56,26 @@ fn decode_stream_matches_expected_words_and_lengths() {
     }
 }
 
+#[test]
+fn decode_stream_preserves_indexed_literal_and_compact_transfer_words() {
+    let expected = [
+        encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 12, 0x3456),
+        encoding::wide::encode_offset24(instruction::wide::control::JALS, -2),
+    ];
+    let mut code = Vec::new();
+    for word in expected {
+        push_word(&mut code, word);
+    }
+
+    let decoded = IvmCache::decode_stream(&code).expect("decode compact extension words");
+    assert_eq!(decoded.len(), expected.len());
+    for (index, op) in decoded.iter().enumerate() {
+        assert_eq!(op.pc, (index * 4) as u64);
+        assert_eq!(op.len, 4);
+        assert_eq!(op.inst, expected[index]);
+    }
+}
+
 /// Decoding should ignore metadata fields that are orthogonal to the byte stream.
 #[test]
 fn decode_artifact_invariant_across_metadata_fields() {

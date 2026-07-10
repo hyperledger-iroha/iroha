@@ -23,6 +23,7 @@ fn minimal_contract_artifact() -> Vec<u8> {
         abi_version: 1,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        contract_name: "TestContract".to_owned(),
         compiler_fingerprint: "integration-tests".to_owned(),
         features_bitmap: 0,
         access_set_hints: None,
@@ -40,6 +41,7 @@ fn minimal_contract_artifact() -> Vec<u8> {
             triggers: Vec::new(),
             entry_pc: 0,
         }],
+        error_codes: Vec::new(),
         states: Vec::new(),
     };
     let mut out = meta.encode();
@@ -51,29 +53,93 @@ fn minimal_contract_artifact() -> Vec<u8> {
 fn contract_state_probe_artifact() -> Vec<u8> {
     let src = r#"
 seiyaku ContractStateProbe {
-  meta { abi_version: 1; }
+  error enum ProbeError {
+    NotInitialized = 1
+  }
 
-  state int Initialized;
-  state int StoredValue;
+  state Initialized: i64;
+  state StoredValue: i64;
+  state probe_readback: i64;
 
-  kotoage fn main() -> int {
+  kotoage fn main() -> i64 authorize("CanEnactGovernance") {
     return 0;
   }
 
-  kotoage fn init() permission(Admin) {
+  fn initialize_impl() {
     Initialized = 1;
     StoredValue = 7;
+    probe_readback = 0;
   }
 
-  kotoage fn verify() permission(Admin) {
-    assert(Initialized == 1, "not initialized");
-    state_set(name("probe_readback"), encode_int(StoredValue));
+  hajimari() {
+    initialize_impl();
+  }
+
+  kotoage fn initialize() authorize("CanEnactGovernance") {
+    initialize_impl();
+  }
+
+  kotoage fn verify() authorize("CanEnactGovernance") {
+    require(Initialized == 1, ProbeError::NotInitialized);
+    probe_readback = StoredValue;
   }
 }
 "#;
     ivm::KotodamaCompiler::new()
         .compile_source(src)
         .expect("compile contract-state probe program")
+}
+
+fn dynamic_access_counter_artifact() -> Vec<u8> {
+    let src = r#"
+seiyaku DynamicAccessCounter {
+  state Counters: StateMap<i64, i64>;
+
+  fn bump_hidden(key: i64, delta: i64) {
+    let current = Counters.get(key).unwrap_or(0);
+    Counters[key] = current + delta;
+  }
+
+  kotoage fn bump_direct(key: i64, delta: i64) authorize("CanEnactGovernance") {
+    let current = Counters.get(key).unwrap_or(0);
+    Counters[key] = current + delta;
+  }
+
+  kotoage fn bump_via_helper(key: i64, delta: i64) authorize("CanEnactGovernance") {
+    bump_hidden(key, delta);
+  }
+}
+"#;
+    let artifact = ivm::KotodamaCompiler::new()
+        .compile_source(src)
+        .expect("compile dynamic-access counter program");
+    let parsed = ivm::ProgramMetadata::parse(&artifact).expect("parse dynamic-access metadata");
+    let interface = parsed
+        .contract_interface
+        .expect("dynamic-access contract interface");
+    for entrypoint_name in ["bump_direct", "bump_via_helper"] {
+        let entrypoint = interface
+            .entrypoints
+            .iter()
+            .find(|entrypoint| entrypoint.name == entrypoint_name)
+            .unwrap_or_else(|| panic!("missing `{entrypoint_name}` entrypoint"));
+        assert!(
+            entrypoint
+                .write_keys
+                .iter()
+                .any(|key| key == "state:Counters"),
+            "`{entrypoint_name}` must transitively report the dynamic StateMap write: {entrypoint:?}"
+        );
+    }
+    artifact
+}
+
+fn dynamic_counter_args(key: i64, delta: i64) -> norito::json::Value {
+    norito::json::object([
+        ("key", norito::json::Value::from(key)),
+        ("delta", norito::json::Value::from(delta)),
+    ])
+    .expect("serialize dynamic counter arguments")
 }
 
 async fn wait_for_approved_txs(
@@ -126,13 +192,22 @@ fn pipeline_status_kind(payload: &norito::json::Value) -> Option<&str> {
     }
 }
 
+fn pipeline_status_block_height(payload: &norito::json::Value) -> Option<u64> {
+    payload
+        .get("content")
+        .and_then(|content| content.get("status"))
+        .or_else(|| payload.get("status"))?
+        .get("block_height")
+        .and_then(norito::json::Value::as_u64)
+}
+
 async fn wait_for_tx_applied(
     http: &reqwest::Client,
     torii_url: &reqwest::Url,
     tx_hash_hex: &str,
     timeout: Duration,
     stage: &str,
-) -> Result<()> {
+) -> Result<u64> {
     let mut status_url = torii_url.join("v1/pipeline/transactions/status")?;
     status_url
         .query_pairs_mut()
@@ -163,7 +238,12 @@ async fn wait_for_tx_applied(
                         last_kind = kind.to_string();
                         last_payload = format!("{payload:?}");
                         match kind {
-                            "Applied" => return Ok(()),
+                            "Applied" => {
+                                if let Some(block_height) = pipeline_status_block_height(&payload) {
+                                    return Ok(block_height);
+                                }
+                                last_kind = "Applied without block_height".to_owned();
+                            }
                             "Rejected" => {
                                 return Err(eyre!(
                                     "{stage}: tx `{tx_hash_hex}` rejected; payload={payload:?}"
@@ -205,6 +285,96 @@ async fn wait_for_tx_applied(
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
+}
+
+async fn deploy_contract_artifact(
+    client: &iroha::client::Client,
+    http: &reqwest::Client,
+    artifact: &[u8],
+    alias_name: &str,
+    stage: &str,
+) -> Result<iroha_data_model::smart_contract::ContractAddress> {
+    let baseline = client.get_status()?.txs_approved;
+    let code_b64 = base64::engine::general_purpose::STANDARD.encode(artifact);
+    let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
+        alias_name,
+        None,
+        "universal",
+    )
+    .map_err(|error| eyre!("{stage}: invalid contract alias: {error}"))?;
+    let response = tokio::task::spawn_blocking({
+        let client = client.clone();
+        move || {
+            client.post_contract_deploy_json(
+                &iroha_test_samples::ALICE_ID.clone(),
+                iroha_test_samples::ALICE_KEYPAIR.private_key(),
+                &code_b64,
+                &contract_alias,
+                None,
+            )
+        }
+    })
+    .await
+    .expect("deploy contract task")?;
+
+    if let Some(tx_hash_hex) = response
+        .get("tx_hash_hex")
+        .and_then(norito::json::Value::as_str)
+    {
+        wait_for_tx_applied(
+            http,
+            &client.torii_url,
+            tx_hash_hex,
+            Duration::from_secs(60),
+            stage,
+        )
+        .await?;
+    } else {
+        wait_for_approved_txs(client, baseline, Duration::from_secs(60), stage).await?;
+    }
+
+    response
+        .get("contract_address")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| eyre!("{stage}: response missing contract_address: {response:?}"))?
+        .parse()
+        .map_err(|error| eyre!("{stage}: invalid contract_address: {error}"))
+}
+
+async fn contract_state_json_value(
+    http: &reqwest::Client,
+    torii_url: &reqwest::Url,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    path: &str,
+) -> Result<norito::json::Value> {
+    let mut url = torii_url.join("v1/contracts/state")?;
+    url.query_pairs_mut()
+        .append_pair("contract_address", &contract_address.to_string())
+        .append_pair("path", path)
+        .append_pair("decode", "json");
+    let response = http
+        .get(url)
+        .header("Accept", "application/json")
+        .send()
+        .await?;
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(eyre!("contract state `{path}` returned {status}: {body}"));
+    }
+    let payload: norito::json::Value = norito::json::from_str(&body)?;
+    let entry = payload
+        .get("entries")
+        .and_then(norito::json::Value::as_array)
+        .and_then(|entries| entries.first())
+        .ok_or_else(|| eyre!("contract state `{path}` response missing entry: {payload:?}"))?;
+    if entry.get("found").and_then(norito::json::Value::as_bool) != Some(true) {
+        return Err(eyre!("contract state `{path}` was not found: {payload:?}"));
+    }
+    entry
+        .get("value_json")
+        .cloned()
+        .ok_or_else(|| eyre!("contract state `{path}` was not decoded: {payload:?}"))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -409,12 +579,168 @@ async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
 }
 
 #[tokio::test]
+async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> Result<()> {
+    let register_permission: Permission = CanRegisterSmartContractCode.into();
+    let alice_enact_permission: Permission = CanEnactGovernance.into();
+    let bob_enact_permission: Permission = CanEnactGovernance.into();
+    let builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_pipeline_time(Duration::from_secs(4))
+        .with_config_layer(|layer| {
+            layer
+                .write(["pipeline", "dynamic_prepass"], true)
+                .write(["pipeline", "parallel_overlay"], true)
+                .write(["pipeline", "parallel_apply"], true)
+                .write(["pipeline", "workers"], 2_i64);
+        })
+        .with_genesis_instruction(Grant::account_permission(
+            register_permission,
+            iroha_test_samples::ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            alice_enact_permission,
+            iroha_test_samples::ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            bob_enact_permission,
+            iroha_test_samples::BOB_ID.clone(),
+        ));
+    let Some(network) = sandbox::start_network_async_or_skip(
+        builder,
+        stringify!(dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+    assert_eq!(network.peers().len(), 4, "test requires four voting peers");
+
+    network.ensure_blocks(1).await?;
+    let alice_client = network.peers()[0].client();
+    let bob_client = network.peers()[1].client();
+    let http = integration_tests::http::client();
+    let artifact = dynamic_access_counter_artifact();
+    let contract_address = deploy_contract_artifact(
+        &alice_client,
+        &http,
+        &artifact,
+        "dynamic_access_counter",
+        "deploy dynamic-access counter",
+    )
+    .await?;
+
+    let deploy_height = alice_client.get_status()?.blocks;
+    network.ensure_blocks(deploy_height).await?;
+
+    let alice_submission = tokio::task::spawn_blocking({
+        let client = alice_client.clone();
+        let contract_address = contract_address.clone();
+        let payload = dynamic_counter_args(7, 3);
+        move || {
+            client.post_contract_call_json(
+                &iroha_test_samples::ALICE_ID.clone(),
+                Some(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+                Some(&contract_address),
+                None,
+                "bump_direct",
+                Some(&payload),
+                None,
+                None,
+                None,
+                100_000,
+            )
+        }
+    });
+    let bob_submission = tokio::task::spawn_blocking({
+        let client = bob_client.clone();
+        let contract_address = contract_address.clone();
+        let payload = dynamic_counter_args(7, 5);
+        move || {
+            client.post_contract_call_json(
+                &iroha_test_samples::BOB_ID.clone(),
+                Some(iroha_test_samples::BOB_KEYPAIR.private_key()),
+                Some(&contract_address),
+                None,
+                "bump_via_helper",
+                Some(&payload),
+                None,
+                None,
+                None,
+                100_000,
+            )
+        }
+    });
+    let (alice_response, bob_response) = tokio::join!(alice_submission, bob_submission);
+    let alice_response = alice_response.expect("submit direct bump task")?;
+    let bob_response = bob_response.expect("submit helper bump task")?;
+    let alice_tx_hash = alice_response
+        .get("tx_hash_hex")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| eyre!("direct bump response missing tx_hash_hex: {alice_response:?}"))?
+        .to_owned();
+    let bob_tx_hash = bob_response
+        .get("tx_hash_hex")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| eyre!("helper bump response missing tx_hash_hex: {bob_response:?}"))?
+        .to_owned();
+
+    let (alice_block_height, bob_block_height) = tokio::try_join!(
+        wait_for_tx_applied(
+            &http,
+            &alice_client.torii_url,
+            &alice_tx_hash,
+            Duration::from_secs(60),
+            "direct dynamic bump",
+        ),
+        wait_for_tx_applied(
+            &http,
+            &bob_client.torii_url,
+            &bob_tx_hash,
+            Duration::from_secs(60),
+            "helper-hidden dynamic bump",
+        ),
+    )?;
+    assert_eq!(
+        alice_block_height, bob_block_height,
+        "concurrent conflicting calls must be observed in the same committed block"
+    );
+
+    network.ensure_blocks(alice_block_height).await?;
+
+    let mut peer_values = Vec::with_capacity(network.peers().len());
+    for peer in network.peers() {
+        let peer_client = peer.client();
+        peer_values.push(
+            contract_state_json_value(
+                &http,
+                &peer_client.torii_url,
+                &contract_address,
+                "Counters/7",
+            )
+            .await?,
+        );
+    }
+    let expected = norito::json::Value::from("8");
+    assert!(
+        peer_values.iter().all(|value| value == &expected),
+        "conflicting dynamic calls lost an update or peers diverged: {peer_values:?}"
+    );
+    assert!(
+        peer_values.windows(2).all(|pair| pair[0] == pair[1]),
+        "contract state differs across voting peers: {peer_values:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 #[ignore = "reproduces live Sora-profile contract state regression"]
 async fn contract_state_survives_across_calls_in_sora_profile_network() -> Result<()> {
     let register_permission: Permission = CanRegisterSmartContractCode.into();
     let enact_permission: Permission = CanEnactGovernance.into();
     let builder = NetworkBuilder::new()
-        .with_peers(1)
+        .with_min_peers(4)
         .with_pipeline_time(Duration::from_secs(4))
         .with_config_layer(|layer| {
             layer
@@ -591,7 +917,7 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
         ),
         (
             "entrypoint",
-            norito::json::to_value("init").expect("serialize entrypoint"),
+            norito::json::to_value("initialize").expect("serialize entrypoint"),
         ),
         (
             "gas_limit",

@@ -446,6 +446,23 @@ pub mod parameter {
     }
 }
 
+/// Permission tokens for governed SCCP consensus state.
+pub mod sccp {
+    use super::*;
+
+    permission! {
+        /// Permission to enact governed SCCP registry actions.
+        #[derive(Copy)]
+        pub struct CanManageSccpGovernance;
+    }
+
+    permission! {
+        /// Permission to submit typed SCCP route-governance proposals.
+        #[derive(Copy)]
+        pub struct CanProposeSccpRouteGovernance;
+    }
+}
+
 /// Permission tokens affecting role lifecycle.
 pub mod role {
     use super::*;

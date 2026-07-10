@@ -1,3 +1,5 @@
+//! End-to-end canonical domain registration from a Kotodama contract.
+
 use std::collections::HashMap;
 
 use iroha_crypto::PublicKey;
@@ -16,8 +18,10 @@ fn account(domain: &str, public_key: &str) -> AccountId {
 fn kotodama_register_domain_e2e() {
     // Compile a tiny Kotodama program that registers a domain via typed constructor.
     let src = r#"
-        fn main() {
-            register_domain(domain("e2e_domain.universal"));
+        seiyaku RegisterDomain {
+        kotoage fn main() authorize("RegisterDomain") {
+            ledger::domain::register(DomainId::parse("e2e_domain.universal"));
+        }
         }
     "#;
     let compiler = KotodamaCompiler::new();

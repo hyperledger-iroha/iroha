@@ -27,11 +27,11 @@ Norito དང་ Kotodama འདི་ འགོ་དང་པ་: གཏན་
   དཔེ་ཚད་ཀྱི་མཉམ་རོགས་ `defaults/docker-compose.single.yml` ནང་གསལ་ལྟར་འགོ་བཙུགས་ནི།).
 - ཁྱོད་ཀྱིས་ཕབ་ལེན་མ་འབད་བ་ཅིན་ གྲོགས་རམ་གཉིས་ལྡན་བཟོ་ནི་གི་དོན་ལུ་ རསཊི་ལག་ཆས་རྒྱུན་རིམ་ (༡.༧༦+) ཨིན།
   དཔར་བསྐྲུན་འབད་མི་ཚུ།
-- `koto_compile`, `ivm_run`, དང་ `iroha` གཉིས་ལྡན་ཚུ། ཁྱོད་ཀྱིས་ཁོང་ལས་བཟོ་ཚུགས།
+- `koto build`, `ivm_run`, དང་ `iroha` གཉིས་ལྡན་ཚུ། ཁྱོད་ཀྱིས་ཁོང་ལས་བཟོ་ཚུགས།
   ལས་ཀའི་ས་སྟོང་བརྟག་ཞིབ་འདི་གཤམ་གསལ་ལྟར་དུ་སྟོན་ཡོད་པ་ཡང་ན་མཐུན་སྒྲིག་གསར་བཏོན་འབད་ཡོད་པའི་ཅ་རྙིང་ཚུ་ཕབ་ལེན་འབད།
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -58,28 +58,22 @@ docker compose -f defaults/docker-compose.single.yml up --build
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Default raw-IVM entrypoint used by ivm_run / transaction ivm.
-  kotoage fn main() permission(Admin) {
-    info("Hello from Kotodama");
-    write_detail();
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() permission(Admin) {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -94,15 +88,14 @@ KO
 ཡོངས་འབྲེལ་ལུ་མ་ལག་མ་འབད་བའི་ཧེ་མ་ ཧོསཊི་སི་ཀཱལ་ཚུ་ མཐར་འཁྱོལ་ཅན་སྦེ་ ངེས་གཏན་བཟོ།
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-གཡོག་བཀོལ་མི་གིས་ `info("Hello from Kotodama")` དྲན་ཐོ་འདི་དཔར་བསྐྲུན་འབདཝ་ཨིནམ་དང་ འདི་འབདཝ་ཨིན།
+གཡོག་བཀོལ་མི་གིས་ `debug::info("Hello from Kotodama")` དྲན་ཐོ་འདི་དཔར་བསྐྲུན་འབདཝ་ཨིནམ་དང་ འདི་འབདཝ་ཨིན།
 `SET_ACCOUNT_DETAIL` མཆོངས་ཡོད་པའི་ཧོསཊི་ལུ་རྒྱབ་འགལ་འབད་མི་ སི་ཀཱལ། གདམ་ཁའི་`ivm_tool`
 གཉིས་ལྡན་འདི་འཐོབ་ཚུགསཔ་ཨིན་, `ivm_tool inspect target/quickstart/hello.to` གིས་ འདི་བཀྲམ་སྟོན་འབདཝ་ཨིན།
 ABI མགོ་ཡིག་དང་ ཁྱད་རྣམ་བིཊི་ དེ་ལས་ ཕྱིར་འདྲེན་འབད་ཡོད་མི་ ཡིག་ཐོག་ཚུ།
@@ -159,3 +152,63 @@ iroha --config defaults/client.toml \
 - ཁྱོད་རའི་གན་རྒྱ་ཚུ་ བསྐྱར་ལོག་འབད་བའི་སྐབས་ `npm run sync-norito-snippets` ལུ་ལག་ལེན་འཐབ།
   ཕབ་ལེན་འབད་བཏུབ་པའི་ ཤོག་འཛིན་ཚུ་ ལོག་བཟོ་ནིའི་ ལཱ་གི་ས་སྒོ་ཚུ་ ཡིག་ཆ་དང་ ཅ་ཆས་ཚུ་ སྡོད་གནས་སྦེ་ སྡོད་ནི།
   `crates/ivm/docs/examples/` འོག་ལུ་ཡོད་པའི་འབྱུང་ཁུངས་ཚུ་དང་གཅིག་ཁར་ མཉམ་འབྱུང་།
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

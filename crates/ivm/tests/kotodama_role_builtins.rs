@@ -1,3 +1,5 @@
+//! End-to-end tests for canonical role and permission builtins.
+
 use std::collections::HashMap;
 
 use ivm::{
@@ -27,14 +29,16 @@ fn public_key_account() -> ivm::mock_wsv::AccountId {
 #[test]
 fn kotodama_create_and_grant_role_enables_mint() {
     let src = r#"
-        fn main() {
+        seiyaku RoleBootstrap {
+        kotoage fn main() authorize("ManageRoles") {
           // Bootstrap the asset definition used by the role permission.
-          register_asset(asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), "ROSE", 0, 1);
+          ledger::asset::register(AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), "ROSE", 0, 1);
           // Create role with mint permission and grant it to the caller.
-          create_role(name("minter"), json("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
-          grant_role(authority(), name("minter"));
+          ledger::role::create(Name::parse("minter"), Json::parse("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
+          ledger::role::grant(context::authority(), Name::parse("minter"));
           // Mint using role permission
-          mint_asset(authority(), asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), 1);
+          ledger::asset::mint(context::authority(), AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), Amount::from_i64(1));
+        }
         }
     "#;
     let compiler = KotodamaCompiler::new();
@@ -54,14 +58,16 @@ fn kotodama_create_and_grant_role_enables_mint() {
 #[test]
 fn kotodama_grant_role_accepts_runtime_account_argument() {
     let src = r#"
-        fn grant_it(AccountId who) {
-          grant_role(who, name("minter"));
+        seiyaku RuntimeRoleGrant {
+        fn grant_it(who: AccountId) {
+          ledger::role::grant(who, Name::parse("minter"));
         }
 
-        fn main() {
-          create_role(name("minter"), json("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
-          let who = account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
+        kotoage fn main() authorize("ManageRoles") {
+          ledger::role::create(Name::parse("minter"), Json::parse("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
+          let who = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
           grant_it(who);
+        }
         }
     "#;
     let compiler = KotodamaCompiler::new();
@@ -84,13 +90,15 @@ fn kotodama_grant_role_accepts_runtime_account_argument() {
 #[test]
 fn kotodama_grant_permission_accepts_runtime_account_argument() {
     let src = r#"
-        fn grant_it(AccountId who) {
-          grant_permission(who, name("BenefitSpend"));
+        seiyaku RuntimePermissionGrant {
+        fn grant_it(who: AccountId) {
+          ledger::permission::grant(who, Name::parse("BenefitSpend"));
         }
 
-        fn main() {
-          let who = account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
+        kotoage fn main() authorize("ManagePermissions") {
+          let who = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
           grant_it(who);
+        }
         }
     "#;
     let compiler = KotodamaCompiler::new();
@@ -110,14 +118,16 @@ fn kotodama_grant_permission_accepts_runtime_account_argument() {
 #[test]
 fn kotodama_runtime_account_argument_survives_syscall_before_grant_permission() {
     let src = r#"
-        fn grant_it(AccountId who) {
-          let _now = current_time_ms();
-          grant_permission(who, name("BenefitSpend"));
+        seiyaku RuntimePermissionGrantAfterSyscall {
+        fn grant_it(who: AccountId) {
+          let _now = context::current_time_ms();
+          ledger::permission::grant(who, Name::parse("BenefitSpend"));
         }
 
-        fn main() {
-          let who = account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
+        kotoage fn main() authorize("ManagePermissions") {
+          let who = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
           grant_it(who);
+        }
         }
     "#;
     let compiler = KotodamaCompiler::new();
@@ -138,9 +148,11 @@ fn kotodama_runtime_account_argument_survives_syscall_before_grant_permission() 
 #[test]
 fn kotodama_authority_matches_domainless_account_literal() {
     let src = r#"
-        fn main() {
-          let who = account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
-          assert(authority() == who, "authority should normalize to domainless subject");
+        seiyaku AuthorityIdentity {
+        view fn main() {
+          let who = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
+          test::assert(context::authority() == who, "authority should normalize to domainless subject");
+        }
         }
     "#;
     let compiler = KotodamaCompiler::new();
@@ -152,5 +164,5 @@ fn kotodama_authority_matches_domainless_account_literal() {
     vm.set_host(host);
     vm.load_program(&prog).expect("load");
     vm.run()
-        .expect("authority() should match the domainless account literal");
+        .expect("context::authority() should match the domainless account literal");
 }

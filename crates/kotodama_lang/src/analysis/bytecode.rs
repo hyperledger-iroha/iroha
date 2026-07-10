@@ -198,7 +198,9 @@ mod tests {
     #[test]
     fn analyze_detects_arithmetic_instruction() {
         let code = KotodamaCompiler::new()
-            .compile_source("fn main() { let x = 1 * 2; }")
+            .compile_source(
+                "seiyaku BytecodeAnalysis { view fn multiply(left: i64, right: i64) -> i64 { return left * right; } }",
+            )
             .expect("compile");
         let analysis = analyze_bytecode(&code).expect("analyze");
         assert!(
@@ -213,7 +215,7 @@ mod tests {
     #[test]
     fn fuzz_reports_disabled_runtime() {
         let code = KotodamaCompiler::new()
-            .compile_source("fn main() { return; }")
+            .compile_source("seiyaku BytecodeAnalysis { fn main() { return; } }")
             .expect("compile");
         let report = run_bytecode_fuzz(&code, 2).expect("fuzz");
         assert_eq!(report.failures, 0);

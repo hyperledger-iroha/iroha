@@ -107,32 +107,25 @@ node javascript/iroha_js/recipes/iso_bridge.mjs
 
 ### ISO 别名助手
 
-`recipes/iso_alias.mjs` 以 ISO 别名端点为目标，以便排练可以覆盖
-盲元素散列和别名查找，无需编写定制工具。它
-调用 `ToriiClient.evaluateAliasVoprf` 加 `resolveAlias` / `resolveAliasByIndex`
-并打印后端、摘要、帐户绑定、源和确定性索引
-由 Torii 返回。
+`recipes/iso_alias.mjs` 无需自定义工具即可测试 ISO 别名查询。
+它会调用 `resolveAlias` 和 `resolveAliasByIndex`，然后打印 Torii 返回的账户绑定、来源和确定性索引。
 
 环境变量：
 
 - `TORII_URL` — Torii 端点公开别名助手。
-- `ISO_VOPRF_INPUT` — 十六进制编码的盲元素（默认为 `deadbeef`）。
-- `ISO_SKIP_VOPRF=1` — 仅测试查找时跳过 VOPRF 调用。
 - `ISO_ALIAS_LABEL` — 要解析的文字别名（例如 IBAN 样式字符串）。
 - `ISO_ALIAS_INDEX` — 十进制或传递给 `resolveAliasByIndex` 的 `0x` 前缀索引。
 - `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — 用于安全 Torii 部署的可选标头。
 
 ```bash
-# Evaluate a blinded element and resolve an alias literal + deterministic index.
+# Resolve an alias literal + deterministic index.
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeefcafebabe \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node javascript/iroha_js/recipes/iso_alias.mjs
 
 # Only perform literal resolution.
 TORII_URL=https://torii.testnet.sora \
-ISO_SKIP_VOPRF=1 \
 ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```

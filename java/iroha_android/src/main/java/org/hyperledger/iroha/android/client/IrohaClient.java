@@ -60,6 +60,13 @@ public interface IrohaClient {
     return future;
   }
 
+  /** Encodes and posts a native-proof-only bridge message settlement request. */
+  default CompletableFuture<ClientResponse> submitBridgeMessage(
+      final BridgeMessageSubmitRequest request) {
+    return postBridgeMessageSubmitJson(
+        java.util.Objects.requireNonNull(request, "request").toJsonBytes());
+  }
+
   /**
    * Submits an already versioned Norito transaction entrypoint to the node.
    *

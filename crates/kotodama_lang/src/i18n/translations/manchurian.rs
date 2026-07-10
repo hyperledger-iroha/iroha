@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "`{func}` function-i `{name}` parameter afara seme ufarakū",
     lint_unreachable_after_return: "{context} de dorgi akū gisun narhūn tucibufi; return-i ice code gemu bihire",
     lint_ok: "saikan",
-    lint_usage: "Kihebe: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Kihebe: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Gisurehe faile be emu biya Kotodama lint de bahafi tucimbi.",
     ..english::MESSAGES
 };

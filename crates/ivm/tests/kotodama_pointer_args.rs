@@ -1,3 +1,5 @@
+//! Runtime tests for canonical pointer values in durable Kotodama state.
+
 use std::{collections::HashMap, str::FromStr};
 
 use iroha_crypto::Hash as IrohaHash;
@@ -14,7 +16,8 @@ fn account_from_public_key(public_key: &str) -> AccountId {
 }
 
 fn resolve_state_value(host: &WsvHost, base: &Name, key: i64) -> Option<Vec<u8>> {
-    let expected_path = format!("{}/{}", base.as_ref(), key);
+    let key = norito::to_bytes(&key).expect("encode canonical StateMap key");
+    let expected_path = format!("{}/{}", base.as_ref(), hex::encode(key));
     if let Some(bytes) = host.wsv.sc_get(&expected_path) {
         return Some(bytes.to_vec());
     }
@@ -32,9 +35,9 @@ fn pointer_map_default_roundtrip() {
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
     let src = r#"
         seiyaku PointerFFI {
-            state Owners: Map<int, AccountId>;
-            fn hajimari() {
-                Owners[7] = authority();
+            state Owners: StateMap<i64, AccountId>;
+            hajimari() {
+                Owners[7] = context::authority();
             }
         }
     "#;
@@ -49,7 +52,7 @@ fn pointer_map_default_roundtrip() {
     let authority = account_from_public_key(AUTHORITY_PUBLIC_KEY);
     let host = WsvHost::new_with_subject(wsv, authority, HashMap::new());
     vm.set_host(host);
-    vm.run().expect("execute hajimari");
+    vm.run().expect("execute init");
 
     let host_ref = vm.host_mut_any().expect("host access");
     let host = host_ref.downcast_ref::<WsvHost>().expect("wsv host");
@@ -85,10 +88,10 @@ fn pointer_asset_state_storage_wraps_inner_pointer() {
     let src = format!(
         r#"
         seiyaku PointerAssetStorage {{
-            state Assets: Map<int, AssetDefinitionId>;
+            state Assets: StateMap<i64, AssetDefinitionId>;
 
-            fn main() {{
-                Assets[7] = asset_definition("{asset_definition}");
+            kotoage fn main() authorize("WriteState") {{
+                Assets[7] = AssetDefinitionId::parse("{asset_definition}");
             }}
         }}
     "#,

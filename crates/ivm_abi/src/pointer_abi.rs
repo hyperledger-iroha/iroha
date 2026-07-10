@@ -1,6 +1,6 @@
 //! Pointer-ABI TLV helpers and type table.
 //!
-//! Layout (in INPUT region):
+//! Envelope layout (normally in INPUT, or in a loader-validated `LTLB` code literal):
 //! - type_id: u16 (BE)
 //! - version: u8
 //! - len: u32 (BE)
@@ -8,7 +8,9 @@
 //! - hash: [u8; 32] (Iroha Hash of payload)
 //!
 //! Validation rules:
-//! - Entire TLV must lie within the INPUT region (no heap/stack).
+//! - Dynamic pointers validated through `Memory::validate_tlv` must lie wholly
+//!   within INPUT (no heap/stack). `LDLIT` code pointers are validated once at
+//!   program load and must name an exact envelope in the read-only literal data.
 //! - `version` currently must be 1.
 //! - `type_id` must be known in the table below.
 //! - Hash must match `iroha_crypto::Hash::new(payload)`.

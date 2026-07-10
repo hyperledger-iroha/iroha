@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "ພາຣາມິເຕີ `{name}` ໃນຟັງຊັນ `{func}` ບໍ່ເຄີຍນຳໃຊ້",
     lint_unreachable_after_return: "ພົບຄຳສັ່ງທີ່ບໍ່ສາມາດເຂົ້າເຖິງໄດ້ໃນ {context}: ໂຄດຫຼັງ return ຈະບໍ່ຖືກເຮັດວຽກ",
     lint_ok: "ສຳເລັດ",
-    lint_usage: "ວິທີໃຊ້: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "ວິທີໃຊ້: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "ເຮັດການກວດ lint ຂອງ Kotodama ກັບແຫຼ່ງທີ່ໃຫ້ມາ.",
     ..english::MESSAGES
 };

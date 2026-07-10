@@ -29,56 +29,57 @@ fn main() {
 - Using the CLI bin (writes `.to`):
 
 ```
-cargo run -p ivm --bin koto_compile -- crates/ivm/docs/examples/10_meta_header.ko --out /tmp/meta.to --manifest-out /tmp/meta.manifest.json
+cargo run -p ivm --bin koto -- build crates/ivm/docs/examples/10_meta_header.ko --out /tmp/meta.to --manifest-out /tmp/meta.manifest.json
 ```
 
-Flags: `--abi <u8>`, `--vl <u8>`, `--max-cycles <u64>`, `--force-zk`, `--force-vector`, `--manifest-out <path.json|->`.
+Build options include `--profile`, `--target-dir`, `--out`,
+`--manifest-out`, `--max-cycles`, the explicit `--zk` build capability, and
+`--verify` for read-only generated-output validation.
 Use `--manifest-out -` to print the manifest JSON to stdout instead of writing a file.
-Seiyaku `meta {}` in the source takes precedence where provided.
+ABI v1 and required execution capabilities are selected by release policy and
+compiler analysis; source files cannot override ABI or vector metadata.
+
+After building fresh `target/debug/koto` and `target/debug/iroha` binaries,
+verify every tracked source and checked-in `.to` golden with:
+
+```
+make kotodama-goldens-check
+```
+
+Use `make kotodama-goldens` to prevalidate and atomically publish all mapped
+artifacts. The authoritative alias/output inventory is
+`scripts/kotodama_goldens.tsv`; the workflow deliberately never accepts or
+persists deployment signing material.
 
 Contents
-- `01_hajimari.ko`: Minimal initializer function inside a contract.
-- `02_kotoage_public_fn.ko`: Public function form (enforced by the runtime dispatcher).
-- `03_kaizen_permission.ko`: Upgrade hook with a permission tag (policy enforced by governance).
+- `01_hajimari.ko`: Minimal `始まり` declaration inside an `誓約`.
+- `02_kotoage_public_fn.ko`: Authorized public `言挙げ fn` form.
+- `03_kaizen_permission.ko`: `改善` lifecycle hook.
 - `04_foreach_map.ko`: For-each syntax (unbounded form is rejected by semantics).
 - `05_range_for.ko`: Range sugar lowered to C-style loop.
-- `06_map_ops.ko`: Map indexing get/set on minimal 2-word layout.
-- `07_set_detail_authority.ko`: Write account detail for `authority()` using the prelude macros.
-- `08_call_transfer_asset.ko`: Direct builtin `transfer_asset(...)` usage from a contract entrypoint.
+- `06_map_ops.ko`: Durable `StateMap` operations.
+- `07_set_detail_authority.ko`: Write account detail for `context::authority()`.
+- `08_call_transfer_asset.ko`: Namespaced asset transfer from a contract entrypoint.
 - `09_struct_and_state.ko`: Parsed-only examples for struct/state declarations.
-- `10_meta_header.ko`: seiyaku-level `meta {}` setting IVM header fields and emitting `SETVL` plus `poseidon2` to exercise vector/zk flags.
+- `10_meta_header.ko`: Compiler-derived ZK capability metadata and build-selected cycle ceiling.
 - `11_detail_and_transfer.ko`: Pointer-ABI typed calls for metadata write and asset transfer.
 - `12_nft_flow.ko`: Create an NFT and transfer it to another account.
 - `13_register_and_mint.ko`: Register a new asset and mint to an account.
 - `14_map_sum_take2.ko`: Deterministic two-iteration map sum via `.take(2)` on a state map.
 - `15_modulo.ko`: `%` modulo operator, returns `a % b`.
-- `16_dynamic_take.ko`: Dynamic `.take(n)` guarded state-map iteration.
-- `17_dynamic_range.ko`: Dynamic `.range(start,end)` guarded state-map iteration.
 - `18_ternary.ko`: Ternary conditional `cond ? then : else` expression.
 
 Notes
 - Kotodama targets the Iroha Virtual Machine (IVM) and produces `.to` bytecode. RISC‑V–like encodings in the implementation are IVM’s mixed-format details and not a hardware target.
-- Pointer-ABI typed constructors (and their `account!(...)`, `name!(...)`, `json!(...)`, `nft_id!(...)`, `asset_definition!(...)` macro aliases) are compiled into Norito-encoded TLV blobs and passed to the host as pointers.
-- Seiyaku `meta {}` influences header fields (`abi_version`, `vector_length`, `max_cycles`) and mode bits (`zk`, `vector`). The compiler validates that `zk`/`vector` flags match the opcodes actually emitted. When omitted, the compiler defaults `abi_version` to 1 and leaves other fields at their option defaults.
-Dynamic bounds
-- First-release Kotodama accepts non-literal bounds for durable `state Map<int, V>` `.take(n)` and `.range(start, end)` iteration.
-
-Compile dynamic-bound examples:
-
-```
-cargo run -p ivm --bin koto_compile -- \
-  crates/ivm/docs/examples/16_dynamic_take.ko --out /tmp/dyn_take.to
-
-cargo run -p ivm --bin koto_compile -- \
-  crates/ivm/docs/examples/17_dynamic_range.ko --out /tmp/dyn_range.to
-```
-
-Notes:
-- The compiler inserts runtime assertions to ensure bounds are non-negative and consistent (e.g., `end >= start`).
-- Lowering emits up to 64 guarded iterations with `if (i < n)` checks to avoid extra body executions.
-- The dynamic iteration cap is fixed for the first release; `--iter-cap` accepts only the fixed value for old scripts and cannot change compiler output.
-- Dynamic bounds are supported on state maps; in-memory maps accept only literal bounds (max 1 element).
-- Run `koto_lint` on source files to review Kotodama lint warnings before invoking the compiler.
-
-Implementation notes:
-- Dynamic `.range(start, end)` computes the per-iteration address using `start + i` and loads key/value from `addr + {0,8}`; the iteration count is `n = end - start`. The compiler guards each unrolled body with `if (i < n)`.
+- Typed constructors are compiled into Norito-encoded TLV blobs and passed to
+  the host through the validated pointer ABI. Raw pointers and direct syscall
+  variants are not source APIs.
+- ABI v1 is unconditional. The compiler derives capability bits from emitted
+  instructions and uses the configured/default cycle ceiling.
+- First-release Kotodama accepts only compiler-proven literal bounds for
+  durable `StateMap<K, V>` `.take(n)` and `.range(start, end)` iteration. The
+  span must be no greater than the fixed 64-item cap; dynamic bounds are
+  rejected during semantic analysis.
+- In-memory maps are not a V1 language type.
+- Run `koto check` to review all parser, resolver, type, effect, and lint
+  diagnostics without writing build outputs.

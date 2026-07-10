@@ -176,6 +176,7 @@ fn manifest_provenance(
     let code_hash = Hash::prehashed(parse_hex32(code_hash_hex));
     let abi_hash = Hash::prehashed(parse_hex32(abi_hash_hex));
     ContractManifest {
+        contract_name: None,
         code_hash: Some(code_hash),
         abi_hash: Some(abi_hash),
         compiler_fingerprint: None,
@@ -184,6 +185,7 @@ fn manifest_provenance(
         entrypoints: None,
         states: None,
         kotoba: None,
+        error_codes: None,
         provenance: None,
     }
     .signed(signer)

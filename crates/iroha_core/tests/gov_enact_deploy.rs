@@ -131,6 +131,7 @@ fn enact_inserts_manifest_and_marks_enacted() {
     let abi_hash_bytes = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
     let abi_hex = hex::encode(abi_hash_bytes);
     let manifest_provenance = ContractManifest {
+        contract_name: None,
         code_hash: Some(key),
         abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash_bytes)),
         compiler_fingerprint: None,
@@ -139,6 +140,7 @@ fn enact_inserts_manifest_and_marks_enacted() {
         entrypoints: None,
         states: None,
         kotoba: None,
+        error_codes: None,
         provenance: None,
     }
     .signed(&kp)
@@ -275,6 +277,7 @@ fn enact_rejects_on_conflicting_existing_manifest() {
     abi_arr.copy_from_slice(&abi_b);
     let key = iroha_crypto::Hash::prehashed(code_arr);
     let man = iroha_data_model::smart_contract::manifest::ContractManifest {
+        contract_name: None,
         code_hash: Some(key),
         abi_hash: Some(iroha_crypto::Hash::prehashed(abi_arr)),
         compiler_fingerprint: None,
@@ -283,6 +286,7 @@ fn enact_rejects_on_conflicting_existing_manifest() {
         entrypoints: None,
         states: None,
         kotoba: None,
+        error_codes: None,
         provenance: None,
     }
     .signed(&kp);

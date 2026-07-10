@@ -775,8 +775,8 @@ fn vector_sequence_cumulative_gas() {
 
 #[test]
 fn poseidon_cost_property() {
-    // Build POSEIDON2 (load two u64 words) and HALT
-    let word = wide_load(wide::crypto::POSEIDON2, 6, 2, 0); // base=r2, rd=r6, imm=0
+    // Build register-form POSEIDON2 and HALT.
+    let word = ivm::encoding::wide::encode_poseidon2(6, 2, 3);
     let mut code = Vec::new();
     push32(&mut code, word);
     halt32(&mut code);
@@ -785,11 +785,8 @@ fn poseidon_cost_property() {
     let mut vm = IVM::new(start);
     let program = common::assemble(&code);
     vm.load_program(&program).unwrap();
-    let base = ivm::Memory::HEAP_START + 0xA00;
-    vm.registers.set(2, base);
-    // Store two 64-bit inputs at base
-    vm.memory.store_u64(base, 1234).unwrap();
-    vm.memory.store_u64(base + 8, 5678).unwrap();
+    vm.registers.set(2, 1234);
+    vm.registers.set(3, 5678);
     vm.run().unwrap();
     assert_eq!(start - vm.gas_remaining, expected);
 }

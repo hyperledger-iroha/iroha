@@ -54,8 +54,8 @@ fn checked_random_keypair_with_algorithm(
 
 /// Parameters for invoking a contract within Torii integration tests.
 pub struct ContractCallOptions<'a> {
-    /// Optional entry point function to call on the contract; defaults to main when `None`.
-    pub entrypoint: Option<&'a str>,
+    /// Explicit entry point function to call on the contract.
+    pub entrypoint: &'a str,
     /// Serialized JSON payload passed to the contract call.
     pub payload: Option<&'a norito::json::Value>,
     /// Gas-paying asset identifier to attach to the request.
@@ -66,8 +66,8 @@ pub struct ContractCallOptions<'a> {
 
 /// Parameters for invoking a read-only contract view within Torii integration tests.
 pub struct ContractViewOptions<'a> {
-    /// Optional entry point function to execute; defaults to main when `None`.
-    pub entrypoint: Option<&'a str>,
+    /// Explicit entry point function to execute.
+    pub entrypoint: &'a str,
     /// Serialized JSON payload passed to the contract view.
     pub payload: Option<&'a norito::json::Value>,
     /// Upper bound on gas consumption for the local view execution.
@@ -180,6 +180,7 @@ pub fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         abi_version,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        contract_name: "TestContract".to_owned(),
         compiler_fingerprint: "torii-test-utils".to_owned(),
         features_bitmap: 0,
         access_set_hints: None,
@@ -188,6 +189,7 @@ pub fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
             name: "main".to_owned(),
             kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
             params: Vec::new(),
+            argument_schema: None,
             return_type: None,
             permission: None,
             read_keys: Vec::new(),
@@ -197,6 +199,7 @@ pub fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
             triggers: Vec::new(),
             entry_pc: 0,
         }],
+        error_codes: Vec::new(),
         states: Vec::new(),
     };
     let mut out = meta.encode();
@@ -207,10 +210,10 @@ pub fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
 
 /// Compute the hex-encoded contract code hash for a `.to` program.
 ///
-/// This matches Torii's deployment hashing (artifact bytes after the fixed header).
-pub fn body_code_hash_hex(code_bytes: &[u8]) -> String {
-    let parsed = ivm::ProgramMetadata::parse(code_bytes).expect("parse contract artifact");
-    let h = iroha_crypto::Hash::new(&code_bytes[parsed.header_len..]);
+/// This matches Torii's domain-separated full-artifact deployment hashing.
+pub fn contract_code_hash_hex(code_bytes: &[u8]) -> String {
+    ivm::ProgramMetadata::parse(code_bytes).expect("parse contract artifact");
+    let h = ivm::contract_code_hash(&code_bytes);
     hex::encode(<[u8; 32]>::from(h))
 }
 
@@ -343,9 +346,7 @@ pub fn contract_call_request_json(
         crate::json_entry("private_key", private_key.to_string()),
         crate::json_entry("contract_address", contract_address),
     ];
-    if let Some(ep) = options.entrypoint {
-        entries.push(crate::json_entry("entrypoint", ep));
-    }
+    entries.push(crate::json_entry("entrypoint", options.entrypoint));
     if let Some(value) = options.payload {
         entries.push(crate::json_entry("payload", value.clone()));
     }
@@ -367,9 +368,7 @@ pub fn contract_view_request_json(
         crate::json_entry("authority", account.clone()),
         crate::json_entry("contract_address", contract_address),
     ];
-    if let Some(ep) = options.entrypoint {
-        entries.push(crate::json_entry("entrypoint", ep));
-    }
+    entries.push(crate::json_entry("entrypoint", options.entrypoint));
     if let Some(value) = options.payload {
         entries.push(crate::json_entry("payload", value.clone()));
     }
@@ -1319,11 +1318,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             bridge_proof_max_past_age_blocks: defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
             bridge_proof_max_future_drift_blocks:
                 defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
-            sccp_source_verifier_materials: Vec::new(),
-            sccp_source_adapter_engine_deployments: Vec::new(),
-            sccp_destination_rollouts: Vec::new(),
-            sccp_route_allowlists: Vec::new(),
-            sccp_route_manifests: Vec::new(),
             poseidon_params_id: defaults::confidential::POSEIDON_PARAMS_ID,
             pedersen_params_id: defaults::confidential::PEDERSEN_PARAMS_ID,
             kaigi_roster_join_vk: None,
@@ -1555,16 +1549,13 @@ mod tests {
     };
     use iroha_primitives::json::Json;
 
-    use super::{apply_queued_in_one_block, body_code_hash_hex, minimal_ivm_program};
+    use super::{apply_queued_in_one_block, contract_code_hash_hex, minimal_ivm_program};
 
     #[test]
-    fn body_code_hash_hex_matches_post_header_hash() {
+    fn contract_code_hash_hex_matches_domain_separated_full_artifact_hash() {
         let code = minimal_ivm_program(1);
-        let parsed = ivm::ProgramMetadata::parse(&code).expect("parse contract artifact");
-        let expected = hex::encode(<[u8; 32]>::from(iroha_crypto::Hash::new(
-            &code[parsed.header_len..],
-        )));
-        assert_eq!(body_code_hash_hex(&code), expected);
+        let expected = hex::encode(<[u8; 32]>::from(ivm::contract_code_hash(&code)));
+        assert_eq!(contract_code_hash_hex(&code), expected);
     }
 
     #[test]

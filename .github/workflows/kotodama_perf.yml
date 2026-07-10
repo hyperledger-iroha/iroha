@@ -1,0 +1,135 @@
+name: Kotodama performance gate
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/kotodama_perf.yml"
+      - "crates/ivm/benches/bench_kotodama.rs"
+      - "crates/ivm/Cargo.toml"
+      - "crates/ivm/src/**"
+      - "crates/ivm_abi/src/**"
+      - "crates/kotodama_lang/Cargo.toml"
+      - "crates/kotodama_lang/src/**"
+      - "crates/iroha_core/src/**"
+      - "crates/iroha_core/benches/kotodama_runtime_cache.rs"
+      - "crates/iroha_core/Cargo.toml"
+      - "crates/iroha_torii/src/**"
+      - "crates/iroha_cli/src/**"
+      - "crates/iroha_js_host/src/**"
+      - "crates/irohad/src/soracloud_runtime.rs"
+      - "scripts/check_kotodama_perf.py"
+      - "scripts/regenerate_kotodama_goldens.py"
+      - "scripts/kotodama_goldens.tsv"
+      - "scripts/kotodama_v1_size_baseline.json"
+      - "pytests/scripts/check_kotodama_perf_test.py"
+      - "**/*.ko"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kotodama-perf-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  representative-regression:
+    # Benchmark the base and candidate on the same controlled Iroha runner.
+    # Shared GitHub-hosted runners have enough host-to-host variance to make a
+    # five-percent regression ceiling meaningless.
+    runs-on: [self-hosted, Linux, iroha2]
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target-kotodama-perf
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@v4
+        with:
+          path: candidate
+
+      - name: Check out comparison base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}
+          path: baseline
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            candidate -> ../target-kotodama-perf
+            baseline -> ../target-kotodama-perf
+
+      - name: Test regression checker
+        working-directory: candidate
+        run: python3 pytests/scripts/check_kotodama_perf_test.py
+
+      - name: Detect a comparable base benchmark suite
+        id: benchmark-base
+        run: |
+          benchmark=baseline/crates/ivm/benches/bench_kotodama.rs
+          comparable=true
+          for name in \
+            kotodama_phase_parse \
+            kotodama_phase_semantic \
+            kotodama_phase_ir_lower \
+            kotodama_phase_codegen_end_to_end \
+            kotodama_runtime_cold_add \
+            kotodama_runtime_warm_add \
+            kotodama_core_runtime_warm_add
+          do
+            if ! grep -Rq "\"$name\"" \
+              baseline/crates/ivm/benches/bench_kotodama.rs \
+              baseline/crates/iroha_core/benches/kotodama_runtime_cache.rs 2>/dev/null
+            then
+              comparable=false
+            fi
+          done
+          echo "comparable=$comparable" >> "$GITHUB_OUTPUT"
+
+      - name: Measure base revision
+        if: steps.benchmark-base.outputs.comparable == 'true'
+        working-directory: baseline
+        run: |
+          cargo bench -p ivm --bench bench_kotodama -- --save-baseline base
+          cargo bench -p iroha_core --bench kotodama_runtime_cache -- --save-baseline base
+
+      - name: Measure candidate revision
+        if: steps.benchmark-base.outputs.comparable == 'true'
+        working-directory: candidate
+        run: |
+          cargo bench -p ivm --bench bench_kotodama -- --baseline base
+          cargo bench -p iroha_core --bench kotodama_runtime_cache -- --baseline base
+
+      - name: Bootstrap first-release benchmark evidence
+        if: steps.benchmark-base.outputs.comparable != 'true'
+        working-directory: candidate
+        run: |
+          cargo bench -p ivm --bench bench_kotodama -- --save-baseline base
+          cargo bench -p iroha_core --bench kotodama_runtime_cache -- --save-baseline base
+
+      - name: Enforce five-percent ceiling
+        working-directory: candidate
+        run: >-
+          python3 scripts/check_kotodama_perf.py
+          --criterion-dir ../target-kotodama-perf/criterion
+          --threshold 0.05
+
+      - name: Build canonical compiler driver
+        working-directory: candidate
+        run: cargo build -p ivm --bin koto
+
+      - name: Enforce artifact size and no-op gates
+        working-directory: candidate
+        run: >-
+          python3 scripts/regenerate_kotodama_goldens.py
+          --check
+          --koto ../target-kotodama-perf/debug/koto
+          --skip-runtime-manifest-check
+          --skip-contract-tests

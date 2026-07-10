@@ -1,136 +1,65 @@
-# SCCP BSC Contracts
+# SCCP BSC contracts
 
-This directory contains the BSC/BEP20 deployment entrypoints for the TAIRA XOR
-SCCP testnet route.
+This directory contains the concrete exact V1 XOR route for BNB Smart Chain.
+There is no owner-controlled source emitter: a BSC-origin SCCP event can only be
+emitted by the value-moving route after wrapped XOR is burned.
 
-Files:
+## Contracts
 
-- `TairaXOR.sol`: BEP20/ERC20-compatible bridged XOR token. The owner sets one
-  bridge, locks it, and only that bridge can mint or burn.
-- `SccpBscSourceBridge.sol`: owner-governed source emitter for BSC-origin SCCP
-  events. It is fixed to source domain BSC (`2`) and target domain SORA (`0`).
-- `TairaXorBscSccpBridge.sol`: route-bound bridge for `taira_bsc_xor`.
-  TAIRA-origin proofs mint bridged XOR on BSC; BSC-origin burns emit source
-  event digests for TAIRA settlement.
+- `TairaXOR.sol` is the wrapped BEP20/ERC20 XOR token built from the shared
+  exact EVM token. Its sole mint/burn route is fixed in the constructor; there
+  is no owner, setter, lock flag, or upgrade hook.
+- `TairaXorBscSccpBridge.sol` specializes the shared exact EVM route for BSC
+  mainnet or testnet and the fixed `taira_bsc_xor` route.
 
-Deployment shape:
+The route constructor pins the token code hash, verifier address/runtime code
+hash/verifying-key hash, BSC profile and chain id, lane hashes, destination
+binding, nonzero route revision, and route-config hash. The revision is encoded
+after the Transfer nonce and prevents message-id reuse when a replacement route
+restarts its local nonce. The destination binding includes both verifier and
+route addresses, so a proof for one deployment cannot be replayed through
+another route that shares its verifier.
 
-1. Deploy `SccpGroth16Bn254MessageVerifier` from `contracts/evm/sccp`.
-2. Deploy `SccpBscSourceBridge` with BSC testnet network id `97`, source domain
-   `2`, and target domain `0`.
-3. Deploy `TairaXOR`.
-4. Deploy `TairaXorBscSccpBridge` with the token, raw verifier, source bridge,
-   verifier runtime code hash, verifier key hash, backend
-   `evm-groth16-bn254-v1`, proof family `stark-fri-v1`, network id `97`,
-   source domain `0`, target domain `2`, route hash `keccak256("taira_bsc_xor")`,
-   and asset hash `keccak256("xor")`.
-5. Call `TairaXOR.setBridge(route_bridge)`, `TairaXOR.lockBridge()`, and
-   `SccpBscSourceBridge.transferOwnership(route_bridge)`.
+`transferToTaira(bytes,uint256)` constructs the complete canonical Transfer
+payload, burns wrapped XOR, and emits the exact six-field `SccpTransfer` event.
+`finalizeFromTaira(bytes,bytes32[6],bytes32,bytes)` parses the canonical payload,
+checks the fixed asset/route/domains/address codec and lane-derived message id,
+verifies the route-bound Groth16 statement, records replay state, and mints the
+scaled wrapped amount. All checks and replay writes precede external token
+state changes, and both paths are non-reentrant.
 
-The route bridge computes the EVM destination binding itself using the raw
-verifier address plus the route bridge address. Live readback should record:
+Governed deployment state must use fixed-width typed addresses and hashes and
+derive the destination binding and route-config hash. Clients do not supply
+deployment identities, aliases, readiness flags, browser provers, or an
+operator-selected expected binding.
 
-- `TairaXOR.bridge()` equals the route bridge.
-- `TairaXOR.bridgeLocked()` is `true`.
-- `SccpBscSourceBridge.owner()` equals the route bridge.
-- `TairaXorBscSccpBridge.destinationBindingHash()` equals the manifest binding.
-- `TairaXorBscSccpBridge.verifier()`, `verifierCodeHash()`,
-  `verifierKeyHash()`, `networkId()`, `expectedSourceDomain()`, and
-  `expectedTargetDomain()` match rollout evidence.
-- `SccpGroth16Bn254MessageVerifier.verifyingKeyHash()` equals the
-  `verifierKeyHash()` stored by the route bridge, so deployment evidence cannot
-  trust a hand-entered verifier key hash that does not match the deployed
-  verifier contract.
+Before activation, independently verify:
 
-The raw verifier does not expose `destinationBindingHash()`. Tooling must not
-require that getter on the verifier address for BSC.
+1. Token, verifier, and route are distinct nonzero contracts with the exact
+   governed runtime code hashes.
+2. The route profile and chain id are BSC mainnet (`56`) or BSC testnet (`97`)
+   as intended.
+3. Verifier key, both lane hashes, destination binding, and route-config hash
+   match the typed route revision.
+4. `TairaXOR.bridge()` is the route, and the token ABI/runtime exposes no
+   owner or bridge-mutation entrypoint. Precompute the route address, deploy
+   the token with it, then deploy that exact route next.
+5. The Groth16 key belongs to an audited circuit proving the complete SCCP
+   statement, not merely the public-signal wiring.
+6. The optimized route runtime is at most 24,576 bytes and its BLAKE2b-256
+   results match the software reference across compression-block boundaries;
+   BSC uses the EIP-152 BLAKE2F precompile.
 
-Operator helper:
+Deployment and signing are out of process. Never persist deployer keys or
+wallet secrets in manifests, evidence, scripts, or repository files.
 
-```bash
-NODE_PATH=/path/to/node_modules \
-  node scripts/sccp_bsc_taira_xor_deploy.mjs compile
-SCCP_BSC_DEPLOYER_PRIVATE_KEY=<runtime-only-funded-testnet-key> \
-NODE_PATH=/path/to/node_modules \
-  node scripts/sccp_bsc_taira_xor_deploy.mjs deploy \
-    --verifier artifacts/sccp-bsc/bsc-testnet-verifier-key.json \
-    --broadcast true \
-    --confirm-testnet taira_bsc_xor \
-    --out artifacts/sccp-bsc/taira-bsc-xor-deployment.evidence.json
-```
-
-`deploy` refuses to broadcast without `--confirm-testnet taira_bsc_xor`. The
-private key is read only from the named environment variable and is never
-written to the evidence artifact. The resulting evidence JSON is public
-deployment/readback material consumed by the wallet route-manifest helper; it
-still needs TAIRA burn-record material plus TAIRA route publication/canary
-evidence before a production-ready manifest can be written. Production canary
-evidence must include distinct source-event and route-canary transaction ids
-plus canonical `https://testnet.bscscan.com/tx/0x...` URLs matching those ids.
-
-After a route manifest has been assembled, generate the TAIRA runtime config
-overlay from that public manifest:
+Run the exact shared suite with:
 
 ```bash
-node scripts/sccp_bsc_taira_xor_deploy.mjs route-config \
-  --manifest artifacts/sccp-bsc/taira-bsc-xor-route.manifest.json \
-  --allow-unready true \
-  --out artifacts/sccp-bsc/taira-bsc-xor-route.torii.toml
+bash scripts/sccp_evm_contract_smoke.sh
 ```
 
-For a local operator dry run, the same command can merge the route into the
-checked-in TAIRA config template:
-
-```bash
-node scripts/sccp_bsc_taira_xor_deploy.mjs route-config \
-  --manifest artifacts/sccp-bsc/taira-bsc-xor-route.manifest.json \
-  --allow-unready true \
-  --base-config configs/soranexus/taira/config.toml \
-  --out artifacts/sccp-bsc/taira-bsc-xor-route.full-taira-config.toml
-```
-
-The route config command validates `taira_bsc_xor`, BSC testnet chain id
-`0x61`, SORA/BSC domains `0 -> 2`, distinct EVM contract addresses,
-destination binding key/hash, canonical XOR settlement asset id, and the
-TAIRA burn-record artifact SHA-256 before writing TOML. The backend accepts
-generic/BSC route address fields as input, but generated overlays now emit only
-the canonical BSC route keys. They intentionally do not mirror EVM addresses
-into legacy TRON-named fields. Conflicting generic, BSC-specific, and legacy
-aliases are rejected before the route is loaded. Production BSC deployment
-addresses, post-deploy canary evidence, verifier code/key, destination binding,
-proof/proving, and native bundle hash fields also reject same-object duplicate
-aliases even when the duplicate values match, so generated operator manifests
-cannot hide stale cryptographic material behind redundant field names.
-App-side BSC preflight also rejects ambiguous route identity aliases and
-duplicate object containers such as `postDeployLiveEvidence` /
-`post_deploy_live_evidence`; those checks are required by sidecar,
-smoke-readiness, and production-gate tooling.
-The `native-prover-bundle` command also treats the route manifest or deployment
-evidence JSON, proof artifact, proving key, verifier key, parity/self-test
-fixtures, SDK implementation artifacts, and audit files as regular-file-only
-inputs. Symlinks and other non-regular files are rejected before bytes are read,
-and artifact paths are realpath-checked against the declared artifact root
-before their hashes are allowed into a production bundle. Bundle artifact paths
-that contain raw, percent-encoded, or recursively over-encoded
-parent-directory segments are also rejected, so locally harmless filenames
-cannot become traversal-like URLs when consumed by browser runtime tooling.
-
-Quick verification:
-
-```bash
-scripts/sccp_evm_contract_smoke.sh
-cargo test -p iroha_config --test sccp_route_manifest_aliases
-node --test scripts/sccp_bsc_taira_xor_deploy.test.mjs
-tmpdir=$(mktemp -d /tmp/iroha-bsc-smoke-deps.XXXXXX)
-npm install --prefix "$tmpdir" --silent solc@0.7.4 ethers@6.16.0 ganache@7.9.2 >/dev/null
-NODE_PATH="$tmpdir/node_modules" node scripts/sccp_bsc_taira_xor_deploy_smoke.mjs
-rm -rf "$tmpdir"
-```
-
-The smoke compiles the shared EVM verifier/wrapper, TRON route contracts, and
-BSC route contracts, then runs mint, replay, payload parsing, burn, and source
-event assertions on Ganache. The deploy-helper smoke separately runs a local
-BSC-testnet-shaped Ganache chain, deploys the verifier/source/token/route
-contracts through the operator helper, registers and locks `TairaXOR`, transfers
-source-bridge ownership, validates readback evidence, and scans the public
-evidence artifact for secret-like material.
+It covers exact cross-language vectors, mint/burn accounting, zero and
+mismatched revisions, malformed and cross-network payloads, replay,
+reentrancy, token failure, immutable code/key drift, deployment-size and
+BLAKE2F parity, route-binding separation, and adversarial BN254 inputs.

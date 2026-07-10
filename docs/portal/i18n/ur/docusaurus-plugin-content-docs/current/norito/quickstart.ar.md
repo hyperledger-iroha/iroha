@@ -22,10 +22,10 @@ translation_last_reviewed: 2026-02-07
 
 - [Docker] (https://docs.docker.com/engine/install/) کمپوز V2 فعال (`defaults/docker-compose.single.yml` میں مخصوص پیر کے نمونے کو چلانے کے لئے استعمال کیا جاتا ہے)۔
 - اگر آپ نے پوسٹ ڈاؤن لوڈ نہیں کی ہے تو معاون بائنریز کی تعمیر کے لئے زنگ ٹول سیریز (1.76+)۔
-- بائنریز `koto_compile` ، `ivm_run` اور `iroha_cli`۔ آپ اسے ورک اسپیس چیک آؤٹ سے بنا سکتے ہیں جیسا کہ ذیل میں دکھایا گیا ہے یا اسی ریلیز نمونے ڈاؤن لوڈ کرسکتے ہیں:
+- بائنریز `koto build` ، `ivm_run` اور `iroha_cli`۔ آپ اسے ورک اسپیس چیک آؤٹ سے بنا سکتے ہیں جیسا کہ ذیل میں دکھایا گیا ہے یا اسی ریلیز نمونے ڈاؤن لوڈ کرسکتے ہیں:
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -49,22 +49,22 @@ docker compose -f defaults/docker-compose.single.yml up --build
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -76,15 +76,14 @@ KO
 نوڈ کو بائیکوڈ IVM/Norito (`.to`) پر مرتب کریں اور پھر نیٹ ورک کو چھونے سے پہلے میزبان کو کامیاب سیسکلز کو یقینی بنانے کے لئے اسے مقامی طور پر اس پر عمل کریں:
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-رنر پرنٹ کرتا ہے `info("Hello from Kotodama")` اور ورچوئل ہوسٹ پر Syscall `SET_ACCOUNT_DETAIL` پرفارم کرتا ہے۔ اگر اختیاری بائنری `ivm_tool` دستیاب ہے تو ، `ivm_tool inspect target/quickstart/hello.to` برآمد شدہ ABI ہیڈر ، فیچر بٹس ، اور انٹری پوائنٹس دکھاتا ہے۔
+رنر پرنٹ کرتا ہے `debug::info("Hello from Kotodama")` اور ورچوئل ہوسٹ پر Syscall `SET_ACCOUNT_DETAIL` پرفارم کرتا ہے۔ اگر اختیاری بائنری `ivm_tool` دستیاب ہے تو ، `ivm_tool inspect target/quickstart/hello.to` برآمد شدہ ABI ہیڈر ، فیچر بٹس ، اور انٹری پوائنٹس دکھاتا ہے۔
 
 ## 4. Torii کے ذریعے بائیکوڈ بھیجیں
 
@@ -131,3 +130,63 @@ iroha --config defaults/client.toml \
 - جب اپنے معاہدوں پر تکرار کرتے ہو تو ، `npm run sync-norito-snippets` in استعمال کریں
   ڈاؤن لوڈ کے قابل نچوڑوں کو دوبارہ پیدا کرنے کے لئے ورک اسپیس تاکہ پورٹل دستاویزات اور نوادرات باقی رہیں
   `crates/ivm/docs/examples/` کے تحت ذرائع کے ساتھ ہم آہنگ۔
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

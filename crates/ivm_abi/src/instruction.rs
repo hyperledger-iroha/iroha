@@ -62,6 +62,8 @@ pub mod wide {
         pub const STORE64: u8 = 0x31;
         pub const LOAD128: u8 = 0x32;
         pub const STORE128: u8 = 0x33;
+        /// Load a validated typed literal pointer by its `u16` literal-table index.
+        pub const LDLIT: u8 = 0x34;
     }
 
     /// Control flow.
@@ -76,7 +78,9 @@ pub mod wide {
         pub const JR: u8 = 0x47;
         pub const JALR: u8 = 0x48;
         pub const HALT: u8 = 0x49;
+        /// Jump by the signed 24-bit word offset in bits 23..0.
         pub const JMP: u8 = 0x4A;
+        /// Jump by a signed 24-bit word offset and write the link to register 1.
         pub const JALS: u8 = 0x4B;
     }
 
@@ -101,8 +105,16 @@ pub mod wide {
 
         pub const SHA256BLOCK: u8 = 0x80;
         pub const SHA3BLOCK: u8 = 0x81;
+        /// Hash two scalar registers: `rd = poseidon2(rs1, rs2)`.
         pub const POSEIDON2: u8 = 0x82;
+        /// Hash six consecutive scalar registers starting at `rs1`.
+        ///
+        /// The third operand slot is reserved and must be zero.
         pub const POSEIDON6: u8 = 0x83;
+        /// Number of consecutive scalar inputs consumed by [`POSEIDON6`].
+        pub const POSEIDON6_INPUTS: usize = 6;
+        /// Largest valid first input register for [`POSEIDON6`].
+        pub const POSEIDON6_MAX_INPUT_BASE: u8 = u8::MAX - (POSEIDON6_INPUTS as u8 - 1);
         pub const PUBKGEN: u8 = 0x84;
         pub const VALCOM: u8 = 0x85;
         pub const ECADD: u8 = 0x86;
@@ -178,6 +190,18 @@ pub mod wide {
         (word & 0xFFFF) as u16 as i16
     }
 
+    /// Return the unsigned literal-table index carried in the low 16 bits.
+    #[inline]
+    pub fn literal_index(word: u32) -> usize {
+        (word & 0xFFFF) as u16 as usize
+    }
+
+    /// Return the signed 24-bit word offset carried by `JMP`/`JALS`.
+    #[inline]
+    pub fn imm24(word: u32) -> i32 {
+        ((word << 8) as i32) >> 8
+    }
+
     /// Returns true when `op` is one of the defined wide opcode values.
     pub fn is_valid_opcode(op: u8) -> bool {
         matches!(
@@ -230,6 +254,7 @@ pub mod wide {
                 | memory::STORE64
                 | memory::LOAD128
                 | memory::STORE128
+                | memory::LDLIT
                 // Control flow
                 | control::BEQ
                 | control::BNE

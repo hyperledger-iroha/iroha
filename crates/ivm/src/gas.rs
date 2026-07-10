@@ -101,6 +101,7 @@ pub const SCHEDULE_OPCODES: &[u8] = &[
     wide::memory::STORE64,
     wide::memory::LOAD128,
     wide::memory::STORE128,
+    wide::memory::LDLIT,
     // Control flow
     wide::control::BEQ,
     wide::control::BNE,
@@ -199,6 +200,7 @@ pub fn cost_of(instr: u32) -> Option<u64> {
         wide::arithmetic::SLT | wide::arithmetic::SLTU => Some(2),
         wide::arithmetic::SEQ | wide::arithmetic::SNE => Some(2),
         wide::arithmetic::CMOV | wide::arithmetic::CMOVI => Some(3),
+        wide::memory::LDLIT => Some(1),
         wide::memory::LOAD64 | wide::memory::STORE64 => Some(3),
         wide::memory::LOAD128 | wide::memory::STORE128 => Some(5),
         wide::control::BEQ

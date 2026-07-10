@@ -786,7 +786,7 @@ impl IterableQueryJson {
         })
     }
 
-    fn predicate_or_pass<T>(&self) -> Result<CompoundPredicate<T>, QueryJsonError> {
+    fn predicate_or_pass<T: 'static>(&self) -> Result<CompoundPredicate<T>, QueryJsonError> {
         self.predicate.as_ref().map_or_else(
             || Ok(CompoundPredicate::PASS),
             |pred| {

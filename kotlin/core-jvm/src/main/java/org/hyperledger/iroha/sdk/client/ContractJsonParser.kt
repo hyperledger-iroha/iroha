@@ -11,7 +11,7 @@ object ContractJsonParser {
     fun parseDeployResponse(payload: ByteArray): ContractDeployResponse {
         val root = expectObject(parse(payload, "contract deploy response"), "contract deploy response")
         val contracts = requiredList(root["contracts"], "contract deploy response.contracts")
-        val initCalls = requiredList(root["init_calls"], "contract deploy response.init_calls")
+        val hajimariCalls = requiredList(root["hajimari_calls"], "contract deploy response.hajimari_calls")
         val assertions = requiredList(root["assertions"], "contract deploy response.assertions")
         return ContractDeployResponse(
             ok = root["ok"] == true,
@@ -39,6 +39,10 @@ object ContractJsonParser {
                             "txHashHex",
                         )
                     } else null,
+                    pipelineStatus = optionalObject(
+                        contract["pipeline_status"],
+                        "contract deploy response.contracts[$index].pipeline_status",
+                    ),
                     codeHashHex = HttpClientTransport.normalizeHex32(
                         requiredString(contract["code_hash_hex"], "contract deploy response.contracts[$index].code_hash_hex"),
                         "codeHashHex",
@@ -50,19 +54,23 @@ object ContractJsonParser {
                     status = requiredString(contract["status"], "contract deploy response.contracts[$index].status"),
                 )
             },
-            initCalls = initCalls.mapIndexed { index, item ->
-                val call = expectObject(item, "contract deploy response.init_calls[$index]")
-                ContractDeployResponseInitCall(
-                    id = requiredString(call["id"], "contract deploy response.init_calls[$index].id"),
+            hajimariCalls = hajimariCalls.mapIndexed { index, item ->
+                val call = expectObject(item, "contract deploy response.hajimari_calls[$index]")
+                ContractDeployResponseHajimariCall(
+                    id = requiredString(call["id"], "contract deploy response.hajimari_calls[$index].id"),
                     contractAlias = optionalString(call["contract_alias"]),
                     entrypoint = optionalString(call["entrypoint"]),
                     txHashHex = if (call.containsKey("tx_hash_hex") && call["tx_hash_hex"] != null) {
                         HttpClientTransport.normalizeHex32(
-                            requiredString(call["tx_hash_hex"], "contract deploy response.init_calls[$index].tx_hash_hex"),
+                            requiredString(call["tx_hash_hex"], "contract deploy response.hajimari_calls[$index].tx_hash_hex"),
                             "txHashHex",
                         )
                     } else null,
-                    status = requiredString(call["status"], "contract deploy response.init_calls[$index].status"),
+                    pipelineStatus = optionalObject(
+                        call["pipeline_status"],
+                        "contract deploy response.hajimari_calls[$index].pipeline_status",
+                    ),
+                    status = requiredString(call["status"], "contract deploy response.hajimari_calls[$index].status"),
                 )
             },
             assertions = assertions.mapIndexed { index, item ->
@@ -94,10 +102,49 @@ object ContractJsonParser {
             txHashHex = if (root.containsKey("tx_hash_hex") && root["tx_hash_hex"] != null)
                 HttpClientTransport.normalizeHex32(requiredString(root["tx_hash_hex"], "contract call response.tx_hash_hex"), "txHashHex")
             else null,
+            pipelineStatus = optionalObject(root["pipeline_status"], "contract call response.pipeline_status"),
             entrypoint = optionalString(root["entrypoint"]),
+            transactionTtlMs = asOptionalNonNegativeLong(
+                root["transaction_ttl_ms"],
+                "contract call response.transaction_ttl_ms",
+            ),
+            entrypointHashHex = optionalHash(root["entrypoint_hash_hex"], "contract call response.entrypoint_hash_hex"),
             transactionScaffoldB64 = optionalBase64(root["transaction_scaffold_b64"], "contract call response.transaction_scaffold_b64"),
             signedTransactionB64 = optionalBase64(root["signed_transaction_b64"], "contract call response.signed_transaction_b64"),
             signingMessageB64 = optionalBase64(root["signing_message_b64"], "contract call response.signing_message_b64"),
+            operationReceipt = parseOperationReceipt(
+                expectObject(root["operation_receipt"], "contract call response.operation_receipt"),
+                "contract call response.operation_receipt",
+            ),
+        )
+    }
+
+    private fun parseOperationReceipt(
+        receipt: Map<String, Any?>,
+        path: String,
+    ): ContractOperationReceipt {
+        val gasLimit = asOptionalNonNegativeLong(receipt["gas_limit"], "$path.gas_limit")
+        check(gasLimit == null || gasLimit > 0) { "$path.gas_limit must be positive" }
+        return ContractOperationReceipt(
+            operationKind = requiredString(receipt["operation_kind"], "$path.operation_kind"),
+            status = requiredString(receipt["status"], "$path.status"),
+            transport = requiredString(receipt["transport"], "$path.transport"),
+            dataspace = requiredString(receipt["dataspace"], "$path.dataspace"),
+            contractAlias = optionalString(receipt["contract_alias"]),
+            contractAddress = optionalString(receipt["contract_address"]),
+            codeHashHex = optionalHash(receipt["code_hash_hex"], "$path.code_hash_hex"),
+            abiHashHex = optionalHash(receipt["abi_hash_hex"], "$path.abi_hash_hex"),
+            txHashHex = optionalHash(receipt["tx_hash_hex"], "$path.tx_hash_hex"),
+            entrypoint = optionalString(receipt["entrypoint"]),
+            entrypointHashHex = optionalHash(receipt["entrypoint_hash_hex"], "$path.entrypoint_hash_hex"),
+            gasLimit = gasLimit,
+            gasUsed = asOptionalNonNegativeLong(receipt["gas_used"], "$path.gas_used"),
+            gasAssetId = optionalString(receipt["gas_asset_id"]),
+            feeSponsor = optionalString(receipt["fee_sponsor"]),
+            payloadDigestHex = HttpClientTransport.normalizeHex32(
+                requiredString(receipt["payload_digest_hex"], "$path.payload_digest_hex"),
+                "payloadDigestHex",
+            ),
         )
     }
 
@@ -175,6 +222,16 @@ object ContractJsonParser {
     private fun optionalString(value: Any?): String? {
         if (value == null) return null
         return if (value is String) value.trim().ifEmpty { null } else value.toString()
+    }
+
+    private fun optionalHash(value: Any?, path: String): String? {
+        if (value == null) return null
+        return HttpClientTransport.normalizeHex32(requiredString(value, path), path)
+    }
+
+    private fun optionalObject(value: Any?, path: String): Map<String, Any?>? {
+        if (value == null) return null
+        return expectObject(value, path).toMap()
     }
 
     private fun optionalBoolean(value: Any?, path: String): Boolean? {

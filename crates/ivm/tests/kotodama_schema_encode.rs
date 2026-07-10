@@ -5,12 +5,14 @@ use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 #[test]
 fn kotodama_schema_encode_decode_roundtrip() {
     let src = r#"
-        fn main() {
-            let schema = name!("Order");
-            let payload = json!{ qty: 7, side: "buy" };
-            let bytes = encode_schema(schema, payload);
-            let decoded = decode_schema(schema, bytes);
-            let _bytes2 = encode_schema(schema, decoded);
+        seiyaku SchemaCodecRoundtrip {
+        view fn main() {
+            let schema = Name::parse("Order");
+            let payload = Json::parse("{\"qty\":7,\"side\":\"buy\"}");
+            let bytes = codec::schema::encode(schema, payload);
+            let decoded = codec::schema::decode(schema, bytes);
+            let _bytes2 = codec::schema::encode(schema, decoded);
+        }
         }
     "#;
     let code = KotodamaCompiler::new()

@@ -36,7 +36,6 @@ use iroha_data_model::{
     },
     transaction::{SignedTransaction, executable::ContractInvocation},
 };
-use iroha_primitives::json::Json;
 use ivm::host::IVMHost;
 use mv::storage::StorageReadOnly; // bring trait into scope for .get()
 use parking_lot::RwLock;
@@ -59,6 +58,7 @@ const ACCOUNT_WILDCARD_KEY: &str = "account:*";
 const ASSET_WILDCARD_KEY: &str = "asset:*";
 const ASSET_DEF_WILDCARD_KEY: &str = "asset_def:*";
 const NEXUS_ACTIVE_LANE_CATALOG_KEY: &str = "nexus.active_lane_catalog";
+const SCCP_ON_CHAIN_REGISTRY_KEY: &str = "parameter.custom:sccp_registry_v1";
 
 /// Access set with separate read and write collections.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -172,7 +172,7 @@ fn manifest_from_metadata(tx: &SignedTransaction) -> Option<ContractManifest> {
 struct ContractCallExecutionContext {
     entrypoint: Option<String>,
     entrypoint_pc: Option<u64>,
-    args: Json,
+    argument_record: Option<Vec<u8>>,
 }
 
 fn requested_contract_entrypoint(metadata: &Metadata) -> Option<String> {
@@ -183,11 +183,11 @@ fn requested_contract_entrypoint(metadata: &Metadata) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn resolve_public_contract_entrypoint(
+fn resolve_callable_contract_entrypoint(
     bytecode: &[u8],
     selector: &str,
     interface_required_message: &'static str,
-) -> Result<u64, String> {
+) -> Result<(u64, Option<ivm::EntrypointArgumentSchemaV1>), String> {
     let parsed = ivm::ProgramMetadata::parse(bytecode)
         .map_err(|err| format!("invalid contract artifact for contract call dispatch: {err}"))?;
     let prefix_len = parsed.prefix_len() as u64;
@@ -200,39 +200,25 @@ fn resolve_public_contract_entrypoint(
         .iter()
         .find(|candidate| candidate.name == selector)
         .ok_or_else(|| format!("unknown contract entrypoint `{selector}`"))?;
-    if !matches!(
+    if matches!(
         descriptor.kind,
-        iroha_data_model::smart_contract::manifest::EntryPointKind::Public
+        iroha_data_model::smart_contract::manifest::EntryPointKind::View
     ) {
-        return Err(format!("contract entrypoint `{selector}` is not public"));
+        return Err(format!(
+            "contract entrypoint `{selector}` is read-only and cannot be invoked as a transaction"
+        ));
     }
-    Ok(prefix_len + descriptor.entry_pc)
+    Ok((
+        prefix_len + descriptor.entry_pc,
+        descriptor.argument_schema.clone(),
+    ))
 }
 
-fn resolve_default_public_contract_entrypoint(bytecode: &[u8]) -> Result<Option<u64>, String> {
-    let parsed = match ivm::ProgramMetadata::parse(bytecode) {
-        Ok(parsed) => parsed,
-        Err(_) => return Ok(None),
-    };
-    let Some(contract_interface) = parsed.contract_interface.as_ref() else {
-        return Ok(None);
-    };
-    let selector = "main";
-    let descriptor = contract_interface
-        .entrypoints
-        .iter()
-        .find(|candidate| candidate.name == selector)
-        .ok_or_else(|| {
-            "contract call without contract_entrypoint metadata requires a public `main` entrypoint"
-                .to_owned()
-        })?;
-    if !matches!(
-        descriptor.kind,
-        iroha_data_model::smart_contract::manifest::EntryPointKind::Public
-    ) {
-        return Err("contract entrypoint `main` is not public".to_owned());
-    }
-    Ok(Some(parsed.prefix_len() as u64 + descriptor.entry_pc))
+fn is_self_describing_contract(bytecode: &[u8]) -> bool {
+    ivm::ProgramMetadata::parse(bytecode)
+        .ok()
+        .and_then(|parsed| parsed.contract_interface)
+        .is_some()
 }
 
 fn parse_contract_call_execution_context(
@@ -242,25 +228,38 @@ fn parse_contract_call_execution_context(
     let entrypoint = requested_contract_entrypoint(metadata);
     let payload = metadata.get("contract_payload").cloned();
 
-    let (entrypoint, entrypoint_pc) = if let Some(selector) = entrypoint.as_deref() {
-        let entrypoint_pc = resolve_public_contract_entrypoint(
+    let (entrypoint, entrypoint_pc, argument_schema) = if let Some(selector) = entrypoint.as_deref()
+    {
+        let (entrypoint_pc, argument_schema) = resolve_callable_contract_entrypoint(
             bytecode,
             selector,
             "contract call entrypoint metadata requires a self-describing contract artifact",
         )?;
-        (Some(selector.to_owned()), Some(entrypoint_pc))
-    } else if let Some(entrypoint_pc) = resolve_default_public_contract_entrypoint(bytecode)? {
-        (Some("main".to_owned()), Some(entrypoint_pc))
+        (
+            Some(selector.to_owned()),
+            Some(entrypoint_pc),
+            argument_schema,
+        )
+    } else if is_self_describing_contract(bytecode) {
+        return Err(
+            "self-describing contract calls require explicit contract_entrypoint metadata"
+                .to_owned(),
+        );
     } else if payload.is_none() {
         return Ok(None);
     } else {
-        (None, None)
+        (None, None, None)
     };
 
+    let argument_record = crate::executor::encode_contract_argument_record(
+        argument_schema.as_ref(),
+        payload.as_ref(),
+    )
+    .map_err(|error| error.to_string())?;
     Ok(Some(ContractCallExecutionContext {
         entrypoint,
         entrypoint_pc,
-        args: payload.unwrap_or_default(),
+        argument_record,
     }))
 }
 
@@ -273,16 +272,21 @@ fn parse_contract_invocation_execution_context(
         return Err("contract entrypoint must not be empty".to_owned());
     }
 
-    let entrypoint_pc = resolve_public_contract_entrypoint(
+    let (entrypoint_pc, argument_schema) = resolve_callable_contract_entrypoint(
         bytecode,
         selector,
         "contract call requires a self-describing contract artifact",
     )?;
 
+    let argument_record = crate::executor::validate_contract_argument_record(
+        argument_schema.as_ref(),
+        invocation.arguments.as_deref(),
+    )
+    .map_err(|error| error.to_string())?;
     Ok(ContractCallExecutionContext {
         entrypoint: Some(selector.to_owned()),
         entrypoint_pc: Some(entrypoint_pc),
-        args: invocation.payload.clone().unwrap_or_default(),
+        argument_record,
     })
 }
 
@@ -299,7 +303,7 @@ fn apply_contract_call_execution_context(
         vm.set_program_counter(entrypoint_pc).map_err(|err| {
             format!(
                 "contract entrypoint `{}` resolved to invalid pc: {err}",
-                context.entrypoint.as_deref().unwrap_or("main")
+                context.entrypoint.as_deref().unwrap_or("<unspecified>")
             )
         })?;
     }
@@ -314,9 +318,11 @@ fn manifest_access_set(
     requested_entrypoint: Option<&str>,
 ) -> Option<(AccessSet, AccessSetSource)> {
     let manifest_hash = cache_enabled.then(|| manifest_signature_hash(manifest));
-    if let Some(entrypoints) = manifest.entrypoints.as_deref()
-        && let Some(entrypoint) = select_entrypoint(entrypoints, requested_entrypoint)
-    {
+    if let Some(entrypoints) = manifest.entrypoints.as_deref() {
+        let entrypoint = select_entrypoint(entrypoints, requested_entrypoint)?;
+        if !entrypoint_access_hints_are_complete(entrypoint) {
+            return None;
+        }
         let key = AccessSetCacheKey {
             code_hash,
             entrypoint: Some(entrypoint.name.clone()),
@@ -332,8 +338,20 @@ fn manifest_access_set(
             }
             return Some((set, AccessSetSource::EntrypointHints));
         }
+
+        // Entrypoint metadata is the most precise description available. If it is
+        // incomplete or otherwise unsafe, do not mask that failure by falling back
+        // to the contract-wide hints: those may contain the same under-approximation.
+        if !entrypoint.read_keys.is_empty() || !entrypoint.write_keys.is_empty() {
+            return None;
+        }
+        // A complete, explicitly empty entrypoint set may use the wider static
+        // contract hints as a conservative over-approximation.
     }
     if let Some(hints) = manifest.access_set_hints.as_ref() {
+        if !hints.dynamic_reads.is_empty() || !hints.dynamic_writes.is_empty() {
+            return None;
+        }
         let key = AccessSetCacheKey {
             code_hash,
             entrypoint: None,
@@ -410,7 +428,7 @@ where
                 }
 
                 if matches!(ivm_strategy, IvmStrategy::DynamicThenConservative) {
-                    let set = tx_gas_limit(tx)
+                    let mut set = tx_gas_limit(tx)
                         .and_then(|gas_limit| {
                             let context = parse_contract_invocation_execution_context(
                                 call,
@@ -425,10 +443,9 @@ where
                             )
                         })
                         .unwrap_or_else(|_| AccessSet::global());
-                    let source = if set.read_keys.is_empty()
-                        && set.write_keys.len() == 1
-                        && set.write_keys.contains("*")
-                    {
+                    let fenced =
+                        apply_unverified_ivm_access_fence(record.code_bytes.as_ref(), &mut set);
+                    let source = if fenced || is_conservative_global(&set) {
                         AccessSetSource::ConservativeFallback
                     } else {
                         AccessSetSource::PrepassMerge
@@ -451,8 +468,8 @@ where
         Executable::Ivm(bytecode) => {
             let bytecode_ref = bytecode.as_ref();
             let requested_entrypoint = requested_contract_entrypoint(tx.metadata());
-            if let Ok(parsed) = ivm::ProgramMetadata::parse(bytecode_ref) {
-                let code_hash = IrohaHash::new(&bytecode_ref[parsed.header_len..]);
+            if ivm::ProgramMetadata::parse(bytecode_ref).is_ok() {
+                let code_hash = ivm::contract_code_hash(bytecode_ref);
                 // 1) Try static hints from on-chain manifest (by code_hash)
                 if let Some(view) = state_ro {
                     if let Some(manifest) = view.world().contract_manifests().get(&code_hash) {
@@ -487,7 +504,7 @@ where
             // 2) Otherwise, use dynamic prepass if enabled with view, else conservative
             let (set, source) = match (ivm_strategy, state_ro) {
                 (IvmStrategy::DynamicThenConservative, Some(view)) => {
-                    let set = tx_gas_limit(tx)
+                    let mut set = tx_gas_limit(tx)
                         .and_then(|gas_limit| {
                             derive_from_ivm_dynamic(
                                 bytecode_ref,
@@ -498,10 +515,8 @@ where
                             )
                         })
                         .unwrap_or_else(|_| AccessSet::global());
-                    let source = if set.read_keys.is_empty()
-                        && set.write_keys.len() == 1
-                        && set.write_keys.contains("*")
-                    {
+                    let fenced = apply_unverified_ivm_access_fence(bytecode_ref, &mut set);
+                    let source = if fenced || is_conservative_global(&set) {
                         AccessSetSource::ConservativeFallback
                     } else {
                         AccessSetSource::PrepassMerge
@@ -610,6 +625,19 @@ fn is_conservative_global(set: &AccessSet) -> bool {
     set.read_keys.is_empty() && set.write_keys.len() == 1 && set.write_keys.contains("*")
 }
 
+fn apply_unverified_ivm_access_fence(bytecode: &[u8], set: &mut AccessSet) -> bool {
+    let fence = ivm::analysis::analyze_program(bytecode).map_or(
+        crate::pipeline::overlay::VmAccessFence::Global,
+        |analysis| crate::pipeline::overlay::VmAccessFence::from_program_analysis(&analysis),
+    );
+    if let Some(key) = fence.scheduler_write_key() {
+        set.add_write(key.to_owned());
+        true
+    } else {
+        false
+    }
+}
+
 fn manifest_matches_embedded_contract(bytecode: &[u8], manifest: &ContractManifest) -> bool {
     ivm::verify_contract_artifact(bytecode)
         .map(|verified| manifest.signature_payload() == verified.manifest.signature_payload())
@@ -620,8 +648,14 @@ fn key_tx_sequence(account: &AccountId) -> AccessKey {
     format!("tx.sequence:{account}")
 }
 
-fn key_sccp_outbound_message(key: &iroha_data_model::bridge::SccpOutboundMessageKey) -> AccessKey {
-    let mut out = format!("sccp.outbound:{}:{}:", key.source_domain, key.target_domain);
+fn key_sccp_outbound_message(
+    key: &iroha_data_model::bridge::SccpOutboundMessageKeyV1,
+) -> AccessKey {
+    let mut out = format!(
+        "sccp.outbound.v1:{}:{}:",
+        key.lane.source.profile_key(),
+        key.lane.target.profile_key()
+    );
     for byte in key.message_id {
         let _ = write!(&mut out, "{byte:02x}");
     }
@@ -652,6 +686,21 @@ fn key_sccp_bridge_message(
     out
 }
 
+fn key_sccp_native_bridge_message(
+    lane: iroha_data_model::bridge::SccpLaneIdV1,
+    message_id: [u8; 32],
+) -> AccessKey {
+    let mut out = format!(
+        "sccp.bridge.native:{}:{}:",
+        lane.source.profile_key(),
+        lane.target.profile_key()
+    );
+    for byte in message_id {
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    out
+}
+
 fn bridge_proof_hash(proof: &iroha_data_model::bridge::BridgeProof) -> Option<[u8; 32]> {
     let backend = proof.backend_label();
     let encoded = norito::to_bytes(proof).ok()?;
@@ -663,23 +712,27 @@ fn bridge_proof_hash(proof: &iroha_data_model::bridge::BridgeProof) -> Option<[u
 fn sccp_bridge_message_access_key(
     proof: &iroha_data_model::bridge::BridgeProof,
 ) -> Option<Option<AccessKey>> {
-    let iroha_data_model::bridge::BridgeProofPayload::TransparentZk(transparent) = &proof.payload
-    else {
-        return Some(None);
-    };
-    if !transparent.proof.backend.starts_with("sccp/stark-fri-v1/") {
-        return Some(None);
+    match &proof.payload {
+        iroha_data_model::bridge::BridgeProofPayload::SccpDestination(destination) => {
+            let artifact = iroha_sccp::decode_bridge_sccp_destination_proof_v1(destination)?;
+            let bundle =
+                iroha_sccp::decode_nexus_sccp_message_proof(&artifact.request.bundle_bytes)?;
+            Some(Some(key_sccp_bridge_message(
+                iroha_sccp::sccp_message_source_domain(&bundle.payload),
+                iroha_sccp::sccp_message_target_domain(&bundle.payload),
+                bundle.commitment.message_id,
+            )))
+        }
+        iroha_data_model::bridge::BridgeProofPayload::NativeProtocol(native) => {
+            let decoded = iroha_sccp::decode_bridge_native_protocol_proof_v1(native).ok()?;
+            Some(Some(key_sccp_native_bridge_message(
+                decoded.source.lane,
+                decoded.source.message_id,
+            )))
+        }
+        iroha_data_model::bridge::BridgeProofPayload::Ics(_)
+        | iroha_data_model::bridge::BridgeProofPayload::TransparentZk(_) => Some(None),
     }
-    let artifact =
-        iroha_sccp::decode_nexus_sccp_message_transparent_proof(&transparent.proof.bytes)?;
-    if artifact.message_backend != transparent.proof.backend {
-        return None;
-    }
-    Some(Some(key_sccp_bridge_message(
-        iroha_sccp::sccp_message_source_domain(&artifact.bundle.payload),
-        iroha_sccp::sccp_message_target_domain(&artifact.bundle.payload),
-        artifact.bundle.commitment.message_id,
-    )))
 }
 
 fn derive_submit_bridge_proof_access(
@@ -712,13 +765,15 @@ fn derive_record_bridge_receipt_access(
 fn derive_sccp_outbound_message_access(
     record: &iroha_data_model::isi::bridge::RecordSccpMessage,
 ) -> AccessSet {
-    let Ok(validated) =
-        crate::bridge::validate_recorded_sccp_message_payload_bytes(&record.payload_bytes)
-    else {
+    let Ok(validated) = crate::bridge::validate_recorded_sccp_message_payload_bytes(
+        record.context,
+        &record.payload_bytes,
+    ) else {
         return AccessSet::global();
     };
     let mut set = AccessSet::new();
     set.add_read(NEXUS_ACTIVE_LANE_CATALOG_KEY.to_owned());
+    set.add_read(SCCP_ON_CHAIN_REGISTRY_KEY.to_owned());
     set.add_write(key_sccp_outbound_message(&validated.key));
     set
 }
@@ -800,7 +855,14 @@ fn entrypoint_access_set_if_safe(
     bytecode: &[u8],
     entrypoint: &EntrypointDescriptor,
 ) -> Option<AccessSet> {
+    if !entrypoint_access_hints_are_complete(entrypoint) {
+        return None;
+    }
     hint_access_set_if_safe(bytecode, &entrypoint.read_keys, &entrypoint.write_keys)
+}
+
+fn entrypoint_access_hints_are_complete(entrypoint: &EntrypointDescriptor) -> bool {
+    entrypoint.access_hints_complete == Some(true) && entrypoint.access_hints_skipped.is_empty()
 }
 
 fn hint_access_set_if_safe(
@@ -815,6 +877,12 @@ fn manifest_hint_access_set_if_safe(
     bytecode: &[u8],
     hints: &iroha_data_model::smart_contract::manifest::AccessSetHints,
 ) -> Option<AccessSet> {
+    // Dynamic hints currently identify only a base key and do not carry enough
+    // information to prove that every concrete state key conflicts with it.
+    // Keep them advisory until that relationship is represented explicitly.
+    if !hints.dynamic_reads.is_empty() || !hints.dynamic_writes.is_empty() {
+        return None;
+    }
     hint_access_set_with_dynamic_if_safe(
         bytecode,
         &hints.read_keys,
@@ -837,28 +905,31 @@ fn hint_access_set_with_dynamic_if_safe(
         }
     }
     let set = access_set_from_hint_keys(read_keys, write_keys, dynamic_reads, dynamic_writes)?;
-    if read_keys.iter().any(|key| key == "*") || write_keys.iter().any(|key| key == "*") {
+    let global_read = read_keys.iter().any(|key| key == "*");
+    let global_write = write_keys.iter().any(|key| key == "*");
+    if global_write {
         return Some(set);
     }
     let report = match ivm::analysis::analyze_program(bytecode) {
         Ok(report) => report,
         Err(_) => return None,
     };
-    if !report
-        .syscalls
-        .iter()
-        .all(|entry| is_entrypoint_hint_safe_syscall(entry.number))
-    {
-        return None;
-    }
-    let has_non_state_syscall = report
-        .syscalls
-        .iter()
-        .any(|entry| !is_state_only_syscall(entry.number));
-    if has_non_state_syscall
-        && hint_keys_state_only(read_keys, write_keys, dynamic_reads, dynamic_writes)
-    {
-        return None;
+    let state_read_wildcard = read_keys.iter().any(|key| key == "state:*")
+        || write_keys.iter().any(|key| key == "state:*");
+    let state_write_wildcard = write_keys.iter().any(|key| key == "state:*");
+    for syscall in &report.syscalls {
+        use ivm::syscalls::SyscallAccess;
+
+        let covered = match ivm::syscalls::syscall_access(syscall.number) {
+            SyscallAccess::None => true,
+            SyscallAccess::StateRead => state_read_wildcard || global_read,
+            SyscallAccess::StateWrite => state_write_wildcard,
+            SyscallAccess::LedgerRead => global_read,
+            SyscallAccess::LedgerWrite | SyscallAccess::Dynamic => false,
+        };
+        if !covered {
+            return None;
+        }
     }
     Some(set)
 }
@@ -872,15 +943,6 @@ fn select_entrypoint<'a>(
     }
     if let Some(requested) = requested_entrypoint {
         return entrypoints.iter().find(|entry| entry.name == requested);
-    }
-    if let Some(entrypoint) = entrypoints.iter().find(|entry| {
-        entry.name == "main"
-            && matches!(
-                entry.kind,
-                iroha_data_model::smart_contract::manifest::EntryPointKind::Public
-            )
-    }) {
-        return Some(entrypoint);
     }
     None
 }
@@ -1189,173 +1251,6 @@ fn ingest_dynamic_hint(hint: &DynamicAccessHint, state_keys: &mut BTreeSet<Strin
     }
     state_keys.insert(hint.base_key.clone());
     Some(())
-}
-
-fn hint_keys_state_only(
-    read_keys: &[String],
-    write_keys: &[String],
-    dynamic_reads: &[DynamicAccessHint],
-    dynamic_writes: &[DynamicAccessHint],
-) -> bool {
-    let is_state_key = |key: &str| key.starts_with("state:");
-    read_keys.iter().all(|key| is_state_key(key))
-        && write_keys.iter().all(|key| is_state_key(key))
-        && dynamic_reads
-            .iter()
-            .all(|hint| hint.base_key.starts_with("state:"))
-        && dynamic_writes
-            .iter()
-            .all(|hint| hint.base_key.starts_with("state:"))
-}
-
-fn is_entrypoint_hint_safe_syscall(number: u32) -> bool {
-    matches!(
-        number,
-        ivm::syscalls::SYSCALL_REGISTER_DOMAIN
-            | ivm::syscalls::SYSCALL_UNREGISTER_DOMAIN
-            | ivm::syscalls::SYSCALL_TRANSFER_DOMAIN
-            | ivm::syscalls::SYSCALL_REGISTER_ACCOUNT
-            | ivm::syscalls::SYSCALL_UNREGISTER_ACCOUNT
-            | ivm::syscalls::SYSCALL_REGISTER_PEER
-            | ivm::syscalls::SYSCALL_UNREGISTER_PEER
-            | ivm::syscalls::SYSCALL_REGISTER_ASSET
-            | ivm::syscalls::SYSCALL_UNREGISTER_ASSET
-            | ivm::syscalls::SYSCALL_MINT_ASSET
-            | ivm::syscalls::SYSCALL_BURN_ASSET
-            | ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED
-            | ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN
-            | ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_END
-            | ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_APPLY
-            | ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL
-            | ivm::syscalls::SYSCALL_NFT_MINT_ASSET
-            | ivm::syscalls::SYSCALL_NFT_TRANSFER_ASSET
-            | ivm::syscalls::SYSCALL_NFT_SET_METADATA
-            | ivm::syscalls::SYSCALL_NFT_BURN_ASSET
-            | ivm::syscalls::SYSCALL_CREATE_ROLE
-            | ivm::syscalls::SYSCALL_DELETE_ROLE
-            | ivm::syscalls::SYSCALL_GRANT_ROLE
-            | ivm::syscalls::SYSCALL_REVOKE_ROLE
-            | ivm::syscalls::SYSCALL_GRANT_PERMISSION
-            | ivm::syscalls::SYSCALL_REVOKE_PERMISSION
-            | ivm::syscalls::SYSCALL_CREATE_TRIGGER
-            | ivm::syscalls::SYSCALL_REMOVE_TRIGGER
-            | ivm::syscalls::SYSCALL_SET_TRIGGER_ENABLED
-            | ivm::syscalls::SYSCALL_AXT_BEGIN
-            | ivm::syscalls::SYSCALL_AXT_TOUCH
-            | ivm::syscalls::SYSCALL_AXT_COMMIT
-            | ivm::syscalls::SYSCALL_VERIFY_DS_PROOF
-            | ivm::syscalls::SYSCALL_USE_ASSET_HANDLE
-            | ivm::syscalls::SYSCALL_DEBUG_PRINT
-            | ivm::syscalls::SYSCALL_EXIT
-            | ivm::syscalls::SYSCALL_ABORT
-            | ivm::syscalls::SYSCALL_DEBUG_LOG
-            | ivm::syscalls::SYSCALL_ALLOC
-            | ivm::syscalls::SYSCALL_GROW_HEAP
-            | ivm::syscalls::SYSCALL_GET_PUBLIC_INPUT
-            | ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT
-            | ivm::syscalls::SYSCALL_VERIFY_SIGNATURE
-            | ivm::syscalls::SYSCALL_COMMIT_OUTPUT
-            | ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV
-            | ivm::syscalls::SYSCALL_POINTER_TO_NORITO
-            | ivm::syscalls::SYSCALL_POINTER_FROM_NORITO
-            | ivm::syscalls::SYSCALL_TLV_EQ
-            | ivm::syscalls::SYSCALL_NAME_DECODE
-            | ivm::syscalls::SYSCALL_JSON_ENCODE
-            | ivm::syscalls::SYSCALL_JSON_DECODE
-            | ivm::syscalls::SYSCALL_JSON_OBJECT
-            | ivm::syscalls::SYSCALL_JSON_SET_I64
-            | ivm::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID
-            | ivm::syscalls::SYSCALL_SCHEMA_ENCODE
-            | ivm::syscalls::SYSCALL_SCHEMA_DECODE
-            | ivm::syscalls::SYSCALL_SCHEMA_INFO
-            | ivm::syscalls::SYSCALL_DECODE_INT
-            | ivm::syscalls::SYSCALL_ENCODE_INT
-            | ivm::syscalls::SYSCALL_BUILD_PATH_MAP_KEY
-            | ivm::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
-            | ivm::syscalls::SYSCALL_STATE_GET
-            | ivm::syscalls::SYSCALL_STATE_SET
-            | ivm::syscalls::SYSCALL_STATE_DEL
-            | ivm::syscalls::SYSCALL_GET_AUTHORITY
-            | ivm::syscalls::SYSCALL_CALL_CONTRACT
-            | ivm::syscalls::SYSCALL_CURRENT_TIME_MS
-            | ivm::syscalls::SYSCALL_SM3_HASH
-            | ivm::syscalls::SYSCALL_SM2_VERIFY
-            | ivm::syscalls::SYSCALL_SM4_GCM_SEAL
-            | ivm::syscalls::SYSCALL_SM4_GCM_OPEN
-            | ivm::syscalls::SYSCALL_SM4_CCM_SEAL
-            | ivm::syscalls::SYSCALL_SM4_CCM_OPEN
-            | ivm::syscalls::SYSCALL_VRF_VERIFY
-            | ivm::syscalls::SYSCALL_VRF_VERIFY_BATCH
-            | ivm::syscalls::SYSCALL_VRF_EPOCH_SEED
-            | ivm::syscalls::SYSCALL_ZK_VERIFY_TRANSFER
-            | ivm::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
-            | ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
-            | ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY
-            | ivm::syscalls::SYSCALL_ZK_VERIFY_BATCH
-            | ivm::syscalls::SYSCALL_PROVE_EXECUTION
-            | ivm::syscalls::SYSCALL_VERIFY_PROOF
-            | ivm::syscalls::SYSCALL_GET_MERKLE_PATH
-            | ivm::syscalls::SYSCALL_GET_MERKLE_COMPACT
-            | ivm::syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT
-    )
-}
-
-fn is_state_only_syscall(number: u32) -> bool {
-    matches!(
-        number,
-        ivm::syscalls::SYSCALL_DEBUG_PRINT
-            | ivm::syscalls::SYSCALL_EXIT
-            | ivm::syscalls::SYSCALL_ABORT
-            | ivm::syscalls::SYSCALL_DEBUG_LOG
-            | ivm::syscalls::SYSCALL_ALLOC
-            | ivm::syscalls::SYSCALL_GROW_HEAP
-            | ivm::syscalls::SYSCALL_GET_PUBLIC_INPUT
-            | ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT
-            | ivm::syscalls::SYSCALL_VERIFY_SIGNATURE
-            | ivm::syscalls::SYSCALL_COMMIT_OUTPUT
-            | ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV
-            | ivm::syscalls::SYSCALL_POINTER_TO_NORITO
-            | ivm::syscalls::SYSCALL_POINTER_FROM_NORITO
-            | ivm::syscalls::SYSCALL_TLV_EQ
-            | ivm::syscalls::SYSCALL_NAME_DECODE
-            | ivm::syscalls::SYSCALL_JSON_ENCODE
-            | ivm::syscalls::SYSCALL_JSON_DECODE
-            | ivm::syscalls::SYSCALL_JSON_OBJECT
-            | ivm::syscalls::SYSCALL_JSON_SET_I64
-            | ivm::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID
-            | ivm::syscalls::SYSCALL_SCHEMA_ENCODE
-            | ivm::syscalls::SYSCALL_SCHEMA_DECODE
-            | ivm::syscalls::SYSCALL_SCHEMA_INFO
-            | ivm::syscalls::SYSCALL_DECODE_INT
-            | ivm::syscalls::SYSCALL_ENCODE_INT
-            | ivm::syscalls::SYSCALL_BUILD_PATH_MAP_KEY
-            | ivm::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
-            | ivm::syscalls::SYSCALL_STATE_GET
-            | ivm::syscalls::SYSCALL_STATE_SET
-            | ivm::syscalls::SYSCALL_STATE_DEL
-            | ivm::syscalls::SYSCALL_GET_AUTHORITY
-            | ivm::syscalls::SYSCALL_CALL_CONTRACT
-            | ivm::syscalls::SYSCALL_CURRENT_TIME_MS
-            | ivm::syscalls::SYSCALL_SM3_HASH
-            | ivm::syscalls::SYSCALL_SM2_VERIFY
-            | ivm::syscalls::SYSCALL_SM4_GCM_SEAL
-            | ivm::syscalls::SYSCALL_SM4_GCM_OPEN
-            | ivm::syscalls::SYSCALL_SM4_CCM_SEAL
-            | ivm::syscalls::SYSCALL_SM4_CCM_OPEN
-            | ivm::syscalls::SYSCALL_VRF_VERIFY
-            | ivm::syscalls::SYSCALL_VRF_VERIFY_BATCH
-            | ivm::syscalls::SYSCALL_VRF_EPOCH_SEED
-            | ivm::syscalls::SYSCALL_ZK_VERIFY_TRANSFER
-            | ivm::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
-            | ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
-            | ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY
-            | ivm::syscalls::SYSCALL_ZK_VERIFY_BATCH
-            | ivm::syscalls::SYSCALL_PROVE_EXECUTION
-            | ivm::syscalls::SYSCALL_VERIFY_PROOF
-            | ivm::syscalls::SYSCALL_GET_MERKLE_PATH
-            | ivm::syscalls::SYSCALL_GET_MERKLE_COMPACT
-            | ivm::syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT
-    )
 }
 
 fn derive_from_isi_batch_with_state<R>(batch: &[InstructionBox], state_ro: Option<&R>) -> AccessSet
@@ -1768,8 +1663,8 @@ where
     R: StateReadOnly + QueryStateSource,
 {
     let bytecode_ref = bytecode.as_ref();
-    let parsed = ivm::ProgramMetadata::parse(bytecode_ref).ok()?;
-    let code_hash = IrohaHash::new(&bytecode_ref[parsed.header_len..]);
+    ivm::ProgramMetadata::parse(bytecode_ref).ok()?;
+    let code_hash = ivm::contract_code_hash(bytecode_ref);
     let manifest = state_ro.world().contract_manifests().get(&code_hash)?;
     manifest_access_set(
         manifest,
@@ -1997,10 +1892,10 @@ where
     // Supply accounts snapshot for vendor helpers to become deterministic.
     let accounts = state_ro.accounts_snapshot();
     let mut host = if let Some(context) = contract_call_context.as_ref() {
-        crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
+        crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_argument_record(
             authority.clone(),
             Arc::clone(&accounts),
-            context.args.clone(),
+            context.argument_record.clone(),
         )
     } else {
         crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
@@ -2124,16 +2019,19 @@ mod tests {
             source_domain,
             dest_domain: target_domain,
             nonce,
+            route_revision: 1,
             asset_home_domain: source_domain,
-            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
             asset_id: b"xor".to_vec(),
             amount: 5,
-            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
             sender: b"sora:bridge".to_vec(),
-            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
-            recipient: b"0x4444444444444444444444444444444444444444".to_vec(),
-            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            route_id: b"nexus:eth:xor".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_ADDRESS20,
+            recipient: vec![0x22; 20],
+            route_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+            route_id: iroha_sccp::SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1
+                .as_bytes()
+                .to_vec(),
         })
     }
 
@@ -2176,10 +2074,10 @@ mod tests {
     ) -> (iroha_data_model::bridge::BridgeProof, AccessKey) {
         let payload = sccp_transfer_payload(
             nonce,
-            iroha_sccp::SCCP_DOMAIN_ETH,
             iroha_sccp::SCCP_DOMAIN_SORA,
+            iroha_sccp::SCCP_DOMAIN_ETH,
         );
-        let commitment = iroha_sccp::hub_commitment_from_sccp_payload(&payload);
+        let commitment = crate::bridge::test_sccp_hub_commitment(&payload);
         let merkle_proof = iroha_sccp::SccpMerkleProofV1 { steps: Vec::new() };
         let commitment_root = iroha_sccp::merkle_root_from_commitment(&commitment, &merkle_proof);
         let bundle = iroha_sccp::NexusSccpMessageProofV1 {
@@ -2201,29 +2099,28 @@ mod tests {
             version: 1,
             message_id: commitment.message_id,
             payload_hash: commitment.payload_hash,
-            target_domain: commitment.target_domain,
+            target_domain: commitment.context.lane.target.domain_id(),
             commitment_root,
             finality_height: 20 + u64::from(proof_seed),
             finality_block_hash: [proof_seed; 32],
         };
-        let bundle_bytes = norito::to_bytes(&bundle).expect("bundle fixture should encode");
+        let destination_binding = iroha_sccp::SccpDestinationBindingV1 {
+            version: 1,
+            key: "access-test".to_owned(),
+            binding_hash: [0x77; 32],
+        };
         let artifact = iroha_sccp::NexusSccpMessageTransparentProofV1 {
             version: 1,
             local_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             counterparty_domain: iroha_sccp::SCCP_DOMAIN_ETH,
             security_model: iroha_sccp::SccpProofSecurityModelV1::RecursiveZk,
             anchor_governance: iroha_sccp::SccpAnchorGovernanceV1::CryptographicProof,
-            destination_binding: iroha_sccp::SccpDestinationBindingV1 {
-                version: 1,
-                key: "access-test".to_owned(),
-                binding_hash: [0x77; 32],
-            },
+            destination_binding: destination_binding.clone(),
             proof_family: proof_family.clone(),
             verifier_backend: verifier_backend.clone(),
             message_backend: message_backend.clone(),
             registry_backend: "sccp/registry/access-test".to_owned(),
             manifest_seed: "access-test".to_owned(),
-            finality_model: iroha_sccp::SccpProofFinalityModelV1::EthereumBeaconExecution,
             verifier_target: iroha_sccp::SccpProofVerifierTargetV1::EvmContract,
             public_inputs,
             proof_bytes: vec![0xA5, proof_seed],
@@ -2232,19 +2129,27 @@ mod tests {
                 proof_family,
                 verifier_backend,
                 envelope_encoding: "norito".to_owned(),
-                submission_kind: "local_admission".to_owned(),
+                submission_kind: "evm_groth16_contract_call".to_owned(),
                 verifier_entrypoint: "verify".to_owned(),
-                platform_payload: iroha_sccp::SccpPlatformSubmissionPayloadV1::LocalAdmission(
-                    iroha_sccp::SccpLocalAdmissionSubmissionPayloadV1 {
-                        version: 1,
-                        proof_bytes: vec![0xA5, proof_seed],
-                        public_inputs_bytes: vec![0xB6, proof_seed],
-                        bundle_bytes,
-                        statement_hash: [0x88; 32],
-                        source_verifier_material_hash: [0x89; 32],
-                        source_adapter_engine_deployment_hash: [0x8A; 32],
-                    },
-                ),
+                platform_payload:
+                    iroha_sccp::SccpPlatformSubmissionPayloadV1::EvmGroth16ContractCall(
+                        iroha_sccp::SccpEvmGroth16ContractSubmissionPayloadV1 {
+                            proof_bytes: vec![0xA5, proof_seed],
+                            public_inputs: iroha_sccp::SccpEvmWordPublicInputsV1 {
+                                message_id: public_inputs.message_id,
+                                payload_hash: public_inputs.payload_hash,
+                                target_domain_word: [0xB6; 32],
+                                commitment_root: public_inputs.commitment_root,
+                                finality_height_word: [0xB7; 32],
+                                finality_block_hash: public_inputs.finality_block_hash,
+                            },
+                            statement_hash: [0x88; 32],
+                            destination_binding,
+                            canonical_payload_bytes: iroha_sccp::canonical_sccp_payload_bytes(
+                                &bundle.payload,
+                            ),
+                        },
+                    ),
                 arguments: Vec::new(),
                 envelope_bytes: vec![0xE0, proof_seed],
             },
@@ -2275,6 +2180,45 @@ mod tests {
         (proof, expected_key)
     }
 
+    fn native_sccp_bridge_proof_fixture() -> (
+        iroha_data_model::bridge::BridgeProof,
+        iroha_data_model::bridge::SccpLaneIdV1,
+        [u8; 32],
+        AccessKey,
+    ) {
+        let (native, identity, anchor) = iroha_sccp::sccp_native_ethereum_inbound_test_fixture_v1();
+        let validated =
+            iroha_sccp::verify_sccp_native_inbound_message_proof_v1(&native, &identity, anchor)
+                .expect("native access fixture must validate");
+        let backend = native.source.proof.backend();
+        let encoded = iroha_sccp::encode_sccp_native_inbound_message_proof_v1(&native)
+            .expect("native access fixture must encode");
+        let proof = iroha_data_model::bridge::BridgeProof {
+            range: iroha_data_model::bridge::BridgeProofRange {
+                start_height: validated.source_finality.height,
+                end_height: validated.source_finality.height,
+            },
+            manifest_hash: [0x9A; 32],
+            payload: iroha_data_model::bridge::BridgeProofPayload::NativeProtocol(
+                iroha_data_model::bridge::BridgeNativeProtocolProofV1 {
+                    backend,
+                    encoded_envelope: encoded,
+                },
+            ),
+            pinned: true,
+        };
+        let key = key_sccp_native_bridge_message(
+            validated.message_key.lane,
+            validated.message_key.message_id,
+        );
+        (
+            proof,
+            validated.message_key.lane,
+            validated.message_key.message_id,
+            key,
+        )
+    }
+
     fn test_contract_artifact(
         code: Vec<u8>,
         access_set_hints: Option<iroha_data_model::smart_contract::manifest::AccessSetHints>,
@@ -2294,6 +2238,7 @@ mod tests {
                 name: entrypoint.name.clone(),
                 kind: entrypoint.kind,
                 params: entrypoint.params.clone(),
+                argument_schema: None,
                 return_type: entrypoint.return_type.clone(),
                 permission: entrypoint.permission.clone(),
                 read_keys: entrypoint.read_keys.clone(),
@@ -2305,11 +2250,13 @@ mod tests {
             })
             .collect();
         let interface = ivm::EmbeddedContractInterfaceV1 {
+            contract_name: "TestContract".to_owned(),
             compiler_fingerprint: "access-test".to_owned(),
             features_bitmap: 0,
             access_set_hints,
             kotoba: Vec::new(),
             entrypoints: embedded_entrypoints,
+            error_codes: Vec::new(),
             states: Vec::new(),
         };
         let mut artifact = meta.encode();
@@ -2324,43 +2271,231 @@ mod tests {
             name: "main".to_owned(),
             kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
             params: Vec::new(),
+            argument_schema: None,
             return_type: None,
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
-            access_hints_complete: None,
+            access_hints_complete: Some(true),
             access_hints_skipped: Vec::new(),
             triggers: Vec::new(),
         }
     }
 
     #[test]
-    fn select_entrypoint_defaults_only_to_public_main() {
+    fn select_entrypoint_requires_an_explicit_selector() {
         let mut main = default_test_entrypoint();
         main.read_keys = vec!["state:main".to_owned()];
         let mut run = default_test_entrypoint();
         run.name = "run".to_owned();
         run.read_keys = vec!["state:run".to_owned()];
-        let mut hajimari = default_test_entrypoint();
-        hajimari.name = "hajimari".to_owned();
-        hajimari.kind = iroha_data_model::smart_contract::manifest::EntryPointKind::Hajimari;
-        hajimari.read_keys = vec!["state:hajimari".to_owned()];
+        let mut initializer = default_test_entrypoint();
+        initializer.name = "hajimari".to_owned();
+        initializer.kind = iroha_data_model::smart_contract::manifest::EntryPointKind::Init;
+        initializer.read_keys = vec!["state:hajimari".to_owned()];
         let mut view_main = default_test_entrypoint();
         view_main.kind = iroha_data_model::smart_contract::manifest::EntryPointKind::View;
 
-        let entrypoints = vec![run.clone(), hajimari.clone(), main.clone()];
-        assert_eq!(
-            select_entrypoint(&entrypoints, None).map(|entrypoint| entrypoint.name.as_str()),
-            Some("main")
-        );
+        let entrypoints = vec![run.clone(), initializer.clone(), main.clone()];
+        assert!(select_entrypoint(&entrypoints, None).is_none());
         assert_eq!(
             select_entrypoint(&entrypoints, Some("run")).map(|entrypoint| entrypoint.name.as_str()),
             Some("run")
         );
 
-        let non_main_entrypoints = vec![run, hajimari];
+        let non_main_entrypoints = vec![run, initializer];
         assert!(select_entrypoint(&non_main_entrypoints, None).is_none());
         assert!(select_entrypoint(&[view_main], None).is_none());
+    }
+
+    fn state_get_test_program() -> Vec<u8> {
+        let mut program = ivm::ProgramMetadata::default().encode();
+        program.extend_from_slice(
+            &ivm::encoding::wide::encode_sys(
+                ivm::instruction::wide::system::SCALL,
+                u8::try_from(ivm::syscalls::SYSCALL_STATE_GET)
+                    .expect("syscall identifier fits in 8 bits"),
+            )
+            .to_le_bytes(),
+        );
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        program
+    }
+
+    #[test]
+    fn entrypoint_hints_require_explicit_complete_unskipped_attestation() {
+        let program = state_get_test_program();
+        let mut entrypoint = default_test_entrypoint();
+        entrypoint.read_keys = vec!["state:alpha".to_owned()];
+        entrypoint.write_keys = vec!["state:beta".to_owned()];
+
+        assert!(
+            entrypoint_access_set_if_safe(&program, &entrypoint).is_none(),
+            "exact CNTR keys are not a bytecode proof of the runtime state path"
+        );
+
+        entrypoint.read_keys = vec!["state:*".to_owned()];
+        entrypoint.write_keys.clear();
+        assert!(entrypoint_access_set_if_safe(&program, &entrypoint).is_some());
+
+        for completion in [None, Some(false)] {
+            entrypoint.access_hints_complete = completion;
+            assert!(entrypoint_access_set_if_safe(&program, &entrypoint).is_none());
+        }
+
+        entrypoint.access_hints_complete = Some(true);
+        entrypoint.access_hints_skipped = vec!["dynamic state path".to_owned()];
+        assert!(entrypoint_access_set_if_safe(&program, &entrypoint).is_none());
+    }
+
+    #[test]
+    fn incomplete_entrypoint_hints_do_not_fall_through_to_contract_hints() {
+        use iroha_data_model::smart_contract::manifest::AccessSetHints;
+
+        let program = state_get_test_program();
+        let code_hash = ivm::contract_code_hash(&program);
+        let contract_hints = AccessSetHints {
+            read_keys: vec!["state:contract-read".to_owned()],
+            write_keys: vec!["state:contract-write".to_owned()],
+            dynamic_reads: Vec::new(),
+            dynamic_writes: Vec::new(),
+        };
+
+        for (completion, skipped) in [
+            (None, Vec::new()),
+            (Some(false), Vec::new()),
+            (Some(true), vec!["dynamic state path".to_owned()]),
+        ] {
+            let mut entrypoint = default_test_entrypoint();
+            entrypoint.read_keys = vec!["state:entry-read".to_owned()];
+            entrypoint.write_keys = vec!["state:entry-write".to_owned()];
+            entrypoint.access_hints_complete = completion;
+            entrypoint.access_hints_skipped = skipped;
+            let manifest = ContractManifest {
+                contract_name: None,
+                code_hash: Some(code_hash),
+                abi_hash: None,
+                compiler_fingerprint: None,
+                features_bitmap: None,
+                access_set_hints: Some(contract_hints.clone()),
+                entrypoints: Some(vec![entrypoint]),
+                states: None,
+                kotoba: None,
+                error_codes: None,
+                provenance: None,
+            };
+
+            assert!(
+                manifest_access_set(&manifest, code_hash, &program, false, Some("main")).is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn dynamic_manifest_hints_are_not_scheduler_authoritative() {
+        use iroha_data_model::smart_contract::manifest::{AccessSetHints, DynamicAccessHint};
+
+        let program = state_get_test_program();
+        let dynamic_hint = DynamicAccessHint {
+            base_key: "state:Orders".to_owned(),
+            key_type: "int".to_owned(),
+            bound_kind: "range".to_owned(),
+            max_keys: 64,
+        };
+        for hints in [
+            AccessSetHints {
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                dynamic_reads: vec![dynamic_hint.clone()],
+                dynamic_writes: Vec::new(),
+            },
+            AccessSetHints {
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                dynamic_reads: Vec::new(),
+                dynamic_writes: vec![dynamic_hint],
+            },
+        ] {
+            assert!(manifest_hint_access_set_if_safe(&program, &hints).is_none());
+        }
+    }
+
+    #[test]
+    fn compiler_dynamic_state_writes_and_helper_writes_fall_back_to_global() {
+        let source = r#"
+seiyaku DynamicAccessCounter {
+  state Counters: StateMap<i64, i64>;
+
+  fn bump_hidden(key: i64, delta: i64) {
+    let current = Counters.get(key).unwrap_or(0);
+    Counters[key] = current + delta;
+  }
+
+  kotoage fn bump_direct(key: i64, delta: i64) authorize("CanEnactGovernance") {
+    let current = Counters.get(key).unwrap_or(0);
+    Counters[key] = current + delta;
+  }
+
+  kotoage fn bump_via_helper(key: i64, delta: i64) authorize("CanEnactGovernance") {
+    bump_hidden(key, delta);
+  }
+}
+"#;
+        let (program, manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(source)
+            .expect("compile dynamic-access contract");
+        let code_hash = ivm::contract_code_hash(&program);
+        let entrypoints = manifest
+            .entrypoints
+            .as_deref()
+            .expect("compiler manifest entrypoints");
+
+        for entrypoint_name in ["bump_direct", "bump_via_helper"] {
+            let entrypoint = entrypoints
+                .iter()
+                .find(|entrypoint| entrypoint.name == entrypoint_name)
+                .unwrap_or_else(|| panic!("missing `{entrypoint_name}` entrypoint"));
+            assert_eq!(entrypoint.access_hints_complete, Some(true));
+            assert!(entrypoint.access_hints_skipped.is_empty());
+            assert!(entrypoint.read_keys.contains(&"state:Counters".to_owned()));
+            assert!(entrypoint.write_keys.contains(&"state:Counters".to_owned()));
+            assert!(
+                manifest_access_set(&manifest, code_hash, &program, false, Some(entrypoint_name),)
+                    .is_none(),
+                "dynamic StateMap base hints must not be trusted as exact scheduler keys"
+            );
+        }
+
+        let (alice, key_pair) = iroha_test_samples::gen_account_in("wonderland");
+        for entrypoint_name in ["bump_direct", "bump_via_helper"] {
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                MANIFEST_METADATA_KEY
+                    .parse()
+                    .expect("manifest metadata key"),
+                iroha_primitives::json::Json::new(manifest.clone()),
+            );
+            metadata.insert(
+                "contract_entrypoint"
+                    .parse()
+                    .expect("contract entrypoint metadata key"),
+                iroha_primitives::json::Json::new(entrypoint_name.to_owned()),
+            );
+            insert_gas_limit(&mut metadata);
+            let transaction = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
+                .with_metadata(metadata)
+                .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program.clone())))
+                .sign(key_pair.private_key());
+
+            let (set, source) = derive_for_transaction_with_source::<crate::state::StateView<'_>>(
+                &transaction,
+                None,
+                IvmStrategy::Conservative,
+            );
+            assert!(set.write_keys.contains("*"));
+            assert!(!set.write_keys.contains("state:Counters"));
+            assert_eq!(source, Some(AccessSetSource::ConservativeFallback));
+        }
     }
 
     fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
@@ -2477,10 +2612,9 @@ mod tests {
     fn record_sccp_message_access_uses_outbound_message_key() {
         let payload =
             sccp_transfer_payload(1, iroha_sccp::SCCP_DOMAIN_SORA, iroha_sccp::SCCP_DOMAIN_ETH);
-        let instruction =
-            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
-                iroha_sccp::canonical_sccp_payload_bytes(&payload),
-            ));
+        let instruction = InstructionBox::from(crate::bridge::test_record_sccp_message(
+            iroha_sccp::canonical_sccp_payload_bytes(&payload),
+        ));
         let mut visited_triggers = BTreeSet::new();
 
         let set = derive_from_instruction(
@@ -2492,12 +2626,70 @@ mod tests {
         );
 
         let expected =
-            key_sccp_outbound_message(&crate::bridge::sccp_outbound_message_key(&payload));
+            key_sccp_outbound_message(&crate::bridge::test_sccp_outbound_message_key(&payload));
         assert_eq!(
             set.read_keys,
-            BTreeSet::from([NEXUS_ACTIVE_LANE_CATALOG_KEY.to_owned()])
+            BTreeSet::from([
+                NEXUS_ACTIVE_LANE_CATALOG_KEY.to_owned(),
+                SCCP_ON_CHAIN_REGISTRY_KEY.to_owned(),
+            ])
         );
         assert_eq!(set.write_keys, BTreeSet::from([expected]));
+    }
+
+    #[test]
+    fn record_sccp_message_access_separates_profiles_but_not_binding_rotations() {
+        use iroha_data_model::bridge::{SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1};
+
+        let payload =
+            sccp_transfer_payload(9, iroha_sccp::SCCP_DOMAIN_SORA, iroha_sccp::SCCP_DOMAIN_ETH);
+        let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&payload);
+        let mainnet = SccpOutboundMessageContextV1::new(
+            SccpLaneIdV1 {
+                source: SccpNetworkV1::SoraNexus,
+                target: SccpNetworkV1::EthereumMainnet,
+            },
+            [0x31; 32],
+        )
+        .expect("mainnet context");
+        let sepolia = SccpOutboundMessageContextV1::new(
+            SccpLaneIdV1 {
+                source: SccpNetworkV1::SoraNexus,
+                target: SccpNetworkV1::EthereumSepolia,
+            },
+            [0x32; 32],
+        )
+        .expect("Sepolia context");
+        let rotated = SccpOutboundMessageContextV1::new(mainnet.lane, [0x33; 32])
+            .expect("rotated mainnet binding");
+
+        let access_for = |context| {
+            let instruction =
+                InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                    context,
+                    payload_bytes.clone(),
+                ));
+            let mut visited_triggers = BTreeSet::new();
+            derive_from_instruction(
+                &instruction,
+                None::<&crate::state::StateView<'_>>,
+                &mut visited_triggers,
+                0,
+                0,
+            )
+        };
+
+        let mainnet_access = access_for(mainnet);
+        let sepolia_access = access_for(sepolia);
+        let rotated_access = access_for(rotated);
+        assert_ne!(
+            mainnet_access.write_keys, sepolia_access.write_keys,
+            "same-domain exact profiles must not alias one scheduler key"
+        );
+        assert_eq!(
+            mainnet_access.write_keys, rotated_access.write_keys,
+            "binding rotation must not create a replay-distinct scheduler key"
+        );
     }
 
     #[test]
@@ -2505,11 +2697,10 @@ mod tests {
         let payload =
             sccp_transfer_payload(3, iroha_sccp::SCCP_DOMAIN_SORA, iroha_sccp::SCCP_DOMAIN_ETH);
         let canonical_payload = iroha_sccp::canonical_sccp_payload_bytes(&payload);
-        let binary = InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
-            canonical_payload,
-        ));
+        let binary =
+            InstructionBox::from(crate::bridge::test_record_sccp_message(canonical_payload));
         let expected =
-            key_sccp_outbound_message(&crate::bridge::sccp_outbound_message_key(&payload));
+            key_sccp_outbound_message(&crate::bridge::test_sccp_outbound_message_key(&payload));
 
         let mut visited_triggers = BTreeSet::new();
         let set = derive_from_instruction(
@@ -2521,32 +2712,31 @@ mod tests {
         );
         assert_eq!(
             set.read_keys,
-            BTreeSet::from([NEXUS_ACTIVE_LANE_CATALOG_KEY.to_owned()])
+            BTreeSet::from([
+                NEXUS_ACTIVE_LANE_CATALOG_KEY.to_owned(),
+                SCCP_ON_CHAIN_REGISTRY_KEY.to_owned(),
+            ])
         );
         assert_eq!(set.write_keys, BTreeSet::from([expected]));
     }
 
     #[test]
     fn record_sccp_message_access_serializes_invalid_or_non_sora_payloads() {
-        let invalid =
-            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(vec![
-                0xFF,
-            ]));
+        let invalid = InstructionBox::from(crate::bridge::test_record_sccp_message(vec![0xFF]));
         let inbound_payload =
             sccp_transfer_payload(2, iroha_sccp::SCCP_DOMAIN_ETH, iroha_sccp::SCCP_DOMAIN_SORA);
-        let inbound = InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+        let inbound = InstructionBox::from(crate::bridge::test_record_sccp_message(
             iroha_sccp::canonical_sccp_payload_bytes(&inbound_payload),
         ));
         let hex_alias_payload =
             sccp_transfer_payload(4, iroha_sccp::SCCP_DOMAIN_SORA, iroha_sccp::SCCP_DOMAIN_ETH);
-        let hex_alias =
-            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
-                format!(
-                    "0x{}",
-                    hex::encode(iroha_sccp::canonical_sccp_payload_bytes(&hex_alias_payload))
-                )
-                .into_bytes(),
-            ));
+        let hex_alias = InstructionBox::from(crate::bridge::test_record_sccp_message(
+            format!(
+                "0x{}",
+                hex::encode(iroha_sccp::canonical_sccp_payload_bytes(&hex_alias_payload))
+            )
+            .into_bytes(),
+        ));
 
         for instruction in [&invalid, &inbound, &hex_alias] {
             let mut visited_triggers = BTreeSet::new();
@@ -2677,6 +2867,89 @@ mod tests {
             );
             assert_eq!(set, AccessSet::global());
         }
+    }
+
+    #[test]
+    fn submit_native_sccp_proof_access_uses_exact_lane_and_message_id() {
+        let (proof, lane, message_id, expected_key) = native_sccp_bridge_proof_fixture();
+        let instruction = InstructionBox::from(
+            iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof.clone()),
+        );
+        let mut visited_triggers = BTreeSet::new();
+        let set = derive_from_instruction(
+            &instruction,
+            None::<&crate::state::StateView<'_>>,
+            &mut visited_triggers,
+            0,
+            0,
+        );
+
+        assert_eq!(
+            expected_key,
+            format!(
+                "sccp.bridge.native:{}:{}:{}",
+                lane.source.profile_key(),
+                lane.target.profile_key(),
+                hex::encode(message_id)
+            )
+        );
+        assert!(set.write_keys.contains(&expected_key));
+        assert!(set.write_keys.contains(&key_bridge_proof_hash(
+            &bridge_proof_hash(&proof).expect("native proof hash")
+        )));
+        assert!(
+            set.write_keys
+                .contains(&key_bridge_backend(&proof.backend_label()))
+        );
+    }
+
+    #[test]
+    fn submit_native_sccp_access_serializes_alternate_wrappers_but_not_other_lanes() {
+        let (proof, lane, message_id, expected_key) = native_sccp_bridge_proof_fixture();
+        let mut alternate = proof.clone();
+        alternate.pinned = false;
+        for proof in [proof, alternate] {
+            let instruction =
+                InstructionBox::from(iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof));
+            let mut visited_triggers = BTreeSet::new();
+            let set = derive_from_instruction(
+                &instruction,
+                None::<&crate::state::StateView<'_>>,
+                &mut visited_triggers,
+                0,
+                0,
+            );
+            assert!(set.write_keys.contains(&expected_key));
+        }
+
+        let other_lane = iroha_data_model::bridge::SccpLaneIdV1 {
+            source: iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
+            target: lane.target,
+        };
+        let other_key = key_sccp_native_bridge_message(other_lane, message_id);
+        assert_ne!(expected_key, other_key);
+    }
+
+    #[test]
+    fn submit_malformed_native_sccp_proof_access_is_global() {
+        let (mut proof, _, _, _) = native_sccp_bridge_proof_fixture();
+        let iroha_data_model::bridge::BridgeProofPayload::NativeProtocol(native) =
+            &mut proof.payload
+        else {
+            panic!("native fixture payload")
+        };
+        native.encoded_envelope.push(0x00);
+        let instruction =
+            InstructionBox::from(iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof));
+        let mut visited_triggers = BTreeSet::new();
+        let set = derive_from_instruction(
+            &instruction,
+            None::<&crate::state::StateView<'_>>,
+            &mut visited_triggers,
+            0,
+            0,
+        );
+        assert_eq!(set, AccessSet::global());
     }
 
     #[test]
@@ -2836,7 +3109,11 @@ mod tests {
         // Expect an account.detail access for the authority under key "cursor".
         let k = key_account_detail(&alice, &"cursor".parse().unwrap());
         assert!(set.read_keys.contains(&k) && set.write_keys.contains(&k));
-        assert_eq!(source, Some(AccessSetSource::PrepassMerge));
+        assert!(
+            set.write_keys.contains("*"),
+            "a concrete prepass target cannot prove that a ledger-write target is stable after re-execution"
+        );
+        assert_eq!(source, Some(AccessSetSource::ConservativeFallback));
     }
 
     #[test]
@@ -2915,13 +3192,98 @@ mod tests {
     }
 
     #[test]
-    fn syscall_hint_filters_accept_u32_numbers() {
-        assert!(is_entrypoint_hint_safe_syscall(
-            ivm::syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT
+    fn bytecode_access_fence_serializes_state_and_nested_targets_conservatively() {
+        fn program_with_syscall(number: u32) -> Vec<u8> {
+            let mut program = ivm::ProgramMetadata::default().encode();
+            program.extend_from_slice(
+                &ivm::encoding::wide::encode_sys(
+                    ivm::instruction::wide::system::SCALL,
+                    u8::try_from(number).expect("test syscall fits in the encoded immediate"),
+                )
+                .to_le_bytes(),
+            );
+            program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+            program
+        }
+
+        let mut state_set = AccessSet::new();
+        state_set.add_write("state:Map/01".to_owned());
+        assert!(apply_unverified_ivm_access_fence(
+            &program_with_syscall(ivm::syscalls::SYSCALL_STATE_SET),
+            &mut state_set,
         ));
-        assert!(is_state_only_syscall(ivm::syscalls::SYSCALL_EXIT));
-        assert!(!is_entrypoint_hint_safe_syscall(0x1_0000));
-        assert!(!is_state_only_syscall(0x1_0000));
+        assert!(state_set.write_keys.contains("state:*"));
+        assert!(!state_set.write_keys.contains("*"));
+
+        let mut nested_set = AccessSet::new();
+        nested_set.add_write("state:Map/01".to_owned());
+        assert!(apply_unverified_ivm_access_fence(
+            &program_with_syscall(ivm::syscalls::SYSCALL_CALL_CONTRACT),
+            &mut nested_set,
+        ));
+        assert!(nested_set.write_keys.contains("*"));
+    }
+
+    #[test]
+    fn syscall_access_registry_fails_closed_for_unknown_numbers() {
+        use ivm::syscalls::SyscallAccess;
+
+        assert_eq!(
+            ivm::syscalls::syscall_access(ivm::syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT),
+            SyscallAccess::None
+        );
+        assert_eq!(
+            ivm::syscalls::syscall_access(ivm::syscalls::SYSCALL_STATE_GET),
+            SyscallAccess::StateRead
+        );
+        assert_eq!(
+            ivm::syscalls::syscall_access(ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED),
+            SyscallAccess::LedgerWrite
+        );
+        assert_eq!(
+            ivm::syscalls::syscall_access(0x00ff_fffe),
+            SyscallAccess::Dynamic
+        );
+    }
+
+    #[test]
+    fn helper_hidden_privileged_and_dynamic_syscalls_force_global_serialization() {
+        use ivm::instruction::wide;
+
+        for (label, syscall) in [
+            ("ledger write", ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED),
+            ("dynamic nested call", ivm::syscalls::SYSCALL_CALL_CONTRACT),
+        ] {
+            let code = [
+                ivm::encoding::wide::encode_offset24(wide::control::JALS, 2),
+                ivm::encoding::wide::encode_halt(),
+                ivm::encoding::wide::encode_syscallx(syscall),
+                ivm::encoding::wide::encode_rr(wide::control::JALR, 0, 1, 0),
+            ];
+            let mut program = ivm::ProgramMetadata::default().encode();
+            program.extend(code.into_iter().flat_map(u32::to_le_bytes));
+
+            assert!(
+                hint_access_set_if_safe(
+                    &program,
+                    &["state:forged-read".to_owned()],
+                    &["state:forged-write".to_owned()],
+                )
+                .is_none(),
+                "{label} hidden behind a helper trusted forged exact CNTR keys"
+            );
+
+            let mut dynamic_prepass_claim = AccessSet::new();
+            dynamic_prepass_claim.add_read("state:forged-read".to_owned());
+            assert!(
+                apply_unverified_ivm_access_fence(&program, &mut dynamic_prepass_claim),
+                "{label} did not activate the bytecode-derived access fence"
+            );
+            assert!(
+                dynamic_prepass_claim.write_keys.contains("*"),
+                "{label} did not force global serialization"
+            );
+        }
     }
 
     #[test]
@@ -3248,8 +3610,8 @@ mod tests {
 
         let mut prog = ivm::ProgramMetadata::default().encode();
         prog.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        let parsed = ivm::ProgramMetadata::parse(&prog).expect("header parse");
-        let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
+        ivm::ProgramMetadata::parse(&prog).expect("header parse");
+        let code_hash = ivm::contract_code_hash(&prog);
 
         let hints_a = AccessSetHints {
             read_keys: vec!["state:alpha".to_owned()],
@@ -3258,6 +3620,7 @@ mod tests {
             dynamic_writes: Vec::new(),
         };
         let manifest_a = ContractManifest {
+            contract_name: None,
             code_hash: Some(code_hash),
             abi_hash: None,
             compiler_fingerprint: None,
@@ -3266,6 +3629,7 @@ mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_codes: None,
             provenance: None,
         }
         .signed(&kp);
@@ -3292,6 +3656,7 @@ mod tests {
             dynamic_writes: Vec::new(),
         };
         let manifest_b = ContractManifest {
+            contract_name: None,
             code_hash: Some(code_hash),
             abi_hash: None,
             compiler_fingerprint: None,
@@ -3300,6 +3665,7 @@ mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_codes: None,
             provenance: None,
         }
         .signed(&kp);
@@ -3332,8 +3698,8 @@ mod tests {
 
         let mut prog = ivm::ProgramMetadata::default().encode();
         prog.extend_from_slice(&[0x01, 0x00]); // dummy body
-        let parsed = ivm::ProgramMetadata::parse(&prog).expect("header parse");
-        let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
+        ivm::ProgramMetadata::parse(&prog).expect("header parse");
+        let code_hash = ivm::contract_code_hash(&prog);
 
         let hints = AccessSetHints {
             read_keys: vec!["perm.account:historical-scoped-literal:can_transfer".to_owned()],
@@ -3342,6 +3708,7 @@ mod tests {
             dynamic_writes: Vec::new(),
         };
         let manifest = ContractManifest {
+            contract_name: None,
             code_hash: Some(code_hash),
             abi_hash: None,
             compiler_fingerprint: None,
@@ -3350,6 +3717,7 @@ mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_codes: None,
             provenance: None,
         }
         .signed(&kp);
@@ -3372,7 +3740,7 @@ mod tests {
     }
 
     #[test]
-    fn ivm_access_uses_manifest_entrypoint_hints_when_present() {
+    fn ivm_access_rejects_unproven_exact_state_entrypoint_hints() {
         use iroha_data_model::smart_contract::manifest::{
             AccessSetHints, ContractManifest, EntryPointKind, EntrypointDescriptor,
         };
@@ -3399,19 +3767,20 @@ mod tests {
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let mut prog = ivm::ProgramMetadata::default().encode();
         prog.extend_from_slice(&code);
-        let parsed = ivm::ProgramMetadata::parse(&prog).expect("header parse");
-        let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
+        ivm::ProgramMetadata::parse(&prog).expect("header parse");
+        let code_hash = ivm::contract_code_hash(&prog);
 
         let entrypoints = vec![
             EntrypointDescriptor {
                 name: "main".to_owned(),
                 kind: EntryPointKind::Public,
                 params: Vec::new(),
+                argument_schema: None,
                 return_type: None,
                 permission: None,
                 read_keys: vec!["state:alpha".to_owned()],
                 write_keys: vec!["state:beta".to_owned()],
-                access_hints_complete: None,
+                access_hints_complete: Some(true),
                 access_hints_skipped: Vec::new(),
                 triggers: Vec::new(),
             },
@@ -3419,16 +3788,18 @@ mod tests {
                 name: "run".to_owned(),
                 kind: EntryPointKind::Public,
                 params: Vec::new(),
+                argument_schema: None,
                 return_type: None,
                 permission: None,
                 read_keys: vec!["state:run-read".to_owned()],
                 write_keys: vec!["state:run-write".to_owned()],
-                access_hints_complete: None,
+                access_hints_complete: Some(true),
                 access_hints_skipped: Vec::new(),
                 triggers: Vec::new(),
             },
         ];
         let manifest = ContractManifest {
+            contract_name: None,
             code_hash: Some(code_hash),
             abi_hash: None,
             compiler_fingerprint: None,
@@ -3442,6 +3813,7 @@ mod tests {
             entrypoints: Some(entrypoints),
             states: None,
             kotoba: None,
+            error_codes: None,
             provenance: None,
         }
         .signed(&kp);
@@ -3462,13 +3834,14 @@ mod tests {
 
         let (set, source) =
             derive_for_transaction_with_source(&tx, Some(&state.view()), IvmStrategy::Conservative);
-        assert!(set.read_keys.contains("state:alpha"));
-        assert!(set.write_keys.contains("state:beta"));
+        assert!(set.write_keys.contains("*"));
+        assert!(!set.read_keys.contains("state:alpha"));
+        assert!(!set.write_keys.contains("state:beta"));
         assert!(!set.read_keys.contains("state:manifest-read"));
         assert!(!set.write_keys.contains("state:manifest-write"));
         assert!(!set.read_keys.contains("state:run-read"));
         assert!(!set.write_keys.contains("state:run-write"));
-        assert_eq!(source, Some(AccessSetSource::EntrypointHints));
+        assert_eq!(source, Some(AccessSetSource::ConservativeFallback));
     }
 
     #[test]
@@ -3499,22 +3872,24 @@ mod tests {
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let mut prog = ivm::ProgramMetadata::default().encode();
         prog.extend_from_slice(&code);
-        let parsed = ivm::ProgramMetadata::parse(&prog).expect("header parse");
-        let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
+        ivm::ProgramMetadata::parse(&prog).expect("header parse");
+        let code_hash = ivm::contract_code_hash(&prog);
 
         let entrypoints = vec![EntrypointDescriptor {
             name: "main".to_owned(),
             kind: EntryPointKind::Public,
             params: Vec::new(),
+            argument_schema: None,
             return_type: None,
             permission: None,
             read_keys: vec!["state:alpha".to_owned()],
             write_keys: vec!["state:beta".to_owned()],
-            access_hints_complete: None,
+            access_hints_complete: Some(true),
             access_hints_skipped: Vec::new(),
             triggers: Vec::new(),
         }];
         let manifest = ContractManifest {
+            contract_name: None,
             code_hash: Some(code_hash),
             abi_hash: None,
             compiler_fingerprint: None,
@@ -3523,6 +3898,7 @@ mod tests {
             entrypoints: Some(entrypoints),
             states: None,
             kotoba: None,
+            error_codes: None,
             provenance: None,
         }
         .signed(&kp);
@@ -3541,13 +3917,15 @@ mod tests {
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
             .sign(kp.private_key());
 
-        let set = derive_for_transaction(&tx, Some(&state.view()), IvmStrategy::Conservative);
+        let (set, source) =
+            derive_for_transaction_with_source(&tx, Some(&state.view()), IvmStrategy::Conservative);
         assert!(set.write_keys.contains("*"));
         assert!(!set.read_keys.contains("state:alpha"));
+        assert_eq!(source, Some(AccessSetSource::ConservativeFallback));
     }
 
     #[test]
-    fn ivm_access_uses_entrypoint_hints_for_isi_syscalls_with_wsv_keys() {
+    fn ivm_access_rejects_unproven_exact_ledger_entrypoint_hints() {
         use iroha_data_model::{
             asset::id::{AssetDefinitionId, AssetId},
             smart_contract::manifest::{ContractManifest, EntryPointKind, EntrypointDescriptor},
@@ -3575,8 +3953,8 @@ mod tests {
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let mut prog = ivm::ProgramMetadata::default().encode();
         prog.extend_from_slice(&code);
-        let parsed = ivm::ProgramMetadata::parse(&prog).expect("header parse");
-        let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
+        ivm::ProgramMetadata::parse(&prog).expect("header parse");
+        let code_hash = ivm::contract_code_hash(&prog);
 
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -3587,15 +3965,17 @@ mod tests {
             name: "main".to_owned(),
             kind: EntryPointKind::Public,
             params: Vec::new(),
+            argument_schema: None,
             return_type: None,
             permission: None,
             read_keys: vec![format!("account:{alice}")],
             write_keys: vec![format!("asset:{asset_id}")],
-            access_hints_complete: None,
+            access_hints_complete: Some(true),
             access_hints_skipped: Vec::new(),
             triggers: Vec::new(),
         }];
         let manifest = ContractManifest {
+            contract_name: None,
             code_hash: Some(code_hash),
             abi_hash: None,
             compiler_fingerprint: None,
@@ -3604,6 +3984,7 @@ mod tests {
             entrypoints: Some(entrypoints),
             states: None,
             kotoba: None,
+            error_codes: None,
             provenance: None,
         }
         .signed(&kp);
@@ -3624,9 +4005,9 @@ mod tests {
 
         let (set, source) =
             derive_for_transaction_with_source(&tx, Some(&state.view()), IvmStrategy::Conservative);
-        assert!(set.read_keys.contains(&format!("account:{alice}")));
-        assert!(set.write_keys.contains(&format!("asset:{asset_id}")));
-        assert_eq!(source, Some(AccessSetSource::EntrypointHints));
+        assert!(set.write_keys.contains("*"));
+        assert!(!set.write_keys.contains(&format!("asset:{asset_id}")));
+        assert_eq!(source, Some(AccessSetSource::ConservativeFallback));
     }
 
     #[test]

@@ -33,11 +33,12 @@ jobs:
         with:
           cache-on-failure: "true"
           workspaces: ".\n./wasm -> wasm32-unknown-unknown"
-      - name: Build binaries (irohad, iroha, kagami) (release)
+      - name: Build binaries (irohad, iroha, kagami, koto) (release)
         run: |
           cargo build --release --bin irohad --bin iroha --bin kagami
+          cargo build --release -p ivm --bin koto
           mkdir target/release/pre_build
-          mv target/release/irohad target/release/iroha target/release/kagami target/release/pre_build
+          mv target/release/irohad target/release/iroha target/release/kagami target/release/koto target/release/pre_build
       - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
@@ -74,6 +75,31 @@ jobs:
         run: |
           chmod +x -R bins
           ./scripts/tests/consistency.sh all
+
+  kotodama_docs:
+    runs-on: ubuntu-latest
+    container:
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
+    needs: pre_build
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Download canonical koto driver
+        uses: actions/download-artifact@v4
+        with:
+          name: bins
+          path: bins
+      - name: Make koto executable
+        run: chmod +x bins/koto
+      - name: Install pytest
+        run: python3 -m pip install --disable-pip-version-check pytest==8.4.2
+      - name: Unit-test Kotodama documentation checker
+        run: python3 -m pytest -q pytests/scripts/check_kotodama_docs_test.py
+      - name: Compile canonical Kotodama documentation fences
+        run: python3 scripts/check_kotodama_docs.py --koto bins/koto
 
   fmt:
     runs-on: ubuntu-latest

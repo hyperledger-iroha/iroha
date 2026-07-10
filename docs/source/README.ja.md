@@ -26,7 +26,7 @@
 
 ## 使い方メモ
 
-- `examples/` 以下のサンプルは外部ツール（`koto_compile`, `ivm_run` など）を利用して実行できます。
+- `examples/` 以下のサンプルは外部ツール（`koto build`, `ivm_run` など）を利用して実行できます。
   - `make examples-run`（`ivm_tool` が利用可能なら `make examples-inspect` も実行可能）
 - サンプルやヘッダ検証に関する追加の統合テストは `integration_tests/tests/` にあり、デフォルトではスキップされます。
 

@@ -54,6 +54,7 @@ fn contract_artifact(entrypoints: Vec<EntrypointDescriptor>) -> (Vec<u8>, Contra
             name: entrypoint.name.clone(),
             kind: entrypoint.kind,
             params: entrypoint.params.clone(),
+            argument_schema: None,
             return_type: entrypoint.return_type.clone(),
             permission: entrypoint.permission.clone(),
             read_keys: entrypoint.read_keys.clone(),
@@ -65,11 +66,13 @@ fn contract_artifact(entrypoints: Vec<EntrypointDescriptor>) -> (Vec<u8>, Contra
         })
         .collect();
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        contract_name: "TestContract".to_owned(),
         compiler_fingerprint: "contract-manifest-trigger-test".to_owned(),
         features_bitmap: 0,
         access_set_hints: None,
         kotoba: Vec::new(),
         entrypoints: embedded_entrypoints,
+        error_codes: Vec::new(),
         states: Vec::new(),
     };
     let mut code = Vec::new();
@@ -202,6 +205,7 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
         name: "run".to_string(),
         kind: EntryPointKind::Public,
         params: Vec::new(),
+        argument_schema: None,
         return_type: None,
         permission: None,
         read_keys: Vec::new(),
@@ -344,6 +348,7 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
         name: "run".to_string(),
         kind: EntryPointKind::Public,
         params: Vec::new(),
+        argument_schema: None,
         return_type: None,
         permission: None,
         read_keys: Vec::new(),
@@ -474,6 +479,7 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
         name: "run".to_string(),
         kind: EntryPointKind::Public,
         params: Vec::new(),
+        argument_schema: None,
         return_type: None,
         permission: None,
         read_keys: Vec::new(),
@@ -528,6 +534,7 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
         name: "arm".to_string(),
         kind: EntryPointKind::Public,
         params: Vec::new(),
+        argument_schema: None,
         return_type: None,
         permission: None,
         read_keys: Vec::new(),
@@ -625,6 +632,7 @@ fn activate_rejects_unresolved_cross_contract_manifest_trigger_callback() {
         name: "arm".to_string(),
         kind: EntryPointKind::Public,
         params: Vec::new(),
+        argument_schema: None,
         return_type: None,
         permission: None,
         read_keys: Vec::new(),
@@ -682,9 +690,8 @@ fn activate_registers_kotodama_compiled_manifest_triggers_from_source() {
     let source = format!(
         r#"
 seiyaku Test {{
-  kotoage fn run() {{}}
-  register_trigger asset_added {{
-    call run;
+  fn run() {{}}
+  trigger asset_added -> run {{
     on data asset added {{
       asset_definition "{asset_definition}";
     }}
@@ -693,8 +700,7 @@ seiyaku Test {{
       tag: "data";
     }}
   }}
-  register_trigger block_seen {{
-    call run;
+  trigger block_seen -> run {{
     on pipeline block approved;
     metadata {{
       tag: "pipeline";
@@ -707,8 +713,7 @@ seiyaku Test {{
     let (program, manifest) = ivm::KotodamaCompiler::new()
         .compile_source_with_manifest(&source)
         .expect("compile source with manifest");
-    let parsed = ivm::ProgramMetadata::parse(&program).expect("ivm header");
-    let code_hash = iroha_crypto::Hash::new(&program[parsed.header_len..]);
+    let code_hash = ivm::contract_code_hash(&program);
     let contract_address = contract_address(&authority, 0);
 
     RegisterSmartContractBytes {

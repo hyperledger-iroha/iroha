@@ -342,8 +342,6 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::bridge::SubmitBridgeProof>,
     dispatch_instruction::<iroha_data_model::isi::bridge::RecordBridgeReceipt>,
     dispatch_instruction::<iroha_data_model::isi::bridge::RecordSccpMessage>,
-    dispatch_instruction::<iroha_data_model::isi::bridge::UpsertSccpRouteManifest>,
-    dispatch_instruction::<iroha_data_model::isi::bridge::RemoveSccpRouteManifest>,
     dispatch_instruction::<confidential::PublishPedersenParams>,
     dispatch_instruction::<confidential::SetPedersenParamsLifecycle>,
     dispatch_instruction::<confidential::PublishPoseidonParams>,
@@ -357,7 +355,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::ministry::SubmitAgendaProposal>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeDeployContract>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>,
-    dispatch_instruction::<iroha_data_model::isi::governance::ProposeSccpRouteManifest>,
+    dispatch_instruction::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>,
     dispatch_instruction::<iroha_data_model::isi::governance::CastZkBallot>,
     dispatch_instruction::<iroha_data_model::isi::governance::CastPlainBallot>,
     dispatch_instruction::<iroha_data_model::isi::governance::EnactReferendum>,
@@ -796,6 +794,7 @@ mod tests {
             abi_version: 1,
         };
         let interface = ivm::EmbeddedContractInterfaceV1 {
+            contract_name: "TestContract".to_owned(),
             compiler_fingerprint: "isi-mod-test".to_owned(),
             features_bitmap: 0,
             access_set_hints: None,
@@ -804,6 +803,7 @@ mod tests {
                 name: "main".to_owned(),
                 kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
                 params: Vec::new(),
+                argument_schema: None,
                 return_type: None,
                 permission: None,
                 read_keys: Vec::new(),
@@ -813,6 +813,7 @@ mod tests {
                 triggers: Vec::new(),
                 entry_pc: 0,
             }],
+            error_codes: Vec::new(),
             states: Vec::new(),
         };
         let mut code = Vec::new();
@@ -3105,6 +3106,7 @@ mod tests {
         let alice = ALICE_ID.clone();
         let h = Hash::new(b"dummy_code");
         let manifest = manifest::ContractManifest {
+            contract_name: None,
             code_hash: Some(h),
             abi_hash: None,
             compiler_fingerprint: None,
@@ -3113,6 +3115,7 @@ mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_codes: None,
             provenance: None,
         };
 
@@ -3151,6 +3154,7 @@ mod tests {
         let alice = ALICE_ID.clone();
         let h = Hash::new(b"dummy_code");
         let manifest = manifest::ContractManifest {
+            contract_name: None,
             code_hash: Some(h),
             abi_hash: None,
             compiler_fingerprint: None,
@@ -3159,6 +3163,7 @@ mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_codes: None,
             provenance: None,
         }
         .signed(&checked_keypair());

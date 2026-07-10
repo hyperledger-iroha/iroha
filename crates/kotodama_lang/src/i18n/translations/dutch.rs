@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "De parameter `{name}` in functie `{func}` wordt nergens gebruikt",
     lint_unreachable_after_return: "Onbereikbare instructie gedetecteerd in {context}: code na return wordt nooit uitgevoerd",
     lint_ok: "ok",
-    lint_usage: "Gebruik: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Gebruik: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Voert de Kotodama-lints uit op de opgegeven bronnen.",
     ..english::MESSAGES
 };

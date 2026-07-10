@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "kigezo `{name}` kwenye kazi `{func}` hakitumiki kamwe",
     lint_unreachable_after_return: "tamko lisiloweza kufikiwa limegunduliwa katika {context}: msimbo baada ya return hautatekelezwa kamwe",
     lint_ok: "sawa",
-    lint_usage: "Matumizi: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Matumizi: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Endesha ukaguzi wa lint wa Kotodama kwenye chanzo kilichotolewa.",
     ..english::MESSAGES
 };

@@ -93,7 +93,7 @@ Validation and execution rules:
 
 ## `POST /v1/contracts/call`
 
-Prepares or submits a public contract call against an active deployed contract.
+Prepares or submits a `kotoage` call against an active deployed contract.
 
 ### Request (`ContractCallDto`)
 
@@ -105,7 +105,7 @@ Prepares or submits a public contract call against an active deployed contract.
 | `signature_b64` | `Option<String>` | Detached Ed25519 signature over `signing_message_b64`. |
 | `contract_address` | `Option<ContractAddress>` | Canonical target address. |
 | `contract_alias` | `Option<ContractAlias>` | Stable alias target. |
-| `entrypoint` | `Option<String>` | Defaults to `main`. Must resolve to a public entrypoint. |
+| `entrypoint` | `String` | Required. Must resolve to a `kotoage` declaration. |
 | `payload` | `Option<IrohaJson>` | Optional Norito JSON payload normalized against the manifest schema. |
 | `creation_time_ms` | `Option<u64>` | Optional fixed timestamp for deterministic detached flows. |
 | `gas_asset_id` | `Option<String>` | Optional metadata override. |
@@ -126,7 +126,7 @@ Submission-mode fields:
 
 ## `POST /v1/contracts/call/simulate`
 
-Executes a public contract entrypoint locally without queueing a transaction.
+Executes a `kotoage` entrypoint locally without queueing a transaction.
 
 - Request type: `ContractCallSimulateDto`.
 - Uses the same address-or-alias selector, entrypoint validation, payload

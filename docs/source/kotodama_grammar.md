@@ -1,450 +1,462 @@
-# Kotodama Language Grammar and Semantics
+# Kotodama V1 language specification
 
-This document specifies the Kotodama language syntax (lexing, grammar), typing rules, deterministic semantics, and how programs lower to IVM bytecode (.to) with Norito pointer-ABI conventions. Kotodama sources use the .ko extension. The compiler emits IVM bytecode (.to) and can optionally return a manifest.
+This document is the single normative source-language specification for the
+first Kotodama release. Translations, examples, editor grammars, generated
+tables, and compiler behavior are subordinate to it; a disagreement in the
+Rust compiler is an implementation bug.
 
-Contents
-- Overview and Goals
-- Lexical Structure
-- Types and Literals
-- Declarations and Modules
-- Contract Container and Metadata
-- Functions and Parameters
-- Local Testing
-- Statements
-- Expressions
-- Builtins and Pointer-ABI Constructors
-- Collections and Maps
-- Deterministic Iteration and Bounds
-- Errors and Diagnostics
-- Codegen Mapping to IVM
-- ABI, Header, and Manifest
-- Roadmap
+The machine-readable documentation policy is
+[`kotodama_v1_docs.json`](./kotodama_v1_docs.json). Pull-request CI extracts
+every tracked `kotodama` or `ko` source fence, plus every documented
+`cat > *.ko` heredoc, below its configured roots and checks the unique source
+contents with the canonical Rust `koto` driver.
 
-## Overview and Goals
+Kotodama compiles to deterministic Iroha Virtual Machine bytecode (`.to`). It is not a standalone RISC-V language. ABI version 1 is the only release ABI.
 
-- Deterministic: Programs must produce identical results across hardware; no floating point or nondeterministic sources. All host interactions happen through syscalls with Norito-encoded arguments.
-- Portable: Targets Iroha Virtual Machine (IVM) bytecode, not a physical ISA. RISC‑V–like encodings visible in the repository are implementation details of IVM decoding and must not change observable behavior.
-- Auditable: Small, explicit semantics; clear mapping of syntax to IVM opcodes and to host syscalls.
-- Boundedness: Loops over unbounded data must carry explicit bounds. Map iteration has strict rules to guarantee determinism.
+## Lexical grammar
 
-## Lexical Structure
+Source is UTF-8 and V1 identifiers are ASCII. Keywords are case-sensitive.
+Four branded declaration features each have a romanized Japanese spelling and
+its exact Japanese-language equivalent: `seiyaku`/`誓約`,
+`kotoage`/`言挙げ`, `hajimari`/`始まり`, and `kaizen`/`改善`.
+Those eight spellings are first-class keywords, not compatibility aliases.
+Other non-ASCII text is permitted only inside strings and comments; English
+`contract`, `entry`, `init`, and `upgrade` are not Kotodama V1 keywords.
 
-Whitespace and comments
-- Whitespace separates tokens and is otherwise insignificant.
-- Line comments start with `//` and run to end-of-line.
-- Block comments `/* ... */` do not nest.
+```ebnf
+identifier      = (ASCII-letter | "_") (ASCII-letter | ASCII-digit | "_")* ;
+integer-literal = decimal-literal | hexadecimal-literal | binary-literal ;
+decimal-literal = ASCII-digit (ASCII-digit | "_")* ;
+hexadecimal-literal = "0x" hex-digit (hex-digit | "_")* ;
+binary-literal  = "0b" ("0" | "1" | "_")+ ;
+string-literal  = '"' string-character* '"' ;
+bytes-literal   = "b" string-literal ;
+comment         = "//" non-newline-character* ;
+```
 
-Identifiers
-- Start: `[A-Za-z_]` then continue `[A-Za-z0-9_]*`.
-- Case-sensitive; `_` is a valid identifier but discouraged.
+String escapes are `\\`, `\"`, `\n`, `\r`, `\t`, `\0`, `\xNN`, and
+`\u{...}`. Raw and raw-byte strings preserve their contents without escape
+processing. Decimal fractions and exponent notation are not numeric literals in
+V1.
 
-Keywords (reserved)
-- `seiyaku`, `hajimari`, `kotoage`, `kaizen`, `state`, `struct`, `fn`, `let`, `const`, `return`, `if`, `else`, `while`, `for`, `in`, `break`, `continue`, `true`, `false`, `permission`, `kotoba`.
+The compiler applies the same mandatory frontend budgets in every driver: at
+most 1 MiB (1,048,576 UTF-8 bytes) per source file, 250,000 significant tokens
+including end-of-file, and 256 levels of syntactic nesting. The nesting budget
+is shared by active delimiters, generic type arguments, unary-prefix chains,
+and conditional-expression structure; combining individually shallow forms
+cannot evade it. Inputs beyond a budget fail with stable `K0001`, `K0002`, or
+`K0003` diagnostics before resolution or code generation. Parsing and cleanup
+at the inclusive boundary use explicit work stacks and must not consume the
+native call stack in proportion to source nesting.
 
-Operators and punctuation
-- Arithmetic: `+ - * / %`
-- Bitwise: `& | ^ ~`, shifts `<< >>`
-- Compare: `== != < <= > >=`
-- Logical: `&& || !`
-- Assign: `= += -= *= /= %= &= |= ^= <<= >>=`
-- Misc: `: , ; . :: ->`
-- Brackets: `() [] {}`
+## Source units
 
-Literals
-- Integer: decimal (`123`), hex (`0x2A`), binary (`0b1010`). All integers are signed 64-bit at runtime; literals without suffix are typed via inference or as `int` by default.
-- String: double-quoted with escapes (`\n`, `\r`, `\t`, `\0`, `\xNN`, `\u{...}`, `\"`, `\\`); UTF‑8. Raw strings `r"..."` or `r#"..."#` disable escapes and allow newlines.
-- Bytes: `b"..."` with escapes, or raw `br"..."` / `rb"..."`; yields a `bytes` literal.
-- Boolean: `true`, `false`.
+A deployable file contains exactly one named contract. A reusable file contains exactly one named module. A file cannot contain both, and source units cannot be nested.
 
-## Types and Literals
+```ebnf
+source          = seiyaku | module ;
+seiyaku         = seiyaku-keyword identifier "{" seiyaku-item* "}" ;
+seiyaku-keyword = "seiyaku" | "誓約" ;
+module          = "module" identifier "{" module-item* "}" ;
 
-Scalar types
-- `int`: 64-bit two’s-complement; arithmetic wraps modulo 2^64 for add/sub/mul; division has defined signed/unsigned variants in IVM; the compiler chooses the appropriate op for semantics.
-- `fixed_u128`, `Amount`, `Balance`: numeric aliases backed by Norito `Numeric` (signed decimal with up to 512-bit mantissa and scale). Kotodama treats these aliases as non-negative quantities; arithmetic is checked, preserves the alias, and traps on overflow or division by zero. Values created from `int` use scale 0; conversions to/from `int` are range-checked at runtime (non-negative, integral, fits in i64).
-- `bool`: logical truth value; lowered to `0`/`1`.
-- `string`: immutable UTF‑8 string; represented as Norito TLV when passed to syscalls; in-VM operations use byte slices and length.
-- `bytes`: raw Norito payload; aliases the pointer-ABI `Blob` type for hashing/crypto/proof inputs and durable overlays.
+seiyaku-item    = struct | error-enum | constant | state | function | kotoage
+                | view | hajimari | kaizen | trigger ;
+module-item     = struct | error-enum | constant | function ;
+```
 
-Composite types
-- `struct Name { field: Type, ... }` user-defined product types. Constructors use call syntax `Name(a, b, ...)` in expressions. Field access `obj.field` is supported and lowers to tuple-style positional fields internally. Durable state ABI on-chain is Norito-encoded; the compiler emits overlays that mirror the struct order and recent tests (`crates/iroha_core/tests/kotodama_struct_overlay.rs`) keep the layout locked in across releases.
-- `Map<K, V>`: deterministic associative map; semantics restrict iteration and mutations during iteration (see below).
-- `Tuple (T1, T2, ...)`: anonymous product type with positional fields; used for multi-return.
+Contract identity is the declared name; the compiler must preserve it through CST, AST, HIR, diagnostics, interfaces, and documentation. Modules are linked at typed HIR. Textual AST rewriting and wildcard imports are not part of V1.
 
-Special pointer-ABI types (host-facing)
-- `AccountId`, `AssetDefinitionId`, `Name`, `Json`, `NftId`, `Blob`, and similar are not first-class runtime types. They are constructors that yield typed, immutable pointers into the INPUT region (Norito TLV envelopes) and can only be used as syscall arguments or moved between variables without mutation.
+The following spellings and forms are errors: English declaration words
+`contract`, `entry`, `init`, and `upgrade`; implicit `main`; raw `call`
+statements; source-level `messages`/`kotoba` localization tables; source macros
+such as `account!` or `json!`; and multiple deployable units in one file.
+Contract failures use declared numeric error enums; presentation-layer
+localization is outside the deployable language. Constructors are ordinary
+typed calls (`AccountId::parse("...")`, `Json::parse("{...}")`); bytes use
+`b"..."`. There is no compatibility parser or edition switch.
 
-Type inference
-- Local `let` bindings infer type from initializer. Function parameters must be explicitly typed. Return types may be inferred unless ambiguous.
+## Declarations
 
-## Declarations and Modules
+```ebnf
+struct          = "struct" identifier "{" field (("," | ";") field)* ("," | ";")? "}" ;
+field           = identifier ":" type ;
 
-Top-level items
-- Contracts: `seiyaku Name { ... }` contain functions, state, structs, and metadata.
-- Multiple contracts per file are allowed but discouraged; one primary `seiyaku` is used as default entry in manifests.
-- `struct` declarations define user types within a contract.
-- `const NAME[: Type] = expr;` defines a contract-level compile-time constant. Current constant initializers are literal-safe expressions and may reference previously declared constants.
+error-enum      = "error" "enum" identifier "{"
+                  error-variant (("," | ";") error-variant)* ("," | ";")?
+                  "}" ;
+error-variant   = identifier "=" integer-literal ;
 
-Visibility
-- `kotoage fn` denotes a public entrypoint; visibility affects dispatcher permissions, not codegen.
-- Access metadata is compiler-owned. Manual `#[access(...)]` attributes are rejected; deployable compilation succeeds only when the compiler can emit complete read/write metadata without wildcard keys.
-- Local test attributes: `#[test]`, `#[テスト]`, and `#[test(fixture="name")]` mark local-only unit tests. These functions must be internal, zero-argument, and return no value. They are accepted by the parser in regular `.ko` files and are stripped automatically in production compilation mode.
+constant        = "const" identifier ":" type "=" expression ";" ;
+state           = "state" identifier ":" type ";" ;
 
-## Local Testing
+function        = "fn" identifier parameters return-type? block ;
+kotoage         = kotoage-keyword "fn" identifier parameters return-type?
+                  "authorize" "(" string-literal ")" block ;
+kotoage-keyword = "kotoage" | "言挙げ" ;
+view            = "view" "fn" identifier parameters return-type?
+                  authorization? block ;
+hajimari        = hajimari-keyword parameters block ;
+hajimari-keyword = "hajimari" | "始まり" ;
+kaizen          = kaizen-keyword parameters block ;
+kaizen-keyword  = "kaizen" | "改善" ;
+authorization   = "authorize" "(" string-literal ")" ;
+parameters      = "(" (parameter ("," parameter)*)? ")" ;
+parameter       = identifier ":" type ;
+return-type     = "->" type ;
 
-Kotodama test functions are local tooling only. They are not part of the on-chain manifest and should be compiled with the `koto_test` harness or with `koto_compile --mode test` when inspection/debug metadata should include test code.
+trigger         = "trigger" identifier "->" trigger-call "{"
+                  trigger-filter trigger-option* "}" ;
+trigger-call    = identifier ("::" identifier)? ;
+trigger-filter  = "on" (time-filter | execute-filter | data-filter | pipeline-filter) ";"? ;
+trigger-option  = "repeats" ("indefinitely" | integer-literal) ";"
+                | "authority" (identifier | string-literal) ";"
+                | "metadata" "{" metadata-entry* "}" ";"? ;
+metadata-entry  = (identifier | string-literal) ":" expression ";" ;
+time-filter     = "time" ("pre_commit" | "schedule" "(" integer-literal
+                  ("," integer-literal)? ")") ;
+execute-filter  = "execute" "trigger" (identifier | string-literal) ;
+data-filter     = "data" ("any" | identifier identifier "{" data-matcher* "}") ;
+data-matcher    = identifier (identifier | string-literal) ";" ;
+pipeline-filter = "pipeline" ("transaction" | "block") "approved"? ;
+```
 
-Inline test example
-```ko
-fn increment(x: int) -> int { return x + 1; }
+Every parameter, field, constant, and state declaration has an explicit type. Every error variant has an explicit, non-zero `u32` code, and names and codes are unique within the enum. Missing types, unknown types, duplicate declarations, reserved names, ambiguous resolution, recursive value types, duplicate parameters, and shadowing are compile errors.
 
-#[test]
-fn smoke() {
-  assert_eq(increment(1), 2);
+A `kotoage fn`/`言挙げ fn` mutates or submits ledger state and always declares
+caller authorization. Authorization is checked at runtime and is separate from
+compiler-derived effects and operation-specific host authorization. Views are
+public unless they add `authorize`. Lifecycle declarations never accept
+source-level authorization: ABI V1 requires the runtime-defined
+`CanRegisterSmartContractCode` permission for both `hajimari`/`始まり` and
+`kaizen`/`改善`.
+
+CLI and Torii callers may submit a JSON object keyed by parameter name. At that boundary, tooling validates it against the exact compiler-emitted `EntrypointArgumentSchemaV1` and converts it to a schema-bound `EntrypointArgumentRecordV1`. The VM receives only that canonical Norito record, decodes it once, and then reads a fixed table of typed ABI words; JSON is never the VM argument transport. Struct parameters use exact JSON objects, tuples use exact arrays, `Option<T>` uses exactly `{"some": value}` or `{"none": true}`, and `Result<T,E>` uses exactly `{"ok": value}` or `{"err": value}`. Unknown fields, duplicate schema names, alternate tags, non-canonical typed identifiers, schema-hash mismatches, and malformed typed atoms are rejected. A `Json` parameter is still a named field in the record and does not receive the whole outer boundary object.
+
+The V1 function-call convention has a fixed 13-word argument window (`r10` through `r22`). Every scalar or pointer leaf consumes one word, `Option<T>` and `Result<T,E>` additionally consume one tag word, and structs and tuples recursively consume the sum of their fields. A function whose complete flattened parameter list exceeds 13 words is rejected with `K2007`; arguments are never truncated and V1 has no hidden stack-argument convention.
+
+Self-describing IVM trigger actions select their callback explicitly with
+`contract_entrypoint` action metadata. When an event fires, the runtime validates
+that event's arguments against the selected callback schema and constructs the
+same canonical Norito record before starting the VM. Trigger metadata may not
+provide a fixed `contract_payload`, and host operations never interpret a null
+pointer or numeric zero as a request to re-read JSON trigger arguments.
+
+## Bindings and assignment
+
+`let` creates an immutable local. `var` creates a mutable local. Assigning to a `let`, parameter, constant, or immutable field is an error. Redeclaring or shadowing a name in an enclosing scope is an error.
+
+```ebnf
+binding         = "let" identifier (":" type)? "=" expression ";"
+                | "var" identifier (":" type)? "=" expression ";" ;
+assignment      = place ("=" | "+=" | "-=" | "*=" | "/=" | "%=") expression ";" ;
+```
+
+Every local binding is initialized at its declaration; there is no
+uninitialized-local state in V1.
+
+## Types
+
+The V1 type vocabulary is:
+
+- `i64`
+- `u128`
+- `bool`
+- `string`
+- `bytes`
+- `Amount`
+- `Json`
+- typed Iroha identifiers, including `AccountId`, `AssetDefinitionId`, `AssetId`, `NftId`, `DomainId`, `DataSpaceId`, and `Name`
+- declared structs and tuples
+- `Option<T>`
+- `Result<T, E>`
+- `StateMap<K, V>`
+- `Secret<T>` inside ZK contracts, subject to the information-flow rules below
+
+`Opaque`, `int`, `number`, `fixed_u128`, `String`, `Blob`, `Bytes`, `Balance`, and in-memory `Map` are not types in V1.
+Unit is an internal function-return state, not a source type: `()` and `(T)` are
+errors in type position. Omit the return type for a Unit-returning function;
+source tuple types always contain at least two elements.
+
+```ebnf
+type            = "i64" | "u128" | "bool" | "string" | "bytes"
+                | "Amount" | "Json" | iroha-id-type | identifier
+                | tuple-type | "Option" "<" type ">"
+                | "Result" "<" type "," type ">"
+                | "StateMap" "<" type "," type ">"
+                | "Secret" "<" type ">" ;
+tuple-type      = "(" type "," type ("," type)* ")" ;
+iroha-id-type   = "AccountId" | "AssetDefinitionId" | "AssetId"
+                | "NftId" | "DomainId" | "DataSpaceId" | "Name" ;
+```
+
+There are no implicit conversions. Numeric operations require identical operand
+types. Boolean values are not integers, and `Amount` remains nominally distinct
+from `u128` even though both use a canonical Norito numeric payload at the ABI.
+Pointer-ABI constructors return their declared typed ID or data type and cannot
+be substituted for one another.
+
+An unsuffixed integer literal (or one suffixed with adjacent `i64`) has type
+`i64`. A `u128` literal requires the adjacent `u128` suffix and may cover the
+complete range `0..=340282366920938463463374607431768211455`. Values above that
+range are lexical errors; a separated spelling such as `1 u128` is not a
+suffix. Canonical explicit conversions are `u128::from_i64(value)`,
+`Amount::from_i64(value)`, `Amount::from_u128(value)`, and
+`numeric::to_i64(value)`. Converting a negative `i64` to an unsigned type
+fails; there is no implicit literal, assignment, argument, return, comparison,
+or arithmetic conversion.
+
+## Control flow
+
+V1 supports `if`/`else`, `return`, and compiler-proven bounded `for` loops. It rejects `while`, recursion, indirect source calls, and loops whose bound cannot be proven.
+
+Collection iteration is deterministic and limited to 64 items. `StateMap`
+iteration follows canonical Norito key order and must use `.take(end)` or
+`.range(start, end)` with non-negative `i64` literals whose resulting span is
+at most 64. The former `#[bounded(N)]` spelling is not V1 syntax; `#[test]` is
+the only source attribute and is accepted only by test-mode tooling. `break`
+and `continue` are valid only inside an accepted bounded loop.
+
+`&&` and `||` short-circuit. The right operand is evaluated only when required.
+
+```ebnf
+block           = "{" statement* "}" ;
+statement       = binding | assignment | expression ";" | return-statement
+                | if-statement | for-statement | "break" ";" | "continue" ";" ;
+return-statement = "return" expression? ";" ;
+if-statement    = "if" expression block ("else" (block | if-statement))? ;
+for-statement   = "for" identifier "in" "range" "(" expression ")" block
+                | "for" "(" identifier "," identifier ")" "in"
+                  bounded-collection block ;
+bounded-collection = expression "." ("take" "(" i64-literal ")"
+                   | "range" "(" i64-literal "," i64-literal ")") ;
+
+expression      = conditional ;
+conditional     = logical-or ("?" expression ":" expression)? ;
+logical-or      = logical-and ("||" logical-and)* ;
+logical-and     = comparison ("&&" comparison)* ;
+comparison      = additive (("==" | "!=" | "<" | "<=" | ">" | ">=") additive)* ;
+additive        = multiplicative (("+" | "-") multiplicative)* ;
+multiplicative  = unary (("*" | "/" | "%") unary)* ;
+unary           = ("!" | "-") unary | postfix ;
+postfix         = primary (("." identifier) | ("[" expression "]")
+                | call-arguments)* ;
+primary         = i64-literal | u128-literal | string-literal | bytes-literal
+                | "true" | "false" | qualified-name
+                | qualified-name call-arguments | "(" expression ")"
+                | tuple-expression ;
+i64-literal     = integer ("i64")? ;
+u128-literal    = integer "u128" ;
+qualified-name  = identifier ("::" identifier)* ;
+call-arguments  = "(" (expression ("," expression)*)? ")" ;
+tuple-expression = "(" expression "," expression ("," expression)* ")" ;
+```
+
+`(expression)` is grouping and does not construct a one-element tuple. Bare
+`()` is not a source expression; use `return;` when a function returns no
+value. Tuple expressions, like tuple types, contain at least two elements.
+
+The grammar above describes source control flow, not an escape hatch around the
+bounded-loop rule. The compiler must prove the effective trip count and reject
+any collection traversal that could exceed 64 items.
+
+## Arithmetic
+
+Arithmetic is checked by default. Overflow, underflow, division by zero, remainder by zero, and negating `i64::MIN` produce a deterministic contract error and revert effects. Compile-time folding follows the same rules.
+
+Intentional modular arithmetic is written with explicit operations such as `math::wrapping_add`, `math::wrapping_sub`, `math::wrapping_mul`, and `math::wrapping_neg`. Ordinary operators never silently wrap.
+
+Relational operators use signed ordering for `i64` and unsigned ordering for
+`u128`. `numeric::neg` is not defined for `u128`. The ABI validates every
+numeric arithmetic operand and result against the `u128` integer domain, so a
+crafted arbitrary-precision `Numeric` payload cannot widen source-level
+`u128`; subtraction underflow, addition or multiplication overflow, and zero
+divisors fail deterministically.
+
+## Durable state
+
+Scalar contract state must be initialized by `hajimari`/`始まり` on every
+successful initializer path before it can be observed. `StateMap` is
+host-backed and does not require allocation in `hajimari`.
+
+`StateMap.get` returns `Option<V>`; absence is not represented by a zero, empty string, or implicit default. Rvalue indexing such as `map[key]` and compound indexed assignment such as `map[key] += value` are errors because both would read a possibly absent value without handling `Option<V>`. Simple `map[key] = value` remains the canonical per-key write form. The flat spelling `get(map, key)` is not a StateMap operation; only the receiver form `map.get(key)` invokes the intrinsic, while an unrelated user-declared function named `get` resolves normally. `StateMap.remove(key)` returns the removed `Option<V>` and is not permitted in views. Every scalar or aggregate state root and every `StateMap` value is encoded once as one canonical, schema-bound record under one durable key. Its domain-separated schema hash covers the exact type and named-field layout; mismatched schemas, malformed typed leaves, null active pointers, and non-canonical inactive sum branches are rejected. Nested `StateMap` values and unsupported leaves are compile errors. V1 map keys may be `i64`, `u128`, `Amount`, `bool`, `string`, `bytes`, or a typed Iroha identifier; aggregate, `Json`, optional, result, secret, and nested-map keys are rejected. Physical V1 key paths use reversible lowercase hexadecimal canonical-Norito bytes, so path order is canonical key-byte order without hash-collision ambiguity. Keys and map bases are capped at 4 KiB, and iteration pages are canonical and limited to 64 items.
+
+Compiler-derived access metadata is advisory until independently verified from bytecode. Unknown, dynamic, incomplete, or transitively unresolved access forces conservative scheduler serialization.
+
+## Errors and requirements
+
+Contracts declare error enums. A requirement has the form `require(condition, Error::Variant)`. Error variants compile to stable contract codes included in the public interface. Free-form failure strings are not part of the release contract.
+
+```kotodama
+seiyaku Vault {
+    error enum VaultError {
+        ZeroDeposit = 1,
+        NotReady = 2,
+    }
+
+    state balance: i64;
+
+    hajimari() {
+        balance = 0;
+    }
+
+    kotoage fn deposit(amount: i64) authorize("CanDeposit") {
+        require(amount > 0, VaultError::ZeroDeposit);
+        balance = balance + amount;
+    }
+
+    view fn ready() -> bool {
+        return balance > 0;
+    }
 }
 ```
 
-Runtime-style entrypoint example
-```ko
-seiyaku Demo {
-  kotoage fn run(count: int) -> int { return count + 1; }
+Assertions intended only for local tests or diagnostics must not replace public contract errors.
 
-  #[test]
-  fn smoke_runtime_path() {
-    let next = invoke_entrypoint("run", json("{\"count\": 7}"));
-    assert_eq(next, 8);
-  }
+## Local test mode
+
+`#[test]` functions, `fixture` declarations, `koto_test` targets, and the
+`test::` builtin namespace exist only when the compiler driver explicitly
+selects test mode. A production `check` or `build` rejects these constructs
+with `E_TEST_ONLY_PRODUCTION`; it never removes them silently before semantic
+analysis or artifact hashing. Typed HIR records whether test capabilities were
+enabled, and production code generation rejects test-capable HIR as well.
+
+The `koto test` driver is the explicit test-mode boundary. It compiles the full
+suite in test mode, then derives a test-free runtime contract for invocation;
+that runner-only derivation is not available to ordinary production builds.
+
+## Namespaced host API
+
+Source code uses namespaced capabilities. Representative roots are:
+
+- `context::authority`, `context::block_height`, and other immutable call context
+- `ledger::asset::transfer`, `ledger::asset::mint`, and `ledger::asset::burn`
+- `ledger::account::set_detail`
+- `state::get`, `state::set`, and `state::delete`
+- `crypto::sha256`, `crypto::sha3`, and signature/proof operations
+- `math::wrapping_add`, `math::isqrt`, and other deterministic arithmetic helpers
+- `debug::info` for diagnostics
+- `test::assert` and `test::assert_eq` in test builds only
+
+Flat aliases are errors. Allocation, heap growth, raw pointers, direct syscall variants, opaque instruction submission, and compiler `*_direct` helpers are not source APIs. The canonical builtin registry defines each capability's signature, effect, syscall, access behavior, gas class, and permitted execution modes.
+
+## Secrets and ZK contracts
+
+A ZK contract explicitly requests the ZK execution capability through its build configuration. Private input is represented only as `Secret<T>`. The V1 private-input syscall supplies one 64-bit word, so `Secret<i64>` is the only concrete secret payload in this release.
+
+Secret values may flow only to approved commitment, proof, and cryptographic declassification operations. The V1 declassifiers are `crypto::poseidon2`, `crypto::poseidon6`, `crypto::pubkgen`, and `crypto::valcom`; when one scalar input is secret, every scalar input must be secret. Their result is public.
+
+Secrets cannot influence public control flow, public returns, logs, error selection, state keys, state values, ledger writes, host queries, contract calls, ordinary arithmetic, comparisons, collection indices, or assertions. They cannot appear in public parameters or return types. A raw secret is never a nullifier or public commitment: `crypto::use_nullifier` accepts only an already-public commitment.
+
+The compiler performs fail-closed information-flow analysis across the complete call graph.
+
+## Resource limits
+
+The compiler rejects inputs exceeding any V1 hard limit:
+
+| Resource | Limit |
+|---|---:|
+| UTF-8 source | 1 MiB |
+| Tokens, including EOF | 250,000 |
+| Delimiter/parse nesting | 256 |
+| Collection iteration | 64 items |
+| Typed module graph | 512 sources / 16 MiB total |
+| Default artifact cycle ceiling | 1,000,000 |
+
+The node's configured admission ceiling is authoritative. The
+`pipeline.ivm_max_cycles_upper_bound` setting is a mandatory positive integer
+(default `1_000_000`); it is accepted only from the node configuration file,
+configuration loading rejects zero, and neither environment variables nor
+consensus custom parameters can override or disable it. The selected positive
+cycle ceiling is embedded in the execution header and therefore covered by the
+canonical artifact hash.
+
+## Tooling and build configuration
+
+`koto` is the only source-language command in V1:
+
+```text
+koto check contract.ko
+koto build contract.ko --max-cycles 1000000
+koto check --zk proof_contract.ko
+koto build --zk proof_contract.ko
+koto test contract.test.ko
+koto fmt contract.ko
+koto doc contract.ko
+koto explain K0001
+koto lsp
+```
+
+`--zk` is an explicit build capability, not source metadata. It is required for
+`Secret<T>` and the approved proof/commitment operations; ordinary builds reject
+those constructs. It does not make ABI, vector, or pointer policy selectable.
+
+`koto fmt` and LSP formatting consume the compiler's lossless token stream.
+They refuse syntactically invalid input, preserve comments and literal spelling,
+and canonicalize four-space indentation, declaration spacing, operators, and
+block layout. Formatting is idempotent and fails rather than producing a source
+larger than the mandatory 1 MiB limit. `koto fmt --check` performs no writes.
+LSP validation uses the check pipeline, so reusable `module` files are analyzed
+without the deployable-contract-only artifact pass. A multi-source
+`koto check --format json|sarif` invocation emits exactly one machine-readable
+document with the combined, deterministically ordered diagnostic set. LSP
+framing, individual documents, open-document count, and aggregate retained text
+all have explicit bounds; rejected updates are not retained as stale formatter
+input.
+
+The test driver supports deterministic discovery and selection:
+
+```text
+koto test list contract.test.ko
+koto test run --filter exact_test_name --exact --jobs 4 --seed 7 contract.test.ko
+koto test run --format json contract.test.ko
+koto test run --junit target/kotodama-tests.xml contract.test.ko
+koto test run --zk zk_contract.test.ko
+```
+
+The Rust compiler library behind `koto` is canonical. `iroha contract dev` and
+Musubi call that library in process. Content-addressed build authentication runs
+before parsing or typed-HIR linking, so an unchanged project performs no
+compiler work and rewrites no outputs. Node.js calls the compiler asynchronously
+through `iroha_js_host`; browsers use an explicit compiler-service client. SDK
+adapters enforce the same 1 MiB UTF-8 source limit before native or network
+dispatch. There is no independent JavaScript compiler or offline browser
+compiler.
+
+ABI version, vector width, execution-mode bits, and compiler features are not source declarations or user-selectable language metadata. Build configuration may request a permitted execution capability such as ZK and may select a positive cycle ceiling no greater than node admission policy. Source-level `meta` blocks are errors.
+
+## Contract artifact
+
+The canonical `code_hash` is a domain-separated hash of the complete deployable `.to` image: every execution-header field, the embedded contract interface (CNTR), typed literals, and executable code.
+
+Debug information and source maps are forbidden inside deployable artifacts. They are hash-keyed sidecars whose `artifact_hash` identifies the exact `.to` image.
+
+Nodes validate direct control-flow targets, allowed ABI-v1 syscalls, pointer-ABI types, interface structure, code/ABI hashes, and signed manifest equality. Compiler fingerprints are informational and are not security claims.
+
+## Example
+
+```kotodama
+seiyaku Counter {
+    state value: i64;
+
+    hajimari() {
+        value = 0;
+    }
+
+    kotoage fn increment(delta: i64) -> i64 authorize("CanIncrementCounter") {
+        let next = value + delta;
+        value = next;
+        return next;
+    }
+
+    view fn current() -> i64 {
+        return value;
+    }
 }
 ```
 
-`invoke_entrypoint(...)` is only available inside `#[test]` functions. It drives the real public/view entrypoint wrapper in test mode, so payload decoding follows the same `Json` ABI path as normal runtime execution.
-
-Standalone test-file example
-```ko
-koto_test { target: "contracts/demo.ko" }
-
-fixture seeded {
-  caller("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
-}
-
-#[test(fixture="seeded")]
-fn smoke() {
-  assert_eq(increment(4), 5);
-}
-```
-
-Fixture blocks are interpreted by the local harness, not by the deployable contract artifact. Current fixture actions are declarative setup helpers such as `caller(...)`, `register_account(...)`, `grant_permission(...)`, `register_domain(...)`, `register_asset_definition(...)`, `set_balance(...)`, `set_account_detail(...)`, `state_set(...)`, and `public_input(...)`.
-
-Tooling
-- `koto_compile --mode production`: default, strips `#[test]`, fixtures, and standalone `koto_test` headers before semantic/codegen phases.
-- `koto_compile --mode test`: keeps test-only items in the local artifact/debug report.
-- `koto_test run <path>`: discovers inline tests plus matching standalone `*.test.ko` / `tests/**/*.ko` files and runs each test in isolation.
-- `koto_test coverage <path>`: runs the same suite and reports bytecode-region/function coverage for non-test functions.
-- `koto_test profile <path>`: emits JSONL runtime traces with PCs, function mapping, and changed registers.
-
-## Contract Container and Metadata
-
-Syntax
-```
-seiyaku Name {
-  meta {
-    abi_version: 1,
-    vector_length: 0,
-    max_cycles: 0,
-    features: ["zk", "simd"],
-  }
-
-  state int counter;
-
-  hajimari() { counter = 0; }
-
-  kotoage fn inc() { counter = counter + 1; }
-}
-```
-
-Semantics
-- `meta { ... }` fields override compiler defaults for the emitted IVM header: `abi_version`, `vector_length` (0 means unset), `max_cycles` (0 means compiler default), `features` toggles header feature bits (ZK tracing, vector announce). The compiler treats `max_cycles: 0` as “use default” and emits the configured non‑zero default to satisfy admission requirements. Unsupported features are ignored with a warning. When `meta {}` is omitted, the compiler emits `abi_version = 1` and uses the option defaults for the remaining header fields.
-- `features: ["zk", "simd"]` (aliases: `"vector"`) explicitly requests the corresponding header bits. Unknown feature strings now produce a parser error instead of being ignored.
-- `state` declares durable contract variables. The compiler lowers accesses into `STATE_GET/STATE_SET/STATE_DEL` syscalls and the host stages them in a per-transaction overlay (checkpoint/restore rollback, flush-on-commit into WSV). Literal state paths emit exact keys, dynamic state-map keys emit map-level conflict keys, and bounded dynamic iteration emits structured dynamic access descriptors. Raw dynamic `state_get/state_set/state_del` paths are rejected for production artifacts unless the compiler can prove a precise state key.
-- State identifiers are reserved; shadowing a `state` name in parameters or `let` bindings is rejected (`E_STATE_SHADOWED`).
-- State map values are not first-class: use the state identifier directly for map operations and iteration. Binding or passing state maps to user-defined functions is rejected (`E_STATE_MAP_ALIAS`).
-- Durable state maps currently support `int` and pointer-ABI key types only; other key types are rejected at compile time.
-- Durable state fields must be `int`, `bool`, `Json`, `Blob`/`bytes`, or pointer-ABI types (including structs/tuples composed of these fields); `string` is not supported for durable state.
-
-### Kotoba localization
-Syntax
-```
-kotoba {
-  "E_UNBOUNDED_ITERATION": { en: "Loop over map lacks a bound." }
-}
-```
-
-Semantics
-- `kotoba` entries attach translation tables to the contract manifest (`kotoba` field).
-- Message IDs and language tags accept identifiers or string literals; entries must be non-empty.
-- Duplicate `msg_id` + language tag pairs are rejected at compile time.
-
-## Trigger Declarations
-
-Trigger declarations attach scheduling metadata to entrypoint manifests and are auto-registered
-when a contract instance is activated (removed on deactivation). They are parsed inside a
-`seiyaku` block.
-
-Syntax
-```
-register_trigger wake {
-  call run;
-  on time pre_commit;
-  repeats 2;
-  authority "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
-  metadata { tag: "alpha"; count: 1; enabled: true; }
-}
-```
-
-Notes
-- `call` must reference a public `kotoage fn` entrypoint in the same contract; an optional
-  `namespace::entrypoint` is recorded in the manifest but cross-contract callbacks are rejected
-  by the runtime for now (local callbacks only).
-- Supported filters: `time pre_commit` and `time schedule(start_ms, period_ms?)`, plus
-  `execute trigger <name>` for by-call triggers, `data any`, and pipeline filters
-  (`pipeline transaction`, `pipeline block`, `pipeline merge`, `pipeline witness`).
-- `authority` optionally overrides the trigger authority (AccountId string literal). If omitted,
-  the runtime uses the contract-activation authority.
-- Metadata values must be JSON literals (`string`, `number`, `bool`, `null`) or `json!(...)`.
-- Runtime-injected trigger metadata keys: `contract_address`, optional
-  `contract_alias`, `contract_entrypoint`, `contract_code_hash`,
-  `contract_trigger_id`.
-
-## Functions and Parameters
-
-Syntax
-- Declaration: `fn name(param1: Type, param2: Type, ...) -> Ret { ... }`
-- Public: `kotoage fn name(...) { ... }`
-- Initializer: `hajimari() { ... }` (invoked on deploy by the runtime, not by the VM itself).
-- Upgrade hook: `kaizen(args...) permission(Role) { ... }`.
-
-Parameters and returns
-- Arguments are passed in registers `r10..r22` as values or INPUT pointers (Norito TLV) per ABI; additional args spill to stack.
-- Functions return zero or one scalar or tuple. Primary return value is in `r10` for scalar; tuples are materialized in stack/OUTPUT by convention.
-
-## Statements
-
-- Variable bindings: `let x = expr;`, `let mut x = expr;` (mutability is a compile-time check; runtime mutation is allowed for locals only).
-- Assignment: `x = expr;` and compound forms `x += 1;` etc. Targets must be variables or map indices; tuple/struct fields are immutable.
-- Numeric aliases (`fixed_u128`, `Amount`, `Balance`) are distinct `Numeric`-backed types; arithmetic preserves the alias and mixing aliases requires converting through an `int` binding. Conversions to/from `int` are checked at runtime (non-negative, integral, range-limited).
-- Control: `if (cond) { ... } else { ... }`, `while (cond) { ... }`, C-style `for (init; cond; step) { ... }`.
-  - `for` initializers and steps must be simple `let name = expr` or expression statements; complex destructuring is rejected (`E0005`, `E0006`).
-  - `for` scoping: bindings from the init clause are visible in the loop and after it; bindings created in the body or step do not escape the loop.
-- Equality (`==`, `!=`) is supported for `int`, `bool`, `string`, pointer-ABI scalars (e.g., `AccountId`, `Name`, `Blob`/`bytes`, `Json`); tuples, structs, and maps are not comparable.
-- Map loop: `for (k, v) in map { ... }` (deterministic; see below).
-- Flow: `return expr;`, `break;`, `continue;`.
-- Call: `name(args...);` or `call name(args...);` (both accepted; compiler normalizes to call statements).
-- Assertions: `assert(cond);`, `assert_eq(a, b);` map to IVM `ASSERT*` in non-ZK builds or ZK constraints in ZK mode.
-
-## Expressions
-
-Precedence (high → low)
-1. Member/index: `a.b`, `a[b]`
-2. Unary: `! ~ -`
-3. Multiplicative: `* / %`
-4. Additive: `+ -`
-5. Shifts: `<< >>`
-6. Relational: `< <= > >=`
-7. Equality: `== !=`
-8. Bitwise AND/XOR/OR: `& ^ |`
-9. Logical AND/OR: `&& ||`
-10. Ternary: `cond ? a : b`
-
-Calls and tuples
-- Calls use positional arguments: `f(a, b, c)`.
-- Tuple literal: `(a, b, c)` and destructure: `let (x, y) = pair;`.
-- Tuple destructuring requires tuple/struct types with matching arity; mismatches are rejected.
-
-Strings and bytes
-- Strings are UTF‑8; raw string and byte literal forms are accepted in source.
-- Byte literals (`b"..."`, `br"..."`, `rb"..."`) lower to `bytes` (Blob) pointers; wrap with `norito_bytes(...)` when a syscall expects NoritoBytes TLV payloads.
-
-## Builtins and Pointer-ABI Constructors
-
-Pointer constructors (emit Norito TLV into INPUT and return a typed pointer)
-- `account_id(string) -> AccountId*`
-- `asset_definition(string) -> AssetDefinitionId*`
-- `asset_id(string) -> AssetId*`
-- `domain(string) | domain_id(string) -> DomainId*`
-- `name(string) -> Name*`
-- `json(string) -> Json*`
-- `nft_id(string) -> NftId*`
-- `blob(bytes|string) -> Blob*`
-- `norito_bytes(bytes|string) -> NoritoBytes*`
-- `dataspace_id(string|0xhex) -> DataSpaceId*`
-- `axt_descriptor(string|0xhex) -> AxtDescriptor*`
-- `asset_handle(string|0xhex) -> AssetHandle*`
-- `proof_blob(string|0xhex) -> ProofBlob*`
-
-Prelude macros provide shorter aliases and inline validation for these constructors:
-- `account!("<i105-account-id>")`, `account_id!("<i105-account-id>")`
-- `asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`, `asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
-- `domain!("wonderland")`, `domain_id!("wonderland")`
-- `name!("example")`
-- `json!("{\"hello\":\"world\"}")` or structured literals such as `json!{ hello: "world" }`
-- `nft_id!("dragon$demo")`, `blob!("bytes")`, `norito_bytes!("...")`
-
-The macros expand to the constructors above and reject invalid literals at compile time.
-
-Implementation status
-- Implemented: constructors above accept string literal arguments and lower to typed Norito TLV envelopes placed in the INPUT region. They return immutable typed pointers usable as syscall arguments. Non-literal string expressions are rejected; use `Blob`/`bytes` for dynamic inputs. `blob`/`norito_bytes` also accept `bytes`-typed values at runtime without macro shims.
-- Extended forms:
-  - `json(Blob[NoritoBytes]) -> Json*` via `JSON_DECODE` syscall.
-  - `name(Blob[NoritoBytes]) -> Name*` via `NAME_DECODE` syscall.
-  - Pointer decode from Blob/NoritoBytes: any pointer constructor (including AXT types) accepts a `Blob`/`NoritoBytes` payload and lowers to `POINTER_FROM_NORITO` with the expected type id.
-  - Pass-through for pointer forms: `name(Name) -> Name*`, `blob(Blob) -> Blob*`, `norito_bytes(Blob) -> Blob*`.
-  - Method sugar is supported: `s.name()`, `s.json()`, `b.blob()`, `b.norito_bytes()`.
-
-Host/syscall builtins (map to SCALL; exact numbers in ivm.md)
-- `mint_asset(AccountId*, AssetDefinitionId*, numeric)`
-- `burn_asset(AccountId*, AssetDefinitionId*, numeric)`
-- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, numeric, DataSpaceId*)`
-- `set_account_detail(AccountId*, Name*, Json*)`
-- `execute_instruction(Blob[NoritoBytes])`
-- `execute_query(Blob[NoritoBytes]) -> Blob`
-- `subscription_bill()`
-- `subscription_record_usage()`
-- `nft_mint_asset(NftId*, AccountId*)`
-- `nft_transfer_asset(AccountId*, NftId*, AccountId*)`
-- `nft_set_metadata(NftId*, Name*, Json*)`
-- `nft_burn_asset(NftId*)`
-- `authority() -> AccountId*`
-- `trigger_event() -> Json*` (current trigger-event payload; data/by-call trigger context)
-- ZK verify helpers (`zk_verify_*`, `zk_vote_verify_*`) set host verification latches; public entrypoints that call them require `permission(...)`, and `view` functions cannot call them.
-- `register_domain(DomainId*)`
-- `unregister_domain(DomainId*)`
-- `transfer_domain(AccountId*, DomainId*, AccountId*)`
-- `vrf_verify(Blob, Blob, Blob, int variant) -> Blob`
-- `vrf_verify_batch(Blob) -> Blob`
-- `axt_begin(AxtDescriptor*)`
-- `axt_touch(DataSpaceId*, Blob[NoritoBytes]? manifest)`
-- `verify_ds_proof(DataSpaceId*, ProofBlob?)`
-- `use_asset_handle(AssetHandle*, Blob[NoritoBytes], ProofBlob?)`
-- `axt_commit()`
-- `map.contains(key) -> bool`
-- `map.get_or(key, default) -> V`
-- `map.ensure(key, default) -> V`
-- `name.path(segment) -> Name`
-- `json.get_int(key)`, `json.get_numeric(key)`, `json.get_json(key)`, `json.get_name(key)`, `json.get_account_id(key)`, `json.get_asset_definition_id(key)`, `json.get_nft_id(key)`, `json.get_blob_hex(key)`
-
-Utility builtins
-- `info(string|int)`: emits a structured event/message via OUTPUT.
-- `hash(blob) -> Blob*`: returns a Norito-encoded hash as Blob.
-- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` and `build_unshield_inline(asset, to, amount, inputs32, [outputs32,] backend, proof, vk) -> Blob*`: inline ISI builders; all arguments must be compile-time literals (string literals or pointer constructors from literals). `nullifier32` must be exactly 32 bytes, `inputs32` must contain one or more 32-byte chunks, optional `outputs32` must contain zero or more 32-byte chunks, and `amount` must be non-negative.
-- `schema_info(Name*) -> Json* { "id": "<hex>", "version": N }`
-- `encode_schema(Name*, Json*) -> Blob`: encodes JSON using the host schema registry (DefaultRegistry supports `QueryRequest` and `QueryResponse` in addition to Order/Trade samples).
-- `decode_schema(Name*, Blob|bytes) -> Json*`: decodes Norito bytes using the host schema registry.
-- `pointer_to_norito(ptr) -> NoritoBytes*`: wraps an existing pointer-ABI TLV as NoritoBytes for storage or transport.
-- `isqrt(int) -> int`: integer square root (`floor(sqrt(x))`) implemented as an IVM opcode.
-- `min(int, int) -> int`, `max(int, int) -> int`, `abs(int) -> int`, `div_ceil(int, int) -> int`, `gcd(int, int) -> int`, `mean(int, int) -> int` — fused arithmetic helpers backed by native IVM opcodes (ceil division traps on divide-by-zero).
-
-Notes
-- Builtins are thin shims; the compiler lowers them to register moves and a `SCALL`.
-- Pointer constructors are pure: the VM ensures the Norito TLV in INPUT is immutable for the call duration.
- - Structs with pointer-ABI fields (e.g., `DomainId`, `AccountId`) can be used to group syscall arguments ergonomically. The compiler maps `obj.field` to the correct register/value without extra allocations.
-
-## Collections and Maps
-
-Type: `Map<K, V>`
-- In-memory maps (heap-allocated via `Map::new()` or passed as parameters) store a single key/value pair; keys and values must be word-sized types: `int`, `bool`, `string`, `Blob`, `bytes`, `Json`, or pointer types (e.g., `AccountId`, `Name`).
-- Durable state maps (`state Map<...>`) use Norito-encoded keys/values. Supported keys: `int` or pointer types. Supported values: `int`, `bool`, `Json`, `Blob`/`bytes`, pointer types, tuples of durable-supported values, or structs whose fields are all durable-supported values.
-- `Map::new()` allocates and zero-initializes the single in-memory entry (key/value = 0); for non-`Map<int,int>` maps, provide an explicit type annotation or return type.
-- State maps are not first-class values: you cannot reassign them (e.g., `M = Map::new()`); update entries via indexing (`M[key] = value`).
-- Internal helper functions may accept durable state-map handles with `state Map<K, V>` parameters. These handles are non-first-class and only valid for map operations and forwarding to other `state Map` helper parameters.
-- Operations:
-  - Indexing: `map[key]` get/set value (set performed via host syscall; see runtime API mapping).
-  - Existence/defaults: `map.contains(key)`, `map.get_or(key, default)`, `map.ensure(key, default)` (lowered helpers; may be intrinsic syscalls).
-  - Path building: `base.path(segment)` lowers to the durable-path helpers for integer or Norito-encoded segments.
-  - JSON field extraction: `json.get_*` lowers to the corresponding typed JSON helper syscall.
-  - Iteration: `for (k, v) in map { ... }` with deterministic order and mutation rules.
-- Composite durable map values are written and read as whole values. Partial field updates on stored records still lower to a load-modify-store pattern in user code.
-
-Deterministic iteration rules
-- The iteration set is the snapshot of keys at loop entry.
-- Order is strictly ascending byte-lexicographic order of Norito-encoded keys.
-- Structural modifications (insert/remove/clear) to the iterated map during the loop cause a deterministic `E_ITER_MUTATION` trap.
-- Boundedness is required: either a declared max (`@max_len`) on the map, an explicit attribute `#[bounded(n)]`, or an explicit bound using `.take(n)`/`.range(..)`; otherwise the compiler emits `E_UNBOUNDED_ITERATION`.
-
-Bounds helpers
-- `#[bounded(n)]`: optional attribute on the map expression, e.g. `for (k, v) in my_map #[bounded(2)] { ... }`.
-- `.take(n)`: iterate the first `n` entries from the start.
-- `.range(start, end)`: iterate entries in the half-open interval `[start, end)`. Semantics are equivalent to `start` and `n = end - start`.
-
-Notes on dynamic bounds
-- Literal bounds: `n`, `start`, and `end` as integer literals are fully supported and compile to a fixed number of iterations.
-- Non-literal bounds are first-release behavior. The compiler accepts dynamic `n`, `start`, and `end` expressions for durable `state Map<int, V>` iteration, inserts runtime assertions for safety (non-negative, `end >= start`, bounded by the fixed release limit), and emits structured dynamic access metadata. The first-release limit is 64 guarded iterations and is not runtime-configurable.
-- Run `koto_lint` to inspect Kotodama lint warnings prior to compilation; the main compiler always proceeds with lowering after parsing and type-checking.
-- Error codes are documented in [Kotodama Compiler Error Codes](./kotodama_error_codes.md); use `koto_compile --explain <code>` for quick explanations.
-
-## Errors and Diagnostics
-
-Compile-time diagnostics (examples)
-- `E_UNBOUNDED_ITERATION`: loop over map lacks a bound.
-- `E_MUT_DURING_ITER`: structural mutation of iterated map in loop body.
-- `E_STATE_SHADOWED`: local bindings cannot shadow `state` declarations.
-- `E_BREAK_OUTSIDE_LOOP`: `break` used outside a loop.
-- `E_CONTINUE_OUTSIDE_LOOP`: `continue` used outside a loop.
-- `E0005`: for-loop initializer is more complex than supported.
-- `E0006`: for-loop step clause is more complex than supported.
-- `E_BAD_POINTER_USE`: using a pointer-ABI constructor result where a first-class type is required.
-- `E_UNRESOLVED_NAME`, `E_TYPE_MISMATCH`, `E_ARITY_MISMATCH`, `E_DUP_SYMBOL`.
-- Tooling: `koto_compile` runs the lint pass before emitting bytecode; use `--no-lint` to skip or `--deny-lint-warnings` to fail the build on lint output.
-
-Runtime VM errors (selected; full list in ivm.md)
-- `E_NORITO_INVALID`, `E_OOB`, `E_UNALIGNED`, `E_SCALL_UNKNOWN`, `E_ASSERT`, `E_ASSERT_EQ`, `E_ITER_MUTATION`.
-
-Error messages
-- Diagnostics carry stable `msg_id`s that map to entries in `kotoba {}` translation tables when available.
-
-## Codegen Mapping to IVM
-
-Pipeline
-1. Lexer/Parser produce AST.
-2. Semantic analysis resolves names, checks types, and populates symbol tables.
-3. IR lowering to a simple SSA-like form.
-4. Register allocation to IVM GPRs (`r10+` for args/ret per calling convention); spills to stack.
-5. Bytecode emission: IVM-native wide encoding only; metadata header emitted with `abi_version`, features, vector length, and `max_cycles`.
-
-Mapping highlights
-- Arithmetic and logic map to IVM ALU ops.
-- Branching and control map to conditional branches and jumps; the compiler uses compressed forms where profitable.
-- Memory for locals spills to the VM stack; alignment is enforced.
-- Builtins lower to register moves and `SCALL` with 8-bit number.
-- Pointer constructors place Norito TLVs into the INPUT region and produce their addresses.
-- Assertions map to `ASSERT`/`ASSERT_EQ` which trap in non-ZK execution and emit constraints in ZK builds.
-
-Determinism constraints
-- No FP; no nondeterministic syscalls.
-- SIMD/GPU acceleration is invisible to bytecode and must be bit-identical; compiler does not emit hardware-specific ops.
-
-## ABI, Header, and Manifest
-
-IVM header fields set by the compiler
-- `version`: IVM bytecode format version (major.minor).
-- `abi_version`: syscall table and pointer-ABI schema version.
-- `feature_bits`: feature flags (e.g., `ZK`, `VECTOR`).
-- `vector_len`: logical vector length (0 → unset).
-- `max_cycles`: admission bound and ZK padding hint.
-
-Manifest (optional sidecar)
-- `code_hash`, `abi_hash`, metadata from `meta {}` block, compiler version, and build hints for reproducibility.
-
-## Roadmap
-
-- **KD-231 (Apr 2026):** add compile-time range analysis for iteration bounds so loops expose bounded access sets to the scheduler.
-- **KD-235 (May 2026):** introduce a first-class `bytes` scalar distinct from `string` for pointer constructors and ABI clarity.
-- **KD-242 (Jun 2026):** expand the builtin opcode set (hash / signature verification) behind feature flags with deterministic fallbacks.
-- **KD-247 (Jun 2026):** stabilize error `msg_id`s and maintain the mapping in `kotoba {}` tables for localized diagnostics.
-### Manifest Emission
-
-- The Kotodama compiler API can return a `ContractManifest` alongside the compiled `.to` via `ivm::kotodama::compiler::Compiler::compile_source_with_manifest`.
-- Fields:
-  - `code_hash`: hash of the code bytes (excluding the IVM header and literals) computed by the compiler to bind the artifact.
-  - `abi_hash`: stable digest of the allowed syscall surface for the program's `abi_version` (see `ivm.md` and `ivm::syscalls::compute_abi_hash`).
-- Optional `compiler_fingerprint` and `features_bitmap` are reserved for toolchains.
-- `entrypoints`: ordered list of exported entrypoints (public, `hajimari`, `kaizen`) including their required `permission(...)` strings and the compiler’s best-effort read/write key hints so admission logic and schedulers can reason about expected WSV access.
-- The manifest is intended for admission-time checks and for registries; see `docs/source/new_pipeline.md` for lifecycle.
+The repository documentation check discovers and compiles every tracked
+`kotodama` or `ko` code fence and documented `*.ko` heredoc below the roots in
+`kotodama_v1_docs.json`. Grammar-derived keyword and operator tables feed
+documentation, formatting, syntax highlighting, and LSP completion so those
+surfaces cannot define independent dialects.

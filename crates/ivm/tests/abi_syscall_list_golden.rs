@@ -207,10 +207,14 @@ fn abi_syscall_list_matches_golden() {
         S::SYSCALL_SYSVAR_AUTHORITY,
         S::SYSCALL_SYSVAR_CONTRACT_ADDRESS,
         S::SYSCALL_SYSVAR_ENTRYPOINT,
+        S::SYSCALL_DECODE_ARGUMENT_RECORD,
         S::SYSCALL_STATE_KEYS,
         S::SYSCALL_STATE_HAS,
         S::SYSCALL_STATE_LEN,
         S::SYSCALL_STATE_COUNT,
+        S::SYSCALL_STATE_MAP_KEY_AT,
+        S::SYSCALL_STATE_VALUE_ENCODE,
+        S::SYSCALL_STATE_VALUE_DECODE,
     ];
 
     let actual = ivm::syscalls::abi_syscall_list();

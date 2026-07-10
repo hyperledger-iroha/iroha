@@ -18,7 +18,7 @@
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote};
+use quote::{ToTokens as _, format_ident, quote};
 use syn::{
     Attribute, Data, DataEnum, DeriveInput, Fields, Generics, Index, Result as SynResult, Token,
     Variant, parse_macro_input, parse_quote,
@@ -215,11 +215,77 @@ fn option_inner_type(ty: &syn::Type) -> Option<syn::Type> {
     None
 }
 
-/// Add a trait bound to the generated `where` clause.
+fn token_stream_mentions_generic(
+    tokens: TokenStream2,
+    generic_names: &[syn::Ident],
+) -> bool {
+    tokens.into_iter().any(|token| match token {
+        proc_macro2::TokenTree::Ident(ident) => generic_names.iter().any(|name| *name == ident),
+        proc_macro2::TokenTree::Group(group) => {
+            token_stream_mentions_generic(group.stream(), generic_names)
+        }
+        proc_macro2::TokenTree::Punct(_) | proc_macro2::TokenTree::Literal(_) => false,
+    })
+}
+
+/// Add a trait bound to the generated `where` clause when the field type
+/// depends on one of the container's generic parameters.
+///
+/// Concrete field types are checked directly while compiling the generated
+/// implementation, so repeating their trait obligations in a `where` clause
+/// is unnecessary. More importantly, such bounds turn a valid concrete
+/// recursive type such as `enum Expr { Nested(Box<Expr>) }` into the cyclic
+/// obligation `Box<Expr>: Trait -> Expr: Trait -> Box<Expr>: Trait`.
 fn add_bound(generics: &mut Generics, ty: &syn::Type, bound: TokenStream2) {
+    let generic_names = generics
+        .params
+        .iter()
+        .map(|parameter| match parameter {
+            syn::GenericParam::Type(parameter) => parameter.ident.clone(),
+            syn::GenericParam::Lifetime(parameter) => parameter.lifetime.ident.clone(),
+            syn::GenericParam::Const(parameter) => parameter.ident.clone(),
+        })
+        .collect::<Vec<_>>();
+    if generic_names.is_empty()
+        || !token_stream_mentions_generic(ty.to_token_stream(), &generic_names)
+    {
+        return;
+    }
     let where_clause = generics.make_where_clause();
     let pred: syn::WherePredicate = parse_quote!(#ty: #bound);
     where_clause.predicates.push(pred);
+}
+
+#[cfg(test)]
+mod generic_bound_tests {
+    use super::*;
+
+    #[test]
+    fn concrete_recursive_field_does_not_create_a_cyclic_bound() {
+        let mut generics = Generics::default();
+        let field: syn::Type = syn::parse_quote!(Box<Expr>);
+
+        add_bound(&mut generics, &field, quote!(DemoTrait));
+
+        assert!(generics.where_clause.is_none());
+    }
+
+    #[test]
+    fn nested_generic_field_keeps_its_required_bound() {
+        let mut generics: Generics = syn::parse_quote!(<'a, T, const N: usize>);
+        let field: syn::Type = syn::parse_quote!(Cow<'a, [T; N]>);
+
+        add_bound(&mut generics, &field, quote!(DemoTrait));
+
+        let predicates = generics
+            .where_clause
+            .as_ref()
+            .expect("generic field must add a where clause")
+            .predicates
+            .to_token_stream()
+            .to_string();
+        assert!(predicates.contains("Cow < 'a , [T ; N] > : DemoTrait"));
+    }
 }
 
 /// Validate `#[norito(...)]` attributes on fields for common misuse cases.

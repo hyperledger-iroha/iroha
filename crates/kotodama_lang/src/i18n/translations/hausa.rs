@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "sigar `{name}` a cikin aikin `{func}` ba ta taba amfani ba",
     lint_unreachable_after_return: "an gano jimla da ba za a iya kai wa gare ta ba a {context}: lambar bayan return ba za ta taba gudana ba",
     lint_ok: "lafiya",
-    lint_usage: "Amfani: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Amfani: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Gudanar da binciken lint na Kotodama a kan tushen da aka bayar.",
     ..english::MESSAGES
 };

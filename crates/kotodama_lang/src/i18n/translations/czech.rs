@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "Parametr `{name}` ve funkci `{func}` se nikde nepoužívá",
     lint_unreachable_after_return: "V kontextu {context} byla nalezena nedosažitelná instrukce: kód za return se nikdy nespustí",
     lint_ok: "ok",
-    lint_usage: "Použití: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Použití: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Spustí linty Kotodama nad zadanými zdrojovými soubory.",
     ..english::MESSAGES
 };

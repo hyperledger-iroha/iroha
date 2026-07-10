@@ -334,11 +334,6 @@ the source (`manifest`, `replication`, etc.) when Torii includes it in the
 response. When Torii responds with `404` the CLI prints a friendly “not found”
 message instead of a stack trace.
 
-> **Note:** `iroha alias voprf-evaluate` remains a developer-only helper for the
-> alias VOPRF service. The command validates its hex input locally and then
-> forwards the request; production operators should rely on the REST surface
-> directly until the VOPRF endpoint reaches GA.
-
 The SoraFS subcommands under `iroha app sorafs …` expose structured JSON for pin
 registry listings (`pin list`), alias enumeration (`alias list`), replication
 order listings (`replication list`), repair queue listings (`repair list`), and

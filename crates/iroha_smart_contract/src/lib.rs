@@ -317,9 +317,9 @@ mod tests {
             }
             QueryRequest::Start(_) | QueryRequest::Continue(_) => {
                 QueryResponse::Iterable(QueryOutput::new(
-                    QueryOutputBatchBoxTuple::new(vec![
-                        QueryOutputBatchBox::Permission(Vec::new()),
-                    ]),
+                    QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Permission(
+                        Vec::new(),
+                    )),
                     0,
                     None,
                 ))

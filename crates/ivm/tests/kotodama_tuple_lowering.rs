@@ -4,10 +4,12 @@ use ivm::kotodama::{ir, parser::parse, semantic::analyze};
 #[test]
 fn lower_call_tuple_return_emits_callmulti_and_tuplepack() {
     let src = r#"
-        fn g(a: int, b: int) -> (int, int) { return (a, b); }
-        fn f(a: int, b: int) -> (int, int) {
-            // Return the tuple produced by g(a,b)
-            return g(a, b);
+        seiyaku TupleCalls {
+            fn g(a: i64, b: i64) -> (i64, i64) { return (a, b); }
+            fn f(a: i64, b: i64) -> (i64, i64) {
+                // Return the tuple produced by g(a,b)
+                return g(a, b);
+            }
         }
     "#;
     let prog = parse(src).expect("parse");
@@ -36,10 +38,12 @@ fn lower_call_tuple_return_emits_callmulti_and_tuplepack() {
 #[test]
 fn lower_return_tuple_emits_returnn() {
     let src = r#"
-        fn h(a: int, b: int, c: int) -> (int, int, int) {
-            let t = (a, b);
-            // Return three elements via tuple composition
-            return (t.0, t.1, c);
+        seiyaku TupleReturns {
+            fn h(a: i64, b: i64, c: i64) -> (i64, i64, i64) {
+                let t = (a, b);
+                // Return three elements via tuple composition
+                return (t.0, t.1, c);
+            }
         }
     "#;
     let prog = parse(src).expect("parse");

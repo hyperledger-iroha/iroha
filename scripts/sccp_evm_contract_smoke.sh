@@ -18,18 +18,33 @@ SOLC_VERSION="0.7.4"
 GANACHE_VERSION="7.9.2"
 ETHERS_VERSION="6.16.0"
 
-npx --yes "solc@$SOLC_VERSION" --bin --base-path . -o "$WORK_DIR/solc-bin" \
+for retired_contract in \
+  contracts/evm/sccp/SccpSecp256k1MessageVerifier.sol \
   contracts/evm/sccp/SccpMessageBridge.sol \
   contracts/evm/sccp/SccpMessageBridgeDeployer.sol \
+  contracts/evm/sccp/SccpEvmSourceBridge.sol \
+  contracts/evm/sccp/Ownable.sol \
+  contracts/ethereum/sccp/SccpEthereumSourceBridge.sol \
+  contracts/bsc/sccp/SccpBscSourceBridge.sol \
+  contracts/tron/sccp/SccpTronSourceBridge.sol
+do
+  if [[ -e "$retired_contract" ]]; then
+    echo "retired generic SCCP contract must remain deleted: $retired_contract" >&2
+    exit 1
+  fi
+done
+
+npx --yes "solc@$SOLC_VERSION" --bin --base-path . -o "$WORK_DIR/solc-bin" \
   contracts/evm/sccp/ISccpMessageVerifier.sol \
   contracts/evm/sccp/SccpGroth16Bn254MessageVerifier.sol \
-  contracts/evm/sccp/SccpSecp256k1MessageVerifier.sol \
-  contracts/evm/sccp/Ownable.sol \
+  contracts/evm/sccp/SccpExactTransferCodec.sol \
+  contracts/evm/sccp/TairaXorEvmToken.sol \
+  contracts/evm/sccp/TairaXorExactEvmSccpBridge.sol \
+  contracts/ethereum/sccp/TairaXOR.sol \
+  contracts/ethereum/sccp/TairaXorEthereumSccpBridge.sol \
   contracts/tron/sccp/SccpTronGroth16Bn254MessageVerifier.sol \
-  contracts/tron/sccp/SccpTronSourceBridge.sol \
   contracts/tron/sccp/TairaXOR.sol \
   contracts/tron/sccp/TairaXorSccpBridge.sol \
-  contracts/bsc/sccp/SccpBscSourceBridge.sol \
   contracts/bsc/sccp/TairaXOR.sol \
   contracts/bsc/sccp/TairaXorBscSccpBridge.sol
 

@@ -1218,7 +1218,7 @@ fn generate_localnet_with_line<T: Write>(
         let config = parse_localnet_peer_config(&bootstrap_config)?;
         (
             Some(resolve_localnet_da_proof_policies(&config)),
-            iroha_core::state::compute_zk_consensus_policy_hash(&config.zk),
+            iroha_core::state::compute_genesis_zk_consensus_policy_hash(&config.zk),
         )
     } else {
         (None, iroha_core::state::default_zk_consensus_policy_hash())
@@ -6176,7 +6176,7 @@ mod tests {
         let parsed = actual::Root::from_toml_source(source).expect("config should parse");
         let expected_hash = iroha_core::da::proof_policy_bundle_hash(&parsed.nexus.lane_config);
         let expected_zk_policy_hash =
-            iroha_core::state::compute_zk_consensus_policy_hash(&parsed.zk);
+            iroha_core::state::compute_genesis_zk_consensus_policy_hash(&parsed.zk);
 
         let bytes = fs::read(temp.path().join("genesis.signed.nrt")).expect("read signed genesis");
         let block =

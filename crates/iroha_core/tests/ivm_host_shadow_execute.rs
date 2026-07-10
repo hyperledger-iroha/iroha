@@ -47,7 +47,7 @@ fn scall_program(syscall: u32) -> Vec<u8> {
         version_minor: 0,
         mode: 0,
         vector_length: 0,
-        max_cycles: 0,
+        max_cycles: 1_000_000,
         abi_version: 1,
     }
     .encode();

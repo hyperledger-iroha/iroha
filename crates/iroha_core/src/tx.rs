@@ -971,7 +971,7 @@ fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
         || any.is::<iroha_data_model::isi::ExecuteTrigger>()
         || any.is::<iroha_data_model::isi::CustomInstruction>()
         || any.is::<iroha_data_model::isi::governance::ProposeDeployContract>()
-        || any.is::<iroha_data_model::isi::governance::ProposeSccpRouteManifest>()
+        || any.is::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>()
         || any.is::<iroha_data_model::isi::governance::CastZkBallot>()
         || any.is::<iroha_data_model::isi::governance::CastPlainBallot>()
         || any.is::<iroha_data_model::isi::governance::ApproveGovernanceProposal>()
@@ -2663,11 +2663,12 @@ impl<'tx> AcceptedTransaction<'tx> {
                         })
                     })?;
                 let code = &proved.bytecode.as_ref()[parsed.code_offset..];
-                let decoded = ivm::ivm_cache::IvmCache::decode_stream(code).map_err(|err| {
-                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                        reason: format!("Failed to decode IVM instructions: {err}"),
-                    })
-                })?;
+                let decoded = ivm::ivm_cache::global_get_with_meta(code, &parsed.metadata)
+                    .map_err(|err| {
+                        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                            reason: format!("Failed to decode IVM instructions: {err}"),
+                        })
+                    })?;
 
                 let decoded_bytes = decoded
                     .iter()
@@ -2730,11 +2731,12 @@ impl<'tx> AcceptedTransaction<'tx> {
                         })
                     })?;
                 let code = &smart_contract.as_ref()[parsed.code_offset..];
-                let decoded = ivm::ivm_cache::IvmCache::decode_stream(code).map_err(|err| {
-                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                        reason: format!("Failed to decode IVM instructions: {err}"),
-                    })
-                })?;
+                let decoded = ivm::ivm_cache::global_get_with_meta(code, &parsed.metadata)
+                    .map_err(|err| {
+                        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                            reason: format!("Failed to decode IVM instructions: {err}"),
+                        })
+                    })?;
 
                 let decoded_bytes = decoded
                     .iter()
@@ -4226,7 +4228,7 @@ impl StateBlock<'_> {
         })?;
         let meta = summary.metadata.clone();
         let offset = summary.code_offset;
-        // Compute code_hash over the program body (bytes after header) and ABI hash for the policy.
+        // Use the domain-separated full-artifact hash and canonical ABI hash.
         let code_hash = summary.code_hash;
         let abi_hash = summary.abi_hash;
 
@@ -4331,8 +4333,7 @@ impl StateBlock<'_> {
             ));
         }
 
-        // Start from configured upper bound and enforce custom overrides.
-        let mut upper_bound: u64 = state_transaction.pipeline.ivm_max_cycles_upper_bound;
+        let upper_bound = state_transaction.pipeline.ivm_max_cycles_upper_bound.get();
         let params = state_transaction.world.parameters.get();
 
         let fuel_limit = params.smart_contract().fuel().get();
@@ -4349,16 +4350,7 @@ impl StateBlock<'_> {
             ));
         }
 
-        if let Ok(name) = core::str::FromStr::from_str("max_ivm_cycles_upper_bound") {
-            let id = iroha_data_model::parameter::CustomParameterId(name);
-            if let Some(custom) = params.custom().get(&id)
-                && let Ok(v) = custom.payload().try_into_any_norito::<u64>()
-            {
-                upper_bound = v;
-            }
-        }
-
-        if upper_bound != 0 && meta.max_cycles > upper_bound {
+        if meta.max_cycles > upper_bound {
             return Err(TransactionRejectionReason::Validation(
                 ValidationFail::IvmAdmission(
                     iroha_data_model::executor::IvmAdmissionError::MaxCyclesExceedsUpperBound(
@@ -9234,12 +9226,12 @@ pub mod tests {
         let mut block1 = state.block(header1);
         let mut tx1 = block1.transaction();
         let prog = minimal_ivm_program(1);
-        let parsed = ivm::ProgramMetadata::parse(&prog).expect("header parse");
-        let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
+        let code_hash = ivm::contract_code_hash(&prog);
         let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         tx1.world.contract_manifests.insert(
             code_hash,
             ContractManifest {
+                contract_name: None,
                 code_hash: Some(code_hash),
                 abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash)),
                 compiler_fingerprint: None,
@@ -9248,6 +9240,7 @@ pub mod tests {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
+                error_codes: None,
                 provenance: None,
             }
             .signed(&kp),
@@ -9263,6 +9256,7 @@ pub mod tests {
         let mut wrong_abi = abi_hash;
         wrong_abi[0] ^= 0x55;
         let manifest = ContractManifest {
+            contract_name: None,
             code_hash: Some(code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(wrong_abi)),
             compiler_fingerprint: None,
@@ -9271,6 +9265,7 @@ pub mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_codes: None,
             provenance: None,
         }
         .signed(&kp);
@@ -9321,13 +9316,13 @@ pub mod tests {
         // Build minimal program with abi_version=1 (current baseline)
         let chain: ChainId = "chain".parse().unwrap();
         let prog = minimal_ivm_program(1);
-        // Compute code hash over bytes after header
-        let parsed = ivm::ProgramMetadata::parse(&prog).expect("header parse");
-        let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
+        // Compute the canonical full-artifact contract hash.
+        let code_hash = ivm::contract_code_hash(&prog);
         // Compute abi hash for the policy
         let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         // Attach manifest in metadata
         let manifest = ContractManifest {
+            contract_name: None,
             code_hash: Some(code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash)),
             compiler_fingerprint: None,
@@ -9336,6 +9331,7 @@ pub mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_codes: None,
             provenance: None,
         }
         .signed(&kp);
@@ -9376,12 +9372,12 @@ pub mod tests {
         let chain: ChainId = "chain".parse().unwrap();
         let prog = minimal_ivm_program(1);
         // Compute real code hash; then corrupt expected
-        let parsed = ivm::ProgramMetadata::parse(&prog).expect("header parse");
-        let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
+        let code_hash = ivm::contract_code_hash(&prog);
         // Compute abi hash then flip
         let mut wrong_abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         wrong_abi[0] ^= 0xAA;
         let manifest = ContractManifest {
+            contract_name: None,
             code_hash: Some(code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(wrong_abi)),
             compiler_fingerprint: None,
@@ -9390,6 +9386,7 @@ pub mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_codes: None,
             provenance: None,
         }
         .signed(&kp);
@@ -9442,6 +9439,7 @@ pub mod tests {
         let wrong_code_hash = iroha_crypto::Hash::prehashed(wrong_bytes);
         let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let manifest = ContractManifest {
+            contract_name: None,
             code_hash: Some(wrong_code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash)),
             compiler_fingerprint: None,
@@ -9450,6 +9448,7 @@ pub mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_codes: None,
             provenance: None,
         }
         .signed(&kp);
@@ -9496,14 +9495,14 @@ pub mod tests {
         let mut block1 = state.block(header1);
         let mut tx1 = block1.transaction();
         let prog = minimal_ivm_program(1);
-        let parsed = ivm::ProgramMetadata::parse(&prog).expect("header parse");
-        let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
+        let code_hash = ivm::contract_code_hash(&prog);
         let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let mut wrong_abi = abi_hash;
         wrong_abi[0] ^= 0x5A;
         tx1.world.contract_manifests.insert(
             code_hash,
             ContractManifest {
+                contract_name: None,
                 code_hash: Some(code_hash),
                 abi_hash: Some(iroha_crypto::Hash::prehashed(wrong_abi)),
                 compiler_fingerprint: None,
@@ -9512,6 +9511,7 @@ pub mod tests {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
+                error_codes: None,
                 provenance: None,
             }
             .signed(&kp),
@@ -9525,6 +9525,7 @@ pub mod tests {
             iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block2 = state.block(header2);
         let manifest = ContractManifest {
+            contract_name: None,
             code_hash: Some(code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash)),
             compiler_fingerprint: None,
@@ -9533,6 +9534,7 @@ pub mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_codes: None,
             provenance: None,
         }
         .signed(&kp);
@@ -9642,7 +9644,8 @@ pub mod tests {
         // Raise pipeline upper bound above fuel limit so the fuel check triggers first.
         let mut pipeline = state.pipeline.clone();
         let fuel_limit = state.world.parameters.view().smart_contract().fuel().get();
-        pipeline.ivm_max_cycles_upper_bound = fuel_limit + 10;
+        pipeline.ivm_max_cycles_upper_bound =
+            std::num::NonZeroU64::new(fuel_limit + 10).expect("fuel limit plus ten is non-zero");
         state.set_pipeline(pipeline);
 
         let header =
@@ -9773,10 +9776,10 @@ pub mod tests {
         let mut tx1 = block1.transaction();
         // Build a minimal program to compute its code_hash/abi_hash
         let prog = minimal_ivm_program(1);
-        let parsed = ivm::ProgramMetadata::parse(&prog).expect("header parse");
-        let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
+        let code_hash = ivm::contract_code_hash(&prog);
         let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let manifest = ContractManifest {
+            contract_name: None,
             code_hash: Some(code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash)),
             compiler_fingerprint: None,
@@ -9785,6 +9788,7 @@ pub mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_codes: None,
             provenance: None,
         }
         .signed(&kp);
@@ -10147,7 +10151,7 @@ pub mod tests {
                     .parse()
                     .expect("contract address"),
                 entrypoint: "call".to_owned(),
-                payload: None,
+                arguments: None,
             }))
             .sign(kp.private_key());
 
@@ -10993,7 +10997,7 @@ pub mod tests {
     }
 
     #[test]
-    fn ivm_max_cycles_exceeds_upper_bound_is_rejected() {
+    fn custom_parameter_cannot_disable_configured_ivm_cycle_ceiling() {
         use iroha_data_model::{
             parameter::{
                 Parameter,
@@ -11009,15 +11013,20 @@ pub mod tests {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let mut state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let mut pipeline = state.pipeline.clone();
+        pipeline.ivm_max_cycles_upper_bound =
+            std::num::NonZeroU64::new(1_000).expect("test ceiling is non-zero");
+        state.set_pipeline(pipeline);
 
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
 
-        // Set custom parameter: upper bound = 1_000 cycles
+        // A consensus custom parameter with the retired name must not disable
+        // or override the node's configured production admission policy.
         let id = CustomParameterId::new(Name::from_str("max_ivm_cycles_upper_bound").unwrap());
-        let custom = CustomParameter::new(id, Json::new(1_000u64));
+        let custom = CustomParameter::new(id, Json::new(0_u64));
         block
             .world
             .parameters
@@ -11035,11 +11044,19 @@ pub mod tests {
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
-        assert!(result.is_err(), "max_cycles above bound must be rejected");
+        match result {
+            Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
+                iroha_data_model::executor::IvmAdmissionError::MaxCyclesExceedsUpperBound(info),
+            ))) => {
+                assert_eq!(info.max_cycles, 2_000);
+                assert_eq!(info.upper_bound, 1_000);
+            }
+            other => panic!("configured cycle ceiling must reject the program, got {other:?}"),
+        }
     }
 
     #[test]
-    fn ivm_max_cycles_within_upper_bound_is_accepted() {
+    fn configured_ivm_cycle_ceiling_accepts_within_bound_despite_custom_parameter() {
         use iroha_data_model::{
             parameter::{
                 Parameter,
@@ -11054,15 +11071,19 @@ pub mod tests {
         let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
+        let mut state = State::new(world, kura, query_handle);
+        let mut pipeline = state.pipeline.clone();
+        pipeline.ivm_max_cycles_upper_bound =
+            std::num::NonZeroU64::new(4_000).expect("test ceiling is non-zero");
+        state.set_pipeline(pipeline);
 
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
 
-        // Set custom parameter: upper bound = 4_000 cycles
+        // The retired custom parameter cannot lower the configured ceiling.
         let id = CustomParameterId::new(Name::from_str("max_ivm_cycles_upper_bound").unwrap());
-        let custom = CustomParameter::new(id, Json::new(4_000u64));
+        let custom = CustomParameter::new(id, Json::new(1_u64));
         block
             .world
             .parameters

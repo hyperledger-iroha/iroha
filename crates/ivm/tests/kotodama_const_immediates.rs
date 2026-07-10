@@ -5,9 +5,11 @@ use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 #[test]
 fn compile_large_positive_constant_executes() {
     let src = r#"
-        fn main() {
-            let x = 123_456_789_012i64;
-            assert_eq(x, 123_456_789_012);
+        seiyaku LargePositiveConstant {
+            view fn main() {
+                let x = 123_456_789_012i64;
+                test::assert_eq(x, 123_456_789_012);
+            }
         }
     "#;
     let code = KotodamaCompiler::new()
@@ -23,9 +25,11 @@ fn compile_large_positive_constant_executes() {
 #[test]
 fn compile_large_negative_constant_executes() {
     let src = r#"
-        fn main() {
-            let x = -987_654_321_098i64;
-            assert_eq(x, -987_654_321_098);
+        seiyaku LargeNegativeConstant {
+            view fn main() {
+                let x = -987_654_321_098i64;
+                test::assert_eq(x, -987_654_321_098);
+            }
         }
     "#;
     let code = KotodamaCompiler::new()

@@ -22,10 +22,10 @@ Il s'agit d'une clé/valeur associée à un effet secondaire `iroha_cli`. کی �
 
 - [Docker](https://docs.docker.com/engine/install/) est disponible pour Compose V2 (`defaults/docker-compose.single.yml` est un exemple de peer peer-to-peer). استعمال کیا جاتا ہے).
 - Chaîne d'outils Rust (1.76+) Fichiers binaires d'assistance disponibles pour les binaires de base.
-- Binaires `koto_compile`, `ivm_run`, et `iroha_cli`۔ La caisse de l'espace de travail est désormais disponible pour les artefacts de version correspondants. سکتے ہیں:
+- Binaires `koto build`, `ivm_run`, et `iroha_cli`۔ La caisse de l'espace de travail est désormais disponible pour les artefacts de version correspondants. سکتے ہیں:
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -47,22 +47,22 @@ Il s'agit d'un minimum Kotodama pour le modèle minimal :
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -74,15 +74,14 @@ KO
 Utilisez le bytecode IVM/Norito (`.to`) pour obtenir un code d'accès Les appels système de l'hôte sont les suivants :
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-Runner `info("Hello from Kotodama")` est un appel système moqué par un hôte moqué `SET_ACCOUNT_DETAIL` syscall est disponible en ligne. Il s'agit d'un fichier binaire `ivm_tool` et d'un en-tête ABI `ivm_tool inspect target/quickstart/hello.to`, de bits de fonctionnalité et de points d'entrée exportés.
+Runner `debug::info("Hello from Kotodama")` est un appel système moqué par un hôte moqué `SET_ACCOUNT_DETAIL` syscall est disponible en ligne. Il s'agit d'un fichier binaire `ivm_tool` et d'un en-tête ABI `ivm_tool inspect target/quickstart/hello.to`, de bits de fonctionnalité et de points d'entrée exportés.
 
 ## 4. Torii est un bytecode en ligne
 
@@ -128,3 +127,63 @@ Voici la charge utile JSON basée sur Norito :
   outils de compilateur/exécuteur, déploiement de manifeste et métadonnées IVM pour les utilisateurs
 - Il s'agit d'une itération dans l'espace de travail `npm run sync-norito-snippets`.
   extraits téléchargeables pour les documents et les artefacts `crates/ivm/docs/examples/` sources et sources synchronisées
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

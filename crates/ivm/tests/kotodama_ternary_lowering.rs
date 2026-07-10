@@ -5,13 +5,15 @@ use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 #[test]
 fn kotodama_ternary_executes() {
     let src = r#"
-        fn main() {
+        seiyaku TernaryLowering {
+        view fn main() {
             let a = 5;
             let b = 9;
             let min = (a < b) ? a : b;
             let max = (a > b) ? a : b;
-            assert_eq(min, 5);
-            assert_eq(max, 9);
+            test::assert_eq(min, 5);
+            test::assert_eq(max, 9);
+        }
         }
     "#;
     let code = KotodamaCompiler::new()

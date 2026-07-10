@@ -16,14 +16,14 @@ translation_last_reviewed: 2026-02-07
 
 1. مورچا ٹولچین (1.76 یا بعد میں) انسٹال کریں اور اس ذخیرے کو کلون کریں۔
 2. معاون بائنریوں کی تعمیر یا ڈاؤن لوڈ کریں:
-   - `koto_compile` - Kotodama مرتب ، جو بائیکوڈ IVM/Norito تیار کرتا ہے
+   - `koto build` - Kotodama مرتب ، جو بائیکوڈ IVM/Norito تیار کرتا ہے
    - `ivm_run` اور `ivm_tool` - مقامی لانچ اور معائنہ کی افادیت
    - `iroha_cli` - Torii کے ذریعے معاہدوں کی تعیناتی کے لئے استعمال کیا جاتا ہے
 
    ریپوزٹری کا میک فائل ان بائنریوں کی توقع کرتا ہے کہ `PATH` پر۔ آپ ریڈی میڈ نمونے کو ڈاؤن لوڈ کرسکتے ہیں یا ذرائع سے ان کی تعمیر کرسکتے ہیں۔ اگر آپ مقامی طور پر ٹولچین مرتب کررہے ہیں تو ، مددگاروں کو بائنریوں کے راستے پر میک فائل فراہم کریں:
 
    ```sh
-   KOTO=./target/debug/koto_compile Kotodama=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto Kotodama=./target/debug/ivm_run make examples-run
    ```
 
 3. اس بات کو یقینی بنائیں کہ تعیناتی مرحلے کے وقت نوڈ Iroha چل رہا ہے۔ ذیل میں دی گئی مثالوں میں یہ فرض کیا گیا ہے کہ Torii پروفائل `iroha_cli` (`~/.config/iroha/cli.toml`) سے URL سے قابل رسائی ہے۔
@@ -34,16 +34,15 @@ translation_last_reviewed: 2026-02-07
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
 کلیدی جھنڈے:
 
-- `--abi 1` معاہدہ ABI ورژن 1 (تحریر کے وقت واحد معاون ورژن) سے معاہدہ کرتا ہے۔
-- `--max-cycles 0` لامحدود عملدرآمد کی درخواست کرتا ہے۔ صفر اور علم کے ثبوتوں کے ل lo لوپ پیڈنگ کو محدود کرنے کے لئے ایک مثبت نمبر پر سیٹ کریں۔
+- `ABI V1` معاہدہ ABI ورژن 1 (تحریر کے وقت واحد معاون ورژن) سے معاہدہ کرتا ہے۔
+- `--max-cycles 1000000` لامحدود عملدرآمد کی درخواست کرتا ہے۔ صفر اور علم کے ثبوتوں کے ل lo لوپ پیڈنگ کو محدود کرنے کے لئے ایک مثبت نمبر پر سیٹ کریں۔
 
 ## 2. نمونہ Norito (اختیاری) چیک کریں
 
@@ -70,7 +69,7 @@ ivm_run target/examples/hello.to --args '{}'
 جب آپ معاہدے سے مطمئن ہوں تو ، اسے CLI کے ذریعے نوڈ پر تعینات کریں۔ اتھارٹی اکاؤنٹ ، اس کی دستخطی کلید اور یا تو `.to` فائل یا بیس 64 پے لوڈ کی وضاحت کریں:
 
 ```sh
-iroha_cli app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -79,8 +78,8 @@ iroha_cli app contracts deploy \
 کمانڈ Torii کے ذریعے مینی فیسٹ بنڈل Norito + بائیک کوڈ بھیجتا ہے اور ٹرانزیکشن کی حیثیت کو پرنٹ کرتا ہے۔ ارتکاب کرنے کے بعد ، جواب میں دکھائے جانے والے کوڈ ہیش کو ظاہر یا مثالوں کی فہرست حاصل کرنے کے لئے استعمال کیا جاسکتا ہے۔
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha contract manifest get --code-hash 0x<hash>
+iroha contract instances --namespace apps --table
 ```
 
 ## 5. Torii کے ذریعے لانچ کریں
@@ -88,7 +87,7 @@ iroha_cli app contracts instances --namespace apps --table
 ایک بار بائیک کوڈ رجسٹر ہونے کے بعد ، آپ اسے ایک ایسی ہدایت بھیج کر کال کرسکتے ہیں جو ذخیرہ شدہ کوڈ کا حوالہ دیتا ہے (مثال کے طور پر ، `iroha_cli ledger transaction submit` یا آپ کے ایپلی کیشن کلائنٹ کے ذریعے)۔ اس بات کو یقینی بنائیں کہ اکاؤنٹ کی اجازت مطلوبہ سیسکلز (`set_account_detail` ، `transfer_asset` ، وغیرہ) کی اجازت دیتی ہے۔
 
 ## اشارے اور خرابیوں کا سراغ لگانا- ایک رن میں مثالوں کی تعمیر اور چلانے کے لئے `make examples-run` استعمال کریں۔ ماحولیاتی متغیرات کو اوور رائڈ `KOTO`/`IVM` اگر بائنری `PATH` میں نہیں ہیں۔
-- اگر `koto_compile` ABI ورژن کو مسترد کرتا ہے تو ، چیک کریں کہ مرتب اور نوڈ ABI V1 کو نشانہ بنا رہے ہیں (`koto_compile --abi` کو تعاون دیکھنے کے لئے کوئی دلائل کے بغیر چلائیں)۔
+- اگر `koto build` ABI ورژن کو مسترد کرتا ہے تو ، چیک کریں کہ مرتب اور نوڈ ABI V1 کو نشانہ بنا رہے ہیں (`koto build --help` کو تعاون دیکھنے کے لئے کوئی دلائل کے بغیر چلائیں)۔
 - سی ایل آئی نے ہیکس یا بیس 64 میں دستخط کرنے والی چابیاں قبول کیں۔ ٹیسٹوں کے ل you ، آپ `iroha_cli tools crypto keypair` کے ذریعہ جاری کردہ چابیاں استعمال کرسکتے ہیں۔
 - جب Norito پے لوڈ کو ڈیبگ کرتے ہو تو ، `ivm_tool disassemble` کمانڈ مفید ہے ، جو Kotodama ذرائع سے ہدایات کا موازنہ کرنے میں مدد کرتا ہے۔
 

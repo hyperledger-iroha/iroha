@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "O parâmetro `{name}` na função `{func}` nunca é usado",
     lint_unreachable_after_return: "Instrução inalcançável detectada em {context}: o código após um return nunca é executado",
     lint_ok: "ok",
-    lint_usage: "Uso: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Uso: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Executa os lints do Kotodama nas fontes fornecidas.",
     ..english::MESSAGES
 };

@@ -1,14 +1,14 @@
-//! Wrapper around a [`String`] guaranteed to contain valid JSON.
+//! Wrapper around immutable, shared text guaranteed to contain valid JSON.
 //!
 //! [`Json::new`] serializes any [`norito::json::JsonSerialize`] value using the
 //! Norito JSON serializer and ensures that parsing it back succeeds. This keeps
 //! the canonical, minified representation that other components expect.
 
 use core::{fmt::Write as _, str::FromStr};
-use std::{string::String, vec::Vec};
+use std::{borrow::Cow, string::String, sync::Arc, vec::Vec};
 
 use derive_more::Display;
-use iroha_schema::IntoSchema;
+use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta};
 use norito::{
     Decode, Encode,
     json::{self, JsonDeserializeOwned, JsonSerialize, Parser, Value},
@@ -16,14 +16,106 @@ use norito::{
 
 const HEX_DIGITS: &[u8; 16] = b"0123456789ABCDEF";
 
-/// A wrapper around a [`String`] that is guaranteed to contain a valid JSON
-/// document.
+/// A wrapper around immutable, reference-counted text that is guaranteed to
+/// contain a valid JSON document.
 ///
 /// Use [`Json::new`] to serialize a value into a JSON string and ensure the
 /// result is well-formed.
-#[derive(Debug, Display, Clone, PartialOrd, PartialEq, Ord, Eq, IntoSchema, Encode, Decode)]
+#[derive(Debug, Display, Clone, PartialOrd, PartialEq, Ord, Eq)]
 #[display("{_0}")]
-pub struct Json(String);
+pub struct Json(Arc<String>);
+
+// These helpers deliberately retain the derived wire layout of the former
+// `Json(String)` representation. `Cow<str>` and `String` are both
+// self-delimiting Norito fields, so the borrowed serializer writes the same
+// bytes without first copying the shared JSON text. Norito does not encode
+// field names, so the named owned helper has the same single-field wire layout
+// while also getting a strict slice decoder that reports the parsed prefix.
+#[derive(Encode)]
+struct JsonWireRef<'a>(Cow<'a, str>);
+
+#[derive(Encode, Decode)]
+#[norito(decode_from_slice)]
+struct JsonWireOwned {
+    value: String,
+}
+
+impl TypeId for Json {
+    fn id() -> String {
+        "Json".to_owned()
+    }
+}
+
+impl IntoSchema for Json {
+    fn type_name() -> String {
+        "Json".to_owned()
+    }
+
+    fn update_schema_map(map: &mut MetaMap) {
+        if !map.contains_key::<Self>() {
+            map.insert::<Self>(Metadata::Tuple(UnnamedFieldsMeta {
+                types: vec![core::any::TypeId::of::<String>()],
+            }));
+            String::update_schema_map(map);
+        }
+    }
+}
+
+impl norito::core::NoritoSerialize for Json {
+    fn schema_hash() -> [u8; 16] {
+        #[cfg(feature = "schema-structural")]
+        {
+            norito::core::schema_hash_structural::<Self>()
+        }
+        #[cfg(not(feature = "schema-structural"))]
+        {
+            norito::core::type_name_schema_hash::<Self>()
+        }
+    }
+
+    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        let wire = JsonWireRef(Cow::Borrowed(self.0.as_str()));
+        norito::core::NoritoSerialize::serialize(&wire, writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        let wire = JsonWireRef(Cow::Borrowed(self.0.as_str()));
+        norito::core::NoritoSerialize::encoded_len_hint(&wire)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        let wire = JsonWireRef(Cow::Borrowed(self.0.as_str()));
+        norito::core::NoritoSerialize::encoded_len_exact(&wire)
+    }
+}
+
+impl<'a> norito::core::NoritoDeserialize<'a> for Json {
+    fn schema_hash() -> [u8; 16] {
+        #[cfg(feature = "schema-structural")]
+        {
+            norito::core::schema_hash_structural::<Self>()
+        }
+        #[cfg(not(feature = "schema-structural"))]
+        {
+            norito::core::type_name_schema_hash::<Self>()
+        }
+    }
+
+    fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).unwrap_or_else(|error| {
+            panic!("norito: fallible deserialize failed for Json: {error:?}")
+        })
+    }
+
+    fn try_deserialize(
+        archived: &'a norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let wire = <JsonWireOwned as norito::core::NoritoDeserialize>::try_deserialize(
+            archived.cast::<JsonWireOwned>(),
+        )?;
+        Ok(Self(Arc::new(wire.value)))
+    }
+}
 
 impl Json {
     fn escape_json_string_plain(s: &str, out: &mut String) {
@@ -117,7 +209,7 @@ impl Json {
     /// # Errors
     /// Returns an error if the string does not represent `T`.
     pub fn try_into_any<T: JsonDeserializeOwned>(&self) -> Result<T, norito::Error> {
-        norito::json::from_str::<T>(&self.0).map_err(|e| norito::Error::from(e.to_string()))
+        norito::json::from_str::<T>(self.0.as_str()).map_err(|e| norito::Error::from(e.to_string()))
     }
 
     /// Deserializes the JSON string into any type using Norito's JSON helper,
@@ -126,7 +218,7 @@ impl Json {
     /// # Errors
     /// Returns an error if the string does not represent `T`.
     pub fn try_into_any_norito<T: JsonDeserializeOwned>(&self) -> Result<T, norito::Error> {
-        norito::json::from_str::<T>(&self.0).map_err(|e| norito::Error::from(e.to_string()))
+        norito::json::from_str::<T>(self.0.as_str()).map_err(|e| norito::Error::from(e.to_string()))
     }
 
     /// Fallible constructor: serialize `payload` to JSON using Norito's helper.
@@ -139,21 +231,21 @@ impl Json {
         let serialized =
             norito::json::to_json(&payload).map_err(|e| norito::Error::from(e.to_string()))?;
         if norito::json::parse_value(&serialized).is_ok() {
-            return Ok(Json(serialized));
+            return Ok(Self::from_string_unchecked(serialized));
         }
 
         // Fallback: materialize a `Value` and serialize it plainly.
         if let Ok(value) = norito::json::to_value(&payload) {
             let plain = Self::serialize_json_value_plain_str(&value);
             if norito::json::parse_value(&plain).is_ok() {
-                return Ok(Json(plain));
+                return Ok(Self::from_string_unchecked(plain));
             }
             // Even if parsing fails, keep the plain serialization to avoid panicking.
-            return Ok(Json(plain));
+            return Ok(Self::from_string_unchecked(plain));
         }
 
         // Last resort: return the original serialized form even if validation failed.
-        Ok(Json(serialized))
+        Ok(Self::from_string_unchecked(serialized))
     }
 
     /// Fallible constructor from `&str` using Norito's JSON helper.
@@ -170,12 +262,23 @@ impl Json {
     ///
     /// The caller must guarantee that `value` contains valid JSON.
     pub fn from_string_unchecked(value: String) -> Self {
-        Self(value)
+        Self(Arc::new(value))
     }
 
     /// Returns a reference to the inner JSON string.
     pub fn get(&self) -> &String {
-        &self.0
+        self.0.as_ref()
+    }
+
+    /// Returns `true` when `self` and `other` share the same immutable backing
+    /// allocation.
+    ///
+    /// This is an allocation-identity check, not a value comparison: two
+    /// independently constructed [`Json`] values can compare equal while this
+    /// method returns `false`.
+    #[must_use]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
     }
 
     /// Convert a Norito JSON value into this JSON wrapper by normalizing it
@@ -186,13 +289,13 @@ impl Json {
     pub fn from_norito_value_ref(v: &Value) -> Result<Self, norito::Error> {
         let plain = Self::serialize_json_value_plain_str(v);
         norito::json::parse_value(&plain).map_err(|e| norito::Error::from(e.to_string()))?;
-        Ok(Json(plain))
+        Ok(Self::from_string_unchecked(plain))
     }
 }
 
 impl json::JsonSerialize for Json {
     fn json_serialize(&self, out: &mut String) {
-        out.push_str(&self.0);
+        out.push_str(self.0.as_str());
     }
 }
 
@@ -274,7 +377,7 @@ impl FromStr for Json {
 impl Default for Json {
     fn default() -> Self {
         // NOTE: empty string isn't valid JSON
-        Self("null".to_string())
+        Self::from_string_unchecked("null".to_owned())
     }
 }
 
@@ -282,15 +385,15 @@ impl Default for Json {
 // and option fields under Norito's strict-safe path.
 impl<'a> norito::core::DecodeFromSlice<'a> for Json {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let mut cursor = std::io::Cursor::new(bytes);
-        let v: Self = <Self as norito::codec::Decode>::decode(&mut cursor)?;
-        Ok((v, bytes.len()))
+        let (wire, consumed) =
+            <JsonWireOwned as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
+        Ok((Self(Arc::new(wire.value)), consumed))
     }
 }
 
 impl AsRef<str> for Json {
     fn as_ref(&self) -> &str {
-        let s = &self.0;
+        let s = self.0.as_str();
         // If the underlying JSON is a string literal, `self.0` holds it quoted.
         // Return a view without the outer quotes to make simple string comparisons ergonomic.
         // Note: this does not unescape inner sequences; for structured use, prefer `try_into_any`.
@@ -307,6 +410,13 @@ impl AsRef<str> for Json {
 #[cfg(all(test, feature = "json"))]
 mod tests {
     use super::*;
+    use norito::codec::{Decode as _, Encode as _};
+
+    /// Mirrors the derived representation used before `Json` adopted shared
+    /// backing. Keeping this local wire oracle makes representation drift
+    /// visible without coupling the production type back to owned strings.
+    #[derive(Encode, Decode)]
+    struct LegacyJsonWire(String);
 
     #[derive(
         Debug,
@@ -319,6 +429,133 @@ mod tests {
     struct SerdeStruct {
         a: u32,
         b: String,
+    }
+
+    #[test]
+    fn clones_share_immutable_backing() {
+        let original =
+            Json::from_string_unchecked(format!("\"{}\"", "shared-json-payload".repeat(64 * 1024)));
+        let cloned = original.clone();
+        let equal_but_distinct = Json::from_string_unchecked(original.get().clone());
+
+        assert!(original.ptr_eq(&cloned));
+        assert!(!original.ptr_eq(&equal_but_distinct));
+        assert_eq!(original, cloned);
+        assert_eq!(original, equal_but_distinct);
+
+        // Preserve the existing public accessor signature as well as its value.
+        let _: &String = cloned.get();
+    }
+
+    #[test]
+    fn shared_backing_preserves_legacy_schema() {
+        let schema = Json::schema();
+
+        assert_eq!(<Json as TypeId>::id(), "Json");
+        assert_eq!(<Json as IntoSchema>::type_name(), "Json");
+        assert_eq!(
+            schema.get::<Json>(),
+            Some(&Metadata::Tuple(UnnamedFieldsMeta {
+                types: vec![core::any::TypeId::of::<String>()],
+            }))
+        );
+        assert_eq!(schema.get::<String>(), Some(&Metadata::String));
+        assert_eq!(schema.iter().count(), 2);
+    }
+
+    #[test]
+    fn shared_backing_preserves_legacy_norito_wire() {
+        let inputs = [
+            "null".to_owned(),
+            "{\"a\":1}".to_owned(),
+            format!("\"{}\"", "x".repeat(300)),
+        ];
+
+        for input in inputs {
+            let json = Json::from_string_unchecked(input.clone());
+            let encoded = json.encode();
+
+            assert_eq!(encoded, LegacyJsonWire(input.clone()).encode());
+            assert_eq!(
+                encoded,
+                JsonWireOwned {
+                    value: input.clone()
+                }
+                .encode()
+            );
+
+            let mut bytes = encoded.as_slice();
+            let decoded = Json::decode(&mut bytes).expect("decode shared Json");
+            assert_eq!(decoded.get(), &input);
+            assert!(bytes.is_empty(), "decoder must consume the entire payload");
+        }
+
+        assert_eq!(
+            Json::from_string_unchecked("{\"a\":1}".to_owned()).encode(),
+            [0x08, 0x07, b'{', b'"', b'a', b'"', b':', b'1', b'}']
+        );
+    }
+
+    #[test]
+    fn slice_decode_does_not_consume_trailing_fields() {
+        const TRAILING_FIELD: &[u8] = b"\xA5\x5Asecond-field";
+
+        let input = "{\"field\":true}".to_owned();
+        let encoded = Json::from_string_unchecked(input.clone()).encode();
+        let mut packed_fields = encoded.clone();
+        packed_fields.extend_from_slice(TRAILING_FIELD);
+
+        let (decoded, consumed) =
+            <Json as norito::core::DecodeFromSlice>::decode_from_slice(&packed_fields)
+                .expect("decode Json prefix");
+
+        assert_eq!(decoded.get(), &input);
+        assert_eq!(consumed, encoded.len());
+        assert_eq!(&packed_fields[consumed..], TRAILING_FIELD);
+    }
+
+    #[test]
+    fn slice_decode_rejects_truncated_and_invalid_utf8_wire() {
+        let encoded = Json::from_string_unchecked("{\"field\":true}".to_owned()).encode();
+
+        for end in 0..encoded.len() {
+            assert!(
+                <Json as norito::core::DecodeFromSlice>::decode_from_slice(&encoded[..end])
+                    .is_err(),
+                "truncated payload of {end} bytes must fail"
+            );
+        }
+
+        let mut invalid_utf8 = encoded;
+        *invalid_utf8.last_mut().expect("non-empty encoded Json") = 0xFF;
+        assert!(
+            <Json as norito::core::DecodeFromSlice>::decode_from_slice(&invalid_utf8).is_err(),
+            "invalid UTF-8 must not enter Json backing storage"
+        );
+    }
+
+    #[test]
+    fn shared_backing_roundtrips_framed_norito() {
+        let original = Json::from_string_unchecked("{\"framed\":[1,true,null]}".to_owned());
+
+        let encoded = norito::to_bytes(&original).expect("encode framed Json");
+        let decoded: Json = norito::decode_from_bytes(&encoded).expect("decode framed Json");
+
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn shared_clone_preserves_exact_json_output() {
+        let raw = "{ \"order\": [3, 2, 1], \"escaped\": \"a\\nb\" }";
+        let json = Json::from_string_unchecked(raw.to_owned());
+        let cloned = json.clone();
+        let mut serialized = String::new();
+
+        cloned.json_serialize(&mut serialized);
+
+        assert_eq!(serialized, raw);
+        assert_eq!(cloned.to_string(), raw);
+        assert_eq!(cloned.get(), raw);
     }
 
     #[test]

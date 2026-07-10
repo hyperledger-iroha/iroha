@@ -6219,12 +6219,12 @@ function encodeEntryPointKindValue(value, context) {
       return encodeEnumTagValue(0);
     case "view":
       return encodeEnumTagValue(1);
-    case "hajimari":
+    case "init":
       return encodeEnumTagValue(2);
-    case "kaizen":
+    case "upgrade":
       return encodeEnumTagValue(3);
     default:
-      throw new Error(`${context} must be Public, View, Hajimari, or Kaizen`);
+      throw new Error(`${context} must be Public, View, Init, or Upgrade`);
   }
 }
 
@@ -6238,9 +6238,9 @@ function decodeEntryPointKindValue(payload, context) {
     case 1:
       return { kind: "View", value: null };
     case 2:
-      return { kind: "Hajimari", value: null };
+      return { kind: "Init", value: null };
     case 3:
-      return { kind: "Kaizen", value: null };
+      return { kind: "Upgrade", value: null };
     default:
       throw new Error(`${context} uses unsupported entrypoint kind ${tag}`);
   }

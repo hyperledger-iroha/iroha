@@ -106,32 +106,27 @@ node javascript/iroha_js/recipes/iso_bridge.mjs
 Оба сценария завершаются с кодом состояния `1`, если Torii никогда не сообщает о терминале.
 переход, что делает их подходящими для работы на шлюзах CI.
 
-### Помощник по псевдонимам ISO`recipes/iso_alias.mjs` нацелен на конечные точки псевдонимов ISO, чтобы репетиции могли охватывать
-хеширование скрытых элементов и поиск псевдонимов без написания специальных инструментов. Это
-вызывает `ToriiClient.evaluateAliasVoprf` плюс `resolveAlias` / `resolveAliasByIndex`
-и печатает серверную часть, дайджест, привязку учетной записи, источник и детерминированный индекс.
-возвращено Torii.
+### Помощник по псевдонимам ISO
+
+`recipes/iso_alias.mjs` проверяет поиск псевдонимов ISO без необходимости в специальных инструментах.
+Он вызывает `resolveAlias` и `resolveAliasByIndex`, а затем выводит привязку учётной записи, источник и детерминированный индекс, возвращённые Torii.
 
 Переменные среды:
 
 - `TORII_URL` — конечная точка Torii, предоставляющая помощники псевдонимов.
-- `ISO_VOPRF_INPUT` — закрытый элемент в шестнадцатеричной кодировке (по умолчанию `deadbeef`).
-- `ISO_SKIP_VOPRF=1` — пропустить вызов VOPRF только при тестировании поиска.
 - `ISO_ALIAS_LABEL` — буквальный псевдоним для разрешения (например, строки в стиле IBAN).
 - `ISO_ALIAS_INDEX` — десятичный индекс или индекс с префиксом `0x`, передаваемый в `resolveAliasByIndex`.
 - `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — дополнительные заголовки для защищенных развертываний Torii.
 
 ```bash
-# Evaluate a blinded element and resolve an alias literal + deterministic index.
+# Resolve an alias literal + deterministic index.
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeefcafebabe \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node javascript/iroha_js/recipes/iso_alias.mjs
 
 # Only perform literal resolution.
 TORII_URL=https://torii.testnet.sora \
-ISO_SKIP_VOPRF=1 \
 ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```

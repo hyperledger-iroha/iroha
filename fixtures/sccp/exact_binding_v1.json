@@ -1,0 +1,88 @@
+{
+  "schema": "sccp_exact_binding_v1",
+  "encoding": "lowercase hexadecimal without 0x; all canonical lengths and integers are little-endian",
+  "message_id_domain": "sccp:lane-message-id:v1",
+  "payload_hash_domain": "sccp:payload:v1",
+  "lane_hash_domain": "sccp:lane-id:v1",
+  "commitment_leaf_domain": "sccp:hub:leaf:v1",
+  "networks": [
+    {"profile":"sora-nexus","tag":0,"canonical_bytes":"01000000000000000000000000000000000000000753"},
+    {"profile":"sora-taira","tag":1,"canonical_bytes":"010100000000809574f5fee75e69bfcf52451e42d50f"},
+    {"profile":"ethereum-mainnet","tag":2,"canonical_bytes":"0102010000000100000000000000"},
+    {"profile":"bsc-mainnet","tag":4,"canonical_bytes":"0104020000003800000000000000"},
+    {"profile":"bsc-testnet","tag":5,"canonical_bytes":"0105020000006100000000000000"}
+  ],
+  "payload": {
+    "kind": "token_pause",
+    "target_domain": 2,
+    "nonce": "41",
+    "sora_asset_id": "3131313131313131313131313131313131313131313131313131313131313131",
+    "canonical_bytes": "04010200000029000000000000003131313131313131313131313131313131313131313131313131313131313131",
+    "payload_hash": "60bd80dbb980f20d490cca031c39302574b8d1dd95bddd07a7c798eb1d124b5c"
+  },
+  "destination_binding_hash": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+  "positive_vectors": [
+    {
+      "name":"nexus_to_bsc_mainnet",
+      "source_profile":"sora-nexus",
+      "target_profile":"bsc-mainnet",
+      "canonical_lane":"0116000000010000000000000000000000000000000000000007530e0000000104020000003800000000000000",
+      "lane_hash":"2a9f8508f7638733335389993636b82eecef39e356dbd63205c5d6532afa39f8",
+      "message_id":"6034b499dcd9880233b6e32a2a59a4762c1d7c71544e978ed018575ccb73d062",
+      "canonical_commitment":"01010004d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d26034b499dcd9880233b6e32a2a59a4762c1d7c71544e978ed018575ccb73d06260bd80dbb980f20d490cca031c39302574b8d1dd95bddd07a7c798eb1d124b5c",
+      "commitment_root":"62955125ae566daef343f9d7a3ab5321635e7793767f58fc389a9452a3901f5f"
+    },
+    {
+      "name":"nexus_to_bsc_testnet",
+      "source_profile":"sora-nexus",
+      "target_profile":"bsc-testnet",
+      "canonical_lane":"0116000000010000000000000000000000000000000000000007530e0000000105020000006100000000000000",
+      "lane_hash":"e127dbb9d9616aa491e82b1f640d4f3db5fadf1dbe7b58ed1973bd132abbc056",
+      "message_id":"394840d3fff7fb97a33d3990109142a02e909618df4be58f74561a2a99a11bc8",
+      "canonical_commitment":"01010005d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2394840d3fff7fb97a33d3990109142a02e909618df4be58f74561a2a99a11bc860bd80dbb980f20d490cca031c39302574b8d1dd95bddd07a7c798eb1d124b5c",
+      "commitment_root":"7bb432380ea6833fc20141cac62f64b742e71a2f66b055ff9e5374c86b9dfea0"
+    },
+    {
+      "name":"taira_to_bsc_mainnet",
+      "source_profile":"sora-taira",
+      "target_profile":"bsc-mainnet",
+      "canonical_lane":"0116000000010100000000809574f5fee75e69bfcf52451e42d50f0e0000000104020000003800000000000000",
+      "lane_hash":"26cc5ae436470d682b9344889be775574464c808e36e805d55762f07baad8030",
+      "message_id":"b5352901e9ad934fa17c9ca806288c98e228bf5da577913267c7bac32eef671c",
+      "canonical_commitment":"01010104d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2b5352901e9ad934fa17c9ca806288c98e228bf5da577913267c7bac32eef671c60bd80dbb980f20d490cca031c39302574b8d1dd95bddd07a7c798eb1d124b5c",
+      "commitment_root":"216c09445e6d0323643e15f6986a4e2ac5b026e08209e3bfdd517c6b2a908706"
+    },
+    {
+      "name":"taira_to_bsc_testnet",
+      "source_profile":"sora-taira",
+      "target_profile":"bsc-testnet",
+      "canonical_lane":"0116000000010100000000809574f5fee75e69bfcf52451e42d50f0e0000000105020000006100000000000000",
+      "lane_hash":"288fee0246de80f1ee6dd02f1f4722c1f2c157a706f30f68d56f335a88a14bc7",
+      "message_id":"615a14946c09297f420fb1e0da384b3bfc55c64e4cbc420193b855dae19ce344",
+      "canonical_commitment":"01010105d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2615a14946c09297f420fb1e0da384b3bfc55c64e4cbc420193b855dae19ce34460bd80dbb980f20d490cca031c39302574b8d1dd95bddd07a7c798eb1d124b5c",
+      "commitment_root":"068f640747558b64ad432f584fb9db7f03008f4ab3462e199c67bb5a11f3d14a"
+    }
+  ],
+  "binding_rotation": {
+    "source_profile":"sora-nexus",
+    "target_profile":"bsc-mainnet",
+    "old_binding_hash":"d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+    "new_binding_hash":"e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2",
+    "message_id_unchanged":"6034b499dcd9880233b6e32a2a59a4762c1d7c71544e978ed018575ccb73d062",
+    "old_commitment_root":"62955125ae566daef343f9d7a3ab5321635e7793767f58fc389a9452a3901f5f",
+    "new_canonical_commitment":"01010004e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e26034b499dcd9880233b6e32a2a59a4762c1d7c71544e978ed018575ccb73d06260bd80dbb980f20d490cca031c39302574b8d1dd95bddd07a7c798eb1d124b5c",
+    "new_commitment_root":"cf0a71dd7818a38a4e1c8c288898ea210ab086ce28e4075aa985ab19d2deb67f",
+    "replay_key_unchanged":true,
+    "commitment_root_changed":true
+  },
+  "malformed_cases": [
+    {"name":"zero_binding","replacement_binding_hash":"0000000000000000000000000000000000000000000000000000000000000000","accepted":false},
+    {"name":"binding_reuses_lane_hash","replacement_binding_hash":"2a9f8508f7638733335389993636b82eecef39e356dbd63205c5d6532afa39f8","accepted":false},
+    {"name":"binding_reuses_message_id","replacement_binding_hash":"6034b499dcd9880233b6e32a2a59a4762c1d7c71544e978ed018575ccb73d062","accepted":false},
+    {"name":"binding_reuses_payload_hash","replacement_binding_hash":"60bd80dbb980f20d490cca031c39302574b8d1dd95bddd07a7c798eb1d124b5c","accepted":false},
+    {"name":"reversed_lane","source_profile":"bsc-mainnet","target_profile":"sora-nexus","accepted":false},
+    {"name":"sora_to_sora_lane","source_profile":"sora-nexus","target_profile":"sora-taira","accepted":false},
+    {"name":"external_to_external_lane","source_profile":"bsc-mainnet","target_profile":"ethereum-mainnet","accepted":false},
+    {"name":"payload_domain_mismatch","source_profile":"sora-nexus","target_profile":"ethereum-mainnet","accepted":false}
+  ]
+}

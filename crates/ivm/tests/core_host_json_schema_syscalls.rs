@@ -602,15 +602,7 @@ fn build_path_key_norito_direct_accepts_input_heap_and_literal_pointers() {
     let key_tlv = tlv(PointerType::NoritoBytes, &key_payload);
     let direct_prog =
         common::assemble_syscalls(&[syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT as u8]);
-    let expected_path = {
-        let h: [u8; 32] = iroha_crypto::Hash::new(&key_payload).into();
-        let mut path = String::from("state/");
-        for byte in h {
-            use core::fmt::Write as _;
-            write!(&mut path, "{byte:02x}").expect("write path hash");
-        }
-        path
-    };
+    let expected_path = format!("state/{}", hex::encode(&key_payload));
 
     let decode_path = |vm: &IVM| {
         let tlv = vm

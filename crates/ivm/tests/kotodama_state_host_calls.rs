@@ -1,17 +1,21 @@
-//! Kotodama calls to durable state helpers via host::state_{get,set,del}.
+//! Kotodama calls to durable state helpers through the public `state` namespace.
 
 use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 
 #[test]
 fn kotodama_host_state_calls_run() {
-    // Store a small NoritoBytes payload under a path, then read and delete it.
+    // Store a small bytes payload under a path, then read and delete it. The
+    // compiler owns the pointer-ABI wrapping; source cannot construct raw
+    // `NoritoBytes` values.
     // We do not attempt to decode the bytes to ints here; the purpose is to
     // ensure pointer-ABI plumbing and syscalls are wired end-to-end.
     let src = r#"
-        fn main() {
-            host::state_set(name("demo"), norito_bytes("hello"));
-            let _b = host::state_get(name("demo"));
-            host::state_del(name("demo"));
+        seiyaku StateHostCalls {
+          kotoage fn main() authorize("StateHostCalls") {
+            state::set(Name::parse("demo"), b"hello");
+            let _b = state::get(Name::parse("demo"));
+            state::delete(Name::parse("demo"));
+          }
         }
     "#;
     let code = KotodamaCompiler::new()

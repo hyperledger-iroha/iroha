@@ -24,6 +24,17 @@ use crate::triggers::get_asset_value;
 
 static NEXT_SUBMIT_PEER_INDEX: AtomicUsize = AtomicUsize::new(0);
 
+fn contract_entrypoint_metadata(entrypoint: &str) -> Metadata {
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        "contract_entrypoint"
+            .parse::<Name>()
+            .expect("static contract entrypoint metadata key is valid"),
+        Json::new(entrypoint.to_owned()),
+    );
+    metadata
+}
+
 fn curr_time() -> Duration {
     use std::time::SystemTime;
 
@@ -538,7 +549,8 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
                 Repeats::Exactly(u32::try_from(expected_count)?),
                 alice_id.clone(),
                 filter,
-            ),
+            )
+            .with_metadata(contract_entrypoint_metadata("run")),
         ));
         submit_with_context(
             network,

@@ -1,13 +1,5 @@
 seiyaku SmokeTransfer {
-  meta { abi_version: 1 }
-
-  kotoage fn main() permission(Admin) {
-    transfer_asset(
-      account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
-      account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
-      asset_definition!("61CtjvNd9T3THAR65GsMVHr82Bjc"),
-      1,
-      dataspace_id("0")
-    );
-  }
+    kotoage fn main() authorize("Admin") {
+        ledger::asset::transfer(AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), AssetDefinitionId::parse("61CtjvNd9T3THAR65GsMVHr82Bjc"), Amount::from_i64(1), DataSpaceId::parse("0"));
+    }
 }

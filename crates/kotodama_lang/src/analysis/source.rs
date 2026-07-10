@@ -585,7 +585,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::parse;
+    use crate::parser::parse_test_fragment as parse;
 
     fn analyze_static(source: &str) -> Vec<AnalysisFinding> {
         let program = parse(source).expect("parse");
@@ -597,7 +597,7 @@ mod tests {
     fn detects_constant_overflow() {
         let findings = analyze_static(
             r#"
-            fn overflow() -> int {
+            fn overflow() -> i64 {
                 return 9223372036854775807 + 1;
             }
         "#,
@@ -612,7 +612,7 @@ mod tests {
     fn detects_division_by_zero_literal() {
         let findings = analyze_static(
             r#"
-            fn div_zero() -> int {
+            fn div_zero() -> i64 {
                 let x = 10;
                 return x / 0;
             }
@@ -625,45 +625,39 @@ mod tests {
     }
 
     #[test]
-    fn detects_reentrancy_pattern() {
-        let findings = analyze_static(
+    fn raw_contract_calls_are_rejected_before_static_analysis() {
+        let program = parse(
             r#"
-            state Map<int, int> balances;
+            state balances: StateMap<i64, i64>;
 
             fn withdraw() {
                 balances[1] = 0;
-                host::call_contract("target", "entrypoint", json!{});
+                host::call_contract("target", "entrypoint", Json::parse("{}"));
             }
         "#,
         );
+        let program = program.expect("raw host call still has ordinary call syntax");
+        let error = semantic::analyze(&program)
+            .expect_err("raw host and contract-call capabilities are not V1 source APIs");
         assert!(
-            findings.iter().any(|f| f.code == "static-reentrancy-risk"),
-            "expected reentrancy finding, got {findings:?}"
+            error.message.contains("unknown function or builtin")
+                || error.message.contains("compiler-internal"),
+            "unexpected raw-call diagnostic: {error:?}"
         );
     }
 
     #[test]
-    fn detects_infinite_loop() {
-        let findings = analyze_static(
-            r#"
-            fn spin() {
-                while true {
-                    let x = 1;
-                }
-            }
-        "#,
-        );
-        assert!(
-            findings.iter().any(|f| f.code == "static-infinite-loop"),
-            "expected loop finding, got {findings:?}"
-        );
+    fn rejects_unbounded_loop_source() {
+        let err = parse("fn spin() { while true {} }")
+            .expect_err("canonical source must reject unbounded loops");
+        assert!(err.contains("`while` is not supported"));
     }
 
     #[test]
     fn unary_neg_on_i64_min_literal_does_not_panic() {
         let findings = analyze_static(
             r#"
-            fn neg_min() -> int {
+            fn neg_min() -> i64 {
                 return -(-9223372036854775808);
             }
         "#,
@@ -672,35 +666,25 @@ mod tests {
     }
 
     #[test]
-    fn reentrancy_warning_only_when_write_precedes_call() {
+    fn ordinary_state_writes_do_not_create_reentrancy_findings() {
         let findings = analyze_static(
             r#"
-            state Map<int, int> balances;
+            state balances: StateMap<i64, i64>;
 
             fn withdraw() {
-                balances[1] = balances[1] - 1;
-                host::call_contract("target", "entrypoint", json!{});
+                balances[1] = balances.get(1).unwrap_or(0) - 1;
             }
         "#,
         );
         assert!(
-            findings.iter().any(|f| f.code == "static-reentrancy-risk"),
-            "expected reentrancy finding, got {findings:?}"
+            !findings.iter().any(|f| f.code == "static-reentrancy-risk"),
+            "state-only code must not be labeled reentrant: {findings:?}"
         );
     }
 
     #[test]
-    fn reentrancy_not_reported_when_call_is_before_write() {
-        let findings = analyze_static(
-            r#"
-            state Map<int, int> balances;
-
-            fn withdraw_safe() {
-                host::call_contract("target", "entrypoint", json!{});
-                balances[1] = balances[1] - 1;
-            }
-        "#,
-        );
+    fn namespaced_pure_calls_do_not_create_reentrancy_findings() {
+        let findings = analyze_static("fn hash() { crypto::sha256(b\"payload\"); }");
         assert!(
             !findings.iter().any(|f| f.code == "static-reentrancy-risk"),
             "unexpected reentrancy finding: {findings:?}"

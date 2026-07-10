@@ -146,6 +146,19 @@ pub mod payloads {
 /// Metadata key tracking the next public contract deploy nonce for an account.
 pub const CONTRACT_DEPLOY_NONCE_METADATA_KEY: &str = "contract_deploy_nonce";
 
+/// Runtime permission required to invoke a contract's `init` lifecycle entrypoint.
+///
+/// Lifecycle authorization is deliberately defined by the host rather than by
+/// source-level `authorize(...)` declarations. For ABI V1, initializing a
+/// deployed contract requires the same authority as registering contract code.
+pub const CONTRACT_INIT_PERMISSION_NAME: &str = "CanRegisterSmartContractCode";
+
+/// Runtime permission required to invoke a contract's `upgrade` lifecycle entrypoint.
+///
+/// ABI V1 uses the contract-code registration authority for both deployment
+/// lifecycle operations so callers cannot weaken lifecycle policy in source.
+pub const CONTRACT_UPGRADE_PERMISSION_NAME: &str = "CanRegisterSmartContractCode";
+
 /// Default mainnet contract HRP used for Bech32m-encoded contract addresses.
 pub const CONTRACT_ADDRESS_HRP_MAINNET: &str = "sorac";
 /// Default Taira/testnet contract HRP used for Bech32m-encoded contract addresses.
@@ -918,6 +931,9 @@ pub mod manifest {
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub struct ContractManifest {
+        /// Canonical source-level contract name embedded by the compiler.
+        #[norito(default)]
+        pub contract_name: Option<String>,
         /// Content-addressed hash of the compiled `.to` bytecode.
         /// If present, nodes compare it to the hash computed from the submitted bytecode.
         pub code_hash: Option<Hash>,
@@ -943,6 +959,9 @@ pub mod manifest {
         /// Optional durable state schema advertised by the compiler.
         #[norito(default)]
         pub states: Option<Vec<StateDescriptor>>,
+        /// Stable application error codes advertised by the compiler.
+        #[norito(default)]
+        pub error_codes: Option<Vec<ContractErrorCodeDescriptor>>,
         /// Optional localization tables extracted from `kotoba { ... }` blocks.
         #[norito(default)]
         pub kotoba: Option<Vec<KotobaTranslationEntry>>,
@@ -1113,7 +1132,7 @@ pub mod manifest {
     pub struct EntrypointDescriptor {
         /// Symbol name as declared in the Kotodama source file.
         pub name: String,
-        /// Logical kind: `kotoage`, `hajimari`, or `kaizen`.
+        /// Logical kind: public entry, view, initializer, upgrader, or trigger.
         pub kind: EntryPointKind,
         /// Ordered public parameters advertised by the compiler.
         #[norito(default)]
@@ -1177,6 +1196,27 @@ pub mod manifest {
         pub name: String,
         /// Canonical durable value type stored under this key.
         pub type_name: String,
+    }
+
+    /// Stable application error code exposed by a compiled contract.
+    #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
+    #[cfg_attr(
+        feature = "json",
+        derive(
+            crate::DeriveFastJson,
+            crate::DeriveJsonSerialize,
+            crate::DeriveJsonDeserialize
+        )
+    )]
+    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    pub struct ContractErrorCodeDescriptor {
+        /// Error enum namespace declared in Kotodama source.
+        pub namespace: String,
+        /// Variant name within the namespace.
+        pub name: String,
+        /// Explicit non-zero numeric code returned on abort.
+        pub code: u32,
     }
 
     /// Localized message text for a specific language tag.
@@ -1284,10 +1324,10 @@ pub mod manifest {
         Public,
         /// Read-only query entrypoint (`view fn`).
         View,
-        /// Deployment initializer (`hajimari`).
-        Hajimari,
-        /// Upgrade hook (`kaizen`).
-        Kaizen,
+        /// Deployment initializer (`init`).
+        Init,
+        /// Upgrade hook (`upgrade`).
+        Upgrade,
     }
 
     /// Canonical payload signed to attest a manifest.
@@ -1303,6 +1343,9 @@ pub mod manifest {
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub struct ContractManifestSignaturePayload {
+        /// Canonical source-level contract name.
+        #[norito(default)]
+        pub contract_name: Option<String>,
         /// Content-addressed hash of the compiled `.to` bytecode.
         pub code_hash: Option<Hash>,
         /// ABI hash computed by the node for the `abi_version` policy.
@@ -1320,6 +1363,9 @@ pub mod manifest {
         /// Optional durable state schema advertised by the compiler.
         #[norito(default)]
         pub states: Option<Vec<StateDescriptor>>,
+        /// Stable application error codes advertised by the compiler.
+        #[norito(default)]
+        pub error_codes: Option<Vec<ContractErrorCodeDescriptor>>,
         /// Optional localization tables extracted from `kotoba { ... }` blocks.
         #[norito(default)]
         pub kotoba: Option<Vec<KotobaTranslationEntry>>,
@@ -1328,6 +1374,7 @@ pub mod manifest {
     impl From<&ContractManifest> for ContractManifestSignaturePayload {
         fn from(manifest: &ContractManifest) -> Self {
             Self {
+                contract_name: manifest.contract_name.clone(),
                 code_hash: manifest.code_hash,
                 abi_hash: manifest.abi_hash,
                 compiler_fingerprint: manifest.compiler_fingerprint.clone(),
@@ -1335,6 +1382,7 @@ pub mod manifest {
                 access_set_hints: manifest.access_set_hints.clone(),
                 entrypoints: manifest.entrypoints.clone(),
                 states: manifest.states.clone(),
+                error_codes: manifest.error_codes.clone(),
                 kotoba: manifest.kotoba.clone(),
             }
         }
@@ -1426,7 +1474,7 @@ pub mod manifest {
                     name: "amount".to_string(),
                     type_name: "Amount".to_string(),
                 }],
-                return_type: Some("int".to_string()),
+                return_type: Some("i64".to_string()),
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -1472,6 +1520,7 @@ pub mod manifest {
         fn signature_payload_excludes_provenance_and_verifies() {
             let kp = checked_random_keypair();
             let mut manifest = ContractManifest {
+                contract_name: None,
                 code_hash: Some(Hash::new(b"code-bytes")),
                 abi_hash: Some(Hash::new(b"abi-bytes")),
                 compiler_fingerprint: Some("rustc-1.78".to_owned()),
@@ -1480,6 +1529,11 @@ pub mod manifest {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
+                error_codes: Some(vec![ContractErrorCodeDescriptor {
+                    namespace: "PaymentError".to_owned(),
+                    name: "Unauthorized".to_owned(),
+                    code: 1001,
+                }]),
                 provenance: None,
             };
 
@@ -1496,12 +1550,21 @@ pub mod manifest {
             signature
                 .verify(kp.public_key(), &payload)
                 .expect("signature must verify");
+
+            manifest.error_codes.as_mut().expect("error codes")[0].code = 1002;
+            assert!(
+                signature
+                    .verify(kp.public_key(), &manifest.signature_payload_bytes())
+                    .is_err(),
+                "manifest provenance must bind stable error codes"
+            );
         }
 
         #[test]
         fn try_signed_attaches_verifiable_provenance() {
             let kp = checked_random_keypair();
             let manifest = ContractManifest {
+                contract_name: None,
                 code_hash: Some(Hash::new(b"contract-code")),
                 abi_hash: Some(Hash::new(b"contract-abi")),
                 compiler_fingerprint: Some("kotodama-test".to_owned()),
@@ -1510,6 +1573,7 @@ pub mod manifest {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
+                error_codes: None,
                 provenance: None,
             };
 

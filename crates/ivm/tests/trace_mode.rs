@@ -1,18 +1,28 @@
-use ivm::{CoreHost, IVM, KotodamaCompiler, TraceMode};
+//! Runtime trace-mode coverage for compiled Kotodama contracts.
+
+use ivm::{
+    CoreHost, IVM, KotodamaCompiler, TraceMode,
+    kotodama::compiler::{CompilerMode, CompilerOptions},
+};
 
 #[test]
 fn runtime_trace_mode_collects_pcs_and_register_deltas() {
-    let code = KotodamaCompiler::new()
-        .compile_source(
-            r#"
-            fn main() {
-                let a = 1;
-                let b = a + 2;
-                assert_eq(b, 3);
+    let code = KotodamaCompiler::new_with_options(CompilerOptions {
+        mode: CompilerMode::Test,
+        ..CompilerOptions::default()
+    })
+    .compile_source(
+        r#"
+            seiyaku TraceMode {
+                fn main() {
+                    let a = 1;
+                    let b = a + 2;
+                    test::assert_eq(b, 3);
+                }
             }
             "#,
-        )
-        .expect("compile kotodama program");
+    )
+    .expect("compile kotodama program");
 
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());

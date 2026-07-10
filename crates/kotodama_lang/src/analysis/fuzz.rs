@@ -209,21 +209,20 @@ fn param_type_from_expr(expr: &Option<TypeExpr>) -> Result<Type, String> {
 fn convert_type_expr(expr: &TypeExpr) -> Result<Type, String> {
     Ok(match expr {
         TypeExpr::Path(name) => match name.as_str() {
-            "int" | "i64" | "number" => Type::Int,
-            "fixed_u128" => Type::FixedU128,
+            "i64" => Type::Int,
+            "u128" => Type::FixedU128,
             "Amount" => Type::Amount,
-            "Balance" => Type::Balance,
             "bool" => Type::Bool,
-            "unit" | "()" => Type::Unit,
-            other => Type::Opaque(other.to_string()),
+            "()" => Type::Unit,
+            other => Type::NamedStruct(other.to_string()),
         },
         TypeExpr::Generic { base, args } => {
-            if base == "Map" && args.len() == 2 {
+            if base == "StateMap" && args.len() == 2 {
                 let key_ty = convert_type_expr(&args[0])?;
                 let value_ty = convert_type_expr(&args[1])?;
-                Type::Map(Box::new(key_ty), Box::new(value_ty))
+                Type::StateMap(Box::new(key_ty), Box::new(value_ty))
             } else {
-                Type::Opaque(base.clone())
+                Type::NamedStruct(base.clone())
             }
         }
         TypeExpr::Tuple(items) => {
@@ -256,7 +255,7 @@ fn supported_type_samples(ty: &Type) -> Option<Vec<Value>> {
             Value::Int(i32::MIN as i64),
             Value::Int(i32::MAX as i64),
         ]),
-        Type::FixedU128 | Type::Amount | Type::Balance => Some(vec![
+        Type::FixedU128 | Type::Amount => Some(vec![
             Value::Int(0),
             Value::Int(1),
             Value::Int(2),
@@ -445,10 +444,6 @@ impl<'a> Evaluator<'a> {
             TypedStatement::While { cond, body } => {
                 let mut iterations = 0usize;
                 loop {
-                    if iterations >= self.loop_limit {
-                        return Err(EvalError::LoopLimitExceeded);
-                    }
-                    iterations += 1;
                     let cond_val = self.eval_expr(cond, locals, depth)?;
                     let cond_bool = cond_val.as_bool().ok_or_else(|| {
                         EvalError::Runtime("while condition is not boolean".into())
@@ -456,6 +451,10 @@ impl<'a> Evaluator<'a> {
                     if !cond_bool {
                         break;
                     }
+                    if iterations >= self.loop_limit {
+                        return Err(EvalError::LoopLimitExceeded);
+                    }
+                    iterations += 1;
                     match self.exec_block(body, locals, depth)? {
                         FlowControl::Next => {}
                         FlowControl::ContinueLoop => continue,
@@ -465,9 +464,53 @@ impl<'a> Evaluator<'a> {
                 }
                 Ok(FlowControl::Next)
             }
-            TypedStatement::For { .. }
-            | TypedStatement::ForEachMap { .. }
-            | TypedStatement::MapSet { .. } => Err(EvalError::UnsupportedFeature("iterators")),
+            TypedStatement::For {
+                init,
+                cond,
+                step,
+                body,
+                ..
+            } => {
+                if let Some(init) = init {
+                    match self.exec_statement(init, locals, depth)? {
+                        FlowControl::Next => {}
+                        other => return Ok(other),
+                    }
+                }
+                let mut iterations = 0usize;
+                loop {
+                    if let Some(cond) = cond {
+                        let value = self.eval_expr(cond, locals, depth)?;
+                        let condition = value.as_bool().ok_or_else(|| {
+                            EvalError::Runtime("for condition is not boolean".into())
+                        })?;
+                        if !condition {
+                            break;
+                        }
+                    }
+                    if iterations >= self.loop_limit {
+                        return Err(EvalError::LoopLimitExceeded);
+                    }
+                    iterations += 1;
+                    match self.exec_block(body, locals, depth)? {
+                        FlowControl::Next | FlowControl::ContinueLoop => {}
+                        FlowControl::Break => break,
+                        FlowControl::Return(value) => return Ok(FlowControl::Return(value)),
+                    }
+                    if let Some(step) = step {
+                        match self.exec_statement(step, locals, depth)? {
+                            FlowControl::Next => {}
+                            FlowControl::Break => break,
+                            FlowControl::Return(value) => return Ok(FlowControl::Return(value)),
+                            FlowControl::ContinueLoop => {}
+                        }
+                    }
+                }
+                Ok(FlowControl::Next)
+            }
+            TypedStatement::ForEachMap { .. } | TypedStatement::MapSet { .. } => {
+                Err(EvalError::UnsupportedFeature("iterators"))
+            }
         }
     }
 
@@ -711,7 +754,7 @@ enum FlowControl {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::parse;
+    use crate::parser::parse_test_fragment as parse;
 
     fn fuzz(source: &str) -> FuzzReport {
         let program = parse(source).expect("parse");
@@ -723,7 +766,7 @@ mod tests {
     fn fuzz_simple_add() {
         let report = fuzz(
             r#"
-            fn add(a: int, b: int) -> int {
+            fn add(a: i64, b: i64) -> i64 {
                 return a + b;
             }
         "#,
@@ -733,18 +776,19 @@ mod tests {
     }
 
     #[test]
-    fn fuzz_detects_loop_limit() {
+    fn fuzz_executes_the_largest_v1_bounded_range() {
         let report = fuzz(
             r#"
             fn spin() {
-                while true { }
+                for index in range(64) { let value = index; }
             }
         "#,
         );
         assert!(
-            report.findings.iter().any(|f| f.code == "fuzz-loop-limit"),
-            "expected loop limit finding, got {report:?}"
+            !report.findings.iter().any(|f| f.code == "fuzz-loop-limit"),
+            "a compiler-proven V1 loop must fit the fuzz evaluator budget: {report:?}"
         );
+        assert!(report.cases_executed > 0);
     }
 
     #[test]
@@ -752,7 +796,7 @@ mod tests {
         let report = fuzz(
             r#"
             fn call_host() {
-                host::emit_event();
+                math::isqrt(9);
             }
         "#,
         );

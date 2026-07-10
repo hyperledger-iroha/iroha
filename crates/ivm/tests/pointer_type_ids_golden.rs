@@ -3,6 +3,29 @@
 #[test]
 fn pointer_type_ids_match_golden() {
     use ivm::PointerType as P;
+    let expected = [
+        P::AccountId,
+        P::AssetDefinitionId,
+        P::Name,
+        P::Json,
+        P::NftId,
+        P::Blob,
+        P::AssetId,
+        P::DomainId,
+        P::NoritoBytes,
+        P::DataSpaceId,
+        P::AxtDescriptor,
+        P::AssetHandle,
+        P::ProofBlob,
+        P::SoracloudRequest,
+        P::SoracloudResponse,
+    ];
+    assert_eq!(
+        P::all(),
+        expected.as_slice(),
+        "the ABI-v1 pointer type surface changed; update numeric ID and policy goldens together"
+    );
+
     // Keep explicit numeric IDs to catch accidental renumbering.
     assert_eq!(P::AccountId as u16, 0x0001);
     assert_eq!(P::AssetDefinitionId as u16, 0x0002);

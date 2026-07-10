@@ -1,6 +1,6 @@
 // Subscription usage recorder (expects SubscriptionUsageDelta in trigger args).
 seiyaku SubscriptionUsageRecorder {
-  kotoage fn run() {
-    subscription_record_usage();
-  }
+    kotoage fn run() authorize("Entry") {
+        ledger::subscription::record_usage();
+    }
 }

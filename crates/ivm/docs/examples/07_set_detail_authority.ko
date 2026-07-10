@@ -1,10 +1,6 @@
-// Using authority() in a metadata call inside a contract.
+// Using context::authority() in a metadata call inside a contract.
 seiyaku DetailAuthority {
-  kotoage fn write_cursor() permission(Admin) {
-    set_account_detail(
-      authority(),
-      name!("cursor"),
-      json!{ query: "sc_dummy", cursor: 1 }
-    );
-  }
+    kotoage fn write_cursor() authorize("Admin") {
+        ledger::account::set_detail(context::authority(), Name::parse("cursor"), Json::parse("{\"cursor\":1,\"query\":\"sc_dummy\"}"));
+    }
 }

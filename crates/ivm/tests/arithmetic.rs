@@ -151,16 +151,17 @@ fn math_helpers_min_max_abs_divceil_gcd_mean() {
     vm.run().expect("div_ceil");
     assert_eq!(vm.register(3) as i64, -1);
 
-    // DIV_CEIL handles i64::MIN / -1 deterministically (matches DIV semantics).
+    // DIV_CEIL rejects the only signed quotient that cannot fit in i64.
     vm.set_register(1, i64::MIN as u64);
     vm.set_register(2, (-1i64) as u64);
+    vm.set_register(3, 0xCAFE_BABE_DEAD_BEEF);
     let prog = assemble_words(&[
         encoding::wide::encode_rr(instruction::wide::arithmetic::DIV_CEIL, 3, 1, 2),
         HALT_WORD,
     ]);
     vm.load_program(&prog).unwrap();
-    vm.run().expect("div_ceil min/-1");
-    assert_eq!(vm.register(3) as i64, i64::MIN);
+    assert_eq!(vm.run(), Err(VMError::AssertionFailed));
+    assert_eq!(vm.register(3), 0xCAFE_BABE_DEAD_BEEF);
 
     // GCD(48, 18) = 6
     vm.set_register(1, 48);

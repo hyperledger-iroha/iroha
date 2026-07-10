@@ -3044,7 +3044,7 @@ impl Network {
         let zk_config = actual_config.as_ref().map(|config| config.zk.clone());
         let confidential_policy_hash = Some(actual_config.as_ref().map_or_else(
             iroha_core::state::default_zk_consensus_policy_hash,
-            |config| iroha_core::state::compute_zk_consensus_policy_hash(&config.zk),
+            |config| iroha_core::state::compute_genesis_zk_consensus_policy_hash(&config.zk),
         ));
         let consensus_handshake_meta = consensus_handshake_parameter(&self.consensus_profile);
 
@@ -5477,7 +5477,7 @@ impl NetworkBuilder {
             .map(|config| iroha_core::da::proof_policy_bundle(&config.nexus.lane_config));
         let confidential_policy_hash = Some(resolved_npos_config.as_ref().map_or_else(
             iroha_core::state::default_zk_consensus_policy_hash,
-            |config| iroha_core::state::compute_zk_consensus_policy_hash(&config.zk),
+            |config| iroha_core::state::compute_genesis_zk_consensus_policy_hash(&config.zk),
         ));
         let genesis_crypto = resolved_npos_config
             .as_ref()
@@ -11068,7 +11068,7 @@ exit 0
         let peer = network.peers().first().expect("network should have peers");
         let actual = resolve_actual_config(peer, &config_layers)
             .expect("should resolve full config for genesis");
-        let expected = iroha_core::state::compute_zk_consensus_policy_hash(&actual.zk);
+        let expected = iroha_core::state::compute_genesis_zk_consensus_policy_hash(&actual.zk);
 
         let genesis = network.genesis();
         assert_eq!(

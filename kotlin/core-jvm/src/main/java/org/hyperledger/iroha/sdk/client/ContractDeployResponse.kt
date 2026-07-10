@@ -10,17 +10,19 @@ class ContractDeployResponseContract(
     @JvmField val dataspace: String?,
     @JvmField val deployNonce: Long?,
     @JvmField val txHashHex: String?,
+    @JvmField val pipelineStatus: Map<String, Any?>?,
     @JvmField val codeHashHex: String,
     @JvmField val abiHashHex: String,
     @JvmField val status: String,
 )
 
-/** One init-call receipt emitted by `POST /v1/contracts/deploy`. */
-class ContractDeployResponseInitCall(
+/** One hajimari-call receipt emitted by `POST /v1/contracts/deploy`. */
+class ContractDeployResponseHajimariCall(
     @JvmField val id: String,
     @JvmField val contractAlias: String?,
     @JvmField val entrypoint: String?,
     @JvmField val txHashHex: String?,
+    @JvmField val pipelineStatus: Map<String, Any?>?,
     @JvmField val status: String,
 )
 
@@ -45,6 +47,6 @@ class ContractDeployResponse(
     @JvmField val completedStages: List<String>,
     @JvmField val failurePoint: String?,
     @JvmField val contracts: List<ContractDeployResponseContract>,
-    @JvmField val initCalls: List<ContractDeployResponseInitCall>,
+    @JvmField val hajimariCalls: List<ContractDeployResponseHajimariCall>,
     @JvmField val assertions: List<ContractDeployResponseAssertion>,
 )

@@ -10,7 +10,7 @@ This document describes the app-facing HTTP endpoints for deploying self-describ
   - Response body: `ContractCodeRecordDto` (JSON) with `manifest` populated.
 
 - POST `/v1/contracts/deploy`
-  - Accepts base64 `.to` bytecode with authority, private key, and a stable `contract_alias`; verifies the embedded `CNTR` contract interface, computes `code_hash` from the full artifact body after the fixed IVM header, computes `abi_hash` from the enforced ABI policy declared by the verified header, derives a fresh immutable `contract_address`, and binds the alias in the requested dataspace (`universal` by default).
+  - Accepts base64 `.to` bytecode with authority, private key, and a stable `contract_alias`; verifies the embedded `CNTR` contract interface, computes the domain-separated `code_hash` over the complete artifact including the fixed IVM execution header, computes `abi_hash` from the enforced ABI policy declared by the verified header, derives a fresh immutable `contract_address`, and binds the alias in the requested dataspace (`universal` by default).
   - Request body: `DeployContractDto`; response body: `DeployContractBundleReceiptDto` with exactly one `contracts[]` receipt entry.
   - Submits a single transaction that registers the manifest, stores the bytecode, activates the fresh address-backed instance, and binds the alias.
   - Reusing an existing `contract_alias` performs an in-place upgrade: `contracts[0]` reports the new `contract_address`, the previous address, and `upgraded = true`.
@@ -70,7 +70,7 @@ Notes:
       "status": "submitted"
     }
   ],
-  "init_calls": [],
+  "hajimari_calls": [],
   "assertions": []
 }
 ```

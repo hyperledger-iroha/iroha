@@ -41,7 +41,10 @@ Terminology
 - `InstructionBox` uses a registry with stable “wire IDs” and Norito encoding; native execution dispatch is the current code path in core.
 
 ### Core Integration of IVM
-- `State::execute_trigger(..)` clones the cached `IVM`, attaches a `CoreHost::with_accounts_and_args`, and then calls `load_program` + `run`.
+- Contract admission builds an immutable `PreparedContract` with validated
+  metadata, interface, control flow, and predecode. Warm calls reuse prepared
+  state and pooled VMs, resetting dirty memory instead of cloning the full
+  stack and Merkle tree.
 - `CoreHostImpl` implements `IVMHost`: stateful syscalls are decoded via the
   pointer-ABI TLV layout, mapped to built-in ISI (`InstructionBox`), and
   queued. Once the VM returns, the host hands those ISI to the regular executor
@@ -57,9 +60,15 @@ Terminology
 ### Kotodama → IVM
 - Kotodama has lexer, parser, semantic analysis, IR, register allocation, and
   codegen in `crates/kotodama_lang`.
-- Contract forms, public/view/test entrypoints, state handles, structs, tuple
-  returns, triggers, permission annotations, typed JSON/Norito helpers, and
-  internal helper calls are wired through semantic analysis and codegen.
+- One branded V1 `seiyaku`/`誓約` or `module`, private functions, authorized
+  `kotoage fn`/`言挙げ fn`, read-only `view fn`, `hajimari`/`始まり` and
+  `kaizen`/`改善` lifecycle declarations, typed state,
+  structs, tuples, triggers, stable error enums, and internal helper calls are
+  wired through resolution, semantic analysis, and codegen.
+- Source host capabilities use canonical namespaces such as `context`,
+  `ledger`, `state`, and `crypto`. Flat legacy operation aliases, source
+  metadata, raw pointers, direct syscall variants, and opaque instruction
+  submission are rejected.
 - Codegen emits pointer-ABI TLVs for ledger syscalls and host helpers:
   - `MintAsset` sets x10=account, x11=asset, x12=&NoritoBytes(Numeric), then
     calls `SYSCALL_MINT_ASSET`.
@@ -89,8 +98,9 @@ operation, and payload variant, then fails closed with metered `NotImplemented`.
 2. Syscall surface vs. ISI/Data Model naming and coverage
 
 NFT syscalls use canonical `SYSCALL_NFT_*` names aligned with
-`iroha_data_model::nft`. Role, permission, trigger, parameter, and smart
-contract lifecycle syscalls are tied to concrete core ISI in `CoreHostImpl`.
+`iroha_data_model::nft`. Role, permission, trigger, parameter, and
+smart-contract lifecycle syscalls are tied to concrete core ISI in
+`CoreHostImpl`.
 The syscall tables in `crates/ivm/docs/syscalls.md` remain the source to update
 when a new number, pointer type, or gas rule is introduced.
 
@@ -104,10 +114,12 @@ derived for production manifests.
 
 4. Gas and error mapping consistency
 
-IVM opcodes charge per-op gas. Runtime host syscalls charge deterministic
-size-aware costs for queued ISI, query payloads, ZK verification, contract
-calls, and helper payloads. Host errors are normalized into VM-visible errors or
-explicit status registers before state changes are committed.
+IVM opcodes charge per-op gas. Runtime host syscalls prepare and quote a
+deterministic size-aware cost for queued ISI, query payloads, ZK verification,
+seiyaku calls, and helper payloads; the VM debits that quote before execution.
+No query, allocation, or state effect occurs before affordability is known.
+Host errors are normalized into VM-visible errors or explicit status registers
+before state changes are committed.
 
 5. Determinism across acceleration paths
 
@@ -119,11 +131,17 @@ semantics.
 
 6. Kotodama language surface vs. ledger semantics
 
-Kotodama now wires contract bodies, state handles, structs, tuples, triggers,
-permissions, typed parameters/returns, dynamic contract calls, and host helper
-builtins into the IVM host model. Public entrypoints require `permission(...)`
-when they call privileged operations, and `view` functions reject stateful
-effects.
+Kotodama wires contract bodies, `StateMap` handles, structs, tuples, triggers,
+typed parameters/returns, dynamic contract calls, and namespaced capabilities
+into the IVM host model. Every mutating public entrypoint declares
+`authorize("PermissionName")`; runtime caller authorization remains separate
+from operation-specific host authorization. `view fn` declarations reject
+stateful effects across the complete call graph.
+
+Lifecycle authorization cannot be weakened in source. ABI V1 maps both
+`hajimari`/`始まり` and `kaizen`/`改善` to the runtime-defined
+`CanRegisterSmartContractCode` permission, while views remain public unless
+they explicitly declare authorization.
 
 ---
 

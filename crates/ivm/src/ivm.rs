@@ -37,11 +37,12 @@ use crate::{
     host::{AccessLog, DefaultHost, IVMHost},
     instruction,
     memory::Memory,
-    metadata::{EmbeddedContractDebugInfoV1, ProgramMetadata},
+    metadata::{EmbeddedContractDebugInfoV1, ParsedLiteralSection, ProgramMetadata},
     parallel::{
         self, Block, BlockResult, ExecutionContext, Scheduler, State, Transaction, TxResult,
     },
     pointer_abi::PointerPolicyGuard,
+    prepared::PreparedContract,
     registers::Registers,
     simple_instruction::Instruction as SimpleInstruction,
     vector,
@@ -65,9 +66,217 @@ const ILP_MIN_PARALLEL_BLOCK_LEN: usize = 16;
 const PREPARED_PROGRAM_CACHE_CAPACITY: usize = 128;
 /// Approximate byte budget for cached prepared instruction streams.
 const PREPARED_PROGRAM_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum protected direct-call depth for deployable contract artifacts.
+///
+/// Kotodama V1 rejects recursion, so legitimate programs remain well below
+/// this bound. The cap makes malicious cyclic call graphs fail deterministically
+/// without allowing an unbounded host-side shadow stack.
+const MAX_CONTRACT_CALL_DEPTH: usize = 1024;
+
+const SYSCALL_ARGS_0: &[usize] = &[];
+const SYSCALL_ARGS_1: &[usize] = &[10];
+const SYSCALL_ARGS_2: &[usize] = &[10, 11];
+const SYSCALL_ARGS_3: &[usize] = &[10, 11, 12];
+const SYSCALL_ARGS_4: &[usize] = &[10, 11, 12, 13];
+const SYSCALL_ARGS_5: &[usize] = &[10, 11, 12, 13, 14];
+
+/// Registers whose values cross the public host boundary for an ABI syscall.
+///
+/// Most syscalls have one argument in r10. Multi-register and argument-free
+/// calls are listed explicitly so an unrelated private value left in a
+/// caller-saved argument register cannot cause a false privacy trap.
+fn syscall_public_input_registers(number: u32) -> &'static [usize] {
+    use crate::syscalls::*;
+
+    match canonical_helper_syscall(number) {
+        SYSCALL_ABORT
+        | SYSCALL_TRANSFER_V1_BATCH_BEGIN
+        | SYSCALL_TRANSFER_V1_BATCH_END
+        | SYSCALL_JSON_OBJECT
+        | SYSCALL_CREATE_NFTS_FOR_ALL_USERS
+        | SYSCALL_GET_AUTHORITY
+        | SYSCALL_SUBSCRIPTION_BILL
+        | SYSCALL_SUBSCRIPTION_RECORD_USAGE
+        | SYSCALL_CURRENT_TIME_MS
+        | SYSCALL_AXT_COMMIT
+        | SYSCALL_PROVE_EXECUTION
+        | SYSCALL_COMMIT_OUTPUT
+        | SYSCALL_SYSVAR_CHAIN_ID
+        | SYSCALL_SYSVAR_BLOCK_HEIGHT
+        | SYSCALL_SYSVAR_BLOCK_TIME_MS
+        | SYSCALL_SYSVAR_AUTHORITY
+        | SYSCALL_SYSVAR_CONTRACT_ADDRESS
+        | SYSCALL_SYSVAR_ENTRYPOINT => SYSCALL_ARGS_0,
+
+        SYSCALL_TRANSFER_ASSET_SCOPED | SYSCALL_SM4_CCM_SEAL | SYSCALL_SM4_CCM_OPEN => {
+            SYSCALL_ARGS_5
+        }
+
+        SYSCALL_TRANSFER_V1
+        | SYSCALL_VERIFY_SIGNATURE
+        | SYSCALL_SM2_VERIFY
+        | SYSCALL_SM4_GCM_SEAL
+        | SYSCALL_SM4_GCM_OPEN
+        | SYSCALL_VRF_VERIFY
+        | SYSCALL_GET_MERKLE_COMPACT
+        | SYSCALL_GET_REGISTER_MERKLE_COMPACT
+        | SYSCALL_ESCROW_OPEN_OFFER
+        | SYSCALL_ESCROW_RESOLVE_DISPUTE => SYSCALL_ARGS_4,
+
+        SYSCALL_SET_ACCOUNT_DETAIL
+        | SYSCALL_MINT_ASSET
+        | SYSCALL_BURN_ASSET
+        | SYSCALL_NFT_TRANSFER_ASSET
+        | SYSCALL_NFT_SET_METADATA
+        | SYSCALL_STATE_KEYS
+        | SYSCALL_STATE_MAP_KEY_AT
+        | SYSCALL_STATE_VALUE_ENCODE
+        | SYSCALL_JSON_SET_I64
+        | SYSCALL_JSON_SET_ACCOUNT_ID
+        | SYSCALL_CALL_CONTRACT
+        | SYSCALL_USE_ASSET_HANDLE => SYSCALL_ARGS_3,
+
+        SYSCALL_TRANSFER_DOMAIN
+        | SYSCALL_ADD_SIGNATORY
+        | SYSCALL_REMOVE_SIGNATORY
+        | SYSCALL_SET_ACCOUNT_QUORUM
+        | SYSCALL_NFT_MINT_ASSET
+        | SYSCALL_STATE_SET
+        | SYSCALL_BUILD_PATH_MAP_KEY
+        | SYSCALL_BUILD_PATH_KEY_NORITO
+        | SYSCALL_SCHEMA_ENCODE
+        | SYSCALL_SCHEMA_DECODE
+        | SYSCALL_POINTER_FROM_NORITO
+        | SYSCALL_TLV_EQ
+        | SYSCALL_NUMERIC_ADD
+        | SYSCALL_NUMERIC_SUB
+        | SYSCALL_NUMERIC_MUL
+        | SYSCALL_NUMERIC_DIV
+        | SYSCALL_NUMERIC_REM
+        | SYSCALL_NUMERIC_EQ
+        | SYSCALL_NUMERIC_NE
+        | SYSCALL_NUMERIC_LT
+        | SYSCALL_NUMERIC_LE
+        | SYSCALL_NUMERIC_GT
+        | SYSCALL_NUMERIC_GE
+        | SYSCALL_JSON_GET_I64
+        | SYSCALL_JSON_GET_JSON
+        | SYSCALL_JSON_GET_NAME
+        | SYSCALL_JSON_GET_ACCOUNT_ID
+        | SYSCALL_JSON_GET_NFT_ID
+        | SYSCALL_JSON_GET_BLOB_HEX
+        | SYSCALL_JSON_GET_NUMERIC
+        | SYSCALL_JSON_GET_ASSET_DEFINITION_ID
+        | SYSCALL_CREATE_ROLE
+        | SYSCALL_GRANT_ROLE
+        | SYSCALL_REVOKE_ROLE
+        | SYSCALL_GRANT_PERMISSION
+        | SYSCALL_REVOKE_PERMISSION
+        | SYSCALL_SET_TRIGGER_ENABLED
+        | SYSCALL_GET_ACCOUNT_BALANCE
+        | SYSCALL_AXT_TOUCH
+        | SYSCALL_VERIFY_DS_PROOF
+        | SYSCALL_ESCROW_OPEN_DISPUTE
+        | SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE
+        | SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION
+        | SYSCALL_DECODE_ARGUMENT_RECORD
+        | SYSCALL_STATE_VALUE_DECODE => SYSCALL_ARGS_2,
+
+        _ => SYSCALL_ARGS_1,
+    }
+}
 
 fn default_vector_length() -> usize {
     DEFAULT_VECTOR_LENGTH.clamp(1, LOGICAL_VECTOR_MAX)
+}
+
+pub(crate) fn decode_literal_pointers(
+    program: &[u8],
+    header_len: usize,
+    section: Option<ParsedLiteralSection>,
+    policy: SyscallPolicy,
+) -> Result<Arc<[u64]>, VMError> {
+    let Some(section) = section else {
+        return Ok(Arc::from(Vec::<u64>::new().into_boxed_slice()));
+    };
+    if section.count > usize::from(u16::MAX) + 1 {
+        return Err(VMError::InvalidMetadata);
+    }
+
+    // Validate the packed typed-data stream once, then require every table
+    // entry to name an exact envelope boundary.
+    let mut validated_targets = HashMap::new();
+    let mut target = section.data_start;
+    while target < section.data_end {
+        let tlv_header_end = target.checked_add(7).ok_or(VMError::InvalidMetadata)?;
+        let header = program
+            .get(target..tlv_header_end)
+            .ok_or(VMError::InvalidMetadata)?;
+        let payload_len = u32::from_be_bytes(
+            header[3..7]
+                .try_into()
+                .map_err(|_| VMError::InvalidMetadata)?,
+        ) as usize;
+        let envelope_len = 7usize
+            .checked_add(payload_len)
+            .and_then(|len| len.checked_add(iroha_crypto::Hash::LENGTH))
+            .ok_or(VMError::InvalidMetadata)?;
+        let envelope_end = target
+            .checked_add(envelope_len)
+            .ok_or(VMError::InvalidMetadata)?;
+        if envelope_end > section.data_end {
+            return Err(VMError::InvalidMetadata);
+        }
+        let tlv = crate::pointer_abi::validate_tlv_bytes(
+            program
+                .get(target..envelope_end)
+                .ok_or(VMError::InvalidMetadata)?,
+        )
+        .map_err(|_| VMError::InvalidMetadata)?;
+        if !crate::pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
+            return Err(VMError::AbiTypeNotAllowed {
+                abi: 1,
+                type_id: tlv.type_id as u16,
+            });
+        }
+        let memory_pointer = target
+            .checked_sub(header_len)
+            .and_then(|pointer| u64::try_from(pointer).ok())
+            .ok_or(VMError::InvalidMetadata)?;
+        validated_targets.insert(target, memory_pointer);
+        target = envelope_end;
+    }
+
+    let mut pointers = Vec::with_capacity(section.count);
+    let mut previous_target = None;
+    for index in 0..section.count {
+        let entry_start = section
+            .entries_start
+            .checked_add(index.checked_mul(8).ok_or(VMError::InvalidMetadata)?)
+            .ok_or(VMError::InvalidMetadata)?;
+        let entry_end = entry_start.checked_add(8).ok_or(VMError::InvalidMetadata)?;
+        let relative = u64::from_le_bytes(
+            program
+                .get(entry_start..entry_end)
+                .ok_or(VMError::InvalidMetadata)?
+                .try_into()
+                .map_err(|_| VMError::InvalidMetadata)?,
+        );
+        let target = section
+            .start
+            .checked_add(usize::try_from(relative).map_err(|_| VMError::InvalidMetadata)?)
+            .ok_or(VMError::InvalidMetadata)?;
+        if previous_target.is_some_and(|previous| target <= previous) {
+            return Err(VMError::InvalidMetadata);
+        }
+        previous_target = Some(target);
+        pointers.push(
+            *validated_targets
+                .get(&target)
+                .ok_or(VMError::InvalidMetadata)?,
+        );
+    }
+    Ok(Arc::from(pointers.into_boxed_slice()))
 }
 
 fn setvl_length(raw: usize) -> Result<usize, VMError> {
@@ -104,20 +313,25 @@ fn isqrt_u64(mut n: u64) -> u64 {
     res
 }
 
+fn checked_div_i64(num: i64, denom: i64) -> Result<i64, VMError> {
+    num.checked_div(denom).ok_or(VMError::AssertionFailed)
+}
+
+fn checked_rem_i64(num: i64, denom: i64) -> Result<i64, VMError> {
+    num.checked_rem(denom).ok_or(VMError::AssertionFailed)
+}
+
+fn checked_abs_i64(value: i64) -> Result<i64, VMError> {
+    value.checked_abs().ok_or(VMError::AssertionFailed)
+}
+
 fn div_ceil_i64(num: i64, denom: i64) -> Result<i64, VMError> {
-    if denom == 0 {
-        return Err(VMError::AssertionFailed);
-    }
-    // Avoid the i64::MIN / -1 overflow case to keep behavior deterministic.
-    if num == i64::MIN && denom == -1 {
-        return Ok(i64::MIN);
-    }
-    let q = num / denom;
-    let r = num % denom;
+    let q = checked_div_i64(num, denom)?;
+    let r = checked_rem_i64(num, denom)?;
     if r == 0 {
         Ok(q)
     } else if (r > 0 && denom > 0) || (r < 0 && denom < 0) {
-        Ok(q + 1)
+        q.checked_add(1).ok_or(VMError::AssertionFailed)
     } else {
         Ok(q)
     }
@@ -189,6 +403,7 @@ struct WorkerResources {
     vm: IVM,
     ctx: ExecutionContext,
     template_memory: Memory,
+    template_private_memory_bytes: HashSet<u64>,
     template_input_bump: u64,
 }
 
@@ -197,11 +412,12 @@ impl WorkerResources {
         template: &Arc<Mutex<IVM>>,
         host: Option<&Arc<Mutex<Option<Box<dyn IVMHost + Send + Sync>>>>>,
     ) -> Self {
-        let (mut vm, template_memory, template_input_bump) = {
+        let (mut vm, template_memory, template_private_memory_bytes, template_input_bump) = {
             let template = template.lock().unwrap_or_else(|err| err.into_inner());
             (
                 template.clone(),
                 template.memory.clone(),
+                template.private_memory_bytes.clone(),
                 template.input_bump_next,
             )
         };
@@ -214,12 +430,17 @@ impl WorkerResources {
             vm,
             ctx: ExecutionContext::new(),
             template_memory,
+            template_private_memory_bytes,
             template_input_bump,
         }
     }
 
     fn execute(&mut self, tx: Transaction) -> TxResult {
+        self.vm.private_memory_bytes.clear();
         self.vm.memory.reset_from_template(&self.template_memory);
+        self.vm
+            .private_memory_bytes
+            .clone_from(&self.template_private_memory_bytes);
         self.vm.input_bump_next = self.template_input_bump;
         self.ctx.init_for_transaction(&tx, &self.vm.state);
         let result = self.vm.execute_transaction(&tx, &mut self.ctx);
@@ -982,7 +1203,7 @@ impl PreparedOp {
 }
 
 #[derive(Clone)]
-struct PreparedProgram {
+pub(crate) struct PreparedProgram {
     first_pc: u64,
     end_pc: u64,
     ops: Arc<[PreparedOp]>,
@@ -1040,6 +1261,11 @@ impl PreparedProgram {
 
     fn contains_pc(&self, pc: u64) -> bool {
         self.op_at(pc).is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shares_ops(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.ops, &other.ops)
     }
 }
 
@@ -1140,6 +1366,40 @@ fn prepared_program_cache() -> &'static Mutex<PreparedProgramCache> {
     CACHE.get_or_init(|| Mutex::new(PreparedProgramCache::new()))
 }
 
+pub(crate) fn prepare_instruction_stream(
+    code: &[u8],
+    metadata: &ProgramMetadata,
+    decoded: &[crate::ivm_cache::DecodedOp],
+    first_pc: u64,
+    literal_count: usize,
+) -> Result<PreparedProgram, VMError> {
+    if decoded.iter().any(|op| {
+        instruction::wide::opcode(op.inst) == instruction::wide::memory::LDLIT
+            && instruction::wide::literal_index(op.inst) >= literal_count
+    }) {
+        return Err(VMError::InvalidMetadata);
+    }
+    let prepared_ops = {
+        let mut guard = prepared_program_cache()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        guard.get_or_prepare(code, metadata, decoded)?
+    };
+    PreparedProgram::from_prepared_ops(prepared_ops, first_pc, code.len())
+}
+
+struct ProgramLoadImage<'a> {
+    code_region: &'a [u8],
+    metadata: ProgramMetadata,
+    contract_debug: Option<EmbeddedContractDebugInfoV1>,
+    literal_pointers: Arc<[u64]>,
+    predecoded: Option<Arc<[crate::ivm_cache::DecodedOp]>>,
+    prepared: Option<PreparedProgram>,
+    code_hash: [u8; 32],
+    entry_pc: u64,
+    strict_return_integrity: bool,
+}
+
 #[derive(Clone, Copy)]
 struct FetchedOp {
     inst: u32,
@@ -1156,16 +1416,47 @@ pub enum TraceMode {
     DeltaRegisters,
 }
 
+/// Immutable baseline used to return a warmed VM to its post-load state.
+///
+/// The baseline owns one pristine memory image. Resetting from it copies only
+/// memory chunks dirtied by the preceding invocation; decoded instructions,
+/// literal tables, and the loaded program remain attached to the VM.
+#[derive(Clone)]
+pub struct RuntimeTemplate {
+    memory: Memory,
+    registers: Registers,
+    private_memory_bytes: HashSet<u64>,
+    pc: u64,
+    gas_limit: u64,
+    max_cycles: u64,
+    trace_mode: TraceMode,
+    zk_trace_enabled: bool,
+    entrypoint_pc: Option<u64>,
+    input_bump_next: u64,
+}
+
 pub struct IVM {
     pub registers: Registers,
     // The vector register file has been folded into `registers`. Vector
     // operations access groups of general registers rather than a separate
     // structure.
     pub memory: Memory,
+    /// Byte addresses in the guest stack that currently contain private data.
+    ///
+    /// ZK register tags must survive compiler-generated spills without allowing
+    /// bytecode to launder a secret through an untagged load. Private stores are
+    /// confined to the stack; every other guest-visible memory region is public.
+    private_memory_bytes: HashSet<u64>,
     pub pc: u64,
     host: Option<Box<dyn IVMHost + Send + Sync>>,
     gas_limit: u64,
     pub gas_remaining: u64,
+    /// Gas pre-debited for the syscall currently executing.
+    ///
+    /// This reserve is visible through [`Self::remaining_gas`] so hosts retain
+    /// their existing gas-budget view, but it is not available to nested VM
+    /// execution until the syscall reports its actual cost.
+    syscall_gas_reserve: u64,
     cycles: u64,
     halted: bool,
     constraint_failed: bool,
@@ -1186,9 +1477,16 @@ pub struct IVM {
     metadata: ProgramMetadata,
     code_hash: [u8; 32],
     contract_debug: Option<EmbeddedContractDebugInfoV1>,
+    literal_pointers: Arc<[u64]>,
     predecoded: Option<Arc<[crate::ivm_cache::DecodedOp]>>,
     prepared: Option<PreparedProgram>,
     prepared_required: bool,
+    /// Whether the loaded image is a deployable contract with protected calls.
+    strict_return_integrity: bool,
+    /// Host-protected return PCs for direct contract calls.
+    contract_return_stack: Vec<u64>,
+    /// Aligned outer-return sentinel captured from r1 at invocation start.
+    contract_outer_return_pc: Option<u64>,
     branch_predictor: crate::branch_predictor::BranchPredictor,
     branch_predictions: u64,
     branch_correct: u64,
@@ -1198,6 +1496,10 @@ pub struct IVM {
     pub(crate) decode_trace: bool,
     #[cfg(test)]
     predecoded_misses: u64,
+    #[cfg(test)]
+    program_parse_attempts: u64,
+    #[cfg(test)]
+    prepared_loads: u64,
     // Shared world state used for block execution.
     state: State,
     // Parallel scheduler reused across blocks.
@@ -1240,10 +1542,14 @@ impl Clone for IVM {
         Self {
             registers: self.registers.clone(),
             memory: self.memory.clone(),
+            private_memory_bytes: self.private_memory_bytes.clone(),
             pc: self.pc,
             host: None,
             gas_limit: self.gas_limit,
-            gas_remaining: self.gas_remaining,
+            gas_remaining: self.remaining_gas(),
+            // A clone is an independent VM, not a continuation of an active
+            // host call, so fold any transient reserve into ordinary gas.
+            syscall_gas_reserve: 0,
             cycles: self.cycles,
             halted: self.halted,
             constraint_failed: self.constraint_failed,
@@ -1262,9 +1568,13 @@ impl Clone for IVM {
             metadata: self.metadata.clone(),
             code_hash: self.code_hash,
             contract_debug: self.contract_debug.clone(),
+            literal_pointers: Arc::clone(&self.literal_pointers),
             predecoded: self.predecoded.clone(),
             prepared: self.prepared.clone(),
             prepared_required: self.prepared_required,
+            strict_return_integrity: self.strict_return_integrity,
+            contract_return_stack: self.contract_return_stack.clone(),
+            contract_outer_return_pc: self.contract_outer_return_pc,
             branch_predictor: self.branch_predictor.clone(),
             branch_predictions: 0,
             branch_correct: 0,
@@ -1272,6 +1582,10 @@ impl Clone for IVM {
             decode_trace: false,
             #[cfg(test)]
             predecoded_misses: 0,
+            #[cfg(test)]
+            program_parse_attempts: 0,
+            #[cfg(test)]
+            prepared_loads: 0,
             state: self.state.clone(),
             scheduler: std::sync::Arc::clone(&self.scheduler),
             _contexts: Vec::new(),
@@ -1554,12 +1868,14 @@ impl IVM {
         let mut vm = IVM {
             registers: Registers::new(),
             memory: mem,
+            private_memory_bytes: HashSet::new(),
             pc: 0,
             host: Some(Box::new(crate::runtime::SyscallDispatcher::new(
                 DefaultHost::new(),
             ))),
             gas_limit,
             gas_remaining: gas_limit,
+            syscall_gas_reserve: 0,
             cycles: 0,
             halted: false,
             constraint_failed: false,
@@ -1578,9 +1894,13 @@ impl IVM {
             metadata: ProgramMetadata::default(),
             code_hash: [0u8; 32],
             contract_debug: None,
+            literal_pointers: Arc::from(Vec::<u64>::new().into_boxed_slice()),
             predecoded: None,
             prepared: None,
             prepared_required: false,
+            strict_return_integrity: false,
+            contract_return_stack: Vec::new(),
+            contract_outer_return_pc: None,
             branch_predictor: crate::branch_predictor::BranchPredictor::new(1024),
             branch_predictions: 0,
             branch_correct: 0,
@@ -1588,6 +1908,10 @@ impl IVM {
             decode_trace: false,
             #[cfg(test)]
             predecoded_misses: 0,
+            #[cfg(test)]
+            program_parse_attempts: 0,
+            #[cfg(test)]
+            prepared_loads: 0,
             state: State::new(),
             core_count: {
                 let (min, _max) = crate::parallel::default_scheduler_limits();
@@ -1882,9 +2206,10 @@ impl IVM {
                 let base = self.registers.get(addr_reg as usize) as i64;
                 let addr = base.wrapping_add(offset as i64) as u64;
                 let value = self.memory.load_u64(addr)?;
+                let tag = self.memory_load_privacy_tag(addr, 8)?;
                 self.registers.set(rd as usize, value);
                 if self.zk_mode {
-                    self.registers.set_tag(rd as usize, false);
+                    self.registers.set_tag(rd as usize, tag);
                 }
             }
             SimpleInstruction::Store {
@@ -1898,7 +2223,10 @@ impl IVM {
                 let base = self.registers.get(addr_reg as usize) as i64;
                 let addr = base.wrapping_add(offset as i64) as u64;
                 let value = self.registers.get(rs as usize);
+                let tag = self.zk_mode && self.registers.tag(rs as usize);
+                self.validate_memory_store_privacy(addr, 8, tag)?;
                 self.memory.store_u64(addr, value)?;
+                self.record_memory_store_privacy(addr, 8, tag);
             }
             SimpleInstruction::Jump { target } => {
                 self.pc = target;
@@ -1934,6 +2262,7 @@ impl IVM {
                 src_addr,
                 len,
             } => {
+                self.ensure_public_memory(src_addr, len)?;
                 let data = self.memory.load_region(src_addr, len)?;
                 use sha2::{Digest, Sha256};
                 let digest = Sha256::digest(data);
@@ -1955,6 +2284,9 @@ impl IVM {
                 result_reg,
             } => {
                 use ed25519_dalek::Signature;
+                self.ensure_public_memory(pubkey_addr, 32)?;
+                self.ensure_public_memory(sig_addr, 64)?;
+                self.ensure_public_memory(msg_addr, msg_len)?;
                 let pk_slice = self.memory.load_region(pubkey_addr, 32)?;
                 let sig_slice = self.memory.load_region(sig_addr, 64)?;
                 let msg = self.memory.load_region(msg_addr, msg_len)?;
@@ -2038,9 +2370,15 @@ impl IVM {
                     mldsa44 as dilithium2, mldsa65 as dilithium3, mldsa87 as dilithium5,
                 };
                 use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
+                self.ensure_public_memory(msg_addr, msg_len)?;
                 let msg = self.memory.load_region(msg_addr, msg_len)?;
                 let valid = match level {
                     2 => {
+                        self.ensure_public_memory(
+                            pubkey_addr,
+                            dilithium2::public_key_bytes() as u64,
+                        )?;
+                        self.ensure_public_memory(sig_addr, dilithium2::signature_bytes() as u64)?;
                         let pk_slice = self
                             .memory
                             .load_region(pubkey_addr, dilithium2::public_key_bytes() as u64)?;
@@ -2070,6 +2408,11 @@ impl IVM {
                         dilithium2::verify_detached_signature(&sig, msg, &pk).is_ok()
                     }
                     3 => {
+                        self.ensure_public_memory(
+                            pubkey_addr,
+                            dilithium3::public_key_bytes() as u64,
+                        )?;
+                        self.ensure_public_memory(sig_addr, dilithium3::signature_bytes() as u64)?;
                         let pk_slice = self
                             .memory
                             .load_region(pubkey_addr, dilithium3::public_key_bytes() as u64)?;
@@ -2099,6 +2442,11 @@ impl IVM {
                         dilithium3::verify_detached_signature(&sig, msg, &pk).is_ok()
                     }
                     5 => {
+                        self.ensure_public_memory(
+                            pubkey_addr,
+                            dilithium5::public_key_bytes() as u64,
+                        )?;
+                        self.ensure_public_memory(sig_addr, dilithium5::signature_bytes() as u64)?;
                         let pk_slice = self
                             .memory
                             .load_region(pubkey_addr, dilithium5::public_key_bytes() as u64)?;
@@ -2245,6 +2593,11 @@ impl IVM {
     /// When enabled and no explicit cycle limit has been set, the default
     /// [`zk::MAX_CYCLES`] value is used. Disabling ZK clears the cycle limit.
     pub fn set_zk_mode(&mut self, enabled: bool) {
+        if self.zk_mode && !enabled {
+            if !self.scrub_private_memory() {
+                return;
+            }
+        }
         self.zk_mode = enabled;
         if enabled {
             if self.max_cycles == 0 {
@@ -2283,6 +2636,9 @@ impl IVM {
         if code.len() > Memory::HEAP_START as usize {
             return Err(VMError::MemoryOutOfBounds);
         }
+        if !self.scrub_private_memory() {
+            return Err(VMError::PrivacyViolation);
+        }
         // Preserve INPUT/STACK contents but reset OUTPUT for a clean run.
         self.memory.load_code(code);
         self.memory.clear_output();
@@ -2290,58 +2646,137 @@ impl IVM {
         self.entrypoint_pc = Some(0);
         self.program_prefix_len = 0;
         self.contract_debug = None;
+        self.literal_pointers = Arc::from(Vec::<u64>::new().into_boxed_slice());
         self.last_diagnostic = None;
         self.predecoded = None;
         self.prepared = None;
         self.prepared_required = false;
+        self.strict_return_integrity = false;
+        self.contract_return_stack.clear();
+        self.contract_outer_return_pc = None;
+        self.code_hash = iroha_crypto::Hash::new(code).into();
+        self.memory.commit();
+        self.memory.mark_template_clean();
         Ok(())
     }
 
     /// Load a program (bytecode) into the VM's code memory.
     pub fn load_program(&mut self, program: &[u8]) -> Result<(), VMError> {
+        #[cfg(test)]
+        {
+            self.program_parse_attempts = self.program_parse_attempts.saturating_add(1);
+        }
         let parsed = ProgramMetadata::parse(program)?;
         if parsed.metadata.abi_version != 1 {
             return Err(VMError::InvalidMetadata);
         }
+        let strict_return_integrity = parsed.contract_interface.is_some();
         let header_len = parsed.header_len;
         let literal_prefix = parsed.literal_prefix_len();
+        let literal_pointers = decode_literal_pointers(
+            program,
+            header_len,
+            parsed.literal_section,
+            SyscallPolicy::AbiV1,
+        )?;
         let code_region = &program[header_len..];
-        if code_region.len() as u64 > Memory::HEAP_START {
+        let code_len = u64::try_from(code_region.len()).map_err(|_| VMError::InvalidMetadata)?;
+        if code_len > Memory::HEAP_START {
             return Err(VMError::InvalidMetadata);
         }
         if literal_prefix > code_region.len() {
             return Err(VMError::InvalidMetadata);
         }
         let instruction_region = &code_region[literal_prefix..];
-        let entry_pc = literal_prefix as u64;
+        let entry_pc = u64::try_from(literal_prefix).map_err(|_| VMError::InvalidMetadata)?;
         let meta = parsed.metadata;
-        self.metadata = meta.clone();
-        self.contract_debug = parsed.contract_debug;
-        self.vector_enabled = meta.mode & crate::metadata::mode::VECTOR != 0;
-        self.max_cycles = meta.max_cycles;
-        self.zk_mode = meta.mode & crate::metadata::mode::ZK != 0;
+        let (predecoded, prepared) = if instruction_region.is_empty() {
+            (None, None)
+        } else {
+            let decoded = crate::ivm_cache::global_get_with_meta(instruction_region, &meta)?;
+            let prepared = prepare_instruction_stream(
+                instruction_region,
+                &meta,
+                decoded.as_ref(),
+                entry_pc,
+                literal_pointers.len(),
+            )?;
+            (Some(decoded), Some(prepared))
+        };
+        self.install_program(ProgramLoadImage {
+            code_region,
+            metadata: meta,
+            contract_debug: parsed.contract_debug,
+            literal_pointers,
+            predecoded,
+            prepared,
+            code_hash: crate::metadata::contract_code_hash(program).into(),
+            entry_pc,
+            strict_return_integrity,
+        })
+    }
+
+    /// Load an already validated and prepared contract without reparsing or redecoding it.
+    ///
+    /// The immutable artifact, metadata, literal index, decoded stream, and
+    /// prepared operations remain shared with `contract`; only the code bytes
+    /// are installed into this VM's memory image.
+    pub fn load_prepared(&mut self, contract: &PreparedContract) -> Result<(), VMError> {
+        #[cfg(test)]
+        {
+            self.prepared_loads = self.prepared_loads.saturating_add(1);
+        }
+        self.install_program(ProgramLoadImage {
+            code_region: contract.code_region(),
+            metadata: contract.metadata().clone(),
+            contract_debug: None,
+            literal_pointers: Arc::clone(contract.literal_pointers()),
+            predecoded: Some(Arc::clone(contract.decoded())),
+            prepared: Some(contract.prepared_program().clone()),
+            code_hash: contract.code_hash().into(),
+            entry_pc: contract.instruction_entry_pc(),
+            strict_return_integrity: true,
+        })
+    }
+
+    fn install_program(&mut self, image: ProgramLoadImage<'_>) -> Result<(), VMError> {
+        let code_len =
+            u64::try_from(image.code_region.len()).map_err(|_| VMError::InvalidMetadata)?;
+        if code_len > Memory::HEAP_START || image.entry_pc > code_len {
+            return Err(VMError::InvalidMetadata);
+        }
+        if !self.scrub_private_memory() {
+            return Err(VMError::PrivacyViolation);
+        }
+        self.metadata = image.metadata.clone();
+        self.contract_debug = image.contract_debug;
+        self.literal_pointers = image.literal_pointers;
+        self.vector_enabled = image.metadata.mode & crate::metadata::mode::VECTOR != 0;
+        self.max_cycles = image.metadata.max_cycles;
+        self.zk_mode = image.metadata.mode & crate::metadata::mode::ZK != 0;
         if self.zk_mode && self.max_cycles == 0 {
             self.max_cycles = zk::MAX_CYCLES;
         }
-        self.vector_length = if meta.vector_length == 0 {
+        self.vector_length = if image.metadata.vector_length == 0 {
             default_vector_length()
         } else {
-            usize::from(meta.vector_length)
+            usize::from(image.metadata.vector_length)
         };
         // Overlay code region while preserving INPUT/STACK contents that may
         // have been preloaded by the host/tests. OUTPUT is cleared per load.
-        self.predecoded = None;
-        self.prepared = None;
+        self.predecoded = image.predecoded;
+        self.prepared = image.prepared;
         self.prepared_required = true;
-        self.memory.load_code(code_region);
+        self.strict_return_integrity = image.strict_return_integrity;
+        self.contract_return_stack.clear();
+        self.contract_outer_return_pc = None;
+        self.memory.load_code(image.code_region);
         self.memory.clear_output();
         self.registers.set(31, self.memory.stack_top());
-        let mut hasher = Sha256::new();
-        hasher.update(code_region);
-        self.code_hash = hasher.finalize().into();
-        self.pc = entry_pc;
+        self.code_hash = image.code_hash;
+        self.pc = image.entry_pc;
         self.entrypoint_pc = Some(self.pc);
-        self.program_prefix_len = entry_pc;
+        self.program_prefix_len = image.entry_pc;
         self.last_diagnostic = None;
         self.pc_alignment = self.pc & 0b11;
         self.halted = false;
@@ -2354,26 +2789,6 @@ impl IVM {
         self.pc_trace.clear();
         self.delta_trace = zk::DeltaTraceLog::default();
         self.cycles = 0;
-        if !instruction_region.is_empty() {
-            let decoded =
-                crate::ivm_cache::global_get_with_meta(instruction_region, &self.metadata)?;
-            let prepared_ops = {
-                let mut guard = prepared_program_cache()
-                    .lock()
-                    .unwrap_or_else(|err| err.into_inner());
-                guard.get_or_prepare(instruction_region, &self.metadata, decoded.as_ref())?
-            };
-            let prepared = PreparedProgram::from_prepared_ops(
-                prepared_ops,
-                entry_pc,
-                instruction_region.len(),
-            )?;
-            self.predecoded = Some(decoded);
-            self.prepared = Some(prepared);
-        } else {
-            self.predecoded = None;
-            self.prepared = None;
-        }
         // Recompute the INPUT bump allocator based on any preloaded TLVs so that
         // host allocations append instead of overwriting existing entries.
         self.recompute_input_bump_from_memory();
@@ -2383,6 +2798,8 @@ impl IVM {
                 off = self.input_bump_next
             );
         }
+        self.memory.commit();
+        self.memory.mark_template_clean();
         Ok(())
     }
 
@@ -2390,6 +2807,7 @@ impl IVM {
     pub fn set_gas_limit(&mut self, limit: u64) {
         self.gas_limit = limit;
         self.gas_remaining = limit;
+        self.syscall_gas_reserve = 0;
     }
 
     /// Structured trap diagnostic captured during the last failed execution, if any.
@@ -2417,6 +2835,24 @@ impl IVM {
         self.prepared
             .as_ref()
             .is_some_and(|prepared| prepared.contains_pc(pc))
+    }
+
+    fn prepared_pc_is_halt(&self, pc: u64) -> bool {
+        self.prepared
+            .as_ref()
+            .and_then(|prepared| prepared.op_at(pc))
+            .is_some_and(|op| op.wide_op == instruction::wide::control::HALT)
+    }
+
+    fn push_contract_return(&mut self, return_pc: u64) -> Result<(), VMError> {
+        if !self.strict_return_integrity {
+            return Ok(());
+        }
+        if self.contract_return_stack.len() >= MAX_CONTRACT_CALL_DEPTH {
+            return Err(VMError::AssertionFailed);
+        }
+        self.contract_return_stack.push(return_pc);
+        Ok(())
     }
 
     fn fetch_instruction(&mut self) -> Result<FetchedOp, VMError> {
@@ -2471,6 +2907,7 @@ impl IVM {
             VMError::InvalidOpcode(_) => VmTrapKind::InvalidOpcode,
             VMError::UnknownSyscall(_) => VmTrapKind::UnknownSyscall,
             VMError::HostUnavailable | VMError::NotImplemented { .. } => VmTrapKind::NotImplemented,
+            VMError::SyscallGasQuoteExceeded { .. } => VmTrapKind::SyscallGasQuoteExceeded,
             VMError::AssertionFailed => VmTrapKind::AssertionFailed,
             VMError::ExceededMaxCycles => VmTrapKind::ExceededMaxCycles,
             VMError::InvalidMetadata => VmTrapKind::InvalidMetadata,
@@ -2595,6 +3032,121 @@ impl IVM {
         }
     }
 
+    fn memory_privacy_range(addr: u64, len: u64) -> Result<std::ops::Range<u64>, VMError> {
+        let end = addr.checked_add(len).ok_or(VMError::PrivacyViolation)?;
+        Ok(addr..end)
+    }
+
+    /// Return the privacy tag for a scalar memory load.
+    ///
+    /// A partially overwritten private word is rejected rather than silently
+    /// downgrading it to public data or exposing a fragment of the secret.
+    fn memory_load_privacy_tag(&self, addr: u64, len: u64) -> Result<bool, VMError> {
+        if !self.zk_mode {
+            return Ok(false);
+        }
+        let range = Self::memory_privacy_range(addr, len)?;
+        let private_count = range
+            .filter(|byte| self.private_memory_bytes.contains(byte))
+            .count() as u64;
+        match private_count {
+            0 => Ok(false),
+            count if count == len => Ok(true),
+            _ => Err(VMError::PrivacyViolation),
+        }
+    }
+
+    /// Reject any non-tag-propagating operation that reads private stack data.
+    pub(crate) fn ensure_public_memory(&self, addr: u64, len: u64) -> Result<(), VMError> {
+        if !self.zk_mode || self.private_memory_bytes.is_empty() {
+            return Ok(());
+        }
+        if Self::memory_privacy_range(addr, len)?
+            .any(|byte| self.private_memory_bytes.contains(&byte))
+        {
+            return Err(VMError::PrivacyViolation);
+        }
+        Ok(())
+    }
+
+    /// Validate that a private value can be spilled without crossing a public
+    /// host boundary. Compiler-generated private spills are stack-only.
+    fn validate_memory_store_privacy(
+        &self,
+        addr: u64,
+        len: u64,
+        private: bool,
+    ) -> Result<(), VMError> {
+        if !self.zk_mode || !private {
+            return Ok(());
+        }
+        let range = Self::memory_privacy_range(addr, len)?;
+        if range.start < Memory::STACK_START || range.end > self.memory.stack_top() {
+            return Err(VMError::PrivacyViolation);
+        }
+        Ok(())
+    }
+
+    fn record_memory_store_privacy(&mut self, addr: u64, len: u64, private: bool) {
+        let Ok(range) = Self::memory_privacy_range(addr, len) else {
+            return;
+        };
+        if self.zk_mode && private {
+            self.private_memory_bytes.extend(range);
+        } else {
+            for byte in range {
+                self.private_memory_bytes.remove(&byte);
+            }
+        }
+    }
+
+    /// Zero private stack bytes before a reset or program replacement.
+    fn scrub_private_memory(&mut self) -> bool {
+        let mut addresses: Vec<_> = self.private_memory_bytes.drain().collect();
+        addresses.sort_unstable();
+        for addr in addresses {
+            if self.memory.store_u8(addr, 0).is_err() {
+                // Fail closed if an invariant is violated: retaining the tag is
+                // safer than making an uncleared byte publicly readable.
+                self.private_memory_bytes.insert(addr);
+            }
+        }
+        self.private_memory_bytes.is_empty()
+    }
+
+    /// Detect a stack value or complete stack TLV that overlaps private bytes.
+    ///
+    /// Register tags catch scalar arguments. This additional check prevents a
+    /// raw program from passing a public pointer to a private stack spill.
+    fn syscall_argument_references_private_memory(&self, value: u64) -> bool {
+        if self.private_memory_bytes.is_empty()
+            || value < Memory::STACK_START
+            || value >= self.memory.stack_top()
+        {
+            return false;
+        }
+
+        let direct_len = self.memory.stack_top().saturating_sub(value).min(8);
+        if self.ensure_public_memory(value, direct_len).is_err() {
+            return true;
+        }
+
+        let Ok(header) = self.memory.load_region(value, 7) else {
+            return false;
+        };
+        let payload_len = u32::from_be_bytes([header[3], header[4], header[5], header[6]]) as u64;
+        let Some(total) = 7u64
+            .checked_add(payload_len)
+            .and_then(|size| size.checked_add(iroha_crypto::Hash::LENGTH as u64))
+        else {
+            return false;
+        };
+        value
+            .checked_add(total)
+            .is_some_and(|end| end <= self.memory.stack_top())
+            && self.ensure_public_memory(value, total).is_err()
+    }
+
     #[cfg(test)]
     pub(crate) fn reset_predecode_misses(&mut self) {
         self.predecoded_misses = 0;
@@ -2603,6 +3155,16 @@ impl IVM {
     #[cfg(test)]
     pub(crate) fn predecode_misses(&self) -> u64 {
         self.predecoded_misses
+    }
+
+    #[cfg(test)]
+    pub(crate) fn program_parse_attempts(&self) -> u64 {
+        self.program_parse_attempts
+    }
+
+    #[cfg(test)]
+    pub(crate) fn prepared_loads(&self) -> u64 {
+        self.prepared_loads
     }
 
     /// Returns `true` when CUDA acceleration is enabled for this VM instance.
@@ -2650,6 +3212,8 @@ impl IVM {
         if self.prepared_contains_pc(pc) {
             self.pc = pc;
             self.entrypoint_pc = Some(pc);
+            self.contract_return_stack.clear();
+            self.contract_outer_return_pc = None;
             Ok(())
         } else {
             Err(VMError::DecodeError)
@@ -2695,8 +3259,46 @@ impl IVM {
         }
     }
 
-    /// Validate a pointer-ABI TLV in any readable region and return its decoded view.
+    /// Require a prospective pointer-ABI envelope range to have public,
+    /// VM-owned provenance.
+    ///
+    /// Pointer envelopes may reside in immutable program data, INPUT, or the
+    /// allocated portion of HEAP. Guest stack/output bytes and unallocated
+    /// heap capacity are not pointer-ABI object stores, even when their bytes
+    /// happen to form a valid envelope.
+    pub(crate) fn ensure_owned_public_tlv_range(
+        &self,
+        address: u64,
+        len: u64,
+    ) -> Result<(), VMError> {
+        self.ensure_public_memory(address, len)?;
+        let end = address.checked_add(len).ok_or(VMError::NoritoInvalid)?;
+        let in_code = end <= self.memory.code_len() && self.is_validated_literal_pointer(address);
+        let in_heap = address >= Memory::HEAP_START
+            && end
+                <= Memory::HEAP_START
+                    .checked_add(self.memory.heap_allocated_len())
+                    .ok_or(VMError::NoritoInvalid)?;
+        let in_input = address >= Memory::INPUT_START
+            && end
+                <= Memory::INPUT_START
+                    .checked_add(Memory::INPUT_SIZE)
+                    .ok_or(VMError::NoritoInvalid)?;
+        if in_code || in_heap || in_input {
+            Ok(())
+        } else {
+            Err(VMError::NoritoInvalid)
+        }
+    }
+
+    /// Return whether `address` is an exact loader-validated literal envelope start.
+    pub(crate) fn is_validated_literal_pointer(&self, address: u64) -> bool {
+        self.literal_pointers.binary_search(&address).is_ok()
+    }
+
+    /// Validate a pointer-ABI TLV in any owned public region and return its decoded view.
     pub fn validate_tlv(&self, ptr: u64) -> Result<crate::pointer_abi::Tlv<'_>, VMError> {
+        self.ensure_owned_public_tlv_range(ptr, 7)?;
         let hdr = self
             .memory
             .load_region(ptr, 7)
@@ -2706,9 +3308,11 @@ impl IVM {
             .checked_add(len)
             .and_then(|size| size.checked_add(iroha_crypto::Hash::LENGTH))
             .ok_or(VMError::NoritoInvalid)?;
+        let total = u64::try_from(total).map_err(|_| VMError::NoritoInvalid)?;
+        self.ensure_owned_public_tlv_range(ptr, total)?;
         let envelope = self
             .memory
-            .load_region(ptr, total as u64)
+            .load_region(ptr, total)
             .map_err(|_| VMError::NoritoInvalid)?;
 
         match crate::pointer_abi::validate_tlv_bytes(envelope) {
@@ -2993,12 +3597,16 @@ impl IVM {
     /// Sequential block execution path used when the host is not concurrency-safe.
     fn execute_block_sequential(&mut self, block: Block) -> BlockResult {
         let template_memory = self.memory.clone();
+        let template_private_memory_bytes = self.private_memory_bytes.clone();
         let template_input_bump = self.input_bump_next;
         let mut ctx = ExecutionContext::new();
         let mut tx_results = Vec::with_capacity(block.transactions.len());
 
         for tx in block.transactions {
+            self.private_memory_bytes.clear();
             self.memory.reset_from_template(&template_memory);
+            self.private_memory_bytes
+                .clone_from(&template_private_memory_bytes);
             self.input_bump_next = template_input_bump;
             ctx.init_for_transaction(&tx, &self.state);
             let snapshot = self.host.as_ref().and_then(|h| h.checkpoint());
@@ -3099,11 +3707,13 @@ impl IVM {
 
     /// Reset the VM state (registers, PC, cycles) but preserve loaded program and host.
     pub fn reset(&mut self) {
+        let _ = self.scrub_private_memory();
         let resume_pc = self
             .entrypoint_pc
             .or_else(|| self.prepared.as_ref().map(|prepared| prepared.first_pc))
             .unwrap_or(0);
         self.registers = Registers::new();
+        self.registers.set(31, self.memory.stack_top());
         self.pc = resume_pc;
         self.cycles = 0;
         self.halted = false;
@@ -3115,7 +3725,11 @@ impl IVM {
         self.step_log = zk::StepLog::default();
         self.pc_trace.clear();
         self.delta_trace = zk::DeltaTraceLog::default();
+        self.contract_return_stack.clear();
+        self.contract_outer_return_pc = None;
         // Gas remaining is not reset here; set_gas_limit should be called if needed.
+        self.gas_remaining = self.remaining_gas();
+        self.syscall_gas_reserve = 0;
         self.vector_length = if self.metadata.vector_length == 0 {
             default_vector_length()
         } else {
@@ -3127,9 +3741,89 @@ impl IVM {
         self.branch_predictor = crate::branch_predictor::BranchPredictor::new(sz);
     }
 
+    /// Capture the current post-load state as a reusable execution baseline.
+    ///
+    /// Hosts should call this after loading and configuring an immutable
+    /// program, before attaching an invocation-specific host or arguments.
+    #[must_use]
+    pub fn runtime_template(&self) -> RuntimeTemplate {
+        RuntimeTemplate {
+            memory: self.memory.clone(),
+            registers: self.registers.clone(),
+            private_memory_bytes: self.private_memory_bytes.clone(),
+            pc: self.pc,
+            gas_limit: self.gas_limit,
+            max_cycles: self.max_cycles,
+            trace_mode: self.trace_mode,
+            zk_trace_enabled: self.zk_trace_enabled,
+            entrypoint_pc: self.entrypoint_pc,
+            input_bump_next: self.input_bump_next,
+        }
+    }
+
+    /// Restore a warmed VM to a previously captured post-load baseline.
+    ///
+    /// Program metadata and predecoded code are immutable and remain in place.
+    /// Invocation-specific hosts, registers, traces, gas, entrypoints, input,
+    /// heap, and output are reset. Memory restoration is proportional to the
+    /// number of chunks modified by the invocation.
+    pub fn reset_from_runtime_template(&mut self, template: &RuntimeTemplate) {
+        // The template replaces the current memory image, so stale tags must not
+        // cause reset() to scrub bytes restored from that image.
+        self.private_memory_bytes.clear();
+        self.memory.reset_from_template(&template.memory);
+        // A pooled runtime must begin each invocation with the complete gas
+        // budget. `reset()` deliberately preserves the current remaining gas,
+        // so replenish it before resetting transient execution state.
+        self.set_gas_limit(template.gas_limit);
+        self.max_cycles = template.max_cycles;
+        self.trace_mode = template.trace_mode;
+        self.zk_trace_enabled = template.zk_trace_enabled;
+        self.entrypoint_pc = template.entrypoint_pc;
+        self.input_bump_next = template.input_bump_next;
+        self.set_host(DefaultHost::default());
+        self.reset();
+        self.registers = template.registers.clone();
+        self.private_memory_bytes = template.private_memory_bytes.clone();
+        self.pc = template.pc;
+        self.last_diagnostic = None;
+    }
+
     /// Get the value of a general-purpose register.
     pub fn register(&self, idx: usize) -> u64 {
         self.registers.get(idx)
+    }
+
+    /// Reject a private-tagged register before its value crosses a public host
+    /// boundary.
+    ///
+    /// Hosts must call this for contract return registers and other values
+    /// they expose outside the VM. Non-ZK programs have no private register
+    /// tags and therefore always pass this check.
+    ///
+    /// # Errors
+    /// Returns [`VMError::PrivacyViolation`] when `idx` contains a private
+    /// value in ZK mode.
+    pub fn ensure_public_register(&self, idx: usize) -> Result<(), VMError> {
+        if self.zk_mode && self.registers.tag(idx) {
+            return Err(VMError::PrivacyViolation);
+        }
+        Ok(())
+    }
+
+    /// Reject a private-tagged pointer or a TLV envelope overlapping private
+    /// guest memory before the envelope crosses a public host boundary.
+    ///
+    /// This validates the complete pointer-ABI envelope as well as the
+    /// register tag. It is intended for pointer-valued contract returns; a
+    /// scalar return should use [`Self::ensure_public_register`].
+    ///
+    /// # Errors
+    /// Returns a structured VM error when the register is private, the TLV is
+    /// invalid, or any byte in the envelope remains private.
+    pub fn ensure_public_tlv_register(&self, idx: usize) -> Result<(), VMError> {
+        self.ensure_public_register(idx)?;
+        self.validate_tlv(self.registers.get(idx)).map(|_| ())
     }
 
     /// Set the value of a general-purpose register.
@@ -3194,6 +3888,27 @@ impl IVM {
     /// Get the remaining gas after execution.
     pub fn remaining_gas(&self) -> u64 {
         self.gas_remaining
+            .saturating_add(self.syscall_gas_reserve)
+            .min(self.gas_limit)
+    }
+
+    /// Gas available to nested execution while the current syscall quote is reserved.
+    #[must_use]
+    pub fn syscall_spendable_gas(&self) -> u64 {
+        self.gas_remaining
+    }
+
+    /// Gas currently reserved for a prepared syscall, or zero for direct host calls.
+    #[must_use]
+    pub fn syscall_reserved_gas(&self) -> u64 {
+        self.syscall_gas_reserve
+    }
+
+    /// Replace the gas available to nested execution without releasing the
+    /// current syscall's pre-debited reserve.
+    pub fn set_syscall_spendable_gas(&mut self, remaining: u64) {
+        let spendable_cap = self.gas_limit.saturating_sub(self.syscall_gas_reserve);
+        self.gas_remaining = remaining.min(spendable_cap);
     }
 
     /// Access the underlying host as a type-erased value to support downcasting.
@@ -3201,7 +3916,11 @@ impl IVM {
         self.host.as_deref_mut().map(|h| h.as_any())
     }
 
-    /// Get the SHA-256 hash of the loaded program code.
+    /// Get the canonical hash of the loaded program image.
+    ///
+    /// Self-describing contract programs use the domain-separated full-artifact
+    /// hash, while raw code loaded through [`Self::load_code`] hashes that raw
+    /// instruction image.
     pub fn code_hash(&self) -> [u8; 32] {
         self.code_hash
     }
@@ -3371,6 +4090,19 @@ impl IVM {
         Self::finish_digest(hasher)
     }
 
+    /// Count trace/log events priced by the execution-proof syscall without
+    /// materializing or hashing the proof summary.
+    pub(crate) fn execution_proof_event_count(&self) -> u64 {
+        u64::try_from(self.pc_trace.len())
+            .unwrap_or(u64::MAX)
+            .saturating_add(u64::try_from(self.delta_trace.entries.len()).unwrap_or(u64::MAX))
+            .saturating_add(u64::try_from(self.trace_log.entries.len()).unwrap_or(u64::MAX))
+            .saturating_add(u64::try_from(self.constraints.list.len()).unwrap_or(u64::MAX))
+            .saturating_add(u64::try_from(self.mem_log.events.len()).unwrap_or(u64::MAX))
+            .saturating_add(u64::try_from(self.reg_log.events.len()).unwrap_or(u64::MAX))
+            .saturating_add(u64::try_from(self.step_log.steps.len()).unwrap_or(u64::MAX))
+    }
+
     /// Build a deterministic proof summary for the current execution state.
     pub fn execution_proof(&mut self) -> ExecutionProof {
         let output = self.memory.read_output();
@@ -3378,6 +4110,7 @@ impl IVM {
         output_hasher.update(b"ivm-proof:output:v1");
         output_hasher.update((output.len() as u64).to_le_bytes());
         output_hasher.update(output);
+        let gas_remaining = self.remaining_gas();
 
         ExecutionProof {
             version: EXECUTION_PROOF_VERSION_V1,
@@ -3394,8 +4127,8 @@ impl IVM {
             step_log_hash: Self::hash_step_log(&self.step_log.steps),
             cycles: self.cycles,
             max_cycles: self.max_cycles,
-            gas_used: self.gas_limit.saturating_sub(self.gas_remaining),
-            gas_remaining: self.gas_remaining,
+            gas_used: self.gas_limit.saturating_sub(gas_remaining),
+            gas_remaining,
             pc_trace_len: self.pc_trace.len() as u64,
             delta_trace_len: self.delta_trace.entries.len() as u64,
             register_trace_len: self.trace_log.entries.len() as u64,
@@ -3507,17 +4240,122 @@ impl IVM {
     }
 
     #[inline]
-    fn apply_syscall_gas_result(&mut self, result: Result<u64, VMError>) -> Result<(), VMError> {
-        match result {
-            Ok(extra) => self.debit_gas(extra),
+    fn validate_syscall_privacy(&self, number: u32) -> Result<(), VMError> {
+        if number == crate::syscalls::SYSCALL_GET_PRIVATE_INPUT && !self.zk_mode {
+            return Err(VMError::PrivacyViolation);
+        }
+        if self.zk_mode {
+            for &register in syscall_public_input_registers(number) {
+                if self.registers.tag(register)
+                    || self.syscall_argument_references_private_memory(self.registers.get(register))
+                {
+                    return Err(VMError::PrivacyViolation);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn apply_syscall_output_privacy(&mut self, number: u32) {
+        if !self.zk_mode {
+            return;
+        }
+        if number == crate::syscalls::SYSCALL_GET_PRIVATE_INPUT {
+            self.registers.set_tag(10, true);
+            return;
+        }
+
+        let has_public_r10_output = !syscall_public_input_registers(number).is_empty()
+            || matches!(
+                number,
+                crate::syscalls::SYSCALL_JSON_OBJECT
+                    | crate::syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS
+                    | crate::syscalls::SYSCALL_GET_AUTHORITY
+                    | crate::syscalls::SYSCALL_CURRENT_TIME_MS
+                    | crate::syscalls::SYSCALL_PROVE_EXECUTION
+                    | crate::syscalls::SYSCALL_SYSVAR_CHAIN_ID
+                    | crate::syscalls::SYSCALL_SYSVAR_BLOCK_HEIGHT
+                    | crate::syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS
+                    | crate::syscalls::SYSCALL_SYSVAR_AUTHORITY
+                    | crate::syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS
+                    | crate::syscalls::SYSCALL_SYSVAR_ENTRYPOINT
+            );
+        if has_public_r10_output {
+            self.registers.set_tag(10, false);
+        }
+
+        if matches!(
+            number,
+            crate::syscalls::SYSCALL_PROVE_EXECUTION
+                | crate::syscalls::SYSCALL_ZK_VERIFY_TRANSFER
+                | crate::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
+                | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
+                | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY
+                | crate::syscalls::SYSCALL_ZK_VERIFY_BATCH
+                | crate::syscalls::SYSCALL_STATE_LEN
+        ) {
+            self.registers.set_tag(11, false);
+        }
+        if number == crate::syscalls::SYSCALL_STATE_KEYS {
+            self.registers.set_tag(11, false);
+            self.registers.set_tag(12, false);
+        }
+    }
+
+    #[inline]
+    fn execute_syscall(&mut self, host: &mut dyn IVMHost, number: u32) -> Result<(), VMError> {
+        debug_assert_eq!(self.syscall_gas_reserve, 0);
+        self.validate_syscall_privacy(number)?;
+        let quoted = match host.prepare_syscall(number, self) {
+            Ok(quoted) => quoted,
             Err(error) => {
                 let (metered_gas, source) = error.split_metered();
                 if let Some(gas) = metered_gas {
                     self.debit_gas(gas)?;
                 }
-                Err(source)
+                return Err(source);
             }
+        };
+        self.debit_gas(quoted)?;
+        self.syscall_gas_reserve = quoted;
+
+        let (actual, outcome) = match host.syscall(number, self) {
+            Ok(actual) => (actual, Ok(())),
+            Err(error) => {
+                let (metered_gas, source) = error.split_metered();
+                // A host that cannot provide a tighter error cost must not
+                // receive a refund for work it may already have performed.
+                // Consuming the pre-debited quote is the deterministic,
+                // fail-closed fallback; explicitly metered errors still refund
+                // any unused part of the quote.
+                (metered_gas.unwrap_or(quoted), Err(source))
+            }
+        };
+        self.syscall_gas_reserve = 0;
+        if actual > quoted {
+            self.gas_remaining = 0;
+            return Err(VMError::SyscallGasQuoteExceeded { quoted, actual });
         }
+        self.gas_remaining = self
+            .gas_remaining
+            .saturating_add(quoted - actual)
+            .min(self.gas_limit);
+        if outcome.is_ok() {
+            self.apply_syscall_output_privacy(number);
+        }
+        outcome
+    }
+
+    pub(crate) fn execute_metered_syscall_with_host(
+        &mut self,
+        host: &mut dyn IVMHost,
+        number: u32,
+    ) -> Result<(), VMError> {
+        if !host.allows_syscall(self.syscall_policy(), number) {
+            return Err(VMError::UnknownSyscall(number));
+        }
+        self.execute_syscall(host, number)
     }
 
     /// Execute the loaded program starting at the current `pc`.
@@ -3555,6 +4393,13 @@ impl IVM {
         self.halted = false;
         self.constraint_failed = false;
         self.cycles = 0;
+        // A run is one invocation. Never retain protected return state after a
+        // prior trap or across a pooled-runtime reuse boundary.
+        self.contract_return_stack.clear();
+        self.contract_outer_return_pc = self.strict_return_integrity.then(|| {
+            let raw_target = self.registers.get(1);
+            ((raw_target.wrapping_sub(self.pc_alignment)) & !3) | self.pc_alignment
+        });
         let result = (|| {
             let _pointer_policy_guard =
                 PointerPolicyGuard::install(self.syscall_policy(), self.abi_version());
@@ -3659,8 +4504,7 @@ impl IVM {
                         if !host.allows_syscall(self.syscall_policy(), imm8) {
                             return Err(VMError::UnknownSyscall(imm8));
                         }
-                        let syscall_result = host.syscall(imm8, self);
-                        self.apply_syscall_gas_result(syscall_result)?;
+                        self.execute_syscall(host, imm8)?;
                         self.pc = self.pc.wrapping_add(length as u64);
                         self.cycles += 1;
                         continue;
@@ -3670,8 +4514,7 @@ impl IVM {
                         if !host.allows_syscall(self.syscall_policy(), number) {
                             return Err(VMError::UnknownSyscall(number));
                         }
-                        let syscall_result = host.syscall(number, self);
-                        self.apply_syscall_gas_result(syscall_result)?;
+                        self.execute_syscall(host, number)?;
                         self.pc = self.pc.wrapping_add(length as u64);
                         self.cycles += 1;
                         continue;
@@ -3844,15 +4687,8 @@ impl IVM {
                         let tag = self.zk_match_tags(rs1, rs2)?;
                         let num = self.registers.get(rs1) as i64;
                         let denom = self.registers.get(rs2) as i64;
-                        if denom == 0 {
-                            return Err(VMError::AssertionFailed);
-                        }
-                        let val = if num == i64::MIN && denom == -1 {
-                            num as u64
-                        } else {
-                            (num / denom) as u64
-                        };
-                        self.registers.set(rd, val);
+                        let val = checked_div_i64(num, denom)?;
+                        self.registers.set(rd, val as u64);
                         self.zk_apply_tag(rd, tag);
                         self.pc = self.pc.wrapping_add(length as u64);
                         self.cycles += 1;
@@ -3881,15 +4717,8 @@ impl IVM {
                         let tag = self.zk_match_tags(rs1, rs2)?;
                         let num = self.registers.get(rs1) as i64;
                         let denom = self.registers.get(rs2) as i64;
-                        if denom == 0 {
-                            return Err(VMError::AssertionFailed);
-                        }
-                        let val = if num == i64::MIN && denom == -1 {
-                            0
-                        } else {
-                            (num % denom) as u64
-                        };
-                        self.registers.set(rd, val);
+                        let val = checked_rem_i64(num, denom)?;
+                        self.registers.set(rd, val as u64);
                         self.zk_apply_tag(rd, tag);
                         self.pc = self.pc.wrapping_add(length as u64);
                         self.cycles += 1;
@@ -4130,7 +4959,7 @@ impl IVM {
                         let rs = instruction::wide::rs1(instr);
                         let tag = self.zk_unary_tag(rs);
                         let v = self.registers.get(rs) as i64;
-                        let abs = v.wrapping_abs();
+                        let abs = checked_abs_i64(v)?;
                         self.registers.set(rd, abs as u64);
                         self.zk_apply_tag(rd, tag);
                         self.pc = self.pc.wrapping_add(length as u64);
@@ -4245,6 +5074,21 @@ impl IVM {
                         self.cycles += 1;
                         continue;
                     }
+                    instruction::wide::memory::LDLIT => {
+                        let rd = instruction::wide::rd(instr);
+                        let index = instruction::wide::literal_index(instr);
+                        let pointer = *self
+                            .literal_pointers
+                            .get(index)
+                            .ok_or(VMError::InvalidMetadata)?;
+                        self.registers.set(rd, pointer);
+                        if self.zk_mode {
+                            self.registers.set_tag(rd, false);
+                        }
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
                     instruction::wide::memory::LOAD64 => {
                         let rd = instruction::wide::rd(instr);
                         let base = instruction::wide::rs1(instr);
@@ -4254,9 +5098,10 @@ impl IVM {
                         }
                         let addr = (self.registers.get(base) as i64).wrapping_add(imm) as u64;
                         let value = self.memory.load_u64(addr)?;
+                        let tag = self.memory_load_privacy_tag(addr, 8)?;
                         self.registers.set(rd, value);
                         if self.zk_mode {
-                            self.registers.set_tag(rd, false);
+                            self.registers.set_tag(rd, tag);
                         }
                         self.pc = self.pc.wrapping_add(length as u64);
                         self.cycles += 1;
@@ -4280,11 +5125,12 @@ impl IVM {
                             return Err(VMError::MisalignedAccess { addr: addr as u32 });
                         }
                         let value = self.memory.load_u128(addr)?;
+                        let tag = self.memory_load_privacy_tag(addr, 16)?;
                         self.registers.set(rd_lo, value as u64);
                         self.registers.set(rd_hi, (value >> 64) as u64);
                         if self.zk_mode {
-                            self.registers.set_tag(rd_lo, false);
-                            self.registers.set_tag(rd_hi, false);
+                            self.registers.set_tag(rd_lo, tag);
+                            self.registers.set_tag(rd_hi, tag);
                         }
                         self.pc = self.pc.wrapping_add(length as u64);
                         self.cycles += 1;
@@ -4299,7 +5145,10 @@ impl IVM {
                         }
                         let addr = (self.registers.get(base) as i64).wrapping_add(imm) as u64;
                         let value = self.registers.get(rs);
+                        let tag = self.zk_mode && self.registers.tag(rs);
+                        self.validate_memory_store_privacy(addr, 8, tag)?;
                         self.memory.store_u64(addr, value)?;
+                        self.record_memory_store_privacy(addr, 8, tag);
                         self.pc = self.pc.wrapping_add(length as u64);
                         self.cycles += 1;
                         continue;
@@ -4323,8 +5172,11 @@ impl IVM {
                         }
                         let lo = self.registers.get(rs_lo);
                         let hi = self.registers.get(rs_hi);
+                        let tag = self.zk_match_tags(rs_lo, rs_hi)?.unwrap_or(false);
+                        self.validate_memory_store_privacy(addr, 16, tag)?;
                         let value = ((hi as u128) << 64) | lo as u128;
                         self.memory.store_u128(addr, value)?;
+                        self.record_memory_store_privacy(addr, 16, tag);
                         self.pc = self.pc.wrapping_add(length as u64);
                         self.cycles += 1;
                         continue;
@@ -4638,6 +5490,9 @@ impl IVM {
                         if self.zk_mode && self.registers.tag(rs) {
                             return Err(VMError::PrivacyViolation);
                         }
+                        if self.strict_return_integrity {
+                            return Err(VMError::AssertionFailed);
+                        }
                         self.pc = self.registers.get(rs);
                         self.cycles += 1;
                         continue;
@@ -4649,9 +5504,36 @@ impl IVM {
                             return Err(VMError::PrivacyViolation);
                         }
                         let imm = i64::from(instruction::wide::imm8(instr));
+                        if self.strict_return_integrity && !(rd == 0 && rs == 1 && imm == 0) {
+                            return Err(VMError::AssertionFailed);
+                        }
                         let raw_target = ((self.registers.get(rs) as i64) + imm) as u64;
                         let target =
                             ((raw_target.wrapping_sub(self.pc_alignment)) & !3) | self.pc_alignment;
+                        if self.strict_return_integrity {
+                            if let Some(expected) = self.contract_return_stack.last().copied() {
+                                if target != expected {
+                                    return Err(VMError::AssertionFailed);
+                                }
+                                self.contract_return_stack.pop();
+                            } else {
+                                if self.contract_outer_return_pc != Some(target) {
+                                    return Err(VMError::AssertionFailed);
+                                }
+                                if target != self.memory.code_len()
+                                    && !self.prepared_pc_is_halt(target)
+                                {
+                                    // Direct test/internal-entry execution may use
+                                    // an appended HALT as its trusted outer return.
+                                    return Err(VMError::AssertionFailed);
+                                }
+                            }
+                            if target == self.memory.code_len() {
+                                // Contract hosts use end-of-code as the trusted
+                                // outer-invocation return sentinel.
+                                self.halted = true;
+                            }
+                        }
                         let return_pc = self.pc.wrapping_add(length as u64);
                         self.registers.set(rd, return_pc);
                         if self.zk_mode {
@@ -4665,6 +5547,14 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let imm = instruction::wide::imm16(instr) as i64;
                         let return_pc = self.pc.wrapping_add(length as u64);
+                        if self.strict_return_integrity {
+                            if rd != 0 && rd != 1 {
+                                return Err(VMError::AssertionFailed);
+                            }
+                            if rd == 1 {
+                                self.push_contract_return(return_pc)?;
+                            }
+                        }
                         self.registers.set(rd, return_pc);
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
@@ -4674,18 +5564,18 @@ impl IVM {
                         continue;
                     }
                     instruction::wide::control::JMP => {
-                        let imm = instruction::wide::imm16(instr) as i64;
+                        let imm = i64::from(instruction::wide::imm24(instr));
                         self.pc = ((self.pc as i64) + (imm * 4)) as u64;
                         self.cycles += 1;
                         continue;
                     }
                     instruction::wide::control::JALS => {
-                        let rd = instruction::wide::rd(instr);
-                        let imm = instruction::wide::imm16(instr) as i64;
+                        let imm = i64::from(instruction::wide::imm24(instr));
                         let return_pc = self.pc.wrapping_add(length as u64);
-                        self.registers.set(rd, return_pc);
+                        self.push_contract_return(return_pc)?;
+                        self.registers.set(1, return_pc);
                         if self.zk_mode {
-                            self.registers.set_tag(rd, false);
+                            self.registers.set_tag(1, false);
                         }
                         self.pc = ((self.pc as i64) + (imm * 4)) as u64;
                         self.cycles += 1;
@@ -4909,7 +5799,16 @@ impl IVM {
                         if second + stride > 256 || ptr_reg >= 256 {
                             return Err(VMError::RegisterOutOfBounds);
                         }
+                        let state_lanes = stride.min(4);
+                        if self.zk_mode
+                            && (0..state_lanes).any(|lane| {
+                                self.registers.tag(base + lane) || self.registers.tag(second + lane)
+                            })
+                        {
+                            return Err(VMError::PrivacyViolation);
+                        }
                         let addr = self.registers.get(ptr_reg);
+                        self.ensure_public_memory(addr, 64)?;
                         let mut block = [0u8; 64];
                         self.memory.load_bytes(addr, &mut block)?;
                         if self.zk_trace_collection_enabled() {
@@ -4926,11 +5825,11 @@ impl IVM {
                             }
                         }
                         let mut state = [0u32; 8];
-                        let first_lanes = vl.min(4);
+                        let first_lanes = state_lanes;
                         for (lane, slot) in state.iter_mut().take(first_lanes).enumerate() {
                             *slot = self.registers.get(base + lane) as u32;
                         }
-                        let second_lanes = vl.min(4);
+                        let second_lanes = state_lanes;
                         for (lane, slot) in state.iter_mut().skip(4).take(second_lanes).enumerate()
                         {
                             *slot = self.registers.get(second + lane) as u32;
@@ -4941,6 +5840,12 @@ impl IVM {
                         }
                         for (lane, value) in state.iter().skip(4).take(second_lanes).enumerate() {
                             self.registers.set(second + lane, u64::from(*value));
+                        }
+                        if self.zk_mode {
+                            for lane in 0..state_lanes {
+                                self.registers.set_tag(base + lane, false);
+                                self.registers.set_tag(second + lane, false);
+                            }
                         }
                         self.pc = self.pc.wrapping_add(length as u64);
                         self.cycles += 1;
@@ -4963,6 +5868,8 @@ impl IVM {
                         let state_ptr = self.registers.get(rs_state);
                         let block_ptr = self.registers.get(rs_block);
                         let out_ptr = self.registers.get(rd);
+                        self.ensure_public_memory(state_ptr, (25 * 8) as u64)?;
+                        self.ensure_public_memory(block_ptr, 136)?;
                         let mut state = [0u64; 25];
                         let mut state_bytes = [0u8; 25 * 8];
                         self.memory.load_bytes(state_ptr, &mut state_bytes)?;
@@ -4979,6 +5886,7 @@ impl IVM {
                             out_bytes[i * 8..(i + 1) * 8].copy_from_slice(&state[i].to_le_bytes());
                         }
                         self.memory.store_bytes(out_ptr, &out_bytes)?;
+                        self.record_memory_store_privacy(out_ptr, out_bytes.len() as u64, false);
                         self.pc = self.pc.wrapping_add(length as u64);
                         self.cycles += 1;
                         continue;
@@ -5080,6 +5988,7 @@ impl IVM {
                             return Err(VMError::RegisterOutOfBounds);
                         }
                         let ptr = self.registers.get(rs);
+                        self.ensure_public_memory(ptr, 64)?;
                         let mut input = [0u8; 64];
                         self.memory.load_bytes(ptr, &mut input)?;
                         let mut hasher = Blake2s256::new();
@@ -5101,38 +6010,22 @@ impl IVM {
                     }
                     instruction::wide::crypto::POSEIDON2 => {
                         let rd = instruction::wide::rd(instr);
-                        let base = instruction::wide::rs1(instr);
-                        let imm = i64::from(i16::from(instruction::wide::imm8(instr)));
-                        if self.zk_mode && self.registers.tag(base) {
-                            return Err(VMError::PrivacyViolation);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        if self.zk_mode {
+                            let first_tag = self.registers.tag(rs1);
+                            if first_tag != self.registers.tag(rs2) {
+                                return Err(VMError::PrivacyViolation);
+                            }
                         }
-                        if rd >= 256 || base >= 256 {
-                            return Err(VMError::RegisterOutOfBounds);
-                        }
-                        let addr = (self.registers.get(base) as i64).wrapping_add(imm) as u64;
-                        let a = self.memory.load_u64(addr)?;
-                        let b = self.memory.load_u64(addr + 8)?;
-                        if self.zk_trace_collection_enabled() {
-                            let (root, path_a) = self.memory.merkle_root_and_path(addr);
-                            let (_root2, path_b) = self.memory.merkle_root_and_path(addr + 8);
-                            self.mem_log.record(MemEvent::Load {
-                                addr,
-                                value: a as u128,
-                                size: 8,
-                                path: path_a,
-                                root,
-                            });
-                            self.mem_log.record(MemEvent::Load {
-                                addr: addr + 8,
-                                value: b as u128,
-                                size: 8,
-                                path: path_b,
-                                root,
-                            });
-                        }
+                        let a = self.registers.get(rs1);
+                        let b = self.registers.get(rs2);
                         let res = crate::poseidon::poseidon2(a, b);
                         self.registers.set(rd, res);
                         if self.zk_mode {
+                            // A Poseidon digest is the public commitment to either two
+                            // public inputs or two private inputs. Mixed visibility is
+                            // rejected above to prevent accidental partial disclosure.
                             self.registers.set_tag(rd, false);
                         }
                         self.pc = self.pc.wrapping_add(length as u64);
@@ -5140,38 +6033,29 @@ impl IVM {
                         continue;
                     }
                     instruction::wide::crypto::POSEIDON6 => {
-                        let rd = instruction::wide::rd(instr);
-                        let base = instruction::wide::rs1(instr);
-                        let imm = i64::from(i16::from(instruction::wide::imm8(instr)));
-                        if self.zk_mode && self.registers.tag(base) {
-                            return Err(VMError::PrivacyViolation);
-                        }
-                        if rd >= 256 || base >= 256 {
-                            return Err(VMError::RegisterOutOfBounds);
-                        }
-                        let addr = (self.registers.get(base) as i64).wrapping_add(imm) as u64;
-                        let mut bytes = [0u8; 48];
-                        self.memory.load_bytes(addr, &mut bytes)?;
-                        let mut vals = [0u64; 6];
-                        for (i, slot) in vals.iter_mut().enumerate() {
-                            let off = i * 8;
-                            let word = u64::from_le_bytes(bytes[off..off + 8].try_into().unwrap());
-                            if self.zk_trace_collection_enabled() {
-                                let (root, path) =
-                                    self.memory.merkle_root_and_path(addr + off as u64);
-                                self.mem_log.record(MemEvent::Load {
-                                    addr: addr + off as u64,
-                                    value: word as u128,
-                                    size: 8,
-                                    path,
-                                    root,
-                                });
+                        let Some((rd, rs_base)) = crate::encoding::wide::decode_poseidon6(instr)
+                        else {
+                            return Err(VMError::DecodeError);
+                        };
+                        let rd = usize::from(rd);
+                        let rs_base = usize::from(rs_base);
+                        if self.zk_mode {
+                            let first_tag = self.registers.tag(rs_base);
+                            for index in 1..instruction::wide::crypto::POSEIDON6_INPUTS {
+                                if self.registers.tag(rs_base + index) != first_tag {
+                                    return Err(VMError::PrivacyViolation);
+                                }
                             }
-                            *slot = word;
                         }
+                        let vals = std::array::from_fn(|index| {
+                            debug_assert!(index < instruction::wide::crypto::POSEIDON6_INPUTS);
+                            self.registers.get(rs_base + index)
+                        });
                         let res = crate::poseidon::poseidon6(vals);
                         self.registers.set(rd, res);
                         if self.zk_mode {
+                            // As with POSEIDON2, hashing is the explicit
+                            // declassification boundary for a private tuple.
                             self.registers.set_tag(rd, false);
                         }
                         self.pc = self.pc.wrapping_add(length as u64);
@@ -5184,6 +6068,9 @@ impl IVM {
                         let secret = self.registers.get(rs);
                         let res = crate::field::mul(secret, 2);
                         self.registers.set(rd, res);
+                        if self.zk_mode {
+                            self.registers.set_tag(rd, false);
+                        }
                         self.pc = self.pc.wrapping_add(length as u64);
                         self.cycles += 1;
                         continue;
@@ -5192,10 +6079,16 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
+                        if self.zk_mode {
+                            let _ = self.zk_match_tags(rs1, rs2)?;
+                        }
                         let value = self.registers.get(rs1);
                         let randomness = self.registers.get(rs2);
                         let res = crate::pedersen::pedersen_commit_truncated(value, randomness);
                         self.registers.set(rd, res);
+                        if self.zk_mode {
+                            self.registers.set_tag(rd, false);
+                        }
                         self.pc = self.pc.wrapping_add(length as u64);
                         self.cycles += 1;
                         continue;
@@ -5204,10 +6097,12 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
                         let p = self.registers.get(rs1);
                         let q = self.registers.get(rs2);
                         let res = crate::ec::ec_add_truncated(p, q);
                         self.registers.set(rd, res);
+                        self.zk_apply_tag(rd, tag);
                         self.pc = self.pc.wrapping_add(length as u64);
                         self.cycles += 1;
                         continue;
@@ -5216,10 +6111,12 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
                         let point = self.registers.get(rs1);
                         let scalar = self.registers.get(rs2);
                         let res = crate::ec::ec_mul_truncated(point, scalar);
                         self.registers.set(rd, res);
+                        self.zk_apply_tag(rd, tag);
                         self.pc = self.pc.wrapping_add(length as u64);
                         self.cycles += 1;
                         continue;
@@ -5228,10 +6125,12 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
                         let a = self.registers.get(rs1);
                         let b = self.registers.get(rs2);
                         let res = crate::ec::pairing_check_truncated(a, b);
                         self.registers.set(rd, res);
+                        self.zk_apply_tag(rd, tag);
                         self.pc = self.pc.wrapping_add(length as u64);
                         self.cycles += 1;
                         continue;
@@ -5504,10 +6403,12 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
                         let v1 = self.registers.get(rs1);
                         let v2 = self.registers.get(rs2);
                         let res = crate::field::add(v1, v2);
                         self.registers.set(rd, res);
+                        self.zk_apply_tag(rd, tag);
                         self.pc = self.pc.wrapping_add(length as u64);
                         self.cycles += 1;
                         continue;
@@ -5519,10 +6420,12 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
                         let v1 = self.registers.get(rs1);
                         let v2 = self.registers.get(rs2);
                         let res = crate::field::sub(v1, v2);
                         self.registers.set(rd, res);
+                        self.zk_apply_tag(rd, tag);
                         self.pc = self.pc.wrapping_add(length as u64);
                         self.cycles += 1;
                         continue;
@@ -5534,10 +6437,12 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
                         let v1 = self.registers.get(rs1);
                         let v2 = self.registers.get(rs2);
                         let res = crate::field::mul(v1, v2);
                         self.registers.set(rd, res);
+                        self.zk_apply_tag(rd, tag);
                         self.pc = self.pc.wrapping_add(length as u64);
                         self.cycles += 1;
                         continue;
@@ -5548,9 +6453,13 @@ impl IVM {
                         }
                         let rd = instruction::wide::rd(instr);
                         let rs = instruction::wide::rs1(instr);
+                        let tag = self.registers.tag(rs);
                         let value = self.registers.get(rs);
                         match crate::field::inv(value) {
-                            Some(inv) => self.registers.set(rd, inv),
+                            Some(inv) => {
+                                self.registers.set(rd, inv);
+                                self.zk_apply_tag(rd, Some(tag));
+                            }
                             None => {
                                 self.constraint_failed = true;
                             }
@@ -5657,31 +6566,42 @@ impl IVM {
     /// Convenience wrapper that forwards to the memory subsystem.
     #[inline]
     pub fn store_u8(&mut self, addr: u64, byte: u8) -> Result<(), VMError> {
-        self.memory.store_u8(addr, byte)
+        self.memory.store_u8(addr, byte)?;
+        self.record_memory_store_privacy(addr, 1, false);
+        Ok(())
     }
 
     #[inline]
     pub fn store_u32(&mut self, addr: u64, value: u32) -> Result<(), VMError> {
-        self.memory.store_u32(addr, value)
+        self.memory.store_u32(addr, value)?;
+        self.record_memory_store_privacy(addr, 4, false);
+        Ok(())
     }
 
     #[inline]
     pub fn store_u64(&mut self, addr: u64, value: u64) -> Result<(), VMError> {
-        self.memory.store_u64(addr, value)
+        self.memory.store_u64(addr, value)?;
+        self.record_memory_store_privacy(addr, 8, false);
+        Ok(())
     }
 
     #[inline]
     pub fn store_u128(&mut self, addr: u64, value: u128) -> Result<(), VMError> {
-        self.memory.store_u128(addr, value)
+        self.memory.store_u128(addr, value)?;
+        self.record_memory_store_privacy(addr, 16, false);
+        Ok(())
     }
 
     #[inline]
     pub fn store_bytes(&mut self, addr: u64, bytes: &[u8]) -> Result<(), VMError> {
-        self.memory.store_bytes(addr, bytes)
+        self.memory.store_bytes(addr, bytes)?;
+        self.record_memory_store_privacy(addr, bytes.len() as u64, false);
+        Ok(())
     }
 
     #[inline]
     pub fn load_u32(&self, addr: u64) -> Result<u32, VMError> {
+        self.ensure_public_memory(addr, 4)?;
         self.memory.load_u32(addr)
     }
 
@@ -5692,16 +6612,19 @@ impl IVM {
     /// on `IVM` for convenience by external users (e.g., executor host code)
     /// that interact with VM memory via the VM handle.
     pub fn load_u64(&self, addr: u64) -> Result<u64, VMError> {
+        self.ensure_public_memory(addr, 8)?;
         self.memory.load_u64(addr)
     }
 
     #[inline]
     pub fn load_u128(&self, addr: u64) -> Result<u128, VMError> {
+        self.ensure_public_memory(addr, 16)?;
         self.memory.load_u128(addr)
     }
 
     #[inline]
     pub fn load_bytes(&self, addr: u64, out: &mut [u8]) -> Result<(), VMError> {
+        self.ensure_public_memory(addr, out.len() as u64)?;
         self.memory.load_bytes(addr, out)
     }
 
@@ -5728,7 +6651,7 @@ impl IVM {
     }
 
     /// Produce a CompactProofBundle for the memory chunk containing `addr` by
-    /// invoking the GET_MERKLE_COMPACT syscall via the host. This helper writes
+    /// invoking the metered GET_MERKLE_COMPACT host path. This helper writes
     /// temporary data into the OUTPUT region.
     pub fn get_memory_compact_bundle(
         &mut self,
@@ -5747,14 +6670,10 @@ impl IVM {
         if !crate::syscalls::is_syscall_allowed(self.syscall_policy(), num) {
             return Err(VMError::UnknownSyscall(num));
         }
-        {
-            let mut host = match self.host.take() {
-                Some(h) => h,
-                None => return Err(VMError::HostUnavailable),
-            };
-            let _ = host.syscall(num, self)?;
-            self.host = Some(host);
-        }
+        let mut host = self.host.take().ok_or(VMError::HostUnavailable)?;
+        let syscall_result = self.execute_syscall(host.as_mut(), num);
+        self.host = Some(host);
+        syscall_result?;
         // Parse header and decode typed compact proof
         let mut hdr = [0u8; 1 + 4 + 4];
         self.memory.load_bytes(out_ptr, &mut hdr)?;
@@ -5782,7 +6701,7 @@ impl IVM {
     }
 
     /// Produce a CompactProofBundle for the register leaf at `idx` by invoking
-    /// the GET_REGISTER_MERKLE_COMPACT syscall via the host. This helper writes
+    /// the metered GET_REGISTER_MERKLE_COMPACT host path. This helper writes
     /// temporary data into the OUTPUT region.
     pub fn get_registers_compact_bundle(
         &mut self,
@@ -5801,14 +6720,10 @@ impl IVM {
         if !crate::syscalls::is_syscall_allowed(self.syscall_policy(), num) {
             return Err(VMError::UnknownSyscall(num));
         }
-        {
-            let mut host = match self.host.take() {
-                Some(h) => h,
-                None => return Err(VMError::HostUnavailable),
-            };
-            let _ = host.syscall(num, self)?;
-            self.host = Some(host);
-        }
+        let mut host = self.host.take().ok_or(VMError::HostUnavailable)?;
+        let syscall_result = self.execute_syscall(host.as_mut(), num);
+        self.host = Some(host);
+        syscall_result?;
         // Parse header and decode typed compact proof
         let mut hdr = [0u8; 1 + 4 + 4];
         self.memory.load_bytes(out_ptr, &mut hdr)?;
@@ -6569,7 +7484,18 @@ fn schedule_batches(metas: &[InstrMeta]) -> Vec<Vec<usize>> {
 impl IVM {
     /// Execute a slice of instructions using simple ILP scheduling.
     pub fn execute_block_parallel(&mut self, block: &[SimpleInstruction]) -> Result<(), VMError> {
-        if block.len() < ILP_MIN_PARALLEL_BLOCK_LEN {
+        let zk_memory_access = self.zk_mode
+            && block.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    SimpleInstruction::Load { .. }
+                        | SimpleInstruction::Store { .. }
+                        | SimpleInstruction::Sha256 { .. }
+                        | SimpleInstruction::Ed25519Verify { .. }
+                        | SimpleInstruction::DilithiumVerify { .. }
+                )
+            });
+        if block.len() < ILP_MIN_PARALLEL_BLOCK_LEN || zk_memory_access {
             for instr in block {
                 self.execute_instruction(*instr)?;
             }
@@ -6673,6 +7599,10 @@ mod tests {
         struct NonSyncHost(Cell<u64>);
 
         impl IVMHost for NonSyncHost {
+            fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+                Ok(0)
+            }
+
             fn syscall(&mut self, _number: u32, vm: &mut IVM) -> Result<u64, VMError> {
                 let next = self.0.get().saturating_add(1);
                 self.0.set(next);
@@ -6855,29 +7785,81 @@ mod tests {
 
     fn program_with_literal_prefix() -> (Vec<u8>, usize) {
         let mut bytes = ProgramMetadata::default().encode();
+        let header_len = bytes.len();
+        let literal = empty_blob_tlv();
         bytes.extend_from_slice(&LITERAL_SECTION_MAGIC);
         bytes.extend_from_slice(&(1u32).to_le_bytes()); // one literal entry
-        bytes.extend_from_slice(&0u32.to_le_bytes()); // no post-pad
-        bytes.extend_from_slice(&0u32.to_le_bytes()); // no extra data payload
-        bytes.extend_from_slice(&0x1122_3344_5566_7788u64.to_le_bytes());
-        let literal_prefix = bytes.len() - ProgramMetadata::default().encode().len();
+        bytes.extend_from_slice(&1u32.to_le_bytes()); // align the executable code
+        bytes.extend_from_slice(&(literal.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&24u64.to_le_bytes()); // LTLB-relative TLV pointer
+        bytes.extend_from_slice(&literal);
+        bytes.push(0);
+        let literal_prefix = bytes.len() - header_len;
         let addi = crate::kotodama::compiler::encode_addi(1, 1, 0).expect("encode addi");
         bytes.extend_from_slice(&addi.to_le_bytes());
         bytes.extend_from_slice(&crate::encoding::encode_halt().to_le_bytes());
         (bytes, literal_prefix)
     }
 
+    fn program_with_indexed_literal(index: u16) -> (Vec<u8>, u64) {
+        let mut bytes = ProgramMetadata::default().encode();
+        let literal = empty_blob_tlv();
+        bytes.extend_from_slice(&LITERAL_SECTION_MAGIC);
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&(literal.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&24u64.to_le_bytes());
+        bytes.extend_from_slice(&literal);
+        bytes.push(0);
+        let load =
+            crate::encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 5, index);
+        bytes.extend_from_slice(&load.to_le_bytes());
+        bytes.extend_from_slice(&crate::encoding::encode_halt().to_le_bytes());
+        (bytes, 24)
+    }
+
+    fn program_with_two_indexed_literals() -> (Vec<u8>, usize, [u64; 2]) {
+        let mut bytes = ProgramMetadata::default().encode();
+        let metadata_len = bytes.len();
+        let first = empty_blob_tlv();
+        let second = empty_blob_tlv();
+        let offsets_len = 2 * 8;
+        let data_len = first.len() + second.len();
+        let post_pad = (4 - ((16 + offsets_len + data_len) % 4)) % 4;
+        let offsets = [
+            (16 + offsets_len) as u64,
+            (16 + offsets_len + first.len()) as u64,
+        ];
+
+        bytes.extend_from_slice(&LITERAL_SECTION_MAGIC);
+        bytes.extend_from_slice(&2_u32.to_le_bytes());
+        bytes.extend_from_slice(&(post_pad as u32).to_le_bytes());
+        bytes.extend_from_slice(&(data_len as u32).to_le_bytes());
+        let entries_start = metadata_len + 16;
+        for offset in offsets {
+            bytes.extend_from_slice(&offset.to_le_bytes());
+        }
+        bytes.extend_from_slice(&first);
+        bytes.extend_from_slice(&second);
+        bytes.extend(std::iter::repeat_n(0, post_pad));
+        bytes.extend_from_slice(&crate::encoding::encode_halt().to_le_bytes());
+        (bytes, entries_start, offsets)
+    }
+
     fn program_with_unaligned_contract_prefix() -> (Vec<u8>, usize) {
         let interface = crate::metadata::EmbeddedContractInterfaceV1 {
+            contract_name: "TestContract".to_owned(),
             compiler_fingerprint: String::new(),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
             entrypoints: Vec::new(),
+            error_codes: Vec::new(),
             states: Vec::new(),
         };
         let prefix = (0..32)
             .map(|len| crate::metadata::EmbeddedContractInterfaceV1 {
+                contract_name: "TestContract".to_owned(),
                 compiler_fingerprint: "x".repeat(len),
                 ..interface.clone()
             })
@@ -6915,6 +7897,123 @@ mod tests {
     }
 
     #[test]
+    fn indexed_literal_load_returns_prevalidated_tlv_pointer() {
+        set_banner_enabled(false);
+        let (program, expected_pointer) = program_with_indexed_literal(0);
+        let mut vm = IVM::new(1);
+        vm.load_program(&program)
+            .expect("indexed literal program loads");
+        vm.run().expect("indexed literal program runs");
+
+        assert_eq!(vm.register(5), expected_pointer);
+        let literal = vm
+            .memory
+            .load_region(expected_pointer, empty_blob_tlv().len() as u64)
+            .expect("literal pointer resolves inside code memory");
+        let tlv = crate::pointer_abi::validate_tlv_bytes(literal)
+            .expect("loader-validated pointer remains a valid TLV");
+        assert_eq!(tlv.type_id, crate::pointer_abi::PointerType::Blob);
+        assert_eq!(vm.remaining_gas(), 0, "LDLIT has a one-gas base cost");
+    }
+
+    #[test]
+    fn indexed_literal_out_of_range_is_rejected_at_load() {
+        set_banner_enabled(false);
+        let (program, _) = program_with_indexed_literal(1);
+        let mut vm = IVM::new(u64::MAX);
+        assert!(matches!(
+            vm.load_program(&program),
+            Err(VMError::InvalidMetadata)
+        ));
+    }
+
+    #[test]
+    fn indexed_literal_table_target_must_point_into_typed_data() {
+        set_banner_enabled(false);
+        let (mut program, _) = program_with_indexed_literal(0);
+        let entry_start = ProgramMetadata::default().encode().len() + 16;
+        program[entry_start..entry_start + 8].copy_from_slice(&0u64.to_le_bytes());
+        let mut vm = IVM::new(u64::MAX);
+        assert!(matches!(
+            vm.load_program(&program),
+            Err(VMError::InvalidMetadata)
+        ));
+    }
+
+    #[test]
+    fn indexed_literal_table_rejects_duplicate_and_reordered_targets() {
+        set_banner_enabled(false);
+        let (canonical, entries_start, offsets) = program_with_two_indexed_literals();
+        for entries in [[offsets[0], offsets[0]], [offsets[1], offsets[0]]] {
+            let mut program = canonical.clone();
+            program[entries_start..entries_start + 8].copy_from_slice(&entries[0].to_le_bytes());
+            program[entries_start + 8..entries_start + 16]
+                .copy_from_slice(&entries[1].to_le_bytes());
+            let mut vm = IVM::new(u64::MAX);
+            assert!(matches!(
+                vm.load_program(&program),
+                Err(VMError::InvalidMetadata)
+            ));
+        }
+    }
+
+    #[test]
+    fn pointer_validation_rejects_nonliteral_code_addresses() {
+        set_banner_enabled(false);
+        let (program, literal_pointer) = program_with_indexed_literal(0);
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_program(&program).expect("literal program loads");
+
+        vm.validate_tlv(literal_pointer)
+            .expect("indexed literal start is owned program data");
+        assert!(matches!(
+            vm.validate_tlv(literal_pointer + 1),
+            Err(VMError::NoritoInvalid)
+        ));
+        assert!(matches!(
+            vm.validate_tlv(vm.pc()),
+            Err(VMError::NoritoInvalid)
+        ));
+    }
+
+    #[test]
+    fn signed24_call_transfer_uses_implicit_link_register() {
+        set_banner_enabled(false);
+        let call = crate::encoding::wide::encode_offset24(instruction::wide::control::JALS, 2);
+        let halt = crate::encoding::encode_halt();
+        let body = crate::encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 7, 0, 9);
+        let ret = crate::encoding::wide::encode_rr(instruction::wide::control::JALR, 0, 1, 0);
+        let code = [call, halt, body, ret]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>();
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_code(&code).expect("compact call code loads");
+        vm.run().expect("compact call returns to halt");
+
+        assert_eq!(vm.register(1), 4);
+        assert_eq!(vm.register(7), 9);
+    }
+
+    #[test]
+    fn signed24_jump_sign_extends_negative_offset() {
+        set_banner_enabled(false);
+        let enter = crate::encoding::wide::encode_jump(instruction::wide::control::JAL, 0, 2);
+        let halt = crate::encoding::encode_halt();
+        let body = crate::encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 7, 0, 9);
+        let jump_back = crate::encoding::wide::encode_offset24(instruction::wide::control::JMP, -2);
+        let code = [enter, halt, body, jump_back]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>();
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_code(&code).expect("compact jump code loads");
+        vm.run().expect("negative compact jump reaches halt");
+
+        assert_eq!(vm.register(7), 9);
+    }
+
+    #[test]
     fn load_program_reuses_cached_prepared_ops() {
         set_banner_enabled(false);
         ivm_cache::init_global_with_capacity(64);
@@ -6936,6 +8035,51 @@ mod tests {
     }
 
     #[test]
+    fn warm_runtime_template_reset_does_not_clone_reload_or_reparse() {
+        set_banner_enabled(false);
+        let program = program_with_imm(7);
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_program(&program).expect("program loads");
+        let code_allocation = vm
+            .memory
+            .load_region(0, 1)
+            .expect("loaded code is readable")
+            .as_ptr();
+        let parse_attempts = vm.program_parse_attempts();
+        let prepared_loads = vm.prepared_loads();
+
+        // Building the immutable template is the one cold full-memory clone.
+        let template = vm.runtime_template();
+        crate::memory::reset_memory_clone_count();
+
+        vm.set_register(7, 99);
+        vm.preload_input(0, &[0xA5])
+            .expect("invocation input is writable before execution");
+        vm.reset_from_runtime_template(&template);
+
+        assert_eq!(crate::memory::memory_clone_count(), 0);
+        assert!(
+            std::ptr::eq(
+                vm.memory
+                    .load_region(0, 1)
+                    .expect("loaded code remains readable")
+                    .as_ptr(),
+                code_allocation,
+            ),
+            "warm reset must preserve the VM memory allocation"
+        );
+        assert_eq!(vm.program_parse_attempts(), parse_attempts);
+        assert_eq!(vm.prepared_loads(), prepared_loads);
+        assert_eq!(vm.register(7), 0);
+        assert_eq!(
+            vm.memory
+                .load_region(Memory::INPUT_START, 1)
+                .expect("input baseline is readable"),
+            [0]
+        );
+    }
+
+    #[test]
     fn load_program_runs_unaligned_contract_prefix_from_prepared_ops() {
         set_banner_enabled(false);
         let (program, prefix_len) = program_with_unaligned_contract_prefix();
@@ -6949,6 +8093,55 @@ mod tests {
         vm.reset_predecode_misses();
         vm.run().expect("unaligned prefix program runs");
         assert_eq!(vm.predecode_misses(), 0);
+    }
+
+    #[test]
+    fn contract_return_integrity_is_cloned_and_cleared_at_reuse_boundaries() {
+        set_banner_enabled(false);
+        let (program, _) = program_with_unaligned_contract_prefix();
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_program(&program).expect("contract program loads");
+        assert!(vm.strict_return_integrity);
+
+        vm.contract_return_stack.extend([4, 8]);
+        vm.contract_outer_return_pc = Some(12);
+        let cloned = vm.clone();
+        assert!(cloned.strict_return_integrity);
+        assert_eq!(cloned.contract_return_stack, [4, 8]);
+        assert_eq!(cloned.contract_outer_return_pc, Some(12));
+
+        vm.reset();
+        assert!(vm.contract_return_stack.is_empty());
+        assert_eq!(vm.contract_outer_return_pc, None);
+        vm.contract_return_stack.push(12);
+        vm.contract_outer_return_pc = Some(16);
+        let template = vm.runtime_template();
+        vm.reset_from_runtime_template(&template);
+        assert!(vm.strict_return_integrity);
+        assert!(vm.contract_return_stack.is_empty());
+        assert_eq!(vm.contract_outer_return_pc, None);
+
+        vm.contract_return_stack.push(16);
+        vm.contract_outer_return_pc = Some(20);
+        vm.load_code(&crate::encoding::wide::encode_halt().to_le_bytes())
+            .expect("raw code loads");
+        assert!(!vm.strict_return_integrity);
+        assert!(vm.contract_return_stack.is_empty());
+        assert_eq!(vm.contract_outer_return_pc, None);
+    }
+
+    #[test]
+    fn deployable_contract_traps_noncanonical_indirect_control_flow() {
+        set_banner_enabled(false);
+        let (mut program, _) = program_with_unaligned_contract_prefix();
+        let indirect = crate::encoding::wide::encode_rr(instruction::wide::control::JALR, 0, 2, 0);
+        let instruction_start = program.len() - WIDE_INSTRUCTION_LEN as usize;
+        program[instruction_start..].copy_from_slice(&indirect.to_le_bytes());
+
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_program(&program).expect("contract program loads");
+        vm.set_register(2, vm.pc());
+        assert_eq!(vm.run(), Err(VMError::AssertionFailed));
     }
 
     #[test]
@@ -6989,6 +8182,10 @@ mod tests {
         }
 
         impl IVMHost for RecordingHost {
+            fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+                Ok(0)
+            }
+
             fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
                 self.seen = Some(number);
                 vm.set_register(10, u64::from(number));
@@ -7158,16 +8355,19 @@ seiyaku Demo {
   }
 }
 "#;
-        let compiler =
-            crate::KotodamaCompiler::new_with_options(crate::kotodama::compiler::CompilerOptions {
-                debug_source_name: Some("contracts/runtime_trap.ko".to_owned()),
-                ..crate::kotodama::compiler::CompilerOptions::default()
-            });
-        let (program, _manifest) = compiler
-            .compile_source_with_manifest(source)
+        let output = crate::kotodama::session::CompilerSession::default()
+            .build(crate::kotodama::session::CompileRequest {
+                source,
+                source_name: Some("contracts/runtime_trap.ko"),
+            })
             .expect("compile kotodama source");
+        assert!(!output.report.source_map.is_empty());
+        assert!(output.report.source_map.iter().all(|entry| {
+            entry.source.source_path.as_deref() == Some("contracts/runtime_trap.ko")
+        }));
         let mut vm = IVM::new(0);
-        vm.load_program(&program).expect("load compiled program");
+        vm.load_program(&output.artifact)
+            .expect("load compiled program");
         let err = vm.run().expect_err("zero gas should trap");
         assert_eq!(err, VMError::OutOfGas);
         let diag = vm.last_diagnostic().expect("diagnostic should be captured");
@@ -7175,17 +8375,8 @@ seiyaku Demo {
         assert_eq!(diag.budget.gas_limit, 0);
         assert_eq!(diag.context.entrypoint_pc, Some(vm.pc()));
         assert!(
-            diag.source
-                .as_ref()
-                .and_then(|source| source.line)
-                .is_some(),
-            "compiled programs should carry function-level source locations"
-        );
-        assert_eq!(
-            diag.source
-                .as_ref()
-                .and_then(|source| source.path.as_deref()),
-            Some("contracts/runtime_trap.ko")
+            diag.source.is_none(),
+            "deployable artifacts exclude source maps; tooling resolves the hash-keyed sidecar"
         );
     }
 
@@ -7457,9 +8648,11 @@ seiyaku Demo {
         assert_eq!(vm.pc(), literal_pc);
         assert!(vm.predecoded.is_some());
         assert!(vm.prepared_contains_pc(literal_pc));
+        vm.set_register(31, 0);
 
         vm.reset();
         assert_eq!(vm.pc(), literal_pc);
+        assert_eq!(vm.register(31), vm.memory.stack_top());
         assert!(vm.prepared_contains_pc(literal_pc));
     }
 }

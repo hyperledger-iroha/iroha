@@ -14,15 +14,16 @@
 use core::str::FromStr;
 #[cfg(feature = "telemetry")]
 use std::time::Instant;
-use std::{
-    collections::BTreeMap,
-    mem,
-    sync::{Arc, OnceLock},
-};
 #[cfg(test)]
 use std::{
     collections::VecDeque,
     sync::{LazyLock, Mutex},
+};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    mem,
+    num::NonZeroU64,
+    sync::{Arc, OnceLock},
 };
 
 use iroha_config::parameters::actual::QueryCursorMode;
@@ -31,12 +32,9 @@ use iroha_data_model::{
     block::BlockHeader,
     errors::CanonicalErrorKind,
     executor::IvmAdmissionError,
-    executor::{
-        ManifestAbiHashMismatchInfo, ManifestCodeHashMismatchInfo, MaxCyclesExceedsUpperBoundInfo,
-    },
+    executor::{ManifestAbiHashMismatchInfo, ManifestCodeHashMismatchInfo},
     isi::{
         InstructionBox,
-        mint_burn::BurnBox,
         settlement::{DvpIsi, PvpIsi},
         smart_contract_code::{
             ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
@@ -55,7 +53,6 @@ use iroha_data_model::{
         OpenVerifyEnvelopeBounds as ZkOpenVerifyEnvelopeBounds, StarkFriOpenProofV1,
     },
 };
-use iroha_primitives::json::Json;
 use ivm::host::IVMHost;
 use ivm::{VMError as IvmError, analysis::ProgramAnalysisError};
 use mv::storage::StorageReadOnly;
@@ -78,37 +75,6 @@ use crate::{
     state::{StateReadOnly, StateTransaction, WorldReadOnly},
     streaming,
 };
-
-const SCCP_TAIRA_TRON_XOR_ROUTE_ID: &[u8] = b"taira_tron_xor";
-const SCCP_TAIRA_BSC_XOR_ROUTE_ID: &[u8] = b"taira_bsc_xor";
-const SCCP_TAIRA_XOR_ASSET_KEY: &[u8] = b"xor";
-const SCCP_TAIRA_XOR_SETTLEMENT_SCALE: u32 = 9;
-
-#[derive(Clone, Copy, Debug)]
-struct TairaXorSccpRoute {
-    route_id: &'static [u8],
-    label: &'static str,
-    dest_domain: u32,
-    recipient_codec: u8,
-    record_amount_scale: u32,
-}
-
-const SCCP_TAIRA_XOR_ROUTES: &[TairaXorSccpRoute] = &[
-    TairaXorSccpRoute {
-        route_id: SCCP_TAIRA_TRON_XOR_ROUTE_ID,
-        label: "taira_tron_xor",
-        dest_domain: iroha_sccp::SCCP_DOMAIN_TRON,
-        recipient_codec: iroha_sccp::SCCP_CODEC_TRON_BASE58CHECK,
-        record_amount_scale: 0,
-    },
-    TairaXorSccpRoute {
-        route_id: SCCP_TAIRA_BSC_XOR_ROUTE_ID,
-        label: "taira_bsc_xor",
-        dest_domain: iroha_sccp::SCCP_DOMAIN_BSC,
-        recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
-        record_amount_scale: SCCP_TAIRA_XOR_SETTLEMENT_SCALE,
-    },
-];
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct StreamingOverlayMetadata {
@@ -159,12 +125,101 @@ static PROGRAM_HASH_CACHE: LazyLock<Mutex<ProgramHashCache>> =
 struct ContractCallExecutionContext {
     entrypoint: Option<String>,
     entrypoint_pc: Option<u64>,
-    args: Json,
+    argument_record: Option<Vec<u8>>,
+}
+
+enum ContractDispatchSource<'a> {
+    Bytecode(&'a [u8]),
+    Prepared(&'a ivm::PreparedContract),
+}
+
+impl ContractDispatchSource<'_> {
+    fn public_entrypoint(
+        &self,
+        selector: &str,
+    ) -> Result<(u64, Option<ivm::EntrypointArgumentSchemaV1>), OverlayBuildError> {
+        let (kind, entrypoint_pc, argument_schema) = match self {
+            Self::Bytecode(bytecode) => {
+                let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
+                    OverlayBuildError::ContractCall(format!(
+                        "invalid contract artifact for contract call dispatch: {err}"
+                    ))
+                })?;
+                let prefix_len = parsed.prefix_len() as u64;
+                let contract_interface = parsed.contract_interface.as_ref().ok_or_else(|| {
+                    OverlayBuildError::ContractCall(
+                        "contract call entrypoint metadata requires a self-describing contract artifact"
+                            .to_owned(),
+                    )
+                })?;
+                let descriptor = contract_interface
+                    .entrypoints
+                    .iter()
+                    .find(|candidate| candidate.name == selector)
+                    .ok_or_else(|| {
+                        OverlayBuildError::ContractCall(format!(
+                            "unknown contract entrypoint `{selector}`"
+                        ))
+                    })?;
+                (
+                    descriptor.kind,
+                    prefix_len + descriptor.entry_pc,
+                    descriptor.argument_schema.clone(),
+                )
+            }
+            Self::Prepared(contract) => {
+                let descriptor = contract.entrypoint_descriptor(selector).ok_or_else(|| {
+                    OverlayBuildError::ContractCall(format!(
+                        "unknown contract entrypoint `{selector}`"
+                    ))
+                })?;
+                let entrypoint_pc = contract.entrypoint_pc(selector).ok_or_else(|| {
+                    OverlayBuildError::ContractCall(format!(
+                        "contract entrypoint `{selector}` has no validated program counter"
+                    ))
+                })?;
+                (
+                    descriptor.kind,
+                    entrypoint_pc,
+                    descriptor.argument_schema.clone(),
+                )
+            }
+        };
+        if !matches!(
+            kind,
+            iroha_data_model::smart_contract::manifest::EntryPointKind::Public
+        ) {
+            return Err(OverlayBuildError::ContractCall(format!(
+                "contract entrypoint `{selector}` is not public"
+            )));
+        }
+        Ok((entrypoint_pc, argument_schema))
+    }
 }
 
 fn parse_contract_call_execution_context(
     metadata: &Metadata,
     bytecode: &[u8],
+) -> Result<Option<ContractCallExecutionContext>, OverlayBuildError> {
+    parse_contract_call_execution_context_from_source(
+        metadata,
+        ContractDispatchSource::Bytecode(bytecode),
+    )
+}
+
+fn parse_prepared_contract_call_execution_context(
+    metadata: &Metadata,
+    contract: &ivm::PreparedContract,
+) -> Result<Option<ContractCallExecutionContext>, OverlayBuildError> {
+    parse_contract_call_execution_context_from_source(
+        metadata,
+        ContractDispatchSource::Prepared(contract),
+    )
+}
+
+fn parse_contract_call_execution_context_from_source(
+    metadata: &Metadata,
+    source: ContractDispatchSource<'_>,
 ) -> Result<Option<ContractCallExecutionContext>, OverlayBuildError> {
     let entrypoint = metadata
         .get("contract_entrypoint")
@@ -188,49 +243,27 @@ fn parse_contract_call_execution_context(
         return Ok(None);
     }
 
-    let entrypoint_pc = if let Some(selector) = entrypoint.as_deref() {
-        let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
-            OverlayBuildError::ContractCall(format!(
-                "invalid contract artifact for contract call dispatch: {err}"
-            ))
-        })?;
-        let prefix_len = parsed.prefix_len() as u64;
-        let contract_interface = parsed.contract_interface.as_ref().ok_or_else(|| {
-            OverlayBuildError::ContractCall(
-                "contract call entrypoint metadata requires a self-describing contract artifact"
-                    .to_owned(),
-            )
-        })?;
-        let descriptor = contract_interface
-            .entrypoints
-            .iter()
-            .find(|candidate| candidate.name == selector)
-            .ok_or_else(|| {
-                OverlayBuildError::ContractCall(format!("unknown contract entrypoint `{selector}`"))
-            })?;
-        if !matches!(
-            descriptor.kind,
-            iroha_data_model::smart_contract::manifest::EntryPointKind::Public
-        ) {
-            return Err(OverlayBuildError::ContractCall(format!(
-                "contract entrypoint `{selector}` is not public"
-            )));
-        }
-        Some(prefix_len + descriptor.entry_pc)
+    let (entrypoint_pc, argument_schema) = if let Some(selector) = entrypoint.as_deref() {
+        let (entrypoint_pc, argument_schema) = source.public_entrypoint(selector)?;
+        (Some(entrypoint_pc), argument_schema)
     } else {
-        None
+        (None, None)
     };
-
+    let argument_record = crate::executor::encode_contract_argument_record(
+        argument_schema.as_ref(),
+        payload.as_ref(),
+    )
+    .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
     Ok(Some(ContractCallExecutionContext {
         entrypoint,
         entrypoint_pc,
-        args: payload.unwrap_or_default(),
+        argument_record,
     }))
 }
 
-fn parse_contract_invocation_execution_context(
+fn parse_prepared_contract_invocation_execution_context(
     invocation: &ContractInvocation,
-    bytecode: &[u8],
+    contract: &ivm::PreparedContract,
 ) -> Result<ContractCallExecutionContext, OverlayBuildError> {
     let selector = invocation.entrypoint.trim();
     if selector.is_empty() {
@@ -239,24 +272,9 @@ fn parse_contract_invocation_execution_context(
         ));
     }
 
-    let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
-        OverlayBuildError::ContractCall(format!(
-            "invalid contract artifact for contract call dispatch: {err}"
-        ))
+    let descriptor = contract.entrypoint_descriptor(selector).ok_or_else(|| {
+        OverlayBuildError::ContractCall(format!("unknown contract entrypoint `{selector}`"))
     })?;
-    let prefix_len = parsed.prefix_len() as u64;
-    let contract_interface = parsed.contract_interface.as_ref().ok_or_else(|| {
-        OverlayBuildError::ContractCall(
-            "contract call requires a self-describing contract artifact".to_owned(),
-        )
-    })?;
-    let descriptor = contract_interface
-        .entrypoints
-        .iter()
-        .find(|candidate| candidate.name == selector)
-        .ok_or_else(|| {
-            OverlayBuildError::ContractCall(format!("unknown contract entrypoint `{selector}`"))
-        })?;
     if !matches!(
         descriptor.kind,
         iroha_data_model::smart_contract::manifest::EntryPointKind::Public
@@ -265,19 +283,29 @@ fn parse_contract_invocation_execution_context(
             "contract entrypoint `{selector}` is not public"
         )));
     }
+    let entrypoint_pc = contract.entrypoint_pc(selector).ok_or_else(|| {
+        OverlayBuildError::ContractCall(format!(
+            "contract entrypoint `{selector}` has no validated program counter"
+        ))
+    })?;
 
+    let argument_record = crate::executor::validate_contract_argument_record(
+        descriptor.argument_schema.as_ref(),
+        invocation.arguments.as_deref(),
+    )
+    .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
     Ok(ContractCallExecutionContext {
         entrypoint: Some(selector.to_owned()),
-        entrypoint_pc: Some(prefix_len + descriptor.entry_pc),
-        args: invocation.payload.clone().unwrap_or_default(),
+        entrypoint_pc: Some(entrypoint_pc),
+        argument_record,
     })
 }
 
-fn validate_bound_contract_record(
-    record: &code::BoundContractRecord,
+fn validate_bound_contract_manifest(
+    manifest: &ContractManifest,
     summary: &ProgramSummary,
 ) -> Result<(), OverlayBuildError> {
-    if let Some(expected) = record.manifest.code_hash
+    if let Some(expected) = manifest.code_hash
         && expected != summary.code_hash
     {
         return Err(OverlayBuildError::HeaderPolicy(
@@ -287,7 +315,7 @@ fn validate_bound_contract_record(
             }),
         ));
     }
-    if let Some(expected) = record.manifest.abi_hash
+    if let Some(expected) = manifest.abi_hash
         && expected != summary.abi_hash
     {
         return Err(OverlayBuildError::HeaderPolicy(
@@ -501,291 +529,6 @@ fn require_tx_gas_limit(tx: &SignedTransaction) -> Result<u64, OverlayBuildError
     })
 }
 
-fn sccp_admission_error(message: impl Into<String>) -> OverlayBuildError {
-    OverlayBuildError::ZkProof(format!(
-        "SCCP settlement validation failed: {}",
-        message.into()
-    ))
-}
-
-fn taira_xor_sccp_route_for_id(route_id: &[u8]) -> Option<TairaXorSccpRoute> {
-    SCCP_TAIRA_XOR_ROUTES
-        .iter()
-        .copied()
-        .find(|route| route.route_id == route_id)
-}
-
-fn decode_taira_xor_sccp_record(
-    instruction: &InstructionBox,
-) -> Result<Option<(TairaXorSccpRoute, iroha_sccp::TransferPayloadV1)>, OverlayBuildError> {
-    let Some(record) = instruction
-        .as_any()
-        .downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>()
-    else {
-        return Ok(None);
-    };
-
-    let payload = crate::bridge::decode_recorded_sccp_payload_bytes(&record.payload_bytes)
-        .or_else(|| crate::bridge::decode_lowercase_hex_sccp_payload_alias(&record.payload_bytes))
-        .ok_or_else(|| sccp_admission_error("record payload bytes could not be decoded"))?;
-    if !iroha_sccp::verify_sccp_payload_structure(&payload) {
-        return Err(sccp_admission_error(
-            "record payload bytes failed structural verification",
-        ));
-    }
-
-    let iroha_sccp::SccpPayloadV1::Transfer(transfer) = payload else {
-        return Ok(None);
-    };
-
-    if transfer.route_id_codec != iroha_sccp::SCCP_CODEC_TEXT_UTF8 {
-        return Ok(None);
-    }
-    let Some(route) = taira_xor_sccp_route_for_id(&transfer.route_id) else {
-        return Ok(None);
-    };
-
-    if transfer.source_domain != iroha_sccp::SCCP_DOMAIN_SORA {
-        return Err(sccp_admission_error(format!(
-            "{} source domain must be SORA",
-            route.label
-        )));
-    }
-    if transfer.dest_domain != route.dest_domain {
-        return Err(sccp_admission_error(format!(
-            "{} destination domain does not match route",
-            route.label
-        )));
-    }
-    if transfer.asset_home_domain != iroha_sccp::SCCP_DOMAIN_SORA {
-        return Err(sccp_admission_error(format!(
-            "{} asset home domain must be SORA",
-            route.label
-        )));
-    }
-    if transfer.asset_id_codec != iroha_sccp::SCCP_CODEC_TEXT_UTF8
-        || transfer.asset_id != SCCP_TAIRA_XOR_ASSET_KEY
-    {
-        return Err(sccp_admission_error(format!(
-            "{} asset id must be XOR text",
-            route.label
-        )));
-    }
-    if transfer.recipient_codec != route.recipient_codec {
-        return Err(sccp_admission_error(format!(
-            "{} recipient codec does not match route",
-            route.label
-        )));
-    }
-
-    Ok(Some((route, transfer)))
-}
-
-fn resolve_taira_xor_settlement_asset_definition<R: StateReadOnly>(
-    state_ro: &R,
-    tx: &SignedTransaction,
-) -> Result<iroha_data_model::asset::AssetDefinitionId, OverlayBuildError> {
-    let now_ms = u64::try_from(tx.creation_time().as_millis()).unwrap_or(u64::MAX);
-    crate::block::parse_asset_definition_literal_with_world(
-        state_ro.world(),
-        &state_ro.nexus().fees.fee_asset_id,
-        now_ms,
-    )
-    .ok_or_else(|| {
-        sccp_admission_error(
-            "TAIRA XOR SCCP routes require a valid configured nexus.fees.fee_asset_id settlement asset",
-        )
-    })
-}
-
-fn checked_add_sccp_amount(
-    target: &mut BTreeMap<AccountId, u128>,
-    account: AccountId,
-    amount: u128,
-    label: &str,
-) -> Result<(), OverlayBuildError> {
-    let entry = target.entry(account).or_insert(0);
-    *entry = entry
-        .checked_add(amount)
-        .ok_or_else(|| sccp_admission_error(format!("{label} amount overflow")))?;
-    Ok(())
-}
-
-fn pow10_u128(exponent: u32) -> Option<u128> {
-    let mut value = 1_u128;
-    for _ in 0..exponent {
-        value = value.checked_mul(10)?;
-    }
-    Some(value)
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TairaXorAmountConversionError {
-    Precision,
-    Width,
-}
-
-fn numeric_to_taira_xor_minor_units(
-    amount: &iroha_primitives::numeric::Numeric,
-) -> Result<u128, TairaXorAmountConversionError> {
-    let amount = amount.clone().trim_trailing_zeros();
-    if amount.scale() > SCCP_TAIRA_XOR_SETTLEMENT_SCALE {
-        return Err(TairaXorAmountConversionError::Precision);
-    }
-    let mantissa = amount
-        .try_mantissa_u128()
-        .ok_or(TairaXorAmountConversionError::Width)?;
-    let multiplier = pow10_u128(SCCP_TAIRA_XOR_SETTLEMENT_SCALE - amount.scale())
-        .ok_or(TairaXorAmountConversionError::Width)?;
-    mantissa
-        .checked_mul(multiplier)
-        .ok_or(TairaXorAmountConversionError::Width)
-}
-
-fn taira_xor_record_amount_to_minor_units(
-    route: TairaXorSccpRoute,
-    amount: u128,
-) -> Result<u128, OverlayBuildError> {
-    if route.record_amount_scale > SCCP_TAIRA_XOR_SETTLEMENT_SCALE {
-        return Err(sccp_admission_error(format!(
-            "{} record amount scale exceeds TAIRA XOR settlement scale",
-            route.label
-        )));
-    }
-    let multiplier = pow10_u128(SCCP_TAIRA_XOR_SETTLEMENT_SCALE - route.record_amount_scale)
-        .ok_or_else(|| sccp_admission_error(format!("{} record amount overflow", route.label)))?;
-    amount
-        .checked_mul(multiplier)
-        .ok_or_else(|| sccp_admission_error(format!("{} record amount overflow", route.label)))
-}
-
-fn sender_route_label(
-    labels: &BTreeMap<AccountId, Vec<&'static str>>,
-    sender: &AccountId,
-) -> String {
-    let Some(labels) = labels.get(sender) else {
-        return "TAIRA XOR SCCP".to_owned();
-    };
-    if labels.len() == 1 {
-        labels[0].to_owned()
-    } else {
-        labels.join("+")
-    }
-}
-
-fn validate_taira_xor_sccp_settlement_burns<R: StateReadOnly>(
-    state_ro: &R,
-    tx: &SignedTransaction,
-    instructions: &[InstructionBox],
-) -> Result<(), OverlayBuildError> {
-    let mut required_by_sender = BTreeMap::<AccountId, u128>::new();
-    let mut route_labels_by_sender = BTreeMap::<AccountId, Vec<&'static str>>::new();
-    for instruction in instructions {
-        let Some((route, transfer)) = decode_taira_xor_sccp_record(instruction)? else {
-            continue;
-        };
-        if transfer.amount == 0 {
-            return Err(sccp_admission_error(format!(
-                "{} transfer amount must be greater than zero",
-                route.label
-            )));
-        }
-        if transfer.sender_codec != iroha_sccp::SCCP_CODEC_TEXT_UTF8 {
-            return Err(sccp_admission_error(format!(
-                "{} sender must use the text codec",
-                route.label
-            )));
-        }
-        let sender_literal = core::str::from_utf8(&transfer.sender).map_err(|_| {
-            sccp_admission_error(format!("{} sender is not valid UTF-8", route.label))
-        })?;
-        let sender = AccountId::parse_encoded(sender_literal)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .map_err(|err| {
-                sccp_admission_error(format!(
-                    "{} sender is not a canonical account id: {err}",
-                    route.label
-                ))
-            })?;
-        let labels = route_labels_by_sender.entry(sender.clone()).or_default();
-        if !labels.contains(&route.label) {
-            labels.push(route.label);
-        }
-        let required_amount = taira_xor_record_amount_to_minor_units(route, transfer.amount)?;
-        checked_add_sccp_amount(
-            &mut required_by_sender,
-            sender,
-            required_amount,
-            "required TAIRA XOR SCCP transfer",
-        )?;
-    }
-
-    if required_by_sender.is_empty() {
-        return Ok(());
-    }
-
-    let settlement_asset = resolve_taira_xor_settlement_asset_definition(state_ro, tx)?;
-    let mut burned_by_sender = BTreeMap::<AccountId, u128>::new();
-    let mut saw_too_precise_candidate = BTreeMap::<AccountId, bool>::new();
-    let mut saw_too_wide_candidate = BTreeMap::<AccountId, bool>::new();
-
-    for instruction in instructions {
-        let Some(burn) = instruction.as_any().downcast_ref::<BurnBox>() else {
-            continue;
-        };
-        let BurnBox::Asset(burn) = burn else {
-            continue;
-        };
-        if burn.destination.definition != settlement_asset {
-            continue;
-        }
-        let sender = burn.destination.account.clone();
-        if !required_by_sender.contains_key(&sender) {
-            continue;
-        }
-        let amount = match numeric_to_taira_xor_minor_units(&burn.object) {
-            Ok(amount) => amount,
-            Err(TairaXorAmountConversionError::Precision) => {
-                saw_too_precise_candidate.insert(sender, true);
-                continue;
-            }
-            Err(TairaXorAmountConversionError::Width) => {
-                saw_too_wide_candidate.insert(sender, true);
-                continue;
-            }
-        };
-        checked_add_sccp_amount(
-            &mut burned_by_sender,
-            sender,
-            amount,
-            "burned TAIRA XOR SCCP",
-        )?;
-    }
-
-    for (sender, required) in required_by_sender {
-        let burned = burned_by_sender.get(&sender).copied().unwrap_or(0);
-        if burned >= required {
-            continue;
-        }
-        let route_label = sender_route_label(&route_labels_by_sender, &sender);
-        if saw_too_precise_candidate.contains_key(&sender) {
-            return Err(sccp_admission_error(format!(
-                "{route_label} settlement burn for `{sender}` exceeds TAIRA XOR scale"
-            )));
-        }
-        if saw_too_wide_candidate.contains_key(&sender) {
-            return Err(sccp_admission_error(format!(
-                "{route_label} settlement burn for `{sender}` exceeds u128"
-            )));
-        }
-        return Err(sccp_admission_error(format!(
-            "{route_label} record for `{sender}` requires at least {required} burned XOR base units in the same proved overlay; observed {burned}"
-        )));
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 const TEST_GAS_LIMIT: u64 = 50_000_000;
 
@@ -800,10 +543,10 @@ fn insert_gas_limit(metadata: &mut iroha_data_model::metadata::Metadata) {
 #[cfg(test)]
 fn compute_program_hashes(
     meta: &ivm::ProgramMetadata,
-    header_len: usize,
+    _header_len: usize,
     bytecode: &[u8],
 ) -> (Hash, Hash) {
-    let code_hash = Hash::new(&bytecode[header_len..]);
+    let code_hash = ivm::contract_code_hash(bytecode);
     debug_assert_eq!(meta.abi_version, 1, "only ABI v1 is supported");
     let policy = ivm::SyscallPolicy::AbiV1;
     let computed = Hash::prehashed(ivm::syscalls::compute_abi_hash(policy));
@@ -817,21 +560,13 @@ fn compute_program_hashes(
 const PREEXEC_OPCODE_DENYLIST: &[u8] = &[];
 
 pub(crate) fn enforce_pre_execution_policy(
-    ivm_max_cycles_upper_bound: u64,
+    ivm_max_cycles_upper_bound: NonZeroU64,
     meta: &ivm::ProgramMetadata,
     code_offset: usize,
     bytecode: &[u8],
 ) -> Result<(), OverlayBuildError> {
-    let provided_cycles = meta.max_cycles;
-    let upper = ivm_max_cycles_upper_bound;
-    if upper > 0 && provided_cycles > upper {
-        return Err(OverlayBuildError::HeaderPolicy(
-            IvmAdmissionError::MaxCyclesExceedsUpperBound(MaxCyclesExceedsUpperBoundInfo {
-                max_cycles: provided_cycles,
-                upper_bound: upper,
-            }),
-        ));
-    }
+    crate::smartcontracts::ivm::validate_cycle_ceiling(meta, ivm_max_cycles_upper_bound)
+        .map_err(OverlayBuildError::HeaderPolicy)?;
 
     if code_offset > bytecode.len() {
         return Err(OverlayBuildError::HeaderPolicy(
@@ -1163,15 +898,6 @@ struct OverlayInstructionExecutionContext {
     contract_runtime_context: Option<crate::executor::ContractRuntimeExecutionContext>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum TxOverlaySource {
-    #[default]
-    Instructions,
-    ContractCall,
-    Ivm,
-    IvmProved,
-}
-
 /// Overlay of a transaction's intended operations.
 #[derive(Debug, Clone, Default)]
 pub struct TxOverlay {
@@ -1179,7 +905,6 @@ pub struct TxOverlay {
     execution_contexts: Option<Vec<OverlayInstructionExecutionContext>>,
     ivm_gas_used: Option<u64>,
     durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
-    source: TxOverlaySource,
     byte_size: OnceLock<usize>,
 }
 
@@ -1190,13 +915,224 @@ pub(crate) struct PreparedTxOverlay {
     pub(crate) overlay: TxOverlay,
     /// Dynamic state access log captured while building the overlay.
     pub(crate) access_log: Option<ivm::host::AccessLog>,
+    /// Bytecode-derived scheduler fence for accesses whose concrete target is
+    /// not proven by the instruction scanner.
+    pub(crate) access_fence: VmAccessFence,
+    /// Whether an opaque/nested or ledger-read syscall requires execution
+    /// against the live scheduler state rather than the block-start snapshot.
+    pub(crate) force_live_rebuild: bool,
+}
+
+/// Conservative scheduler scope required by the reachable syscall surface.
+///
+/// Concrete host logs are useful for diagnostics and conflict precision, but
+/// they describe only the block-start execution. If a predecessor changes a
+/// value used for control flow, selective re-execution may choose a different
+/// target. This bytecode-derived fence keeps that target change inside the DAG
+/// relation established before any overlay is applied.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum VmAccessFence {
+    /// Every reachable syscall is VM-local.
+    #[default]
+    None,
+    /// Reachable syscalls are limited to contract-owned durable state.
+    State,
+    /// Ledger, nested-contract, opaque, or unclassified access is reachable.
+    Global,
+}
+
+impl VmAccessFence {
+    /// Derive a fail-closed fence from decoded bytecode rather than CNTR claims.
+    #[must_use]
+    pub(crate) fn from_program_analysis(analysis: &ivm::analysis::ProgramAnalysis) -> Self {
+        let mut fence = Self::None;
+        for syscall in &analysis.syscalls {
+            match ivm::syscalls::syscall_access(syscall.number) {
+                ivm::syscalls::SyscallAccess::None => {}
+                ivm::syscalls::SyscallAccess::StateRead
+                | ivm::syscalls::SyscallAccess::StateWrite => {
+                    if fence == Self::None {
+                        fence = Self::State;
+                    }
+                }
+                ivm::syscalls::SyscallAccess::LedgerRead
+                | ivm::syscalls::SyscallAccess::LedgerWrite
+                | ivm::syscalls::SyscallAccess::Dynamic => return Self::Global,
+            }
+        }
+        fence
+    }
+
+    /// Return whether the bytecode can observe world state not represented by
+    /// the durable-state read fingerprint.
+    #[must_use]
+    pub(crate) fn requires_live_rebuild(analysis: &ivm::analysis::ProgramAnalysis) -> bool {
+        analysis.syscalls.iter().any(|syscall| {
+            matches!(
+                ivm::syscalls::syscall_access(syscall.number),
+                ivm::syscalls::SyscallAccess::LedgerRead
+                    | ivm::syscalls::SyscallAccess::LedgerWrite
+                    | ivm::syscalls::SyscallAccess::Dynamic
+            )
+        })
+    }
+
+    /// Scheduler write key which serializes every access in the required scope.
+    #[must_use]
+    pub(crate) const fn scheduler_write_key(self) -> Option<&'static str> {
+        match self {
+            Self::None => None,
+            Self::State => Some("state:*"),
+            Self::Global => Some("*"),
+        }
+    }
+}
+
+/// Snapshot of the durable-state prefixes read while preparing a VM overlay.
+///
+/// Overlay construction runs before the block scheduler applies predecessors. A
+/// later transaction must therefore re-run its VM when one of the durable paths
+/// it observed has changed in the meantime; otherwise a read-modify-write can
+/// commit the value computed from the stale block-start snapshot.
+#[derive(Clone, Debug)]
+pub(crate) struct DurableStateReadSnapshot {
+    /// `None` means an invalid/unrepresentable host key forced a fail-closed
+    /// fingerprint of the complete durable-state map.
+    prefixes: Option<Vec<Name>>,
+    fingerprint: [u8; 32],
+}
+
+impl DurableStateReadSnapshot {
+    /// Capture all exact values and descendants covered by the host read log.
+    ///
+    /// The host uses the same logical key for exact reads and prefix operations
+    /// such as `STATE_KEYS`. Fingerprinting the whole prefix is conservative for
+    /// exact reads and complete for both forms. Deployed contracts report the
+    /// concrete contract-instance namespace; raw IVM execution reports the
+    /// unscoped path it actually uses.
+    pub(crate) fn capture<R>(
+        tx: &SignedTransaction,
+        access_log: Option<&ivm::host::AccessLog>,
+        state_ro: &R,
+    ) -> Option<Self>
+    where
+        R: StateReadOnly,
+    {
+        if !matches!(
+            tx.instructions(),
+            Executable::ContractCall(_) | Executable::Ivm(_)
+        ) {
+            return None;
+        }
+        let access_log = access_log?;
+        if !access_log.durable_read_paths_complete {
+            let fingerprint = durable_state_prefix_fingerprint(None, state_ro);
+            return Some(Self {
+                prefixes: None,
+                fingerprint,
+            });
+        }
+        if access_log.durable_read_paths.is_empty() {
+            return None;
+        }
+
+        let mut prefixes = BTreeSet::new();
+        for concrete_path in &access_log.durable_read_paths {
+            let Ok(concrete_path) = Name::from_str(concrete_path) else {
+                let fingerprint = durable_state_prefix_fingerprint(None, state_ro);
+                return Some(Self {
+                    prefixes: None,
+                    fingerprint,
+                });
+            };
+            prefixes.insert(concrete_path);
+        }
+
+        let prefixes = Some(prefixes.into_iter().collect::<Vec<_>>());
+        let fingerprint = durable_state_prefix_fingerprint(prefixes.as_deref(), state_ro);
+        Some(Self {
+            prefixes,
+            fingerprint,
+        })
+    }
+
+    /// Return whether every observed durable-state prefix still has its
+    /// block-preparation value.
+    pub(crate) fn is_current<R>(&self, state_ro: &R) -> bool
+    where
+        R: StateReadOnly,
+    {
+        durable_state_prefix_fingerprint(self.prefixes.as_deref(), state_ro) == self.fingerprint
+    }
+}
+
+fn durable_state_prefix_fingerprint<R>(prefixes: Option<&[Name]>, state_ro: &R) -> [u8; 32]
+where
+    R: StateReadOnly,
+{
+    fn frame(hasher: &mut Sha256, bytes: &[u8]) {
+        let len = u64::try_from(bytes.len()).expect("slice length fits u64");
+        hasher.update(len.to_le_bytes());
+        hasher.update(bytes);
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"iroha:durable-state-read-snapshot:v1");
+    let state = state_ro.world().smart_contract_state();
+    let Some(prefixes) = prefixes else {
+        hasher.update(u64::MAX.to_le_bytes());
+        for (path, value) in state.iter() {
+            let path_raw: &str = path.as_ref();
+            frame(&mut hasher, path_raw.as_bytes());
+            frame(&mut hasher, value);
+        }
+        return hasher.finalize().into();
+    };
+    let prefix_count = u64::try_from(prefixes.len()).expect("prefix count fits u64");
+    hasher.update(prefix_count.to_le_bytes());
+    for prefix in prefixes {
+        let prefix_raw: &str = prefix.as_ref();
+        frame(&mut hasher, prefix_raw.as_bytes());
+        if let Some(value) = state.get(prefix) {
+            hasher.update([1]);
+            frame(&mut hasher, prefix_raw.as_bytes());
+            frame(&mut hasher, value);
+        } else {
+            hasher.update([0]);
+        }
+
+        // Start directly at `prefix/`. Other valid names such as `prefix-`
+        // can sort between `prefix` and `prefix/`; beginning at `prefix` and
+        // breaking on the first non-match would therefore miss descendants.
+        let descendant_prefix_raw = format!("{prefix_raw}/");
+        let descendant_prefix = Name::from_str(&descendant_prefix_raw)
+            .expect("a durable-state name with a slash suffix remains a valid Name");
+        for (path, value) in state.range(descendant_prefix..) {
+            let path_raw: &str = path.as_ref();
+            if !path_raw.starts_with(&descendant_prefix_raw) {
+                break;
+            }
+            hasher.update([1]);
+            frame(&mut hasher, path_raw.as_bytes());
+            frame(&mut hasher, value);
+        }
+        hasher.update([0]);
+    }
+    hasher.finalize().into()
 }
 
 impl PreparedTxOverlay {
-    fn new(overlay: TxOverlay, access_log: Option<ivm::host::AccessLog>) -> Self {
+    fn new(
+        overlay: TxOverlay,
+        access_log: Option<ivm::host::AccessLog>,
+        access_fence: VmAccessFence,
+        force_live_rebuild: bool,
+    ) -> Self {
         Self {
             overlay,
             access_log,
+            access_fence,
+            force_live_rebuild,
         }
     }
 }
@@ -1209,7 +1145,6 @@ impl TxOverlay {
             execution_contexts: None,
             ivm_gas_used: None,
             durable_state_overlay: BTreeMap::new(),
-            source: TxOverlaySource::Instructions,
             byte_size: OnceLock::new(),
         }
     }
@@ -1220,7 +1155,6 @@ impl TxOverlay {
             execution_contexts: None,
             ivm_gas_used: None,
             durable_state_overlay: BTreeMap::new(),
-            source: TxOverlaySource::IvmProved,
             byte_size: OnceLock::new(),
         }
     }
@@ -1232,7 +1166,6 @@ impl TxOverlay {
             execution_contexts: None,
             ivm_gas_used: Some(ivm_gas_used),
             durable_state_overlay: BTreeMap::new(),
-            source: TxOverlaySource::Ivm,
             byte_size: OnceLock::new(),
         }
     }
@@ -1248,7 +1181,6 @@ impl TxOverlay {
             execution_contexts: None,
             ivm_gas_used: Some(ivm_gas_used),
             durable_state_overlay,
-            source: TxOverlaySource::Ivm,
             byte_size: OnceLock::new(),
         }
     }
@@ -1272,7 +1204,6 @@ impl TxOverlay {
             execution_contexts: Some(execution_contexts),
             ivm_gas_used: Some(ivm_gas_used),
             durable_state_overlay,
-            source: TxOverlaySource::ContractCall,
             byte_size: OnceLock::new(),
         }
     }
@@ -1362,9 +1293,7 @@ impl TxOverlay {
         authority: &AccountId,
         chunk: usize,
     ) -> Result<(), ValidationFail> {
-        let prior_sccp_recording_proof_verified = state_tx.sccp_recording_proof_verified;
-        state_tx.sccp_recording_proof_verified = self.source == TxOverlaySource::IvmProved;
-        let result = (|| -> Result<(), ValidationFail> {
+        (|| -> Result<(), ValidationFail> {
             let executor = state_tx.world.executor.clone();
             let mut instruction_index = 0usize;
             for chunk_instrs in self.instructions.chunks(chunk) {
@@ -1410,9 +1339,7 @@ impl TxOverlay {
                 }
             }
             Ok(())
-        })();
-        state_tx.sccp_recording_proof_verified = prior_sccp_recording_proof_verified;
-        result
+        })()
     }
 }
 
@@ -1488,15 +1415,40 @@ where
             Ok(TxOverlay::from_instructions(instrs))
         }
         Executable::ContractCall(call) => {
-            let record = code::fetch_bound_contract_record(state_ro, &call.contract_address)
+            let code_hash = code::fetch_instance_binding(state_ro, &call.contract_address)
                 .ok_or_else(|| {
                     OverlayBuildError::ContractCall(format!(
                         "contract instance `{}` not found in WSV",
                         call.contract_address
                     ))
                 })?;
+            let manifest = state_ro
+                .world()
+                .contract_manifests()
+                .get(&code_hash)
+                .ok_or_else(|| {
+                    OverlayBuildError::ContractCall(format!(
+                        "contract instance `{}` has no manifest",
+                        call.contract_address
+                    ))
+                })?;
+            let code_bytes = state_ro
+                .world()
+                .contract_code()
+                .get(&code_hash)
+                .ok_or_else(|| {
+                    OverlayBuildError::ContractCall(format!(
+                        "contract instance `{}` has no bytecode",
+                        call.contract_address
+                    ))
+                })?;
+            let contract_alias = state_ro
+                .world()
+                .contract_alias_bindings()
+                .get(&call.contract_address)
+                .map(|binding| binding.alias.clone());
             let summary = ivm_cache
-                .summarize_program(record.code_bytes.as_ref())
+                .summarize_program_with_hash(code_hash, code_bytes.as_ref())
                 .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
             let gas_limit = require_tx_gas_limit(tx)?;
             let meta = summary.metadata.clone();
@@ -1514,19 +1466,22 @@ where
                 state_ro.pipeline().ivm_max_cycles_upper_bound,
                 &meta,
                 code_offset,
-                record.code_bytes.as_ref(),
+                code_bytes.as_ref(),
             )?;
-            validate_bound_contract_record(&record, &summary)?;
+            validate_bound_contract_manifest(manifest, &summary)?;
 
-            let mut vm = ivm_cache
-                .clone_runtime(&summary, record.code_bytes.as_ref(), gas_limit)
+            let amx_analysis = cached_amx_analysis(ivm_cache, &summary, code_bytes.as_ref())?;
+            let mut vm = summary
+                .checkout_runtime(gas_limit)
                 .map_err(OverlayBuildError::IvmLoad)?;
-            let contract_call_context =
-                parse_contract_invocation_execution_context(call, record.code_bytes.as_ref())?;
+            let contract_call_context = parse_prepared_contract_invocation_execution_context(
+                call,
+                summary.prepared_contract(),
+            )?;
             let contract_runtime_context = Some(crate::executor::ContractRuntimeExecutionContext {
-                contract_subject: record.contract_address.subject_id(),
-                contract_address: record.contract_address.clone(),
-                contract_alias: record.contract_alias.clone(),
+                contract_subject: call.contract_address.subject_id(),
+                contract_address: call.contract_address.clone(),
+                contract_alias,
                 entrypoint: contract_call_context
                     .entrypoint
                     .clone()
@@ -1535,13 +1490,13 @@ where
 
             let accounts = state_ro.accounts_snapshot();
             let streaming_meta = resolve_streaming_metadata(state_ro, tx.authority());
-            let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
-                tx.authority().clone(),
-                Arc::clone(&accounts),
-                contract_call_context.args.clone(),
-            );
-            let amx_analysis =
-                cached_amx_analysis(ivm_cache, &summary, record.code_bytes.as_ref())?;
+            let mut host =
+                crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_argument_record(
+                    tx.authority().clone(),
+                    Arc::clone(&accounts),
+                    contract_call_context.argument_record.clone(),
+                );
+            host.set_prepared_contract_cache(summary.prepared_contract_cache());
             host.set_amx_analysis(amx_analysis);
             let amx_limits = crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(
                 state_ro.pipeline(),
@@ -1586,7 +1541,7 @@ where
                     let job = crate::pipeline::zk_lane::ZkTask {
                         tx_hash: Some(tx_hash),
                         code_hash,
-                        program: Arc::new(record.code_bytes.clone()),
+                        program: summary.prepared_contract().shared_artifact(),
                         header: None,
                         trace,
                         constraints,
@@ -1633,21 +1588,24 @@ where
             )?;
             validate_contract_binding(state_ro, tx, &summary)?;
 
-            let mut vm = ivm_cache
-                .clone_runtime(&summary, bytecode.as_ref(), gas_limit)
+            let amx_analysis = cached_amx_analysis(ivm_cache, &summary, bytecode.as_ref())?;
+            let mut vm = summary
+                .checkout_runtime(gas_limit)
                 .map_err(OverlayBuildError::IvmLoad)?;
-            let contract_call_context =
-                parse_contract_call_execution_context(tx.metadata(), bytecode.as_ref())?;
+            let contract_call_context = parse_prepared_contract_call_execution_context(
+                tx.metadata(),
+                summary.prepared_contract(),
+            )?;
 
             // Run CoreHost to collect queued ISIs
             // Snapshot of accounts for deterministic helpers
             let accounts = state_ro.accounts_snapshot();
             let streaming_meta = resolve_streaming_metadata(state_ro, tx.authority());
             let mut host = if let Some(context) = contract_call_context.as_ref() {
-                crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
+                crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_argument_record(
                     tx.authority().clone(),
                     Arc::clone(&accounts),
-                    context.args.clone(),
+                    context.argument_record.clone(),
                 )
             } else {
                 crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
@@ -1655,7 +1613,7 @@ where
                     Arc::clone(&accounts),
                 )
             };
-            let amx_analysis = cached_amx_analysis(ivm_cache, &summary, bytecode.as_ref())?;
+            host.set_prepared_contract_cache(summary.prepared_contract_cache());
             host.set_amx_analysis(amx_analysis);
             let amx_limits = crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(
                 state_ro.pipeline(),
@@ -1698,7 +1656,7 @@ where
                     let job = crate::pipeline::zk_lane::ZkTask {
                         tx_hash: Some(tx_hash),
                         code_hash,
-                        program: Arc::new(bytecode.as_ref().to_vec()),
+                        program: summary.prepared_contract().shared_artifact(),
                         header: None,
                         trace,
                         constraints,
@@ -1811,10 +1769,10 @@ pub fn build_overlay_for_transaction_with_accounts(
             let contract_call_context =
                 parse_contract_call_execution_context(tx.metadata(), bytecode.as_ref())?;
             let mut host = if let Some(context) = contract_call_context.as_ref() {
-                crate::smartcontracts::ivm::host::CoreHost::with_accounts_and_args(
+                crate::smartcontracts::ivm::host::CoreHost::with_accounts_and_argument_record(
                     tx.authority().clone(),
                     Arc::new(accounts.to_vec()),
-                    context.args.clone(),
+                    context.argument_record.clone(),
                 )
             } else {
                 crate::smartcontracts::ivm::host::CoreHost::with_accounts(
@@ -1881,20 +1839,47 @@ where
             Ok(PreparedTxOverlay::new(
                 TxOverlay::from_instructions(instrs),
                 None,
+                VmAccessFence::None,
+                false,
             ))
         }
         Executable::ContractCall(call) => {
             #[cfg(feature = "telemetry")]
             let program_prepare_start = Instant::now();
-            let record = code::fetch_bound_contract_record(state_ro, &call.contract_address)
+            let code_hash = code::fetch_instance_binding(state_ro, &call.contract_address)
                 .ok_or_else(|| {
                     OverlayBuildError::ContractCall(format!(
                         "contract instance `{}` not found in WSV",
                         call.contract_address
                     ))
                 })?;
+            let manifest = state_ro
+                .world()
+                .contract_manifests()
+                .get(&code_hash)
+                .ok_or_else(|| {
+                    OverlayBuildError::ContractCall(format!(
+                        "contract instance `{}` has no manifest",
+                        call.contract_address
+                    ))
+                })?;
+            let code_bytes = state_ro
+                .world()
+                .contract_code()
+                .get(&code_hash)
+                .ok_or_else(|| {
+                    OverlayBuildError::ContractCall(format!(
+                        "contract instance `{}` has no bytecode",
+                        call.contract_address
+                    ))
+                })?;
+            let contract_alias = state_ro
+                .world()
+                .contract_alias_bindings()
+                .get(&call.contract_address)
+                .map(|binding| binding.alias.clone());
             let summary = ivm_cache
-                .summarize_program(record.code_bytes.as_ref())
+                .summarize_program_with_hash(code_hash, code_bytes.as_ref())
                 .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
@@ -1909,21 +1894,26 @@ where
                 state_ro.pipeline().ivm_max_cycles_upper_bound,
                 &meta,
                 code_offset,
-                record.code_bytes.as_ref(),
+                code_bytes.as_ref(),
             )?;
-            validate_bound_contract_record(&record, &summary)?;
+            validate_bound_contract_manifest(manifest, &summary)?;
             let tx_gas_limit = require_tx_gas_limit(tx)?;
-            let mut vm = ivm_cache
-                .clone_runtime(&summary, record.code_bytes.as_ref(), tx_gas_limit)
+            let amx_analysis = cached_amx_analysis(ivm_cache, &summary, code_bytes.as_ref())?;
+            let access_fence = VmAccessFence::from_program_analysis(&amx_analysis);
+            let force_live_rebuild = VmAccessFence::requires_live_rebuild(&amx_analysis);
+            let mut vm = summary
+                .checkout_runtime(tx_gas_limit)
                 .map_err(OverlayBuildError::IvmLoad)?;
-            let contract_call_context =
-                parse_contract_invocation_execution_context(call, record.code_bytes.as_ref())?;
+            let contract_call_context = parse_prepared_contract_invocation_execution_context(
+                call,
+                summary.prepared_contract(),
+            )?;
             #[cfg(feature = "telemetry")]
             observe_overlay_stage_ms(state_ro, "overlay_program_prepare", program_prepare_start);
             let contract_runtime_context = Some(crate::executor::ContractRuntimeExecutionContext {
-                contract_subject: record.contract_address.subject_id(),
-                contract_address: record.contract_address.clone(),
-                contract_alias: record.contract_alias.clone(),
+                contract_subject: call.contract_address.subject_id(),
+                contract_address: call.contract_address.clone(),
+                contract_alias,
                 entrypoint: contract_call_context
                     .entrypoint
                     .clone()
@@ -1933,13 +1923,12 @@ where
                 crate::smartcontracts::ivm::host::QueryStateSlot<_>,
             > = crate::smartcontracts::ivm::host::CoreHostImpl::<
                 crate::smartcontracts::ivm::host::QueryStateSlot<_>,
-            >::with_accounts_and_args(
+            >::with_accounts_and_argument_record(
                 tx.authority().clone(),
                 Arc::clone(&accounts),
-                contract_call_context.args.clone(),
+                contract_call_context.argument_record.clone(),
             );
-            let amx_analysis =
-                cached_amx_analysis(ivm_cache, &summary, record.code_bytes.as_ref())?;
+            host.set_prepared_contract_cache(summary.prepared_contract_cache());
             host.set_amx_analysis(amx_analysis);
             #[cfg(feature = "telemetry")]
             let host_hydrate_start = Instant::now();
@@ -1997,7 +1986,7 @@ where
                     let job = crate::pipeline::zk_lane::ZkTask {
                         tx_hash: Some(tx_hash),
                         code_hash,
-                        program: Arc::new(record.code_bytes.clone()),
+                        program: summary.prepared_contract().shared_artifact(),
                         header: Some(*header),
                         trace,
                         constraints,
@@ -2013,6 +2002,8 @@ where
             Ok(PreparedTxOverlay::new(
                 tx_overlay_from_host_queued(state_ro, queued, ivm_gas_used, durable_state_overlay),
                 access_log,
+                access_fence,
+                force_live_rebuild,
             ))
         }
         Executable::Ivm(bytecode) => {
@@ -2038,18 +2029,23 @@ where
             )?;
             validate_contract_binding(state_ro, tx, &summary)?;
             let tx_gas_limit = require_tx_gas_limit(tx)?;
-            let mut vm = ivm_cache
-                .clone_runtime(&summary, bytecode.as_ref(), tx_gas_limit)
+            let amx_analysis = cached_amx_analysis(ivm_cache, &summary, bytecode.as_ref())?;
+            let access_fence = VmAccessFence::from_program_analysis(&amx_analysis);
+            let force_live_rebuild = VmAccessFence::requires_live_rebuild(&amx_analysis);
+            let mut vm = summary
+                .checkout_runtime(tx_gas_limit)
                 .map_err(OverlayBuildError::IvmLoad)?;
-            let contract_call_context =
-                parse_contract_call_execution_context(tx.metadata(), bytecode.as_ref())?;
+            let contract_call_context = parse_prepared_contract_call_execution_context(
+                tx.metadata(),
+                summary.prepared_contract(),
+            )?;
             #[cfg(feature = "telemetry")]
             observe_overlay_stage_ms(state_ro, "overlay_program_prepare", program_prepare_start);
             let mut host = if let Some(context) = contract_call_context.as_ref() {
-                crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
+                crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_argument_record(
                     tx.authority().clone(),
                     Arc::clone(&accounts),
-                    context.args.clone(),
+                    context.argument_record.clone(),
                 )
             } else {
                 crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
@@ -2057,7 +2053,7 @@ where
                     Arc::clone(&accounts),
                 )
             };
-            let amx_analysis = cached_amx_analysis(ivm_cache, &summary, bytecode.as_ref())?;
+            host.set_prepared_contract_cache(summary.prepared_contract_cache());
             host.set_amx_analysis(amx_analysis);
             #[cfg(feature = "telemetry")]
             let host_hydrate_start = Instant::now();
@@ -2112,7 +2108,7 @@ where
                     let job = crate::pipeline::zk_lane::ZkTask {
                         tx_hash: Some(tx_hash),
                         code_hash,
-                        program: Arc::new(bytecode.as_ref().to_vec()),
+                        program: summary.prepared_contract().shared_artifact(),
                         header: Some(*header),
                         trace,
                         constraints,
@@ -2136,14 +2132,17 @@ where
             Ok(PreparedTxOverlay::new(
                 TxOverlay::from_ivm_execution(queued, ivm_gas_used, durable_state_overlay),
                 access_log,
+                access_fence,
+                force_live_rebuild,
             ))
         }
         Executable::IvmProved(proved) => {
-            let parsed = ivm::ProgramMetadata::parse(proved.bytecode.as_ref())
+            let summary = ivm_cache
+                .summarize_program(proved.bytecode.as_ref())
                 .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
-            let meta = parsed.metadata;
+            let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
-            let code_offset = parsed.code_offset;
+            let code_offset = summary.code_offset;
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
             if wants_zk && !zk_enabled {
                 return Err(OverlayBuildError::HeaderPolicy(
@@ -2157,24 +2156,6 @@ where
                 proved.bytecode.as_ref(),
             )?;
 
-            let body = proved
-                .bytecode
-                .as_ref()
-                .get(parsed.header_len..)
-                .ok_or(OverlayBuildError::IvmHeaderParse)?;
-            let code_hash = Hash::new(body);
-            let abi_hash =
-                Hash::prehashed(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1));
-            let meta_hash = Hash::new(meta.encode());
-            let summary = ProgramSummary {
-                metadata: meta,
-                code_offset,
-                header_len: parsed.header_len,
-                code_hash,
-                abi_hash,
-                meta_hash,
-            };
-
             enforce_manifest_is_pre_registered(state_ro, tx, summary.code_hash)?;
             verify_ivm_proved_execution(state_ro, tx, proved, &summary)?;
 
@@ -2183,6 +2164,8 @@ where
             Ok(PreparedTxOverlay::new(
                 TxOverlay::from_ivm_proved_instructions(instrs),
                 None,
+                VmAccessFence::None,
+                false,
             ))
         }
     }
@@ -2193,7 +2176,7 @@ where
 /// Applies per-transaction execution caps when running IVM bytecode to collect queued ISIs:
 /// - `max_cycles_cap`: if non-zero, caps VM cycles to `min(header.max_cycles, max_cycles_cap, upper_bound_cap)`.
 /// - `max_millis_cap`: if non-zero, rejects the overlay if VM execution exceeds the wall-clock budget.
-/// - `upper_bound_cap`: pipeline-wide upper bound on cycles; 0 means no additional cap.
+/// - `upper_bound_cap`: mandatory pipeline-wide upper bound on cycles.
 ///   Build an overlay for a transaction under quarantine caps (cycles/millis and upper bound).
 ///
 /// # Errors
@@ -2205,7 +2188,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
     state_ro: &(impl StateReadOnly + QueryStateSource),
     max_cycles_cap: u64,
     max_millis_cap: u64,
-    upper_bound_cap: u64,
+    upper_bound_cap: NonZeroU64,
     streaming_meta: StreamingOverlayMetadata,
     ivm_cache: &mut IvmCache,
 ) -> Result<TxOverlay, OverlayBuildError> {
@@ -2216,15 +2199,40 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             Ok(TxOverlay::from_instructions(instrs))
         }
         Executable::ContractCall(call) => {
-            let record = code::fetch_bound_contract_record(state_ro, &call.contract_address)
+            let code_hash = code::fetch_instance_binding(state_ro, &call.contract_address)
                 .ok_or_else(|| {
                     OverlayBuildError::ContractCall(format!(
                         "contract instance `{}` not found in WSV",
                         call.contract_address
                     ))
                 })?;
+            let manifest = state_ro
+                .world()
+                .contract_manifests()
+                .get(&code_hash)
+                .ok_or_else(|| {
+                    OverlayBuildError::ContractCall(format!(
+                        "contract instance `{}` has no manifest",
+                        call.contract_address
+                    ))
+                })?;
+            let code_bytes = state_ro
+                .world()
+                .contract_code()
+                .get(&code_hash)
+                .ok_or_else(|| {
+                    OverlayBuildError::ContractCall(format!(
+                        "contract instance `{}` has no bytecode",
+                        call.contract_address
+                    ))
+                })?;
+            let contract_alias = state_ro
+                .world()
+                .contract_alias_bindings()
+                .get(&call.contract_address)
+                .map(|binding| binding.alias.clone());
             let summary = ivm_cache
-                .summarize_program(record.code_bytes.as_ref())
+                .summarize_program_with_hash(code_hash, code_bytes.as_ref())
                 .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
@@ -2234,29 +2242,23 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 ));
             }
             let tx_gas_limit = require_tx_gas_limit(tx)?;
-            validate_bound_contract_record(&record, &summary)?;
-            let mut eff = meta.max_cycles;
-            if eff == 0 {
-                eff = u64::MAX;
-            }
-            if upper_bound_cap > 0 {
-                eff = eff.min(upper_bound_cap);
-            }
+            validate_bound_contract_manifest(manifest, &summary)?;
+            let mut eff = meta.max_cycles.min(upper_bound_cap.get());
             if max_cycles_cap > 0 {
                 eff = eff.min(max_cycles_cap);
             }
-            if eff == u64::MAX {
-                eff = 0;
-            }
-            let mut vm = ivm_cache
-                .clone_runtime(&summary, record.code_bytes.as_ref(), tx_gas_limit)
+            let amx_analysis = cached_amx_analysis(ivm_cache, &summary, code_bytes.as_ref())?;
+            let mut vm = summary
+                .checkout_runtime(tx_gas_limit)
                 .map_err(OverlayBuildError::IvmLoad)?;
-            let contract_call_context =
-                parse_contract_invocation_execution_context(call, record.code_bytes.as_ref())?;
+            let contract_call_context = parse_prepared_contract_invocation_execution_context(
+                call,
+                summary.prepared_contract(),
+            )?;
             let contract_runtime_context = Some(crate::executor::ContractRuntimeExecutionContext {
-                contract_subject: record.contract_address.subject_id(),
-                contract_address: record.contract_address.clone(),
-                contract_alias: record.contract_alias.clone(),
+                contract_subject: call.contract_address.subject_id(),
+                contract_address: call.contract_address.clone(),
+                contract_alias,
                 entrypoint: contract_call_context
                     .entrypoint
                     .clone()
@@ -2266,13 +2268,12 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 crate::smartcontracts::ivm::host::QueryStateSlot<_>,
             > = crate::smartcontracts::ivm::host::CoreHostImpl::<
                 crate::smartcontracts::ivm::host::QueryStateSlot<_>,
-            >::with_accounts_and_args(
+            >::with_accounts_and_argument_record(
                 tx.authority().clone(),
                 Arc::clone(&accounts),
-                contract_call_context.args.clone(),
+                contract_call_context.argument_record.clone(),
             );
-            let amx_analysis =
-                cached_amx_analysis(ivm_cache, &summary, record.code_bytes.as_ref())?;
+            host.set_prepared_contract_cache(summary.prepared_contract_cache());
             host.set_amx_analysis(amx_analysis);
             let amx_limits = crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(
                 state_ro.pipeline(),
@@ -2282,9 +2283,6 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             host.hydrate_axt_replay_ledger(state_ro);
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
             host.set_vrf_epoch_seeds_from_world(state_ro.world());
-            host.set_bound_contract_records_by_subject_snapshot(
-                code::snapshot_bound_contract_records_by_subject(state_ro),
-            );
             host.set_query_state(state_ro);
             host.set_contract_runtime_context(contract_runtime_context.clone());
             let snapshot = state_ro.axt_policy_snapshot();
@@ -2297,9 +2295,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             host.set_chain_id(state_ro.chain_id());
             host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
                 .map_err(OverlayBuildError::IvmRun)?;
-            if eff > 0 {
-                vm.set_max_cycles(eff);
-            }
+            vm.set_max_cycles(eff);
             vm.set_gas_limit(tx_gas_limit);
             apply_contract_call_execution_context(&mut vm, Some(&contract_call_context))?;
             #[cfg(feature = "telemetry")]
@@ -2345,29 +2341,22 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 ));
             }
             let tx_gas_limit = require_tx_gas_limit(tx)?;
-            let mut eff = meta.max_cycles;
-            if eff == 0 {
-                eff = u64::MAX;
-            }
-            if upper_bound_cap > 0 {
-                eff = eff.min(upper_bound_cap);
-            }
+            let mut eff = meta.max_cycles.min(upper_bound_cap.get());
             if max_cycles_cap > 0 {
                 eff = eff.min(max_cycles_cap);
             }
-            if eff == u64::MAX {
-                eff = 0; // no cap
-            }
-            let mut vm = ivm_cache
-                .clone_runtime(&summary, bytecode.as_ref(), tx_gas_limit)
+            let mut vm = summary
+                .checkout_runtime(tx_gas_limit)
                 .map_err(OverlayBuildError::IvmLoad)?;
-            let contract_call_context =
-                parse_contract_call_execution_context(tx.metadata(), bytecode.as_ref())?;
+            let contract_call_context = parse_prepared_contract_call_execution_context(
+                tx.metadata(),
+                summary.prepared_contract(),
+            )?;
             let mut host = if let Some(context) = contract_call_context.as_ref() {
-                crate::smartcontracts::ivm::host::CoreHost::with_accounts_and_args(
+                crate::smartcontracts::ivm::host::CoreHost::with_accounts_and_argument_record(
                     tx.authority().clone(),
                     Arc::clone(&accounts),
-                    context.args.clone(),
+                    context.argument_record.clone(),
                 )
             } else {
                 crate::smartcontracts::ivm::host::CoreHost::with_accounts(
@@ -2375,11 +2364,10 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                     Arc::clone(&accounts),
                 )
             };
+            host.set_prepared_contract_cache(summary.prepared_contract_cache());
             apply_streaming_metadata(&mut host, streaming_meta);
             vm.set_host(host);
-            if eff > 0 {
-                vm.set_max_cycles(eff);
-            }
+            vm.set_max_cycles(eff);
             vm.set_gas_limit(tx_gas_limit);
             apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())?;
             // Run with a simple wall-clock budget check (post-hoc reject).
@@ -2440,6 +2428,235 @@ mod tests_overlay_manifest {
         iroha_data_model::account::Account::new(authority.clone()).build(authority)
     }
 
+    fn analysis_with_syscalls(numbers: &[u32]) -> ivm::analysis::ProgramAnalysis {
+        ivm::analysis::ProgramAnalysis {
+            metadata: ivm::ProgramMetadata::default(),
+            instruction_count: numbers.len(),
+            registers: ivm::analysis::RegisterUsage::default(),
+            memory: ivm::analysis::MemoryAccesses::default(),
+            syscalls: numbers
+                .iter()
+                .copied()
+                .map(|number| ivm::analysis::SyscallUsage { number, count: 1 })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn vm_access_fence_fails_closed_by_reachable_syscall_class() {
+        assert_eq!(
+            VmAccessFence::from_program_analysis(&analysis_with_syscalls(&[])),
+            VmAccessFence::None
+        );
+        assert_eq!(
+            VmAccessFence::from_program_analysis(&analysis_with_syscalls(&[
+                ivm::syscalls::SYSCALL_STATE_GET,
+                ivm::syscalls::SYSCALL_STATE_SET,
+            ])),
+            VmAccessFence::State
+        );
+        assert!(!VmAccessFence::requires_live_rebuild(
+            &analysis_with_syscalls(&[ivm::syscalls::SYSCALL_STATE_GET])
+        ));
+        assert!(VmAccessFence::requires_live_rebuild(
+            &analysis_with_syscalls(&[ivm::syscalls::SYSCALL_QUERY_GET_ACCOUNT])
+        ));
+        assert!(VmAccessFence::requires_live_rebuild(
+            &analysis_with_syscalls(&[ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED])
+        ));
+        assert!(VmAccessFence::requires_live_rebuild(
+            &analysis_with_syscalls(&[ivm::syscalls::SYSCALL_CALL_CONTRACT])
+        ));
+        for syscall in [
+            ivm::syscalls::SYSCALL_QUERY_GET_ACCOUNT,
+            ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED,
+            ivm::syscalls::SYSCALL_CALL_CONTRACT,
+            0x00ff_fffe,
+        ] {
+            assert_eq!(
+                VmAccessFence::from_program_analysis(&analysis_with_syscalls(&[syscall])),
+                VmAccessFence::Global,
+                "syscall 0x{syscall:06x} must serialize globally"
+            );
+        }
+    }
+
+    #[test]
+    fn overlay_error_retryability_excludes_state_invariant_failures() {
+        assert!(
+            OverlayBuildError::ContractCall("binding not found yet".to_owned())
+                .may_change_with_live_state()
+        );
+        assert!(
+            OverlayBuildError::IvmRun(ivm::VMError::PermissionDenied).may_change_with_live_state()
+        );
+        assert!(!OverlayBuildError::IvmHeaderParse.may_change_with_live_state());
+        assert!(
+            !OverlayBuildError::GasLimit("missing gas limit".to_owned())
+                .may_change_with_live_state()
+        );
+        assert!(
+            !OverlayBuildError::IvmLoad(ivm::VMError::InvalidMetadata).may_change_with_live_state()
+        );
+    }
+
+    #[test]
+    fn durable_state_read_snapshot_detects_value_and_descendant_changes() {
+        fn state_with_entries(entries: &[(&str, &[u8])]) -> State {
+            let mut world = crate::state::World::new();
+            for (path, value) in entries {
+                world.smart_contract_state_mut_for_testing().insert(
+                    path.parse().expect("valid durable-state path"),
+                    value.to_vec(),
+                );
+            }
+            State::new_for_testing(
+                world,
+                crate::kura::Kura::blank_kura_for_testing(),
+                crate::query::store::LiveQueryStore::start_test(),
+            )
+        }
+
+        let (authority, keypair) = iroha_test_samples::gen_account_in("wonderland");
+        let transaction = TransactionBuilder::new(ChainId::from("snapshot-test"), authority)
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(Vec::new())))
+            .sign(keypair.private_key());
+        let mut access_log = ivm::host::AccessLog::default();
+        access_log.read_keys.insert("counter".to_owned());
+        access_log
+            .durable_read_paths
+            .extend(["counter".to_owned(), "sc/nested/counter".to_owned()]);
+        access_log.durable_read_paths_complete = true;
+
+        let initial = state_with_entries(&[
+            ("counter", b"one"),
+            ("counter-lexical-interloper", b"same"),
+            ("sc/nested/counter", b"nested-one"),
+            ("unrelated", b"stable"),
+        ]);
+        let snapshot =
+            DurableStateReadSnapshot::capture(&transaction, Some(&access_log), &initial.view())
+                .expect("non-empty VM read log creates a snapshot");
+        assert!(snapshot.is_current(&initial.view()));
+
+        let unrelated = state_with_entries(&[
+            ("counter", b"one"),
+            ("counter-lexical-interloper", b"same"),
+            ("sc/nested/counter", b"nested-one"),
+            ("unrelated", b"changed"),
+        ]);
+        assert!(snapshot.is_current(&unrelated.view()));
+
+        let changed_value = state_with_entries(&[("counter", b"two")]);
+        assert!(!snapshot.is_current(&changed_value.view()));
+
+        let changed_concrete_scope = state_with_entries(&[
+            ("counter", b"one"),
+            ("counter-lexical-interloper", b"same"),
+            ("sc/nested/counter", b"nested-two"),
+        ]);
+        assert!(!snapshot.is_current(&changed_concrete_scope.view()));
+
+        let changed_descendant = state_with_entries(&[
+            ("counter", b"one"),
+            ("counter-lexical-interloper", b"same"),
+            ("counter/child", b"new"),
+            ("sc/nested/counter", b"nested-one"),
+        ]);
+        assert!(!snapshot.is_current(&changed_descendant.view()));
+    }
+
+    #[test]
+    fn durable_state_read_snapshot_fails_closed_for_invalid_host_key() {
+        let (authority, keypair) = iroha_test_samples::gen_account_in("wonderland");
+        let transaction = TransactionBuilder::new(ChainId::from("snapshot-invalid"), authority)
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(Vec::new())))
+            .sign(keypair.private_key());
+        let mut access_log = ivm::host::AccessLog::default();
+        access_log
+            .read_keys
+            .insert("invalid state key with spaces".to_owned());
+
+        let initial = {
+            let mut world = crate::state::World::new();
+            world
+                .smart_contract_state_mut_for_testing()
+                .insert("unrelated".parse().unwrap(), b"one".to_vec());
+            State::new_for_testing(
+                world,
+                crate::kura::Kura::blank_kura_for_testing(),
+                crate::query::store::LiveQueryStore::start_test(),
+            )
+        };
+        let snapshot =
+            DurableStateReadSnapshot::capture(&transaction, Some(&access_log), &initial.view())
+                .expect("invalid VM read key still creates a fail-closed snapshot");
+
+        let changed = {
+            let mut world = crate::state::World::new();
+            world
+                .smart_contract_state_mut_for_testing()
+                .insert("unrelated".parse().unwrap(), b"two".to_vec());
+            State::new_for_testing(
+                world,
+                crate::kura::Kura::blank_kura_for_testing(),
+                crate::query::store::LiveQueryStore::start_test(),
+            )
+        };
+        assert!(
+            !snapshot.is_current(&changed.view()),
+            "an unrepresentable access key must conservatively observe the whole state map"
+        );
+    }
+
+    #[test]
+    fn durable_state_read_snapshot_fails_closed_for_partial_concrete_paths() {
+        let (authority, keypair) = iroha_test_samples::gen_account_in("wonderland");
+        let transaction = TransactionBuilder::new(ChainId::from("snapshot-partial"), authority)
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(Vec::new())))
+            .sign(keypair.private_key());
+        let mut access_log = ivm::host::AccessLog::default();
+        access_log
+            .read_keys
+            .extend(["alpha".to_owned(), "nested".to_owned()]);
+        access_log.durable_read_paths.insert("alpha".to_owned());
+
+        let make_state = |unrelated: &[u8]| {
+            let mut world = crate::state::World::new();
+            world
+                .smart_contract_state_mut_for_testing()
+                .insert("alpha".parse().unwrap(), b"stable".to_vec());
+            world
+                .smart_contract_state_mut_for_testing()
+                .insert("unrelated".parse().unwrap(), unrelated.to_vec());
+            State::new_for_testing(
+                world,
+                crate::kura::Kura::blank_kura_for_testing(),
+                crate::query::store::LiveQueryStore::start_test(),
+            )
+        };
+        let initial = make_state(b"one");
+        let empty_incomplete_snapshot = DurableStateReadSnapshot::capture(
+            &transaction,
+            Some(&ivm::host::AccessLog::default()),
+            &initial.view(),
+        )
+        .expect("an unattested empty log creates a fail-closed snapshot");
+        assert!(
+            !empty_incomplete_snapshot.is_current(&make_state(b"two").view()),
+            "an empty custom-host log must not claim that no durable reads occurred"
+        );
+
+        let snapshot =
+            DurableStateReadSnapshot::capture(&transaction, Some(&access_log), &initial.view())
+                .expect("partial concrete log creates a fail-closed snapshot");
+        assert!(snapshot.is_current(&initial.view()));
+        assert!(
+            !snapshot.is_current(&make_state(b"two").view()),
+            "missing one logical read path must force a complete-map fingerprint"
+        );
+    }
+
     fn minimal_contract_artifact(abi_version: u8) -> (Vec<u8>, ContractManifest) {
         let meta = ivm::ProgramMetadata {
             version_major: 1,
@@ -2450,6 +2667,7 @@ mod tests_overlay_manifest {
             abi_version,
         };
         let interface = ivm::EmbeddedContractInterfaceV1 {
+            contract_name: "TestContract".to_owned(),
             compiler_fingerprint: "iroha-core-overlay-test".to_owned(),
             features_bitmap: 0,
             access_set_hints: None,
@@ -2458,6 +2676,7 @@ mod tests_overlay_manifest {
                 name: "main".to_owned(),
                 kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
                 params: Vec::new(),
+                argument_schema: None,
                 return_type: None,
                 permission: None,
                 read_keys: Vec::new(),
@@ -2467,6 +2686,7 @@ mod tests_overlay_manifest {
                 triggers: Vec::new(),
                 entry_pc: 0,
             }],
+            error_codes: Vec::new(),
             states: Vec::new(),
         };
         let mut artifact = meta.encode();
@@ -2561,6 +2781,9 @@ pub(crate) fn validate_header_policy(meta: &ivm::ProgramMetadata) -> Result<(), 
     if meta.abi_version != 1 {
         return Err(IvmAdmissionError::UnsupportedAbiVersion(meta.abi_version));
     }
+    if meta.max_cycles == 0 {
+        return Err(IvmAdmissionError::MissingMaxCycles);
+    }
     // Vector length sanity
     if meta.vector_length != 0 && meta.vector_length > ivm::VECTOR_LENGTH_MAX {
         return Err(IvmAdmissionError::VectorLengthTooLarge(
@@ -2598,6 +2821,59 @@ mod tests {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     }
 
+    #[test]
+    fn pre_execution_cycle_ceiling_accepts_exact_bound() {
+        let meta = ivm::ProgramMetadata {
+            max_cycles: 42,
+            ..ivm::ProgramMetadata::default()
+        };
+        let bytecode = ivm::encoding::wide::encode_halt().to_le_bytes();
+
+        enforce_pre_execution_policy(
+            NonZeroU64::new(42).expect("test ceiling is non-zero"),
+            &meta,
+            0,
+            &bytecode,
+        )
+        .expect("artifact at the configured ceiling should be admitted");
+    }
+
+    #[test]
+    fn header_policy_rejects_zero_cycle_limit() {
+        let meta = ivm::ProgramMetadata {
+            max_cycles: 0,
+            ..ivm::ProgramMetadata::default()
+        };
+
+        assert!(matches!(
+            validate_header_policy(&meta),
+            Err(IvmAdmissionError::MissingMaxCycles)
+        ));
+    }
+
+    #[test]
+    fn pre_execution_cycle_ceiling_rejects_over_bound() {
+        let meta = ivm::ProgramMetadata {
+            max_cycles: 43,
+            ..ivm::ProgramMetadata::default()
+        };
+        let bytecode = ivm::encoding::wide::encode_halt().to_le_bytes();
+
+        let error = enforce_pre_execution_policy(
+            NonZeroU64::new(42).expect("test ceiling is non-zero"),
+            &meta,
+            0,
+            &bytecode,
+        )
+        .expect_err("artifact above the configured ceiling must fail closed");
+        assert!(matches!(
+            error,
+            OverlayBuildError::HeaderPolicy(
+                IvmAdmissionError::MaxCyclesExceedsUpperBound(info)
+            ) if info.max_cycles == 43 && info.upper_bound == 42
+        ));
+    }
+
     fn mutate_open_verify_envelope_proof_box(
         mut proof: iroha_data_model::proof::ProofBox,
         mutate: impl FnOnce(&mut ZkOpenVerifyEnvelope),
@@ -2632,495 +2908,6 @@ mod tests {
         assert_eq!(overlay.byte_size(), expected);
         assert_eq!(overlay.byte_size.get(), Some(&expected));
         assert_eq!(overlay.byte_size(), expected);
-    }
-
-    #[test]
-    fn sccp_record_overlay_has_durable_state_changes() {
-        let overlay = TxOverlay::from_ivm_proved_instructions(vec![sccp_record_instruction()]);
-
-        assert!(overlay.has_durable_state_changes());
-    }
-
-    fn sccp_record_instruction() -> InstructionBox {
-        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
-            version: 1,
-            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-            nonce: 1,
-            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor".to_vec(),
-            amount: 1,
-            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            sender: b"sora:bridge".to_vec(),
-            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
-            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
-            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            route_id: b"nexus:eth:xor".to_vec(),
-        });
-        iroha_data_model::isi::bridge::RecordSccpMessage::new(
-            iroha_sccp::canonical_sccp_payload_bytes(&payload),
-        )
-        .into()
-    }
-
-    fn taira_tron_xor_record_payload(sender: &AccountId, amount: u128) -> Vec<u8> {
-        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
-            version: 1,
-            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            dest_domain: iroha_sccp::SCCP_DOMAIN_TRON,
-            nonce: 11,
-            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: SCCP_TAIRA_XOR_ASSET_KEY.to_vec(),
-            amount,
-            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            sender: sender.to_string().into_bytes(),
-            recipient_codec: iroha_sccp::SCCP_CODEC_TRON_BASE58CHECK,
-            recipient: b"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_vec(),
-            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            route_id: SCCP_TAIRA_TRON_XOR_ROUTE_ID.to_vec(),
-        });
-        iroha_sccp::canonical_sccp_payload_bytes(&payload)
-    }
-
-    fn taira_tron_xor_record_instruction(sender: &AccountId, amount: u128) -> InstructionBox {
-        iroha_data_model::isi::bridge::RecordSccpMessage::new(taira_tron_xor_record_payload(
-            sender, amount,
-        ))
-        .into()
-    }
-
-    fn taira_tron_xor_hex_record_instruction(sender: &AccountId, amount: u128) -> InstructionBox {
-        iroha_data_model::isi::bridge::RecordSccpMessage::new(
-            hex::encode(taira_tron_xor_record_payload(sender, amount)).into_bytes(),
-        )
-        .into()
-    }
-
-    fn taira_bsc_xor_record_payload(sender: &AccountId, amount: u128) -> Vec<u8> {
-        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
-            version: 1,
-            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            dest_domain: iroha_sccp::SCCP_DOMAIN_BSC,
-            nonce: 12,
-            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: SCCP_TAIRA_XOR_ASSET_KEY.to_vec(),
-            amount,
-            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            sender: sender.to_string().into_bytes(),
-            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
-            recipient: b"0x52908400098527886E0F7030069857D2E4169EE7".to_vec(),
-            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            route_id: SCCP_TAIRA_BSC_XOR_ROUTE_ID.to_vec(),
-        });
-        iroha_sccp::canonical_sccp_payload_bytes(&payload)
-    }
-
-    fn taira_bsc_xor_record_instruction(sender: &AccountId, amount: u128) -> InstructionBox {
-        iroha_data_model::isi::bridge::RecordSccpMessage::new(taira_bsc_xor_record_payload(
-            sender, amount,
-        ))
-        .into()
-    }
-
-    fn taira_xor_burn_instruction(
-        sender: &AccountId,
-        asset_definition_id: iroha_data_model::asset::AssetDefinitionId,
-        amount: iroha_primitives::numeric::Numeric,
-    ) -> InstructionBox {
-        let asset_id = iroha_data_model::asset::AssetId::of(asset_definition_id, sender.clone());
-        iroha_data_model::isi::Burn::asset_numeric(amount, asset_id).into()
-    }
-
-    fn sccp_taira_xor_state() -> (
-        crate::state::State,
-        AccountId,
-        iroha_crypto::KeyPair,
-        iroha_data_model::asset::AssetDefinitionId,
-    ) {
-        let (authority, keypair) = gen_account_in("wonderland");
-        let domain_id =
-            DomainId::try_new("wonderland", "universal").expect("test domain id is valid");
-        let domain = iroha_data_model::domain::Domain::new(domain_id.clone()).build(&authority);
-        let account = build_wonderland_account(&authority);
-        let asset_definition_id =
-            iroha_data_model::asset::AssetDefinitionId::new(domain_id, "xor".parse().unwrap());
-        let asset_definition =
-            iroha_data_model::asset::AssetDefinition::numeric(asset_definition_id.clone())
-                .with_name("xor".to_owned())
-                .build(&authority);
-        let world = crate::state::World::with([domain], [account], [asset_definition]);
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let mut state =
-            crate::state::State::new_with_chain(world, kura, query_handle, ChainId::from("chain"));
-        state.nexus.get_mut().fees.fee_asset_id = asset_definition_id.to_string();
-        (state, authority, keypair, asset_definition_id)
-    }
-
-    fn sccp_validation_tx(
-        state: &crate::state::State,
-        authority: AccountId,
-        keypair: &iroha_crypto::KeyPair,
-    ) -> iroha_data_model::transaction::SignedTransaction {
-        let mut metadata = iroha_data_model::metadata::Metadata::default();
-        insert_gas_limit(&mut metadata);
-        iroha_data_model::transaction::TransactionBuilder::new(state.chain_id.clone(), authority)
-            .with_metadata(metadata)
-            .with_instructions([iroha_data_model::isi::Log::new(
-                iroha_logger::Level::INFO,
-                "sccp-validation".to_owned(),
-            )])
-            .sign(keypair.private_key())
-    }
-
-    fn validate_taira_xor_overlay_for_test(
-        state: &crate::state::State,
-        authority: AccountId,
-        keypair: &iroha_crypto::KeyPair,
-        instructions: &[InstructionBox],
-    ) -> Result<(), OverlayBuildError> {
-        let tx = sccp_validation_tx(state, authority, keypair);
-        validate_taira_xor_sccp_settlement_burns(&state.view(), &tx, instructions)
-    }
-
-    fn sccp_overlay_state() -> (crate::state::State, AccountId) {
-        let (authority, _) = gen_account_in("wonderland");
-        let domain = iroha_data_model::domain::Domain::new(
-            DomainId::try_new("wonderland", "universal").expect("domain id"),
-        )
-        .build(&authority);
-        let account = build_wonderland_account(&authority);
-        let world = crate::state::World::with([domain], [account], []);
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        (
-            crate::state::State::new_with_chain(world, kura, query_handle, ChainId::from("chain")),
-            authority,
-        )
-    }
-
-    #[test]
-    fn plain_overlay_rejects_sccp_recording() {
-        let (state, authority) = sccp_overlay_state();
-        let mut block = state.block(iroha_data_model::block::BlockHeader::new(
-            nonzero_ext::nonzero!(1_u64),
-            None,
-            None,
-            None,
-            0,
-            0,
-        ));
-        let mut tx = block.transaction();
-        let overlay = TxOverlay::from_instructions(vec![sccp_record_instruction()]);
-
-        let err = overlay
-            .apply_with_chunk(&mut tx, &authority, 1)
-            .expect_err("plain overlay must not record SCCP messages");
-        match err {
-            ValidationFail::InstructionFailed(
-                iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
-                    message,
-                ),
-            ) => assert!(
-                message.contains("requires verified IVM proof"),
-                "unexpected invariant violation: {message}"
-            ),
-            other => panic!("unexpected error: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn ivm_proved_overlay_allows_sccp_recording() {
-        let (state, authority) = sccp_overlay_state();
-        let mut block = state.block(iroha_data_model::block::BlockHeader::new(
-            nonzero_ext::nonzero!(1_u64),
-            None,
-            None,
-            None,
-            0,
-            0,
-        ));
-        let mut tx = block.transaction();
-        tx.current_lane_id = Some(iroha_data_model::nexus::LaneId::SINGLE);
-        tx.current_dataspace_id = Some(iroha_data_model::nexus::DataSpaceId::UNIVERSAL);
-        tx.world.current_dataspace_id = Some(iroha_data_model::nexus::DataSpaceId::UNIVERSAL);
-        let overlay = TxOverlay::from_ivm_proved_instructions(vec![sccp_record_instruction()]);
-
-        overlay
-            .apply_with_chunk(&mut tx, &authority, 1)
-            .expect("verified IVM-proved overlay may record SCCP messages");
-    }
-
-    #[test]
-    fn failed_ivm_proved_overlay_restores_sccp_recording_flag() {
-        let (state, authority) = sccp_overlay_state();
-        let mut block = state.block(iroha_data_model::block::BlockHeader::new(
-            nonzero_ext::nonzero!(1_u64),
-            None,
-            None,
-            None,
-            0,
-            0,
-        ));
-        let mut tx = block.transaction();
-        tx.current_lane_id = Some(iroha_data_model::nexus::LaneId::SINGLE);
-        tx.current_dataspace_id = Some(iroha_data_model::nexus::DataSpaceId::UNIVERSAL);
-        tx.world.current_dataspace_id = Some(iroha_data_model::nexus::DataSpaceId::UNIVERSAL);
-        let malformed = TxOverlay::from_ivm_proved_instructions(vec![InstructionBox::from(
-            iroha_data_model::isi::bridge::RecordSccpMessage::new(vec![0xFF]),
-        )]);
-
-        malformed
-            .apply_with_chunk(&mut tx, &authority, 1)
-            .expect_err("malformed IVM-proved SCCP record must fail");
-        assert!(
-            !tx.sccp_recording_proof_verified,
-            "failed IVM-proved overlay must restore the SCCP proof flag"
-        );
-
-        let plain = TxOverlay::from_instructions(vec![sccp_record_instruction()]);
-        let err = plain
-            .apply_with_chunk(&mut tx, &authority, 1)
-            .expect_err("plain overlay must not inherit SCCP proof authority");
-        match err {
-            ValidationFail::InstructionFailed(
-                iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
-                    message,
-                ),
-            ) => assert!(
-                message.contains("requires verified IVM proof"),
-                "unexpected invariant violation: {message}"
-            ),
-            other => panic!("unexpected error: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn taira_tron_xor_record_requires_matching_burn() {
-        let (state, authority, keypair, _asset_definition_id) = sccp_taira_xor_state();
-        let instructions = vec![taira_tron_xor_record_instruction(&authority, 10)];
-
-        let err = validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
-            .expect_err("TAIRA -> TRON record without burn must be rejected");
-        assert!(matches!(
-            err,
-            OverlayBuildError::ZkProof(msg)
-                if msg.contains("requires at least 10000000000 burned XOR base units")
-                    && msg.contains("observed 0")
-        ));
-    }
-
-    #[test]
-    fn taira_tron_xor_record_accepts_matching_burn() {
-        let (state, authority, keypair, asset_definition_id) = sccp_taira_xor_state();
-        let instructions = vec![
-            taira_xor_burn_instruction(
-                &authority,
-                asset_definition_id,
-                iroha_primitives::numeric::Numeric::try_new(10, 0).unwrap(),
-            ),
-            taira_tron_xor_record_instruction(&authority, 10),
-        ];
-
-        validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
-            .expect("matching XOR burn must satisfy TAIRA -> TRON record");
-    }
-
-    #[test]
-    fn taira_tron_xor_record_accepts_hex_encoded_payload_bytes() {
-        let (state, authority, keypair, asset_definition_id) = sccp_taira_xor_state();
-        let instructions = vec![
-            taira_xor_burn_instruction(
-                &authority,
-                asset_definition_id,
-                iroha_primitives::numeric::Numeric::try_new(10, 0).unwrap(),
-            ),
-            taira_tron_xor_hex_record_instruction(&authority, 10),
-        ];
-
-        validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
-            .expect("hex-encoded XOR record payload must satisfy TAIRA -> TRON record");
-    }
-
-    #[test]
-    fn taira_tron_xor_record_aggregates_burns_and_rejects_reuse() {
-        let (state, authority, keypair, asset_definition_id) = sccp_taira_xor_state();
-        let instructions = vec![
-            taira_xor_burn_instruction(
-                &authority,
-                asset_definition_id,
-                iroha_primitives::numeric::Numeric::try_new(10, 0).unwrap(),
-            ),
-            taira_tron_xor_record_instruction(&authority, 10),
-            taira_tron_xor_record_instruction(&authority, 9),
-        ];
-
-        let err = validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
-            .expect_err("one burn must not be reusable across multiple bridge records");
-        assert!(matches!(
-            err,
-            OverlayBuildError::ZkProof(msg)
-                if msg.contains("requires at least 19000000000 burned XOR base units")
-                    && msg.contains("observed 10000000000")
-        ));
-    }
-
-    #[test]
-    fn taira_tron_xor_record_rejects_wrong_sender_burn() {
-        let (state, authority, keypair, asset_definition_id) = sccp_taira_xor_state();
-        let (other, _) = gen_account_in("wonderland");
-        let instructions = vec![
-            taira_xor_burn_instruction(
-                &other,
-                asset_definition_id,
-                iroha_primitives::numeric::Numeric::try_new(10, 0).unwrap(),
-            ),
-            taira_tron_xor_record_instruction(&authority, 10),
-        ];
-
-        let err = validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
-            .expect_err("burn from another account must not satisfy bridge record");
-        assert!(matches!(
-            err,
-            OverlayBuildError::ZkProof(msg)
-                if msg.contains("requires at least 10000000000 burned XOR base units")
-                    && msg.contains("observed 0")
-        ));
-    }
-
-    #[test]
-    fn taira_tron_xor_record_rejects_wrong_asset_burn() {
-        let (state, authority, keypair, _asset_definition_id) = sccp_taira_xor_state();
-        let wrong_asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").expect("domain id"),
-            "rose".parse().unwrap(),
-        );
-        let instructions = vec![
-            taira_xor_burn_instruction(
-                &authority,
-                wrong_asset_definition_id,
-                iroha_primitives::numeric::Numeric::try_new(10, 0).unwrap(),
-            ),
-            taira_tron_xor_record_instruction(&authority, 10),
-        ];
-
-        let err = validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
-            .expect_err("burning another asset must not satisfy bridge record");
-        assert!(matches!(
-            err,
-            OverlayBuildError::ZkProof(msg)
-                if msg.contains("requires at least 10000000000 burned XOR base units")
-                    && msg.contains("observed 0")
-        ));
-    }
-
-    #[test]
-    fn taira_tron_xor_record_rejects_bsc_scaled_burn_as_too_small() {
-        let (state, authority, keypair, asset_definition_id) = sccp_taira_xor_state();
-        let instructions = vec![
-            taira_xor_burn_instruction(
-                &authority,
-                asset_definition_id,
-                iroha_primitives::numeric::Numeric::try_new(10, 1).unwrap(),
-            ),
-            taira_tron_xor_record_instruction(&authority, 1_000_000_000),
-        ];
-
-        let err = validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
-            .expect_err("BSC-scaled burn must not satisfy a raw TAIRA -> TRON record");
-        assert!(matches!(
-            err,
-            OverlayBuildError::ZkProof(msg)
-                if msg.contains("requires at least 1000000000000000000 burned XOR base units")
-                    && msg.contains("observed 1000000000")
-        ));
-    }
-
-    #[test]
-    fn taira_bsc_xor_record_requires_matching_burn() {
-        let (state, authority, keypair, _asset_definition_id) = sccp_taira_xor_state();
-        let instructions = vec![taira_bsc_xor_record_instruction(&authority, 100_000)];
-
-        let err = validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
-            .expect_err("TAIRA -> BSC record without burn must be rejected");
-        assert!(matches!(
-            err,
-            OverlayBuildError::ZkProof(msg)
-                if msg.contains("taira_bsc_xor record")
-                    && msg.contains("requires at least 100000 burned XOR base units")
-                    && msg.contains("observed 0")
-        ));
-    }
-
-    #[test]
-    fn taira_bsc_xor_record_accepts_matching_decimal_burn() {
-        let (state, authority, keypair, asset_definition_id) = sccp_taira_xor_state();
-        let instructions = vec![
-            taira_xor_burn_instruction(
-                &authority,
-                asset_definition_id,
-                iroha_primitives::numeric::Numeric::try_new(1, 4).unwrap(),
-            ),
-            taira_bsc_xor_record_instruction(&authority, 100_000),
-        ];
-
-        validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
-            .expect("0.0001 XOR burn must satisfy a 100000-unit TAIRA -> BSC record");
-    }
-
-    #[test]
-    fn taira_bsc_xor_record_rejects_burn_precision_beyond_taira_scale() {
-        let (state, authority, keypair, asset_definition_id) = sccp_taira_xor_state();
-        let instructions = vec![
-            taira_xor_burn_instruction(
-                &authority,
-                asset_definition_id,
-                iroha_primitives::numeric::Numeric::try_new(1, 10).unwrap(),
-            ),
-            taira_bsc_xor_record_instruction(&authority, 100_000),
-        ];
-
-        let err = validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
-            .expect_err("burns beyond TAIRA XOR scale must fail closed");
-        assert!(matches!(
-            err,
-            OverlayBuildError::ZkProof(msg)
-                if msg.contains("taira_bsc_xor settlement burn")
-                    && msg.contains("exceeds TAIRA XOR scale")
-        ));
-    }
-
-    #[test]
-    fn taira_tron_xor_record_rejects_invalid_settlement_asset_config() {
-        let (mut state, authority, keypair, _asset_definition_id) = sccp_taira_xor_state();
-        state.nexus.get_mut().fees.fee_asset_id = "not an asset literal".to_owned();
-        let instructions = vec![taira_tron_xor_record_instruction(&authority, 10)];
-
-        let err = validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
-            .expect_err("invalid settlement asset config must fail closed");
-        assert!(matches!(
-            err,
-            OverlayBuildError::ZkProof(msg)
-                if msg.contains("valid configured nexus.fees.fee_asset_id")
-        ));
-    }
-
-    #[test]
-    fn taira_tron_xor_record_rejects_malformed_record_payload() {
-        let (state, authority, keypair, _asset_definition_id) = sccp_taira_xor_state();
-        let instructions = vec![InstructionBox::from(
-            iroha_data_model::isi::bridge::RecordSccpMessage::new(vec![0xFF]),
-        )];
-
-        let err = validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
-            .expect_err("malformed SCCP record payload must fail closed");
-        assert!(matches!(
-            err,
-            OverlayBuildError::ZkProof(msg) if msg.contains("could not be decoded")
-        ));
     }
 
     #[test]
@@ -4666,12 +4453,12 @@ mod tests {
             .compile_source_with_manifest(
                 r#"
 seiyaku DeriveDispatch {
-  kotoage fn main() -> int {
+  kotoage fn main() -> i64 authorize("DeriveDispatch") {
     assert(false);
     return 0;
   }
 
-  kotoage fn open(amount: int) -> int {
+  kotoage fn open(amount: i64) -> i64 authorize("DeriveDispatch") {
     assert(amount == 7);
     return 0;
   }
@@ -4686,7 +4473,18 @@ seiyaku DeriveDispatch {
         let domain =
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
         let account = build_wonderland_account(&authority);
-        let world = crate::state::World::with([domain], [account], []);
+        let mut world = crate::state::World::with([domain], [account], []);
+        let mut permissions = iroha_data_model::permission::Permissions::new();
+        assert!(
+            permissions.insert(iroha_data_model::permission::Permission::new(
+                "DeriveDispatch".to_owned(),
+                iroha_primitives::json::Json::new(()),
+            )),
+            "fixture permission should be newly granted"
+        );
+        world
+            .account_permissions_mut_for_testing()
+            .insert(authority.clone(), permissions);
 
         let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -4816,6 +4614,7 @@ seiyaku DeriveDispatch {
         world.contract_manifests.insert(
             code_hash,
             ContractManifest {
+                contract_name: None,
                 code_hash: Some(code_hash),
                 abi_hash: Some(wrong_abi_hash),
                 compiler_fingerprint: None,
@@ -4824,6 +4623,7 @@ seiyaku DeriveDispatch {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
+                error_codes: None,
                 provenance: None,
             }
             .signed(&kp),
@@ -5150,6 +4950,7 @@ seiyaku DeriveDispatch {
         world.contract_manifests.insert(
             code_hash,
             ContractManifest {
+                contract_name: None,
                 code_hash: Some(code_hash),
                 abi_hash: Some(abi_hash),
                 compiler_fingerprint: None,
@@ -5158,6 +4959,7 @@ seiyaku DeriveDispatch {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
+                error_codes: None,
                 provenance: None,
             }
             .signed(&kp),
@@ -5266,6 +5068,7 @@ seiyaku DeriveDispatch {
         world.contract_manifests.insert(
             code_hash,
             ContractManifest {
+                contract_name: None,
                 code_hash: Some(code_hash),
                 abi_hash: None,
                 compiler_fingerprint: None,
@@ -5274,6 +5077,7 @@ seiyaku DeriveDispatch {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
+                error_codes: None,
                 provenance: None,
             }
             .signed(&kp),
@@ -5312,6 +5116,7 @@ seiyaku DeriveDispatch {
         world.contract_manifests.insert(
             code_hash,
             ContractManifest {
+                contract_name: None,
                 code_hash: Some(code_hash),
                 abi_hash: Some(Hash::prehashed([0u8; 32])),
                 compiler_fingerprint: None,
@@ -5320,6 +5125,7 @@ seiyaku DeriveDispatch {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
+                error_codes: None,
                 provenance: None,
             }
             .signed(&kp),
@@ -5444,6 +5250,7 @@ seiyaku DeriveDispatch {
 
         let mut world = crate::state::World::default();
         let manifest = ContractManifest {
+            contract_name: None,
             code_hash: Some(code_hash),
             abi_hash: Some(abi_hash),
             compiler_fingerprint: None,
@@ -5452,6 +5259,7 @@ seiyaku DeriveDispatch {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_codes: None,
             provenance: None,
         };
         world.contract_manifests.insert(code_hash, manifest.clone());
@@ -5703,6 +5511,19 @@ pub enum OverlayBuildError {
     QuarantineOverflow,
     /// ZK proof-related rejection (missing/invalid/unsupported).
     ZkProof(String),
+}
+
+impl OverlayBuildError {
+    /// Return whether rebuilding against a later serial state may change the
+    /// result. Structural, policy, gas, proof, and quarantine failures are
+    /// invariant and must remain rejected without another execution attempt.
+    #[must_use]
+    pub(crate) const fn may_change_with_live_state(&self) -> bool {
+        matches!(
+            self,
+            Self::ContractCall(_) | Self::IvmRun(_) | Self::AxtReject(_)
+        )
+    }
 }
 
 impl core::fmt::Display for OverlayBuildError {
@@ -6149,25 +5970,24 @@ fn is_full_semantics_ivm_execution_circuit(backend: &str, circuit_id: &str) -> b
 fn replay_ivm_proved_overlay<R>(
     state_ro: &R,
     tx: &SignedTransaction,
-    proved: &iroha_data_model::transaction::IvmProved,
+    summary: &ProgramSummary,
     gas_limit: u64,
-    code_hash: Hash,
     overlay_hash: Hash,
 ) -> Result<IvmProvedReplay, OverlayBuildError>
 where
     R: StateReadOnly + QueryStateSource,
 {
-    let mut vm = ivm::IVM::new(gas_limit);
+    let mut vm = summary
+        .checkout_runtime(gas_limit)
+        .map_err(OverlayBuildError::IvmLoad)?;
+    vm.set_zk_trace_enabled(true);
     let accounts = state_ro.accounts_snapshot();
     let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
         tx.authority().clone(),
         Arc::clone(&accounts),
     );
-    let amx_analysis =
-        ivm::analysis::analyze_program(proved.bytecode.as_ref()).map_err(|err| match err {
-            ProgramAnalysisError::Metadata(_) => OverlayBuildError::IvmHeaderParse,
-            ProgramAnalysisError::Decode(decode_err) => OverlayBuildError::IvmLoad(decode_err),
-        })?;
+    let amx_analysis = ivm::analysis::analyze_prepared(summary.prepared_contract());
+    host.set_prepared_contract_cache(summary.prepared_contract_cache());
     host.set_amx_analysis(amx_analysis);
     let amx_limits =
         crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(state_ro.pipeline());
@@ -6190,14 +6010,13 @@ where
     host.set_chain_id(state_ro.chain_id());
     host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
         .map_err(OverlayBuildError::IvmRun)?;
-    vm.load_program(proved.bytecode.as_ref())
-        .map_err(OverlayBuildError::IvmLoad)?;
     vm.set_gas_limit(gas_limit);
     run_vm_with_host(&mut vm, &mut host)?;
     let gas_used = gas_limit.saturating_sub(vm.remaining_gas());
     let trace_bundle = build_ivm_trace_bundle(&vm);
     let trace_hash = expected_ivm_trace_hash(&trace_bundle)?;
-    let events_commitment = expected_ivm_events_commitment(code_hash, overlay_hash, trace_hash);
+    let events_commitment =
+        expected_ivm_events_commitment(summary.code_hash, overlay_hash, trace_hash);
     let mut queued = host.drain_instructions();
     prune_redundant_contract_ops(state_ro, &mut queued);
     Ok(IvmProvedReplay {
@@ -6513,7 +6332,6 @@ where
                 .to_owned(),
         ));
     }
-    validate_taira_xor_sccp_settlement_burns(state_ro, tx, proved.overlay.as_ref())?;
     let tx_gas_limit = require_tx_gas_limit(tx)?;
     let report = crate::zk::verify_backend_with_timing_checked(
         attachment.backend.as_str(),
@@ -6533,14 +6351,7 @@ where
         return Ok(());
     }
 
-    let replay = replay_ivm_proved_overlay(
-        state_ro,
-        tx,
-        proved,
-        tx_gas_limit,
-        summary.code_hash,
-        overlay_hash,
-    )?;
+    let replay = replay_ivm_proved_overlay(state_ro, tx, summary, tx_gas_limit, overlay_hash)?;
     if proved.events_commitment != replay.events_commitment {
         return Err(OverlayBuildError::ZkProof(
             "events commitment mismatch".to_owned(),
@@ -6633,20 +6444,23 @@ where
         OverlayBuildError::ZkProof("verifying key missing gas_schedule_id".to_owned())
     })?;
 
-    let mut vm = ivm_cache
-        .clone_runtime(&summary, bytecode.as_ref(), gas_limit)
+    let amx_analysis = ivm_cache
+        .analyze_program(&summary, bytecode.as_ref())
+        .map_err(map_program_analysis_error)?;
+    let mut vm = summary
+        .checkout_runtime(gas_limit)
         .map_err(OverlayBuildError::IvmLoad)?;
     vm.set_zk_trace_enabled(true);
     let contract_call_context =
-        parse_contract_call_execution_context(tx.metadata(), bytecode.as_ref())?;
+        parse_prepared_contract_call_execution_context(tx.metadata(), summary.prepared_contract())?;
 
     let accounts = state_ro.accounts_snapshot();
     let streaming_meta = resolve_streaming_metadata(state_ro, tx.authority());
     let mut host = if let Some(context) = contract_call_context.as_ref() {
-        crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
+        crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_argument_record(
             tx.authority().clone(),
             Arc::clone(&accounts),
-            context.args.clone(),
+            context.argument_record.clone(),
         )
     } else {
         crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
@@ -6654,11 +6468,7 @@ where
             Arc::clone(&accounts),
         )
     };
-    let amx_analysis =
-        ivm::analysis::analyze_program(bytecode.as_ref()).map_err(|err| match err {
-            ProgramAnalysisError::Metadata(_) => OverlayBuildError::IvmHeaderParse,
-            ProgramAnalysisError::Decode(decode_err) => OverlayBuildError::IvmLoad(decode_err),
-        })?;
+    host.set_prepared_contract_cache(summary.prepared_contract_cache());
     host.set_amx_analysis(amx_analysis);
     let amx_limits =
         crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(state_ro.pipeline());
@@ -6690,7 +6500,6 @@ where
 
     let mut queued = host.drain_instructions();
     prune_redundant_contract_ops(state_ro, &mut queued);
-    validate_taira_xor_sccp_settlement_burns(state_ro, tx, &queued)?;
     let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = queued.into();
 
     let overlay_hash = {

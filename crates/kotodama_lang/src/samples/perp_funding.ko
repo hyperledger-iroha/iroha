@@ -1,36 +1,36 @@
 // Perpetual swap funding and simple liquidation check utilities.
 seiyaku PerpFunding {
-  // Compute funding payment: position_size * (mark - index) * funding_bps / 10_000
-  fn funding_payment(position_size: int, mark_price: int, index_price: int, funding_bps: int) -> int {
-    let delta = mark_price - index_price;
-    let num = position_size * delta * funding_bps;
-    let pay = num / 10_000;
-    return pay;
-  }
-
-  // Update position balance by transferring funding between trader and insurance_fund.
-  // Positive payment means trader pays; negative means trader receives.
-  kotoage fn settle_funding(trader: AccountId,
-                            insurance_fund: AccountId,
-                            stable_asset: AssetDefinitionId,
-                            position_size: int,
-                            mark_price: int,
-                            index_price: int,
-                            funding_bps: int) permission(Admin) {
-    let pay = funding_payment(position_size, mark_price, index_price, funding_bps);
-    if pay > 0 {
-      transfer_asset(trader, insurance_fund, stable_asset, pay, dataspace_id("0"));
-    } else {
-      let receive = 0 - pay; // absolute value
-      transfer_asset(insurance_fund, trader, stable_asset, receive, dataspace_id("0"));
+    // Compute an unsigned funding-payment magnitude. Direction is selected by
+    // comparing mark and index prices before any checked subtraction.
+    fn funding_payment(position_size_magnitude: Amount, price_delta: Amount, funding_bps: Amount) -> Amount {
+        let num = position_size_magnitude * price_delta * funding_bps;
+        let pay = num / Amount::from_i64(10_000);
+        return pay;
     }
-  }
 
-  // Basic liquidation check: equity_bps = (equity * 10_000) / notional
-  kotoage fn is_liquidatable(equity: int, notional: int, maintenance_bps: int) -> int {
-    if notional == 0 { return 0; } // not liquidatable if no position
-    let equity_bps = (equity * 10_000) / notional;
-    let liq = (equity_bps < maintenance_bps);
-    return liq; // returns 1 if true, 0 if false
-  }
+    // Update position balance by transferring funding between the trader and
+    // insurance fund. A mark premium makes the trader pay; a discount reverses
+    // the transfer direction.
+    kotoage fn settle_funding(trader: AccountId, insurance_fund: AccountId, stable_asset: AssetDefinitionId, position_size_magnitude: Amount, mark_price: Amount, index_price: Amount, funding_bps: Amount) authorize("Admin") {
+        if mark_price >= index_price {
+            let premium_delta = mark_price - index_price;
+            let premium_payment = funding_payment(position_size_magnitude, premium_delta, funding_bps);
+            ledger::asset::transfer(trader, insurance_fund, stable_asset, premium_payment, DataSpaceId::parse("0"));
+        } else {
+            let discount_delta = index_price - mark_price;
+            let discount_payment = funding_payment(position_size_magnitude, discount_delta, funding_bps);
+            ledger::asset::transfer(insurance_fund, trader, stable_asset, discount_payment, DataSpaceId::parse("0"));
+        }
+    }
+
+    // Basic liquidation check: equity_bps = (equity * 10_000) / notional
+    view fn is_liquidatable(equity: Amount, notional: Amount, maintenance_bps: Amount) -> bool {
+        if notional == Amount::from_i64(0) {
+            return false;
+        }
+        // not liquidatable if no position
+        let equity_bps = (equity * Amount::from_i64(10_000)) / notional;
+        let liq = (equity_bps < maintenance_bps);
+        return liq;
+    }
 }

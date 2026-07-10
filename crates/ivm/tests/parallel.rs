@@ -420,6 +420,10 @@ impl CheckpointHost {
 }
 
 impl IVMHost for CheckpointHost {
+    fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+        Ok(0)
+    }
+
     fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
         self.calls += 1;
         if self.calls == self.fail_on {
@@ -465,6 +469,10 @@ impl AccessLoggingHost {
 }
 
 impl IVMHost for AccessLoggingHost {
+    fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+        Ok(0)
+    }
+
     fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
         self.log.read_keys.insert("key_a".to_string());
         self.log.write_keys.insert("key_a".to_string());
@@ -549,6 +557,10 @@ impl FinishErrorHost {
 }
 
 impl IVMHost for FinishErrorHost {
+    fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+        Ok(0)
+    }
+
     fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
         Ok(0)
     }

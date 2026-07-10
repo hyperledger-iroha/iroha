@@ -2643,6 +2643,10 @@ pub mod time {
 
 /// Execution pipeline defaults (scheduler, overlay, batching).
 pub mod pipeline {
+    use std::num::NonZeroU64;
+
+    use nonzero_ext::nonzero;
+
     /// Enable dynamic prepass (IVM read-only run to derive access sets).
     pub const DYNAMIC_PREPASS: bool = true;
     /// Cache derived access sets by code hash/entrypoint for diagnostics.
@@ -2690,7 +2694,7 @@ pub mod pipeline {
     /// Default gas-collection technical account identifier (encoded-only literal).
     pub const GAS_TECH_ACCOUNT_ID: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
     /// Admission-time upper bound for `max_cycles` embedded in IVM bytecode headers.
-    pub const IVM_MAX_CYCLES_UPPER_BOUND: u64 = 1_000_000;
+    pub const IVM_MAX_CYCLES_UPPER_BOUND: NonZeroU64 = nonzero!(1_000_000_u64);
     /// Maximum decoded Kotodama instructions accepted during admission (0 = unlimited).
     pub const IVM_MAX_DECODED_INSTRUCTIONS: u64 = 1_048_576;
     /// Maximum decoded byte length after Kotodama instruction expansion (0 = unlimited).

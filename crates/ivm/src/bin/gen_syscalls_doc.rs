@@ -261,8 +261,13 @@ fn guess_defaults(n: u32) -> (String, String, String) {
     } else if up.contains("SYSVAR_ENTRYPOINT") || n == 0x01_0025 {
         ret = "r10=ptr (&Blob(entrypoint)) or 0".into();
         gas = "G_sysvar + bytes".into();
+    } else if up.contains("DECODE_ARGUMENT_RECORD") || n == 0x01_0026 {
+        args = "r10=&NoritoBytes(EntrypointArgumentRecordV1), r11=&NoritoBytes(EntrypointArgumentSchemaV1)"
+            .into();
+        ret = "r10=ptr (&Blob(pad:u8 then [u64; word_count]))".into();
+        gas = "G_argument_decode + record + schema + output".into();
     } else if up.contains("STATE_KEYS") || n == 0x01_0030 {
-        args = "r10=&Name(prefix), r11=offset:u64, r12=limit:u64".into();
+        args = "r10=&Name(prefix), r11=offset:u64, r12=limit:u64 (0..=64)".into();
         ret = "r10=ptr (&NoritoBytes(Vec<Name>)), r11=total:u64, r12=count:u64".into();
         gas = "G_state_keys + count + bytes".into();
     } else if up.contains("STATE_HAS") || n == 0x01_0031 {
@@ -277,6 +282,18 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         args = "r10=&Name(prefix)".into();
         ret = "r10=total:u64".into();
         gas = "G_state_count + count".into();
+    } else if up.contains("STATE_MAP_KEY_AT") || n == 0x01_0034 {
+        args = "r10=&NoritoBytes(Vec<Name>), r11=&Name(base), r12=index:u64".into();
+        ret = "r10=ptr (&NoritoBytes(canonical key)) or 0".into();
+        gas = "G_path + bytes".into();
+    } else if up.contains("STATE_VALUE_ENCODE") || n == 0x01_0035 {
+        args = "r10=&NoritoBytes(StateValueSchemaV1), r11=&[u64], r12=word_count:u64".into();
+        ret = "r10=ptr (&NoritoBytes(StateValueRecordV1))".into();
+        gas = "G_state_value + schema + words + pointers + output".into();
+    } else if up.contains("STATE_VALUE_DECODE") || n == 0x01_0036 {
+        args = "r10=&NoritoBytes(StateValueSchemaV1), r11=&NoritoBytes(StateValueRecordV1)".into();
+        ret = "r10=ptr (&Blob(pad:u8 then [u64; word_count]))".into();
+        gas = "G_state_value + schema + record + pointers + output".into();
     } else if up.contains("EXECUTE_QUERY") || n == 0xA1 {
         args = "r10=&Json".into();
         ret = "ptr (r10)".into();

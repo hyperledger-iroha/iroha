@@ -1,56 +1,52 @@
 seiyaku PredictionMarket {
-  meta {
-    abi_version: 1,
-    max_cycles: 200000,
-  }
+    // Fixed-size demo market: two bettors (Alice/Bob) and two oracle keys (YES/NO).
+    // Durable state guards prevent double-staking or double-resolution.
+    state alice_staked: bool;
+    state bob_staked: bool;
+    state resolved: bool;
+    hajimari() {
+        alice_staked = false;
+        bob_staked = false;
+        resolved = false;
+    }
 
-  // Fixed-size demo market: two bettors (Alice/Bob) and two oracle keys (YES/NO).
-  // Durable state guards prevent double-staking or double-resolution.
-  state bool alice_staked;
-  state bool bob_staked;
-  state bool resolved;
-
-  hajimari() {
-    alice_staked = false;
-    bob_staked = false;
-    resolved = false;
-  }
-  kotoage fn main() permission(MarketUser) {
-    let caller = authority();
-    let asset = asset_definition("61CtjvNd9T3THAR65GsMVHr82Bjc");
-    let pool = account_id("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE");
-    let alice = account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
-    let bob = account_id("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76");
-    let oracle_yes = account_id("sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888");
-    let oracle_no = account_id("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D");
-
-    if (caller == oracle_yes) {
-      if (!resolved && alice_staked && bob_staked) {
-        transfer_asset(pool, alice, asset, 20, dataspace_id("0"));
-        resolved = true;
-      }
-      return;
+    kotoage fn main() authorize("MarketUser") {
+        let caller = context::authority();
+        let asset = AssetDefinitionId::parse("61CtjvNd9T3THAR65GsMVHr82Bjc");
+        let pool = AccountId::parse("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE");
+        let alice = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
+        let bob = AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76");
+        let oracle_yes = AccountId::parse("sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888");
+        let oracle_no = AccountId::parse("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D");
+        let stake = Amount::from_i64(10);
+        let payout = Amount::from_i64(20);
+        if (caller == oracle_yes) {
+            if (!resolved && alice_staked && bob_staked) {
+                ledger::asset::transfer(pool, alice, asset, payout, DataSpaceId::parse("0"));
+                resolved = true;
+            }
+            return;
+        }
+        if (caller == oracle_no) {
+            if (!resolved && alice_staked && bob_staked) {
+                ledger::asset::transfer(pool, bob, asset, payout, DataSpaceId::parse("0"));
+                resolved = true;
+            }
+            return;
+        }
+        if (caller == alice) {
+            if (!resolved &&!alice_staked) {
+                ledger::asset::transfer(caller, pool, asset, stake, DataSpaceId::parse("0"));
+                alice_staked = true;
+            }
+            return;
+        }
+        if (caller == bob) {
+            if (!resolved &&!bob_staked) {
+                ledger::asset::transfer(caller, pool, asset, stake, DataSpaceId::parse("0"));
+                bob_staked = true;
+            }
+            return;
+        }
     }
-    if (caller == oracle_no) {
-      if (!resolved && alice_staked && bob_staked) {
-        transfer_asset(pool, bob, asset, 20, dataspace_id("0"));
-        resolved = true;
-      }
-      return;
-    }
-    if (caller == alice) {
-      if (!resolved && !alice_staked) {
-        transfer_asset(caller, pool, asset, 10, dataspace_id("0"));
-        alice_staked = true;
-      }
-      return;
-    }
-    if (caller == bob) {
-      if (!resolved && !bob_staked) {
-        transfer_asset(caller, pool, asset, 10, dataspace_id("0"));
-        bob_staked = true;
-      }
-      return;
-    }
-  }
 }

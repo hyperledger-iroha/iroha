@@ -727,7 +727,7 @@ fn collect_sccp_messages_for_active_proposal_routes<F>(
     is_already_recorded: F,
 ) -> Result<Vec<crate::bridge::RecordedSccpMessage>>
 where
-    F: Fn(&iroha_data_model::bridge::SccpOutboundMessageKey) -> bool,
+    F: Fn(&iroha_data_model::bridge::SccpOutboundMessageKeyV1) -> bool,
 {
     if tx_batch.len() != routing_batch.len() {
         return Err(eyre!(
@@ -3599,7 +3599,7 @@ impl Actor {
             ))
     }
 
-    fn local_same_height_vote_has_live_proposal_material(
+    pub(super) fn local_same_height_vote_has_live_proposal_material(
         &self,
         proposal_height: u64,
         block_hash: HashOf<BlockHeader>,
@@ -4317,6 +4317,7 @@ impl Actor {
                     let digest = self.state.cached_confidential_feature_digest(
                         state_view.world(),
                         &state_view.zk,
+                        state_view.sccp_registry.as_ref(),
                         next_height,
                     );
                     (
@@ -4327,23 +4328,26 @@ impl Actor {
                         digest,
                     )
                 } else {
-                    let world = self.state.world_view();
-                    let block_max_param = world.parameters().block().max_transactions();
-                    let sumeragi_params = world.parameters().sumeragi();
+                    let state_view = self.state.query_view();
+                    let block_max_param =
+                        state_view.world().parameters().block().max_transactions();
+                    let sumeragi_params = state_view.world().parameters().sumeragi();
                     let commit_time_ms = sumeragi_params.commit_time_ms();
                     let effective_commit_time_ms = sumeragi_params.effective_commit_time_ms();
                     let base_gas_limit = NonZeroU64::new(crate::state::gas_limit_from_parameters(
-                        world.parameters(),
+                        state_view.world().parameters(),
                     ));
-                    let committed_height = u64::try_from(self.state.committed_height())
+                    let committed_height = u64::try_from(state_view.height())
                         .expect("committed height exceeds u64::MAX");
                     let next_height = committed_height
                         .checked_add(1)
                         .expect("block height exceeds u64::MAX");
-                    let zk = self.state.zk_snapshot();
-                    let digest =
-                        self.state
-                            .cached_confidential_feature_digest(&world, &zk, next_height);
+                    let digest = self.state.cached_confidential_feature_digest(
+                        state_view.world(),
+                        &state_view.zk,
+                        state_view.sccp_registry.as_ref(),
+                        next_height,
+                    );
                     (
                         block_max_param,
                         commit_time_ms,
@@ -9228,14 +9232,14 @@ mod tests {
             dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
             nonce,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
             asset_id: b"xor".to_vec(),
             amount: 77,
-            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
             sender: b"sora:bridge".to_vec(),
-            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
-            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
-            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_ADDRESS20,
+            recipient: vec![0x22; 20],
+            route_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
             route_id: b"nexus:eth:xor".to_vec(),
         })
     }
@@ -9260,7 +9264,7 @@ mod tests {
         let executable = Executable::IvmProved(IvmProved {
             bytecode: IvmBytecode::from_compiled(bytecode),
             overlay: vec![InstructionBox::from(
-                iroha_data_model::isi::bridge::RecordSccpMessage::new(payload),
+                crate::bridge::test_record_sccp_message(payload),
             )]
             .into(),
             events_commitment: Hash::new(b"proposal-sccp-events"),

@@ -2467,17 +2467,21 @@ mod tests {
     }
 
     #[test]
-    fn transaction_detail_includes_contract_call_payload() {
+    fn transaction_detail_includes_contract_call_argument_record() {
         let chain: ChainId = "test-chain".parse().expect("valid chain id");
         let contract_address = ContractAddress::derive(0, &ALICE_ID, 1, DataSpaceId::UNIVERSAL)
             .expect("contract address");
-        let mut payload = Map::new();
-        payload.insert("amount".to_string(), Value::Number(5_u64.into()));
+        let arguments = vec![0x4b, 0x4f, 0x54, 0x4f];
         let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
             .with_executable(Executable::ContractCall(ContractInvocation {
                 contract_address: contract_address.clone(),
                 entrypoint: "contribute".to_string(),
-                payload: Some(iroha_primitives::json::Json::new(Value::Object(payload))),
+                arguments: Some(
+                    iroha_data_model::transaction::executable::ContractArgumentRecord::try_new(
+                        arguments.clone(),
+                    )
+                    .expect("bounded argument fixture"),
+                ),
             }))
             .sign(ALICE_KEYPAIR.private_key());
         let result = TransactionResult(Ok(DataTriggerSequence::default()));
@@ -2494,11 +2498,15 @@ mod tests {
                     map.get("entrypoint").and_then(Value::as_str),
                     Some("contribute")
                 );
-                let payload = map
-                    .get("payload")
-                    .and_then(Value::as_object)
-                    .expect("contract call payload should be serialized as object");
-                assert_eq!(payload.get("amount").and_then(Value::as_u64), Some(5));
+                let encoded = map
+                    .get("arguments")
+                    .and_then(Value::as_array)
+                    .expect("contract argument record should be serialized as bytes");
+                let actual = encoded
+                    .iter()
+                    .map(|value| value.as_u64().expect("argument byte") as u8)
+                    .collect::<Vec<_>>();
+                assert_eq!(actual, arguments);
             }
             other => panic!("unexpected executable payload: {other:?}"),
         }

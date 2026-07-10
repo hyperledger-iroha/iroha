@@ -103,6 +103,10 @@ add_phase() {
   local value="$1"
   local parts=()
   local phase
+  if [[ -z "$value" ]]; then
+    echo "Empty --phase value is not valid." >&2
+    exit 2
+  fi
   IFS=',' read -r -a parts <<<"$value"
   for phase in "${parts[@]}"; do
     if [[ -z "$phase" ]]; then
@@ -1463,41 +1467,48 @@ phase_rust_sccp() {
   run_cmd \
     env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
     cargo test -p iroha_sccp -- --nocapture
+  run_cmd \
+    env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
+    cargo test -p iroha_sccp --bin sccp_release_evidence -- --nocapture
 }
 
 phase_evidence_scripts() {
-  local tests=(
-    pytests/scripts/check_sccp_production_corridor_test.py
-    pytests/scripts/sccp_release_bundle_test.py
-    pytests/scripts/sccp_release_readiness_report_test.py
-    pytests/scripts/sccp_source_template_hashes_test.py
-    pytests/scripts/sccp_all_lanes_evidence_test.py
-    pytests/scripts/sccp_eth_source_bridge_evidence_test.py
-    pytests/scripts/sccp_bsc_source_bridge_evidence_test.py
-    pytests/scripts/sccp_evm_destination_evidence_test.py
-    pytests/scripts/sccp_evm_live_evidence_test.py
-    pytests/scripts/sccp_evm_receipt_proof_evidence_test.py
-    pytests/scripts/sccp_evm_source_live_evidence_test.py
-    pytests/scripts/sccp_solana_destination_evidence_test.py
-    pytests/scripts/sccp_solana_live_evidence_test.py
-    pytests/scripts/sccp_solana_source_state_evidence_test.py
-    pytests/scripts/sccp_ton_destination_evidence_test.py
-    pytests/scripts/sccp_ton_live_evidence_test.py
-    pytests/scripts/sccp_ton_source_state_evidence_test.py
-    pytests/scripts/sccp_tron_live_evidence_test.py
-    pytests/scripts/sccp_tron_source_bridge_evidence_test.py
-    pytests/scripts/sccp_retired_network_surface_test.py
-  )
-  run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" -m pytest -q "${tests[@]}"
+  local validator
+  local fixture_bundle_parent
+  local fixture_bundle
+  if [[ "$CARGO_TARGET_DIR" == /* ]]; then
+    validator="$CARGO_TARGET_DIR/debug/sccp_release_evidence"
+  else
+    validator="$ROOT/$CARGO_TARGET_DIR/debug/sccp_release_evidence"
+  fi
+  run_cmd \
+    env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
+    cargo build -p iroha_sccp --bin sccp_release_evidence
+  run_cmd env "SCCP_RELEASE_RUST_VALIDATOR=$validator" \
+    "$SCCP_CORRIDOR_PYTHON_BIN" -m pytest -q \
+    pytests/scripts/check_sccp_production_corridor_test.py \
+    pytests/scripts/sccp_release_tooling_test.py
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    fixture_bundle_parent="${TMPDIR:-/tmp}/iroha-sccp-release-fixture.dry-run"
+  else
+    fixture_bundle_parent="$(mktemp -d "${TMPDIR:-/tmp}/iroha-sccp-release-fixture.XXXXXX")"
+  fi
+  fixture_bundle="$fixture_bundle_parent/bundle"
+  run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" scripts/sccp_release_fixture.py \
+    --rust-validator "$validator" validate
+  run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" scripts/sccp_release_fixture.py \
+    --rust-validator "$validator" build --output-dir "$fixture_bundle"
+  run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" scripts/sccp_release_fixture.py \
+    --rust-validator "$validator" verify "$fixture_bundle"
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    rm -rf "$fixture_bundle_parent"
+  fi
 }
 
 phase_js_sdk() {
   run_cmd "$SCCP_CORRIDOR_NODE_BIN" --test \
-    javascript/iroha_js/test/sccpSolanaProver.test.js \
-    javascript/iroha_js/test/sccpEthereumMainnet.test.js \
-    javascript/iroha_js/test/sccpBscMainnet.test.js \
-    javascript/iroha_js/test/package_dist.test.js \
-    javascript/iroha_js/test/sccpPackageExports.test.js
+    javascript/iroha_js/test/sccpExact.test.js \
+    javascript/iroha_js/test/package_dist.test.js
 }
 
 phase_python_sdk() {
@@ -1507,11 +1518,7 @@ phase_python_sdk() {
 phase_swift_sdk() {
   ensure_swift_bridge_artifact
   run_in_dir "$ROOT/IrohaSwift" \
-    swift test --filter SccpSolanaProverTests --disable-swift-testing
-  run_in_dir "$ROOT/IrohaSwift" \
-    swift test --filter \
-      ToriiClientTests/testBridgeProofSubmitRequestBuildsSccpPayloadsFromSubmissions \
-      --disable-swift-testing
+    swift test --filter SccpV1Tests --disable-swift-testing
 }
 
 phase_kotlin_sdk() {
@@ -1522,7 +1529,7 @@ phase_kotlin_sdk() {
     env "JAVA_HOME=$java_home" "GRADLE_OPTS=$SCCP_GRADLE_OPTS" "PATH=$java_home/bin:$PATH" \
     ./gradlew :core-jvm:test --console=plain \
       --tests 'org.hyperledger.iroha.sdk.sccp.*' \
-      --tests 'org.hyperledger.iroha.sdk.sccp.TonSccpProverTest'
+      --tests 'org.hyperledger.iroha.sdk.client.SccpClientExactTest'
 }
 
 phase_java_android() {
@@ -1533,15 +1540,12 @@ phase_java_android() {
   java_home="$(resolve_java_home)"
   android_home="$(resolve_android_home)"
   android_sdk_root="${ANDROID_SDK_ROOT:-$android_home}"
-  android_harness_mains="org.hyperledger.iroha.android.sccp.EvmSccpProverTests,org.hyperledger.iroha.android.sccp.SourceSccpProofsTests,org.hyperledger.iroha.android.sccp.TonSccpProverTests,org.hyperledger.iroha.android.sccp.TronSccpProverTests"
+  android_harness_mains="org.hyperledger.iroha.android.sccp.SccpV1Tests,org.hyperledger.iroha.android.client.SccpClientExactTests"
   run_java_version_check "$java_home"
   run_in_dir "$ROOT/java/iroha_android" \
     env "JAVA_HOME=$java_home" "ANDROID_HOME=$android_home" "ANDROID_SDK_ROOT=$android_sdk_root" "GRADLE_OPTS=$SCCP_GRADLE_OPTS" "PATH=$java_home/bin:$PATH" \
     "ANDROID_HARNESS_MAINS=$android_harness_mains" \
     ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests
-  run_in_dir "$ROOT/java/iroha_android" \
-    env "JAVA_HOME=$java_home" "ANDROID_HOME=$android_home" "ANDROID_SDK_ROOT=$android_sdk_root" "GRADLE_OPTS=$SCCP_GRADLE_OPTS" "PATH=$java_home/bin:$PATH" \
-    ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.sccp.SolanaSccpProverTests
 }
 
 phase_dotnet_sdk() {
@@ -1798,7 +1802,6 @@ phase_dotnet_sdk() {
 }
 
 phase_contract_smoke() {
-  run_cmd "$SCCP_CORRIDOR_NODE_BIN" --test scripts/sccp_bsc_groth16_material.test.mjs scripts/sccp_bsc_taira_xor_deploy.test.mjs scripts/sccp_tron_taira_xor_deploy.test.mjs scripts/sccp_solana_taira_xor_deploy.test.mjs scripts/sccp_taira_xor_contract.test.mjs
   run_cmd "$SCCP_CORRIDOR_NODE_BIN" --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js
   run_cmd bash scripts/sccp_evm_contract_smoke.sh
 }

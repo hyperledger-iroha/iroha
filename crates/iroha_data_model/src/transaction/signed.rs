@@ -1544,6 +1544,58 @@ mod tests {
     }
 
     #[test]
+    fn signed_contract_argument_record_is_hash_and_signature_bound() {
+        let chain: ChainId = "test-chain".parse().expect("chain id");
+        let public_key: iroha_crypto::PublicKey =
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                .parse()
+                .expect("public key");
+        let authority = AccountId::new(public_key);
+        let private_key: iroha_crypto::PrivateKey =
+            "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+                .parse()
+                .expect("private key");
+        let contract_address = crate::smart_contract::ContractAddress::derive(
+            0,
+            &authority,
+            0,
+            crate::nexus::DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let arguments = crate::transaction::executable::ContractArgumentRecord::try_new(vec![
+            0x4b, 0x4f, 0x54, 0x4f,
+        ])
+        .expect("bounded argument record");
+        let mut transaction = TransactionBuilder::new(chain, authority)
+            .with_executable(Executable::ContractCall(
+                crate::transaction::executable::ContractInvocation {
+                    contract_address,
+                    entrypoint: "call".to_owned(),
+                    arguments: Some(arguments),
+                },
+            ))
+            .sign(&private_key);
+        let signed_hash = transaction.hash();
+        transaction
+            .verify_signature()
+            .expect("original signature verifies");
+
+        let Executable::ContractCall(invocation) = &mut transaction.payload.instructions else {
+            panic!("contract call executable");
+        };
+        invocation
+            .arguments
+            .as_mut()
+            .expect("argument record")
+            .as_mut_bytes()[0] ^= 0x01;
+
+        assert_ne!(transaction.hash(), signed_hash);
+        transaction
+            .verify_signature()
+            .expect_err("mutating signed arguments must invalidate the signature");
+    }
+
+    #[test]
     fn verify_proof_instruction_signed_tx_versioned_roundtrip() {
         let chain: ChainId = "test-chain".parse().unwrap();
         let public_key: iroha_crypto::PublicKey =

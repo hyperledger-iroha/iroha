@@ -75,9 +75,9 @@
       "types": "./nexus-app.d.ts"
     },
     "./kotodama-compiler": {
-      "import": "./dist/kotodamaCompiler/index.js",
-      "browser": "./dist/kotodamaCompiler/index.js",
-      "types": "./kotodama-compiler.d.ts"
+      "types": "./kotodama-compiler.d.ts",
+      "browser": "./dist/kotodamaCompiler/browser.js",
+      "import": "./dist/kotodamaCompiler/index.js"
     }
   },
   "typesVersions": {

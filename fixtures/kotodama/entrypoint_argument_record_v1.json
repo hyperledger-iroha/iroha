@@ -1,0 +1,46 @@
+{
+  "fixture_version": 1,
+  "codec": "EntrypointArgumentRecordV1",
+  "generator": "ivm::encode_argument_record_from_json",
+  "contract": {
+    "source": "seiyaku ArgumentRecordFixture {\n  view fn quote(count: i64, active: bool, memo: string, digest: bytes) -> i64 {\n    let _active = active;\n    let _memo = memo;\n    let _digest = digest;\n    return count;\n  }\n}\n",
+    "entrypoint": "quote",
+    "parameters": [
+      {
+        "name": "count",
+        "type": "i64"
+      },
+      {
+        "name": "active",
+        "type": "bool"
+      },
+      {
+        "name": "memo",
+        "type": "string"
+      },
+      {
+        "name": "digest",
+        "type": "bytes"
+      }
+    ]
+  },
+  "torii_boundary": {
+    "authority": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+    "contract_alias": "argument-record-fixture::universal",
+    "entrypoint": "quote",
+    "payload": {
+      "count": -7,
+      "active": true,
+      "memo": "kotodama-v1",
+      "digest": "0x000102feff"
+    },
+    "gas_limit": 1000000
+  },
+  "entrypoint_argument_schema_v1": {
+    "norito_hex": "4e5254300000810b5b73851d755225643a04c2699687007a000000000000008a175d8c5f28399f027904000000000000001b0605636f756e7413120100000000000000090400000004000000001c070661637469766513120100000000000000090400000004020000001a05046d656d6f13120100000000000000090400000004030000001c0706646967657374131201000000000000000904000000040d000000",
+    "schema_hash_hex": "a3393cd41f4089b0d9d1e11ceadd8f8bc62fe31567fa9f273bcfbb38c7160889"
+  },
+  "entrypoint_argument_record_v1": {
+    "norito_hex": "4e5254300000ed2fb877eda0e2003413d477870c3d5f00ba00000000000000fdf80c39cd33346f0220a3393cd41f4089b0d9d1e11ceadd8f8bc62fe31567fa9f273bcfbb38c7160889970104000000000000000d0100000008f9ffffffffffffff060200000001013f030000003a32000000000000000006010000000b6b6f746f64616d612d7631e032c5b18bd0bb200040b1ecbf5ca3005f6d3f8beb7717a87fb438ec98c245cf3903000000342c0000000000000000060100000005000102fefff2733f12c373409d35b7ef4c923b256bc81efcf9f56fbc41510feed97ec9f4c7"
+  }
+}

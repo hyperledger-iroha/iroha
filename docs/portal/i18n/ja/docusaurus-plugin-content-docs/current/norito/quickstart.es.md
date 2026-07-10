@@ -22,10 +22,10 @@ El contrato de ejemplo は、`iroha_cli` の効果を検証するためのクエ
 
 - [Docker](https://docs.docker.com/engine/install/) Compose V2 の機能 (`defaults/docker-compose.single.yml` を参照)。
 - Toolchain de Rust (1.76+) は、公開されたデータをダウンロードすることなく、補助的な構築を可能にします。
-- ビナリオ `koto_compile`、`ivm_run`、`iroha_cli`。リリース対応の成果物をダウンロードして、ワークスペースでチェックアウトを実行する方法:
+- ビナリオ `koto build`、`ivm_run`、`iroha_cli`。リリース対応の成果物をダウンロードして、ワークスペースでチェックアウトを実行する方法:
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -49,22 +49,22 @@ Kotodama の管理者および管理者用のミニモを作成します:
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -76,15 +76,14 @@ KO
 バイトコード IVM/Norito (`.to`) をコンパイルして、ホスト機能の確認のためのローカル システムコールの確認を行ってください:
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-ランナー インプリメ ログ `info("Hello from Kotodama")` とシステムコール `SET_ACCOUNT_DETAIL` の対照ホスト シミュレーションを実行します。オプションの `ivm_tool` 保存可能、`ivm_tool inspect target/quickstart/hello.to` の ABI 管理、機能のビットとエントリポイントのエクスポートの損失。
+ランナー インプリメ ログ `debug::info("Hello from Kotodama")` とシステムコール `SET_ACCOUNT_DETAIL` の対照ホスト シミュレーションを実行します。オプションの `ivm_tool` 保存可能、`ivm_tool inspect target/quickstart/hello.to` の ABI 管理、機能のビットとエントリポイントのエクスポートの損失。
 
 ## 4. Torii 経由の Envia el バイトコード
 
@@ -133,3 +132,63 @@ Deberias バージョンのペイロード JSON 応答 Norito:
 - Cuando iteres en tus propios contratos、米国 `npm run sync-norito-snippets` en el
   ワークスペース パラ リジェネラー スニペット デ モード ドキュメント デル ポータル および ロス アーティファクト
   SE mantengan sincronizados con las fuentes en `crates/ivm/docs/examples/`。
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

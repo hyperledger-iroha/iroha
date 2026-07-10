@@ -9491,7 +9491,7 @@ mod tests {
         let invocation = iroha_data_model::transaction::executable::ContractInvocation {
             contract_address,
             entrypoint: "transfer".to_owned(),
-            payload: None,
+            arguments: None,
         };
         let tx = sample_executable_transaction(
             &alice_id,

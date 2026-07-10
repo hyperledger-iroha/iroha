@@ -22,6 +22,7 @@ import {
   ValidationErrorCode,
 } from "./validationError.js";
 import { getNativeBinding } from "./native.js";
+import { normalizeSccpRouteGovernanceAction } from "./sccp.js";
 
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
@@ -9980,19 +9981,17 @@ function normalizeEntrypointKind(value, name) {
     .toLowerCase();
   switch (normalized) {
     case "public":
-    case "kotoage":
       return { kind: "Public" };
-    case "hajimari":
+    case "view":
+      return { kind: "View" };
     case "init":
-    case "initializer":
-      return { kind: "Hajimari" };
-    case "kaizen":
+      return { kind: "Init" };
     case "upgrade":
-      return { kind: "Kaizen" };
+      return { kind: "Upgrade" };
     default:
       fail(
         ValidationErrorCode.INVALID_STRING,
-        `${name} must be one of 'Public', 'Hajimari', or 'Kaizen'`,
+        `${name} must be one of 'Public', 'View', 'Init', or 'Upgrade'`,
         name,
       );
   }
@@ -11525,21 +11524,24 @@ export function buildProposeDeployContractInstruction(options) {
 }
 
 /**
- * Build a `ProposeSccpRouteManifest` instruction payload.
+ * Build a `ProposeSccpRouteGovernance` instruction payload.
  * @param {object} options
- * @returns {{ProposeSccpRouteManifest: object}}
+ * @returns {{ProposeSccpRouteGovernance: object}}
  */
-export function buildProposeSccpRouteManifestInstruction(options) {
-  const source = assertPlainObject(options, "proposeSccpRouteManifest");
-  const manifest = assertPlainObject(
-    source.manifest ?? source.routeManifest ?? source.route_manifest,
-    "proposeSccpRouteManifest.manifest",
-  );
+export function buildProposeSccpRouteGovernanceInstruction(options) {
+  const source = assertPlainObject(options, "proposeSccpRouteGovernance");
+  for (const key of Object.keys(source)) {
+    if (!["action", "window", "mode"].includes(key)) {
+      throw new TypeError(
+        `proposeSccpRouteGovernance contains unknown or retired field \`${key}\``,
+      );
+    }
+  }
   return {
-    ProposeSccpRouteManifest: {
-      manifest: { ...manifest },
+    ProposeSccpRouteGovernance: {
+      action: normalizeSccpRouteGovernanceAction(source.action),
       window: normalizeAtWindow(source.window, "window"),
-      mode: normalizeVotingMode(source.votingMode ?? source.mode, "votingMode"),
+      mode: normalizeVotingMode(source.mode, "mode"),
     },
   };
 }

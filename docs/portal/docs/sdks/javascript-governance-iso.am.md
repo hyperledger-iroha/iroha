@@ -107,32 +107,25 @@ Torii መቼም ተርሚናል ካላሳወቀ ሁለቱም ስክሪፕቶች 
 
 ### ISO ተለዋጭ ስም አጋዥ
 
-`recipes/iso_alias.mjs` ልምምዶች መሸፈን እንዲችሉ የ ISO ተለዋጭ ስም የመጨረሻ ነጥቦችን ያነጣጥራል።
-ዓይነ ስውር-ኤለመንት ሀሺንግ እና ቅጽል ምልልሶች የቃል መሣሪያን ሳይጽፉ። እሱ
-`ToriiClient.evaluateAliasVoprf` እና `resolveAlias` / `resolveAliasByIndex` ይደውላል
-እና የጀርባውን፣ የመፍጨት ሂደቱን፣ የመለያ ማሰሪያውን፣ ምንጩን እና የመወሰን መረጃን ያትማል
-በ Torii ተመልሷል።
+`recipes/iso_alias.mjs` ብጁ መሣሪያ ሳያስፈልግ የISO ተለዋጭ ስም ፍለጋዎችን ይሞክራል።
+`resolveAlias` እና `resolveAliasByIndex`ን ይጠራል፣ ከዚያም Torii የመለሰውን የመለያ ማሰሪያ፣ ምንጭ እና ወሳኝ ኢንዴክስ ያትማል።
 
 የአካባቢ ተለዋዋጮች፡-
 
 - `TORII_URL` — Torii ቅጽል ረዳቶችን የሚያጋልጥ የመጨረሻ ነጥብ።
-- `ISO_VOPRF_INPUT` — ሄክስ-የተመሰጠረ ዓይነ ስውር ኤለመንት (የ`deadbeef` ነባሪዎች)።
-- `ISO_SKIP_VOPRF=1` — ፍለጋዎችን ሲሞክሩ የVOPRF ጥሪን ይዝለሉ።
 - `ISO_ALIAS_LABEL` - ለመፍታት ቀጥተኛ ተለዋጭ ስም (ለምሳሌ፣ IBAN-style strings)።
 - `ISO_ALIAS_INDEX` — አስርዮሽ ወይም I18NI0000065X-ቅድመ-ቅጥያ ኢንዴክስ ወደ `resolveAliasByIndex` አልፏል።
 - `TORII_AUTH_TOKEN` / I18NI0000068X - ለደህንነታቸው የተጠበቁ Torii ማሰማራቶች አማራጭ ራስጌዎች።
 
 ```bash
-# Evaluate a blinded element and resolve an alias literal + deterministic index.
+# Resolve an alias literal + deterministic index.
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeefcafebabe \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node javascript/iroha_js/recipes/iso_alias.mjs
 
 # Only perform literal resolution.
 TORII_URL=https://torii.testnet.sora \
-ISO_SKIP_VOPRF=1 \
 ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```

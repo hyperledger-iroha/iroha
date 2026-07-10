@@ -58,7 +58,6 @@ import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
 import org.hyperledger.iroha.android.client.HttpTransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
-import org.hyperledger.iroha.android.sccp.SourceSccpProofs;
 
 /**
  * HTTP-based client implementation that will forward transactions to an Iroha Torii endpoint.
@@ -420,6 +419,45 @@ public final class HttpClientTransport implements IrohaClient {
     final TransportRequest request =
         buildJsonGetRequest("/v1/ram-lfe/program-policies", Collections.emptyMap());
     return fetchJson(request, RamLfeJsonParser::parsePolicyList, "ram-lfe program policy list");
+  }
+
+  /** Fetch and strictly decode exact-lane SCCP capability discovery. */
+  public CompletableFuture<SccpModels.Capabilities> getSccpCapabilities() {
+    return fetchJson(
+        buildJsonGetRequest("/v1/sccp/capabilities", Collections.emptyMap()),
+        SccpJsonParser::parseCapabilities,
+        "SCCP capabilities");
+  }
+
+  /** Fetch and strictly decode exact-lane native/prover manifests. */
+  public CompletableFuture<SccpModels.ProofManifestSet> getSccpProofManifests() {
+    return fetchJson(
+        buildJsonGetRequest("/v1/sccp/manifests", Collections.emptyMap()),
+        SccpJsonParser::parseProofManifests,
+        "SCCP proof manifests");
+  }
+
+  /** Fetch newest-first exact-context SCCP outbound messages. */
+  public CompletableFuture<SccpModels.RecentMessages> getSccpRecentMessages() {
+    return getSccpRecentMessages(null, null);
+  }
+
+  /** Fetch newest-first exact-context SCCP outbound messages using an explicit window. */
+  public CompletableFuture<SccpModels.RecentMessages> getSccpRecentMessages(
+      final Long from, final Integer limit) {
+    if (from != null && from.longValue() < 0) {
+      throw new IllegalArgumentException("from must be a u64 height");
+    }
+    if (limit != null && (limit.intValue() < 1 || limit.intValue() > 50)) {
+      throw new IllegalArgumentException("limit must be between 1 and 50");
+    }
+    final Map<String, String> query = new LinkedHashMap<>();
+    if (from != null) query.put("from", Long.toString(from.longValue()));
+    if (limit != null) query.put("limit", Integer.toString(limit.intValue()));
+    return fetchJson(
+        buildJsonGetRequest("/v1/sccp/messages/recent", query),
+        SccpJsonParser::parseRecentMessages,
+        "SCCP recent messages");
   }
 
   /** Fetches a persisted identifier claim by its deterministic receipt hash. */
@@ -2064,16 +2102,14 @@ public final class HttpClientTransport implements IrohaClient {
       final String entrypoint,
       final Object payloadValue,
       final String gasAssetId) {
-    if (gasLimit < 0L) {
-      throw new IllegalArgumentException("gasLimit must be non-negative");
+    if (gasLimit <= 0L) {
+      throw new IllegalArgumentException("gasLimit must be positive");
     }
     final Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("authority", normalizeNonBlank(authority, "authority"));
     payload.put("private_key", normalizeNonBlank(privateKey, "privateKey"));
     payload.putAll(buildContractTargetSelector(contractAddress, contractAlias));
-    if (entrypoint != null) {
-      payload.put("entrypoint", normalizeNonBlank(entrypoint, "entrypoint"));
-    }
+    payload.put("entrypoint", normalizeNonBlank(entrypoint, "entrypoint"));
     if (payloadValue != null) {
       payload.put("payload", payloadValue);
     }
@@ -2491,26 +2527,99 @@ public final class HttpClientTransport implements IrohaClient {
     try {
       parsed = JsonParser.parse(new String(Objects.requireNonNull(body, "body"), StandardCharsets.UTF_8));
     } catch (final RuntimeException ex) {
-      return;
+      throw new IllegalArgumentException("bridge submit payload must be valid JSON", ex);
     }
     if (!(parsed instanceof Map<?, ?>)) {
-      return;
+      throw new IllegalArgumentException("bridge submit payload must be a JSON object");
     }
     final Map<?, ?> fields = (Map<?, ?>) parsed;
+    final java.util.Set<String> allowed;
+    if ("/v1/bridge/proofs/submit".equals(path)) {
+      allowed = SCCP_PROOF_SUBMIT_FIELDS;
+    } else if ("/v1/bridge/messages".equals(path)) {
+      allowed = SCCP_MESSAGE_SUBMIT_FIELDS;
+    } else {
+      throw new IllegalArgumentException("unsupported SCCP bridge submit path");
+    }
+    for (final Object key : fields.keySet()) {
+      if (!(key instanceof String) || !allowed.contains((String) key)) {
+        throw new IllegalArgumentException("unknown or retired bridge submit field `" + key + "`");
+      }
+    }
+    if (!(fields.get("authority") instanceof String)
+        || ((String) fields.get("authority")).trim().isEmpty()) {
+      throw new IllegalArgumentException("authority is required");
+    }
+    final Object publicKey = fields.get("public_key_hex");
+    final Object signature = fields.get("signature_b64");
+    if ((publicKey == null) != (signature == null)) {
+      throw new IllegalArgumentException(
+          "public_key_hex and signature_b64 must be supplied together");
+    }
+    if (publicKey != null) {
+      if (!(publicKey instanceof String)
+          || SccpSubmitEncoding.normalizeOptionalPublicKeyHex((String) publicKey) == null) {
+        throw new IllegalArgumentException(
+            "public_key_hex must be exactly 32 nonzero lowercase hexadecimal bytes");
+      }
+      if (!(signature instanceof String)) {
+        throw new IllegalArgumentException("signature_b64 must be canonical base64");
+      }
+      final String normalizedSignature =
+          SccpSubmitEncoding.normalizeOptionalExactBase64(
+              (String) signature, "signatureB64");
+      if (normalizedSignature == null) {
+        throw new IllegalArgumentException("signature_b64 must be canonical base64");
+      }
+    }
+    final Object creationTime = fields.get("creation_time_ms");
+    if (creationTime != null) {
+      if (!(creationTime instanceof Number)) {
+        throw new IllegalArgumentException("creation_time_ms must be a positive integer");
+      }
+      final Number number = (Number) creationTime;
+      final long value = number.longValue();
+      if (value <= 0 || !number.toString().equals(Long.toString(value))) {
+        throw new IllegalArgumentException("creation_time_ms must be a positive integer");
+      }
+    }
+    if ("/v1/bridge/messages".equals(path)) {
+      final String nativeProof = optionalSccpArtifact(fields, "native_proof_b64");
+      if (nativeProof == null) {
+        throw new IllegalArgumentException("bridge message submit requires native_proof_b64");
+      }
+      SccpSubmitEncoding.validateCanonicalNoritoBase64(
+          nativeProof, "native_proof_b64", SccpSubmitEncoding.MAX_ARTIFACT_BYTES);
+      return;
+    }
+    final String messageBundle = optionalSccpArtifact(fields, "message_bundle_b64");
+    if (messageBundle != null) {
+      SccpSubmitEncoding.validateCanonicalNoritoBase64(
+          messageBundle, "message_bundle_b64", SccpSubmitEncoding.MAX_ARTIFACT_BYTES);
+    }
+    if (messageBundle == null) {
+      throw new IllegalArgumentException("bridge proof submit requires message_bundle_b64");
+    }
+    final boolean destinationPresent = validateExactSccpDestinationMaterial(fields);
     final Object proofBytesHex = fields.get("proof_bytes_hex");
     if (proofBytesHex != null) {
       if (!(proofBytesHex instanceof String)) {
-        throw new IllegalArgumentException("proof_bytes_hex must be an even-length hex string");
+        throw new IllegalArgumentException("proof_bytes_hex must be a canonical hex string");
       }
-      final String normalizedProofBytesHex =
-          normalizeExactNonZeroEvenLengthHex(
+      final String normalized =
+          requireCanonicalSccpHex(
               (String) proofBytesHex,
-              "proof_bytes_hex",
-              SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1);
-      validateSccpGroth16ProofHexForMessageBundle(normalizedProofBytesHex, fields);
+              SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1,
+              "proof_bytes_hex");
+      validateSccpGroth16ProofHex(normalized);
     }
-    validateSccpDestinationProofMaterialRelationship(fields);
-    preflightSccpBridgeSubmitBundleSelection(fields, path);
+    if ((proofBytesHex == null) != !destinationPresent) {
+      throw new IllegalArgumentException(
+          "proof_bytes_hex and complete destination material must be supplied together");
+    }
+    if (destinationPresent) {
+      requireCompleteSccpDestinationTuple(fields);
+    }
   }
 
   static String normalizeHex32(final String value, final String field) {
@@ -2733,83 +2842,9 @@ public final class HttpClientTransport implements IrohaClient {
     }
   }
 
-  private static String abiWordU32Hex(final int value) {
-    if (value < 0) {
-      throw new IllegalArgumentException("SCCP ABI word value must be a u32");
-    }
-    final String hex = Integer.toHexString(value);
-    final StringBuilder out = new StringBuilder(64);
-    for (int i = hex.length(); i < 64; i++) {
-      out.append('0');
-    }
-    out.append(hex);
-    return out.toString();
-  }
-
   private static String word(final String proofHex, final int index) {
     final int start = index * 64;
     return proofHex.substring(start, start + 64);
-  }
-
-  private static String[] optionalSccpMessageProofContext(final Map<?, ?> fields) {
-    final Object messageBundleValue = fields.get("message_bundle");
-    if (messageBundleValue == null) {
-      return null;
-    }
-    if (!(messageBundleValue instanceof Map<?, ?>)) {
-      throw new IllegalArgumentException("message_bundle must contain commitment metadata");
-    }
-    final Map<?, ?> messageBundle = (Map<?, ?>) messageBundleValue;
-    final Object commitmentValue = messageBundle.get("commitment");
-    if (!(commitmentValue instanceof Map<?, ?>)) {
-      throw new IllegalArgumentException("message_bundle.commitment.message_id is required");
-    }
-    final Map<?, ?> commitment = (Map<?, ?>) commitmentValue;
-    final Object messageIdValue =
-        commitment.containsKey("message_id") ? commitment.get("message_id") : commitment.get("messageId");
-    final Object commitmentRootValue =
-        messageBundle.containsKey("commitment_root")
-            ? messageBundle.get("commitment_root")
-            : messageBundle.get("commitmentRoot");
-    if (messageIdValue == null || commitmentRootValue == null) {
-      throw new IllegalArgumentException(
-          "message_bundle.commitment.message_id and message_bundle.commitment_root are required");
-    }
-    if (!(messageIdValue instanceof String)) {
-      throw new IllegalArgumentException(
-          "message_bundle.commitment.message_id must contain 64 hex characters");
-    }
-    if (!(commitmentRootValue instanceof String)) {
-      throw new IllegalArgumentException(
-          "message_bundle.commitment_root must contain 64 hex characters");
-    }
-    return new String[] {
-      normalizeHex32((String) messageIdValue, "message_bundle.commitment.message_id"),
-      normalizeHex32((String) commitmentRootValue, "message_bundle.commitment_root")
-    };
-  }
-
-  private static void validateSccpGroth16ProofHexForMessageBundle(
-      final String proofHex, final Map<?, ?> fields) {
-    validateSccpGroth16ProofHex(proofHex);
-    final String[] proofContext = optionalSccpMessageProofContext(fields);
-    if (proofContext == null) {
-      return;
-    }
-    if (!word(proofHex, 0).equals(abiWordU32Hex(1))) {
-      throw new IllegalArgumentException("proof_bytes_hex.version must be 1");
-    }
-    if (!word(proofHex, 1).equals(proofContext[0])) {
-      throw new IllegalArgumentException(
-          "proof_bytes_hex.message_id must match message_bundle.commitment.message_id");
-    }
-    if (!word(proofHex, 2).equals(abiWordU32Hex(SCCP_DOMAIN_SORA))) {
-      throw new IllegalArgumentException("proof_bytes_hex.source_domain must be SORA");
-    }
-    if (!word(proofHex, 3).equals(proofContext[1])) {
-      throw new IllegalArgumentException(
-          "proof_bytes_hex.commitment_root must match message_bundle.commitment_root");
-    }
   }
 
   private static BigInteger proofWordValue(final String proofHex, final int index) {
@@ -2910,243 +2945,105 @@ public final class HttpClientTransport implements IrohaClient {
     requireG1Point(proofHex, 10, 11, "proof_bytes_hex.c");
   }
 
-  private static void validateSccpDestinationProofMaterialRelationship(final Map<?, ?> fields) {
-    final boolean hasDestinationMaterial = preflightSccpDestinationProofMaterial(fields);
-    final boolean hasProofBytes = fields.get("proof_bytes_hex") != null;
-    if (hasDestinationMaterial && !hasProofBytes) {
+  private static final java.util.Set<String> SCCP_PROOF_SUBMIT_FIELDS =
+      java.util.Set.of(
+          "authority",
+          "public_key_hex",
+          "signature_b64",
+          "message_bundle_b64",
+          "network_id_hex",
+          "verifier_address_hex",
+          "bridge_address_hex",
+          "verifier_code_hash_hex",
+          "verifier_key_hash_hex",
+          "tron_verifier_address",
+          "proof_bytes_hex",
+          "creation_time_ms");
+  private static final java.util.Set<String> SCCP_MESSAGE_SUBMIT_FIELDS =
+      java.util.Set.of(
+          "authority",
+          "public_key_hex",
+          "signature_b64",
+          "native_proof_b64",
+          "creation_time_ms");
+
+  private static String optionalSccpArtifact(final Map<?, ?> fields, final String field) {
+    final Object value = fields.get(field);
+    if (value == null) return null;
+    if (!(value instanceof String)) {
+      throw new IllegalArgumentException(field + " must be a canonical padded base64 string");
+    }
+    return (String) value;
+  }
+
+  private static String requireCanonicalSccpHex(
+      final String value, final int bytes, final String field) {
+    if (value == null || !value.startsWith("0x") || value.length() != 2 + bytes * 2) {
       throw new IllegalArgumentException(
-          "proof_bytes_hex is required when SCCP destination proof parameters are supplied");
+          field + " must be canonical lowercase 0x-prefixed " + bytes + "-byte hex");
     }
-    if (hasProofBytes && !hasDestinationMaterial) {
-      throw new IllegalArgumentException(
-          "deployment destination fields are required when proof_bytes_hex is supplied");
-    }
-    if (hasDestinationMaterial && hasProofBytes) {
-      requireSccpDestinationProofMaterialTuple(fields);
-    }
-  }
-
-  private static boolean preflightSccpDestinationProofMaterial(final Map<?, ?> fields) {
-    boolean hasDestinationMaterial = false;
-    hasDestinationMaterial |= validateOptionalSccpDestinationHex(fields, "network_id_hex", 32);
-    hasDestinationMaterial |= validateOptionalSccpDestinationHex(fields, "verifier_address_hex", 20);
-    hasDestinationMaterial |= validateOptionalSccpDestinationHex(fields, "bridge_address_hex", 20);
-    hasDestinationMaterial |= validateOptionalSccpDestinationHex(fields, "verifier_code_hash_hex", 32);
-    hasDestinationMaterial |= validateOptionalSccpDestinationHex(fields, "verifier_key_hash_hex", 32);
-    hasDestinationMaterial |=
-        validateOptionalSccpDestinationHex(fields, "expected_destination_binding_hash_hex", 32);
-    hasDestinationMaterial |= validateOptionalSccpDestinationText(fields, "tron_verifier_address");
-    return hasDestinationMaterial;
-  }
-
-  private static void requireSccpDestinationProofMaterialTuple(final Map<?, ?> fields) {
-    final boolean hasEvmFields =
-        hasSccpDestinationField(fields, "verifier_address_hex")
-            || hasSccpDestinationField(fields, "bridge_address_hex");
-    final boolean hasTronFields = hasSccpDestinationField(fields, "tron_verifier_address");
-    if (hasEvmFields && hasTronFields) {
-      throw new IllegalArgumentException("EVM and TRON SCCP destination fields cannot be mixed");
-    }
-
-    final String[] sharedFields = {
-      "network_id_hex",
-      "verifier_code_hash_hex",
-      "verifier_key_hash_hex",
-      "expected_destination_binding_hash_hex"
-    };
-    final boolean hasSharedFields = hasAnySccpDestinationField(fields, sharedFields);
-    if (hasTronFields) {
-      final String[] required = {
-        "network_id_hex",
-        "tron_verifier_address",
-        "verifier_code_hash_hex",
-        "verifier_key_hash_hex",
-        "expected_destination_binding_hash_hex"
-      };
-      final String missing = missingSccpDestinationFields(fields, required);
-      if (!missing.isEmpty()) {
+    boolean nonzero = false;
+    for (int index = 2; index < value.length(); index++) {
+      final char item = value.charAt(index);
+      if (!((item >= '0' && item <= '9') || (item >= 'a' && item <= 'f'))) {
         throw new IllegalArgumentException(
-            "complete TRON SCCP deployment destination fields are required; missing " + missing);
+            field + " must be canonical lowercase 0x-prefixed " + bytes + "-byte hex");
       }
-      requireTronSccpDestinationBindingHashMatches(fields);
-      return;
+      nonzero |= item != '0';
     }
-
-    if (hasEvmFields) {
-      final String[] required = {
-        "network_id_hex",
-        "verifier_address_hex",
-        "bridge_address_hex",
-        "verifier_code_hash_hex",
-        "verifier_key_hash_hex",
-        "expected_destination_binding_hash_hex"
-      };
-      final String missing = missingSccpDestinationFields(fields, required);
-      if (!missing.isEmpty()) {
-        throw new IllegalArgumentException(
-            "complete EVM SCCP deployment destination fields are required; missing " + missing);
-      }
-      requireEvmSccpDestinationBindingHashMatches(fields);
-      return;
+    if (!nonzero) {
+      throw new IllegalArgumentException(field + " must be nonzero");
     }
-
-    if (hasSharedFields) {
-      throw new IllegalArgumentException(
-          "complete EVM or TRON SCCP deployment destination fields are required");
-    }
+    return value.substring(2);
   }
 
-  private static void requireEvmSccpDestinationBindingHashMatches(final Map<?, ?> fields) {
-    final String actual =
-        normalizeExactNonZeroEvenLengthHex(
-            (String) fields.get("expected_destination_binding_hash_hex"),
-            "expected_destination_binding_hash_hex",
-            32);
-    final int[] targetDomains = {SourceSccpProofs.DOMAIN_ETH, SourceSccpProofs.DOMAIN_BSC};
-    for (final int targetDomain : targetDomains) {
-      final String expectedWithPrefix =
-          SourceSccpProofs.evmDestinationBindingHash(
-              SourceSccpProofs.DOMAIN_SORA,
-              targetDomain,
-              (String) fields.get("network_id_hex"),
-              (String) fields.get("verifier_address_hex"),
-              (String) fields.get("bridge_address_hex"),
-              (String) fields.get("verifier_code_hash_hex"),
-              (String) fields.get("verifier_key_hash_hex"));
-      final String expected =
-          expectedWithPrefix.startsWith("0x")
-              ? expectedWithPrefix.substring(2)
-              : expectedWithPrefix;
-      if (actual.equals(expected)) {
-        return;
-      }
-    }
-    throw new IllegalArgumentException(
-        "expected_destination_binding_hash_hex must match canonical EVM destination binding");
-  }
-
-  private static void requireTronSccpDestinationBindingHashMatches(final Map<?, ?> fields) {
-    final String expectedWithPrefix =
-        SourceSccpProofs.tronDestinationBindingHash(
-            SourceSccpProofs.DOMAIN_SORA,
-            SourceSccpProofs.DOMAIN_TRON,
-            (String) fields.get("network_id_hex"),
-            (String) fields.get("tron_verifier_address"),
-            (String) fields.get("verifier_code_hash_hex"),
-            (String) fields.get("verifier_key_hash_hex"));
-    final String expected =
-        expectedWithPrefix.startsWith("0x")
-            ? expectedWithPrefix.substring(2)
-            : expectedWithPrefix;
-    final String actual =
-        normalizeExactNonZeroEvenLengthHex(
-            (String) fields.get("expected_destination_binding_hash_hex"),
-            "expected_destination_binding_hash_hex",
-            32);
-    if (!actual.equals(expected)) {
-      throw new IllegalArgumentException(
-          "expected_destination_binding_hash_hex must match canonical TRON destination binding");
-    }
-  }
-
-  private static boolean hasSccpDestinationField(final Map<?, ?> fields, final String field) {
-    return fields.get(field) != null;
-  }
-
-  private static void preflightSccpBridgeSubmitBundleSelection(
-      final Map<?, ?> fields, final String path) {
-    final boolean hasBurnBundle = hasSccpDestinationField(fields, "burn_bundle");
-    final boolean hasMessageBundle = hasSccpDestinationField(fields, "message_bundle");
-    if ("/v1/bridge/proofs/submit".equals(path)) {
-      final int bundleCount = (hasBurnBundle ? 1 : 0) + (hasMessageBundle ? 1 : 0);
-      if (bundleCount != 1) {
-        throw new IllegalArgumentException(
-            "bridge proof submit must provide exactly one of burn_bundle or message_bundle");
-      }
-      if (hasBurnBundle && hasSccpDestinationProofOrMaterial(fields)) {
-        throw new IllegalArgumentException(
-            "SCCP destination fields and proof_bytes_hex are only valid for message_bundle submissions");
-      }
-    } else if ("/v1/bridge/messages".equals(path)) {
-      if (!hasMessageBundle) {
-        throw new IllegalArgumentException("bridge message submit requires message_bundle");
-      }
-      if (hasBurnBundle) {
-        throw new IllegalArgumentException("bridge message submit does not accept burn_bundle");
-      }
-    }
-  }
-
-  private static boolean hasSccpDestinationProofOrMaterial(final Map<?, ?> fields) {
-    if (hasSccpDestinationField(fields, "proof_bytes_hex")) {
-      return true;
-    }
-    final String[] materialFields = {
+  private static boolean validateExactSccpDestinationMaterial(final Map<?, ?> fields) {
+    final String[] names = {
       "network_id_hex",
       "verifier_address_hex",
       "bridge_address_hex",
       "verifier_code_hash_hex",
-      "verifier_key_hash_hex",
-      "expected_destination_binding_hash_hex",
-      "tron_verifier_address"
+      "verifier_key_hash_hex"
     };
-    return hasAnySccpDestinationField(fields, materialFields);
-  }
-
-  private static boolean hasAnySccpDestinationField(
-      final Map<?, ?> fields, final String[] names) {
-    for (final String name : names) {
-      if (hasSccpDestinationField(fields, name)) {
-        return true;
+    final int[] sizes = {32, 20, 20, 32, 32};
+    boolean present = false;
+    for (int index = 0; index < names.length; index++) {
+      final Object value = fields.get(names[index]);
+      if (value == null) continue;
+      if (!(value instanceof String)) {
+        throw new IllegalArgumentException(names[index] + " must be a canonical hex string");
       }
+      requireCanonicalSccpHex((String) value, sizes[index], names[index]);
+      present = true;
     }
-    return false;
-  }
-
-  private static String missingSccpDestinationFields(
-      final Map<?, ?> fields, final String[] names) {
-    final StringBuilder missing = new StringBuilder();
-    for (final String name : names) {
-      if (!hasSccpDestinationField(fields, name)) {
-        if (missing.length() > 0) {
-          missing.append(", ");
-        }
-        missing.append(name);
+    final Object tron = fields.get("tron_verifier_address");
+    if (tron != null) {
+      if (!(tron instanceof String)) {
+        throw new IllegalArgumentException("tron_verifier_address must be a string");
       }
+      normalizeTronBase58CheckAddress((String) tron, "tron_verifier_address");
+      present = true;
     }
-    return missing.toString();
+    return present;
   }
 
-  private static boolean validateOptionalSccpDestinationHex(
-      final Map<?, ?> fields, final String field, final int expectedByteLength) {
-    if (!fields.containsKey(field)) {
-      return false;
-    }
-    final Object value = fields.get(field);
-    if (value == null) {
-      return false;
-    }
-    if (!(value instanceof String)) {
+  private static void requireCompleteSccpDestinationTuple(final Map<?, ?> fields) {
+    final boolean evm =
+        fields.get("verifier_address_hex") != null || fields.get("bridge_address_hex") != null;
+    final boolean tron = fields.get("tron_verifier_address") != null;
+    if (evm == tron) {
       throw new IllegalArgumentException(
-          field + " must be a " + expectedByteLength + "-byte hex string");
+          "destination material must select exactly one EVM or TRON family");
     }
-    normalizeExactNonZeroEvenLengthHex((String) value, field, expectedByteLength);
-    return true;
-  }
-
-  private static boolean validateOptionalSccpDestinationText(
-      final Map<?, ?> fields, final String field) {
-    if (!fields.containsKey(field)) {
-      return false;
+    if (fields.get("network_id_hex") == null
+        || fields.get("verifier_code_hash_hex") == null
+        || fields.get("verifier_key_hash_hex") == null) {
+      throw new IllegalArgumentException("complete SCCP destination material is required");
     }
-    final Object value = fields.get(field);
-    if (value == null) {
-      return false;
+    if (evm
+        && (fields.get("verifier_address_hex") == null
+            || fields.get("bridge_address_hex") == null)) {
+      throw new IllegalArgumentException("complete EVM SCCP destination material is required");
     }
-    if (!(value instanceof String)) {
-      throw new IllegalArgumentException(field + " must be a non-empty string");
-    }
-    normalizeTronBase58CheckAddress((String) value, field);
-    return true;
   }
 }

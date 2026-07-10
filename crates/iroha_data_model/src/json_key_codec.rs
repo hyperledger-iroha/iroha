@@ -311,29 +311,38 @@ impl JsonKeyCodec for crate::ram_lfe::RamLfeProgramId {
     }
 }
 
-impl JsonKeyCodec for crate::bridge::SccpOutboundMessageKey {
+impl JsonKeyCodec for crate::bridge::sccp::SccpOutboundMessageKeyV1 {
     fn encode_json_key(&self, out: &mut String) {
         let encoded = format!(
-            "{}:{}:{}",
-            self.source_domain,
-            self.target_domain,
-            hex::encode_upper(self.message_id)
+            "sccp-outbound-v1:{}:{}:{}",
+            self.lane.source.profile_key(),
+            self.lane.target.profile_key(),
+            hex::encode(self.message_id)
         );
         json::write_json_string(&encoded, out);
     }
 
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        const PREFIX: &str = "sccp-outbound-v1";
+
         let mut parts = encoded.split(':');
-        let source_domain = parts
+        if parts.next() != Some(PREFIX) {
+            return Err(json::Error::Message(
+                "SCCP outbound message key must use the canonical V1 prefix".into(),
+            ));
+        }
+        let source = parts
             .next()
-            .ok_or_else(|| json::Error::Message("missing SCCP source domain".into()))?
-            .parse::<u32>()
-            .map_err(|err| json::Error::Message(err.to_string()))?;
-        let target_domain = parts
+            .and_then(crate::bridge::sccp::SccpNetworkV1::from_profile_key)
+            .ok_or_else(|| {
+                json::Error::Message("unknown or non-canonical SCCP source profile".into())
+            })?;
+        let target = parts
             .next()
-            .ok_or_else(|| json::Error::Message("missing SCCP target domain".into()))?
-            .parse::<u32>()
-            .map_err(|err| json::Error::Message(err.to_string()))?;
+            .and_then(crate::bridge::sccp::SccpNetworkV1::from_profile_key)
+            .ok_or_else(|| {
+                json::Error::Message("unknown or non-canonical SCCP target profile".into())
+            })?;
         let message_id_hex = parts
             .next()
             .ok_or_else(|| json::Error::Message("missing SCCP message id".into()))?;
@@ -342,14 +351,176 @@ impl JsonKeyCodec for crate::bridge::SccpOutboundMessageKey {
                 "too many SCCP outbound message key parts".into(),
             ));
         }
+        if message_id_hex.len() != 64
+            || !message_id_hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(json::Error::Message(
+                "SCCP message id must be exactly 64 lowercase hexadecimal characters".into(),
+            ));
+        }
         let message_id = hex::decode(message_id_hex)
             .map_err(|err| json::Error::Message(err.to_string()))?
             .try_into()
             .map_err(|_| json::Error::Message("SCCP message id must be 32 bytes".into()))?;
-        Ok(Self {
-            source_domain,
-            target_domain,
+        crate::bridge::sccp::SccpOutboundMessageKeyV1::new(
+            crate::bridge::sccp::SccpLaneIdV1 { source, target },
             message_id,
+        )
+        .ok_or_else(|| {
+            json::Error::Message(
+                "SCCP outbound key must contain a SORA-to-external lane and nonzero message id"
+                    .into(),
+            )
+        })
+    }
+}
+
+impl JsonKeyCodec for crate::bridge::sccp::SccpOutboundMessageIndexKeyV1 {
+    fn encode_json_key(&self, out: &mut String) {
+        let encoded = format!(
+            "sccp-outbound-index-v1:{}:{}:{}:{}",
+            self.recorded_at_height,
+            self.lane.source.profile_key(),
+            self.lane.target.profile_key(),
+            hex::encode(self.message_id)
+        );
+        json::write_json_string(&encoded, out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        const PREFIX: &str = "sccp-outbound-index-v1";
+
+        let mut parts = encoded.split(':');
+        if parts.next() != Some(PREFIX) {
+            return Err(json::Error::Message(
+                "SCCP outbound index key must use the canonical V1 prefix".into(),
+            ));
+        }
+        let height_text = parts
+            .next()
+            .ok_or_else(|| json::Error::Message("missing SCCP outbound index height".into()))?;
+        if height_text.is_empty()
+            || (height_text.len() > 1 && height_text.starts_with('0'))
+            || !height_text.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(json::Error::Message(
+                "SCCP outbound index height must be canonical unsigned decimal".into(),
+            ));
+        }
+        let recorded_at_height = height_text
+            .parse::<u64>()
+            .map_err(|err| json::Error::Message(err.to_string()))?;
+        let source = parts
+            .next()
+            .and_then(crate::bridge::sccp::SccpNetworkV1::from_profile_key)
+            .ok_or_else(|| {
+                json::Error::Message("unknown or non-canonical SCCP source profile".into())
+            })?;
+        let target = parts
+            .next()
+            .and_then(crate::bridge::sccp::SccpNetworkV1::from_profile_key)
+            .ok_or_else(|| {
+                json::Error::Message("unknown or non-canonical SCCP target profile".into())
+            })?;
+        let message_id_hex = parts
+            .next()
+            .ok_or_else(|| json::Error::Message("missing SCCP message id".into()))?;
+        if parts.next().is_some() {
+            return Err(json::Error::Message(
+                "too many SCCP outbound index key parts".into(),
+            ));
+        }
+        if message_id_hex.len() != 64
+            || !message_id_hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(json::Error::Message(
+                "SCCP message id must be exactly 64 lowercase hexadecimal characters".into(),
+            ));
+        }
+        let message_id = hex::decode(message_id_hex)
+            .map_err(|err| json::Error::Message(err.to_string()))?
+            .try_into()
+            .map_err(|_| json::Error::Message("SCCP message id must be 32 bytes".into()))?;
+        let key = crate::bridge::sccp::SccpOutboundMessageIndexKeyV1 {
+            recorded_at_height,
+            lane: crate::bridge::sccp::SccpLaneIdV1 { source, target },
+            message_id,
+        };
+        key.is_well_formed().then_some(key).ok_or_else(|| {
+            json::Error::Message(
+                "SCCP outbound index must contain a positive height, SORA-to-external lane, and nonzero message id"
+                    .into(),
+            )
+        })
+    }
+}
+
+impl JsonKeyCodec for crate::bridge::sccp::SccpInboundMessageKeyV1 {
+    fn encode_json_key(&self, out: &mut String) {
+        let encoded = format!(
+            "sccp-inbound-v1:{}:{}:{}",
+            self.lane.source.profile_key(),
+            self.lane.target.profile_key(),
+            hex::encode(self.message_id)
+        );
+        json::write_json_string(&encoded, out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        const PREFIX: &str = "sccp-inbound-v1";
+
+        let mut parts = encoded.split(':');
+        if parts.next() != Some(PREFIX) {
+            return Err(json::Error::Message(
+                "SCCP inbound message key must use the canonical V1 prefix".into(),
+            ));
+        }
+        let source = parts
+            .next()
+            .and_then(crate::bridge::sccp::SccpNetworkV1::from_profile_key)
+            .ok_or_else(|| {
+                json::Error::Message("unknown or non-canonical SCCP source profile".into())
+            })?;
+        let target = parts
+            .next()
+            .and_then(crate::bridge::sccp::SccpNetworkV1::from_profile_key)
+            .ok_or_else(|| {
+                json::Error::Message("unknown or non-canonical SCCP target profile".into())
+            })?;
+        let message_id_hex = parts
+            .next()
+            .ok_or_else(|| json::Error::Message("missing SCCP message id".into()))?;
+        if parts.next().is_some() {
+            return Err(json::Error::Message(
+                "too many SCCP inbound message key parts".into(),
+            ));
+        }
+        if message_id_hex.len() != 64
+            || !message_id_hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(json::Error::Message(
+                "SCCP message id must be exactly 64 lowercase hexadecimal characters".into(),
+            ));
+        }
+        let message_id = hex::decode(message_id_hex)
+            .map_err(|err| json::Error::Message(err.to_string()))?
+            .try_into()
+            .map_err(|_| json::Error::Message("SCCP message id must be 32 bytes".into()))?;
+        crate::bridge::sccp::SccpInboundMessageKeyV1::new(
+            crate::bridge::sccp::SccpLaneIdV1 { source, target },
+            message_id,
+        )
+        .ok_or_else(|| {
+            json::Error::Message(
+                "SCCP inbound key must contain an external-to-SORA lane and nonzero message id"
+                    .into(),
+            )
         })
     }
 }
@@ -361,7 +532,10 @@ mod tests {
     use norito::json::Parser;
 
     use crate::account::AccountId;
-    use crate::bridge::SccpOutboundMessageKey;
+    use crate::bridge::sccp::{
+        SccpInboundMessageKeyV1, SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageIndexKeyV1,
+        SccpOutboundMessageKeyV1,
+    };
 
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked JSON key codec fixture keypair")
@@ -390,17 +564,187 @@ mod tests {
     }
 
     #[test]
-    fn sccp_outbound_message_key_json_key_codec_roundtrip() {
-        let key = SccpOutboundMessageKey {
-            source_domain: 1,
-            target_domain: 2,
-            message_id: [0x42; 32],
-        };
+    fn sccp_outbound_message_key_json_key_codec_is_canonical() {
+        let key = SccpOutboundMessageKeyV1::new(
+            SccpLaneIdV1 {
+                source: SccpNetworkV1::SoraTaira,
+                target: SccpNetworkV1::BscTestnet,
+            },
+            [0x42; 32],
+        )
+        .expect("valid outbound key");
         let mut encoded = String::new();
         key.encode_json_key(&mut encoded);
+        assert_eq!(
+            encoded,
+            concat!(
+                "\"sccp-outbound-v1:sora-taira:bsc-testnet:",
+                "4242424242424242424242424242424242424242424242424242424242424242\""
+            )
+        );
         let mut parser = Parser::new(&encoded);
         let raw_key = parser.parse_string().expect("parse encoded json key");
-        let decoded = SccpOutboundMessageKey::decode_json_key(&raw_key).expect("decode json key");
+        let decoded = SccpOutboundMessageKeyV1::decode_json_key(&raw_key).expect("decode json key");
         assert_eq!(decoded, key);
+    }
+
+    #[test]
+    fn sccp_outbound_message_key_json_key_codec_rejects_aliases_and_malleability() {
+        let message_id = "4242424242424242424242424242424242424242424242424242424242424242";
+        let zero_id = "0000000000000000000000000000000000000000000000000000000000000000";
+        let hostile = [
+            format!("sora-taira:bsc-testnet:{message_id}"),
+            format!("SCCP-OUTBOUND-V1:sora-taira:bsc-testnet:{message_id}"),
+            format!("sccp-outbound-v1:Sora-Taira:bsc-testnet:{message_id}"),
+            format!("sccp-outbound-v1:sora_taira:bsc-testnet:{message_id}"),
+            format!("sccp-outbound-v1:taira:bsc-testnet:{message_id}"),
+            format!("sccp-outbound-v1:sora-taira:bsc_testnet:{message_id}"),
+            format!("sccp-outbound-v1:sora-taira:unknown:{message_id}"),
+            format!("sccp-outbound-v1:bsc-testnet:sora-taira:{message_id}"),
+            format!("sccp-outbound-v1:sora-taira:sora-nexus:{message_id}"),
+            format!("sccp-outbound-v1:sora-taira:ethereum-sepolia:{zero_id}"),
+            format!(
+                "sccp-outbound-v1:sora-taira:bsc-testnet:{}",
+                message_id.to_uppercase()
+            ),
+            format!("sccp-outbound-v1:sora-taira:bsc-testnet: {message_id}"),
+            format!("sccp-outbound-v1:sora-taira:bsc-testnet:{message_id}:trailing"),
+            String::new(),
+        ];
+
+        for encoded in hostile {
+            assert!(
+                SccpOutboundMessageKeyV1::decode_json_key(&encoded).is_err(),
+                "accepted non-canonical or invalid key {encoded:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sccp_outbound_index_key_json_key_codec_is_canonical() {
+        let key = SccpOutboundMessageIndexKeyV1 {
+            recorded_at_height: 42,
+            lane: SccpLaneIdV1 {
+                source: SccpNetworkV1::SoraTaira,
+                target: SccpNetworkV1::EthereumMainnet,
+            },
+            message_id: [0x7b; 32],
+        };
+        assert!(key.is_well_formed());
+        let mut encoded = String::new();
+        key.encode_json_key(&mut encoded);
+        assert_eq!(
+            encoded,
+            concat!(
+                "\"sccp-outbound-index-v1:42:sora-taira:ethereum-mainnet:",
+                "7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b\""
+            )
+        );
+        let mut parser = Parser::new(&encoded);
+        let raw = parser.parse_string().expect("parse encoded index key");
+        assert_eq!(
+            SccpOutboundMessageIndexKeyV1::decode_json_key(&raw)
+                .expect("decode canonical outbound index key"),
+            key
+        );
+    }
+
+    #[test]
+    fn sccp_outbound_index_key_json_key_codec_rejects_malleability() {
+        let id = "7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b";
+        for encoded in [
+            format!("sccp-outbound-index-v1:0:sora-taira:ethereum-mainnet:{id}"),
+            format!("sccp-outbound-index-v1:01:sora-taira:ethereum-mainnet:{id}"),
+            format!("sccp-outbound-index-v1:+1:sora-taira:ethereum-mainnet:{id}"),
+            format!("sccp-outbound-index-v1: 1:sora-taira:ethereum-mainnet:{id}"),
+            format!("sccp-outbound-index-v1:1:ethereum-mainnet:sora-taira:{id}"),
+            format!(
+                "sccp-outbound-index-v1:1:sora-taira:ethereum-mainnet:{}",
+                id.to_uppercase()
+            ),
+            format!("sccp-outbound-index-v1:1:sora-taira:ethereum-mainnet:{id}:tail"),
+            format!("sccp-outbound-index-v1:18446744073709551616:sora-taira:ethereum-mainnet:{id}"),
+        ] {
+            assert!(
+                SccpOutboundMessageIndexKeyV1::decode_json_key(&encoded).is_err(),
+                "accepted non-canonical outbound index key {encoded:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sccp_inbound_message_key_json_key_codec_is_canonical() {
+        let key = SccpInboundMessageKeyV1::new(
+            SccpLaneIdV1 {
+                source: SccpNetworkV1::EthereumMainnet,
+                target: SccpNetworkV1::SoraNexus,
+            },
+            [0xab; 32],
+        )
+        .expect("valid inbound key");
+        let mut encoded = String::new();
+        key.encode_json_key(&mut encoded);
+        assert_eq!(
+            encoded,
+            concat!(
+                "\"sccp-inbound-v1:ethereum-mainnet:sora-nexus:",
+                "abababababababababababababababababababababababababababababababab\""
+            )
+        );
+
+        let mut parser = Parser::new(&encoded);
+        let raw_key = parser.parse_string().expect("parse encoded json key");
+        assert_eq!(
+            SccpInboundMessageKeyV1::decode_json_key(&raw_key)
+                .expect("decode canonical inbound key"),
+            key
+        );
+    }
+
+    #[test]
+    fn sccp_inbound_message_key_json_key_codec_rejects_aliases_and_malleability() {
+        let message_id = "abababababababababababababababababababababababababababababababab";
+        let zero_id = "0000000000000000000000000000000000000000000000000000000000000000";
+        let hostile = [
+            format!("ethereum-mainnet:sora-nexus:{message_id}"),
+            format!("SCCP-INBOUND-V1:ethereum-mainnet:sora-nexus:{message_id}"),
+            format!("sccp-inbound-v1:Ethereum-Mainnet:sora-nexus:{message_id}"),
+            format!("sccp-inbound-v1:ethereum_mainnet:sora-nexus:{message_id}"),
+            format!("sccp-inbound-v1:eth-mainnet:sora-nexus:{message_id}"),
+            format!("sccp-inbound-v1:1:sora-nexus:{message_id}"),
+            format!("sccp-inbound-v1:unknown:sora-nexus:{message_id}"),
+            format!("sccp-inbound-v1:ethereum-mainnet:unknown:{message_id}"),
+            format!("sccp-inbound-v1:ethereum-mainnet:SORA-NEXUS:{message_id}"),
+            format!("sccp-inbound-v1:ethereum-mainnet:sora:{message_id}"),
+            format!("sccp-inbound-v1:sora-nexus:ethereum-mainnet:{message_id}"),
+            format!("sccp-inbound-v1:ethereum-mainnet:bsc-mainnet:{message_id}"),
+            format!("sccp-inbound-v1:sora-nexus:sora-taira:{message_id}"),
+            format!("sccp-inbound-v1:ethereum-mainnet:sora-nexus:{zero_id}"),
+            format!(
+                "sccp-inbound-v1:ethereum-mainnet:sora-nexus:{}",
+                &message_id[..62]
+            ),
+            format!("sccp-inbound-v1:ethereum-mainnet:sora-nexus:{message_id}ab"),
+            format!(
+                "sccp-inbound-v1:ethereum-mainnet:sora-nexus:{}",
+                message_id.to_uppercase()
+            ),
+            format!(
+                "sccp-inbound-v1:ethereum-mainnet:sora-nexus:g{}",
+                &message_id[1..]
+            ),
+            format!("sccp-inbound-v1:ethereum-mainnet:sora-nexus: {message_id}"),
+            format!("sccp-inbound-v1:ethereum-mainnet:sora-nexus:{message_id}:trailing"),
+            format!(":sccp-inbound-v1:ethereum-mainnet:sora-nexus:{message_id}"),
+            "sccp-inbound-v1:ethereum-mainnet:sora-nexus:".to_owned(),
+            "".to_owned(),
+        ];
+
+        for encoded in hostile {
+            assert!(
+                SccpInboundMessageKeyV1::decode_json_key(&encoded).is_err(),
+                "accepted non-canonical or invalid key {encoded:?}"
+            );
+        }
     }
 }

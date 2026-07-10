@@ -22,10 +22,10 @@ O contrato de exemplo grav um par Chave/valor na conta do Chamador para que voce
 
 - [Docker](https://docs.docker.com/engine/install/) com Compose V2 habilitado (`defaults/docker-compose.single.yml` を使用して模範を定義)。
 - ツールチェーン Rust (1.76+) は、バイナリ OS のコンパイラを補助し、公開されています。
-- ビナリオ `koto_compile`、`ivm_run`、`iroha_cli`。リリース担当者のコンピラの内容を確認し、ワークスペースで最も多くの情報を入手し、バイザーの OS アーティファクトを確認してください:
+- ビナリオ `koto build`、`ivm_run`、`iroha_cli`。リリース担当者のコンピラの内容を確認し、ワークスペースで最も多くの情報を入手し、バイザーの OS アーティファクトを確認してください:
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -49,22 +49,22 @@ Kotodama のトラバルホおよび治療用ミニモの例を作成します:
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -76,15 +76,14 @@ KO
 バイトコード IVM/Norito (`.to`) をコンパイルし、実行する前にホスト機能をローカルで確認してシステムコールを実行します。
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-ランナー インプリメ ログ `info("Hello from Kotodama")` システムコール `SET_ACCOUNT_DETAIL` ホスト モカドに対して実行します。バイナリオオプション `ivm_tool` ESTIVER ディスポニベル、`ivm_tool inspect target/quickstart/hello.to` ほとんどの ABI ヘッダー、OS 機能ビット、OS エントリポイントエクスポート。
+ランナー インプリメ ログ `debug::info("Hello from Kotodama")` システムコール `SET_ACCOUNT_DETAIL` ホスト モカドに対して実行します。バイナリオオプション `ivm_tool` ESTIVER ディスポニベル、`ivm_tool inspect target/quickstart/hello.to` ほとんどの ABI ヘッダー、OS 機能ビット、OS エントリポイントエクスポート。
 
 ## 4. Torii 経由の Envie バイトコード
 
@@ -132,3 +131,63 @@ Norito のペイロード JSON サポートの開発:
   コンパイラ/ランナーのツールの作成、マニフェストのデプロイ、およびメタデータ IVM の実行が広範囲に行われます。
 - 繰り返しを繰り返します。`npm run sync-norito-snippets` ワークスペース パラメータを使用しません。
   再生スニペットは、`crates/ivm/docs/examples/` のフォントとしてポータルとアーティファクトの同期を実行し、OS ドキュメントを管理します。
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

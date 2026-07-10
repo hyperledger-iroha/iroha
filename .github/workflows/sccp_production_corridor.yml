@@ -24,13 +24,21 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/sccp_production_corridor.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
       - "contracts/evm/sccp/**"
       - "contracts/tron/sccp/**"
+      - "crates/iroha/**"
+      - "crates/iroha_cli/**"
+      - "crates/iroha_config/**"
       - "crates/iroha_sccp/**"
-      - "crates/iroha_core/src/bridge.rs"
-      - "crates/iroha_core/tests/bridge_proofs.rs"
+      - "crates/iroha_core/**"
+      - "crates/iroha_data_model/**"
+      - "crates/iroha_torii/**"
       - "csharp/**"
       - "docs/source/bridge_proofs.md"
+      - "fixtures/sccp/**"
       - "IrohaSwift/**"
       - "java/iroha_android/**"
       - "javascript/iroha_js/**"
@@ -40,7 +48,6 @@ on:
       - "pytests/scripts/sccp_release_readiness_report_test.py"
       - "pytests/scripts/sccp_*"
       - "roadmap.md"
-      - "rust-toolchain.toml"
       - "scripts/check_sccp_production_corridor.sh"
       - "scripts/sccp_evm_contract_smoke.sh"
       - "scripts/sccp_release_readiness_report.py"
@@ -78,12 +85,15 @@ jobs:
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: "true"
+      - name: Rust SCCP no-default feature matrix
+        run: |
+          cargo test -p iroha_sccp --lib --no-default-features
       - name: Rust SCCP verifier corridor
         run: |
           set -o pipefail
@@ -100,12 +110,18 @@ jobs:
     if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.phase == 'all' || github.event.inputs.phase == 'evidence-scripts' }}
     needs: runner-self-check
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Full local evidence suites currently take roughly 100 minutes. Keep enough
+    # headroom for shared-runner variance and continued adversarial coverage.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
       - name: Install evidence script dependencies
         run: |
           python3 -m pip install --upgrade pip pytest
@@ -297,12 +313,16 @@ jobs:
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: "true"
+      - name: Core SCCP unit and route-manifest admission
+        run: |
+          cargo test -p iroha_core --lib sccp_ -- --nocapture
+          cargo test -p iroha_core --test iroha_core_group_04 sccp_route_manifest_isi:: -- --nocapture
       - name: Core bridge-proof admission corridor
         run: |
           set -o pipefail

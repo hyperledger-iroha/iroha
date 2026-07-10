@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "parameter `{name}` pada fungsi `{func}` tidak pernah digunakan",
     lint_unreachable_after_return: "pernyataan tidak dapat dijangkau terdeteksi di {context}: kode setelah return tidak akan pernah dijalankan",
     lint_ok: "berhasil",
-    lint_usage: "Penggunaan: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Penggunaan: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Jalankan lint Kotodama pada sumber yang diberikan.",
     ..english::MESSAGES
 };

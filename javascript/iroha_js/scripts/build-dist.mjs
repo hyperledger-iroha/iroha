@@ -11,7 +11,16 @@ const SRC = join(ROOT, "src");
 async function main() {
   rmSync(DIST, { recursive: true, force: true });
   cpSync(SRC, DIST, { recursive: true });
-  const requiredOutputs = ["address.js", "curveRegistry.js", "toriiClient.js", "kotodamaCompiler/index.js"];
+  const requiredOutputs = [
+    "address.js",
+    "curveRegistry.js",
+    "toriiClient.js",
+    "kotodamaCompiler/index.js",
+    "kotodamaCompiler/browser.js",
+    "kotodamaCompiler/client.js",
+    "kotodamaCompiler/nativeBridge.js",
+    "kotodamaCompiler/normalize.js",
+  ];
   for (const fileName of requiredOutputs) {
     if (!existsSync(join(DIST, fileName))) {
       throw new Error(`build:dist missing expected output: ${fileName}`);

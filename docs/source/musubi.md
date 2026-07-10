@@ -46,7 +46,7 @@ namespace = "dex.universal"
 name = "swap-core"
 version = "0.1.0"
 
-[dependencies.math]
+[dependencies.arith]
 package = "std.universal/math"
 version = "^1.0.0"
 
@@ -74,13 +74,13 @@ Useful local commands:
 
 ```bash
 cargo run -p musubi -- init --namespace dex.universal --name swap-core --dapp
-cargo run -p musubi -- add std.universal/math --version '^1.0.0' --alias math
+cargo run -p musubi -- add std.universal/math --version '^1.0.0' --alias arith
 cargo run -p musubi -- install --config client.toml
 cargo run -p musubi -- install --config client.toml --fetch --provider-payload math.payload
-cargo run -p musubi -- install --config client.toml --fetch --gateway-provider 'name=hot-a,provider-id=1111111111111111111111111111111111111111111111111111111111111111,base-url=https://gw.example,stream-token=BASE64,package=math'
-cargo run -p musubi -- cache import math --source-root ../math
-cargo run -p musubi -- cache fetch math --provider-payload math.payload
-cargo run -p musubi -- cache fetch math --config client.toml --gateway-provider 'name=hot-a,provider-id=1111111111111111111111111111111111111111111111111111111111111111,base-url=https://gw.example,stream-token=BASE64'
+cargo run -p musubi -- install --config client.toml --fetch --gateway-provider 'name=hot-a,provider-id=1111111111111111111111111111111111111111111111111111111111111111,base-url=https://gw.example,stream-token=BASE64,package=arith'
+cargo run -p musubi -- cache import arith --source-root ../math
+cargo run -p musubi -- cache fetch arith --provider-payload math.payload
+cargo run -p musubi -- cache fetch arith --config client.toml --gateway-provider 'name=hot-a,provider-id=1111111111111111111111111111111111111111111111111111111111111111,base-url=https://gw.example,stream-token=BASE64'
 cargo run -p musubi -- pack --car-out source.car --sorafs-manifest-out manifest.norito --source-plan-out source-plan.norito
 cargo run -p musubi -- build src/lib.ko --manifest-out target/lib.contract.json
 cargo run -p musubi -- search swap --config client.toml
@@ -126,11 +126,13 @@ archive for a lockfile node. Runtime gateway options include
 test gateways can use `http://localhost`, `http://127.0.0.1`, or
 `http://[::1]` only when `--gateway-allow-insecure-localhost` is supplied.
 Stream tokens are runtime credentials; they are not written into `Musubi.lock`.
-`build` links cached dependency sources by rewriting calls such as
-`math::add()` to deterministic internal Kotodama function names, and rejects
-calls to functions that the dependency did not export. Musubi v1 libraries are
-function-only: dependency source files containing state declarations, triggers,
-kotoba blocks, constants, or other non-function contract items are rejected.
+`build` resolves calls such as `arith::add()` through explicit lockfile aliases,
+type-checks each module before linking, and assigns deterministic internal
+identities in typed HIR. It never rewrites source ASTs, and it rejects calls to
+functions that the dependency did not export. Musubi V1 modules may declare
+structs, error enums, constants, and private functions. Durable state, triggers,
+public entrypoints, lifecycle hooks, and contract-only declarations are rejected
+inside reusable modules.
 
 `pack` computes the deterministic BLAKE3-256 source archive hash plus the source
 byte and file counts. With `--car-out`, `--sorafs-manifest-out`, or

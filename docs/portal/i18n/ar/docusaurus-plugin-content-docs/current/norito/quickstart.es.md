@@ -22,10 +22,10 @@ translation_last_reviewed: 2026-02-07
 
 - [Docker](https://docs.docker.com/engine/install/) مع Compose V2 المؤهلة (يُستخدم لبدء النظير المحدد في `defaults/docker-compose.single.yml`).
 - Toolchain de Rust (1.76+) لإنشاء الثنائيات المساعدة في حالة عدم تنزيل المنشورات.
-- ثنائيات `koto_compile`، `ivm_run` و`iroha_cli`. يمكنك البناء من خلال الخروج من مساحة العمل كما هو موضح أدناه أو تنزيل عناصر الإصدار المقابلة:
+- ثنائيات `koto build`، `ivm_run` و`iroha_cli`. يمكنك البناء من خلال الخروج من مساحة العمل كما هو موضح أدناه أو تنزيل عناصر الإصدار المقابلة:
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -47,22 +47,22 @@ docker compose -f defaults/docker-compose.single.yml up --build
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -74,15 +74,14 @@ KO
 قم بتجميع العقد مع الرمز الثانوي IVM/Norito (`.to`) وتنفيذه محليًا للتأكد من أن مكالمات المضيف تعمل قبل النقر على اللون الأحمر:
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-يقوم المشغل بطباعة السجل `info("Hello from Kotodama")` وتشغيل استدعاء النظام `SET_ACCOUNT_DETAIL` مقابل محاكاة المضيف. إذا كان الخيار الثنائي `ivm_tool` متاحًا، فسيقوم `ivm_tool inspect target/quickstart/hello.to` بتمكين ABI المغطى وأجزاء الميزات ونقاط الدخول المصدرة.
+يقوم المشغل بطباعة السجل `debug::info("Hello from Kotodama")` وتشغيل استدعاء النظام `SET_ACCOUNT_DETAIL` مقابل محاكاة المضيف. إذا كان الخيار الثنائي `ivm_tool` متاحًا، فسيقوم `ivm_tool inspect target/quickstart/hello.to` بتمكين ABI المغطى وأجزاء الميزات ونقاط الدخول المصدرة.
 
 ## 4. قم بإرسال الرمز الثانوي عبر Toriiمع العقدة للتصحيح، أرسل الرمز الثانوي المجمع إلى Torii باستخدام CLI. يتم استخلاص معرف التطوير المعيب من المفتاح الرئيسي المنشور في `defaults/client.toml`، لأنه يتم حساب معرف الحساب
 ```
@@ -127,3 +126,63 @@ iroha --config defaults/client.toml \
 - عندما نعود إلى عقودنا الخاصة، الولايات المتحدة الأمريكية `npm run sync-norito-snippets` en el
   مساحة العمل لإعادة إنشاء المقتطفات القابلة للتنزيل بطريقة تشبه مستندات البوابة والعناصر المصطنعة
   يتم الاحتفاظ بالمزامنة مع التيارات في `crates/ivm/docs/examples/`.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            context::authority(),
+            Name::parse("example"),
+            Json::parse("{\"hello\":\"world\"}")
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

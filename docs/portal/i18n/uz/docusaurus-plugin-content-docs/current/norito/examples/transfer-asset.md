@@ -33,19 +33,12 @@ SDK tezkor ishga tushirish va buxgalteriya hisobi bo'yicha ko'rsatmalarni aks et
 
 [Kotodama manbasini yuklab oling](/norito-snippets/transfer-asset.ko)
 
-```text
+```kotodama
 // Transfer example: uses typed pointer constructors and transfer_asset syscall
-
 seiyaku TransferDemo {
-  // Public entrypoint to transfer 10 units of the canonical Base58 asset definition between canonical I105 accounts
-  kotoage fn do_transfer() permission(AssetTransferRole) {
-    transfer_asset(
-      account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
-      account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
-      asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-      10,
-      dataspace_id("0")
-    );
-  }
+    // Public entrypoint to transfer 10 units of the canonical Base58 asset definition between canonical I105 accounts
+    kotoage fn do_transfer() authorize("AssetTransferRole") {
+        ledger::asset::transfer(AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), Amount::from_i64(10), DataSpaceId::parse("0"));
+    }
 }
 ```

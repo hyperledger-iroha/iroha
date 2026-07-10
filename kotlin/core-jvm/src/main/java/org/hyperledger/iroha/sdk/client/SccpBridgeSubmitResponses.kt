@@ -1,0 +1,161 @@
+package org.hyperledger.iroha.sdk.client
+
+import java.util.Base64
+import org.hyperledger.iroha.sdk.crypto.IrohaHash
+import org.hyperledger.iroha.sdk.sccp.SccpNetworkV1
+import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
+
+/** Closed SCCP payload kinds admitted by the first-release bridge flow. */
+enum class SccpPayloadKindV1(val wireKey: String) {
+    ASSET_REGISTER("asset_register"),
+    ROUTE_ACTIVATE("route_activate"),
+    TRANSFER("transfer"),
+    TOKEN_ADD("token_add"),
+    TOKEN_PAUSE("token_pause"),
+    TOKEN_RESUME("token_resume");
+
+    companion object {
+        fun fromWireKey(value: String): SccpPayloadKindV1? = values().firstOrNull { it.wireKey == value }
+    }
+}
+
+/** Unified strict detached-signing response returned by both SCCP submit endpoints. */
+data class SccpBridgeSubmitResponse(
+    val submitted: Boolean,
+    val payloadKind: SccpPayloadKindV1,
+    val messageIdHex: String,
+    val backend: String,
+    val counterpartyDomain: Int,
+    val counterpartyChain: String,
+    val manifestHashHex: String,
+    val rangeStartHeight: Long,
+    val rangeEndHeight: Long,
+    val creationTimeMs: Long,
+    val txHashHex: String?,
+    val transactionPayloadB64: String?,
+    val signingMessageB64: String?,
+)
+
+/** Exact decoder for the unified two-phase SCCP signing response. */
+object SccpBridgeSubmitResponseParser {
+    @JvmStatic fun parse(bytes: ByteArray): SccpBridgeSubmitResponse {
+        val value = root(bytes)
+        val unknown = value.keys.firstOrNull { it !in FIELDS }
+        require(unknown == null) { "bridge response contains unknown or retired field `$unknown`" }
+        val missing = FIELDS.firstOrNull { it !in value }
+        require(missing == null) { "bridge response is missing required field `$missing`" }
+        val submitted = boolean(value, "submitted")
+        val start = long(value, "range_start_height", 1)
+        val end = long(value, "range_end_height", start)
+        val creationTime = long(value, "creation_time_ms", 1)
+        val txHash = optionalHash(value, "tx_hash_hex")
+        val transactionPayload = optionalText(value, "transaction_payload_b64")
+        val signingMessage = optionalText(value, "signing_message_b64")
+        if (submitted) {
+            require(txHash != null && transactionPayload == null && signingMessage == null) {
+                "submitted SCCP response must contain tx_hash_hex and no signing scaffold"
+            }
+        } else {
+            require(txHash == null && transactionPayload != null && signingMessage != null) {
+                "unsigned SCCP response requires transaction_payload_b64 and signing_message_b64"
+            }
+            val transactionBytes = validateCanonicalTransactionPayload(transactionPayload, creationTime)
+            val signingBytes = decodeCanonicalBase64(signingMessage, "signing_message_b64", 32)
+            require(signingBytes.contentEquals(IrohaHash.prehash(transactionBytes))) {
+                "signing_message_b64 must be the exact transaction-payload prehash"
+            }
+        }
+        val kindText = text(value, "payload_kind")
+        val kind = SccpPayloadKindV1.fromWireKey(kindText)
+            ?: throw IllegalArgumentException("payload_kind is unknown or retired")
+        val backend = text(value, "backend")
+        require(backend.length <= 128 && Regex("bridge/[a-z0-9/_-]+").matches(backend)) {
+            "backend must be a canonical bridge backend label"
+        }
+        val counterpartyDomain = integer(value, "counterparty_domain", 1, 5)
+        val counterpartyChain = text(value, "counterparty_chain")
+        val counterparty = SccpNetworkV1.fromProfileKey(counterpartyChain)
+        require(counterparty?.isExternal == true && counterparty.domainId == counterpartyDomain) {
+            "counterparty_chain and counterparty_domain must identify one exact external network"
+        }
+        return SccpBridgeSubmitResponse(
+            submitted, kind, hash(value, "message_id_hex"), backend,
+            counterpartyDomain, counterpartyChain,
+            hash(value, "manifest_hash_hex"), start, end, creationTime,
+            txHash, transactionPayload, signingMessage,
+        )
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun root(bytes: ByteArray): Map<String, Any?> {
+        val text = String(bytes, Charsets.UTF_8)
+        require(text.toByteArray(Charsets.UTF_8).contentEquals(bytes)) { "bridge response must be UTF-8 JSON" }
+        val value = JsonParser.parse(text)
+        require(value is Map<*, *> && value.keys.all { it is String }) { "bridge response must be an object" }
+        return value as Map<String, Any?>
+    }
+    private fun text(value: Map<String, Any?>, field: String): String {
+        val result = value[field] as? String ?: throw IllegalArgumentException("$field must be a string")
+        require(result.isNotBlank() && result == result.trim()) { "$field must be canonical text" }
+        return result
+    }
+    private fun optionalText(value: Map<String, Any?>, field: String): String? = if (value[field] == null) null else text(value, field)
+    private fun boolean(value: Map<String, Any?>, field: String): Boolean = value[field] as? Boolean ?: throw IllegalArgumentException("$field must be boolean")
+    private fun long(value: Map<String, Any?>, field: String, minimum: Long): Long {
+        val number = value[field] as? Number ?: throw IllegalArgumentException("$field must be integer")
+        val result = number.toLong()
+        require(number.toString() == result.toString() && result >= minimum) { "$field is out of range" }
+        return result
+    }
+    private fun integer(value: Map<String, Any?>, field: String, minimum: Int, maximum: Int): Int {
+        val result = long(value, field, minimum.toLong())
+        require(result <= maximum) { "$field is out of range" }
+        return result.toInt()
+    }
+    private fun hash(value: Map<String, Any?>, field: String): String = text(value, field).also {
+        require(Regex("[0-9a-f]{64}").matches(it) && it.any { char -> char != '0' }) {
+            "$field must be canonical lowercase nonzero 32-byte hex"
+        }
+    }
+    private fun optionalHash(value: Map<String, Any?>, field: String): String? = if (value[field] == null) null else hash(value, field)
+    private fun decodeCanonicalBase64(value: String, field: String, exactBytes: Int? = null): ByteArray {
+        val decoded = try { Base64.getDecoder().decode(value) } catch (ex: IllegalArgumentException) {
+            throw IllegalArgumentException("$field must be canonical base64", ex)
+        }
+        require(decoded.isNotEmpty() && Base64.getEncoder().encodeToString(decoded) == value) {
+            "$field must be canonical nonempty padded base64"
+        }
+        if (exactBytes != null) require(decoded.size == exactBytes) { "$field must contain exactly $exactBytes bytes" }
+        return decoded
+    }
+
+    private fun validateCanonicalTransactionPayload(value: String, creationTimeMs: Long): ByteArray {
+        val bytes = decodeCanonicalBase64(value, "transaction_payload_b64")
+        require(bytes.size <= 16 * 1024 * 1024) { "transaction_payload_b64 exceeds its size bound" }
+        val payload = try {
+            TRANSACTION_CODEC.decodeTransaction(bytes)
+        } catch (ex: Exception) {
+            throw IllegalArgumentException(
+                "transaction_payload_b64 must contain one canonical transaction payload",
+                ex,
+            )
+        }
+        val canonical = try {
+            TRANSACTION_CODEC.encodeTransaction(payload)
+        } catch (ex: Exception) {
+            throw IllegalArgumentException("transaction_payload_b64 could not be canonically re-encoded", ex)
+        }
+        require(canonical.contentEquals(bytes)) { "transaction_payload_b64 is not canonical" }
+        require(payload.creationTimeMs == creationTimeMs) {
+            "transaction payload creation time does not match creation_time_ms"
+        }
+        return bytes
+    }
+
+    private val FIELDS = setOf(
+        "submitted", "payload_kind", "message_id_hex", "backend", "counterparty_domain",
+        "counterparty_chain", "manifest_hash_hex", "range_start_height", "range_end_height",
+        "creation_time_ms", "tx_hash_hex", "transaction_payload_b64", "signing_message_b64",
+    )
+    private val TRANSACTION_CODEC = NoritoJavaCodecAdapter()
+}

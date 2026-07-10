@@ -37,6 +37,27 @@ fn alloc_heap_tlv(vm: &mut IVM, bytes: &[u8]) -> u64 {
     addr
 }
 
+fn assert_numeric_binary_rejected(
+    host: &mut impl IVMHost,
+    syscall: u32,
+    lhs: Numeric,
+    rhs: Numeric,
+) {
+    let mut vm = IVM::new(u64::MAX);
+    let lhs_ptr = vm
+        .alloc_input_tlv(&make_numeric_tlv(lhs))
+        .expect("alloc lhs");
+    let rhs_ptr = vm
+        .alloc_input_tlv(&make_numeric_tlv(rhs))
+        .expect("alloc rhs");
+    vm.set_register(10, lhs_ptr);
+    vm.set_register(11, rhs_ptr);
+    let error = host
+        .syscall(syscall, &mut vm)
+        .expect_err("out-of-domain u128 arithmetic must fail");
+    assert!(matches!(error, VMError::AssertionFailed));
+}
+
 fn account(public_key: &str) -> AccountId {
     let public_key: PublicKey = public_key.parse().expect("public key");
     AccountId::new(public_key)
@@ -295,6 +316,47 @@ fn numeric_div_rem_zero_rejected() {
 }
 
 #[test]
+fn numeric_underflow_and_zero_divisors_fail_on_direct_host_paths() {
+    let one = Numeric::one();
+    let two = Numeric::new(2_u32, 0);
+    let zero = Numeric::zero();
+
+    let mut core_host = CoreHost::new();
+    for syscall in [
+        syscalls::SYSCALL_NUMERIC_SUB,
+        syscalls::SYSCALL_NUMERIC_SUB_DIRECT,
+    ] {
+        assert_numeric_binary_rejected(&mut core_host, syscall, one.clone(), two.clone());
+    }
+    for syscall in [
+        syscalls::SYSCALL_NUMERIC_DIV,
+        syscalls::SYSCALL_NUMERIC_DIV_DIRECT,
+        syscalls::SYSCALL_NUMERIC_REM,
+        syscalls::SYSCALL_NUMERIC_REM_DIRECT,
+    ] {
+        assert_numeric_binary_rejected(&mut core_host, syscall, one.clone(), zero.clone());
+    }
+
+    let caller = account("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03");
+    let mut wsv_host =
+        WsvHost::new_with_subject(MockWorldStateView::new(), caller, Default::default());
+    for syscall in [
+        syscalls::SYSCALL_NUMERIC_SUB,
+        syscalls::SYSCALL_NUMERIC_SUB_DIRECT,
+    ] {
+        assert_numeric_binary_rejected(&mut wsv_host, syscall, one.clone(), two.clone());
+    }
+    for syscall in [
+        syscalls::SYSCALL_NUMERIC_DIV,
+        syscalls::SYSCALL_NUMERIC_DIV_DIRECT,
+        syscalls::SYSCALL_NUMERIC_REM,
+        syscalls::SYSCALL_NUMERIC_REM_DIRECT,
+    ] {
+        assert_numeric_binary_rejected(&mut wsv_host, syscall, one.clone(), zero.clone());
+    }
+}
+
+#[test]
 fn numeric_div_rem_outputs_expected() {
     let mut vm = IVM::new(u64::MAX);
     let mut host = DefaultHost::new();
@@ -321,6 +383,111 @@ fn numeric_div_rem_outputs_expected() {
         .expect("numeric rem");
     let out = decode_numeric(&vm, vm.register(10));
     assert_eq!(out, Numeric::new(1_u32, 0));
+}
+
+#[test]
+fn numeric_u128_max_is_accepted_without_widening() {
+    let mut vm = IVM::new(u64::MAX);
+    let mut host = DefaultHost::new();
+    let max = Numeric::new(u128::MAX, 0);
+    let zero = Numeric::zero();
+    let max_ptr = vm
+        .alloc_input_tlv(&make_numeric_tlv(max.clone()))
+        .expect("alloc max");
+    let zero_ptr = vm
+        .alloc_input_tlv(&make_numeric_tlv(zero))
+        .expect("alloc zero");
+    vm.set_register(10, max_ptr);
+    vm.set_register(11, zero_ptr);
+    host.syscall(syscalls::SYSCALL_NUMERIC_ADD, &mut vm)
+        .expect("u128::MAX + 0");
+    assert_eq!(decode_numeric(&vm, vm.register(10)), max);
+}
+
+#[test]
+fn numeric_add_and_mul_reject_results_above_u128_max_on_every_host() {
+    let max = Numeric::new(u128::MAX, 0);
+    let one = Numeric::one();
+    let high_bit = Numeric::new(1_u128 << 127, 0);
+    let two = Numeric::new(2_u32, 0);
+
+    let mut default_host = DefaultHost::new();
+    assert_numeric_binary_rejected(
+        &mut default_host,
+        syscalls::SYSCALL_NUMERIC_ADD,
+        max.clone(),
+        one.clone(),
+    );
+    assert_numeric_binary_rejected(
+        &mut default_host,
+        syscalls::SYSCALL_NUMERIC_MUL,
+        high_bit.clone(),
+        two.clone(),
+    );
+
+    let mut core_host = CoreHost::new();
+    for syscall in [
+        syscalls::SYSCALL_NUMERIC_ADD,
+        syscalls::SYSCALL_NUMERIC_ADD_DIRECT,
+    ] {
+        assert_numeric_binary_rejected(&mut core_host, syscall, max.clone(), one.clone());
+    }
+    for syscall in [
+        syscalls::SYSCALL_NUMERIC_MUL,
+        syscalls::SYSCALL_NUMERIC_MUL_DIRECT,
+    ] {
+        assert_numeric_binary_rejected(&mut core_host, syscall, high_bit.clone(), two.clone());
+    }
+
+    let caller = account("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03");
+    let mut wsv_host =
+        WsvHost::new_with_subject(MockWorldStateView::new(), caller, Default::default());
+    for syscall in [
+        syscalls::SYSCALL_NUMERIC_ADD,
+        syscalls::SYSCALL_NUMERIC_ADD_DIRECT,
+    ] {
+        assert_numeric_binary_rejected(&mut wsv_host, syscall, max.clone(), one.clone());
+    }
+    for syscall in [
+        syscalls::SYSCALL_NUMERIC_MUL,
+        syscalls::SYSCALL_NUMERIC_MUL_DIRECT,
+    ] {
+        assert_numeric_binary_rejected(&mut wsv_host, syscall, high_bit.clone(), two.clone());
+    }
+}
+
+#[test]
+fn numeric_syscalls_reject_preexisting_values_above_u128_max() {
+    let above_max: Numeric = "340282366920938463463374607431768211456"
+        .parse()
+        .expect("512-bit Numeric can represent u128::MAX + 1");
+    let zero = Numeric::zero();
+
+    let mut default_host = DefaultHost::new();
+    assert_numeric_binary_rejected(
+        &mut default_host,
+        syscalls::SYSCALL_NUMERIC_EQ,
+        above_max.clone(),
+        zero.clone(),
+    );
+
+    let mut core_host = CoreHost::new();
+    assert_numeric_binary_rejected(
+        &mut core_host,
+        syscalls::SYSCALL_NUMERIC_EQ_DIRECT,
+        above_max.clone(),
+        zero.clone(),
+    );
+
+    let caller = account("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03");
+    let mut wsv_host =
+        WsvHost::new_with_subject(MockWorldStateView::new(), caller, Default::default());
+    assert_numeric_binary_rejected(
+        &mut wsv_host,
+        syscalls::SYSCALL_NUMERIC_EQ_DIRECT,
+        above_max,
+        zero,
+    );
 }
 
 #[test]

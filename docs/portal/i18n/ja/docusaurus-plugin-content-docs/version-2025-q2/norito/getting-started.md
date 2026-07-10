@@ -20,7 +20,7 @@ Iroha ノードに送信します。
 
 1. Rust ツールチェーン (1.76 以降) をインストールし、このリポジトリをチェックアウトします。
 2. サポートするバイナリをビルドまたはダウンロードします。
-   - `koto_compile` – IVM/Norito バイトコードを発行する Kotodama コンパイラ
+   - `koto build` – IVM/Norito バイトコードを発行する Kotodama コンパイラ
    - `ivm_run` および `ivm_tool` – ローカル実行および検査ユーティリティ
    - `iroha_cli` – Torii 経由のコントラクト展開に使用されます
 
@@ -29,7 +29,7 @@ Iroha ノードに送信します。
    ツールチェーンをローカルに配置し、Makefile ヘルパーにバイナリを指定します。
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. 導入ステップに到達したときに、Iroha ノードが実行されていることを確認します。の
@@ -43,17 +43,16 @@ Iroha ノードに送信します。
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
 主要なフラグ:
 
-- `--abi 1` は、コントラクトを ABI バージョン 1 (現在サポートされている唯一のバージョン) にロックします。
+- `ABI V1` は、コントラクトを ABI バージョン 1 (現在サポートされている唯一のバージョン) にロックします。
   執筆時）。
-- `--max-cycles 0` は無制限の実行を要求します。正の数値を境界に設定します
+- `--max-cycles 1000000` は無制限の実行を要求します。正の数値を境界に設定します
   ゼロ知識証明のためのサイクルパディング。
 
 ## 2. Norito アーティファクトを検査します (オプション)
@@ -87,7 +86,7 @@ ivm_run target/examples/hello.to --args '{}'
 Base64 ペイロード:
 
 ```sh
-iroha_cli app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -98,8 +97,8 @@ iroha_cli app contracts deploy \
 応答に示されるハッシュを使用して、マニフェストを取得したり、インスタンスをリストしたりできます。
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha contract manifest get --code-hash 0x<hash>
+iroha contract instances --namespace apps --table
 ```
 
 ## 5. Torii に対して実行します。
@@ -114,8 +113,8 @@ iroha_cli app contracts instances --namespace apps --table
 - `make examples-run` を使用して、提供された例を 1 つにコンパイルして実行します
   撃った。バイナリが存在しない場合は、`KOTO`/`IVM` 環境変数をオーバーライドします。
   `PATH`。
-- `koto_compile` が ABI バージョンを拒否した場合は、コンパイラとノードが
-  両方とも ABI v1 をターゲットとしています (リストへの引数を指定せずに `koto_compile --abi` を実行します)
+- `koto build` が ABI バージョンを拒否した場合は、コンパイラとノードが
+  両方とも ABI v1 をターゲットとしています (リストへの引数を指定せずに `koto build --help` を実行します)
   サポート）。
 - CLI は 16 進数または Base64 署名キーを受け入れます。テストには、次を使用できます
   `iroha_cli tools crypto keypair` によって発行されたキー。

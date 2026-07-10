@@ -11,12 +11,12 @@ fn struct_fields_lower_to_corehost_syscall_args() {
     let src = r#"
         seiyaku C {
             struct TransferArgs { domain: DomainId; to: AccountId; }
-            fn main() {
+            kotoage fn main() authorize("TransferDomain") {
                 let args = TransferArgs(
-                    domain("wonderland.universal"),
-                    account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
+                    DomainId::parse("wonderland.universal"),
+                    AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
                 );
-                transfer_domain(authority(), args.domain, args.to);
+                ledger::domain::transfer(context::authority(), args.domain, args.to);
             }
         }
     "#;

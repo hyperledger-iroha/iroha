@@ -5875,12 +5875,12 @@ mod tests {
         .compile_source(
             r#"
 seiyaku TriggerDispatch {
-  kotoage fn main() permission(Admin) {
-    set_account_detail(authority(), name("entrypoint"), json("1"));
+  kotoage fn main() authorize("Admin") {
+    ledger::account::set_detail(context::authority(), Name::parse("entrypoint"), Json::parse("1"));
   }
 
-  kotoage fn alternate() permission(Admin) {
-    set_account_detail(authority(), name("entrypoint"), json("2"));
+  kotoage fn alternate() authorize("Admin") {
+    ledger::account::set_detail(context::authority(), Name::parse("entrypoint"), Json::parse("2"));
   }
 }
 "#,
@@ -6085,33 +6085,32 @@ seiyaku TriggerDispatch {
         let src = format!(
             r#"
             seiyaku StagedMintRequest {{
-              register_trigger staged_mint_like {{
-                call run;
+              trigger staged_mint_like -> run {{
                 on execute trigger "staged_mint_like";
                 authority "{multisig_id}";
               }}
 
-              state Requests_requested_by_actor: Map<Name, Blob>;
-              state ToAccount: Map<Name, AccountId>;
-              state Amount: Map<Name, int>;
-              state ProposalStatus: Map<Name, int>;
-              state CreatedAtMs: Map<Name, int>;
-              state ExpiresAtMs: Map<Name, int>;
+              state Requests_requested_by_actor: StateMap<Name, bytes>;
+              state ToAccount: StateMap<Name, AccountId>;
+              state Amount: StateMap<Name, i64>;
+              state ProposalStatus: StateMap<Name, i64>;
+              state CreatedAtMs: StateMap<Name, i64>;
+              state ExpiresAtMs: StateMap<Name, i64>;
 
               fn run_impl(ev: Json) {{
-                let request_id = ev.get_name(name("request_id"));
+                let request_id = ev.get_name(Name::parse("request_id"));
                 assert(!ProposalStatus.contains(request_id), "mint request already exists");
-                let action = ev.get_name(name("action"));
-                assert(action == name("create"), "unsupported staged mint action");
-                let asset_id = ev.get_asset_definition_id(name("asset_id"));
-                let expected_asset = asset_definition!("66owaQmAQMuHxPzxUN3bqZ6FJfDa");
+                let action = ev.get_name(Name::parse("action"));
+                assert(action == Name::parse("create"), "unsupported staged mint action");
+                let asset_id = ev.get_asset_definition_id(Name::parse("asset_id"));
+                let expected_asset = AssetDefinitionId::parse("66owaQmAQMuHxPzxUN3bqZ6FJfDa");
                 assert(asset_id == expected_asset, "unsupported asset definition");
-                let to_account_id = ev.get_account_id(name("to_account_id"));
-                assert(to_account_id == authority(), "mint destination account mismatch");
-                let amount_i64 = ev.get_int(name("amount_i64"));
-                let requested_by_actor = ev.get_blob_hex(name("requested_by_actor_hex"));
-                let created_at_ms = ev.get_int(name("created_at_ms"));
-                let expires_at_ms = ev.get_int(name("expires_at_ms"));
+                let to_account_id = ev.get_account_id(Name::parse("to_account_id"));
+                assert(to_account_id == context::authority(), "mint destination account mismatch");
+                let amount_i64 = ev.get_int(Name::parse("amount_i64"));
+                let requested_by_actor = ev.get_blob_hex(Name::parse("requested_by_actor_hex"));
+                let created_at_ms = ev.get_int(Name::parse("created_at_ms"));
+                let expires_at_ms = ev.get_int(Name::parse("expires_at_ms"));
                 assert(amount_i64 > 0, "invalid amount");
 
                 Requests_requested_by_actor[request_id] = requested_by_actor;
@@ -6122,7 +6121,7 @@ seiyaku TriggerDispatch {
                 ExpiresAtMs[request_id] = expires_at_ms;
               }}
 
-              kotoage fn run(ev: Json) permission(staged_mint_request_run) {{
+              kotoage fn run(ev: Json) authorize("staged_mint_request_run") {{
                 run_impl(ev);
               }}
             }}

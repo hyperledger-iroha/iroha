@@ -16,7 +16,8 @@ const staticDir = path.resolve(portalRoot, 'static', 'norito-snippets');
 const manifestPath = path.resolve(portalRoot, '.docusaurus', 'norito-snippets-manifest.json');
 const marker = SNIPPET_MARKER;
 const MANIFEST_VERSION = 2;
-const TEMPLATE_REVISION = 3;
+const TEMPLATE_REVISION = 5;
+const RETIRED_SNIPPET_SLUGS = new Set(['init-entrypoint']);
 
 function formatDoc(snippet, code) {
   const {slug, title, description, source, ledgerWalkthrough, sdkGuides} = snippet;
@@ -27,7 +28,7 @@ function formatDoc(snippet, code) {
     formatSdkGuideSection(sdkGuides)
   ].filter(Boolean);
   const sectionsBlock = sections.length > 0 ? `\n\n${sections.join('\n\n')}\n` : '\n\n';
-  return `${marker}\n\n---\nslug: /norito/examples/${slug}\ntitle: ${title}\ndescription: ${description}\nsource: ${relSource}\n---\n\n${description}${sectionsBlock}\n[Download the Kotodama source](${downloadPath})\n\n\`\`\`text\n${code.trim()}\n\`\`\`\n`;
+  return `${marker}\n\n---\nslug: /norito/examples/${slug}\ntitle: ${title}\ndescription: ${description}\nsource: ${relSource}\n---\n\n${description}${sectionsBlock}\n[Download the Kotodama source](${downloadPath})\n\n\`\`\`kotodama\n${code.trim()}\n\`\`\`\n`;
 }
 
 function formatIndex(snippets) {
@@ -67,8 +68,14 @@ function formatSdkGuideSection(guides) {
 async function main() {
   await mkdir(outputDocsDir, {recursive: true});
   await mkdir(staticDir, {recursive: true});
+  await removeRetiredSnippetDocs(path.resolve(portalRoot, 'docs'));
+  await removeRetiredSnippetDocs(path.resolve(portalRoot, 'i18n'));
+  await removeRetiredSnippetArtifacts(staticDir);
 
   const descriptors = await buildSnippetDescriptors(SNIPPETS);
+  const quickstartCode = await readCanonicalKotodamaFence(
+    path.resolve(portalRoot, 'docs', 'norito', 'quickstart.md')
+  );
   const manifestEntries = createManifestEntries(descriptors);
   const previousManifest = await readManifest(manifestPath);
   const outputsReady = await outputsExist(SNIPPETS);
@@ -77,7 +84,17 @@ async function main() {
     manifestNeedsUpdate(previousManifest, manifestEntries) || !outputsReady;
 
   if (!needsGeneration) {
-    console.log('[sync-norito-snippets] inputs unchanged; skipping generation');
+    let translatedUpdates = 0;
+    for (const {snippet, absoluteSource} of descriptors) {
+      const code = await readFile(absoluteSource, 'utf8');
+      translatedUpdates += await synchronizeTranslatedSnippetCode(snippet.slug, code);
+    }
+    translatedUpdates += await synchronizeTranslatedQuickstart(quickstartCode);
+    console.log(
+      translatedUpdates === 0
+        ? '[sync-norito-snippets] inputs unchanged; skipping generation'
+        : `[sync-norito-snippets] refreshed ${translatedUpdates} translated snippet docs`
+    );
     return;
   }
 
@@ -99,11 +116,13 @@ async function main() {
     if (await writeIfChanged(staticPath, code)) {
       updatedStatic += 1;
     }
+    updatedDocs += await synchronizeTranslatedSnippetCode(snippet.slug, code);
 
     staleDocs.delete(docPath);
     staleStatic.delete(staticPath);
     generated.push(snippet);
   }
+  updatedDocs += await synchronizeTranslatedQuickstart(quickstartCode);
 
   const indexPath = path.join(outputDocsDir, 'index.md');
   if (await writeIfChanged(indexPath, formatIndex(generated))) {
@@ -118,6 +137,159 @@ async function main() {
   console.log(
     `[sync-norito-snippets] processed ${generated.length} snippets (${updatedDocs} docs updated, ${updatedStatic} snippets updated)`
   );
+}
+
+async function readCanonicalKotodamaFence(filePath) {
+  const source = await readFile(filePath, 'utf8');
+  const match = source.match(/```kotodama\n([\s\S]*?)\n```/);
+  if (!match) {
+    throw new Error(`canonical page ${filePath} has no Kotodama fence`);
+  }
+  return match[1];
+}
+
+async function removeRetiredSnippetDocs(root) {
+  let entries;
+  try {
+    entries = await readdir(root, {withFileTypes: true});
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return;
+    throw error;
+  }
+  for (const entry of entries) {
+    const entryPath = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      await removeRetiredSnippetDocs(entryPath);
+      continue;
+    }
+    if (
+      entry.isFile() &&
+      [...RETIRED_SNIPPET_SLUGS].some(
+        (slug) => entry.name === `${slug}.md` || entry.name.startsWith(`${slug}.`)
+      )
+    ) {
+      await rm(entryPath);
+    }
+  }
+}
+
+async function removeRetiredSnippetArtifacts(root) {
+  let entries;
+  try {
+    entries = await readdir(root, {withFileTypes: true});
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (
+      [...RETIRED_SNIPPET_SLUGS].some(
+        (slug) => entry.name === `${slug}.ko` || entry.name === `${slug}.to`
+      )
+    ) {
+      await rm(path.join(root, entry.name));
+    }
+  }
+}
+
+async function synchronizeTranslatedSnippetCode(slug, code) {
+  return (
+    await synchronizeSnippetCodeUnder(outputDocsDir, slug, code, true)
+  ) + (
+    await synchronizeSnippetCodeUnder(path.resolve(portalRoot, 'i18n'), slug, code, false)
+  );
+}
+
+async function synchronizeTranslatedQuickstart(code) {
+  return (
+    await synchronizeSnippetCodeUnder(
+      path.resolve(portalRoot, 'docs', 'norito'),
+      'quickstart',
+      code,
+      true,
+      'Hello'
+    )
+  ) + (
+    await synchronizeSnippetCodeUnder(
+      path.resolve(portalRoot, 'i18n'),
+      'quickstart',
+      code,
+      false,
+      'Hello'
+    )
+  );
+}
+
+async function synchronizeSnippetCodeUnder(
+  root,
+  slug,
+  code,
+  skipCanonical,
+  contractName = null
+) {
+  let entries;
+  try {
+    entries = await readdir(root, {withFileTypes: true});
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return 0;
+    throw error;
+  }
+  let updated = 0;
+  for (const entry of entries) {
+    const filePath = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      updated += await synchronizeSnippetCodeUnder(
+        filePath,
+        slug,
+        code,
+        false,
+        contractName
+      );
+      continue;
+    }
+    if (
+      !entry.isFile() ||
+      (skipCanonical && entry.name === `${slug}.md`) ||
+      (entry.name !== `${slug}.md` && !entry.name.startsWith(`${slug}.`)) ||
+      !entry.name.startsWith(`${slug}.`) ||
+      !entry.name.endsWith('.md')
+    ) {
+      continue;
+    }
+    const current = await readFile(filePath, 'utf8');
+    const replacement = `\`\`\`kotodama\n${code.trim()}\n\`\`\``;
+    let next;
+    if (contractName) {
+      let replaced = false;
+      next = current.replace(
+        /```(text|kotodama|sh|bash)\n([\s\S]*?)\n```/g,
+        (fence, language, body) => {
+          if (new RegExp(`(?:誓約|contract)\\s+${contractName}\\b`).test(body)) {
+            if (!replaced) {
+              replaced = true;
+              if (language === 'sh' || language === 'bash') {
+                return `\`\`\`${language}\nmkdir -p target/quickstart\ncat > target/quickstart/hello.ko <<'KO'\n${code.trim()}\nKO\n\`\`\``;
+              }
+              return replacement;
+            }
+            return '';
+          }
+          return fence;
+        }
+      );
+      if (!replaced) next = `${current.trimEnd()}\n\n${replacement}\n`;
+    } else {
+      const terminalFence = /```(?:text|kotodama)\n[\s\S]*?\n```(?=\s*$)/;
+      next = terminalFence.test(current)
+        ? current.replace(terminalFence, replacement)
+        : `${current.trimEnd()}\n\n${replacement}\n`;
+    }
+    if (await writeIfChanged(filePath, `${next.trimEnd()}\n`)) {
+      updated += 1;
+    }
+  }
+  return updated;
 }
 
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : null;

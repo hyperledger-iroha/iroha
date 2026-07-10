@@ -1206,7 +1206,7 @@ mod tests {
                     .parse()
                     .expect("contract address"),
                 entrypoint: "send_transfer".to_owned(),
-                payload: None,
+                arguments: None,
             }))
             .with_metadata(metadata)
             .sign(key_pair.private_key())

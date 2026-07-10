@@ -131,8 +131,7 @@ fn protected_namespace_requires_enacted_proposal() {
         out.extend_from_slice(&code);
         out
     };
-    let parsed = ivm::ProgramMetadata::parse(&prog).unwrap();
-    let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
+    let code_hash = ivm::contract_code_hash(&prog);
     let abi_hash =
         iroha_crypto::Hash::prehashed(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1));
 
@@ -188,6 +187,7 @@ fn protected_namespace_requires_enacted_proposal() {
     );
     let manifest_signer = checked_random_protected_gate_keypair();
     let manifest_provenance = ContractManifest {
+        contract_name: None,
         code_hash: Some(iroha_crypto::Hash::prehashed(code_arr)),
         abi_hash: Some(iroha_crypto::Hash::prehashed(abi_arr)),
         compiler_fingerprint: None,
@@ -196,6 +196,7 @@ fn protected_namespace_requires_enacted_proposal() {
         entrypoints: None,
         states: None,
         kotoba: None,
+        error_codes: None,
         provenance: None,
     }
     .signed(&manifest_signer)

@@ -264,7 +264,7 @@ gas = "G_state_del"
 
 [[syscall]]
 number = "0x010030"
-args = "r10=&Name(prefix), r11=offset:u64, r12=limit:u64"
+args = "r10=&Name(prefix), r11=offset:u64, r12=limit:u64 (0..=64)"
 ret = "r10=ptr (&NoritoBytes(Vec<Name>)), r11=total:u64, r12=count:u64"
 gas = "G_state_keys + count + bytes"
 
@@ -285,6 +285,24 @@ number = "0x010033"
 args = "r10=&Name(prefix)"
 ret = "r10=total:u64"
 gas = "G_state_count + count"
+
+[[syscall]]
+number = "0x010034"
+args = "r10=&NoritoBytes(Vec<Name>), r11=&Name(base), r12=index:u64"
+ret = "r10=ptr (&NoritoBytes(canonical key)) or 0"
+gas = "G_path + bytes"
+
+[[syscall]]
+number = "0x010035"
+args = "r10=&NoritoBytes(StateValueSchemaV1), r11=&[u64], r12=word_count:u64"
+ret = "r10=ptr (&NoritoBytes(StateValueRecordV1))"
+gas = "G_state_value + schema + words + pointers + output"
+
+[[syscall]]
+number = "0x010036"
+args = "r10=&NoritoBytes(StateValueSchemaV1), r11=&NoritoBytes(StateValueRecordV1)"
+ret = "r10=ptr (&Blob(pad:u8 then [u64; word_count]))"
+gas = "G_state_value + schema + record + pointers + output"
 
 [[syscall]]
 number = "0x53"
@@ -590,7 +608,7 @@ gas = "G_hash + bytes"
 
 [[syscall]]
 number = "0xA0"
-args = "r10=&NoritoBytes(InstructionBox)"
+args = "r10=&NoritoBytes(InstructionBox), r11=operation_tag(1=SubmitBallot,2=Unshield,3=RecordSccpMessage)"
 ret = "u64=0"
 gas = "G_sci"
 
@@ -646,7 +664,7 @@ gas = "G_sysvar"
 number = "0xA9"
 args = "r10=&Blob(contract_address), r11=&Blob(entrypoint), r12=&Json(payload)"
 ret = "r10=ptr (&NoritoBytes(return)) or 0"
-gas = "G_call_contract + request bytes + return bytes"
+gas = "G_call_contract + request bytes + return bytes + child gas"
 
 [[syscall]]
 number = "0xAA"
@@ -989,6 +1007,12 @@ number = "0x010025"
 args = "-"
 ret = "r10=ptr (&Blob(entrypoint)) or 0"
 gas = "G_sysvar + bytes"
+
+[[syscall]]
+number = "0x010026"
+args = "r10=&NoritoBytes(EntrypointArgumentRecordV1), r11=&NoritoBytes(EntrypointArgumentSchemaV1)"
+ret = "r10=ptr (&Blob(pad:u8 then [u64; word_count]))"
+gas = "G_argument_decode + record + schema + output"
 
 [[syscall]]
 number = "0x00"

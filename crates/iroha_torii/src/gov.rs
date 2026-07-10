@@ -3475,6 +3475,7 @@ mod tests {
         abi_hash: [u8; 32],
     ) -> ManifestProvenance {
         let manifest = ContractManifest {
+            contract_name: None,
             code_hash: Some(iroha_crypto::Hash::prehashed(code_hash)),
             abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash)),
             compiler_fingerprint: None,
@@ -3483,6 +3484,7 @@ mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_codes: None,
             provenance: None,
         }
         .signed(keypair);

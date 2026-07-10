@@ -18,7 +18,7 @@ Iroha კვანძზე.
 
 1. დააინსტალირეთ Rust toolchain (1.76 ან უფრო ახალი) და შეამოწმეთ ეს საცავი.
 2. შექმენით ან ჩამოტვირთეთ დამხმარე ორობითი ფაილები:
-   - `koto_compile` – Kotodama შემდგენელი, რომელიც გამოსცემს IVM/Norito ბაიტიკოდს
+   - `koto build` – Kotodama შემდგენელი, რომელიც გამოსცემს IVM/Norito ბაიტიკოდს
    - `ivm_run` და `ivm_tool` - ადგილობრივი აღსრულებისა და ინსპექტირების კომუნალური საშუალებები
    - `iroha_cli` - გამოიყენება კონტრაქტის განსათავსებლად Torii-ის საშუალებით
 
@@ -27,7 +27,7 @@ Iroha კვანძზე.
    Toolchain ადგილობრივად, მიუთითეთ Makefile დამხმარეები ბინარებზე:
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. დარწმუნდით, რომ Iroha კვანძი მუშაობს, როდესაც მიაღწევთ განლაგების საფეხურს. The
@@ -41,17 +41,16 @@ Iroha კვანძზე.
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
 ძირითადი დროშები:
 
-- `--abi 1` ბლოკავს კონტრაქტს ABI 1 ვერსიაზე (ერთადერთი მხარდაჭერილი ვერსია:
+- `ABI V1` ბლოკავს კონტრაქტს ABI 1 ვერსიაზე (ერთადერთი მხარდაჭერილი ვერსია:
   წერის დრო).
-- `--max-cycles 0` ითხოვს შეუზღუდავ შესრულებას; დააყენეთ დადებითი რიცხვი შეკრული
+- `--max-cycles 1000000` ითხოვს შეუზღუდავ შესრულებას; დააყენეთ დადებითი რიცხვი შეკრული
   ციკლის ბალიშები ნულოვანი ცოდნის მტკიცებულებისთვის.
 
 ## 2. შეამოწმეთ Norito არტეფაქტი (არასავალდებულო)
@@ -85,7 +84,7 @@ ivm_run target/examples/hello.to --args '{}'
 Base64 დატვირთვა:
 
 ```sh
-iroha_cli app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -96,8 +95,8 @@ iroha_cli app contracts deploy \
 პასუხში ნაჩვენები ჰეში შეიძლება გამოყენებულ იქნას მანიფესტების ან ინსტანციების სიაში მოსაძებნად:
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha contract manifest get --code-hash 0x<hash>
+iroha contract instances --namespace apps --table
 ```
 
 ## 5. გაუშვით Torii-ის წინააღმდეგ
@@ -112,8 +111,8 @@ syscalls (`set_account_detail`, `transfer_asset` და ა.შ.).
 - გამოიყენეთ `make examples-run` მოწოდებული მაგალითების შედგენისა და ერთში შესასრულებლად
   დახვრიტეს. `KOTO`/`IVM` გარემოს ცვლადების უგულებელყოფა, თუ ბინარები ჩართული არ არის
   `PATH`.
-- თუ `koto_compile` უარყოფს ABI ვერსიას, შეამოწმეთ, რომ შემდგენელი და კვანძი
-  ორივე სამიზნე ABI v1 (გაუშვით `koto_compile --abi` სიაში არგუმენტების გარეშე
+- თუ `koto build` უარყოფს ABI ვერსიას, შეამოწმეთ, რომ შემდგენელი და კვანძი
+  ორივე სამიზნე ABI v1 (გაუშვით `koto build --help` სიაში არგუმენტების გარეშე
   მხარდაჭერა).
 - CLI იღებს ექვსკუთხა ან Base64 ხელმოწერის გასაღებებს. ტესტირებისთვის შეგიძლიათ გამოიყენოთ
   `iroha_cli tools crypto keypair`-ის მიერ გამოშვებული გასაღებები.

@@ -38,6 +38,7 @@ pub enum VmTrapKind {
     InvalidOpcode,
     UnknownSyscall,
     NotImplemented,
+    SyscallGasQuoteExceeded,
     AssertionFailed,
     ExceededMaxCycles,
     InvalidMetadata,
@@ -131,6 +132,13 @@ pub enum VMError {
     /// Syscall number is reserved/known but not implemented by the current host build.
     NotImplemented {
         syscall: u32,
+    },
+    /// A host returned an actual gas cost above its side-effect-free preparation quote.
+    SyscallGasQuoteExceeded {
+        /// Upper bound supplied before the VM entered the host.
+        quoted: u64,
+        /// Cost reported after the host returned.
+        actual: u64,
     },
     AssertionFailed,
     ExceededMaxCycles,
@@ -256,6 +264,10 @@ impl fmt::Display for VMError {
             VMError::NotImplemented { syscall } => {
                 write!(f, "syscall 0x{syscall:02x} not implemented by host")
             }
+            VMError::SyscallGasQuoteExceeded { quoted, actual } => write!(
+                f,
+                "syscall gas quote exceeded (quoted={quoted}, actual={actual})"
+            ),
             VMError::AssertionFailed => write!(f, "assertion failed (constraint violation)"),
             VMError::ExceededMaxCycles => write!(f, "execution exceeded max cycles"),
             VMError::InvalidMetadata => write!(f, "invalid program metadata"),

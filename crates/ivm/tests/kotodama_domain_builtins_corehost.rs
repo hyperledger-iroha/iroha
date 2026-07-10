@@ -11,7 +11,11 @@ use ivm::{
 fn kotodama_unregister_domain() {
     // Program unregisters a domain using a constructor
     let src = r#"
-        fn main() { unregister_domain(domain("wonderland.universal")); }
+        seiyaku UnregisterDomain {
+            kotoage fn main() authorize("UnregisterDomain") {
+                ledger::domain::unregister(DomainId::parse("wonderland.universal"));
+            }
+        }
     "#;
     unsafe { std::env::set_var("IVM_COMPILER_DEBUG", "1") };
     let compiler = KotodamaCompiler::new();
@@ -41,10 +45,12 @@ fn kotodama_unregister_domain() {
 
 #[test]
 fn kotodama_transfer_domain() {
-    // Program transfers a domain from `authority()` to bob
+    // Program transfers a domain from the execution authority to bob.
     let src = r#"
-        fn main() {
-          transfer_domain(authority(), domain("wonderland.universal"), account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
+        seiyaku TransferDomain {
+        kotoage fn main() authorize("TransferDomain") {
+          ledger::domain::transfer(context::authority(), DomainId::parse("wonderland.universal"), AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
+        }
         }
     "#;
     unsafe { std::env::set_var("IVM_COMPILER_DEBUG", "1") };

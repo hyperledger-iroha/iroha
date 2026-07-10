@@ -6,12 +6,14 @@ use ivm::kotodama::{parser::parse, semantic};
 #[test]
 fn pointer_cannot_participate_in_arithmetic() {
     let src = r#"
+        module InvalidPointerArithmetic {
         fn main() {
-            let k = name("cursor");
-            let a = k + 1; // invalid: Name is not int
+            let k = Name::parse("cursor");
+            let a = k + 1; // invalid: Name is not i64
+        }
         }
     "#;
     let ast = parse(src).expect("parse");
     let err = semantic::analyze(&ast).expect_err("analyze should reject pointer arithmetic");
-    assert!(err.message.contains("expects int"));
+    assert!(err.message.contains("expects i64"));
 }

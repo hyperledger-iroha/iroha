@@ -7,10 +7,12 @@
 pub mod axt;
 pub mod dev_env;
 pub mod encoding;
+pub mod entrypoint;
 pub mod error;
 pub mod instruction;
 pub mod metadata;
 pub mod pointer_abi;
+pub mod state_value;
 pub mod syscalls;
 
 pub use error::{Perm, VMError};

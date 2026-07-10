@@ -12,8 +12,9 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (May 2
 - Contract `.to` artifacts are self-describing: the required `CNTR` section
   embeds the contract interface ahead of the executable stream, and Torii
   derives the on-chain `ContractManifest` from that section after verification.
-- Nodes recompute `code_hash` and the canonical ABI hash locally; mismatches
-  reject deterministically.
+- Nodes recompute `code_hash` over the complete deployable `.to` bytes,
+  including the execution header, `CNTR`, literals, and code, and recompute the
+  canonical ABI hash locally; mismatches reject deterministically.
 - Stored artifacts live under the on-chain `contract_manifests` and
   `contract_code` registries. Manifests reference hashes only and remain small;
   code bytes are keyed by `code_hash`.
@@ -110,18 +111,18 @@ returns HTTP 429; any handler error increments
 
 ## CLI helpers
 
-- `iroha_cli app contracts deploy --authority <id> --private-key <hex> --code-file <path> --contract-alias <name::dataspace>`
+- `iroha contract deploy --authority <id> --private-key <hex> --code-file <path> --contract-alias <name::dataspace>`
   submits the alias-first Torii deploy request (computing hashes on the fly).
-- `iroha_cli app contracts manifest build --code-file <path> [--sign-with <hex>]` computes
+- `iroha contract manifest build --code-file <path> [--sign-with <hex>]` computes
   `code_hash`/`abi_hash` for compiled `.to`, derives the manifest from the
   embedded `CNTR`, and optionally signs it for inspection, printing JSON or
   writing to `--out`.
-- `iroha_cli app contracts simulate --authority <id> --private-key <hex> --code-file <path> --gas-limit <u64>`
+- `iroha contract simulate --authority <id> --private-key <hex> --code-file <path> --gas-limit <u64>`
   runs an offline VM pass and reports ABI/hash metadata plus the queued ISIs
   (counts and instruction ids) without touching the network.
-- `iroha_cli app contracts manifest get --code-hash <hex>` fetches the manifest via Torii
+- `iroha contract manifest get --code-hash <hex>` fetches the manifest via Torii
   and optionally writes it to disk.
-- `iroha_cli app contracts code get --code-hash <hex> --out <path>` downloads
+- `iroha contract code get --code-hash <hex> --out <path>` downloads
   the stored `.to` image.
 - Governance helpers (`iroha_cli app gov deploy propose`, `iroha_cli app gov enact`,
   `iroha_cli app gov protected set/get`) orchestrate the protected-namespace workflow and

@@ -39,7 +39,7 @@ translator: manual
 - שימוש בדימוי בנייה של Docker: ‏`docker_build.md`
 
 טיפים לשימוש
-- בנו והריצו דוגמאות תחת `examples/` בעזרת כלים חיצוניים (`koto_compile`, ‏`ivm_run`):
+- בנו והריצו דוגמאות תחת `examples/` בעזרת כלים חיצוניים (`koto build`, ‏`ivm_run`):
   - `make examples-run` (ו־`make examples-inspect` אם `ivm_tool` זמין)
 - בדיקות אינטגרציה אופציונליות (מושבתות כברירת מחדל) לדוגמאות ולבדיקות כותרת נמצאות ב־`integration_tests/tests/`.
 

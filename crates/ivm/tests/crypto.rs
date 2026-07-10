@@ -49,56 +49,48 @@ impl Drop for AccelConfigGuard {
 
 fn run_poseidon2_program(a: u64, b: u64) -> u64 {
     let mut vm = IVM::new(u64::MAX);
-    let base = Memory::HEAP_START;
-    vm.set_register(1, base);
-    let instr = encoding::wide::encode_load(instruction::wide::crypto::POSEIDON2, 2, 1, 0);
+    let instr = encoding::wide::encode_poseidon2(9, 10, 11);
     let prog = assemble(&words(&[instr, HALT_WORD]));
     vm.load_program(&prog).unwrap();
-    vm.store_u64(base, a).unwrap();
-    vm.store_u64(base + 8, b).unwrap();
+    vm.set_register(10, a);
+    vm.set_register(11, b);
     vm.run().unwrap();
-    vm.register(2)
+    vm.register(9)
 }
 
 fn run_poseidon6_program(vals: [u64; 6]) -> u64 {
     let mut vm = IVM::new(u64::MAX);
-    let base = Memory::HEAP_START;
-    vm.set_register(1, base);
-    let instr = encoding::wide::encode_load(instruction::wide::crypto::POSEIDON6, 2, 1, 0);
+    let instr = encoding::wide::encode_poseidon6(9, 10);
     let prog = assemble(&words(&[instr, HALT_WORD]));
     vm.load_program(&prog).unwrap();
     for (idx, val) in vals.iter().enumerate() {
-        vm.store_u64(base + 8 * idx as u64, *val).unwrap();
+        vm.set_register(10 + idx, *val);
     }
     vm.run().unwrap();
-    vm.register(2)
+    vm.register(9)
 }
 
 #[test]
 fn test_poseidon2() {
     let mut vm = IVM::new(u64::MAX);
-    let base = Memory::HEAP_START;
-    vm.set_register(1, base);
-    let instr = encoding::wide::encode_load(instruction::wide::crypto::POSEIDON2, 2, 1, 0);
+    let instr = encoding::wide::encode_poseidon2(9, 10, 11);
     let prog = assemble(&words(&[instr, HALT_WORD]));
     vm.load_program(&prog).unwrap();
-    vm.store_u64(base, 5).unwrap();
-    vm.store_u64(base + 8, 7).unwrap();
+    vm.set_register(10, 5);
+    vm.set_register(11, 7);
     vm.run().unwrap();
     let expected = poseidon2(5, 7);
-    assert_eq!(vm.register(2), expected);
+    assert_eq!(vm.register(9), expected);
 }
 
 #[test]
 fn test_poseidon6() {
     let mut vm = IVM::new(u64::MAX);
-    let base = Memory::HEAP_START;
-    vm.set_register(1, base);
-    let instr = encoding::wide::encode_load(instruction::wide::crypto::POSEIDON6, 2, 1, 0);
+    let instr = encoding::wide::encode_poseidon6(9, 10);
     let prog = assemble(&words(&[instr, HALT_WORD]));
     vm.load_program(&prog).unwrap();
     for i in 0..6u64 {
-        vm.store_u64(base + 8 * i, i + 1).unwrap();
+        vm.set_register(10 + i as usize, i + 1);
     }
     vm.run().unwrap();
     let mut vals = [0u64; 6];
@@ -106,7 +98,67 @@ fn test_poseidon6() {
         vals[i as usize] = i + 1;
     }
     let expected = poseidon6(vals);
-    assert_eq!(vm.register(2), expected);
+    assert_eq!(vm.register(9), expected);
+}
+
+#[test]
+fn poseidon_hashes_private_tuples_to_public_commitments() {
+    let poseidon2_word = encoding::wide::encode_poseidon2(9, 10, 11);
+    let program = common::assemble_zk(&words(&[poseidon2_word, HALT_WORD]), 2);
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_program(&program).unwrap();
+    vm.set_register(10, 0x0123_4567_89ab_cdef);
+    vm.set_register(11, 0xfedc_ba98_7654_3210);
+    vm.registers.set_tag(10, true);
+    vm.registers.set_tag(11, true);
+    vm.run().unwrap();
+    assert_eq!(
+        vm.register(9),
+        poseidon2(0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210)
+    );
+    assert!(!vm.registers.tag(9));
+
+    let inputs = [3, 5, 8, 13, 21, 34];
+    let poseidon6_word = encoding::wide::encode_poseidon6(9, 10);
+    let program = common::assemble_zk(&words(&[poseidon6_word, HALT_WORD]), 2);
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_program(&program).unwrap();
+    for (offset, value) in inputs.into_iter().enumerate() {
+        vm.set_register(10 + offset, value);
+        vm.registers.set_tag(10 + offset, true);
+    }
+    vm.run().unwrap();
+    assert_eq!(vm.register(9), poseidon6(inputs));
+    assert!(!vm.registers.tag(9));
+}
+
+#[test]
+fn poseidon_rejects_mixed_public_and_private_inputs() {
+    let poseidon2_word = encoding::wide::encode_poseidon2(9, 10, 11);
+    let program = common::assemble_zk(&words(&[poseidon2_word, HALT_WORD]), 2);
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_program(&program).unwrap();
+    vm.registers.set_tag(10, true);
+    assert!(matches!(vm.run(), Err(ivm::VMError::PrivacyViolation)));
+
+    let poseidon6_word = encoding::wide::encode_poseidon6(9, 10);
+    let program = common::assemble_zk(&words(&[poseidon6_word, HALT_WORD]), 2);
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_program(&program).unwrap();
+    for register in 10..16 {
+        vm.registers.set_tag(register, true);
+    }
+    vm.registers.set_tag(13, false);
+    assert!(matches!(vm.run(), Err(ivm::VMError::PrivacyViolation)));
+}
+
+#[test]
+fn poseidon6_rejects_noncanonical_operand_slot() {
+    let malformed = encoding::wide::encode_rr(instruction::wide::crypto::POSEIDON6, 9, 10, 1);
+    let program = assemble(&words(&[malformed, HALT_WORD]));
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_program(&program).unwrap();
+    assert!(matches!(vm.run(), Err(ivm::VMError::DecodeError)));
 }
 
 #[test]

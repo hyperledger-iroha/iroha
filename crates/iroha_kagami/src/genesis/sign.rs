@@ -684,7 +684,7 @@ fn resolve_confidential_policy_hash(
     };
 
     let config = load_peer_config(config_path)?;
-    Ok(iroha_core::state::compute_zk_consensus_policy_hash(
+    Ok(iroha_core::state::compute_genesis_zk_consensus_policy_hash(
         &config.zk,
     ))
 }

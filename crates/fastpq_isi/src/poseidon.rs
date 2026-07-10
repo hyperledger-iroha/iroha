@@ -11,6 +11,7 @@ use core::convert::TryFrom;
 const MODULUS: u64 = 0xffff_ffff_0000_0001;
 /// Goldilocks field modulus (2^64 - 2^32 + 1).
 pub const FIELD_MODULUS: u64 = MODULUS;
+#[cfg(test)]
 const MODULUS_U128: u128 = MODULUS as u128;
 /// Poseidon state width (t = 3).
 pub const STATE_WIDTH: usize = 3;
@@ -412,13 +413,7 @@ fn mul(a: u64, b: u64) -> u64 {
     let lo = u64::try_from(product & u128::from(u64::MAX))
         .expect("low 64 bits of the product must fit into u64");
     let hi = u64::try_from(product >> 64).expect("high 64 bits of the product must fit into u64");
-    let reduced = reduce_wide(lo, hi);
-    debug_assert_eq!(
-        reduced,
-        (product % MODULUS_U128) as u64,
-        "Goldilocks multiplication reduction diverged for a={a:#x}, b={b:#x}"
-    );
-    reduced
+    reduce_wide(lo, hi)
 }
 
 #[inline]
@@ -631,19 +626,48 @@ mod tests {
 
     #[test]
     fn field_multiplication_matches_reference() {
-        let cases = [
-            (0u64, 0u64),
-            (1, FIELD_MODULUS - 1),
-            (FIELD_MODULUS - 1, FIELD_MODULUS - 1),
-            (123_456_789, 987_654_321),
-            (0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210),
+        let boundary_values = [
+            0_u64,
+            1,
+            2,
+            u64::from(u32::MAX) - 1,
+            u64::from(u32::MAX),
+            u64::from(u32::MAX) + 1,
+            FIELD_MODULUS / 2,
+            FIELD_MODULUS - u64::from(u32::MAX) - 1,
+            FIELD_MODULUS - u64::from(u32::MAX),
+            FIELD_MODULUS - 2,
+            FIELD_MODULUS - 1,
         ];
-        for (a, b) in cases {
+        for &a in &boundary_values {
+            for &b in &boundary_values {
+                let expected = ((u128::from(a) * u128::from(b)) % MODULUS_U128) as u64;
+                assert_eq!(
+                    mul(a, b),
+                    expected,
+                    "multiplication diverged for boundary pair {a:#x} * {b:#x}"
+                );
+            }
+        }
+
+        // A fixed SplitMix64 stream gives broad, reproducible coverage without
+        // adding a property-test dependency or introducing nondeterminism.
+        let mut state = 0x243f_6a88_85a3_08d3_u64;
+        for case in 0..65_536 {
+            let next = |state: &mut u64| {
+                *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+                let mut value = *state;
+                value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+                value ^ (value >> 31)
+            };
+            let a = next(&mut state) % FIELD_MODULUS;
+            let b = next(&mut state) % FIELD_MODULUS;
             let expected = ((u128::from(a) * u128::from(b)) % MODULUS_U128) as u64;
             assert_eq!(
                 mul(a, b),
                 expected,
-                "multiplication diverged for {a:#x} * {b:#x}"
+                "multiplication diverged for deterministic case {case}: {a:#x} * {b:#x}"
             );
         }
     }

@@ -1,4 +1,9 @@
-use std::{collections::BTreeSet, error::Error as StdError, fmt};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    error::Error as StdError,
+    fmt,
+    sync::Arc,
+};
 
 use iroha_crypto::Hash;
 use iroha_data_model::smart_contract::manifest::{
@@ -8,14 +13,21 @@ use iroha_data_model::smart_contract::manifest::{
 
 use crate::{
     ProgramMetadata, SyscallPolicy,
-    ivm_cache::IvmCache,
+    ivm::{decode_literal_pointers, prepare_instruction_stream},
+    ivm_cache::{DecodedOp, IvmCache},
     metadata::{
         CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, CONTRACT_FEATURE_KNOWN_BITS,
-        EmbeddedContractInterfaceV1, EmbeddedStateType, HEADER_SIZE, mode,
+        EmbeddedContractInterfaceV1, EmbeddedStateType, HEADER_SIZE, ParsedProgramMetadata,
+        contract_code_hash, mode,
     },
+    prepared::{PreparedContract, PreparedContractParts, PreparedControlFlow},
 };
 
-/// Verified contract artifact details derived from a self-describing `.to` image.
+/// Structurally validated contract artifact details derived from a self-describing `.to` image.
+///
+/// The compiler fingerprint is informational and is never treated as an
+/// attestation of compiler provenance. Scheduler hints remain subject to
+/// independent completeness and bytecode-safety checks.
 #[derive(Clone, Debug)]
 pub struct VerifiedContractArtifact {
     pub metadata: ProgramMetadata,
@@ -53,13 +65,111 @@ impl StdError for ContractArtifactError {}
 pub fn verify_contract_artifact(
     artifact: &[u8],
 ) -> Result<VerifiedContractArtifact, ContractArtifactError> {
-    let parsed = ProgramMetadata::parse(artifact).map_err(|err| {
+    let parsed = parse_contract_metadata(artifact)?;
+    let envelope = validate_contract_envelope(artifact, &parsed)?;
+    let decoded = IvmCache::decode_stream(&artifact[parsed.code_offset..]).map_err(|err| {
+        ContractArtifactError::invalid(format!(
+            "instruction decode failed for executable stream: {err}"
+        ))
+    })?;
+    verify_decoded_contract_artifact(artifact, &parsed, envelope, decoded.as_ref())
+}
+
+/// Prepare a validated self-describing contract for repeated VM loading.
+///
+/// The input [`Arc`] becomes the immutable canonical artifact retained by the
+/// returned contract, so callers that already own shared bytecode do not need
+/// to copy it.
+pub fn prepare_contract(artifact: Arc<[u8]>) -> Result<PreparedContract, ContractArtifactError> {
+    PreparedContract::prepare(artifact)
+}
+
+impl PreparedContract {
+    /// Parse, validate, index, and predecode a canonical deployable contract artifact.
+    pub fn prepare(artifact: Arc<[u8]>) -> Result<Self, ContractArtifactError> {
+        let parsed = parse_contract_metadata(artifact.as_ref())?;
+        let envelope = validate_contract_envelope(artifact.as_ref(), &parsed)?;
+        let instruction_region = artifact.get(parsed.code_offset..).ok_or_else(|| {
+            ContractArtifactError::invalid("executable stream offset exceeds artifact length")
+        })?;
+        let decoded =
+            crate::ivm_cache::global_get_with_meta(instruction_region, &envelope.metadata)
+                .map_err(|err| {
+                    ContractArtifactError::invalid(format!(
+                        "instruction decode failed for executable stream: {err}"
+                    ))
+                })?;
+        let verified = verify_decoded_contract_artifact(
+            artifact.as_ref(),
+            &parsed,
+            envelope,
+            decoded.as_ref(),
+        )?;
+        let literal_pointers = decode_literal_pointers(
+            artifact.as_ref(),
+            parsed.header_len,
+            parsed.literal_section,
+            SyscallPolicy::AbiV1,
+        )
+        .map_err(|err| {
+            ContractArtifactError::invalid(format!("literal index validation failed: {err}"))
+        })?;
+        let instruction_entry_pc = u64::try_from(parsed.prefix_len()).map_err(|_| {
+            ContractArtifactError::invalid("executable stream offset does not fit a VM address")
+        })?;
+        let prepared_program = prepare_instruction_stream(
+            instruction_region,
+            &verified.metadata,
+            decoded.as_ref(),
+            instruction_entry_pc,
+            literal_pointers.len(),
+        )
+        .map_err(|err| {
+            ContractArtifactError::invalid(format!("instruction preparation failed: {err}"))
+        })?;
+        let control_flow = PreparedControlFlow::from_decoded(decoded.as_ref()).map_err(|err| {
+            ContractArtifactError::invalid(format!("control-flow preparation failed: {err}"))
+        })?;
+
+        PreparedContract::from_parts(PreparedContractParts {
+            artifact,
+            metadata: verified.metadata,
+            manifest: verified.manifest,
+            header_len: verified.header_len,
+            code_offset: verified.code_offset,
+            code_hash: verified.code_hash,
+            contract_interface: Arc::new(verified.contract_interface),
+            literal_pointers,
+            decoded,
+            prepared_program,
+            control_flow,
+        })
+        .map_err(|err| ContractArtifactError::invalid(format!("contract indexing failed: {err}")))
+    }
+}
+
+struct ValidatedContractEnvelope {
+    metadata: ProgramMetadata,
+    contract_interface: EmbeddedContractInterfaceV1,
+    syscall_policy: SyscallPolicy,
+}
+
+fn parse_contract_metadata(
+    artifact: &[u8],
+) -> Result<ParsedProgramMetadata, ContractArtifactError> {
+    ProgramMetadata::parse(artifact).map_err(|err| {
         if header_declares_contract_minor_one(artifact) && cntr_section_missing(artifact) {
             ContractArtifactError::invalid("missing required CNTR section")
         } else {
             ContractArtifactError::invalid(format!("metadata parse failed: {err}"))
         }
-    })?;
+    })
+}
+
+fn validate_contract_envelope(
+    artifact: &[u8],
+    parsed: &ParsedProgramMetadata,
+) -> Result<ValidatedContractEnvelope, ContractArtifactError> {
     let metadata = parsed.metadata.clone();
     if metadata.version_major != 1 || metadata.version_minor != 1 {
         return Err(ContractArtifactError::invalid(format!(
@@ -78,6 +188,21 @@ pub fn verify_contract_artifact(
             "artifact shorter than fixed IVM header",
         ));
     }
+    let code_region_len = artifact
+        .len()
+        .checked_sub(parsed.header_len)
+        .and_then(|len| u64::try_from(len).ok())
+        .ok_or_else(|| ContractArtifactError::invalid("contract image length is invalid"))?;
+    if code_region_len > crate::memory::Memory::HEAP_START {
+        return Err(ContractArtifactError::invalid(
+            "contract image exceeds IVM code memory",
+        ));
+    }
+    if parsed.contract_debug.is_some() {
+        return Err(ContractArtifactError::invalid(
+            "embedded DBG1 debug metadata is forbidden; publish source maps as hash-keyed sidecars",
+        ));
+    }
     let contract_interface = parsed
         .contract_interface
         .clone()
@@ -91,39 +216,54 @@ pub fn verify_contract_artifact(
         }
     };
 
-    validate_contract_interface(
-        &metadata,
-        &contract_interface,
-        &artifact[parsed.code_offset..],
-    )?;
+    Ok(ValidatedContractEnvelope {
+        metadata,
+        contract_interface,
+        syscall_policy,
+    })
+}
 
-    let code_hash = Hash::new(&artifact[HEADER_SIZE..]);
-    let abi_hash = Hash::prehashed(crate::syscalls::compute_abi_hash(syscall_policy));
-    let entrypoints = contract_interface
+fn verify_decoded_contract_artifact(
+    artifact: &[u8],
+    parsed: &ParsedProgramMetadata,
+    envelope: ValidatedContractEnvelope,
+    decoded: &[DecodedOp],
+) -> Result<VerifiedContractArtifact, ContractArtifactError> {
+    validate_contract_interface(&envelope.metadata, &envelope.contract_interface, decoded)?;
+
+    let code_hash = contract_code_hash(artifact);
+    let abi_hash = Hash::prehashed(crate::syscalls::compute_abi_hash(envelope.syscall_policy));
+    let entrypoints = envelope
+        .contract_interface
         .entrypoints
         .iter()
         .map(|entrypoint| entrypoint.to_manifest_descriptor())
         .collect::<Vec<_>>();
     let manifest = ContractManifest {
+        contract_name: Some(envelope.contract_interface.contract_name.clone()),
         code_hash: Some(code_hash),
         abi_hash: Some(abi_hash),
-        compiler_fingerprint: Some(contract_interface.compiler_fingerprint.clone()),
-        features_bitmap: Some(contract_interface.features_bitmap),
-        access_set_hints: contract_interface.access_set_hints.clone(),
+        compiler_fingerprint: Some(envelope.contract_interface.compiler_fingerprint.clone()),
+        features_bitmap: Some(envelope.contract_interface.features_bitmap),
+        access_set_hints: envelope.contract_interface.access_set_hints.clone(),
         entrypoints: Some(entrypoints),
-        states: Some(manifest_state_descriptors(&contract_interface.states)),
-        kotoba: (!contract_interface.kotoba.is_empty())
-            .then_some(contract_interface.kotoba.clone()),
+        states: Some(manifest_state_descriptors(
+            &envelope.contract_interface.states,
+        )),
+        error_codes: (!envelope.contract_interface.error_codes.is_empty())
+            .then_some(envelope.contract_interface.error_codes.clone()),
+        kotoba: (!envelope.contract_interface.kotoba.is_empty())
+            .then_some(envelope.contract_interface.kotoba.clone()),
         provenance: None,
     };
 
     Ok(VerifiedContractArtifact {
-        metadata,
+        metadata: envelope.metadata,
         header_len: parsed.header_len,
         code_offset: parsed.code_offset,
         code_hash,
         abi_hash,
-        contract_interface,
+        contract_interface: envelope.contract_interface,
         manifest,
     })
 }
@@ -144,13 +284,11 @@ fn manifest_state_type_name(ty: &crate::metadata::EmbeddedStateType) -> String {
     use crate::metadata::EmbeddedStateType;
 
     match ty {
-        EmbeddedStateType::Int => "int".to_string(),
-        EmbeddedStateType::FixedU128 => "FixedU128".to_string(),
+        EmbeddedStateType::I64 => "i64".to_string(),
+        EmbeddedStateType::U128 => "u128".to_string(),
         EmbeddedStateType::Amount => "Amount".to_string(),
-        EmbeddedStateType::Balance => "Balance".to_string(),
         EmbeddedStateType::Bool => "bool".to_string(),
         EmbeddedStateType::String => "string".to_string(),
-        EmbeddedStateType::Blob => "Blob".to_string(),
         EmbeddedStateType::Bytes => "bytes".to_string(),
         EmbeddedStateType::DataSpaceId => "DataSpaceId".to_string(),
         EmbeddedStateType::AccountId => "AccountId".to_string(),
@@ -176,11 +314,21 @@ fn manifest_state_type_name(ty: &crate::metadata::EmbeddedStateType) -> String {
                 .join(", ");
             format!("{name}{{{fields}}}")
         }
-        EmbeddedStateType::Map { key, value } => {
+        EmbeddedStateType::StateMap { key, value } => {
             format!(
-                "map<{}, {}>",
+                "StateMap<{}, {}>",
                 manifest_state_type_name(key),
                 manifest_state_type_name(value)
+            )
+        }
+        EmbeddedStateType::Option(value) => {
+            format!("Option<{}>", manifest_state_type_name(value))
+        }
+        EmbeddedStateType::Result { ok, err } => {
+            format!(
+                "Result<{}, {}>",
+                manifest_state_type_name(ok),
+                manifest_state_type_name(err)
             )
         }
     }
@@ -189,8 +337,13 @@ fn manifest_state_type_name(ty: &crate::metadata::EmbeddedStateType) -> String {
 fn validate_contract_interface(
     metadata: &ProgramMetadata,
     contract_interface: &EmbeddedContractInterfaceV1,
-    code: &[u8],
+    decoded: &[DecodedOp],
 ) -> Result<(), ContractArtifactError> {
+    if !is_canonical_contract_name(&contract_interface.contract_name) {
+        return Err(ContractArtifactError::invalid(
+            "CNTR contract_name must be a non-empty identifier",
+        ));
+    }
     let fingerprint = contract_interface.compiler_fingerprint.trim();
     if fingerprint.is_empty() {
         return Err(ContractArtifactError::invalid(
@@ -223,6 +376,7 @@ fn validate_contract_interface(
     validate_access_set_hints(contract_interface.access_set_hints.as_ref())?;
     validate_kotoba_entries(&contract_interface.kotoba)?;
     validate_state_descriptors(contract_interface)?;
+    validate_error_codes(contract_interface)?;
 
     if contract_interface.entrypoints.is_empty() {
         return Err(ContractArtifactError::invalid(
@@ -230,15 +384,12 @@ fn validate_contract_interface(
         ));
     }
 
-    let decoded = IvmCache::decode_stream(code).map_err(|err| {
-        ContractArtifactError::invalid(format!(
-            "instruction decode failed for executable stream: {err}"
-        ))
-    })?;
+    validate_bytecode_security(decoded, zk_enabled)?;
     let valid_pcs = decoded.iter().map(|op| op.pc).collect::<BTreeSet<_>>();
     let mut entrypoint_names = BTreeSet::new();
-    let mut hajimari_seen = false;
-    let mut kaizen_seen = false;
+    let mut entrypoint_pcs = BTreeSet::new();
+    let mut init_seen = false;
+    let mut upgrade_seen = false;
 
     for entrypoint in &contract_interface.entrypoints {
         validate_entrypoint_name(&entrypoint.name)?;
@@ -252,6 +403,65 @@ fn validate_contract_interface(
             return Err(ContractArtifactError::invalid(format!(
                 "entrypoint `{}` has invalid entry_pc {}",
                 entrypoint.name, entrypoint.entry_pc
+            )));
+        }
+        if !entrypoint_pcs.insert(entrypoint.entry_pc) {
+            return Err(ContractArtifactError::invalid(format!(
+                "entrypoint `{}` reuses entry_pc {}",
+                entrypoint.name, entrypoint.entry_pc
+            )));
+        }
+        let reachability =
+            reachable_syscalls(decoded, entrypoint.entry_pc, entrypoint.name.as_str())?;
+        match (&entrypoint.params[..], entrypoint.argument_schema.as_ref()) {
+            ([], None) => {}
+            ([], Some(_)) => {
+                return Err(ContractArtifactError::invalid(format!(
+                    "zero-parameter entrypoint `{}` must not declare an argument schema",
+                    entrypoint.name
+                )));
+            }
+            (params, Some(schema))
+                if schema.validate()
+                    && schema.fields.len() == params.len()
+                    && schema.fields.iter().zip(params).all(|(field, param)| {
+                        field.name == param.name
+                            && field.ty.canonical_type_name().as_deref()
+                                == Some(param.type_name.as_str())
+                    })
+                    && reachability
+                        .syscalls
+                        .contains(&crate::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD) => {}
+            (_, Some(_)) => {
+                return Err(ContractArtifactError::invalid(format!(
+                    "entrypoint `{}` has an invalid argument schema or does not decode it",
+                    entrypoint.name
+                )));
+            }
+            (_, None) => {
+                return Err(ContractArtifactError::invalid(format!(
+                    "parameterized entrypoint `{}` is missing its argument schema",
+                    entrypoint.name
+                )));
+            }
+        }
+        if entrypoint.kind == EntryPointKind::View {
+            validate_view_effects(&entrypoint.name, &reachability.syscalls)?;
+        }
+        if entrypoint.kind == EntryPointKind::Public && entrypoint.permission.is_none() {
+            return Err(ContractArtifactError::invalid(format!(
+                "public entrypoint `{}` is missing caller authorization",
+                entrypoint.name
+            )));
+        }
+        if matches!(
+            entrypoint.kind,
+            EntryPointKind::Init | EntryPointKind::Upgrade
+        ) && entrypoint.permission.is_some()
+        {
+            return Err(ContractArtifactError::invalid(format!(
+                "lifecycle entrypoint `{}` must use runtime-defined authorization",
+                entrypoint.name
             )));
         }
         if let Some(permission) = entrypoint.permission.as_deref()
@@ -272,19 +482,35 @@ fn validate_contract_interface(
                 )));
             }
         }
+        match entrypoint.access_hints_complete {
+            Some(true) if !entrypoint.access_hints_skipped.is_empty() => {
+                return Err(ContractArtifactError::invalid(format!(
+                    "entrypoint `{}` marks access hints complete but records skipped reasons",
+                    entrypoint.name
+                )));
+            }
+            Some(false) if entrypoint.access_hints_skipped.is_empty() => {
+                return Err(ContractArtifactError::invalid(format!(
+                    "entrypoint `{}` marks access hints incomplete without a reason",
+                    entrypoint.name
+                )));
+            }
+            _ => {}
+        }
+        validate_entrypoint_access_claims(entrypoint, &reachability.syscalls)?;
         match entrypoint.kind {
-            EntryPointKind::Hajimari if hajimari_seen => {
+            EntryPointKind::Init if init_seen => {
                 return Err(ContractArtifactError::invalid(
                     "CNTR declares more than one hajimari entrypoint",
                 ));
             }
-            EntryPointKind::Hajimari => hajimari_seen = true,
-            EntryPointKind::Kaizen if kaizen_seen => {
+            EntryPointKind::Init => init_seen = true,
+            EntryPointKind::Upgrade if upgrade_seen => {
                 return Err(ContractArtifactError::invalid(
                     "CNTR declares more than one kaizen entrypoint",
                 ));
             }
-            EntryPointKind::Kaizen => kaizen_seen = true,
+            EntryPointKind::Upgrade => upgrade_seen = true,
             EntryPointKind::Public | EntryPointKind::View => {}
         }
     }
@@ -312,6 +538,340 @@ fn validate_contract_interface(
     }
 
     Ok(())
+}
+
+fn is_canonical_contract_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(first) if first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+fn validate_bytecode_security(
+    decoded: &[crate::ivm_cache::DecodedOp],
+    zk_enabled: bool,
+) -> Result<(), ContractArtifactError> {
+    use crate::instruction::wide;
+
+    let instruction_boundaries = decoded.iter().map(|op| op.pc).collect::<BTreeSet<_>>();
+    for op in decoded {
+        let opcode = wide::opcode(op.inst);
+        if opcode == wide::control::JR {
+            return Err(ContractArtifactError::invalid(format!(
+                "unverifiable indirect control flow at pc {}",
+                op.pc
+            )));
+        }
+        if opcode == wide::control::JALR {
+            let (_, rd, base, immediate) = crate::encoding::wide::decode_rr(op.inst);
+            if !(rd == 0 && base == 1 && immediate == 0) {
+                return Err(ContractArtifactError::invalid(format!(
+                    "unverifiable indirect control flow at pc {}",
+                    op.pc
+                )));
+            }
+        }
+        if opcode == wide::control::JAL && !matches!(wide::rd(op.inst), 0 | 1) {
+            return Err(ContractArtifactError::invalid(format!(
+                "direct call at pc {} uses unsupported link register r{}",
+                op.pc,
+                wide::rd(op.inst)
+            )));
+        }
+        let syscall = decoded_syscall_number(op.inst);
+        if syscall == Some(crate::syscalls::SYSCALL_GET_PRIVATE_INPUT) && !zk_enabled {
+            return Err(ContractArtifactError::invalid(format!(
+                "private-input syscall at pc {} requires ZK execution mode",
+                op.pc
+            )));
+        }
+        if let Some(number) = syscall
+            && !crate::syscalls::is_syscall_allowed(SyscallPolicy::AbiV1, number)
+        {
+            return Err(ContractArtifactError::invalid(format!(
+                "disallowed syscall 0x{number:06x} at pc {}",
+                op.pc
+            )));
+        }
+        let offset_words = match opcode {
+            wide::control::BEQ
+            | wide::control::BNE
+            | wide::control::BLT
+            | wide::control::BGE
+            | wide::control::BLTU
+            | wide::control::BGEU => i64::from(wide::imm8(op.inst)),
+            wide::control::JAL => i64::from(wide::imm16(op.inst)),
+            wide::control::JMP | wide::control::JALS => i64::from(wide::imm24(op.inst)),
+            _ => continue,
+        };
+        let Some(byte_offset) = offset_words.checked_mul(4) else {
+            return Err(ContractArtifactError::invalid(format!(
+                "control-flow offset overflows at pc {}",
+                op.pc
+            )));
+        };
+        let Some(target) = i128::from(op.pc)
+            .checked_add(i128::from(byte_offset))
+            .and_then(|target| u64::try_from(target).ok())
+        else {
+            return Err(ContractArtifactError::invalid(format!(
+                "control-flow target is outside the executable stream at pc {}",
+                op.pc
+            )));
+        };
+        if !instruction_boundaries.contains(&target) {
+            return Err(ContractArtifactError::invalid(format!(
+                "control-flow target {target} from pc {} is not an instruction boundary",
+                op.pc
+            )));
+        }
+
+        let requires_fallthrough = matches!(
+            opcode,
+            wide::control::BEQ
+                | wide::control::BNE
+                | wide::control::BLT
+                | wide::control::BGE
+                | wide::control::BLTU
+                | wide::control::BGEU
+                | wide::control::JALS
+        ) || (opcode == wide::control::JAL && wide::rd(op.inst) != 0);
+        if requires_fallthrough {
+            let fallthrough = op.pc.checked_add(u64::from(op.len)).ok_or_else(|| {
+                ContractArtifactError::invalid(format!(
+                    "control-flow fallthrough overflows at pc {}",
+                    op.pc
+                ))
+            })?;
+            if !instruction_boundaries.contains(&fallthrough) {
+                return Err(ContractArtifactError::invalid(format!(
+                    "control-flow fallthrough {fallthrough} from pc {} is not an instruction boundary",
+                    op.pc
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn decoded_syscall_number(instruction: u32) -> Option<u32> {
+    use crate::instruction::wide;
+
+    match wide::opcode(instruction) {
+        wide::system::SCALL => Some(u32::from(wide::imm8(instruction) as u8)),
+        wide::system::SYSTEM => Some(crate::encoding::wide::decode_syscallx(instruction)),
+        _ => None,
+    }
+}
+
+fn direct_control_flow_target(op: &crate::ivm_cache::DecodedOp) -> Option<u64> {
+    use crate::instruction::wide;
+
+    let offset_words = match wide::opcode(op.inst) {
+        wide::control::BEQ
+        | wide::control::BNE
+        | wide::control::BLT
+        | wide::control::BGE
+        | wide::control::BLTU
+        | wide::control::BGEU => i64::from(wide::imm8(op.inst)),
+        wide::control::JAL => i64::from(wide::imm16(op.inst)),
+        wide::control::JMP | wide::control::JALS => i64::from(wide::imm24(op.inst)),
+        _ => return None,
+    };
+    let byte_offset = offset_words.checked_mul(4)?;
+    i128::from(op.pc)
+        .checked_add(i128::from(byte_offset))
+        .and_then(|target| u64::try_from(target).ok())
+}
+
+struct Reachability {
+    syscalls: BTreeSet<u32>,
+}
+
+fn reachable_syscalls(
+    decoded: &[crate::ivm_cache::DecodedOp],
+    entry_pc: u64,
+    entrypoint_name: &str,
+) -> Result<Reachability, ContractArtifactError> {
+    use crate::instruction::wide;
+
+    let instructions = decoded
+        .iter()
+        .map(|op| (op.pc, op))
+        .collect::<BTreeMap<_, _>>();
+    let mut pending = VecDeque::from([entry_pc]);
+    let mut visited = BTreeSet::new();
+    let mut syscalls = BTreeSet::new();
+
+    while let Some(pc) = pending.pop_front() {
+        if !visited.insert(pc) {
+            continue;
+        }
+        let op = instructions.get(&pc).ok_or_else(|| {
+            ContractArtifactError::invalid(format!(
+                "entrypoint `{entrypoint_name}` reaches non-instruction pc {pc}"
+            ))
+        })?;
+        if let Some(number) = decoded_syscall_number(op.inst) {
+            syscalls.insert(number);
+        }
+
+        let opcode = wide::opcode(op.inst);
+        let fallthrough = op.pc.checked_add(u64::from(op.len));
+        match opcode {
+            wide::control::HALT => {}
+            wide::control::BEQ
+            | wide::control::BNE
+            | wide::control::BLT
+            | wide::control::BGE
+            | wide::control::BLTU
+            | wide::control::BGEU => {
+                pending.push_back(direct_control_flow_target(op).ok_or_else(|| {
+                    ContractArtifactError::invalid(format!(
+                        "entrypoint `{entrypoint_name}` has an invalid branch at pc {}",
+                        op.pc
+                    ))
+                })?);
+                pending.push_back(fallthrough.ok_or_else(|| {
+                    ContractArtifactError::invalid("control-flow fallthrough overflows")
+                })?);
+            }
+            wide::control::JAL => {
+                pending.push_back(direct_control_flow_target(op).ok_or_else(|| {
+                    ContractArtifactError::invalid(format!(
+                        "entrypoint `{entrypoint_name}` has an invalid jump at pc {}",
+                        op.pc
+                    ))
+                })?);
+                if wide::rd(op.inst) != 0 {
+                    pending.push_back(fallthrough.ok_or_else(|| {
+                        ContractArtifactError::invalid("call fallthrough overflows")
+                    })?);
+                }
+            }
+            wide::control::JMP => {
+                pending.push_back(direct_control_flow_target(op).ok_or_else(|| {
+                    ContractArtifactError::invalid(format!(
+                        "entrypoint `{entrypoint_name}` has an invalid jump at pc {}",
+                        op.pc
+                    ))
+                })?);
+            }
+            wide::control::JALS => {
+                pending.push_back(direct_control_flow_target(op).ok_or_else(|| {
+                    ContractArtifactError::invalid(format!(
+                        "entrypoint `{entrypoint_name}` has an invalid call at pc {}",
+                        op.pc
+                    ))
+                })?);
+                pending.push_back(
+                    fallthrough.ok_or_else(|| {
+                        ContractArtifactError::invalid("call fallthrough overflows")
+                    })?,
+                );
+            }
+            wide::control::JALR => {
+                let (_, rd, base, immediate) = crate::encoding::wide::decode_rr(op.inst);
+                if !(rd == 0 && base == 1 && immediate == 0) {
+                    return Err(ContractArtifactError::invalid(format!(
+                        "entrypoint `{entrypoint_name}` reaches unverifiable indirect control flow at pc {}",
+                        op.pc
+                    )));
+                }
+                // Deployable contracts execute with IVM return-address
+                // integrity enabled. A canonical return therefore terminates
+                // this static path; its dynamic target must match the protected
+                // direct-call stack (or a trusted outer-invocation sentinel).
+            }
+            wide::control::JR => {
+                return Err(ContractArtifactError::invalid(format!(
+                    "entrypoint `{entrypoint_name}` reaches unverifiable indirect control flow at pc {}",
+                    op.pc
+                )));
+            }
+            _ => {
+                pending.push_back(fallthrough.ok_or_else(|| {
+                    ContractArtifactError::invalid("control-flow fallthrough overflows")
+                })?);
+            }
+        }
+    }
+    Ok(Reachability { syscalls })
+}
+
+fn validate_view_effects(
+    entrypoint_name: &str,
+    syscalls: &BTreeSet<u32>,
+) -> Result<(), ContractArtifactError> {
+    for number in syscalls {
+        if matches!(
+            crate::syscalls::syscall_access(*number),
+            crate::syscalls::SyscallAccess::StateWrite
+                | crate::syscalls::SyscallAccess::LedgerWrite
+                | crate::syscalls::SyscallAccess::Dynamic
+        ) {
+            return Err(ContractArtifactError::invalid(format!(
+                "view entrypoint `{entrypoint_name}` transitively reaches effectful syscall 0x{number:06x}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_entrypoint_access_claims(
+    entrypoint: &crate::metadata::EmbeddedEntrypointDescriptor,
+    syscalls: &BTreeSet<u32>,
+) -> Result<(), ContractArtifactError> {
+    if entrypoint.access_hints_complete != Some(true) {
+        return Ok(());
+    }
+
+    // Bytecode admission can prove the coarse access class but not the concrete
+    // host key carried in a runtime register. Reject cross-class omissions here;
+    // exact keys remain advisory and the scheduler must independently prove
+    // them or select its conservative wildcard fence.
+    for number in syscalls {
+        let access = crate::syscalls::syscall_access(*number);
+        if !entrypoint_claim_covers_access(entrypoint, access) {
+            return Err(ContractArtifactError::invalid(format!(
+                "entrypoint `{}` marks access hints complete but under-reports transitively reachable {access:?} syscall 0x{number:06x}",
+                entrypoint.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn entrypoint_claim_covers_access(
+    entrypoint: &crate::metadata::EmbeddedEntrypointDescriptor,
+    access: crate::syscalls::SyscallAccess,
+) -> bool {
+    use crate::syscalls::SyscallAccess;
+
+    let is_state_key = |key: &str| key.starts_with("state:");
+    let global_read = entrypoint.read_keys.iter().any(|key| key == "*")
+        || entrypoint.write_keys.iter().any(|key| key == "*");
+    let global_write = entrypoint.write_keys.iter().any(|key| key == "*");
+    let state_read = entrypoint.read_keys.iter().any(|key| is_state_key(key))
+        || entrypoint.write_keys.iter().any(|key| is_state_key(key));
+    let state_write = entrypoint.write_keys.iter().any(|key| is_state_key(key));
+    let ledger_read = entrypoint
+        .read_keys
+        .iter()
+        .chain(&entrypoint.write_keys)
+        .any(|key| key != "*" && !is_state_key(key));
+    let ledger_write = entrypoint
+        .write_keys
+        .iter()
+        .any(|key| key != "*" && !is_state_key(key));
+
+    match access {
+        SyscallAccess::None => true,
+        SyscallAccess::StateRead => global_read || state_read,
+        SyscallAccess::StateWrite => global_write || state_write,
+        SyscallAccess::LedgerRead => global_read || ledger_read,
+        SyscallAccess::LedgerWrite => global_write || ledger_write,
+        SyscallAccess::Dynamic => global_write,
+    }
 }
 
 fn validate_access_set_hints(
@@ -455,6 +1015,39 @@ fn validate_state_descriptors(
     Ok(())
 }
 
+fn validate_error_codes(
+    contract_interface: &EmbeddedContractInterfaceV1,
+) -> Result<(), ContractArtifactError> {
+    let mut paths = BTreeSet::new();
+    let mut codes = BTreeSet::new();
+    for error in &contract_interface.error_codes {
+        if !is_canonical_contract_name(&error.namespace) || !is_canonical_contract_name(&error.name)
+        {
+            return Err(ContractArtifactError::invalid(
+                "CNTR error code namespace and name must be non-empty identifiers",
+            ));
+        }
+        let path = format!("{}::{}", error.namespace, error.name);
+        if !paths.insert(path.clone()) {
+            return Err(ContractArtifactError::invalid(format!(
+                "duplicate error code descriptor `{path}`"
+            )));
+        }
+        if error.code == 0 {
+            return Err(ContractArtifactError::invalid(format!(
+                "error code descriptor `{path}` uses reserved code 0"
+            )));
+        }
+        if !codes.insert(error.code) {
+            return Err(ContractArtifactError::invalid(format!(
+                "duplicate numeric error code {}",
+                error.code
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn validate_state_type(ty: &EmbeddedStateType) -> Result<(), ContractArtifactError> {
     match ty {
         EmbeddedStateType::Tuple(items) => {
@@ -484,9 +1077,14 @@ fn validate_state_type(ty: &EmbeddedStateType) -> Result<(), ContractArtifactErr
                 validate_state_type(&field.ty)?;
             }
         }
-        EmbeddedStateType::Map { key, value } => {
+        EmbeddedStateType::StateMap { key, value } => {
             validate_state_type(key)?;
             validate_state_type(value)?;
+        }
+        EmbeddedStateType::Option(value) => validate_state_type(value)?,
+        EmbeddedStateType::Result { ok, err } => {
+            validate_state_type(ok)?;
+            validate_state_type(err)?;
         }
         _ => {}
     }
@@ -501,4 +1099,126 @@ fn cntr_section_missing(artifact: &[u8]) -> bool {
     artifact.len() < HEADER_SIZE + 4
         || artifact[HEADER_SIZE..HEADER_SIZE + 4]
             != crate::metadata::CONTRACT_INTERFACE_SECTION_MAGIC
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn prepared_fixture(max_cycles: u64) -> Arc<[u8]> {
+        let metadata = ProgramMetadata {
+            max_cycles,
+            ..ProgramMetadata::default()
+        };
+        let interface = EmbeddedContractInterfaceV1 {
+            contract_name: "PreparedFixture".to_owned(),
+            compiler_fingerprint: "ivm-unit-tests".to_owned(),
+            features_bitmap: 0,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: vec![crate::metadata::EmbeddedEntrypointDescriptor {
+                name: "inspect".to_owned(),
+                kind: EntryPointKind::View,
+                params: Vec::new(),
+                argument_schema: None,
+                return_type: None,
+                permission: None,
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                access_hints_complete: Some(true),
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+                entry_pc: 0,
+            }],
+            error_codes: Vec::new(),
+            states: Vec::new(),
+        };
+        let mut artifact = metadata.encode();
+        artifact.extend_from_slice(&interface.encode_section());
+        artifact.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+        Arc::from(artifact.into_boxed_slice())
+    }
+
+    #[test]
+    fn repeated_preparation_reuses_instruction_storage_and_indexes_entrypoints() {
+        let artifact = prepared_fixture(0);
+        let original_artifact = Arc::clone(&artifact);
+        let first = prepare_contract(Arc::clone(&artifact)).expect("first preparation succeeds");
+        let second = prepare_contract(artifact).expect("second preparation succeeds");
+        let retained_artifact = first.shared_artifact();
+
+        assert_eq!(first.code_hash(), second.code_hash());
+        assert!(Arc::ptr_eq(&retained_artifact, &original_artifact));
+        assert!(Arc::ptr_eq(&retained_artifact, &first.shared_artifact()));
+        assert!(first.shares_prepared_program_with(&second));
+        assert_eq!(first.instruction_boundaries(), &[0]);
+        assert_eq!(first.control_flow_successors(0), Some(&[][..]));
+        assert_eq!(
+            first.entrypoint_pc("inspect"),
+            Some(first.instruction_entry_pc())
+        );
+        assert_eq!(
+            first
+                .entrypoint_descriptor("inspect")
+                .map(|entrypoint| entrypoint.kind),
+            Some(EntryPointKind::View)
+        );
+    }
+
+    #[test]
+    fn preparation_identity_binds_execution_header_fields() {
+        let original = prepared_fixture(7);
+        let mut mutated = original.to_vec();
+        mutated[8..16].copy_from_slice(&11_u64.to_le_bytes());
+        let mutated: Arc<[u8]> = Arc::from(mutated.into_boxed_slice());
+
+        let original = prepare_contract(original).expect("original preparation succeeds");
+        let mutated = prepare_contract(mutated).expect("mutated preparation succeeds");
+
+        assert_eq!(original.metadata().max_cycles, 7);
+        assert_eq!(mutated.metadata().max_cycles, 11);
+        assert_ne!(original.code_hash(), mutated.code_hash());
+    }
+
+    #[test]
+    fn prepared_load_matches_raw_load_without_a_parse_attempt() {
+        crate::ivm::set_banner_enabled(false);
+        let artifact = prepared_fixture(0);
+        let prepared = prepare_contract(Arc::clone(&artifact)).expect("preparation succeeds");
+        let mut raw = crate::IVM::new(u64::MAX);
+        let mut warm = crate::IVM::new(u64::MAX);
+
+        raw.load_program(artifact.as_ref())
+            .expect("raw load succeeds");
+        warm.load_prepared(&prepared)
+            .expect("prepared load succeeds");
+
+        assert_eq!(raw.program_parse_attempts(), 1);
+        assert_eq!(warm.program_parse_attempts(), 0);
+        assert_eq!(warm.prepared_loads(), 1);
+        assert_eq!(raw.code_hash(), warm.code_hash());
+        assert_eq!(raw.pc(), warm.pc());
+        assert_eq!(raw.metadata().max_cycles, warm.metadata().max_cycles);
+        let code_len = u64::try_from(prepared.artifact().len() - prepared.header_len())
+            .expect("fixture length fits VM address");
+        assert_eq!(
+            raw.memory.load_region(0, code_len).expect("raw code image"),
+            warm.memory
+                .load_region(0, code_len)
+                .expect("prepared code image")
+        );
+
+        raw.run().expect("raw program runs");
+        warm.reset_predecode_misses();
+        warm.run().expect("prepared program runs");
+        assert_eq!(warm.predecode_misses(), 0);
+        assert_eq!(raw.pc(), warm.pc());
+        assert_eq!(raw.remaining_gas(), warm.remaining_gas());
+        assert_eq!(raw.register(10), warm.register(10));
+
+        warm.load_prepared(&prepared)
+            .expect("prepared reload succeeds");
+        assert_eq!(warm.program_parse_attempts(), 0);
+        assert_eq!(warm.prepared_loads(), 2);
+    }
 }

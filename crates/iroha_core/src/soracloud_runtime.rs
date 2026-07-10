@@ -72,6 +72,7 @@ fn hf_generated_entrypoint(name: &str, entry_pc: u64) -> ivm::EmbeddedEntrypoint
         name: name.to_owned(),
         kind: EntryPointKind::Public,
         params: Vec::new(),
+        argument_schema: None,
         return_type: None,
         permission: None,
         read_keys: Vec::new(),
@@ -98,10 +99,11 @@ pub fn soracloud_hf_generated_service_contract_artifact() -> Vec<u8> {
         version_minor: 1,
         mode: 0,
         vector_length: 0,
-        max_cycles: 0,
+        max_cycles: iroha_config::parameters::defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND.get(),
         abi_version: 1,
     };
     let contract_interface = ivm::EmbeddedContractInterfaceV1 {
+        contract_name: "SoracloudRuntime".to_owned(),
         compiler_fingerprint: "iroha-soracloud-hf-generated".to_owned(),
         features_bitmap: 0,
         access_set_hints: None,
@@ -112,6 +114,7 @@ pub fn soracloud_hf_generated_service_contract_artifact() -> Vec<u8> {
         ]
         .into_iter()
         .collect(),
+        error_codes: Vec::new(),
         states: Vec::new(),
     };
     let mut bytes = metadata.encode();

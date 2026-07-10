@@ -208,11 +208,19 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
     let src = format!(
         r#"
         seiyaku PointerStateTransfer {{
-          state PoolAsset: Map<int, AssetDefinitionId>;
-          fn main() {{
+          state PoolAsset: StateMap<i64, AssetDefinitionId>;
+          kotoage fn main() authorize("TransferAsset") {{
             let key = 7;
-            PoolAsset[key] = asset_definition("{asset_literal}");
-            transfer_asset(authority(), authority(), PoolAsset[key], 1, dataspace_id("0"));
+            let amount: Amount = Amount::from_i64(1);
+            PoolAsset[key] = AssetDefinitionId::parse("{asset_literal}");
+            let asset = PoolAsset.get(key).unwrap_or(AssetDefinitionId::parse("{asset_literal}"));
+            ledger::asset::transfer(
+              context::authority(),
+              context::authority(),
+              asset,
+              amount,
+              DataSpaceId::parse("0")
+            );
           }}
         }}
     "#
@@ -303,10 +311,10 @@ fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
     let write_src = format!(
         r#"
         seiyaku PointerStateWrite {{
-          state PoolAsset: Map<Name, AssetDefinitionId>;
-          fn main() {{
-            let key = name!("pool");
-            PoolAsset[key] = asset_definition("{asset_literal}");
+          state PoolAsset: StateMap<Name, AssetDefinitionId>;
+          kotoage fn main() authorize("WriteState") {{
+            let key = Name::parse("pool");
+            PoolAsset[key] = AssetDefinitionId::parse("{asset_literal}");
           }}
         }}
     "#
@@ -314,10 +322,18 @@ fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
     let read_src = format!(
         r#"
         seiyaku PointerStateRead {{
-          state PoolAsset: Map<Name, AssetDefinitionId>;
-          fn main() {{
-            let key = name!("pool");
-            transfer_asset(authority(), authority(), PoolAsset[key], 1, dataspace_id("0"));
+          state PoolAsset: StateMap<Name, AssetDefinitionId>;
+          kotoage fn main() authorize("TransferAsset") {{
+            let key = Name::parse("pool");
+            let amount: Amount = Amount::from_i64(1);
+            let asset = PoolAsset.get(key).unwrap_or(AssetDefinitionId::parse("{asset_literal}"));
+            ledger::asset::transfer(
+              context::authority(),
+              context::authority(),
+              asset,
+              amount,
+              DataSpaceId::parse("0")
+            );
           }}
         }}
     "#
@@ -380,27 +396,37 @@ fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
     let write_src = format!(
         r#"
         seiyaku PointerStateWrite {{
-          state PoolAsset: Map<Name, AssetDefinitionId>;
-          state VaultAccount: Map<Name, AccountId>;
-          fn main() {{
-            let key = name!("pool");
-            PoolAsset[key] = asset_definition("{asset_literal}");
-            VaultAccount[key] = account_id("{vault_literal}");
+          state PoolAsset: StateMap<Name, AssetDefinitionId>;
+          state VaultAccount: StateMap<Name, AccountId>;
+          kotoage fn main() authorize("WriteState") {{
+            let key = Name::parse("pool");
+            PoolAsset[key] = AssetDefinitionId::parse("{asset_literal}");
+            VaultAccount[key] = AccountId::parse("{vault_literal}");
           }}
         }}
     "#
     );
-    let read_src = r#"
-        seiyaku PointerStateRead {
-          state PoolAsset: Map<Name, AssetDefinitionId>;
-          state VaultAccount: Map<Name, AccountId>;
-          fn main() {
-            let key = name!("pool");
-            let vault = VaultAccount[key];
-            transfer_asset(authority(), vault, PoolAsset[key], 1, dataspace_id("0"));
-          }
-        }
-    "#;
+    let read_src = format!(
+        r#"
+        seiyaku PointerStateRead {{
+          state PoolAsset: StateMap<Name, AssetDefinitionId>;
+          state VaultAccount: StateMap<Name, AccountId>;
+          kotoage fn main() authorize("TransferAsset") {{
+            let key = Name::parse("pool");
+            let amount: Amount = Amount::from_i64(1);
+            let vault = VaultAccount.get(key).unwrap_or(AccountId::parse("{vault_literal}"));
+            let asset = PoolAsset.get(key).unwrap_or(AssetDefinitionId::parse("{asset_literal}"));
+            ledger::asset::transfer(
+              context::authority(),
+              vault,
+              asset,
+              amount,
+              DataSpaceId::parse("0")
+            );
+          }}
+        }}
+    "#
+    );
 
     let write_program = pointer_abi_test_compiler()
         .compile_source(&write_src)
@@ -426,7 +452,7 @@ fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
     let view = state.view();
 
     let read_program = pointer_abi_test_compiler()
-        .compile_source(read_src)
+        .compile_source(&read_src)
         .expect("compile reader");
     let mut read_vm = IVM::new(50_000_000);
     let mut read_host = CoreHostImpl::new(authority.clone());
@@ -454,12 +480,12 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
     let write_src = format!(
         r#"
         seiyaku PointerStateWrite {{
-          state BaseAsset: Map<Name, AssetDefinitionId>;
-          state VaultAccount: Map<Name, AccountId>;
-          fn main() {{
-            let key = name!("pool");
-            BaseAsset[key] = asset_definition("{asset_literal}");
-            VaultAccount[key] = account_id("{vault_literal}");
+          state BaseAsset: StateMap<Name, AssetDefinitionId>;
+          state VaultAccount: StateMap<Name, AccountId>;
+          kotoage fn main() authorize("WriteState") {{
+            let key = Name::parse("pool");
+            BaseAsset[key] = AssetDefinitionId::parse("{asset_literal}");
+            VaultAccount[key] = AccountId::parse("{vault_literal}");
           }}
         }}
     "#
@@ -467,16 +493,24 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
     let read_src = format!(
         r#"
         seiyaku PointerStateRead {{
-          state BaseAsset: Map<Name, AssetDefinitionId>;
-          state VaultAccount: Map<Name, AccountId>;
-          fn main() {{
-            let key = name!("pool");
-            let ev = json("{{\"provider\":\"{authority_literal}\",\"base_amount\":1000}}");
-            let provider = ev.get_account_id(name("provider"));
-            let base_amount = ev.get_int(name("base_amount"));
-            let vault = VaultAccount[key];
-            if base_amount > 0 {{
-              transfer_asset(provider, vault, BaseAsset[key], base_amount, dataspace_id("0"));
+          state BaseAsset: StateMap<Name, AssetDefinitionId>;
+          state VaultAccount: StateMap<Name, AccountId>;
+          kotoage fn main() authorize("TransferAsset") {{
+            let key = Name::parse("pool");
+            let ev = Json::parse("{{\"provider\":\"{authority_literal}\",\"base_amount\":1000}}");
+            let provider = json::get_account_id(ev, Name::parse("provider"));
+            let base_amount = json::get_amount(ev, Name::parse("base_amount"));
+            let zero: Amount = Amount::from_i64(0);
+            let vault = VaultAccount.get(key).unwrap_or(AccountId::parse("{vault_literal}"));
+            let asset = BaseAsset.get(key).unwrap_or(AssetDefinitionId::parse("{asset_literal}"));
+            if base_amount > zero {{
+              ledger::asset::transfer(
+                provider,
+                vault,
+                asset,
+                base_amount,
+                DataSpaceId::parse("0")
+              );
             }}
           }}
         }}
@@ -526,22 +560,22 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
 fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
     let source = r#"
         seiyaku DlmmPool {
-          state BaseAsset: Map<Name, AssetDefinitionId>;
-          state QuoteAsset: Map<Name, AssetDefinitionId>;
-          state VaultAccount: Map<Name, AccountId>;
-          state FeePips: Map<Name, int>;
-          state BinStep: Map<Name, int>;
-          state ActiveBin: Map<Name, int>;
-          state SeededBase: Map<int, int>;
-          state SeededQuote: Map<int, int>;
+          state BaseAsset: StateMap<Name, AssetDefinitionId>;
+          state QuoteAsset: StateMap<Name, AssetDefinitionId>;
+          state VaultAccount: StateMap<Name, AccountId>;
+          state FeePips: StateMap<Name, i64>;
+          state BinStep: StateMap<Name, i64>;
+          state ActiveBin: StateMap<Name, i64>;
+          state SeededBase: StateMap<i64, Amount>;
+          state SeededQuote: StateMap<i64, Amount>;
 
           kotoage fn init_pool(base_asset: AssetDefinitionId,
-                               quote_asset: AssetDefinitionId,
-                               vault_account: AccountId,
-                               fee_pips: int,
-                               bin_step: int,
-                               active_bin: int) permission(Admin) {
-            let pool = name!("pool");
+                             quote_asset: AssetDefinitionId,
+                             vault_account: AccountId,
+                             fee_pips: i64,
+                             bin_step: i64,
+                             active_bin: i64) authorize("Admin") {
+            let pool = Name::parse("pool");
             BaseAsset[pool] = base_asset;
             QuoteAsset[pool] = quote_asset;
             VaultAccount[pool] = vault_account;
@@ -551,13 +585,27 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
           }
 
           kotoage fn seed_bin(provider: AccountId,
-                              bin_id: int,
-                              base_amount: int,
-                              quote_amount: int) permission(Admin) {
-            let pool = name!("pool");
-            let vault = VaultAccount[pool];
-            transfer_asset(provider, vault, BaseAsset[pool], base_amount, dataspace_id("0"));
-            transfer_asset(provider, vault, QuoteAsset[pool], quote_amount, dataspace_id("0"));
+                            bin_id: i64,
+                            base_amount: Amount,
+            quote_amount: Amount) authorize("Admin") {
+            let pool = Name::parse("pool");
+            let vault = VaultAccount.get(pool).unwrap_or(provider);
+            let base_asset = BaseAsset.get(pool).unwrap_or(AssetDefinitionId::parse("6qLb5RYJbzychndCXgFa9aZzjWyx"));
+            let quote_asset = QuoteAsset.get(pool).unwrap_or(AssetDefinitionId::parse("7Dsw1EgqCsPmv9HpEztf26xEL2qo"));
+            ledger::asset::transfer(
+              provider,
+              vault,
+              base_asset,
+              base_amount,
+              DataSpaceId::parse("0")
+            );
+            ledger::asset::transfer(
+              provider,
+              vault,
+              quote_asset,
+              quote_amount,
+              DataSpaceId::parse("0")
+            );
             SeededBase[bin_id] = base_amount;
             SeededQuote[bin_id] = quote_amount;
           }

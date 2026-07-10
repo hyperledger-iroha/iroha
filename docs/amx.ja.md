@@ -299,7 +299,7 @@ Norito スキーマは `crates/iroha_data_model/src/nexus` にあり、SDK は s
 `ivm::analysis` モジュール（`crates/ivm/src/analysis.rs`）は
 `analyze_program(&[u8])` を提供し、`.to` アーティファクトをデコードして
 レジスタ R/W、メモリ操作、syscall 使用を集計し、JSON フレンドリーなレポートを
-生成する。UAID 発行時に `koto_lint` と併用し、R/W サマリを証跡に含める。
+生成する。UAID 発行時に `koto check` と併用し、R/W サマリを証跡に含める。
 
 ## Space Directory ポリシー強制
 

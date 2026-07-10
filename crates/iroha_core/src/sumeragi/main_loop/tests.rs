@@ -69018,6 +69018,7 @@ async fn maybe_emit_rbc_deliver_recovers_block_created_locally() {
         let digest = crate::state::compute_confidential_feature_digest(
             view_snapshot.world(),
             &view_snapshot.zk,
+            view_snapshot.sccp_registry.as_ref(),
             height,
         );
         let confidential_features = if digest.is_empty() {
@@ -209102,8 +209103,12 @@ fn heartbeat_block_for_state(
         let view = state.view();
         let tx_params = view.world().parameters().transaction().clone();
         let policies = crate::da::proof_policy_bundle(&view.nexus.lane_config);
-        let digest =
-            crate::state::compute_confidential_feature_digest(view.world(), &view.zk, height);
+        let digest = crate::state::compute_confidential_feature_digest(
+            view.world(),
+            &view.zk,
+            view.sccp_registry.as_ref(),
+            height,
+        );
         let confidential_features = if digest.is_empty() {
             None
         } else {
@@ -209705,7 +209710,9 @@ fn sample_ivm_transaction() -> SignedTransaction {
     let mut metadata = iroha_data_model::metadata::Metadata::default();
     metadata.insert(
         "gas_limit".parse().expect("gas_limit key"),
-        iroha_primitives::json::Json::new(crate::smartcontracts::ivm::gas_limit_for_cycles(1)),
+        iroha_primitives::json::Json::new(crate::smartcontracts::ivm::gas_limit_for_cycles(
+            nonzero!(1_u64),
+        )),
     );
 
     TransactionBuilder::new(chain, authority)

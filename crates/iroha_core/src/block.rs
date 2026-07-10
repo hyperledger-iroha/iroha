@@ -56,6 +56,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     hint::black_box,
     str::FromStr,
+    sync::atomic::{AtomicUsize, Ordering as AtomicOrdering},
     time::Duration,
 };
 
@@ -2455,13 +2456,13 @@ pub enum BlockValidationError {
         /// Human-readable validation reason.
         reason: &'static str,
     },
-    /// SCCP committed block contains duplicate successful outbound message. Source domain: {source_domain}, target domain: {target_domain}, message id: {message_id:?}
+    /// SCCP committed block contains duplicate successful outbound message. Source profile: {source_profile:?}, target profile: {target_profile:?}, message id: {message_id:?}
     SccpDuplicateOutboundMessage {
-        /// SCCP source domain encoded in the duplicate payload.
-        source_domain: u32,
-        /// SCCP target domain encoded in the duplicate payload.
-        target_domain: u32,
-        /// SCCP message identifier derived from the canonical payload.
+        /// Exact SCCP source profile committed by the duplicate record.
+        source_profile: iroha_data_model::bridge::SccpNetworkV1,
+        /// Exact SCCP target profile committed by the duplicate record.
+        target_profile: iroha_data_model::bridge::SccpNetworkV1,
+        /// SCCP message identifier derived from the exact lane and canonical payload.
         message_id: [u8; 32],
     },
     /// Mismatch between the actual and expected hashes of the previous block. Expected: {expected:?}, actual: {actual:?}
@@ -5541,8 +5542,8 @@ pub(crate) mod valid {
                     crate::bridge::SccpCommittedBlockValidationError::DuplicateOutboundMessage(
                         key,
                     ) => BlockValidationError::SccpDuplicateOutboundMessage {
-                        source_domain: key.source_domain,
-                        target_domain: key.target_domain,
+                        source_profile: key.lane.source,
+                        target_profile: key.lane.target,
                         message_id: key.message_id,
                     },
                     crate::bridge::SccpCommittedBlockValidationError::CommitmentRootMismatch {
@@ -6023,8 +6024,12 @@ pub(crate) mod valid {
                 });
             }
 
-            let computed_digest =
-                compute_confidential_feature_digest(state.world(), state.zk(), block_height);
+            let computed_digest = compute_confidential_feature_digest(
+                state.world(),
+                state.zk(),
+                state.sccp_registry(),
+                block_height,
+            );
             let expected_digest = if computed_digest.is_empty() {
                 None
             } else {
@@ -7271,43 +7276,17 @@ pub(crate) mod valid {
             }
         }
 
-        fn signed_transaction_requires_live_sequential_execution(tx: &SignedTransaction) -> bool {
-            matches!(
-                tx.instructions(),
-                Executable::ContractCall(_) | Executable::Ivm(_)
-            )
-        }
-
-        fn entrypoint_requires_live_sequential_execution(
-            entrypoint: &TransactionEntrypoint,
-        ) -> bool {
-            Self::signed_transaction_from_entrypoint(entrypoint)
-                .is_some_and(Self::signed_transaction_requires_live_sequential_execution)
-        }
-
         pub(crate) fn sequential_entrypoints_for_live_execution(
             block: &SignedBlock,
         ) -> Option<Vec<TransactionEntrypoint>> {
             if let Some(entrypoints) = block.external_entrypoints_slice() {
-                let needs_sequential = entrypoints.iter().any(|entrypoint| {
-                    !matches!(entrypoint, TransactionEntrypoint::External(_))
-                        || Self::entrypoint_requires_live_sequential_execution(entrypoint)
-                });
+                let needs_sequential = entrypoints
+                    .iter()
+                    .any(|entrypoint| !matches!(entrypoint, TransactionEntrypoint::External(_)));
                 return needs_sequential.then(|| entrypoints.to_vec());
             }
 
-            block
-                .transactions_vec()
-                .iter()
-                .any(|tx| Self::signed_transaction_requires_live_sequential_execution(tx))
-                .then(|| {
-                    block
-                        .transactions_vec()
-                        .iter()
-                        .cloned()
-                        .map(TransactionEntrypoint::External)
-                        .collect()
-                })
+            None
         }
 
         fn prepare_external_transactions(block: &SignedBlock) -> Vec<PreparedBlockTransaction> {
@@ -8153,7 +8132,10 @@ pub(crate) mod valid {
                 }
             }
 
-            let mut ivm_cache = IvmCache::new();
+            let mut ivm_cache = IvmCache::with_prepared_contract_cache(
+                state_block.pipeline.cache_size,
+                state_block.pipeline_ivm_prepared_cache.clone(),
+            );
             let mut hashes: Vec<Option<HashOf<TransactionEntrypoint>>> = vec![None; n];
             let mut results: Vec<Option<TransactionResultInner>> = vec![None; n];
             for idx in execution_order {
@@ -8382,7 +8364,10 @@ pub(crate) mod valid {
                     AccessSetSource, derive_for_prepared_overlay_with_source,
                     derive_for_transaction_with_source,
                 },
-                overlay::{TxOverlay, build_prepared_overlay_for_transaction_with_accounts_zk},
+                overlay::{
+                    DurableStateReadSnapshot, TxOverlay, VmAccessFence,
+                    build_prepared_overlay_for_transaction_with_accounts_zk,
+                },
             };
 
             let to_ms = |duration: Duration| -> u64 {
@@ -9279,11 +9264,18 @@ pub(crate) mod valid {
             let overlay_cache_count = workers.max(1);
             let overlay_caches: Vec<_> = (0..overlay_cache_count)
                 .map(|_| {
-                    parking_lot::Mutex::new(IvmCache::with_capacity(
+                    parking_lot::Mutex::new(IvmCache::with_prepared_contract_cache(
                         state_block.pipeline.cache_size,
+                        state_block.pipeline_ivm_prepared_cache.clone(),
                     ))
                 })
                 .collect();
+            // Preserve the worker-local cache affinity even when preparation
+            // fails. A state-dependent failure may be retried later against
+            // live state and should reuse any artifact/template work completed
+            // before that failure.
+            let overlay_cache_indices: Vec<_> =
+                (0..txs.len()).map(|_| AtomicUsize::new(0)).collect();
             #[cfg(feature = "telemetry")]
             let overlay_aggregate_lane = state_block.nexus.routing_policy.default_lane;
 
@@ -9298,7 +9290,19 @@ pub(crate) mod valid {
             struct PreparedBlockOverlay {
                 overlay: Arc<TxOverlay>,
                 access_log: Option<ivm::host::AccessLog>,
+                durable_state_reads: Option<DurableStateReadSnapshot>,
+                access_fence: VmAccessFence,
+                force_live_rebuild: bool,
+                cache_idx: usize,
             }
+
+            let capture_vm_access_log = |tx: &SignedTransaction| {
+                dynamic_prepass
+                    || matches!(
+                        tx.instructions(),
+                        Executable::ContractCall(_) | Executable::Ivm(_)
+                    )
+            };
 
             let mut prepared_overlays: Vec<
                 Result<PreparedBlockOverlay, crate::pipeline::overlay::OverlayBuildError>,
@@ -9320,6 +9324,8 @@ pub(crate) mod valid {
                                         );
                                     let cache_idx = rayon::current_thread_index().unwrap_or(i)
                                         % overlay_caches.len();
+                                    overlay_cache_indices[i]
+                                        .store(cache_idx, AtomicOrdering::Relaxed);
                                     #[cfg(feature = "telemetry")]
                                     let cache_wait_start = Instant::now();
                                     let mut ivm_cache = overlay_caches[cache_idx].lock();
@@ -9339,12 +9345,22 @@ pub(crate) mod valid {
                                             &block.header(),
                                             metadata,
                                             &mut ivm_cache,
-                                            dynamic_prepass,
+                                            capture_vm_access_log(tx),
                                         )
                                         .map(|prepared| {
+                                            let durable_state_reads =
+                                                DurableStateReadSnapshot::capture(
+                                                    tx,
+                                                    prepared.access_log.as_ref(),
+                                                    state_block,
+                                                );
                                             PreparedBlockOverlay {
                                                 overlay: Arc::new(prepared.overlay),
                                                 access_log: prepared.access_log,
+                                                durable_state_reads,
+                                                access_fence: prepared.access_fence,
+                                                force_live_rebuild: prepared.force_live_rebuild,
+                                                cache_idx,
                                             }
                                         });
                                 }
@@ -9363,6 +9379,7 @@ pub(crate) mod valid {
                                 );
                                 let cache_idx = rayon::current_thread_index().unwrap_or(i)
                                     % overlay_caches.len();
+                                overlay_cache_indices[i].store(cache_idx, AtomicOrdering::Relaxed);
                                 #[cfg(feature = "telemetry")]
                                 let cache_wait_start = Instant::now();
                                 let mut ivm_cache = overlay_caches[cache_idx].lock();
@@ -9381,12 +9398,21 @@ pub(crate) mod valid {
                                     &block.header(),
                                     metadata,
                                     &mut ivm_cache,
-                                    dynamic_prepass,
+                                    capture_vm_access_log(tx),
                                 )
                                 .map(|prepared| {
+                                    let durable_state_reads = DurableStateReadSnapshot::capture(
+                                        tx,
+                                        prepared.access_log.as_ref(),
+                                        state_block,
+                                    );
                                     PreparedBlockOverlay {
                                         overlay: Arc::new(prepared.overlay),
                                         access_log: prepared.access_log,
+                                        durable_state_reads,
+                                        access_fence: prepared.access_fence,
+                                        force_live_rebuild: prepared.force_live_rebuild,
+                                        cache_idx,
                                     }
                                 });
                             }
@@ -9417,11 +9443,22 @@ pub(crate) mod valid {
                                 &block.header(),
                                 metadata,
                                 &mut ivm_cache,
-                                dynamic_prepass,
+                                capture_vm_access_log(tx),
                             )
-                            .map(|prepared| PreparedBlockOverlay {
-                                overlay: Arc::new(prepared.overlay),
-                                access_log: prepared.access_log,
+                            .map(|prepared| {
+                                let durable_state_reads = DurableStateReadSnapshot::capture(
+                                    tx,
+                                    prepared.access_log.as_ref(),
+                                    state_block,
+                                );
+                                PreparedBlockOverlay {
+                                    overlay: Arc::new(prepared.overlay),
+                                    access_log: prepared.access_log,
+                                    durable_state_reads,
+                                    access_fence: prepared.access_fence,
+                                    force_live_rebuild: prepared.force_live_rebuild,
+                                    cache_idx: 0,
+                                }
                             });
                     }
                 }
@@ -9460,6 +9497,10 @@ pub(crate) mod valid {
                             .map(|overlay| PreparedBlockOverlay {
                                 overlay: Arc::new(overlay),
                                 access_log: None,
+                                durable_state_reads: None,
+                                access_fence: VmAccessFence::Global,
+                                force_live_rebuild: true,
+                                cache_idx: 0,
                             });
                     }
                 }
@@ -9507,7 +9548,7 @@ pub(crate) mod valid {
                 if stateless_rejections[idx].is_some() {
                     return (crate::pipeline::access::AccessSet::new(), None);
                 }
-                match &prepared_overlays[idx] {
+                let (mut set, mut source) = match &prepared_overlays[idx] {
                     Ok(prepared) => derive_for_prepared_overlay_with_source(
                         tx,
                         &*state_block,
@@ -9520,7 +9561,18 @@ pub(crate) mod valid {
                         Some(&*state_block),
                         crate::pipeline::access::IvmStrategy::Conservative,
                     ),
+                };
+                if let Ok(prepared) = &prepared_overlays[idx]
+                    && !matches!(
+                        source,
+                        Some(AccessSetSource::ManifestHints | AccessSetSource::EntrypointHints)
+                    )
+                    && let Some(fence_key) = prepared.access_fence.scheduler_write_key()
+                {
+                    set.add_write(fence_key.to_owned());
+                    source = Some(AccessSetSource::ConservativeFallback);
                 }
+                (set, source)
             };
             let derived: Vec<_> = if workers > 1 {
                 if let Some(pool) = pool.as_ref() {
@@ -9609,6 +9661,87 @@ pub(crate) mod valid {
                             .map_err(Clone::clone)
                     })
                     .collect();
+
+            // VM overlays are prepared from a block-start snapshot. Before a
+            // sequential merge, retain the cached overlay only while every
+            // durable-state prefix read by that VM still has the same value.
+            // This is deliberately narrower than re-executing arbitrary ISIs:
+            // ContractCall/IVM overlays with an observed stale durable read are
+            // rebuilt selectively. Bytecode with ledger access, nested calls,
+            // or other opaque dynamic access is also rebuilt because those
+            // observations are not yet represented by a narrow fingerprint.
+            // Quarantined VMs use the same live-state rule because their capped
+            // builder does not return an access log.
+            let overlay_rebuild_header = block.header();
+            let overlay_for_live_state = |state_ro: &StateBlock<'_>,
+                                          idx: usize|
+             -> Result<
+                Arc<TxOverlay>,
+                crate::pipeline::overlay::OverlayBuildError,
+            > {
+                let tx = txs[idx];
+                let is_vm = matches!(
+                    tx.instructions(),
+                    Executable::ContractCall(_) | Executable::Ivm(_)
+                );
+                let (stale_durable_read, force_live_rebuild, cache_idx) =
+                    match prepared_overlays[idx].as_ref() {
+                        Ok(prepared) => (
+                            prepared
+                                .durable_state_reads
+                                .as_ref()
+                                .is_some_and(|snapshot| !snapshot.is_current(state_ro)),
+                            prepared.force_live_rebuild,
+                            prepared.cache_idx,
+                        ),
+                        Err(err) if is_vm && err.may_change_with_live_state() => (
+                            false,
+                            true,
+                            overlay_cache_indices[idx].load(AtomicOrdering::Relaxed),
+                        ),
+                        Err(err) => return Err(err.clone()),
+                    };
+                let rebuild_quarantined_vm = is_quarantine[idx] && is_vm;
+                if !stale_durable_read && !force_live_rebuild && !rebuild_quarantined_vm {
+                    return prepared_overlays[idx]
+                        .as_ref()
+                        .map(|prepared| Arc::clone(&prepared.overlay))
+                        .map_err(Clone::clone);
+                }
+
+                let accounts = state_ro.accounts_snapshot();
+                let metadata =
+                    crate::pipeline::overlay::resolve_streaming_metadata(state_ro, tx.authority());
+                // Reuse the same worker-local runtime and prepared-artifact
+                // pool that produced the original overlay. A selective retry
+                // must not turn a warm nested call into another parse/predecode.
+                let mut ivm_cache = overlay_caches[cache_idx].lock();
+                let rebuilt = if rebuild_quarantined_vm {
+                    crate::pipeline::overlay::build_overlay_for_transaction_quarantine(
+                        tx,
+                        accounts,
+                        state_ro,
+                        q_cycle_cap,
+                        q_time_cap,
+                        upper_cycle_cap,
+                        metadata,
+                        &mut ivm_cache,
+                    )
+                } else {
+                    build_prepared_overlay_for_transaction_with_accounts_zk(
+                        tx,
+                        accounts,
+                        state_ro,
+                        state_ro.zk().halo2.enabled || state_ro.zk().stark.enabled,
+                        &overlay_rebuild_header,
+                        metadata,
+                        &mut ivm_cache,
+                        false,
+                    )
+                    .map(|prepared| prepared.overlay)
+                }?;
+                Ok(Arc::new(rebuilt))
+            };
 
             // Build conflict graph using key interning (strings -> compact IDs),
             // and partition transactions into independent components via DSF.
@@ -10402,6 +10535,57 @@ pub(crate) mod valid {
                     let layer_prep_start = timings.as_ref().map(|_| Instant::now());
                     #[cfg(feature = "telemetry")]
                     let t_layer_prep = Instant::now();
+                    let prepare_entry = |idx: usize| {
+                        let tx = txs[idx];
+                        let overlay = match overlays[idx].as_ref() {
+                            Ok(overlay) => Some(overlay.as_ref()),
+                            Err(err)
+                                if matches!(
+                                    tx.instructions(),
+                                    Executable::ContractCall(_) | Executable::Ivm(_)
+                                ) && err.may_change_with_live_state() =>
+                            {
+                                // A VM can fail against the block-start snapshot
+                                // and become valid after an earlier globally
+                                // serialized transaction. Defer its definitive
+                                // build to `overlay_for_live_state`.
+                                None
+                            }
+                            Err(err) => return Err((idx, map_overlay_error(err))),
+                        };
+                        if let Some(overlay) = overlay {
+                            let max_instrs = state_block.pipeline.overlay_max_instructions;
+                            if max_instrs > 0 && overlay.instruction_count() > max_instrs {
+                                return Err((
+                                    idx,
+                                    iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                                        iroha_data_model::ValidationFail::NotPermitted(format!(
+                                            "overlay exceeds max instructions: {} > {max_instrs}",
+                                            overlay.instruction_count()
+                                        )),
+                                    ),
+                                ));
+                            }
+                            let max_bytes = state_block.pipeline.overlay_max_bytes;
+                            let byte_size = overlay.byte_size() as u64;
+                            if max_bytes > 0 && byte_size > max_bytes {
+                                return Err((
+                                    idx,
+                                    iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                                        iroha_data_model::ValidationFail::NotPermitted(format!(
+                                            "overlay exceeds max bytes: {byte_size} > {max_bytes}"
+                                        )),
+                                    ),
+                                ));
+                            }
+                        }
+                        Ok(PreparedEntry {
+                            idx,
+                            authority: tx.authority().clone(),
+                            chunk_size: state_block.pipeline.overlay_chunk_instructions.max(1),
+                            _log_only: false,
+                        })
+                    };
                     let prepared_or_err: Vec<
                         Result<
                             PreparedEntry,
@@ -10415,132 +10599,17 @@ pub(crate) mod valid {
                             pool.install(|| {
                                 layer_norm
                                     .par_iter()
-                                    .map(|&idx| {
-                                        let tx = txs[idx];
-                                        let overlay = match overlays[idx].as_ref() {
-                                            Ok(o) => Arc::clone(o),
-                                            Err(err) => {
-                                                let rej = map_overlay_error(err);
-                                                return Err((idx, rej));
-                                            }
-                                        };
-                                        let max_instrs =
-                                            state_block.pipeline.overlay_max_instructions;
-                                        if max_instrs > 0
-                                            && overlay.instruction_count() > max_instrs
-                                        {
-                                            return Err((
-                                                idx,
-                                                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                                    iroha_data_model::ValidationFail::NotPermitted(format!(
-                                                        "overlay exceeds max instructions: {} > {max_instrs}",
-                                                        overlay.instruction_count()
-                                                    )),
-                                                ),
-                                            ));
-                                        }
-                                        let max_bytes = state_block.pipeline.overlay_max_bytes;
-                                        let byte_size = overlay.byte_size() as u64;
-                                        if max_bytes > 0 && byte_size > max_bytes {
-                                            return Err((
-                                                idx,
-                                                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                                    iroha_data_model::ValidationFail::NotPermitted(format!(
-                                                        "overlay exceeds max bytes: {byte_size} > {max_bytes}"
-                                                    )),
-                                                ),
-                                            ));
-                                        }
-                                        Ok(PreparedEntry {
-                                            idx,
-                                            authority: tx.authority().clone(),
-                                            chunk_size: state_block
-                                                .pipeline
-                                                .overlay_chunk_instructions
-                                                .max(1),
-                                            _log_only: false,
-                                        })
-                                    })
+                                    .map(|&idx| prepare_entry(idx))
                                     .collect()
                             })
                         } else {
                             layer_norm
                                 .par_iter()
-                                .map(|&idx| {
-                                    let tx = txs[idx];
-                                    let overlay = match overlays[idx].as_ref() {
-                                        Ok(o) => Arc::clone(o),
-                                        Err(err) => {
-                                            let rej = map_overlay_error(err);
-                                            return Err((idx, rej));
-                                        }
-                                    };
-                                    let max_instrs = state_block.pipeline.overlay_max_instructions;
-                                    if max_instrs > 0 && overlay.instruction_count() > max_instrs {
-                                        return Err((
-                                            idx,
-                                            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                                iroha_data_model::ValidationFail::NotPermitted(format!(
-                                                    "overlay exceeds max instructions: {} > {max_instrs}",
-                                                    overlay.instruction_count()
-                                                )),
-                                            ),
-                                        ));
-                                    }
-                                    let max_bytes = state_block.pipeline.overlay_max_bytes;
-                                    let byte_size = overlay.byte_size() as u64;
-                                    if max_bytes > 0 && byte_size > max_bytes {
-                                        return Err((
-                                            idx,
-                                            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                                iroha_data_model::ValidationFail::NotPermitted(format!(
-                                                    "overlay exceeds max bytes: {byte_size} > {max_bytes}"
-                                                )),
-                                            ),
-                                        ));
-                                    }
-                                    Ok(PreparedEntry {
-                                        idx,
-                                        authority: tx.authority().clone(),
-                                        chunk_size: state_block
-                                            .pipeline
-                                            .overlay_chunk_instructions
-                                            .max(1),
-                                        _log_only: false,
-                                    })
-                                })
+                                .map(|&idx| prepare_entry(idx))
                                 .collect()
                         }
                     } else {
-                        layer_norm.iter().map(|&idx| {
-                            let tx = txs[idx];
-                            let overlay = match overlays[idx].as_ref() {
-                                Ok(o) => Arc::clone(o),
-                                Err(err) => {
-                                    let rej = map_overlay_error(err);
-                                    return Err((idx, rej));
-                                }
-                            };
-                            let max_instrs = state_block.pipeline.overlay_max_instructions;
-                            if max_instrs > 0 && overlay.instruction_count() > max_instrs {
-                                return Err((idx, iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                    iroha_data_model::ValidationFail::NotPermitted(format!("overlay exceeds max instructions: {} > {max_instrs}", overlay.instruction_count())),
-                                )));
-                            }
-                            let max_bytes = state_block.pipeline.overlay_max_bytes;
-                            let byte_size = overlay.byte_size() as u64;
-                            if max_bytes > 0 && byte_size > max_bytes {
-                                return Err((idx, iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                    iroha_data_model::ValidationFail::NotPermitted(format!("overlay exceeds max bytes: {byte_size} > {max_bytes}")),
-                                )));
-                            }
-                            Ok(PreparedEntry {
-                                idx,
-                                authority: tx.authority().clone(),
-                                chunk_size: state_block.pipeline.overlay_chunk_instructions.max(1),
-                                _log_only: false,
-                            })
-                        }).collect()
+                        layer_norm.iter().map(|&idx| prepare_entry(idx)).collect()
                     };
                     #[cfg(feature = "telemetry")]
                     {
@@ -10766,7 +10835,15 @@ pub(crate) mod valid {
                             ) {
                                 return (p.idx, None, Some(DetachedFallbackReason::UserExecutor));
                             }
-                            if ovl.has_durable_state_changes() {
+                            if ovl.has_durable_state_changes()
+                                || prepared_overlays[p.idx]
+                                    .as_ref()
+                                    .ok()
+                                    .is_some_and(|prepared| {
+                                        prepared.durable_state_reads.is_some()
+                                            || prepared.force_live_rebuild
+                                    })
+                            {
                                 return (p.idx, None, Some(DetachedFallbackReason::DurableState));
                             }
                             let mut delta = DetachedStateTransactionDelta::default();
@@ -11029,11 +11106,11 @@ pub(crate) mod valid {
                             }
                             let tx = txs[idx];
                             let hash = prepared_txs[idx].metadata.entrypoint_hash;
-                            let overlay = match overlays[idx].as_ref() {
-                                Ok(ovl) => Arc::clone(ovl),
+                            let overlay = match overlay_for_live_state(state_block_mut, idx) {
+                                Ok(overlay) => overlay,
                                 Err(err) => {
                                     record_amx_abort(state_block_mut, idx, "prepare");
-                                    let rej = map_overlay_error(err);
+                                    let rej = map_overlay_error(&err);
                                     return Err(rej);
                                 }
                             };
@@ -11638,10 +11715,10 @@ pub(crate) mod valid {
                             record_result(idx, Err(reason));
                             continue;
                         }
-                        let overlay = match overlays[idx].as_ref() {
-                            Ok(o) => Arc::clone(o),
+                        let overlay = match overlay_for_live_state(state_block, idx) {
+                            Ok(overlay) => overlay,
                             Err(err) => {
-                                let rej = map_overlay_error(err);
+                                let rej = map_overlay_error(&err);
                                 record_result(idx, Err(rej));
                                 continue;
                             }
@@ -11846,11 +11923,11 @@ pub(crate) mod valid {
                         record_result(idx, Err(reason));
                         continue;
                     }
-                    let overlay = match overlays[idx].as_ref() {
-                        Ok(ovl) => Arc::clone(ovl),
+                    let overlay = match overlay_for_live_state(state_block, idx) {
+                        Ok(overlay) => overlay,
                         Err(err) => {
                             record_amx_abort(state_block, idx, "prepare");
-                            let rej = map_overlay_error(err);
+                            let rej = map_overlay_error(&err);
                             record_result(idx, Err(rej));
                             continue;
                         }
@@ -12878,7 +12955,12 @@ pub(crate) mod valid {
             height: u64,
         ) -> Option<ConfidentialFeatureDigest> {
             let view = state.query_view();
-            let digest = compute_confidential_feature_digest(view.world(), view.zk(), height);
+            let digest = compute_confidential_feature_digest(
+                view.world(),
+                view.zk(),
+                view.sccp_registry(),
+                height,
+            );
             (!digest.is_empty()).then_some(digest)
         }
 
@@ -13255,14 +13337,14 @@ pub(crate) mod valid {
                 dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
                 nonce: 1,
                 asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-                asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                asset_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
                 asset_id: b"xor".to_vec(),
                 amount: 10,
-                sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                sender_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
                 sender: b"bridge@sora".to_vec(),
-                recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
-                recipient: b"0x3333333333333333333333333333333333333333".to_vec(),
-                route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                recipient_codec: iroha_sccp::SCCP_CODEC_EVM_ADDRESS20,
+                recipient: vec![0x22; 20],
+                route_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
                 route_id: b"nexus:eth:xor".to_vec(),
             })
         }
@@ -13290,7 +13372,7 @@ pub(crate) mod valid {
         ) -> AcceptedTransaction<'static> {
             let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&sccp_transfer_payload());
             let overlay = core::iter::repeat_with(|| {
-                InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                InstructionBox::from(crate::bridge::test_record_sccp_message(
                     payload_bytes.clone(),
                 ))
             })
@@ -13456,7 +13538,7 @@ pub(crate) mod valid {
                 account_id,
                 &keypair,
                 vec![InstructionBox::from(
-                    iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                    crate::bridge::test_record_sccp_message(
                         b"not a canonical SCCP payload".to_vec(),
                     ),
                 )],
@@ -13641,7 +13723,7 @@ pub(crate) mod valid {
             let accepted = sccp_accepted_transaction_with_record_count(account_id, &keypair, 2);
             let leader = crate::block::checked_keypair();
             let duplicate_commitment =
-                iroha_sccp::hub_commitment_from_sccp_payload(&sccp_transfer_payload());
+                crate::bridge::test_sccp_hub_commitment(&sccp_transfer_payload());
             let duplicate_inclusive_root = iroha_sccp::commitment_merkle_root(&[
                 duplicate_commitment.clone(),
                 duplicate_commitment,
@@ -13679,7 +13761,7 @@ pub(crate) mod valid {
             let candidate_root =
                 crate::bridge::sccp_commitment_root_from_messages(&candidate_messages)
                     .expect("candidate SCCP root");
-            let key = crate::bridge::sccp_outbound_message_key(&sccp_transfer_payload());
+            let key = crate::bridge::test_sccp_outbound_message_key(&sccp_transfer_payload());
             let leader = crate::block::checked_keypair();
             let new_block = BlockBuilder::new(vec![accepted])
                 .chain(0, None)
@@ -13732,7 +13814,7 @@ pub(crate) mod valid {
                 crate::bridge::sccp_commitment_root_from_messages(&candidate_messages).is_some(),
                 "the pre-execution candidate includes the SCCP record"
             );
-            let key = crate::bridge::sccp_outbound_message_key(&sccp_transfer_payload());
+            let key = crate::bridge::test_sccp_outbound_message_key(&sccp_transfer_payload());
             let leader = crate::block::checked_keypair();
             let new_block = BlockBuilder::new(vec![accepted])
                 .chain(0, None)
@@ -13772,7 +13854,7 @@ pub(crate) mod valid {
             let candidate_root =
                 crate::bridge::sccp_commitment_root_from_messages(&candidate_messages)
                     .expect("candidate SCCP root");
-            let key = crate::bridge::sccp_outbound_message_key(&sccp_transfer_payload());
+            let key = crate::bridge::test_sccp_outbound_message_key(&sccp_transfer_payload());
             let leader = crate::block::checked_keypair();
             let new_block = BlockBuilder::new(vec![accepted])
                 .chain(0, None)
@@ -24206,8 +24288,8 @@ mod tests {
     }
 
     #[test]
-    fn block_validation_external_vm_entrypoints_require_sequential_execution() {
-        let chain_id = ChainId::from("external-vm-sequential-routing");
+    fn block_validation_external_vm_entrypoints_use_overlay_scheduler() {
+        let chain_id = ChainId::from("external-vm-overlay-routing");
         let (authority, keypair) = gen_account_in("wonderland");
         let make_block = |tx: SignedTransaction| {
             BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(tx))])
@@ -24238,14 +24320,14 @@ mod tests {
                 iroha_data_model::transaction::executable::ContractInvocation {
                     contract_address,
                     entrypoint: "increment".to_owned(),
-                    payload: None,
+                    arguments: None,
                 },
             ))
             .sign(keypair.private_key());
         let contract_block: SignedBlock = make_block(contract_tx);
         assert!(
-            ValidBlock::sequential_entrypoints_for_live_execution(&contract_block).is_some(),
-            "contract calls must execute against live state instead of stale prebuilt overlays"
+            ValidBlock::sequential_entrypoints_for_live_execution(&contract_block).is_none(),
+            "contract calls use the overlay scheduler; durable reads are validated before merge"
         );
 
         let ivm_tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
@@ -24253,8 +24335,8 @@ mod tests {
             .sign(keypair.private_key());
         let ivm_block: SignedBlock = make_block(ivm_tx);
         assert!(
-            ValidBlock::sequential_entrypoints_for_live_execution(&ivm_block).is_some(),
-            "raw IVM bytecode can produce durable-state overlays and must execute live"
+            ValidBlock::sequential_entrypoints_for_live_execution(&ivm_block).is_none(),
+            "raw IVM calls use the same durable-read validation as deployed contracts"
         );
 
         let proved_tx = TransactionBuilder::new(chain_id, authority)
@@ -24270,6 +24352,360 @@ mod tests {
             ValidBlock::sequential_entrypoints_for_live_execution(&proved_block).is_none(),
             "proved overlays are transaction-supplied and should keep their existing path"
         );
+    }
+
+    #[test]
+    fn block_validation_reprepares_stale_contract_state_read_modify_write() {
+        let chain_id = ChainId::from("durable-state-read-validation");
+        let (alice, alice_keypair) = gen_account_in("wonderland");
+        let (bob, bob_keypair) = gen_account_in("wonderland");
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("valid domain");
+        let domain = Domain::new(domain_id).build(&alice);
+        let alice_account = Account::new(alice.clone()).build(&alice);
+        let bob_account = Account::new(bob.clone()).build(&alice);
+        let mut world = World::with([domain], [alice_account, bob_account], []);
+
+        for authority in [&alice, &bob] {
+            let mut permissions = iroha_data_model::permission::Permissions::new();
+            assert!(
+                permissions.insert(iroha_data_model::permission::Permission::new(
+                    "CanEnactGovernance".to_owned(),
+                    Json::new(()),
+                ))
+            );
+            world
+                .account_permissions_mut_for_testing()
+                .insert(authority.clone(), permissions);
+        }
+
+        let source = r#"
+seiyaku DynamicAccessCounter {
+  state Counters: StateMap<i64, i64>;
+
+  fn bump_hidden(key: i64, delta: i64) {
+    let current = Counters.get(key).unwrap_or(0);
+    Counters[key] = current + delta;
+  }
+
+  kotoage fn bump_direct(key: i64, delta: i64) authorize("CanEnactGovernance") {
+    let current = Counters.get(key).unwrap_or(0);
+    Counters[key] = current + delta;
+  }
+
+  kotoage fn bump_via_helper(key: i64, delta: i64) authorize("CanEnactGovernance") {
+    bump_hidden(key, delta);
+  }
+}
+"#;
+        let (program, manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(source)
+            .expect("compile dynamic StateMap counter");
+        let contract_interface = ivm::ProgramMetadata::parse(&program)
+            .expect("parse compiled contract")
+            .contract_interface
+            .expect("compiled contract interface");
+        let code_hash = ivm::contract_code_hash(&program);
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &alice,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        world.contract_code.insert(code_hash, program);
+        world
+            .contract_manifests
+            .insert(code_hash, manifest.signed(&alice_keypair));
+        world
+            .contract_instances
+            .insert(contract_address.clone(), code_hash);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut state = State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+        let mut pipeline = state.pipeline.clone();
+        pipeline.dynamic_prepass = true;
+        pipeline.parallel_overlay = true;
+        pipeline.parallel_apply = true;
+        pipeline.workers = 2;
+        state.set_pipeline(pipeline);
+
+        let make_call = |authority: AccountId, keypair: &KeyPair, entrypoint: &str, delta: i64| {
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                "gas_limit".parse().expect("gas_limit name"),
+                Json::new(100_000_u64),
+            );
+            let payload = Json::new(norito::json!({ "key": 7, "delta": delta }));
+            let schema = contract_interface
+                .entrypoints
+                .iter()
+                .find(|descriptor| descriptor.name == entrypoint)
+                .and_then(|descriptor| descriptor.argument_schema.as_ref());
+            let arguments =
+                crate::executor::encode_contract_argument_record(schema, Some(&payload))
+                    .expect("encode contract arguments")
+                    .map(iroha_data_model::transaction::executable::ContractArgumentRecord::try_new)
+                    .transpose()
+                    .expect("bounded contract arguments");
+            TransactionBuilder::new(chain_id.clone(), authority)
+                .with_metadata(metadata)
+                .with_executable(Executable::ContractCall(
+                    iroha_data_model::transaction::executable::ContractInvocation {
+                        contract_address: contract_address.clone(),
+                        entrypoint: entrypoint.to_owned(),
+                        arguments,
+                    },
+                ))
+                .sign(keypair.private_key())
+        };
+        let direct = make_call(alice.clone(), &alice_keypair, "bump_direct", 3);
+        let helper = make_call(bob, &bob_keypair, "bump_via_helper", 5);
+        let accepted = [direct, helper]
+            .into_iter()
+            .map(|tx| AcceptedTransaction::new_unchecked(Cow::Owned(tx)))
+            .collect();
+        let block = BlockBuilder::new(accepted)
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(alice_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(block.header());
+        let valid = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let results = valid
+            .as_ref()
+            .entrypoint_results()
+            .map(|(_, _, result)| result.0.clone())
+            .collect::<Vec<_>>();
+        assert!(
+            results.iter().all(Result::is_ok),
+            "both co-batched contract calls must succeed: {results:?}"
+        );
+
+        let encoded_key = norito::to_bytes(&7_i64).expect("encode StateMap key");
+        let logical_path = format!("Counters/{}", hex::encode(encoded_key));
+        let scope_id = contract_address.to_string();
+        let scope_digest = hex::encode(Hash::new(scope_id.as_bytes()).as_ref());
+        let scoped_path: Name = format!("sc/{scope_digest}/{logical_path}")
+            .parse()
+            .expect("valid scoped StateMap path");
+        let stored = state_block
+            .world
+            .smart_contract_state
+            .get(&scoped_path)
+            .expect("counter state must be persisted");
+        let tlv = ivm::pointer_abi::validate_tlv_bytes(stored)
+            .expect("counter state uses a canonical pointer-ABI envelope");
+        let counter: i64 =
+            norito::decode_from_bytes(tlv.payload).expect("decode persisted counter");
+        assert_eq!(
+            counter, 8,
+            "the second overlay must be recomputed from the first call's committed value"
+        );
+    }
+
+    #[test]
+    fn block_validation_serializes_a_dynamic_target_that_changes_during_reprepare() {
+        let chain_id = ChainId::from("dynamic-target-live-reprepare");
+        let (alice, alice_keypair) = gen_account_in("wonderland");
+        let (bob, bob_keypair) = gen_account_in("wonderland");
+        let (charlie, charlie_keypair) = gen_account_in("wonderland");
+        let (dave, dave_keypair) = gen_account_in("wonderland");
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("valid domain");
+        let domain = Domain::new(domain_id).build(&alice);
+        let accounts = [
+            Account::new(alice.clone()).build(&alice),
+            Account::new(bob.clone()).build(&alice),
+            Account::new(charlie.clone()).build(&alice),
+            Account::new(dave.clone()).build(&alice),
+        ];
+        let mut world = World::with([domain], accounts, []);
+        for authority in [&alice, &bob, &charlie, &dave] {
+            let mut permissions = iroha_data_model::permission::Permissions::new();
+            assert!(
+                permissions.insert(iroha_data_model::permission::Permission::new(
+                    "CanEnactGovernance".to_owned(),
+                    Json::new(()),
+                ))
+            );
+            world
+                .account_permissions_mut_for_testing()
+                .insert(authority.clone(), permissions);
+        }
+
+        let source = r#"
+seiyaku DynamicTarget {
+  error enum DynamicTargetError {
+    SelectorClosed = 1,
+  }
+
+  state Selector: StateMap<i64, i64>;
+  state Counters: StateMap<i64, i64>;
+
+  kotoage fn choose(key: i64) authorize("CanEnactGovernance") {
+    Selector[0] = key;
+  }
+
+  kotoage fn set_selected(value: i64) authorize("CanEnactGovernance") {
+    let key = Selector.get(0).unwrap_or(1);
+    Counters[key] = value;
+  }
+
+  kotoage fn set_direct(key: i64, value: i64) authorize("CanEnactGovernance") {
+    Counters[key] = value;
+  }
+
+  kotoage fn guarded_set(value: i64) authorize("CanEnactGovernance") {
+    require(Selector.get(0).unwrap_or(0) == 2, DynamicTargetError::SelectorClosed);
+    Counters[3] = value;
+  }
+}
+"#;
+        let (program, manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(source)
+            .expect("compile dynamic-target contract");
+        let contract_interface = ivm::ProgramMetadata::parse(&program)
+            .expect("parse compiled contract")
+            .contract_interface
+            .expect("compiled contract interface");
+        let code_hash = ivm::contract_code_hash(&program);
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &alice,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        world.contract_code.insert(code_hash, program);
+        world
+            .contract_manifests
+            .insert(code_hash, manifest.signed(&alice_keypair));
+        world
+            .contract_instances
+            .insert(contract_address.clone(), code_hash);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut state = State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+        let mut pipeline = state.pipeline.clone();
+        pipeline.dynamic_prepass = true;
+        pipeline.parallel_overlay = true;
+        pipeline.parallel_apply = true;
+        pipeline.workers = 4;
+        state.set_pipeline(pipeline);
+
+        let make_call = |authority: AccountId,
+                         keypair: &KeyPair,
+                         entrypoint: &str,
+                         payload: Json| {
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                "gas_limit".parse().expect("gas_limit name"),
+                Json::new(100_000_u64),
+            );
+            let schema = contract_interface
+                .entrypoints
+                .iter()
+                .find(|descriptor| descriptor.name == entrypoint)
+                .and_then(|descriptor| descriptor.argument_schema.as_ref());
+            let arguments =
+                crate::executor::encode_contract_argument_record(schema, Some(&payload))
+                    .expect("encode contract arguments")
+                    .map(iroha_data_model::transaction::executable::ContractArgumentRecord::try_new)
+                    .transpose()
+                    .expect("bounded contract arguments");
+            TransactionBuilder::new(chain_id.clone(), authority)
+                .with_metadata(metadata)
+                .with_executable(Executable::ContractCall(
+                    iroha_data_model::transaction::executable::ContractInvocation {
+                        contract_address: contract_address.clone(),
+                        entrypoint: entrypoint.to_owned(),
+                        arguments,
+                    },
+                ))
+                .sign(keypair.private_key())
+        };
+        let choose = make_call(
+            alice.clone(),
+            &alice_keypair,
+            "choose",
+            Json::new(norito::json!({ "key": 2 })),
+        );
+        let selected = make_call(
+            bob,
+            &bob_keypair,
+            "set_selected",
+            Json::new(norito::json!({ "value": 5 })),
+        );
+        let direct = make_call(
+            charlie,
+            &charlie_keypair,
+            "set_direct",
+            Json::new(norito::json!({ "key": 2, "value": 7 })),
+        );
+        let guarded = make_call(
+            dave,
+            &dave_keypair,
+            "guarded_set",
+            Json::new(norito::json!({ "value": 11 })),
+        );
+        let accepted = [choose, selected, direct, guarded]
+            .into_iter()
+            .map(|tx| AcceptedTransaction::new_unchecked(Cow::Owned(tx)))
+            .collect();
+        let block = BlockBuilder::new(accepted)
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(alice_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(block.header());
+        let valid = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let results = valid
+            .as_ref()
+            .entrypoint_results()
+            .map(|(_, _, result)| result.0.clone())
+            .collect::<Vec<_>>();
+        assert!(
+            results.iter().all(Result::is_ok),
+            "all dynamic-target calls must succeed: {results:?}"
+        );
+
+        let encoded_key = norito::to_bytes(&2_i64).expect("encode StateMap key");
+        let logical_path = format!("Counters/{}", hex::encode(encoded_key));
+        let scope_digest = hex::encode(Hash::new(contract_address.to_string().as_bytes()).as_ref());
+        let scoped_path: Name = format!("sc/{scope_digest}/{logical_path}")
+            .parse()
+            .expect("valid scoped StateMap path");
+        let stored = state_block
+            .world
+            .smart_contract_state
+            .get(&scoped_path)
+            .expect("selected counter must be persisted");
+        let tlv = ivm::pointer_abi::validate_tlv_bytes(stored)
+            .expect("counter state uses a canonical pointer-ABI envelope");
+        let counter: i64 =
+            norito::decode_from_bytes(tlv.payload).expect("decode persisted counter");
+        assert_eq!(
+            counter, 7,
+            "a key selected during live re-execution must retain source-order conflict semantics"
+        );
+
+        let guarded_key = norito::to_bytes(&3_i64).expect("encode guarded StateMap key");
+        let guarded_path: Name = format!("sc/{scope_digest}/Counters/{}", hex::encode(guarded_key))
+            .parse()
+            .expect("valid guarded StateMap path");
+        let guarded_stored = state_block
+            .world
+            .smart_contract_state
+            .get(&guarded_path)
+            .expect("an initially failing VM overlay must be retried against live state");
+        let guarded_tlv = ivm::pointer_abi::validate_tlv_bytes(guarded_stored)
+            .expect("guarded state uses a canonical pointer-ABI envelope");
+        let guarded_value: i64 =
+            norito::decode_from_bytes(guarded_tlv.payload).expect("decode guarded persisted value");
+        assert_eq!(guarded_value, 11);
     }
 
     #[test]

@@ -8,7 +8,7 @@ use iroha_data_model::{
     query::{
         QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryWithParams,
         account::prelude::FindAccounts,
-        builder::{QueryBuilder, QueryExecutor},
+        builder::{QueryBuilder, QueryExecutor, TypedBatchDowncastError},
         parameters::FetchSize,
     },
 };
@@ -35,13 +35,16 @@ impl MockExec {
 
 impl QueryExecutor for MockExec {
     type Cursor = usize; // index of next element
-    type Error = ();
+    type Error = TypedBatchDowncastError;
 
     fn execute_singular_query(
         &self,
         _query: iroha_data_model::query::SingularQueryBox,
     ) -> Result<iroha_data_model::query::SingularQueryOutputBox, Self::Error> {
-        Err(())
+        Err(TypedBatchDowncastError::ColumnCountMismatch {
+            expected: 1,
+            actual: 0,
+        })
     }
 
     fn start_query(
@@ -50,9 +53,7 @@ impl QueryExecutor for MockExec {
     ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
         let end = self.page.min(self.data.len());
         let batch = self.data[..end].to_vec();
-        let tuple = QueryOutputBatchBoxTuple {
-            tuple: vec![QueryOutputBatchBox::Account(batch)],
-        };
+        let tuple = QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Account(batch));
         let remaining = (self.data.len() - end) as u64;
         let cursor = if end < self.data.len() {
             Some(end)
@@ -65,9 +66,7 @@ impl QueryExecutor for MockExec {
     fn continue_query(
         _cursor: Self::Cursor,
     ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
-        let tuple = QueryOutputBatchBoxTuple {
-            tuple: vec![QueryOutputBatchBox::Account(Vec::new())],
-        };
+        let tuple = QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Account(Vec::new()));
         Ok((tuple, Some(0), None))
     }
 }

@@ -94,7 +94,7 @@ Defaults first: configuration values are curated for typical Iroha blockchain de
   - `ivm_proved.enabled`: enable/disable `Executable::IvmProved` admission.
   - `ivm_proved.skip_replay` (default: `false`): when `ivm-execution-v1` semantics are fully enforced by proofs, skip the deterministic VM replay step in admission. Keep `false` while proofs are still commitment-only.
   - `ivm_proved.allowed_circuits`: list of allowed proof circuit IDs. Empty list disables all proved execution admission.
-  - `ivm_max_cycles_upper_bound` caps the `max_cycles` header value accepted from Kotodama bytecode. Set to `0` to disable the admission guard (still clamped at execution time by the VM).
+  - `ivm_max_cycles_upper_bound` is the mandatory positive ceiling for the `max_cycles` header value accepted from Kotodama bytecode. The default is `1000000`; `0` is rejected during configuration loading. This consensus-relevant value is read only from the configuration file and has no environment-variable alias.
   - `ivm_max_decoded_instructions` limits the number of decoded VM instructions per contract. `0` disables the check.
   - `ivm_max_decoded_bytes` limits the decoded byte length after instruction expansion. `0` disables the check.
   - `query_max_fetch_size` caps iterable query `fetch_size` for IVM query syscalls (0 clamps to 1). Torii endpoints continue to use `torii.app_api.max_fetch_size`.

@@ -39,7 +39,7 @@ isi! {
     pub struct ActivateContractInstance {
         /// Canonical contract address.
         pub contract_address: crate::smart_contract::ContractAddress,
-        /// Content-addressed code hash (Blake2b-32) of the `.to` bytecode to bind.
+        /// Domain-separated canonical hash of the complete `.to` artifact to bind.
         pub code_hash: iroha_crypto::Hash,
     }
 }
@@ -50,10 +50,11 @@ isi! {
     /// Register compiled contract bytecode on-chain keyed by its `code_hash`.
     ///
     /// The bytecode is the full compiled `.to` image including the IVM header.
-    /// Nodes verify that `code_hash` equals the Blake2b-32 digest of the program body
-    /// (bytes after the IVM header) before storing.
+    /// Nodes verify that `code_hash` equals the domain-separated canonical hash of the
+    /// complete deployable `.to` artifact, including the execution header, `CNTR`,
+    /// literals, and code, before storing.
     pub struct RegisterSmartContractBytes {
-        /// Hash of the program body bytes (after IVM header).
+        /// Domain-separated canonical hash of the complete deployable `.to` artifact.
         pub code_hash: iroha_crypto::Hash,
         /// Full compiled `.to` image (including IVM header).
         pub code: Vec<u8>,
@@ -242,6 +243,7 @@ mod tests {
 
     fn manifest() -> ContractManifest {
         ContractManifest {
+            contract_name: None,
             code_hash: Some(code_hash()),
             abi_hash: Some(Hash::new(b"abi-policy")),
             compiler_fingerprint: Some("kotodama-1.2.3".to_owned()),
@@ -250,6 +252,7 @@ mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_codes: None,
             provenance: None,
         }
     }

@@ -197,7 +197,7 @@ Norito 架构位于 `crates/iroha_data_model/src/nexus` 中的数据模型定义
 (`crates/ivm/src/analysis.rs`) 公开 `analyze_program(&[u8])`，它解码
 `.to` 人工制品，记录寄存器读/写、内存操作和系统调用使用情况，
 并生成 SDK 清单可以嵌入的 JSON 友好的报告。运行它
-发布 UAID 时与 `koto_lint` 一起，因此生成的读/写摘要为
+发布 UAID 时与 `koto check` 一起，因此生成的读/写摘要为
 在 NX-17 准备情况审查期间引用的证据包中捕获。
 
 ## 空间目录策略执行

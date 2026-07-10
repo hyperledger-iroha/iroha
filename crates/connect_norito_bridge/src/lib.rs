@@ -17028,6 +17028,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
         let private_key = parse_private_key(key_slice)?;
         let key_pair = KeyPair::from(private_key.clone());
         let manifest = ContractManifest {
+            contract_name: None,
             code_hash: Some(Hash::prehashed(code_hash_arr)),
             abi_hash: Some(Hash::prehashed(abi_hash_arr)),
             compiler_fingerprint: None,
@@ -17036,6 +17037,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_codes: None,
             provenance: None,
         }
         .try_signed(&key_pair)
@@ -17144,6 +17146,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
         let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;
         let key_pair = KeyPair::from(private_key.clone());
         let manifest = ContractManifest {
+            contract_name: None,
             code_hash: Some(Hash::prehashed(code_hash_arr)),
             abi_hash: Some(Hash::prehashed(abi_hash_arr)),
             compiler_fingerprint: None,
@@ -17152,6 +17155,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_codes: None,
             provenance: None,
         }
         .try_signed(&key_pair)

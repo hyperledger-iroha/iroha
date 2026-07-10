@@ -17,6 +17,7 @@ fn minimal_contract_artifact() -> Vec<u8> {
         abi_version: 1,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        contract_name: "TestContract".to_owned(),
         compiler_fingerprint: "metadata-tests".to_owned(),
         features_bitmap: 0,
         access_set_hints: None,
@@ -25,6 +26,7 @@ fn minimal_contract_artifact() -> Vec<u8> {
             name: "main".to_owned(),
             kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
             params: Vec::new(),
+            argument_schema: None,
             return_type: None,
             permission: None,
             read_keys: Vec::new(),
@@ -34,6 +36,7 @@ fn minimal_contract_artifact() -> Vec<u8> {
             triggers: Vec::new(),
             entry_pc: 0,
         }],
+        error_codes: Vec::new(),
         states: Vec::new(),
     };
     let mut bytes = meta.encode();
@@ -52,6 +55,7 @@ fn minimal_contract_artifact_with_debug() -> Vec<u8> {
         abi_version: 1,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        contract_name: "TestContract".to_owned(),
         compiler_fingerprint: "metadata-tests".to_owned(),
         features_bitmap: 0,
         access_set_hints: None,
@@ -60,6 +64,7 @@ fn minimal_contract_artifact_with_debug() -> Vec<u8> {
             name: "main".to_owned(),
             kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
             params: Vec::new(),
+            argument_schema: None,
             return_type: None,
             permission: None,
             read_keys: Vec::new(),
@@ -69,6 +74,7 @@ fn minimal_contract_artifact_with_debug() -> Vec<u8> {
             triggers: Vec::new(),
             entry_pc: 0,
         }],
+        error_codes: Vec::new(),
         states: Vec::new(),
     };
     let debug = ivm::EmbeddedContractDebugInfoV1 {

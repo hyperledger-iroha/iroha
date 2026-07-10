@@ -105,32 +105,25 @@ keçid, onları CI qapı işləri üçün uyğun edir.
 
 ### ISO ləqəb köməkçisi
 
-`recipes/iso_alias.mjs` ISO ləqəb son nöqtələrini hədəfləyir ki, məşqlər əhatə etsin
-sifarişli alətlər yazmadan kor-element hashing və ləqəb axtarışları. Bu
-zənglər `ToriiClient.evaluateAliasVoprf` plus `resolveAlias` / `resolveAliasByIndex`
-və backend, digest, hesab bağlaması, mənbə və deterministik indeksi çap edir
-Torii tərəfindən qaytarıldı.
+`recipes/iso_alias.mjs` xüsusi alətlər tələb etmədən ISO ləqəb axtarışlarını yoxlayır.
+O, `resolveAlias` və `resolveAliasByIndex` çağırır, sonra Torii-nin qaytardığı hesab bağlantısını, mənbəni və deterministik indeksi çap edir.
 
 Ətraf mühit dəyişənləri:
 
 - `TORII_URL` — Torii ləqəb köməkçilərini ifşa edən son nöqtə.
-- `ISO_VOPRF_INPUT` — hex kodlu kor element (defolt olaraq `deadbeef`).
-- `ISO_SKIP_VOPRF=1` — yalnız axtarışları sınaqdan keçirərkən VOPRF çağırışını atlayın.
 - `ISO_ALIAS_LABEL` — həll etmək üçün hərfi ad (məsələn, IBAN tipli sətirlər).
 - `ISO_ALIAS_INDEX` — onluq və ya `0x`-prefiksli indeks `resolveAliasByIndex`-ə keçdi.
 - `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — təhlükəsiz Torii yerləşdirmələri üçün əlavə başlıqlar.
 
 ```bash
-# Evaluate a blinded element and resolve an alias literal + deterministic index.
+# Resolve an alias literal + deterministic index.
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeefcafebabe \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node javascript/iroha_js/recipes/iso_alias.mjs
 
 # Only perform literal resolution.
 TORII_URL=https://torii.testnet.sora \
-ISO_SKIP_VOPRF=1 \
 ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```

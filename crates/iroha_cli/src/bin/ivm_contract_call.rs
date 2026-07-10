@@ -19,7 +19,10 @@ use iroha::{
         name::Name,
         prelude::*,
         smart_contract::{ContractAddress, ContractAlias},
-        transaction::{Executable, TransactionBuilder, executable::ContractInvocation},
+        transaction::{
+            Executable, TransactionBuilder,
+            executable::{ContractArgumentRecord, ContractInvocation},
+        },
     },
 };
 use iroha_config::parameters::{
@@ -52,7 +55,7 @@ struct Args {
     contract_address: Option<String>,
     #[arg(long)]
     contract_alias: Option<String>,
-    #[arg(long, default_value = "main")]
+    #[arg(long)]
     entrypoint: String,
     #[arg(long)]
     payload_json: Option<String>,
@@ -247,7 +250,6 @@ fn contract_call_metadata(
     contract_address: &ContractAddress,
     contract_alias: Option<&ContractAlias>,
     entrypoint: &str,
-    payload: Option<&Json>,
     gas_asset_id: Option<&str>,
     fee_sponsor: Option<&str>,
     gas_limit: u64,
@@ -263,9 +265,6 @@ fn contract_call_metadata(
         insert_string_metadata(&mut metadata, "contract_alias", alias.to_string())?;
     }
     insert_string_metadata(&mut metadata, "contract_entrypoint", entrypoint.to_owned())?;
-    if let Some(payload) = payload {
-        metadata.insert(Name::from_str("contract_payload")?, payload.clone());
-    }
     insert_gas_asset_id(&mut metadata, gas_asset_id)?;
     if let Some(sponsor) = fee_sponsor.filter(|value| !value.trim().is_empty()) {
         insert_string_metadata(&mut metadata, "fee_sponsor", sponsor.trim().to_owned())?;
@@ -283,8 +282,12 @@ fn sign_contract_call_transaction(
     metadata: Metadata,
     contract_address: ContractAddress,
     entrypoint: String,
-    payload: Option<Json>,
+    arguments: Option<Vec<u8>>,
 ) -> Result<SignedTransaction> {
+    let arguments = arguments
+        .map(ContractArgumentRecord::try_new)
+        .transpose()
+        .wrap_err("contract argument record exceeds the signed wire limit")?;
     let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
     if let Some(transaction_ttl) = transaction_ttl {
         builder.set_ttl(transaction_ttl);
@@ -294,10 +297,53 @@ fn sign_contract_call_transaction(
         .with_executable(Executable::ContractCall(ContractInvocation {
             contract_address,
             entrypoint,
-            payload,
+            arguments,
         }))
         .try_sign(private_key)
         .wrap_err("failed to sign contract call transaction")
+}
+
+fn encode_contract_arguments(
+    client: &Client,
+    contract_address: &ContractAddress,
+    entrypoint: &str,
+    payload: Option<&Json>,
+) -> Result<Option<Vec<u8>>> {
+    let binding = client
+        .get_gov_contract_json(contract_address)
+        .wrap_err("failed to resolve deployed contract binding")?;
+    let code_hash = binding
+        .get("code_hash_hex")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| eyre!("contract `{contract_address}` has no active code binding"))?;
+    let code_bytes = client
+        .get_contract_code_bytes(code_hash)
+        .wrap_err("failed to fetch deployed contract bytecode")?;
+    let metadata = ivm::ProgramMetadata::parse(&code_bytes)
+        .map_err(|err| eyre!("invalid deployed contract artifact: {err}"))?;
+    let descriptor = metadata
+        .contract_interface
+        .as_ref()
+        .and_then(|interface| {
+            interface
+                .entrypoints
+                .iter()
+                .find(|candidate| candidate.name == entrypoint)
+        })
+        .ok_or_else(|| eyre!("deployed contract has no entrypoint `{entrypoint}`"))?;
+
+    match (descriptor.argument_schema.as_ref(), payload) {
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err(eyre!(
+            "zero-parameter entrypoint `{entrypoint}` must not receive a payload"
+        )),
+        (Some(_), None) => Err(eyre!(
+            "parameterized entrypoint `{entrypoint}` requires a payload"
+        )),
+        (Some(schema), Some(payload)) => ivm::encode_argument_record_from_json(schema, payload)
+            .map(Some)
+            .map_err(|err| eyre!("payload does not match entrypoint schema: {err}")),
+    }
 }
 
 fn payload_digest_hex(payload: Option<&Json>) -> String {
@@ -337,12 +383,17 @@ fn main() -> Result<()> {
     )?;
     let payload = parse_payload(args.payload_json.as_deref(), args.payload_file.as_deref())?;
     let payload_digest_hex = payload_digest_hex(payload.as_ref());
+    let arguments = encode_contract_arguments(
+        &client,
+        &contract_address,
+        &args.entrypoint,
+        payload.as_ref(),
+    )?;
     let transaction_ttl = args.transaction_ttl_ms.map(Duration::from_millis);
     let metadata = contract_call_metadata(
         &contract_address,
         contract_alias.as_ref(),
         &args.entrypoint,
-        payload.as_ref(),
         args.gas_asset_id.as_deref(),
         args.fee_sponsor.as_deref(),
         args.gas_limit,
@@ -356,7 +407,7 @@ fn main() -> Result<()> {
         metadata,
         contract_address.clone(),
         args.entrypoint.clone(),
-        payload,
+        arguments,
     )?;
     let tx_hash = tx.hash();
     let entrypoint_hash = tx.hash_as_entrypoint();
@@ -418,6 +469,25 @@ mod tests {
         assert_eq!(
             payload_digest_hex(Some(&payload)),
             hex::encode(blake3::hash(payload.get().as_bytes()).as_bytes())
+        );
+    }
+
+    #[test]
+    fn contract_call_metadata_never_duplicates_the_argument_record_as_json() {
+        let address: ContractAddress =
+            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address");
+        let metadata = contract_call_metadata(&address, None, "submit", None, None, 50_000, &[])
+            .expect("contract call metadata");
+
+        assert!(metadata.get("contract_payload").is_none());
+        assert_eq!(
+            metadata
+                .get("contract_entrypoint")
+                .and_then(|value| value.try_into_any_norito::<String>().ok())
+                .as_deref(),
+            Some("submit")
         );
     }
 }

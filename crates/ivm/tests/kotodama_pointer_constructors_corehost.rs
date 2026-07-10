@@ -5,11 +5,13 @@ use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 
 #[test]
 fn kotodama_set_account_detail_with_constructors() {
-    // Kotodama program uses pointer constructors for Name/Json and authority() for AccountId
+    // Kotodama program uses typed pointer constructors for the host call.
     let src = r#"
-        fn main() {
+        seiyaku SetAccountDetail {
+        kotoage fn main() authorize("SetAccountDetail") {
           // Use a valid AccountId multihash form for Iroha v2
-          set_account_detail(account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), name("cursor"), json("{\"x\":1}"));
+          ledger::account::set_detail(AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), Name::parse("cursor"), Json::parse("{\"x\":1}"));
+        }
         }
     "#;
     // Use default compiler options (no forced VECTOR bit)

@@ -69,8 +69,6 @@ p2p_tls = [
 ]
 ## WebSocket fallback over Torii (/p2p) using WSS
 p2p_ws = ["dep:tokio-tungstenite"]
-## Optional TURN relay scaffold (no external deps; env-based stub)
-p2p_turn = []
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "time", "macros"] }

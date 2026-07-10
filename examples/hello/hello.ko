@@ -1,23 +1,18 @@
 // Minimal Kotodama example: logs a greeting and writes a detail for the current authority
-
 seiyaku Hello {
-  // Optional initializer; deploy-oriented runtimes may call this automatically.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    // Optional initializer; deploy-oriented runtimes may call this automatically.
+    hajimari() {
+        debug::info("Hello from Kotodama");
+    }
 
-  // Default raw-IVM entrypoint used by ivm_run / transaction ivm when no selector is supplied.
-  kotoage fn main() permission(Admin) {
-    info("Hello from Kotodama");
-    write_detail();
-  }
+    // Named public entrypoint; callers must select `main` explicitly.
+    kotoage fn main() authorize("Admin") {
+        debug::info("Hello from Kotodama");
+        write_detail();
+    }
 
-  // Public entrypoint that sets an account detail on the caller.
-  kotoage fn write_detail() permission(Admin) {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    // Public entrypoint that sets an account detail on the caller.
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(context::authority(), Name::parse("example"), Json::parse("{\"hello\":\"world\"}"));
+    }
 }

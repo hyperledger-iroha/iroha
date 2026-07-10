@@ -6,9 +6,97 @@ use iroha_data_model::prelude::*;
 use iroha_primitives::json::Json;
 use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls};
 use ivm_abi::metadata::LITERAL_SECTION_MAGIC;
+use ivm_abi::state_value::{
+    StateValueAtomV1, StateValueKindV1, StateValueNodeV1, StateValueRecordV1, StateValueSchemaV1,
+    state_value_schema_hash_v1,
+};
 
 const HALT_WORD: u32 = encoding::wide::encode_halt();
 pub const HALT: [u8; 4] = HALT_WORD.to_le_bytes();
+
+fn i64_state_schema() -> StateValueSchemaV1 {
+    StateValueSchemaV1 {
+        nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Int)],
+    }
+}
+
+/// Encode an `i64` using the schema-bound Kotodama V1 durable-value record.
+pub fn encode_i64_state_value(value: i64) -> Vec<u8> {
+    let schema = i64_state_schema();
+    let schema_bytes = norito::to_bytes(&schema).expect("encode i64 state schema");
+    norito::to_bytes(&StateValueRecordV1 {
+        schema_hash: state_value_schema_hash_v1(&schema_bytes),
+        atoms: vec![StateValueAtomV1::Int(value)],
+    })
+    .expect("encode i64 state record")
+}
+
+/// Decode and validate an `i64` Kotodama V1 durable-value record.
+pub fn decode_i64_state_value(payload: &[u8]) -> i64 {
+    let schema = i64_state_schema();
+    let schema_bytes = norito::to_bytes(&schema).expect("encode i64 state schema");
+    let record: StateValueRecordV1 =
+        norito::decode_from_bytes(payload).expect("decode i64 state record");
+    assert_eq!(
+        record.schema_hash,
+        state_value_schema_hash_v1(&schema_bytes),
+        "i64 state schema hash"
+    );
+    assert!(schema.validate_atoms(&record.atoms));
+    let [StateValueAtomV1::Int(value)] = record.atoms.as_slice() else {
+        panic!("i64 state record must contain exactly one integer atom");
+    };
+    *value
+}
+
+/// Encode one pointer-backed value using the schema-bound Kotodama V1 record.
+pub fn encode_pointer_state_value(
+    kind: StateValueKindV1,
+    pointer_type: PointerType,
+    payload: &[u8],
+) -> Vec<u8> {
+    assert!(kind.is_pointer(), "state kind must use a pointer word");
+    let schema = StateValueSchemaV1 {
+        nodes: vec![StateValueNodeV1::Leaf(kind)],
+    };
+    let schema_bytes = norito::to_bytes(&schema).expect("encode pointer state schema");
+    let mut envelope = Vec::with_capacity(7 + payload.len() + iroha_crypto::Hash::LENGTH);
+    envelope.extend_from_slice(&(pointer_type as u16).to_be_bytes());
+    envelope.push(1);
+    envelope.extend_from_slice(
+        &u32::try_from(payload.len())
+            .expect("test pointer payload fits u32")
+            .to_be_bytes(),
+    );
+    envelope.extend_from_slice(payload);
+    envelope.extend_from_slice(iroha_crypto::Hash::new(payload).as_ref());
+    norito::to_bytes(&StateValueRecordV1 {
+        schema_hash: state_value_schema_hash_v1(&schema_bytes),
+        atoms: vec![StateValueAtomV1::Pointer(envelope)],
+    })
+    .expect("encode pointer state record")
+}
+
+/// Decode and structurally validate one pointer-backed Kotodama V1 state record.
+pub fn decode_pointer_state_value(payload: &[u8], kind: StateValueKindV1) -> Vec<u8> {
+    assert!(kind.is_pointer(), "state kind must use a pointer word");
+    let schema = StateValueSchemaV1 {
+        nodes: vec![StateValueNodeV1::Leaf(kind)],
+    };
+    let schema_bytes = norito::to_bytes(&schema).expect("encode pointer state schema");
+    let record: StateValueRecordV1 =
+        norito::decode_from_bytes(payload).expect("decode pointer state record");
+    assert_eq!(
+        record.schema_hash,
+        state_value_schema_hash_v1(&schema_bytes),
+        "pointer state schema hash"
+    );
+    assert!(schema.validate_atoms(&record.atoms));
+    let [StateValueAtomV1::Pointer(envelope)] = record.atoms.as_slice() else {
+        panic!("pointer state record must contain exactly one pointer atom");
+    };
+    envelope.clone()
+}
 
 fn assemble_words(words: &[u32]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(words.len() * 4);

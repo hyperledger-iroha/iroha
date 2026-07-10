@@ -39,7 +39,7 @@ fn branch_executed_set_gas_matches() {
     let a1 = ivm::kotodama::compiler::encode_addi(1, 0, 1).expect("encode addi");
     let a2 = ivm::kotodama::compiler::encode_addi(2, 0, 2).expect("encode addi");
     let beq = encoding::wide::encode_branch(instruction::wide::control::BEQ, 1, 2, 2);
-    let jmp = encoding::wide::encode_jump(instruction::wide::control::JMP, 0, 1);
+    let jmp = encoding::wide::encode_offset24(instruction::wide::control::JMP, 1);
     let halt = encoding::wide::encode_halt();
     let words = [a1, a2, beq, jmp, halt];
     let mut code = header_with_mode(0);

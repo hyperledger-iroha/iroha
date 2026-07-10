@@ -1,12 +1,12 @@
 ---
 lang: ba
 direction: ltr
-source: docs/portal/versioned_docs/version-2025-q2/norito/getting-started.md
+source: docs/portal/docs/norito/getting-started.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8e153602cfb465bd5f65bab0cf97c44604bba982a7a7f1edc8d5af8fd67a9e29
-source_last_modified: "2026-01-22T16:26:46.562262+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 3754b8549f90a4f325bb58a6b4e24bc052ec65d46a6352995c13555a8d5544bf
+source_last_modified: "2026-04-08T09:18:21.504260+00:00"
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -29,7 +29,7 @@ Iroha төйөнөнә тиклем.
    Ҡораллы сылбыр урындағы, күрһәтеү Makefile ярҙамсылары бинар:
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 . 1990 й.
@@ -43,17 +43,16 @@ Iroha төйөнөнә тиклем.
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
 Төп флагтар:
 
 - I18NI0000000038X контрактты 1-се версияһына ABI-ға бикләп ҡуя (берҙән-бер ярҙам версияһында
   яҙыу ваҡыты).
-- `--max-cycles 0` X сикһеҙ башҡарыу үтенесе; ыңғай һан ҡуйығыҙ, бәйләү өсөн
+- `--max-cycles 1000000` X сикһеҙ башҡарыу үтенесе; ыңғай һан ҡуйығыҙ, бәйләү өсөн
   цикл нуль-белемле дәлилдәр өсөн прокладка.
 
 ## 2. I18NT0000000009X артефактын тикшерергә (төҙөү)
@@ -85,7 +84,7 @@ I18NI000000042X миҫалы сәләмләү һәм `SET_ACCOUNT_DETAIL` syscal
 База64 файҙалы йөк:
 
 ```sh
-iroha_cli app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to

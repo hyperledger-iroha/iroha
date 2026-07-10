@@ -1,11 +1,16 @@
 // Demonstrates struct declaration and durable state.
 seiyaku StructAndState {
-  struct Pair { first: int, second: int }
+    struct Pair {
+        first: i64, second: i64
+    }
 
-  state Pair stored_pair;
+    state stored_pair: Pair;
+    hajimari() {
+        stored_pair = Pair(0, 0);
+    }
 
-  kotoage fn set_pair(a: int, b: int) {
-    stored_pair = Pair(a, b);
-    info("pair set");
-  }
+    kotoage fn set_pair(a: i64, b: i64) authorize("Entry") {
+        stored_pair = Pair(a, b);
+        debug::info("pair set");
+    }
 }

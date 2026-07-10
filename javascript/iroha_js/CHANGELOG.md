@@ -4,6 +4,11 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Replaced lossy Kotodama compiler exceptions with a discriminated asynchronous
+  result. Node and browser-service compilation now preserve the canonical Rust
+  diagnostic fields and UTF-8 byte spans, validate artifact/manifest/sidecar
+  integrity on success, and bound compiler-service success and error bodies
+  while reading them.
 - Added signed Torii alias-resolution ergonomics: `resolveAlias`,
   `resolveAliasByIndex`, and `lookupAliasesByAccount` now accept
   `canonicalAuth`, and `buildCanonicalJsonRequest` builds a signed JSON request

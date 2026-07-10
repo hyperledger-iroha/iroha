@@ -33,8 +33,10 @@ fn kotodama_roles_roundtrip_on_wsvhost() {
 
     // 1) Create role `minter` with permission mint_asset:rose#wonder
     let src_create = r#"
-        fn main() {
-          create_role(name("minter"), json("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
+        seiyaku CreateRole {
+        kotoage fn main() authorize("ManageRoles") {
+          ledger::role::create(Name::parse("minter"), Json::parse("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
+        }
         }
     "#;
     let prog = compiler
@@ -58,8 +60,10 @@ fn kotodama_roles_roundtrip_on_wsvhost() {
 
     // 2) Grant role to alice and check derived permission
     let src_grant = r#"
-        fn main() {
-          grant_role(authority(), name("minter"));
+        seiyaku GrantRole {
+        kotoage fn main() authorize("ManageRoles") {
+          ledger::role::grant(context::authority(), Name::parse("minter"));
+        }
         }
     "#;
     let prog = compiler
@@ -82,9 +86,11 @@ fn kotodama_roles_roundtrip_on_wsvhost() {
 
     // 3) Revoke role and delete; verify permissions removed and role absent
     let src_cleanup = r#"
-        fn main() {
-          revoke_role(authority(), name("minter"));
-          delete_role(name("minter"));
+        seiyaku RevokeAndDeleteRole {
+        kotoage fn main() authorize("ManageRoles") {
+          ledger::role::revoke(context::authority(), Name::parse("minter"));
+          ledger::role::delete(Name::parse("minter"));
+        }
         }
     "#;
     let prog = compiler

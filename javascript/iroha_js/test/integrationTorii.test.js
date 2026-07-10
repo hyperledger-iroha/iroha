@@ -45,10 +45,6 @@ const ISO_PACS008_OVERRIDES = parseJsonEnv(
 const ISO_PACS009_OVERRIDES = parseJsonEnv(
   process.env.IROHA_TORII_INTEGRATION_ISO_PACS009 ?? null,
 );
-const ISO_VOPRF_INPUT_RAW =
-  process.env.IROHA_TORII_INTEGRATION_ISO_VOPRF ?? "";
-const ISO_VOPRF_INPUT =
-  ISO_VOPRF_INPUT_RAW.trim().length === 0 ? "deadbeef" : ISO_VOPRF_INPUT_RAW.trim();
 const ISO_POLL_INTERVAL_MS = parsePositiveIntegerEnv(
   process.env.IROHA_TORII_INTEGRATION_ISO_POLL_MS,
   2_000,
@@ -2610,9 +2606,13 @@ test(
 
     const entrypoint =
       CONTRACT_CALL_OPTIONS.entrypoint ?? CONTRACT_CALL_OPTIONS.entryPoint ?? null;
-    if (isNonEmptyString(entrypoint)) {
-      request.entrypoint = entrypoint;
+    if (!isNonEmptyString(entrypoint)) {
+      t.diagnostic(
+        "contract call payload must include non-empty `entrypoint`/`entryPoint`",
+      );
+      return;
     }
+    request.entrypoint = entrypoint;
     if (Object.prototype.hasOwnProperty.call(CONTRACT_CALL_OPTIONS, "payload")) {
       request.payload = CONTRACT_CALL_OPTIONS.payload;
     }
@@ -4570,54 +4570,6 @@ test(
     t.diagnostic(
       `governance ballot accepted=${response.accepted} instructions=${response.tx_instructions.length} proposal=${response.proposal_id ?? "none"}`,
     );
-  },
-);
-
-test(
-  "ISO bridge alias VOPRF helper responds (optional)",
-  {
-    skip: !!SKIP_REASON,
-    timeout: 60_000,
-  },
-  async (t) => {
-    if (!ISO_ENABLED) {
-      t.diagnostic("set IROHA_TORII_INTEGRATION_ISO_ENABLED=1 to exercise ISO alias coverage");
-      return;
-    }
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-    try {
-      const response = await client.evaluateAliasVoprf(ISO_VOPRF_INPUT);
-      assert.ok(
-        typeof response.evaluated_element_hex === "string" &&
-          response.evaluated_element_hex.length > 0,
-        "alias VOPRF response must include evaluated_element_hex",
-      );
-      assert.ok(
-        typeof response.backend === "string" && response.backend.length > 0,
-        "alias VOPRF response must include backend label",
-      );
-      t.diagnostic(
-        `alias VOPRF backend=${response.backend} digest=${response.evaluated_element_hex.slice(
-          0,
-          16,
-        )}…`,
-      );
-    } catch (error) {
-      if (isIsoBridgeDisabledError(error)) {
-        t.diagnostic(`ISO bridge disabled on target node: ${error.message}`);
-        return;
-      }
-      if (error instanceof Error && /hex string/i.test(error.message ?? "")) {
-        t.diagnostic(
-          `alias VOPRF helper rejected configured input '${ISO_VOPRF_INPUT}': ${error.message}`,
-        );
-        return;
-      }
-      throw error;
-    }
   },
 );
 

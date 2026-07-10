@@ -20,7 +20,6 @@ tiny-keccak = { version = "2.0.2", default-features = false, features = ["keccak
 sha2 = { version = "0.10.9", default-features = false }
 bs58 = { version = "0.5.1", default-features = false, features = ["alloc"] }
 norito = { path = "../norito" }
-fastpq_prover = { path = "../fastpq_prover" }
 halo2curves = { workspace = true }
 iroha_crypto = { path = "../iroha_crypto" }
-iroha_data_model = { path = "../iroha_data_model", default-features = false }
+iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["json"] }

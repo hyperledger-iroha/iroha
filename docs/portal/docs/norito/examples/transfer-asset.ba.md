@@ -36,3 +36,13 @@ source: examples/transfer/transfer.ko
 [Скачать источник Kotodama] (/norito-snippets/transfer-asset.ko)
 
 18НФ00000001Х
+
+```kotodama
+// Transfer example: uses typed pointer constructors and transfer_asset syscall
+seiyaku TransferDemo {
+    // Public entrypoint to transfer 10 units of the canonical Base58 asset definition between canonical I105 accounts
+    kotoage fn do_transfer() authorize("AssetTransferRole") {
+        ledger::asset::transfer(AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), Amount::from_i64(10), DataSpaceId::parse("0"));
+    }
+}
+```
