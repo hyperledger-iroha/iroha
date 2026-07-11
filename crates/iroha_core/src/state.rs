@@ -23462,6 +23462,8 @@ impl State {
                     iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
                 bridge_proof_max_future_drift_blocks:
                     iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
+                sccp_launch_mode:
+                    iroha_config::parameters::actual::SccpLaunchMode::EthereumMainnetLane,
                 sccp_source_verifier_materials: Vec::new(),
                 sccp_source_adapter_engine_deployments: Vec::new(),
                 sccp_destination_rollouts: Vec::new(),
@@ -36641,6 +36643,7 @@ pub fn default_zk_config() -> iroha_config::parameters::actual::Zk {
             iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
         bridge_proof_max_future_drift_blocks:
             iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
+        sccp_launch_mode: iroha_config::parameters::actual::SccpLaunchMode::EthereumMainnetLane,
         sccp_source_verifier_materials: Vec::new(),
         sccp_source_adapter_engine_deployments: Vec::new(),
         sccp_destination_rollouts: Vec::new(),
@@ -52188,6 +52191,7 @@ pub(crate) mod deserialize {
                 iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
             bridge_proof_max_future_drift_blocks:
                 iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
+            sccp_launch_mode: iroha_config::parameters::actual::SccpLaunchMode::EthereumMainnetLane,
             sccp_source_verifier_materials: Vec::new(),
             sccp_source_adapter_engine_deployments: Vec::new(),
             sccp_destination_rollouts: Vec::new(),

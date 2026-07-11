@@ -1,6 +1,6 @@
 {
   "name": "@iroha/iroha-js",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Preview Node.js SDK for interacting with Hyperledger Iroha via Norito payloads and Torii APIs.",
   "type": "module",
   "main": "./dist/index.js",
@@ -18,6 +18,11 @@
       "browser": "./dist/browser.js",
       "import": "./dist/browser.js",
       "types": "./index.d.ts"
+    },
+    "./transaction-codec": {
+      "browser": "./dist/transactionCodec.js",
+      "import": "./dist/transactionCodec.js",
+      "types": "./transaction-codec.d.ts"
     },
     "./normalizers": {
       "browser": "./dist/normalizers.js",
@@ -87,6 +92,9 @@
       ],
       "browser": [
         "./index.d.ts"
+      ],
+      "transaction-codec": [
+        "./transaction-codec.d.ts"
       ],
       "normalizers": [
         "./index.d.ts"
@@ -174,6 +182,7 @@
   "files": [
     "README.md",
     "index.d.ts",
+    "transaction-codec.d.ts",
     "connect.browser.d.ts",
     "nexus-app.d.ts",
     "kotodama-compiler.d.ts",
@@ -203,6 +212,12 @@
     "buffer": "^6.0.3"
   },
   "devDependencies": {
-    "eslint": "^8.57.0"
+    "@types/node": "^22.15.30",
+    "esbuild": "0.28.1",
+    "eslint": "^8.57.0",
+    "typescript": "^5.8.3"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true
   }
 }

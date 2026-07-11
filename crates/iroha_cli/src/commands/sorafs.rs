@@ -13074,17 +13074,19 @@ impl Run for ToolkitPackArgs {
         };
 
         let chunk_profile = ChunkingProfileV1::from_descriptor(descriptor);
+        let chunk_digest_sha3 = compute_chunk_digest_sha3(&plan.chunks);
         let mut builder = ManifestBuilder::new()
             .root_cid(root_cid.clone())
             .dag_codec(DagCodecId(car_stats.dag_codec))
             .chunking_profile(chunk_profile.clone())
+            .chunk_digest_sha3_256(chunk_digest_sha3)
             .content_length(plan.content_length)
             .car_digest(car_payload_digest)
             .car_size(car_stats.car_size)
             .pin_policy(PinPolicy {
                 min_replicas: 3,
                 storage_class: ManifestStorageClass::Hot,
-                retention_epoch: 0,
+                retention_epoch: 86_400,
             })
             .governance(GovernanceProofs::default());
 
@@ -13102,7 +13104,6 @@ impl Run for ToolkitPackArgs {
                 .map(|name| name.to_string_lossy().into_owned())
         });
 
-        let chunk_digest_sha3 = compute_chunk_digest_sha3(&plan.chunks);
         let hybrid_output = if let Some(recipient) = hybrid_recipient {
             let aad = build_hybrid_manifest_aad(
                 &manifest_digest,
@@ -16412,9 +16413,6 @@ pub struct PinRegisterArgs {
     /// Path to the Norito-encoded manifest (`.to`) file.
     #[arg(long, value_name = "PATH")]
     pub manifest: PathBuf,
-    /// Hex-encoded SHA3-256 digest of the chunk metadata plan.
-    #[arg(long, value_name = "HEX")]
-    pub chunk_digest: String,
     /// Epoch recorded when submitting the manifest.
     #[arg(long)]
     pub submitted_epoch: u64,
@@ -16437,10 +16435,8 @@ impl Run for PinRegisterArgs {
         let manifest_bytes = fs::read(&self.manifest).wrap_err_with(|| {
             format!("failed to read manifest from `{}`", self.manifest.display())
         })?;
-        let manifest: ManifestV1 = norito::decode_from_bytes(&manifest_bytes)
-            .wrap_err("failed to decode manifest payload")?;
-
-        let chunk_digest = parse_hex_array::<32>(&self.chunk_digest, "chunk_digest")?;
+        let manifest = sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes)
+            .wrap_err("failed to decode exact canonical manifest payload")?;
         let alias_inputs = self.load_alias_inputs()?;
         let successor = self
             .successor_of
@@ -16462,9 +16458,8 @@ impl Run for PinRegisterArgs {
                 authority: &config.account,
                 private_key: config.key_pair.private_key(),
                 manifest: &manifest,
-                manifest_bytes: Some(manifest_bytes.as_slice()),
-                chunk_digest_sha3_256: chunk_digest,
                 submitted_epoch: self.submitted_epoch,
+                gas_asset_id: None,
                 alias: alias_ref,
                 successor_of: successor,
             })
@@ -22460,6 +22455,7 @@ mod tests {
                 multihash_code: BLAKE3_256_MULTIHASH_CODE,
                 aliases: vec!["sf1".into()],
             })
+            .chunk_digest_sha3_256([0xCD; 32])
             .content_length(payload_bytes)
             .car_digest([0xAB; 32])
             .car_size(car_bytes)
@@ -28253,6 +28249,7 @@ mod tests {
             .root_cid(vec![0xAA; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
+            .chunk_digest_sha3_256([0xCD; 32])
             .content_length(0)
             .car_digest([0x11; 32])
             .car_size(0)
@@ -28312,6 +28309,7 @@ mod tests {
                 multihash_code: BLAKE3_256_MULTIHASH_CODE,
                 aliases: vec!["sf1".into()],
             })
+            .chunk_digest_sha3_256([0xCD; 32])
             .content_length(1_048_576)
             .car_digest([0xAB; 32])
             .car_size(1_111_111)

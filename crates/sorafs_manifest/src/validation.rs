@@ -28,6 +28,62 @@ pub const MAX_MANIFEST_METADATA_BYTES: usize = 128 * 1024;
 pub const MAX_MANIFEST_COUNCIL_SIGNATURES: usize = 64;
 const MAX_MANIFEST_TEXT_FIELD_BYTES: usize = 128;
 const MAX_MANIFEST_METADATA_VALUE_BYTES: usize = 4096;
+const MAX_MANIFEST_DECODE_SEQUENCE_ELEMENTS: usize = MAX_MANIFEST_ALIAS_PROOF_BYTES;
+const MAX_MANIFEST_DECODE_TOTAL_ELEMENTS: usize = MAX_MANIFEST_ENCODED_BYTES * 2;
+const MAX_MANIFEST_DECODE_ALLOCATED_BYTES: usize = MAX_MANIFEST_ENCODED_BYTES * 4;
+const MAX_MANIFEST_DECODE_DEPTH: usize = 64;
+
+/// Errors emitted while decoding an attacker-controlled manifest payload.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum ManifestDecodeError {
+    /// The wire payload exceeds the first-release manifest byte ceiling.
+    #[error("manifest payload has {found} bytes; maximum is {maximum}")]
+    PayloadTooLarge { found: usize, maximum: usize },
+    /// Norito rejected the payload under the manifest resource budget.
+    #[error("failed to decode bounded ManifestV1 payload: {reason}")]
+    Decode { reason: String },
+    /// The decoded value could not be encoded canonically.
+    #[error("failed to encode canonical ManifestV1 payload: {reason}")]
+    CanonicalEncoding { reason: String },
+    /// The input contained a non-canonical or trailing-byte encoding.
+    #[error("manifest payload is not the exact canonical Norito encoding")]
+    NonCanonicalEncoding,
+}
+
+/// Decode one exact canonical manifest under first-release resource limits.
+///
+/// This helper is intended for every untrusted manifest byte boundary. It
+/// applies limits before allocation and rejects alternate encodings and
+/// trailing bytes by comparing the decoded value with its canonical encoding.
+pub fn decode_manifest_v1_canonical(bytes: &[u8]) -> Result<ManifestV1, ManifestDecodeError> {
+    if bytes.len() > MAX_MANIFEST_ENCODED_BYTES {
+        return Err(ManifestDecodeError::PayloadTooLarge {
+            found: bytes.len(),
+            maximum: MAX_MANIFEST_ENCODED_BYTES,
+        });
+    }
+    let limits = norito::DecodeLimits::new(
+        MAX_MANIFEST_DECODE_SEQUENCE_ELEMENTS,
+        MAX_MANIFEST_ENCODED_BYTES,
+        MAX_MANIFEST_DECODE_TOTAL_ELEMENTS,
+        MAX_MANIFEST_DECODE_ALLOCATED_BYTES,
+        MAX_MANIFEST_DECODE_DEPTH,
+    );
+    let manifest: ManifestV1 = norito::decode_from_bytes_with_limits(bytes, limits).map_err(
+        |error| ManifestDecodeError::Decode {
+            reason: error.to_string(),
+        },
+    )?;
+    let canonical = norito::to_bytes(&manifest).map_err(|error| {
+        ManifestDecodeError::CanonicalEncoding {
+            reason: error.to_string(),
+        }
+    })?;
+    if canonical != bytes {
+        return Err(ManifestDecodeError::NonCanonicalEncoding);
+    }
+    Ok(manifest)
+}
 
 /// Constraints applied to the pin policy during manifest validation.
 #[derive(Debug, Clone)]
@@ -730,6 +786,38 @@ mod tests {
         let result = validate_manifest(&manifest, &constraints);
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn bounded_manifest_decoder_accepts_only_exact_canonical_bytes() {
+        let manifest = manifest_with_defaults();
+        let canonical = norito::to_bytes(&manifest).expect("canonical manifest");
+
+        assert_eq!(
+            decode_manifest_v1_canonical(&canonical).expect("canonical manifest decodes"),
+            manifest
+        );
+
+        let mut with_trailing_bytes = canonical;
+        with_trailing_bytes.extend_from_slice(&[0x00, 0xA5]);
+        assert!(matches!(
+            decode_manifest_v1_canonical(&with_trailing_bytes),
+            Err(ManifestDecodeError::NonCanonicalEncoding)
+                | Err(ManifestDecodeError::Decode { .. })
+        ));
+    }
+
+    #[test]
+    fn bounded_manifest_decoder_rejects_oversized_input_before_decode() {
+        let oversized = vec![0_u8; MAX_MANIFEST_ENCODED_BYTES + 1];
+
+        assert_eq!(
+            decode_manifest_v1_canonical(&oversized),
+            Err(ManifestDecodeError::PayloadTooLarge {
+                found: MAX_MANIFEST_ENCODED_BYTES + 1,
+                maximum: MAX_MANIFEST_ENCODED_BYTES,
+            })
+        );
     }
 
     #[test]

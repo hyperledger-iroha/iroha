@@ -5479,14 +5479,12 @@ pub fn write_pin_registry_fixture(output: PathBuf) -> Result<(), Box<dyn Error>>
     let mut tx = block.transaction();
 
     let (digest, manifest_root_cid, manifest_payload) = pin_fixture_default_manifest()?;
-    let chunk_digest = pin_fixture_default_chunk_digest();
     let council_keys = pin_fixture_council_keypair();
 
     pin_fixture_register_and_approve(
         &mut tx,
         digest,
         manifest_payload,
-        chunk_digest,
         &council_keys,
     )?;
 
@@ -5582,10 +5580,9 @@ fn pin_fixture_register_and_approve(
     tx: &mut iroha_core::state::StateTransaction<'_, '_>,
     digest: ManifestDigest,
     manifest_payload: Vec<u8>,
-    chunk_digest: [u8; 32],
     council_keys: &KeyPair,
 ) -> Result<(), Box<dyn Error>> {
-    RegisterPinManifest::new(manifest_payload, chunk_digest, 5, None, None)
+    RegisterPinManifest::new(manifest_payload, 5, None, None)
         .execute(&pin_fixture_alice(), tx)
         .map_err(|err| format!("failed to register manifest: {err}"))?;
 
@@ -5615,6 +5612,7 @@ fn pin_fixture_default_manifest()
         .root_cid(sorafs_manifest::canonical_manifest_root_cid([0xA5; 32]))
         .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
         .chunking_from_registry(descriptor.id)
+        .chunk_digest_sha3_256(pin_fixture_default_chunk_digest())
         .content_length(1_048_576)
         .car_digest([0xB6; 32])
         .car_size(1_048_832)

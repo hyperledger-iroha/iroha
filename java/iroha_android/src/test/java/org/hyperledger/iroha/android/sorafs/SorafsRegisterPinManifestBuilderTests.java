@@ -27,7 +27,6 @@ public final class SorafsRegisterPinManifestBuilderTests {
     rejectsOversizedManifestPayload();
     defensivelyCopiesManifestPayload();
     rejectsMissingRequiredFields();
-    rejectsMalformedChunkDigest();
     rejectsMalformedSuccessorDigest();
     rejectsNegativeSubmittedEpoch();
     rejectsPartialAliasBinding();
@@ -43,17 +42,14 @@ public final class SorafsRegisterPinManifestBuilderTests {
     final RegisterPinManifestInstruction payload =
         RegisterPinManifestInstruction.builder()
             .setManifestPayloadBase64(requireString(instruction, "manifest_payload_base64"))
-            .setChunkDigestSha3Hex(requireString(instruction, "chunk_digest_sha3_256_hex"))
             .setSubmittedEpoch(requireNumber(instruction.get("submitted_epoch")))
             .build();
     final InstructionBox box = payload.toInstructionBox();
-    assert box.arguments().size() == 4 : "unexpected legacy consensus fields";
+    assert box.arguments().size() == 3 : "unexpected retired consensus fields";
     assert Objects.equals(
         box.arguments().get("manifest_payload_base64"),
         requireString(instruction, "manifest_payload_base64"));
-    assert Objects.equals(
-        box.arguments().get("chunk_digest_sha3_256_hex"),
-        requireString(instruction, "chunk_digest_sha3_256_hex"));
+    assert !box.arguments().containsKey("chunk_digest_sha3_256_hex");
     assert !box.arguments().containsKey("digest_hex");
     assert !box.arguments().containsKey("chunker.profile_id");
     assert !box.arguments().containsKey("content_length");
@@ -89,7 +85,6 @@ public final class SorafsRegisterPinManifestBuilderTests {
     final RegisterPinManifestInstruction instruction =
         RegisterPinManifestInstruction.builder()
             .setManifestPayload(source)
-            .setChunkDigestSha3Hex(repeat("b0", 32))
             .setSubmittedEpoch(1)
             .build();
     Arrays.fill(source, (byte) 0);
@@ -103,7 +98,6 @@ public final class SorafsRegisterPinManifestBuilderTests {
     expectIllegalState(
         () ->
             RegisterPinManifestInstruction.builder()
-                .setChunkDigestSha3Hex(repeat("b0", 32))
                 .setSubmittedEpoch(1)
                 .build(),
         "missing manifest payload must fail");
@@ -111,32 +105,8 @@ public final class SorafsRegisterPinManifestBuilderTests {
         () ->
             RegisterPinManifestInstruction.builder()
                 .setManifestPayloadBase64(CANONICAL_MANIFEST_BASE64)
-                .setSubmittedEpoch(1)
-                .build(),
-        "missing chunk digest must fail");
-    expectIllegalState(
-        () ->
-            RegisterPinManifestInstruction.builder()
-                .setManifestPayloadBase64(CANONICAL_MANIFEST_BASE64)
-                .setChunkDigestSha3Hex(repeat("b0", 32))
                 .build(),
         "missing submitted epoch must fail");
-  }
-
-  private static void rejectsMalformedChunkDigest() {
-    for (final String digest :
-        new String[] {
-          repeat("00", 32),
-          repeat("b0", 31),
-          repeat("b0", 33),
-          repeat("B0", 32),
-          "0x" + repeat("b0", 32),
-          repeat("zz", 32)
-        }) {
-      expectIllegalArgument(
-          () -> RegisterPinManifestInstruction.builder().setChunkDigestSha3Hex(digest),
-          "chunk digest must be canonical nonzero 32-byte hex");
-    }
   }
 
   private static void rejectsMalformedSuccessorDigest() {
@@ -204,6 +174,12 @@ public final class SorafsRegisterPinManifestBuilderTests {
         () -> RegisterPinManifestInstruction.fromArguments(legacy),
         "legacy digest field must fail");
 
+    final Map<String, String> retiredChunkDigest = baseArguments();
+    retiredChunkDigest.put("chunk_digest_sha3_256_hex", repeat("b0", 32));
+    expectIllegalArgument(
+        () -> RegisterPinManifestInstruction.fromArguments(retiredChunkDigest),
+        "retired out-of-band chunk digest must fail");
+
     final Map<String, String> wrongAction = baseArguments();
     wrongAction.put("action", "ApprovePinManifest");
     expectIllegalArgument(
@@ -211,9 +187,7 @@ public final class SorafsRegisterPinManifestBuilderTests {
         "wrong action must fail");
 
     for (final String key :
-        new String[] {
-          "action", "manifest_payload_base64", "chunk_digest_sha3_256_hex", "submitted_epoch"
-        }) {
+        new String[] {"action", "manifest_payload_base64", "submitted_epoch"}) {
       final Map<String, String> missing = baseArguments();
       missing.remove(key);
       expectIllegalArgument(
@@ -238,7 +212,6 @@ public final class SorafsRegisterPinManifestBuilderTests {
   private static RegisterPinManifestInstruction.Builder baseBuilder() {
     return RegisterPinManifestInstruction.builder()
         .setManifestPayloadBase64(CANONICAL_MANIFEST_BASE64)
-        .setChunkDigestSha3Hex(repeat("b0", 32))
         .setSubmittedEpoch(1);
   }
 

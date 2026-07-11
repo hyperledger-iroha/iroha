@@ -315,7 +315,6 @@ def run_manifest_stub(
 
 def build_fixture_example(
     fixture_meta: dict,
-    chunker_fixture: dict,
     manifest_report: dict,
     manifest_report_path: Path,
     manifest_payload_base64: str,
@@ -323,8 +322,7 @@ def build_fixture_example(
     timestamp = iso_utc_from_unix_timestamp(fixture_meta["now_unix_secs"])
     instruction = {
         "manifest_payload_base64": manifest_payload_base64,
-        "chunk_digest_sha3_256_hex": chunker_fixture["chunk_digest_sha3_256"],
-        "submitted_epoch": 0,
+        "submitted_epoch": fixture_meta["now_unix_secs"],
         "alias": None,
         "successor_of": None,
     }
@@ -453,12 +451,23 @@ def main(argv: list[str] | None = None) -> int:
             manifest_out=tmp_manifest,
         )
         manifest_report = load_json(tmp_report, label="generated manifest report")
+        embedded_chunk_digest = (
+            manifest_report.get("manifest", {}).get("chunk_digest_sha3_256_hex")
+        )
+        expected_chunk_digest = chunker_fixture.get("chunk_digest_sha3_256")
+        if (
+            not isinstance(embedded_chunk_digest, str)
+            or not isinstance(expected_chunk_digest, str)
+            or embedded_chunk_digest.lower() != expected_chunk_digest.lower()
+        ):
+            raise SystemExit(
+                "generated manifest chunk-plan commitment does not match the governed chunker fixture"
+            )
         manifest_payload_base64 = base64.b64encode(tmp_manifest.read_bytes()).decode("ascii")
         write_json(report_path, manifest_report, label="manifest report")
 
     fixture_example = build_fixture_example(
         fixture_meta,
-        chunker_fixture,
         manifest_report,
         report_path,
         manifest_payload_base64,

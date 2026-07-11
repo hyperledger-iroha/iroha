@@ -1066,16 +1066,14 @@ Completed local foundations:
   It also rejects duplicate or unsupported `--source-entry` kinds before
   dry-run output or live canaries.
 - Provide `scripts/build_sorafs_ai_prescreen_canary.py` as a fail-closed
-  payload-free SFM-4a canary builder for individual runner, committee,
-  operator workflow, juror notification transport, commit/reveal executor,
-  transparency publication, Governance DAG, and end-to-end workflow artifacts.
-  The builder requires reviewed deployment context, runner tuple digests,
-  reviewed `--subject` references matching the gate's `cid:*` production
-  shape, runner `--evidence-digest-hex` and `--policy-digest-hex` evidence
-  anchors, integer `--score-bps` values capped at `10000`, workflow digest
-  bindings, reviewed committee-result labels whose
-  unique inventory matches `--result-count` and the
-  `ai-prescreen-committee-result-*` production family, generated notification
+  payload-free non-runner SFM-4a canary builder for operator workflow, juror
+  notification transport, commit/reveal executor, transparency publication,
+  Governance DAG, and end-to-end workflow artifacts. Runner and committee evidence
+  must come from their deployed live-probe commands (`runner-canary` and
+  `committee-canary`), because those commands bind the evidence to real service
+  responses rather than operator-supplied synthetic facts. The non-runner
+  builder requires reviewed deployment context, workflow digest bindings,
+  and generated notification
   delivery labels in the `ai-prescreen-notification-delivery-*` production
   family, `--probe-count` covers both shipped notification actions by default
   and must continue to cover them, complete operator
@@ -1089,7 +1087,7 @@ Completed local foundations:
   reviewed `ai-prescreen-governance-edge-*` edge labels without non-production
   markers, commit/reveal executor action-count breakdowns that sum to
   `--action-count`, and
-  shared URL preflight for runner, committee, operator, and webhook URLs so
+  shared URL preflight for operator and webhook URLs so
   userinfo, query strings, fragments, encoded traversal/separators/drive
   prefixes, URI-like path tokens, and secret-looking host/path components fail
   before evidence is written, and

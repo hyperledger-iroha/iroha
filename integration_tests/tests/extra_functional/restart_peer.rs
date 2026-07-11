@@ -267,6 +267,7 @@ fn register_private_model_pin(
         ))
         .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
         .chunking_from_registry(descriptor.id)
+        .chunk_digest_sha3_256([chunk_seed; 32])
         .content_length(content_length)
         .car_digest([chunk_seed.wrapping_add(0x22); 32])
         .car_size(content_length.saturating_add(256))
@@ -277,7 +278,7 @@ fn register_private_model_pin(
         })
         .build()?;
     let digest = ManifestDigest::from_manifest(&manifest)?;
-    let instruction = RegisterPinManifest::new(manifest.encode()?, [chunk_seed; 32], 1, None, None);
+    let instruction = RegisterPinManifest::new(manifest.encode()?, 1, None, None);
     Ok((digest, instruction))
 }
 

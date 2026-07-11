@@ -763,7 +763,7 @@ def test_rollout_artifacts_must_share_one_reviewed_deployment_context(
     assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
 
     report = json.loads(summary.read_text("utf-8"))
-    assert report["valid_deployment_contexts"] == []
+    assert report["deployment_context"] == {}
     assert (
         "valid_deployment_contexts must contain exactly one active binding"
         in report["errors"]

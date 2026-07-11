@@ -185,6 +185,7 @@ max_proof_size_bytes = 8388608
 max_proof_bytes_block = 16777216
 
 [zk]
+sccp_launch_mode = "solana_testnet_lane"
 sccp_source_verifier_materials = []
 
 [zk.halo2]

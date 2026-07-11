@@ -189,13 +189,13 @@ case "${method} ${url}" in
     ;;
   "GET https://taira.sora.org/v1/sumeragi/status")
     if [[ "$scenario" == "sumeragi_3_validators" ]]; then
-      body='{"commit_qc":{"height":707,"validator_set_len":3},"highest_qc":{"height":707},"locked_qc":{"height":707},"canonical":{"height":707}}'
+      body='{"protocol_version":2,"node_fingerprint":"n","build_fingerprint":"b","config_fingerprint":"c","height_context_id":["ctx"],"height":708,"view":0,"phase":{"phase":"Prepare","details":null},"leader":0,"body_state":{"state":"Missing","details":null},"last_committed_height":707,"last_committed_subject":{"block_hash":"block","payload_hash":"payload"},"height_context":{"epoch":1,"epoch_end_height":720,"mode":{"mode":"Permissioned","details":null},"epoch_seed":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"validator_count":3,"quorum":{"min_signers":3,"total_power":3}},"last_commit_qc":{"certificate":{"round":{"height":707,"view":0},"phase":{"phase":"Commit","details":null},"subject":{"block_hash":"block","payload_hash":"payload"}},"validator_count":3,"signer_count":3,"min_signers":3,"signed_power":3,"total_power":3},"lane_settlement_commitments":[],"lane_relay_envelopes":[],"lane_payload_ownerships":[],"committed_lane_blocks":[],"lane_block_sessions":[],"local_peer_removed":false,"operator":{"adapter_queues":{"ingress_keys":0,"ingress_capacity":64,"deferred_completion":0,"deferred_progress":0,"deferred_progress_capacity":64,"deferred_normal":0,"deferred_normal_capacity":64},"tx_queue":{"tracked_transactions":0,"queued_transactions":0,"capacity":100,"max_retained_bytes":8192}}}'
     elif [[ "$scenario" == "sumeragi_canonical_behind" ]]; then
-      body='{"commit_qc":{"height":707,"validator_set_len":4},"highest_qc":{"height":707},"locked_qc":{"height":707},"canonical":{"height":706}}'
+      body='{"protocol_version":2,"height":706,"view":0,"phase":{"phase":"Prepare"},"leader":0,"body_state":{"state":"Missing"},"last_committed_height":707,"height_context":{"epoch":1,"epoch_end_height":720,"mode":{"mode":"Permissioned"},"validator_count":4,"quorum":{"min_signers":3,"total_power":4}}}'
     elif [[ "$scenario" == "sumeragi_idle_high_view_missing_qc" ]]; then
-      body='{"commit_qc":{"height":707,"validator_set_len":4},"highest_qc":{"height":707},"locked_qc":{"height":707},"canonical":{"height":708,"phase":"prepare","view":42,"pending_finality":null,"rbc_status":"disabled"},"membership":{"height":708,"view":42},"worker_loop":{"stage":"idle"},"view_change_causes":{"last_cause":"missing_qc"},"tx_queue":{"depth":1,"capacity":20000,"saturated_by_age":true,"oldest_queued_age_ms":30000},"pending_rbc":{"sessions":0}}'
+      body='{"protocol_version":2,"height":708,"view":42,"phase":{"phase":"Prepare"},"leader":0,"body_state":{"state":"Missing"},"last_committed_height":707,"last_committed_subject":{"block_hash":"block","payload_hash":"payload"},"height_context":{"epoch":1,"epoch_end_height":720,"mode":{"mode":"Permissioned"},"validator_count":4,"quorum":{"min_signers":3,"total_power":4}},"lane_settlement_commitments":[],"lane_relay_envelopes":[],"lane_payload_ownerships":[],"committed_lane_blocks":[],"lane_block_sessions":[],"operator":{"adapter_queues":{"ingress_keys":0,"ingress_capacity":64,"deferred_progress":0,"deferred_progress_capacity":64,"deferred_normal":0,"deferred_normal_capacity":64},"tx_queue":{"tracked_transactions":1,"queued_transactions":1,"capacity":100,"max_retained_bytes":8192}}}'
     else
-      body='{"commit_qc":{"height":707,"validator_set_len":4},"highest_qc":{"height":707},"locked_qc":{"height":707},"canonical":{"height":707}}'
+      body='{"protocol_version":2,"node_fingerprint":"n","build_fingerprint":"b","config_fingerprint":"c","height_context_id":["ctx"],"height":708,"view":0,"phase":{"phase":"Prepare","details":null},"leader":0,"body_state":{"state":"Missing","details":null},"last_committed_height":707,"last_committed_subject":{"block_hash":"block","payload_hash":"payload"},"height_context":{"epoch":1,"epoch_end_height":720,"mode":{"mode":"Permissioned","details":null},"epoch_seed":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"validator_count":4,"quorum":{"min_signers":3,"total_power":4}},"last_commit_qc":{"certificate":{"round":{"height":707,"view":0},"phase":{"phase":"Commit","details":null},"subject":{"block_hash":"block","payload_hash":"payload"}},"validator_count":4,"signer_count":3,"min_signers":3,"signed_power":3,"total_power":4},"lane_settlement_commitments":[],"lane_relay_envelopes":[],"lane_payload_ownerships":[],"committed_lane_blocks":[],"lane_block_sessions":[],"local_peer_removed":false,"operator":{"adapter_queues":{"ingress_keys":0,"ingress_capacity":64,"deferred_completion":0,"deferred_progress":0,"deferred_progress_capacity":64,"deferred_normal":0,"deferred_normal_capacity":64},"tx_queue":{"tracked_transactions":0,"queued_transactions":0,"capacity":100,"max_retained_bytes":8192}}}'
     fi
     ;;
   *)
@@ -203,6 +203,18 @@ case "${method} ${url}" in
     body='{"error":"unexpected mock route"}'
     ;;
 esac
+
+if [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sumeragi/status" ]]; then
+  body="${body//\"phase\":\"Prepare\"/\"phase\":\"prepare\"}"
+  body="${body//\"phase\":\"Commit\"/\"phase\":\"commit\"}"
+  body="${body//\"state\":\"Missing\"/\"state\":\"missing\"}"
+  body="${body//\"mode\":\"Permissioned\"/\"mode\":\"permissioned\"}"
+  body="${body//\"epoch_seed\":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]/\"epoch_seed\":\"0000000000000000000000000000000000000000000000000000000000000000\"}"
+  body="${body//{\"phase\":\"prepare\"}/{\"phase\":\"prepare\",\"details\":null}}"
+  body="${body//{\"state\":\"missing\"}/{\"state\":\"missing\",\"details\":null}}"
+  body="${body//{\"mode\":\"permissioned\"}/{\"mode\":\"permissioned\",\"details\":null}}"
+  body="${body//\"mode\":{\"mode\":\"permissioned\",\"details\":null},\"validator_count\"/\"mode\":{\"mode\":\"permissioned\",\"details\":null},\"epoch_seed\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"validator_count\"}"
+fi
 
 if [[ -z "$output_file" ]]; then
   echo "mock curl missing --output" >&2
@@ -738,13 +750,13 @@ run_expected_preflight_failure_case \
   'status payload did not include a positive `blocks` value'
 run_expected_preflight_failure_case \
   sumeragi_3_validators \
-  'sumeragi/status reported only 3 validators in the commit QC set'
+  'sumeragi/status frozen only 3 validators'
 run_expected_preflight_failure_case \
   sumeragi_canonical_behind \
-  'sumeragi/status canonical height 706 is behind commit QC height 707'
+  'sumeragi/status reducer/commit frontier is inconsistent'
 run_expected_preflight_failure_case \
   sumeragi_idle_high_view_missing_qc \
-  'sumeragi/status reports a finality fault'
+  'sumeragi/status omitted required last_commit_qc object'
 run_expected_numeric_argument_failure_case \
   'DECLARED_CAPACITY_GIB must be a positive integer' \
   --declared-capacity-gib 0

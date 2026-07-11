@@ -38,27 +38,37 @@ def _qc(
 ) -> dict[str, Any]:
     return {
         "body": {
+            "round": {
+                "context_id": [_hash(0x0D)],
+                "height": 40,
+                "view": 6,
+            },
+            "epoch": 3,
             "chain_id_hash": _hash(0x11),
             "source_id": "ab" * 32,
             "tx_entrypoint_hash": entrypoint_hash,
             "plan_digest": _hash(0x23),
-            "phase": phase,
+            "phase": {"phase": phase, "detail": None},
             "coordinator_lane_id": 7,
             "coordinator_dataspace_id": 11,
             "coordinator_lane_incarnation": _hash(0x89),
             "participant_lane_id": participant_lane_id,
             "participant_dataspace_id": participant_dataspace_id,
             "participant_lane_incarnation": participant_lane_incarnation,
+            "participant_validator_set_hash": _hash(0x45),
+            "participant_validator_count": 4,
+            "participant_min_quorum": 3,
             "authority_context_height": 40,
-            "coordinator_lane_block_height": 42,
+            "planned_coordinator_block_height": 42,
             "coordinator_lane_block_view": 6,
             "coordinator_proposal_hash": _hash(0x55),
         },
         "validator_set_hash_version": 1,
         "validator_set_hash": _hash(0x45),
         "validator_set": ["validator-0", "validator-1", "validator-2", "validator-3"],
+        "validator_set_pops": [[0x5A] * 96 for _ in range(4)],
         "signers_bitmap": [0b0000_0111],
-        "bls_aggregate_signature": "9a" * 96,
+        "bls_aggregate_signature": [0x9A] * 96,
     }
 
 
@@ -67,7 +77,6 @@ def _leg(lane_id: int, dataspace_id: int, entrypoint_hash: str) -> dict[str, Any
     return {
         "lane_id": lane_id,
         "dataspace_id": dataspace_id,
-        "lane_incarnation": lane_incarnation,
         "prepare_qc": _qc(
             "prepare",
             participant_lane_id=lane_id,
@@ -86,7 +95,7 @@ def _leg(lane_id: int, dataspace_id: int, entrypoint_hash: str) -> dict[str, Any
 
 
 def _commitment() -> dict[str, Any]:
-    entrypoint_hash = _hash(0x67)
+    entrypoint_hash = _hash(0xAB)
     huge_total = str((1 << 127) + 123)
     return {
         "block_height": 42,
@@ -123,7 +132,7 @@ def _commitment() -> dict[str, Any]:
         ],
         "native_amx_receipts": [
             {
-                "version": 1,
+                "version": 2,
                 "source_id": "ab" * 32,
                 "chain_id_hash": _hash(0x11),
                 "plan_digest": _hash(0x23),
@@ -149,12 +158,18 @@ def _relay() -> dict[str, Any]:
         "lane_incarnation": _hash(0x89),
         "dataspace_id": 11,
         "block_height": 42,
-        "block_hash": _hash(0x91),
+        "block_header": {"height": 42},
         "da_commitment_hash": _hash(0x93),
-        "commit_qc": None,
+        "lane_block_descriptor_hash": _hash(0x91),
+        "qc": None,
         "settlement_commitment": _commitment(),
         "settlement_hash": _hash(0x95),
         "rbc_bytes_total": 1234,
+        "manifest_root": "A5" * 32,
+        "fastpq_proof": {
+            "proof_digest": _hash(0x97),
+            "verified_at_height": 43,
+        },
     }
 
 
@@ -195,7 +210,26 @@ def test_lane_commitment_preserves_exact_native_amx_and_fee_evidence() -> None:
     assert receipt.legs[0].prepare_qc.body.phase is SumeragiNativeAmxPhase.PREPARE
     assert receipt.legs[0].commit_qc.body.phase is SumeragiNativeAmxPhase.COMMIT
     assert receipt.legs[0].prepare_qc.signers_bitmap == (0b0000_0111,)
-    assert receipt.legs[0].prepare_qc.bls_aggregate_signature == "9a" * 96
+    assert receipt.legs[0].prepare_qc.bls_aggregate_signature == (0x9A,) * 96
+
+
+def test_lane_commitment_accepts_derived_json_integer_totals_and_tagged_swap_enums() -> None:
+    payload = _commitment()
+    payload["total_local_micro"] = (1 << 128) - 1
+    payload["swap_metadata"] = {
+        "epsilon_bps": 25,
+        "twap_window_seconds": 300,
+        "liquidity_profile": {"profile": "Tier2", "state": None},
+        "twap_local_per_xor": "1.25",
+        "volatility_class": {"bucket": "Elevated", "state": None},
+    }
+
+    parsed = SumeragiLaneSettlementCommitment.from_payload(payload)
+
+    assert parsed.total_local_micro == (1 << 128) - 1
+    assert parsed.swap_metadata is not None
+    assert parsed.swap_metadata.liquidity_profile == "Tier2"
+    assert parsed.swap_metadata.volatility_class == "Elevated"
 
 
 def test_lane_relay_preserves_the_exact_embedded_native_amx_receipt() -> None:
@@ -215,7 +249,7 @@ def test_lane_relay_preserves_the_exact_embedded_native_amx_receipt() -> None:
     [
         _delete(("native_amx_receipts", 0, "version")),
         _delete(("native_amx_receipts", 0, "chain_id_hash")),
-        _set(("native_amx_receipts", 0, "version"), 2),
+        _set(("native_amx_receipts", 0, "version"), 1),
         _set(("native_amx_receipts", 0, "source_id"), "ab" * 31),
         _set(("native_amx_receipts", 0, "plan_digest"), "hash:BAD#0000"),
         _set(("native_amx_receipts", 0, "lane_id"), 9),
@@ -236,18 +270,29 @@ def test_lane_relay_preserves_the_exact_embedded_native_amx_receipt() -> None:
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "participant_dataspace_id"), 99),
         _set(("native_amx_receipts", 0, "legs", 0, "lane_incarnation"), _hash(0xC1)),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "participant_lane_incarnation"), _hash(0xC3)),
+        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "round", "height"), 41),
+        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "round", "view"), 7),
+        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "round", "context_id"), []),
+        _set(("native_amx_receipts", 0, "legs", 0, "commit_qc", "body", "epoch"), 4),
+        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "phase", "detail"), "unexpected"),
+        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "participant_validator_count"), 3),
+        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "participant_min_quorum"), 2),
+        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "participant_validator_set_hash"), _hash(0x39)),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "authority_context_height"), 41),
-        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "coordinator_lane_block_height"), 41),
+        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "planned_coordinator_block_height"), 41),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "coordinator_lane_block_view"), 7),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "coordinator_proposal_hash"), _hash(0x59)),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "validator_set_hash_version"), 2),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "validator_set_hash"), _hash(0x37)),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "validator_set"), ["v", "v", "x", "y"]),
+        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "validator_set_pops"), []),
+        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "validator_set_pops", 0), [0] * 96),
+        _set(("native_amx_receipts", 0, "legs", 0, "commit_qc", "validator_set_pops", 0), [0x5B] * 96),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "signers_bitmap"), []),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "signers_bitmap"), [0b1000_0111]),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "signers_bitmap"), [0b0000_0011]),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "bls_aggregate_signature"), "zz" * 96),
-        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "bls_aggregate_signature"), "00" * 96),
+        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "bls_aggregate_signature"), [0] * 96),
         _set(("native_amx_receipts", 0, "legs"), []),
     ],
     ids=lambda mutate: mutate.__name__,

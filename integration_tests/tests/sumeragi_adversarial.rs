@@ -913,13 +913,6 @@ async fn run_chunk_equivocation_scenario() -> Result<()> {
     configure_runtime_rbc(&targeted_client).await?;
 
     let status_before = blocking_status(&targeted_client)?;
-    let status_json_before = fetch_sumeragi_status(&targeted_client).await?;
-    let chunk_digest_drop_before = consensus_message_total(
-        &status_json_before,
-        "rbc_chunk",
-        "dropped",
-        "chunk_digest_mismatch",
-    );
     let expected_height = status_before.blocks + 1;
 
     submit_heavy_log(&targeted_client, DEFAULT_PAYLOAD_BYTES).await?;
@@ -956,16 +949,7 @@ async fn run_chunk_equivocation_scenario() -> Result<()> {
     }
 
     let status_after = blocking_status(&targeted_client)?;
-    let status_json_after = fetch_sumeragi_status(&targeted_client).await?;
-    let chunk_digest_drop_after = consensus_message_total(
-        &status_json_after,
-        "rbc_chunk",
-        "dropped",
-        "chunk_digest_mismatch",
-    );
-    let mismatch_detected = chunk_digest_drop_after > chunk_digest_drop_before
-        || rbc_mismatch_detected(&status_json_after);
-    let detection_observed = invalid_total >= 1 || mismatch_detected;
+    let detection_observed = invalid_total >= 1;
 
     let mut status_after_all = Vec::with_capacity(network.peers().len());
     for peer in network.peers() {
@@ -1025,7 +1009,7 @@ async fn run_chunk_equivocation_scenario() -> Result<()> {
                 || detection_observed
                 || stalled_sessions >= 1
                 || delivered_sessions >= 1,
-            "equivocation stall should surface missing sessions, explicit invalidation, a retained non-delivered RBC session, or delivered session evidence from local payload recovery (missing_sessions={missing_sessions}, invalid_total={invalid_total}, stalled_sessions={stalled_sessions}, delivered_sessions={delivered_sessions}, mismatch_detected={mismatch_detected})"
+            "equivocation stall should surface missing sessions, explicit invalidation, a retained non-delivered RBC session, or delivered session evidence from local payload recovery (missing_sessions={missing_sessions}, invalid_total={invalid_total}, stalled_sessions={stalled_sessions}, delivered_sessions={delivered_sessions})"
         );
     }
 
@@ -1106,15 +1090,10 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
         }
     }
 
-    let mut mismatch_detected = false;
     let mut status_after = Vec::with_capacity(PEER_COUNT);
     for peer in network.peers() {
         let status = blocking_status(&peer.client())?;
         status_after.push(status);
-        if !mismatch_detected {
-            let status_json = fetch_sumeragi_status(&peer.client()).await?;
-            mismatch_detected = rbc_mismatch_detected(&status_json);
-        }
     }
 
     let base_height = status_before
@@ -1138,15 +1117,6 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
             status_after = quorum_statuses;
         }
     }
-    let mismatch_before_total = status_before
-        .iter()
-        .filter_map(|status| {
-            status
-                .sumeragi
-                .as_ref()
-                .map(|consensus| consensus.block_created_proposal_mismatch_total)
-        })
-        .sum::<u64>();
     let min_blocks = status_after
         .iter()
         .map(|status| status.blocks)
@@ -1157,16 +1127,6 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
         .map(|status| status.blocks)
         .max()
         .unwrap_or(base_height);
-    let mismatch_after_total = status_after
-        .iter()
-        .filter_map(|status| {
-            status
-                .sumeragi
-                .as_ref()
-                .map(|consensus| consensus.block_created_proposal_mismatch_total)
-        })
-        .sum::<u64>();
-    let mismatch_counter_advanced = mismatch_after_total > mismatch_before_total;
     let progress_quorum_blocks = count_statuses_at_or_above_height(&status_after, expected_height);
 
     if max_blocks >= expected_height {
@@ -1192,11 +1152,8 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
             );
         }
         ensure!(
-            invalid_total > 0
-                || mismatch_detected
-                || mismatch_counter_advanced
-                || stalled_total == PEER_COUNT,
-            "expected corrupted shards to be detected via invalid flag, mismatch status, network mismatch counters, or a full non-delivered stall (invalid_total={invalid_total}, mismatch_detected={mismatch_detected}, mismatch_before_total={mismatch_before_total}, mismatch_after_total={mismatch_after_total}, delivered_total={delivered_total}, stalled_total={stalled_total})"
+            invalid_total > 0 || stalled_total == PEER_COUNT,
+            "expected corrupted shards to be detected via exact invalid session evidence or a full non-delivered stall (invalid_total={invalid_total}, delivered_total={delivered_total}, stalled_total={stalled_total})"
         );
     }
     let mut summary_map = Map::new();
@@ -1211,7 +1168,6 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
         Value::from(delivered_total as u64),
     );
     summary_map.insert("stalled_sessions".into(), Value::from(stalled_total as u64));
-    summary_map.insert("mismatch_detected".into(), Value::from(mismatch_detected));
     summary_map.insert("expected_height".into(), Value::from(expected_height));
     summary_map.insert("base_height".into(), Value::from(base_height));
     summary_map.insert("min_blocks".into(), Value::from(min_blocks));
@@ -1220,18 +1176,6 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
     summary_map.insert(
         "progress_quorum_blocks".into(),
         Value::from(progress_quorum_blocks),
-    );
-    summary_map.insert(
-        "mismatch_before_total".into(),
-        Value::from(mismatch_before_total),
-    );
-    summary_map.insert(
-        "mismatch_after_total".into(),
-        Value::from(mismatch_after_total),
-    );
-    summary_map.insert(
-        "mismatch_counter_advanced".into(),
-        Value::from(mismatch_counter_advanced),
     );
     emit_summary("all_chunks_corrupted", &Value::Object(summary_map))?;
 
@@ -1289,13 +1233,6 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
     )
     .await?;
 
-    let mut invalid_ready_before_cluster = 0_u64;
-    for peer in network.peers() {
-        let status_json = fetch_sumeragi_status(&peer.client()).await?;
-        invalid_ready_before_cluster = invalid_ready_before_cluster.saturating_add(
-            consensus_message_total(&status_json, "rbc_ready", "dropped", "invalid_signature"),
-        );
-    }
     let expected_height = status_before.blocks + 1;
 
     submit_heavy_log(&targeted_client, DEFAULT_PAYLOAD_BYTES).await?;
@@ -1327,15 +1264,7 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
     }
 
     let status_after = blocking_status(&targeted_client)?;
-    let mut invalid_ready_after_cluster = 0_u64;
-    for peer in network.peers() {
-        let status_json = fetch_sumeragi_status(&peer.client()).await?;
-        invalid_ready_after_cluster = invalid_ready_after_cluster.saturating_add(
-            consensus_message_total(&status_json, "rbc_ready", "dropped", "invalid_signature"),
-        );
-    }
-    let detection_observed =
-        invalid_sessions >= 1 || invalid_ready_after_cluster > invalid_ready_before_cluster;
+    let detection_observed = invalid_sessions >= 1;
 
     let progress_quorum = commit_quorum_from_len(cluster_clients.len()).max(1);
     let status_after_all = if delivered_sessions > 0 {
@@ -1387,7 +1316,7 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
                 || detection_observed
                 || retained_nondelivered_sessions >= 1
                 || delivered_sessions >= 1,
-            "conflicting READY stall should surface missing RBC sessions, explicit invalidation evidence, retained non-delivered sessions, or delivered session evidence from local payload recovery (missing={missing_sessions}, invalid={invalid_sessions}, retained_nondelivered={retained_nondelivered_sessions}, delivered={delivered_sessions}, invalid_ready_before={invalid_ready_before_cluster}, invalid_ready_after={invalid_ready_after_cluster})"
+            "conflicting READY stall should surface missing RBC sessions, exact invalidation evidence, retained non-delivered sessions, or delivered session evidence from local payload recovery (missing={missing_sessions}, invalid={invalid_sessions}, retained_nondelivered={retained_nondelivered_sessions}, delivered={delivered_sessions})"
         );
     }
 
@@ -1470,21 +1399,7 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
     configure_runtime_rbc(&client).await?;
 
     let status_before = blocking_status(&client)?;
-    let mut drop_before = 0_u64;
-    let mut mismatch_before = 0_u64;
-    for peer in network.peers() {
-        let status_json = fetch_sumeragi_status(&peer.client()).await?;
-        drop_before = drop_before.saturating_add(
-            get_u64(&status_json, "block_created_dropped_by_lock_total").ok_or_else(|| {
-                eyre!("missing block_created_dropped_by_lock_total before scenario")
-            })?,
-        );
-        mismatch_before = mismatch_before.saturating_add(
-            get_u64(&status_json, "block_created_proposal_mismatch_total").ok_or_else(|| {
-                eyre!("missing block_created_proposal_mismatch_total before scenario")
-            })?,
-        );
-    }
+    let view_installs_before = sum_v2_view_change_installs(network.peers()).await?;
     let expected_height = status_before.blocks + 1;
 
     submit_heavy_log(&client, DEFAULT_PAYLOAD_BYTES).await?;
@@ -1503,7 +1418,7 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
 
     let primary_delivered = optional_session_bool(primary_session.as_ref(), "delivered")?;
     let observation_deadline = Instant::now() + Duration::from_secs(60);
-    let (status_after, delivered_after, mut duplicate_views, drop_after, mismatch_after) = loop {
+    let (status_after, delivered_after, mut duplicate_views, view_installs_after) = loop {
         let status_after = blocking_status(&client)?;
         let mut delivered_after = false;
         let mut duplicate_views: Vec<u64> = Vec::new();
@@ -1522,21 +1437,7 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
             );
         }
 
-        let mut drop_after = 0_u64;
-        let mut mismatch_after = 0_u64;
-        for peer in network.peers() {
-            let status_json = fetch_sumeragi_status(&peer.client()).await?;
-            drop_after = drop_after.saturating_add(
-                get_u64(&status_json, "block_created_dropped_by_lock_total").ok_or_else(|| {
-                    eyre!("missing block_created_dropped_by_lock_total after scenario")
-                })?,
-            );
-            mismatch_after = mismatch_after.saturating_add(
-                get_u64(&status_json, "block_created_proposal_mismatch_total").ok_or_else(
-                    || eyre!("missing block_created_proposal_mismatch_total after scenario"),
-                )?,
-            );
-        }
+        let view_installs_after = sum_v2_view_change_installs(network.peers()).await?;
 
         let repeated_base_view_entries = base_view
             .map(|base_view| {
@@ -1551,10 +1452,10 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
                 || (duplicate_views.contains(&base_view)
                     && duplicate_views.contains(&(base_view.saturating_add(1))))
         });
-        let counters_advanced = drop_after > drop_before || mismatch_after > mismatch_before;
+        let installed_new_view = view_installs_after > view_installs_before;
         if status_after.blocks >= expected_height
             || delivered_after
-            || counters_advanced
+            || installed_new_view
             || duplicate_view_evidence
             || Instant::now() >= observation_deadline
         {
@@ -1562,8 +1463,7 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
                 status_after,
                 delivered_after,
                 duplicate_views,
-                drop_after,
-                mismatch_after,
+                view_installs_after,
             );
         }
         sleep(Duration::from_millis(500)).await;
@@ -1581,8 +1481,8 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
         );
     }
     ensure!(
-        drop_after >= drop_before,
-        "locked QC drop counter must be monotonic across the validator set (before={drop_before}, after={drop_after})"
+        view_installs_after >= view_installs_before,
+        "authoritative v2 view-install counters must be monotonic across the validator set (before={view_installs_before}, after={view_installs_after})"
     );
     let repeated_base_view_entries = base_view
         .map(|base_view| {
@@ -1600,8 +1500,8 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
                 && duplicate_views.contains(&(base_view.saturating_add(1))))
     });
     ensure!(
-        drop_after > drop_before || mismatch_after > mismatch_before || duplicate_view_evidence,
-        "locked QC gate should record counters or expose duplicate-session evidence (drop_before={drop_before}, drop_after={drop_after}, mismatch_before={mismatch_before}, mismatch_after={mismatch_after}, repeated_base_view_entries={repeated_base_view_entries}, observed={duplicate_views:?})"
+        view_installs_after > view_installs_before || duplicate_view_evidence,
+        "locked QC gate should install a durable v2 view change or expose exact duplicate-session evidence (view_installs_before={view_installs_before}, view_installs_after={view_installs_after}, repeated_base_view_entries={repeated_base_view_entries}, observed={duplicate_views:?})"
     );
     network.shutdown().await;
     Ok(())
@@ -1763,11 +1663,17 @@ async fn run_partial_erasure_scenario() -> Result<()> {
     Ok(())
 }
 
-async fn fetch_sumeragi_status(client: &Client) -> Result<Value> {
-    let client = client.clone();
-    tokio::task::spawn_blocking(move || client.get_sumeragi_status_json())
-        .await
-        .wrap_err("fetch sumeragi status JSON")?
+async fn sum_v2_view_change_installs(peers: &[iroha_test_network::NetworkPeer]) -> Result<u64> {
+    let mut total = 0_u64;
+    for peer in peers {
+        let client = peer.client();
+        let status = tokio::task::spawn_blocking(move || client.get_sumeragi_v2_status())
+            .await
+            .wrap_err("join authoritative Sumeragi v2 status fetch")?
+            .wrap_err("fetch authoritative Sumeragi v2 status")?;
+        total = total.saturating_add(status.operator.view_change_install_total);
+    }
+    Ok(total)
 }
 
 async fn configure_runtime_rbc(client: &Client) -> Result<()> {
@@ -2362,52 +2268,6 @@ fn required_session_reads_reject_missing_or_malformed_evidence_fields() {
         "received_chunks": 5
     });
     assert!(require_session_chunk_counts(&over_counted).is_err());
-}
-
-fn consensus_message_total(status: &Value, kind: &str, outcome: &str, reason: &str) -> u64 {
-    status
-        .as_object()
-        .and_then(|root| root.get("consensus_message_handling"))
-        .and_then(Value::as_object)
-        .and_then(|obj| obj.get("entries"))
-        .and_then(Value::as_array)
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(|entry| entry.as_object())
-                .filter(|entry| {
-                    entry.get("kind").and_then(Value::as_str) == Some(kind)
-                        && entry.get("outcome").and_then(Value::as_str) == Some(outcome)
-                        && entry.get("reason").and_then(Value::as_str) == Some(reason)
-                })
-                .filter_map(|entry| entry.get("total").and_then(Value::as_u64))
-                .sum()
-        })
-        .unwrap_or_default()
-}
-
-fn rbc_mismatch_detected(status: &Value) -> bool {
-    status
-        .as_object()
-        .and_then(|root| root.get("rbc_mismatch"))
-        .and_then(Value::as_object)
-        .and_then(|obj| obj.get("entries"))
-        .and_then(Value::as_array)
-        .is_some_and(|entries| {
-            entries.iter().any(|entry| {
-                let Some(entry_obj) = entry.as_object() else {
-                    return false;
-                };
-                [
-                    "chunk_digest_mismatch_total",
-                    "payload_hash_mismatch_total",
-                    "chunk_root_mismatch_total",
-                ]
-                .iter()
-                .filter_map(|key| entry_obj.get(*key).and_then(Value::as_u64))
-                .any(|value| value > 0)
-            })
-        })
 }
 
 fn emit_summary(scenario: &str, summary: &Value) -> Result<()> {

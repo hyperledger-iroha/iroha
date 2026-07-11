@@ -25,6 +25,7 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     MultisigResponse,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
+    SumeragiV2Status,
     ToriiCanonicalRequestAuth,
     ToriiClient,
     VpnQuoteCreateRequest,
@@ -66,6 +67,137 @@ SCCP_TEST_TRON_NETWORK_ID = "71" * 32
 SCCP_TEST_TRON_VERIFIER_ADDRESS = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
 SCCP_TEST_TRON_VERIFIER_CODE_HASH = "72" * 32
 SCCP_TEST_TRON_VERIFIER_KEY_HASH = "73" * 32
+
+
+def _canonical_hash(seed: int) -> str:
+    body_bytes = bytearray([seed & 0xFF] * 32)
+    body_bytes[-1] |= 1
+    body = body_bytes.hex().upper()
+    crc = 0xFFFF
+    for byte in f"hash:{body}".encode("ascii"):
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return f"hash:{body}#{crc:04X}"
+
+
+def _sumeragi_v2_status_payload() -> Dict[str, Any]:
+    subject = {
+        "parent_block_hash": _canonical_hash(0x31),
+        "block_hash": _canonical_hash(0x32),
+        "payload_hash": _canonical_hash(0x33),
+    }
+    return {
+        "protocol_version": 2,
+        "node_fingerprint": _canonical_hash(0x11),
+        "build_fingerprint": _canonical_hash(0x12),
+        "config_fingerprint": _canonical_hash(0x13),
+        "height_context_id": [_canonical_hash(0x14)],
+        "height": 10,
+        "view": 2,
+        "phase": {"phase": "prepare", "details": None},
+        "leader": 1,
+        "locked_prepare_qc": None,
+        "highest_prepare_qc": None,
+        "last_timeout_certificate": None,
+        "body_state": {"state": "validated", "details": None},
+        "pending_persistence_id": None,
+        "last_committed_height": 9,
+        "last_committed_subject": subject,
+        "height_context": {
+            "epoch": 1,
+            "epoch_end_height": 20,
+            "mode": {"mode": "permissioned", "details": None},
+            "epoch_seed": bytes(range(32)).hex().upper(),
+            "validator_count": 4,
+            "quorum": {"min_signers": 3, "total_power": 4},
+        },
+        "last_commit_qc": {
+            "certificate": {
+                "round": {
+                    "context_id": [_canonical_hash(0x41)],
+                    "height": 9,
+                    "view": 1,
+                },
+                "phase": {"phase": "commit", "details": None},
+                "subject": dict(subject),
+            },
+            "validator_count": 4,
+            "signer_count": 3,
+            "min_signers": 3,
+            "signed_power": 3,
+            "total_power": 4,
+        },
+        "lane_settlement_commitments": [],
+        "lane_relay_envelopes": [],
+        "lane_payload_ownerships": [],
+        "committed_lane_blocks": [],
+        "lane_block_sessions": [],
+        "local_peer_removed": False,
+        "operator": {
+            "view_change_install_total": 7,
+            "busy_deferral_total": 3,
+            "adapter_queues": {
+                "ingress_keys": 2,
+                "ingress_capacity": 16,
+                "deferred_completion": 1,
+                "deferred_progress": 2,
+                "deferred_progress_capacity": 4,
+                "deferred_normal": 3,
+                "deferred_normal_capacity": 8,
+            },
+            "tx_queue": {
+                "tracked_transactions": 5,
+                "queued_transactions": 3,
+                "capacity": 32,
+                "retained_bytes": 4096,
+                "max_retained_bytes": 65536,
+                "oldest_queued_age_ms": 25,
+                "saturated_by_count": False,
+                "saturated_by_bytes": False,
+                "saturated_by_age": False,
+            },
+        },
+    }
+
+
+def _lane_settlement_payload() -> Dict[str, Any]:
+    return {
+        "block_height": 9,
+        "lane_id": 2,
+        "lane_incarnation": _canonical_hash(0x51),
+        "dataspace_id": 7,
+        "tx_count": 1,
+        "total_local_micro": "10",
+        "total_xor_due_micro": "5",
+        "total_xor_after_haircut_micro": "4",
+        "total_xor_variance_micro": "1",
+        "swap_metadata": {
+            "epsilon_bps": 5,
+            "twap_window_seconds": 60,
+            "liquidity_profile": {"profile": "Tier1", "state": None},
+            "twap_local_per_xor": "2.5",
+            "volatility_class": {"bucket": "Stable", "state": None},
+        },
+        "receipts": [
+            {
+                "source_id": "52" * 32,
+                "local_amount_micro": "10",
+                "xor_due_micro": "5",
+                "xor_after_haircut_micro": "4",
+                "xor_variance_micro": "1",
+                "timestamp_ms": 1700,
+            }
+        ],
+        "nexus_fee_receipts": [],
+        "native_amx_receipts": [],
+    }
+
+
+def _get_sumeragi_status(payload: Mapping[str, Any]) -> SumeragiV2Status:
+    session = RecordingSession()
+    session.queue(StubResponse(payload=payload))
+    return ToriiClient("http://node.test", session=session).get_sumeragi_status()
 
 
 def _canonical_signature_base64_fixture() -> str:
@@ -3892,11 +4024,107 @@ def test_mock_server_seeds_sumeragi_status_snapshot() -> None:
 
         payload = response.json()
 
-        assert payload["leader_index"] == 2
-        assert payload["gossip_fallback_total"] == 1
-        assert payload["rbc_store"]["persist_drops_total"] == 2
+        assert payload["protocol_version"] == 2
+        assert payload["leader"] == 1
+        assert payload["height_context"]["validator_count"] == 4
+        assert payload["operator"]["tx_queue"]["capacity"] == 32
+        assert payload["committed_lane_blocks"] == []
     finally:
         server.stop()
+
+
+def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
+    payload = _sumeragi_v2_status_payload()
+    payload["lane_settlement_commitments"] = [_lane_settlement_payload()]
+    status = _get_sumeragi_status(payload)
+
+    assert status.protocol_version == 2
+    assert status.height == 10
+    assert status.phase == "prepare"
+    assert status.height_context.mode == "permissioned"
+    assert status.height_context.min_signers == 3
+    assert status.last_commit_qc is not None
+    assert status.last_commit_qc.certificate.round.height == 9
+    assert status.last_commit_qc.signed_power == 3
+    assert status.operator.tx_queue.queued_transactions == 3
+    assert status.lane_payload_ownerships == []
+    settlement = status.lane_settlement_commitments[0]
+    assert settlement["total_local_micro"] == "10"
+    assert settlement["swap_metadata"]["liquidity_profile"]["profile"] == "Tier1"
+
+
+def test_get_sumeragi_status_rejects_protocol_context_and_commit_tampering() -> None:
+    legacy_field = _sumeragi_v2_status_payload()
+    legacy_field["mode_tag"] = "retired"
+    with pytest.raises(RuntimeError, match="unknown field mode_tag"):
+        _get_sumeragi_status(legacy_field)
+
+    wrong_version = _sumeragi_v2_status_payload()
+    wrong_version["protocol_version"] = 1
+    with pytest.raises(RuntimeError, match="protocol_version must equal 2"):
+        _get_sumeragi_status(wrong_version)
+
+    wrong_quorum = _sumeragi_v2_status_payload()
+    wrong_quorum["height_context"]["quorum"]["min_signers"] = 2
+    with pytest.raises(RuntimeError, match="quorum is not canonical"):
+        _get_sumeragi_status(wrong_quorum)
+
+    missing_enum_details = _sumeragi_v2_status_payload()
+    del missing_enum_details["phase"]["details"]
+    with pytest.raises(RuntimeError, match="phase.details must be explicitly null"):
+        _get_sumeragi_status(missing_enum_details)
+
+    wrong_leader = _sumeragi_v2_status_payload()
+    wrong_leader["leader"] = 4
+    with pytest.raises(RuntimeError, match="leader must index"):
+        _get_sumeragi_status(wrong_leader)
+
+    wrong_subject = _sumeragi_v2_status_payload()
+    wrong_subject["last_commit_qc"]["certificate"]["subject"]["block_hash"] = (
+        _canonical_hash(0x77)
+    )
+    with pytest.raises(RuntimeError, match="does not certify the committed subject"):
+        _get_sumeragi_status(wrong_subject)
+
+    underpowered = _sumeragi_v2_status_payload()
+    underpowered["last_commit_qc"]["signed_power"] = 2
+    with pytest.raises(RuntimeError, match="does not satisfy its frozen dual quorum"):
+        _get_sumeragi_status(underpowered)
+
+
+def test_get_sumeragi_status_rejects_impossible_queue_bounds() -> None:
+    adapter_overflow = _sumeragi_v2_status_payload()
+    adapter_overflow["operator"]["adapter_queues"]["ingress_keys"] = 17
+    with pytest.raises(RuntimeError, match="adapter_queues occupancy exceeds capacity"):
+        _get_sumeragi_status(adapter_overflow)
+
+    tx_overflow = _sumeragi_v2_status_payload()
+    tx_overflow["operator"]["tx_queue"]["queued_transactions"] = 6
+    with pytest.raises(RuntimeError, match="tx_queue occupancy exceeds capacity"):
+        _get_sumeragi_status(tx_overflow)
+
+    zero_capacity = _sumeragi_v2_status_payload()
+    zero_capacity["operator"]["tx_queue"]["max_retained_bytes"] = 0
+    with pytest.raises(RuntimeError, match="max_retained_bytes must be positive"):
+        _get_sumeragi_status(zero_capacity)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "lane_settlement_commitments",
+        "lane_relay_envelopes",
+        "lane_payload_ownerships",
+        "committed_lane_blocks",
+        "lane_block_sessions",
+    ],
+)
+def test_get_sumeragi_status_requires_all_canonical_lane_arrays(field: str) -> None:
+    payload = _sumeragi_v2_status_payload()
+    del payload[field]
+
+    with pytest.raises(RuntimeError, match=rf"{field} must be an array"):
+        _get_sumeragi_status(payload)
 
 
 def test_contract_bundle_helpers_against_mock_server() -> None:

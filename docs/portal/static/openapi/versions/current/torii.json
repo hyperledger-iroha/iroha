@@ -17136,72 +17136,6 @@
         "x-iroha-tool-effect": "write"
       }
     },
-    "/v1/sorafs/capacity/por": {
-      "post": {
-        "deprecated": true,
-        "description": "This compatibility route always returns 410 Gone. PoR metering is derived from authenticated proof and verdict lifecycle transitions.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "410": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The compatibility route is retired and never mutates PoR state."
-          }
-        },
-        "summary": "Manual PoR observation retired.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/sorafs/capacity/por-challenge": {
-      "post": {
-        "deprecated": true,
-        "description": "This authenticated compatibility route always returns 410 Gone. The verified coordinator scheduler is the only permitted challenge authority and remains fail-closed until authenticated external drand/VRF feeds are configured.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "410": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The compatibility route is retired and never mutates PoR state."
-          }
-        },
-        "summary": "External PoR challenge submission retired.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
     "/v1/sorafs/capacity/por-proof": {
       "post": {
         "description": "Submit a domain-separated provider-signed proof whose request key and current admitted advert key match the proof signer.",
@@ -18516,7 +18450,7 @@
     },
     "/v1/sorafs/pin/register": {
       "post": {
-        "description": "Submit a SoraFS manifest registration transaction. The request must include `content_length`; optional `manifest_b64` carries a Norito `ManifestV1` for full Torii-side validation and is required when governance requires council signatures. Execution collects the public pin fee and records the committed fee receipt on-chain.",
+        "description": "Submit a SoraFS manifest registration transaction. `manifest_payload` is the required canonical base64-encoded Norito `ManifestV1`; Torii derives the digest, chunker, chunk-plan commitment, content length, and pin policy exclusively from that payload. Execution collects the public pin fee and records the committed fee receipt on-chain.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -18707,39 +18641,6 @@
           "SoraFS"
         ],
         "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sorafs/por/trigger": {
-      "post": {
-        "deprecated": true,
-        "description": "This legacy manual-trigger compatibility route always returns 410 Gone after access checks. Challenges are issued only by the trusted PoR coordinator scheduler.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "410": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The compatibility route is retired and never mutates PoR state."
-          }
-        },
-        "summary": "Manual PoR trigger retired.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/proof/stream": {
@@ -19575,72 +19476,6 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/sorafs/storage/por-challenge": {
-      "post": {
-        "deprecated": true,
-        "description": "This compatibility route accepts the legacy envelope only to return 410 Gone without parsing or mutating PoR state. Use the trusted coordinator scheduler.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "410": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The compatibility route is retired and never mutates PoR state."
-          }
-        },
-        "summary": "Storage PoR challenge mutation retired.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/sorafs/storage/por-proof": {
-      "post": {
-        "deprecated": true,
-        "description": "This compatibility route always returns 410 Gone without mutating PoR state. Submit proofs through `/v1/sorafs/capacity/por-proof`.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "410": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The compatibility route is retired and never mutates PoR state."
-          }
-        },
-        "summary": "Storage PoR proof mutation retired.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
     "/v1/sorafs/storage/por-sample": {
       "post": {
         "description": "Request a proof-of-replication sample. The JSON `count` field must be between 1 and 500; the returned `samples` array is also capped by the stored manifest leaf count.",
@@ -19667,39 +19502,6 @@
           }
         },
         "summary": "Request a PoR sample.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/sorafs/storage/por-verdict": {
-      "post": {
-        "deprecated": true,
-        "description": "This compatibility route always returns 410 Gone without mutating PoR state. Submit verdicts through `/v1/sorafs/capacity/por-verdict`.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "410": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The compatibility route is retired and never mutates PoR state."
-          }
-        },
-        "summary": "Storage PoR verdict mutation retired.",
         "tags": [
           "SoraFS"
         ],

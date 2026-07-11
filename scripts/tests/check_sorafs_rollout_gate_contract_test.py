@@ -324,6 +324,19 @@ ACTIVE_SORAFS_TODO_SCAN_FILES = (
     / "include"
     / "connect_norito_bridge.h",
     REPO_ROOT / "crates" / "sorafs_manifest" / "include" / "sorafs_reference.h",
+    REPO_ROOT
+    / "java"
+    / "iroha_android"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "android"
+    / "model"
+    / "instructions"
+    / "ReplicationOrderInstructionValidation.java",
     REPO_ROOT / "ci" / "check_agents_guardrails.sh",
     REPO_ROOT / "ci" / "check_connect_norito_bridge_header.sh",
     REPO_ROOT / "ci" / "check_docs_portal.sh",
@@ -11670,12 +11683,13 @@ def test_canary_builders_use_shared_non_production_marker_helper() -> None:
 
     assert "def forbidden_non_production_markers" in helper
     assert "compact_rollout_marker_tokens(token, markers)" in helper
-    assert "test_committee_result_inventory_rejects_compact_placeholder_marker" in read(
-        SCRIPTS_DIR / "tests" / "build_sorafs_ai_prescreen_canary_test.py"
+    ai_checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_ai_prescreen_rollout_evidence_test.py"
     )
+    assert "test_committee_results_reject_compact_placeholder_marker" in ai_checker_test
     assert (
-        "test_committee_result_inventory_rejects_sandwiched_compact_placeholder_marker"
-        in read(SCRIPTS_DIR / "tests" / "build_sorafs_ai_prescreen_canary_test.py")
+        "test_committee_results_reject_sandwiched_compact_placeholder_marker"
+        in ai_checker_test
     )
     assert marker_builders
     assert missing_helper == []
@@ -16183,7 +16197,10 @@ def test_ai_prescreen_canary_builder_is_checked_in() -> None:
     normalized_plan = re.sub(r"\s+", " ", plan)
     roadmap = read(REPO_ROOT / "roadmap.md")
 
-    assert "Build payload-free SoraFS AI pre-screening rollout canary artifacts." in builder
+    assert "Build payload-free non-runner SoraFS AI pre-screening canary artifacts." in builder
+    assert 'LIVE_PROBE_ONLY_KINDS = ("runner", "committee")' in builder
+    assert "if kind not in LIVE_PROBE_ONLY_KINDS" in builder
+    assert "Runner and committee evidence must come from deployed live-probe commands." in builder
     assert "validate_evidence_payload(" in builder
     assert "ValidationOptions(" in builder
     assert "now_unix=args.now_unix" in builder
@@ -16200,8 +16217,6 @@ def test_ai_prescreen_canary_builder_is_checked_in() -> None:
     assert "diagnostic_text_is_canonical" in builder
     assert "if not diagnostic_text_is_canonical(value):" in builder
     assert "ord(character)" not in builder
-    assert "https://C%3A.committee.example/aggregate" in builder_tests
-    assert "https://http%3A.committee.example/aggregate" in builder_tests
     assert "base_url: bool = False" in builder
     assert "base_url and value.endswith(\"/\")" in builder
     assert ".rstrip" not in builder
@@ -16279,7 +16294,7 @@ def test_ai_prescreen_canary_builder_is_checked_in() -> None:
     assert "name = name.strip()" not in builder
     assert "REQUIRED_GOVERNANCE_EDGE_COUNT" in builder
     assert "--edge-count must match required governance producer inventory" in builder
-    assert "test_generated_canaries_pass_full_ai_prescreen_gate" in builder_tests
+    assert "test_generated_non_live_canaries_pass_their_kind_contract" in builder_tests
     assert (
         "test_url_arguments_reject_encoded_or_secret_bearing_values_without_leaking"
         in builder_tests
@@ -16288,15 +16303,8 @@ def test_ai_prescreen_canary_builder_is_checked_in() -> None:
         "test_path_arguments_reject_encoded_or_platform_values_without_leaking"
         in builder_tests
     )
-    assert "test_committee_result_inventory_must_match_result_count" in builder_tests
-    assert (
-        "test_committee_result_inventory_requires_production_family"
-        in builder_tests
-    )
-    assert (
-        "test_committee_result_inventory_rejects_placeholder_marker"
-        in builder_tests
-    )
+    assert "test_builder_rejects_live_probe_only_kinds" in builder_tests
+    assert "test_generated_non_live_canaries_pass_their_kind_contract" in builder_tests
     assert "test_operator_workflow_canary_records_passed_route_count" in builder_tests
     assert "test_governance_edge_inventory_must_match_edge_count" in builder_tests
     assert (
@@ -16323,16 +16331,10 @@ def test_ai_prescreen_canary_builder_is_checked_in() -> None:
     assert "test_workflow_id_must_be_canonical" in builder_tests
     assert "test_workflow_id_rejects_non_production_markers" in builder_tests
     assert "test_workflow_id_accepts_future_production_label" in builder_tests
-    assert "test_subject_must_be_canonical" in builder_tests
-    assert "test_subject_rejects_non_production_markers" in builder_tests
-    assert "test_subject_accepts_future_production_reference" in builder_tests
-    assert "test_runner_canary_requires_digest_options" in builder_tests
-    assert "test_verdict_input_rejects_unknown_value_before_write" in builder_tests
-    assert "test_verdict_input_accepts_shipped_block_value" in builder_tests
     assert "scripts/build_sorafs_ai_prescreen_canary.py" in plan
-    assert "reviewed `--subject` references matching the gate's `cid:*` production shape" in normalized_plan
-    assert "runner `--evidence-digest-hex` and `--policy-digest-hex` evidence anchors" in normalized_plan
-    assert "`ai-prescreen-committee-result-*` production family" in normalized_plan
+    assert "non-runner" in normalized_plan
+    assert "runner and committee evidence" in normalized_plan.lower()
+    assert "deployed live-probe commands" in normalized_plan
     assert (
         "`ai-prescreen-notification-delivery-*` production family"
         in normalized_plan
@@ -20235,7 +20237,7 @@ def test_pdp_provider_protocol_work_stays_open_in_docs() -> None:
     normalized = re.sub(r"\s+", " ", source)
 
     required_open = (
-        "the provider protocol is not production ready yet. Torii therefore rejects PDP proof-stream requests with `400 Bad Request` until real provider proof generation, signature verification, and governance archival are implemented.",
+        "The deployed provider protocol is not production-ready yet: Torii therefore rejects PDP proof-stream requests with `400 Bad Request` until persisted-node proof generation, signed challenge/proof transport, governance archival, and repair handoff are wired end to end.",
         "The PDP rollout evidence gate requires payload-free provider-transport, proof-generation, validator-replay, governance/repair, observability, and governance-approval artifacts before reporting `ready`",
         "Torii `/v1/sorafs/proof/stream` accepts PoR and PoTR only. It parses `pdp` but returns `400 Bad Request` so clients do not mistake PoR samples for PDP provider proofs.",
         "Do not remove the Torii fail-closed PDP guard until these local gates exist:",
@@ -21166,27 +21168,36 @@ def test_unshipped_governance_dag_public_service_surface_is_not_exposed() -> Non
     assert exposed == {}
 
 
-def test_orderbook_contract_and_daemon_work_stays_unshipped_in_docs() -> None:
+def test_orderbook_docs_distinguish_shipped_native_ledger_from_remaining_services() -> None:
     source = read(SORAFS_ORDERBOOK_PLAN)
     normalized = re.sub(r"\s+", " ", source)
 
-    required_unshipped = (
-        "does not ship an on-chain SoraFS orderbook contract",
+    required_current = (
+        "ships an authoritative native ledger foundation",
+        "SetSorafsOrderbookPolicy",
+        "SubmitSorafsOrderbookOrder",
+        "CancelSorafsOrderbookOrder",
+        "RecordSorafsOrderbookSettlementReceipt",
+        "atomically debits a pre-funded native lock",
+        "Typed signed-query variants expose the active policy",
+        "Page sizes are restricted to `1..=500`",
+        "Deterministic fill matching and automatic channel/lock creation and funding are not shipped.",
         "durable off-chain matcher service",
-        "on-chain/daemonized streaming-settlement receipt service",
+        "daemonized streaming-settlement service",
         "contract-backed authenticated orderbook streams",
-        "On-chain orderbook contract | Store bids/asks, match orders, record fills, and enforce escrow requirements. | Not shipped.",
         "daemonized matcher service and contract submission are not shipped",
-        "durable receipt daemon and escrow custody mutation are not shipped",
+        "Automatic lock creation/funding/refund/expiry integration and a durable receipt daemon are not shipped",
         "contract forwarding and durable streams are not shipped",
         "live dashboard wiring and rollout evidence are not shipped",
-        "Remaining: implement on-chain contract surface, durable matcher service",
-        "daemonized settlement receipt service with escrow custody mutation",
-        "durable contract/matcher-backed WebSocket/SSE streams",
+        "Remaining: implement deterministic authoritative matching/fill and automatic settlement-channel lock creation/funding/refund/expiry",
+        "durable matcher and daemonized settlement services",
+        "durable matcher-backed WebSocket/SSE streams",
     )
-    missing = [phrase for phrase in required_unshipped if phrase not in normalized]
+    missing = [phrase for phrase in required_current if phrase not in normalized]
 
     assert missing == []
+    assert "does not ship an on-chain SoraFS orderbook contract" not in normalized
+    assert "durable receipt daemon and escrow custody mutation are not shipped" not in normalized
 
 
 def test_orderbook_docs_keep_rollout_contract_markers() -> None:
@@ -21823,16 +21834,17 @@ def test_hedging_runtime_services_stay_unshipped_in_docs() -> None:
     normalized = re.sub(r"\s+", " ", source)
 
     required_unshipped = (
-        "This is not yet a production hedging and billing stack",
-        "There is still no shipped `hedgingd`, price-feed collector service, `billingd`, statement publisher, SoraFS hedging/billing REST API, service-management CLI",
-        "daemon, exposure tracking, and hedge execution are not shipped",
+        "This is not yet a complete production hedging and billing stack",
+        "There is still no shipped `hedgingd`, price-feed collector service, `billingd`, statement publisher, complete SoraFS hedging/billing service API, service-management CLI",
+        "daemon, exposure tracking, collector automation, and hedge execution are not shipped",
         "Price feed collectors | Fetch primary/secondary/tertiary feeds and normalize them into signed price payloads. | Not shipped for SoraFS hedging.",
         "event ingestion and accrual service are not shipped",
         "Statement publisher | Store, sign, publish, notify, and track acknowledgements for statements. | Not shipped.",
-        "runtime service emission and service management are not shipped",
+        "always-on collector emission and service management are not shipped",
         "Automated hedge execution must remain off until governance approves venues",
-        "No hedging or billing routes are currently shipped.",
-        "Remaining: implement collector service, daemonized pricing/exposure engine, billing aggregator, statement publisher, signed APIs, runtime CLI helpers",
+        "The minimum authenticated local economics operator routes described above are shipped.",
+        "No complete hedging or billing service routes under `/v1/sorafs/hedging` or `/v1/sorafs/billing` are currently shipped.",
+        "Remaining: implement collector service, daemonized pricing/exposure engine, billing aggregator, statement publisher, signed exposure/billing/statement APIs beyond the local economics operator boundary, runtime CLI helpers",
     )
     missing = [phrase for phrase in required_unshipped if phrase not in normalized]
 
@@ -22752,7 +22764,9 @@ def test_commit_reveal_production_services_stay_unshipped_in_docs() -> None:
     required_unshipped = (
         "Accepted local ballot state, durable local challenge records, and event backlog are persisted as a validated Norito checkpoint when storage is enabled",
         "`NodeHandle` now also derives deterministic payload-free no-show penalty plans for closed ballots, separates missing commits from committed no-shows, and binds the plan to a stable digest without mutating ballot state. Torii exposes that plan through the payload-free local `GET /v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan` readback route, using server-side network time and returning only counts, juror identifiers, and the digest.",
-        "repository now ships local ballot CLI/client readback, signed commit/reveal/challenge-resolution/tally submission, and payload-free executor automation for the local Torii API. It does not yet ship the SoraFS moderation voting contract, contract-backed ballot orchestrator, production challenge monitor/dispute service, public juror portal, or deployed production service needed to run appeal-panel ballots end to end.",
+        "repository now ships local ballot CLI/client readback, signed commit/reveal/challenge-resolution/tally submission, and payload-free executor automation for the local Torii API. It does not yet ship the contract-backed ballot orchestrator, production challenge monitor/dispute service, public juror portal, or deployed production service needed to run appeal-panel ballots end to end.",
+        "`iroha_data_model::sorafs::moderation_ledger` defines the first-release `ModerationLedgerPolicyV1`, immutable case specifications and policy snapshots, canonical commitment/reveal records, payload-free challenge and resolution records, terminal decision/contested/quorum-failure/challenged outcomes, distinct missing-commit and unrevealed-commit no-show records, and constant-time ledger counters.",
+        "Typed `FindSorafsModeration*` queries expose the active policy, case, commitment, reveal, challenge, outcome, no-show, and ledger status through Iroha's existing generic Torii query API.",
         "ballot lifecycle and challenge submit/resolve events can also be materialized into the SoraFS Governance DAG filesystem publisher and optional signed runtime DAG",
         "persists successful local ballot transitions, challenge submissions/resolutions, and the sequenced local event backlog to `moderation-ballots/ballots-snapshot.to` as a validated Norito checkpoint and rejects duplicate, mismatched, out-of-window, missing-commit, unresolved or accepted-challenge-with-reveal/tally, bad-tally, insufficient-quorum, non-contiguous-event, missing/duplicated/mutated challenge-event, or event/state-mismatch snapshots",
         "`moderation_ballot_no_show_plan`, which refuses open reveal windows and unresolved or accepted challenges, separates missing-commit and unrevealed-commit jurors, and emits a stable payload-free penalty-plan digest without mutating state or publishing events.",
@@ -22760,11 +22774,10 @@ def test_commit_reveal_production_services_stay_unshipped_in_docs() -> None:
         "Ballot event readback now includes `challenge_submitted` and `challenge_resolved` entries with `challenge_count` and the payload-free challenge record",
         "`iroha::client` and `iroha sorafs moderation ballots list|get|no-show-plan|events|commit|reveal|tally` wrap the local readback and signed committee lifecycle endpoints",
         "`iroha sorafs moderation ballots execute|executor-bundle|executor-canary` provide local payload-free commit/reveal executor automation",
-        "That gate blocks deployed promotion evidence; it does not replace the missing durable service or contract-backed workflow.",
-        "Build the production orchestrator around the persisted local ballot lifecycle store, local challenge records, event backlog, and local no-show penalty plans, including retries, scheduled no-show dispatch/settlement handoff, production challenge monitor/dispute workflows, and durable contested-outcome workflows.",
-        "Implement the on-chain contract or ledger workflow that records commitments, reveals, challenges, outcomes, and juror penalties.",
+        "That gate blocks deployed promotion evidence; it does not replace the missing production orchestration, service deployment, and public rollout evidence.",
+        "Build the production orchestrator around the persisted local ballot lifecycle store, local challenge records, event backlog, and local no-show penalty plans as replay-checked operational projections of the authoritative ledger. Add retries, scheduled no-show dispatch/settlement handoff, production challenge monitor/dispute workflows, and durable contested-outcome workflows.",
         "Promote the shipped local CLI/client bridge and executor automation into audited juror-facing deployment workflows, including challenge evidence export, portal UX, and public operations runbooks.",
-        "Promote local Governance DAG publication for lifecycle and challenge/dispute events into contract-backed decisions and public IPFS/IPNS rollout evidence.",
+        "Bind local Governance DAG lifecycle and challenge/dispute publication to the authoritative ledger outcome and promote it into public IPFS/IPNS rollout evidence.",
         "Collect a passing payload-free `commit_reveal` canary through the SFM-4b rollout evidence gate after the durable service exists.",
         "Until then, do not document `sorafs-juror`, portal-only commands, or deployed ballot service commands as shipped.",
     )
@@ -23383,6 +23396,88 @@ def test_appeal_finance_live_dashboard_and_reconciliation_stay_open_in_docs() ->
     missing = [phrase for phrase in required_open if phrase not in normalized]
 
     assert missing == []
+
+
+def test_commit_reveal_authoritative_ledger_foundation_is_pinned() -> None:
+    model = read(
+        REPO_ROOT
+        / "crates"
+        / "iroha_data_model"
+        / "src"
+        / "sorafs"
+        / "moderation_ledger.rs"
+    )
+    instructions = read(
+        REPO_ROOT / "crates" / "iroha_data_model" / "src" / "isi" / "sorafs.rs"
+    )
+    queries = read(
+        REPO_ROOT / "crates" / "iroha_data_model" / "src" / "query" / "mod.rs"
+    )
+    core = read(
+        REPO_ROOT
+        / "crates"
+        / "iroha_core"
+        / "src"
+        / "smartcontracts"
+        / "isi"
+        / "sorafs_moderation.rs"
+    )
+    executor_permission = read(
+        REPO_ROOT
+        / "crates"
+        / "iroha_executor_data_model"
+        / "src"
+        / "permission.rs"
+    )
+
+    for marker in (
+        "pub struct ModerationLedgerPolicyV1",
+        "pub struct ModerationCaseRecordV1",
+        "pub struct ModerationCommitRecordV1",
+        "pub struct ModerationRevealRecordV1",
+        "pub struct ModerationChallengeRecordV1",
+        "pub struct ModerationOutcomeRecordV1",
+        "pub struct ModerationNoShowRecordV1",
+        "pub enum ModerationNoShowKindV1",
+        "pub enum ModerationOutcomeKindV1",
+        "pub fn sorafs_moderation_panel_roster_hash_v1",
+    ):
+        assert marker in model
+
+    for instruction in (
+        "SetSorafsModerationPolicy",
+        "OpenSorafsModerationCase",
+        "SubmitSorafsModerationCommit",
+        "RaiseSorafsModerationChallenge",
+        "ResolveSorafsModerationChallenge",
+        "SubmitSorafsModerationReveal",
+        "FinalizeSorafsModerationCase",
+    ):
+        assert f"pub struct {instruction}" in instructions
+        assert f"impl Execute for {instruction}" in core
+
+    for query in (
+        "FindSorafsModerationPolicy",
+        "FindSorafsModerationCase",
+        "FindSorafsModerationCommit",
+        "FindSorafsModerationReveal",
+        "FindSorafsModerationChallenge",
+        "FindSorafsModerationOutcome",
+        "FindSorafsModerationNoShow",
+        "FindSorafsModerationStatus",
+    ):
+        assert f"pub struct {query}" in queries
+        assert f"impl ValidSingularQuery for {query}" in core
+
+    assert "pub struct CanManageSorafsModeration" in executor_permission
+    for adversarial_test in (
+        "duplicate_wrong_authority_phase_and_mismatched_reveal_are_atomic",
+        "pending_and_accepted_challenges_block_reveal_and_close_without_penalties",
+        "rejected_challenge_unblocks_reveals_and_tied_quorum_is_contested",
+        "missed_quorum_persists_distinct_no_show_penalties",
+        "bounds_permissions_and_counter_overflow_reject_without_partial_case",
+    ):
+        assert f"fn {adversarial_test}" in core
 
 
 def test_appeal_finance_docs_do_not_reopen_shipped_local_runtime_status() -> None:

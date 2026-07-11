@@ -17,23 +17,9 @@ def _pin_register_request() -> dict[str, Any]:
     return {
         "authority": "alice@boi",
         "privateKey": "ed25519:deadbeef",
-        "chunker": {
-            "profileId": 1,
-            "namespace": "sorafs",
-            "name": "sf1",
-            "semver": "1.0.0",
-            "multihashCode": 0,
-        },
-        "pinPolicy": {
-            "minReplicas": 3,
-            "storageClass": "hot",
-            "retentionEpoch": 72,
-        },
-        "manifestDigestHex": "A" * 64,
         "manifestBytes": b"manifest-norito",
-        "chunkDigestSha3_256Hex": "0x" + "b" * 64,
-        "contentLength": 4096,
         "submittedEpoch": 42,
+        "gasAssetId": "xor#universal",
         "alias": {
             "namespace": "docs",
             "name": "main",
@@ -62,21 +48,9 @@ def test_register_sorafs_pin_manifest_posts_validated_payload() -> None:
     body = json.loads(call["data"].decode("utf-8"))
     assert body["authority"] == "alice@boi"
     assert body["private_key"] == "ed25519:deadbeef"
-    assert body["chunker_profile_id"] == 1
-    assert body["chunker_namespace"] == "sorafs"
-    assert body["chunker_name"] == "sf1"
-    assert body["chunker_semver"] == "1.0.0"
-    assert body["chunker_multihash_code"] == 0
-    assert body["pin_policy"] == {
-        "min_replicas": 3,
-        "storage_class": {"type": "Hot"},
-        "retention_epoch": 72,
-    }
-    assert body["manifest_digest_hex"] == "a" * 64
-    assert body["manifest_b64"] == base64.b64encode(b"manifest-norito").decode("ascii")
-    assert body["chunk_digest_sha3_256_hex"] == "b" * 64
-    assert body["content_length"] == 4096
+    assert body["manifest_payload"] == base64.b64encode(b"manifest-norito").decode("ascii")
     assert body["submitted_epoch"] == 42
+    assert body["gas_asset_id"] == "xor#universal"
     assert body["alias"] == {
         "namespace": "docs",
         "name": "main",
@@ -85,31 +59,24 @@ def test_register_sorafs_pin_manifest_posts_validated_payload() -> None:
     assert body["successor_of_hex"] == "c" * 64
 
 
-def test_register_sorafs_pin_manifest_accepts_snake_case_policy_alias_and_successor() -> None:
+def test_register_sorafs_pin_manifest_accepts_canonical_payload_and_flat_alias() -> None:
     successor_hex = "d" * 64
     request = copy.deepcopy(_pin_register_request())
-    request.pop("pinPolicy")
     request.pop("alias")
     request.pop("successorOfHex")
-    request["pin_policy"] = {
-        "min_replicas": "3",
-        "storage_class": {"type": "warm"},
-        "retention_epoch": "72",
-    }
+    request.pop("manifestBytes")
     request["alias_namespace"] = "docs"
     request["alias_name"] = "main"
     request["alias_proof_base64"] = base64.b64encode(b"alias-proof").decode("ascii")
     request["successor_of_hex"] = successor_hex.upper()
-    request["manifestBytes"] = None
-    request["manifest_b64"] = base64.b64encode(b"explicit-manifest").decode("ascii")
+    request["manifest_payload"] = base64.b64encode(b"explicit-manifest").decode("ascii")
     session = RecordingSession(StubResponse(200, {"status": "queued"}))
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
     client.register_sorafs_pin_manifest(request)
 
     body = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert body["pin_policy"]["storage_class"] == {"type": "Warm"}
-    assert body["manifest_b64"] == base64.b64encode(b"explicit-manifest").decode("ascii")
+    assert body["manifest_payload"] == base64.b64encode(b"explicit-manifest").decode("ascii")
     assert body["alias"]["proof_base64"] == base64.b64encode(b"alias-proof").decode("ascii")
     assert body["successor_of_hex"] == successor_hex
 
@@ -163,16 +130,10 @@ def test_register_sorafs_pin_manifest_typed_normalizes_response() -> None:
     ("mutate", "match"),
     [
         (
-            lambda request: request.update({"manifest_digest_hex": "a" * 64}),
-            "ambiguous aliases: manifest_digest_hex, manifestDigestHex",
-        ),
-        (
-            lambda request: request.update({"chunk_digest_sha3_256_hex": "b" * 64}),
-            "ambiguous aliases: chunk_digest_sha3_256_hex, chunkDigestSha3_256Hex",
-        ),
-        (
-            lambda request: request.update({"content_length": 4096}),
-            "ambiguous aliases: content_length, contentLength",
+            lambda request: request.update(
+                {"manifest_payload": base64.b64encode(b"other").decode("ascii")}
+            ),
+            "ambiguous aliases: manifest_payload, manifestBytes",
         ),
         (
             lambda request: request.update({"submitted_epoch": 42}),
@@ -183,24 +144,8 @@ def test_register_sorafs_pin_manifest_typed_normalizes_response() -> None:
             "ambiguous aliases: successor_of_hex, successorOfHex",
         ),
         (
-            lambda request: request.update(
-                {"manifest_b64": base64.b64encode(b"other").decode("ascii")}
-            ),
-            "accepts only one of manifest_b64 or manifest_bytes",
-        ),
-        (
-            lambda request: request.update(
-                {"pin_policy": {"min_replicas": 3, "storage_class": "hot"}}
-            ),
-            "ambiguous aliases: pin_policy, pinPolicy",
-        ),
-        (
-            lambda request: request["chunker"].update({"profile_id": 1}),
-            "ambiguous aliases: profile_id, profileId",
-        ),
-        (
-            lambda request: request["pinPolicy"].update({"min_replicas": 3}),
-            "ambiguous aliases: min_replicas, minReplicas",
+            lambda request: request.update({"gas_asset_id": "xor#universal"}),
+            "ambiguous aliases: gas_asset_id, gasAssetId",
         ),
         (
             lambda request: request["alias"].update(
@@ -225,6 +170,32 @@ def test_register_sorafs_pin_manifest_rejects_duplicate_aliases_before_request(
     assert session.calls == []
 
 
+@pytest.mark.parametrize(
+    "retired_field",
+    [
+        "chunker",
+        "pinPolicy",
+        "manifestDigestHex",
+        "manifest_b64",
+        "chunkDigestSha3_256Hex",
+        "contentLength",
+        "unexpected",
+    ],
+)
+def test_register_sorafs_pin_manifest_rejects_retired_and_unknown_fields(
+    retired_field: str,
+) -> None:
+    request = copy.deepcopy(_pin_register_request())
+    request[retired_field] = "retired"
+    session = RecordingSession(StubResponse(200, {"status": "queued"}))
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    with pytest.raises(TypeError, match=f"unsupported fields: {retired_field}"):
+        client.register_sorafs_pin_manifest(request)
+
+    assert session.calls == []
+
+
 def test_register_sorafs_pin_manifest_rejects_alias_object_with_flat_alias_fields() -> None:
     request = copy.deepcopy(_pin_register_request())
     request["alias_namespace"] = "docs"
@@ -242,26 +213,21 @@ def test_register_sorafs_pin_manifest_rejects_alias_object_with_flat_alias_field
 @pytest.mark.parametrize(
     ("mutate", "match"),
     [
-        (lambda request: request.update({"manifestDigestHex": "abc123"}), "manifest_digest_hex"),
-        (lambda request: request.update({"manifestBytes": b""}), "manifest_bytes"),
-        (lambda request: request.update({"manifestBytes": "not base64!"}), "manifest_bytes"),
+        (lambda request: request.update({"manifestBytes": b""}), "manifest_payload"),
+        (lambda request: request.update({"manifestBytes": "not base64!"}), "manifest_payload"),
         (
-            lambda request: request.update({"chunkDigestSha3_256Hex": "z" * 64}),
-            "chunk_digest_sha3_256_hex",
+            lambda request: request.update({"manifestBytes": b"x" * (512 * 1024 + 1)}),
+            "at most 524288 bytes",
         ),
         (lambda request: request.update({"successorOfHex": "c" * 63}), "successor_of_hex"),
-        (lambda request: request.update({"contentLength": -1}), "content_length"),
+        (lambda request: request.update({"successorOfHex": "0" * 64}), "must not be zero"),
         (lambda request: request.update({"submittedEpoch": -1}), "submitted_epoch"),
-        (lambda request: request["chunker"].update({"profileId": 0}), "chunker.profile_id"),
-        (lambda request: request["chunker"].update({"namespace": " "}), "chunker.namespace"),
-        (lambda request: request["chunker"].update({"multihashCode": True}), "multihash_code"),
-        (lambda request: request["pinPolicy"].update({"minReplicas": 0}), "min_replicas"),
-        (lambda request: request["pinPolicy"].update({"minReplicas": True}), "min_replicas"),
-        (lambda request: request["pinPolicy"].update({"storageClass": "lava"}), "storage_class"),
-        (lambda request: request["pinPolicy"].update({"retentionEpoch": -1}), "retention_epoch"),
+        (lambda request: request.update({"submittedEpoch": True}), "submitted_epoch"),
+        (lambda request: request.update({"gasAssetId": ""}), "gas_asset_id"),
         (lambda request: request["alias"].pop("proof"), "alias.proof"),
         (lambda request: request["alias"].update({"proof": "not base64!"}), "alias.proof"),
         (lambda request: request["alias"].update({"namespace": ""}), "alias.namespace"),
+        (lambda request: request["alias"].update({"extra": True}), "unsupported fields: extra"),
         (
             lambda request: request.update({"private_key": "ed25519:abc"}),
             "private_key or privateKey",

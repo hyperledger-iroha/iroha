@@ -244,8 +244,9 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   --response-out artifacts/manifest.submit.body
 ```
 
-- Provide either `--chunk-plan` (preferred) or an explicit
-  `--chunk-digest-sha3` to satisfy registry validation.
+- The manifest carries its canonical chunk-plan SHA3-256 commitment. Supplying
+  `--chunk-plan` or `--chunk-digest-sha3` is optional verification evidence; if
+  present, it must match the embedded commitment exactly.
 - Use `--submitted-epoch=<N>` to pin an explicit epoch, or
   `--resolve-submitted-epoch=true` to query `<torii-url>/status` and resolve it
   automatically.
@@ -253,9 +254,11 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   whitespace automatically.
 - Alias bindings require `--alias-namespace`, `--alias-name`, and
   `--alias-proof` together. The command fails fast if any component is missing.
-- The pin-registration request includes `manifest_b64`, a base64 copy of the
-  Norito `ManifestV1`, so Torii can validate governance proofs, digest,
-  chunker, content length, and pin policy before queueing the transaction.
+- The pin-registration request includes the required `manifest_payload`, a
+  canonical base64 copy of the exact Norito `ManifestV1`. Torii derives the
+  digest, chunk-plan commitment, chunker, content length, and pin policy only
+  from those bytes before queueing the transaction; retired parallel summary
+  fields are rejected.
 - If `<torii-url>/v1/sorafs/pin/register` is not routed on the target node, the
   CLI automatically derives `chain_id` from the read-side registry endpoints and
   submits the same `RegisterPinManifest` instruction through `/v1/pipeline/transactions`.

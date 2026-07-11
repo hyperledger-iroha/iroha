@@ -36,7 +36,7 @@ use norito::{
     json::{self, Value},
 };
 use sorafs_manifest::{
-    BLAKE3_256_MULTIHASH_CODE, ManifestV1, ManifestValidationError, PinPolicy as ManifestPinPolicy,
+    BLAKE3_256_MULTIHASH_CODE, ManifestValidationError, PinPolicy as ManifestPinPolicy,
     PinPolicyConstraints as ManifestPinPolicyConstraints, ProfileId,
     StorageClass as ManifestStorageClass,
     alias_cache::decode_alias_proof,
@@ -96,13 +96,6 @@ const MAX_ALIAS_PROOF_BYTES: usize = 1024 * 1024;
 const MAX_REPLICATION_ORDER_PAYLOAD_BYTES: usize = 1024 * 1024;
 const MAX_CAPACITY_DECLARATION_PAYLOAD_BYTES: usize = 256 * 1024;
 const MAX_CAPACITY_DISPUTE_PAYLOAD_BYTES: usize = 64 * 1024;
-const MANIFEST_DECODE_LIMITS: DecodeLimits = DecodeLimits::new(
-    sorafs_manifest::MAX_MANIFEST_ALIAS_PROOF_BYTES,
-    sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES,
-    sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES * 2,
-    sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES * 4,
-    32,
-);
 const REPLICATION_ORDER_DECODE_LIMITS: DecodeLimits = DecodeLimits::new(
     sorafs_manifest::capacity::MAX_CAPACITY_METADATA_VALUE_BYTES,
     MAX_REPLICATION_ORDER_PAYLOAD_BYTES,
@@ -480,20 +473,10 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterPinManifest {
                 sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES,
             )));
         }
-        let manifest: ManifestV1 =
-            decode_from_bytes_with_limits(&manifest_payload, MANIFEST_DECODE_LIMITS).map_err(
-                |error| invalid_parameter(format!("invalid canonical ManifestV1 payload: {error}")),
-            )?;
-        let canonical_manifest = manifest.encode().map_err(|error| {
-            invalid_parameter(format!(
-                "failed to canonicalize ManifestV1 payload: {error}"
-            ))
-        })?;
-        if canonical_manifest != manifest_payload {
-            return Err(invalid_parameter(
-                "manifest payload must use canonical first-release Norito",
-            ));
-        }
+        let manifest =
+            sorafs_manifest::decode_manifest_v1_canonical(&manifest_payload).map_err(|error| {
+                invalid_parameter(format!("invalid canonical ManifestV1 payload: {error}"))
+            })?;
         let mut manifest_constraints =
             manifest_pin_policy_constraints_from_config(&state_transaction.gov.sorafs_pin_policy);
         // The separately submitted approval envelope remains the authoritative

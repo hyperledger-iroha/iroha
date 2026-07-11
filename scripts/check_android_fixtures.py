@@ -21,15 +21,39 @@ DEFAULT_STATE_PATH = Path("artifacts/android_fixture_regen_state.json")
 
 def decode_base64(value: str, context: str) -> bytes:
     try:
-        return base64.b64decode(value)
+        decoded = base64.b64decode(value, validate=True)
     except Exception as exc:  # pragma: no cover - defensive conversion
         raise ValueError(f"invalid base64 for {context}: {exc}") from exc
+    canonical = base64.b64encode(decoded).decode("ascii")
+    if canonical != value:
+        raise ValueError(f"non-canonical base64 for {context}")
+    return decoded
 
 
 def iroha_hash(data: bytes) -> str:
     digest = bytearray(hashlib.blake2b(data, digest_size=32).digest())
     digest[-1] |= 1
     return digest.hex()
+
+
+def compact_length(value: int) -> bytes:
+    if value < 0:
+        raise ValueError("compact length must be non-negative")
+    output = bytearray()
+    remaining = value
+    while True:
+        byte = remaining & 0x7F
+        remaining >>= 7
+        if remaining:
+            byte |= 0x80
+        output.append(byte)
+        if not remaining:
+            return bytes(output)
+
+
+def signed_transaction_entrypoint_hash(data: bytes) -> str:
+    entrypoint = b"\x00\x00\x00\x00" + compact_length(len(data)) + data
+    return iroha_hash(entrypoint)
 
 def normalize_authority(value: str) -> str:
     if not isinstance(value, str):
@@ -46,6 +70,9 @@ def normalize_authority(value: str) -> str:
 @dataclass(frozen=True)
 class PayloadFixture:
     encoded: str
+    payload_hash: str
+    signed_base64: str
+    signed_hash: str
     chain: str
     authority: str
     creation_time_ms: int
@@ -63,6 +90,11 @@ def load_payload_fixtures(path: Path) -> Dict[str, PayloadFixture]:
         raise ValueError(f"fixtures JSON at {path} must be a list")
 
     mapping: Dict[str, PayloadFixture] = {}
+    seen_names: Set[str] = set()
+    seen_encoded_payloads: Set[bytes] = set()
+    seen_payload_hashes: Set[str] = set()
+    seen_signed_payloads: Set[bytes] = set()
+    seen_signed_hashes: Set[str] = set()
     for entry in payloads:
         if not isinstance(entry, dict):
             raise ValueError(f"fixture entry in {path} is not an object")
@@ -70,7 +102,40 @@ def load_payload_fixtures(path: Path) -> Dict[str, PayloadFixture]:
         encoded = entry.get("encoded")
         if not isinstance(name, str):
             raise ValueError(f"fixture entry in {path} missing name string: {entry!r}")
+        if name in seen_names:
+            raise ValueError(f"duplicate fixture name {name!r} in {path}")
+        seen_names.add(name)
         if isinstance(encoded, str):
+            encoded_bytes = decode_base64(encoded, f"{name} encoded payload")
+            if encoded_bytes in seen_encoded_payloads:
+                raise ValueError(f"duplicate fixture payload bytes for {name!r} in {path}")
+            seen_encoded_payloads.add(encoded_bytes)
+            payload_base64 = entry.get("payload_base64")
+            payload_hash = entry.get("payload_hash")
+            signed_base64 = entry.get("signed_base64")
+            signed_hash = entry.get("signed_hash")
+            if payload_base64 != encoded:
+                raise ValueError(f"fixture entry {name} in {path} payload_base64 differs from encoded")
+            if not isinstance(payload_hash, str):
+                raise ValueError(f"fixture entry {name} in {path} missing payload_hash string")
+            if not isinstance(signed_base64, str):
+                raise ValueError(f"fixture entry {name} in {path} missing signed_base64 string")
+            if not isinstance(signed_hash, str):
+                raise ValueError(f"fixture entry {name} in {path} missing signed_hash string")
+            if payload_hash != iroha_hash(encoded_bytes):
+                raise ValueError(f"fixture entry {name} in {path} payload_hash mismatch")
+            signed_bytes = decode_base64(signed_base64, f"{name} signed payload")
+            if signed_hash != signed_transaction_entrypoint_hash(signed_bytes):
+                raise ValueError(f"fixture entry {name} in {path} signed_hash mismatch")
+            if payload_hash in seen_payload_hashes:
+                raise ValueError(f"duplicate fixture payload_hash {payload_hash!r} in {path}")
+            seen_payload_hashes.add(payload_hash)
+            if signed_bytes in seen_signed_payloads:
+                raise ValueError(f"duplicate fixture signed bytes for {name!r} in {path}")
+            seen_signed_payloads.add(signed_bytes)
+            if signed_hash in seen_signed_hashes:
+                raise ValueError(f"duplicate fixture signed_hash {signed_hash!r} in {path}")
+            seen_signed_hashes.add(signed_hash)
             chain = entry.get("chain")
             authority = entry.get("authority")
             creation_time_ms = entry.get("creation_time_ms")
@@ -106,6 +171,9 @@ def load_payload_fixtures(path: Path) -> Dict[str, PayloadFixture]:
                 raise ValueError(f"fixture entry {name} in {path} has invalid nonce")
             mapping[name] = PayloadFixture(
                 encoded=encoded,
+                payload_hash=payload_hash,
+                signed_base64=signed_base64,
+                signed_hash=signed_hash,
                 chain=chain,
                 authority=authority,
                 creation_time_ms=creation_time_ms,
@@ -142,6 +210,10 @@ def compare(
 
     seen_names: Set[str] = set()
     seen_files: Set[str] = set()
+    seen_payload_hashes: Set[str] = set()
+    seen_payload_bytes: Set[bytes] = set()
+    seen_signed_hashes: Set[str] = set()
+    seen_signed_bytes: Set[bytes] = set()
 
     for entry in fixtures:
         if not isinstance(entry, dict):
@@ -198,10 +270,34 @@ def compare(
             errors.append(f"manifest fixture has invalid nonce: {entry}")
             continue
 
-        seen_names.add(name)
-        seen_files.add(encoded_file)
+        if name in seen_names:
+            errors.append(f"manifest contains duplicate fixture name: {name}")
+        else:
+            seen_names.add(name)
+        if encoded_file in seen_files:
+            errors.append(f"manifest contains duplicate encoded_file: {encoded_file}")
+        else:
+            seen_files.add(encoded_file)
+        if payload_hash in seen_payload_hashes:
+            errors.append(f"manifest contains duplicate payload_hash: {payload_hash}")
+        else:
+            seen_payload_hashes.add(payload_hash)
+        payload_identity = decode_base64(payload_base64, f"{name} payload")
+        if payload_identity in seen_payload_bytes:
+            errors.append(f"manifest contains duplicate payload bytes: {name}")
+        else:
+            seen_payload_bytes.add(payload_identity)
+        if signed_hash in seen_signed_hashes:
+            errors.append(f"manifest contains duplicate signed_hash: {signed_hash}")
+        else:
+            seen_signed_hashes.add(signed_hash)
+        signed_identity = decode_base64(signed_base64, f"{name} signed")
+        if signed_identity in seen_signed_bytes:
+            errors.append(f"manifest contains duplicate signed bytes: {name}")
+        else:
+            seen_signed_bytes.add(signed_identity)
 
-        expected_payload_bytes = decode_base64(payload_base64, f"{name} payload")
+        expected_payload_bytes = payload_identity
         expected_payload_hash = iroha_hash(expected_payload_bytes)
         if expected_payload_hash != payload_hash:
             errors.append(
@@ -216,6 +312,12 @@ def compare(
                 errors.append(
                     f"payload JSON for {name} does not match manifest payload_base64"
                 )
+            if payload_entry.payload_hash != payload_hash:
+                errors.append(f"payload JSON payload_hash mismatch for {name}")
+            if payload_entry.signed_base64 != signed_base64:
+                errors.append(f"payload JSON signed_base64 mismatch for {name}")
+            if payload_entry.signed_hash != signed_hash:
+                errors.append(f"payload JSON signed_hash mismatch for {name}")
             if payload_entry.chain != chain:
                 errors.append(
                     f"payload JSON chain mismatch for {name}: "
@@ -261,12 +363,12 @@ def compare(
                     f"fixture hash mismatch for {encoded_file}: manifest={payload_hash} actual={actual_hash}"
                 )
 
-        signed_bytes = decode_base64(signed_base64, f"{name} signed")
+        signed_bytes = signed_identity
         if len(signed_bytes) != signed_len:
             errors.append(
                 f"signed transaction length mismatch for {name}: manifest={signed_len} actual={len(signed_bytes)}"
             )
-        signed_digest = iroha_hash(signed_bytes)
+        signed_digest = signed_transaction_entrypoint_hash(signed_bytes)
         if signed_digest != signed_hash:
             errors.append(
                 f"signed transaction hash mismatch for {name}: manifest={signed_hash} actual={signed_digest}"

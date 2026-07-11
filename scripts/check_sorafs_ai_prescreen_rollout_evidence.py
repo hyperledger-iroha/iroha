@@ -1878,6 +1878,13 @@ def build_summary(
         errors,
         label="valid_deployment_contexts",
     )
+    deployment_context: dict[str, str] = {}
+    if len(valid_deployment_contexts) == 1:
+        deployment_id, environment = next(iter(valid_deployment_contexts))
+        deployment_context = {
+            "deployment_id": deployment_id,
+            "environment": environment,
+        }
 
     validate_bound_evidence_tuple_references(
         required_kinds=required_kinds,
@@ -1963,10 +1970,7 @@ def build_summary(
         ),
         "valid_executor_summary_digests": sorted(valid_executor_summary_digests),
         "valid_policy_digests": sorted(valid_policy_digests),
-        "valid_deployment_contexts": [
-            {"deployment_id": deployment_id, "environment": environment}
-            for deployment_id, environment in sorted(valid_deployment_contexts)
-        ],
+        "deployment_context": deployment_context,
         "required": required,
         "errors": errors,
     }

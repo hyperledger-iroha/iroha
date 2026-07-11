@@ -794,17 +794,49 @@ export const SCCP_SUBMIT_MESSAGE_PROOF_ABI_V1: "submitSccpMessageProof(bytes,byt
 export const SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_V1: string;
 export const SCCP_MESSAGE_TRANSPARENT_PUBLIC_INPUTS_BYTES_V1_LEN: 141;
 export const SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1: "sccp-solana-recursive-mainnet-v1";
+export const SCCP_SOLANA_TESTNET_RECURSIVE_PROOF_BACKEND_V1: "sccp-solana-recursive-testnet-v1";
 export const SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-solana-accounts-lt-hash-v1";
 export const SCCP_SOLANA_TOWER_REPLAY_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-solana-tower-replay-v1";
 export const SCCP_SOLANA_FULL_ACCOUNTSDB_LATTICE_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-solana-full-accountsdb-lattice-v1";
 export const SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-solana-bank-fork-choice-v1";
 export const SCCP_SOLANA_MAINNET_GENESIS_HASH: string;
+export const SCCP_SOLANA_TESTNET_GENESIS_HASH: string;
+export const SCCP_SOLANA_MAINNET_SOURCE_NETWORK_V1: "solana-mainnet-beta";
+export const SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1: "solana-testnet";
+export type SolanaSccpSourceNetwork =
+  | typeof SCCP_SOLANA_MAINNET_SOURCE_NETWORK_V1
+  | typeof SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1;
+export type SolanaSccpProofBackend =
+  | typeof SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1
+  | typeof SCCP_SOLANA_TESTNET_RECURSIVE_PROOF_BACKEND_V1;
+export interface SolanaSccpSourceProfile {
+  readonly network: SolanaSccpSourceNetwork;
+  readonly backend: SolanaSccpProofBackend;
+  readonly genesisHash: string;
+  readonly sourceStateVerifierId: string;
+  readonly sourceTrustAnchorId: string;
+  readonly consensusVerifierId: string;
+  readonly messageInclusionVerifierId: string;
+  readonly finalityPolicyId: string;
+  readonly towerReplayVerifierId: string;
+  readonly fullAccountsdbLatticeVerifierId: string;
+  readonly bankForkChoiceVerifierId: string;
+  readonly transcriptDomain: string;
+  readonly genesisPublicInputDomain: string;
+}
+export const SCCP_SOLANA_SOURCE_PROFILES_V1: Readonly<
+  Record<SolanaSccpSourceNetwork, Readonly<SolanaSccpSourceProfile>>
+>;
 export const SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1: string;
+export const SCCP_SOLANA_TESTNET_ACCOUNTS_DB_VERIFIER_ID_V1: string;
 export const SCCP_SOLANA_UPGRADEABLE_LOADER_ID: string;
 export const SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1: string;
 export const SCCP_SOLANA_MAINNET_TOWER_REPLAY_VERIFIER_ID_V1: string;
 export const SCCP_SOLANA_MAINNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1: string;
 export const SCCP_SOLANA_MAINNET_BANK_FORK_CHOICE_VERIFIER_ID_V1: string;
+export const SCCP_SOLANA_TESTNET_TOWER_REPLAY_VERIFIER_ID_V1: string;
+export const SCCP_SOLANA_TESTNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1: string;
+export const SCCP_SOLANA_TESTNET_BANK_FORK_CHOICE_VERIFIER_ID_V1: string;
 export const SCCP_SOLANA_MAINNET_SLOTS_PER_EPOCH: bigint;
 export const SCCP_SOLANA_TOWER_LOCKOUT_CONFIRMATION_DEPTH: bigint;
 export const SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH: bigint;
@@ -1695,6 +1727,13 @@ export interface SolanaSccpWitnessInput {
   target_domain?: SccpDomainIdInput;
   mainnetGenesisHash?: string;
   mainnet_genesis_hash?: string;
+  solanaNetwork?: SolanaSccpSourceNetwork;
+  solana_network?: SolanaSccpSourceNetwork;
+  solanaGenesisHash?: string;
+  solana_genesis_hash?: string;
+  testnetGenesisHash?: string;
+  testnet_genesis_hash?: string;
+  backend?: SolanaSccpProofBackend;
   finalizedSlot?: string | number | bigint;
   finalized_slot?: string | number | bigint;
   slot?: string | number | bigint;
@@ -1769,7 +1808,10 @@ export interface SolanaSccpWitness {
   version: 1;
   sourceDomain: typeof SCCP_DOMAIN_SOL;
   targetDomain: number;
-  mainnetGenesisHash: string;
+  mainnetGenesisHash?: string;
+  solanaNetwork?: typeof SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1;
+  solanaGenesisHash?: string;
+  backend?: typeof SCCP_SOLANA_TESTNET_RECURSIVE_PROOF_BACKEND_V1;
   finalizedSlot: string;
   parentSlot: string;
   bankSignatureCount: string;
@@ -1927,6 +1969,11 @@ export function solanaSccpOpenedAccountInclusionWitness(
 
 export interface SolanaSccpAccountsLtHashProofRequestInput
   extends SolanaSccpAccountsLtHashOpenedContributionsInput {
+  solanaNetwork?: SolanaSccpSourceNetwork;
+  solana_network?: SolanaSccpSourceNetwork;
+  solanaGenesisHash?: string;
+  solana_genesis_hash?: string;
+  backend?: SolanaSccpProofBackend;
   parentSlot?: string | number | bigint;
   parent_slot?: string | number | bigint;
   bankSignatureCount?: string | number | bigint;
@@ -2571,6 +2618,8 @@ export interface SolanaSccpTowerReplayInput {
 }
 
 export interface SolanaSccpBankForkInput {
+  solanaNetwork?: SolanaSccpSourceNetwork;
+  solana_network?: SolanaSccpSourceNetwork;
   sourceDomain?: SccpDomainIdInput;
   source_domain?: SccpDomainIdInput;
   epoch?: string | number | bigint;
@@ -4222,10 +4271,12 @@ export interface TronSccpRouteCanaryEvidenceInput {
 
 export interface SolanaSccpProofRequest {
   readonly version: 1;
-  readonly backend: typeof SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1;
+  readonly backend: SolanaSccpProofBackend;
   readonly sourceDomain: typeof SCCP_DOMAIN_SOL;
   readonly targetDomain: number;
-  readonly mainnetGenesisHash: string;
+  readonly mainnetGenesisHash?: string;
+  readonly solanaNetwork?: typeof SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1;
+  readonly solanaGenesisHash?: string;
   readonly witnessHash: string;
   readonly proofContextHash: string;
   readonly sourceAdapterDeploymentBindingHash: string;
@@ -4239,7 +4290,9 @@ export interface SolanaSccpProofRequest {
 
 export interface SolanaSccpProofResult {
   readonly version: 1;
-  readonly backend: typeof SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1;
+  readonly backend: SolanaSccpProofBackend;
+  readonly solanaNetwork?: typeof SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1;
+  readonly solanaGenesisHash?: string;
   readonly proofBytes: Uint8Array;
   readonly proofBase64: string;
   readonly publicInputs: Readonly<SolanaSccpProofPublicInputs>;
@@ -7377,7 +7430,11 @@ export interface SolanaSccpProveResult {
   proof?: BinaryLike;
   proofBase64?: string;
   proof_base64?: string;
-  backend?: typeof SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1;
+  backend?: SolanaSccpProofBackend;
+  solanaNetwork?: typeof SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1;
+  solana_network?: typeof SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1;
+  solanaGenesisHash?: string;
+  solana_genesis_hash?: string;
   publicInputs?: SolanaSccpProofPublicInputsInput;
   public_inputs?: SolanaSccpProofPublicInputsInput;
   sourceStateVerifierId?: string;
@@ -8143,6 +8200,12 @@ export function canonicalSolanaSccpBankForkBytes(
   input: SolanaSccpBankForkInput,
 ): Uint8Array;
 export function solanaSccpBankForkHash(input: SolanaSccpBankForkInput): string;
+export function solanaSccpSourceProfile(
+  input?: Record<string, unknown>,
+): Readonly<SolanaSccpSourceProfile>;
+export function solanaSccpSourceProfileFromRecord(
+  input?: Record<string, unknown>,
+): Readonly<SolanaSccpSourceProfile>;
 export function canonicalSolanaSccpAccountsLtHashProofPublicInputsBytes(
   input: SolanaSccpAccountsLtHashProofPublicInputsInput,
 ): Uint8Array;
@@ -13250,24 +13313,45 @@ export interface ToriiDataspaceCommitmentSnapshot {
 
 export interface ToriiLaneSettlementReceipt {
   source_id: string;
-  local_amount_micro: number;
-  xor_due_micro: number;
-  xor_after_haircut_micro: number;
-  xor_variance_micro: number;
+  local_amount_micro: string;
+  xor_due_micro: string;
+  xor_after_haircut_micro: string;
+  xor_variance_micro: string;
   timestamp_ms: number;
+}
+
+export type ToriiLaneLiquidityProfile = Readonly<{
+  profile: "Tier1" | "Tier2" | "Tier3";
+  state: null;
+}>;
+
+export type ToriiLaneVolatilityClass = Readonly<{
+  bucket: "Stable" | "Elevated" | "Dislocated";
+  state: null;
+}>;
+
+export interface ToriiLaneSwapMetadata {
+  epsilon_bps: number;
+  twap_window_seconds: number;
+  liquidity_profile: ToriiLaneLiquidityProfile;
+  twap_local_per_xor: string;
+  volatility_class: ToriiLaneVolatilityClass;
 }
 
 export interface ToriiLaneSettlementCommitment {
   block_height: number;
   lane_id: number;
+  lane_incarnation: string;
   dataspace_id: number;
   tx_count: number;
-  total_local_micro: number;
-  total_xor_due_micro: number;
-  total_xor_after_haircut_micro: number;
-  total_xor_variance_micro: number;
-  swap_metadata: Record<string, unknown> | null;
+  total_local_micro: string;
+  total_xor_due_micro: string;
+  total_xor_after_haircut_micro: string;
+  total_xor_variance_micro: string;
+  swap_metadata: ToriiLaneSwapMetadata | null;
   receipts: ReadonlyArray<ToriiLaneSettlementReceipt>;
+  nexus_fee_receipts: ReadonlyArray<Readonly<Record<string, unknown>>>;
+  native_amx_receipts: ReadonlyArray<Readonly<Record<string, unknown>>>;
 }
 
 export interface ToriiLaneFastpqProofMaterial {
@@ -13277,11 +13361,13 @@ export interface ToriiLaneFastpqProofMaterial {
 
 export interface ToriiLaneRelayEnvelope {
   lane_id: number;
+  lane_incarnation: string;
   dataspace_id: number;
   block_height: number;
   block_header: Record<string, unknown>;
   qc: Record<string, unknown> | null;
   da_commitment_hash: string | null;
+  lane_block_descriptor_hash: string | null;
   settlement_commitment: ToriiLaneSettlementCommitment;
   settlement_hash: string;
   rbc_bytes_total: number;
@@ -14667,24 +14753,201 @@ export interface ToriiPipelineRecoveryFastpqProofs {
   proofs: ReadonlyArray<ToriiPipelineRecoveryFastpqProof>;
 }
 
+export type ToriiSumeragiV2ContextId = readonly [string];
+
+export type ToriiSumeragiV2ConsensusMode = Readonly<{
+  mode: "permissioned" | "npos";
+  details: null;
+}>;
+
+export type ToriiSumeragiV2GlobalPhase = Readonly<{
+  phase: "prepare" | "commit";
+  details: null;
+}>;
+
+export type ToriiSumeragiV2StatusPhase = Readonly<{
+  phase:
+    | "awaiting_proposal"
+    | "reconstructing_payload"
+    | "validating_payload"
+    | "prepare"
+    | "commit"
+    | "pending_apply";
+  details: null;
+}>;
+
+export type ToriiSumeragiV2BodyState = Readonly<{
+  state:
+    | "missing"
+    | "reconstructing"
+    | "stored"
+    | "validated"
+    | "pending_apply"
+    | "applied";
+  details: null;
+}>;
+
+export interface ToriiSumeragiV2Round {
+  context_id: ToriiSumeragiV2ContextId;
+  height: number;
+  view: number;
+}
+
+export interface ToriiSumeragiV2BlockSubject {
+  parent_block_hash: string | null;
+  block_hash: string;
+  payload_hash: string;
+}
+
+export interface ToriiSumeragiV2QcReference {
+  round: ToriiSumeragiV2Round;
+  phase: ToriiSumeragiV2GlobalPhase;
+  subject: ToriiSumeragiV2BlockSubject;
+}
+
+export interface ToriiSumeragiV2TimeoutReference {
+  round: ToriiSumeragiV2Round;
+  highest_prepare_qc: ToriiSumeragiV2QcReference | null;
+  certificate_hash: string;
+}
+
+export interface ToriiSumeragiV2HeightContextStatus {
+  epoch: number;
+  epoch_end_height: number;
+  mode: ToriiSumeragiV2ConsensusMode;
+  epoch_seed: string;
+  validator_count: number;
+  quorum: Readonly<{
+    min_signers: number;
+    total_power: number;
+  }>;
+}
+
+export interface ToriiSumeragiV2CommitQcStatus {
+  certificate: ToriiSumeragiV2QcReference;
+  validator_count: number;
+  signer_count: number;
+  min_signers: number;
+  signed_power: number;
+  total_power: number;
+}
+
+export interface ToriiSumeragiV2AdapterQueueStatus {
+  ingress_keys: number;
+  ingress_capacity: number;
+  deferred_completion: number;
+  deferred_progress: number;
+  deferred_progress_capacity: number;
+  deferred_normal: number;
+  deferred_normal_capacity: number;
+}
+
+export interface ToriiSumeragiV2TxQueueStatus {
+  tracked_transactions: number;
+  queued_transactions: number;
+  capacity: number;
+  retained_bytes: number;
+  max_retained_bytes: number;
+  oldest_queued_age_ms: number;
+  saturated_by_count: boolean;
+  saturated_by_bytes: boolean;
+  saturated_by_age: boolean;
+}
+
+export interface ToriiSumeragiV2OperatorStatus {
+  view_change_install_total: number;
+  busy_deferral_total: number;
+  adapter_queues: ToriiSumeragiV2AdapterQueueStatus;
+  tx_queue: ToriiSumeragiV2TxQueueStatus;
+}
+
+export interface ToriiSumeragiLanePayloadOwnership {
+  proposal_height: number;
+  proposal_view: number;
+  lane_id: number;
+  dataspace_id: number;
+  lane_incarnation: string;
+  lane_block_height: number;
+  lane_block_view: number;
+  subject_hash: string;
+  qc_mode_tag: string;
+  accepted_candidate_indices: ReadonlyArray<number>;
+  accepted_transaction_hashes: ReadonlyArray<string>;
+  previous_lane_block_height: number;
+  previous_lane_block_descriptor_hash: string | null;
+  lane_block_descriptor_hash: string;
+  lane_block_descriptor_validator_set: ReadonlyArray<string>;
+  lane_block_descriptor_validator_count: number;
+  lane_block_descriptor_min_quorum: number;
+  payload_ownership_hash: string;
+  rbc_instance_hash: string;
+}
+
+export interface ToriiSumeragiCommittedLaneBlock {
+  lane_id: number;
+  dataspace_id: number;
+  lane_incarnation: string;
+  lane_block_height: number;
+  lane_block_view: number;
+  descriptor_hash: string;
+  proposal_hash: string;
+  execution_status: string;
+  executable_payload_available: boolean;
+  subject_hash: string;
+  payload_ownership_hash: string;
+  rbc_instance_hash: string;
+  qc_mode_tag: string;
+  validator_count: number;
+  min_quorum: number;
+  prepare_qc_signer_count: number;
+  commit_qc_signer_count: number;
+}
+
+export interface ToriiSumeragiLaneBlockSessionStatus {
+  lane_id: number;
+  dataspace_id: number;
+  lane_incarnation: string;
+  lane_block_height: number;
+  lane_block_view: number;
+  proposal_hash: string;
+  has_proposal: boolean;
+  prepare_vote_count: number;
+  commit_vote_count: number;
+  has_prepare_qc: boolean;
+  has_commit_qc: boolean;
+  pending_commit_vote_request: boolean;
+  pending_committed_session_drain: boolean;
+  committed_session_drained: boolean;
+  validator_count: number;
+  min_quorum: number;
+}
+
 export interface ToriiSumeragiStatus {
-  mode_tag?: string;
-  staged_mode_tag?: string | null;
-  staged_mode_activation_height?: number | null;
-  mode_activation_lag_blocks?: number | null;
-  consensus_caps?: ToriiConsensusCaps | null;
-  commit_qc?: ToriiSumeragiCommitQcSummary | null;
-  commit_quorum?: ToriiSumeragiCommitQuorumSummary | null;
-  membership?: ToriiSumeragiMembershipSnapshot;
-  lane_commitments?: ToriiLaneCommitmentSnapshot[];
-  dataspace_commitments?: ToriiDataspaceCommitmentSnapshot[];
-  lane_settlement_commitments?: ToriiLaneSettlementCommitment[];
-  lane_relay_envelopes?: ToriiLaneRelayEnvelope[];
-  lane_governance?: ToriiLaneGovernanceSnapshot[];
-  lane_governance_sealed_total?: number;
-  lane_governance_sealed_aliases?: ReadonlyArray<string>;
-  da_reschedule_total?: number;
-  [key: string]: unknown;
+  protocol_version: 2;
+  node_fingerprint: string;
+  build_fingerprint: string;
+  config_fingerprint: string;
+  height_context_id: ToriiSumeragiV2ContextId;
+  height: number;
+  view: number;
+  phase: ToriiSumeragiV2StatusPhase;
+  leader: number;
+  locked_prepare_qc: ToriiSumeragiV2QcReference | null;
+  highest_prepare_qc: ToriiSumeragiV2QcReference | null;
+  last_timeout_certificate: ToriiSumeragiV2TimeoutReference | null;
+  body_state: ToriiSumeragiV2BodyState;
+  pending_persistence_id: number | null;
+  last_committed_height: number;
+  last_committed_subject: ToriiSumeragiV2BlockSubject | null;
+  height_context: ToriiSumeragiV2HeightContextStatus;
+  last_commit_qc: ToriiSumeragiV2CommitQcStatus | null;
+  lane_settlement_commitments: ReadonlyArray<ToriiLaneSettlementCommitment>;
+  lane_relay_envelopes: ReadonlyArray<ToriiLaneRelayEnvelope>;
+  lane_payload_ownerships: ReadonlyArray<ToriiSumeragiLanePayloadOwnership>;
+  committed_lane_blocks: ReadonlyArray<ToriiSumeragiCommittedLaneBlock>;
+  lane_block_sessions: ReadonlyArray<ToriiSumeragiLaneBlockSessionStatus>;
+  local_peer_removed: boolean;
+  operator: ToriiSumeragiV2OperatorStatus;
 }
 
 export interface ToriiConsensusCaps {
@@ -17107,86 +17370,19 @@ export interface SorafsPinListOptions {
   signal?: AbortSignal;
 }
 
-export interface SorafsPinRegisterPinPolicyInput {
-  minReplicas?: NumericLike;
-  min_replicas?: NumericLike;
-  storageClass?:
-    | "Hot"
-    | "Warm"
-    | "Cold"
-    | string
-    | {
-        type?: string;
-        name?: string;
-        label?: string;
-      };
-  storage_class?:
-    | "Hot"
-    | "Warm"
-    | "Cold"
-    | string
-    | {
-        type?: string;
-        name?: string;
-        label?: string;
-      };
-  retentionEpoch?: NumericLike;
-  retention_epoch?: NumericLike;
-}
-
-export interface SorafsPinRegisterChunkerInput {
-  profileId: NumericLike;
-  namespace: string;
-  name: string;
-  semver: string;
-  multihashCode?: NumericLike;
-}
-
 export interface SorafsPinRegisterAliasInput {
   namespace: string;
   name: string;
-  proof?: BinaryLike | string;
-  proof_b64?: BinaryLike | string;
-  proofB64?: BinaryLike | string;
-  proof_base64?: BinaryLike | string;
-  proofBase64?: BinaryLike | string;
+  proof_base64: string;
 }
 
 export interface SorafsPinRegisterRequest {
   authority: string;
-  privateKey: string;
-  chunker: SorafsPinRegisterChunkerInput;
-  pinPolicy?: SorafsPinRegisterPinPolicyInput;
-  pin_policy?: SorafsPinRegisterPinPolicyInput;
-  manifestDigestHex?: string;
-  manifest_digest_hex?: string;
-  manifest?: BinaryLike | string | null;
-  manifestBytes?: BinaryLike | string | null;
-  manifest_bytes?: BinaryLike | string | null;
-  manifestB64?: BinaryLike | string | null;
-  manifest_b64?: BinaryLike | string | null;
-  manifestBase64?: BinaryLike | string | null;
-  manifest_base64?: BinaryLike | string | null;
-  chunkDigestSha3_256Hex?: string;
-  chunk_digest_sha3_256_hex?: string;
-  chunkDigest?: string;
-  chunk_digest?: string;
-  contentLength?: NumericLike;
-  content_length?: NumericLike;
-  submittedEpoch?: NumericLike;
-  submitted_epoch?: NumericLike;
+  private_key: string;
+  manifest_payload: string;
+  submitted_epoch: NumericLike;
+  gas_asset_id?: string | null;
   alias?: SorafsPinRegisterAliasInput | null;
-  aliasNamespace?: string;
-  alias_namespace?: string;
-  aliasName?: string;
-  alias_name?: string;
-  aliasProof?: BinaryLike | string;
-  alias_proof?: BinaryLike | string;
-  aliasProofB64?: BinaryLike | string;
-  alias_proof_b64?: BinaryLike | string;
-  aliasProofBase64?: BinaryLike | string;
-  alias_proof_base64?: BinaryLike | string;
-  successorOfHex?: string | null;
   successor_of_hex?: string | null;
   signal?: AbortSignal;
 }
@@ -22315,3 +22511,4 @@ export function privateUploadedModelReceiptInstruction(
 ): SoracloudTxInstruction;
 
 export * from "./nexus-app";
+export * from "./transaction-codec.js";

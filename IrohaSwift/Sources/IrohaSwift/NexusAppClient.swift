@@ -756,20 +756,47 @@ fileprivate func normalizedValidationFeePolicyHash(_ value: String) throws -> St
 }
 
 extension SwiftTransactionEncoder {
+    struct ValidationFeeTransferNativeInput {
+        let chainId: String
+        let authority: String
+        let creationTimeMs: UInt64
+        let ttlMs: UInt64?
+        let nonce: UInt32?
+        let principalAssetDefinitionId: String
+        let principalQuantity: String
+        let destination: String
+        let feeAssetDefinitionId: String
+        let feeQuantity: String
+        let treasury: String
+        let policyVersion: UInt64
+        let policyHashHex: String
+        let feeInstructionIndex: UInt64
+        let feeSponsor: String?
+        let memo: String?
+        let transactionMetadataJSON: Data
+        let privateKey: Data
+    }
+
+    typealias ValidationFeeTransferNativeEncoder =
+        (ValidationFeeTransferNativeInput) throws -> NativeSignedTransaction?
+
     static func encodeValidationFeeTransfer(request: ValidationFeeTransferRequest,
                                             keypair: Keypair,
-                                            creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
+                                            creationTimeMs: UInt64,
+                                            nativeEncoder: ValidationFeeTransferNativeEncoder? = nil) throws -> SignedTransactionEnvelope {
         let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
         return try encodeValidationFeeTransfer(
             request: request,
             signingKey: signingKey,
-            creationTimeMs: creationTimeMs
+            creationTimeMs: creationTimeMs,
+            nativeEncoder: nativeEncoder
         )
     }
 
     static func encodeValidationFeeTransfer(request: ValidationFeeTransferRequest,
                                             signingKey: SigningKey,
-                                            creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
+                                            creationTimeMs: UInt64,
+                                            nativeEncoder: ValidationFeeTransferNativeEncoder? = nil) throws -> SignedTransactionEnvelope {
         guard signingKey.algorithm == .ed25519 else {
             throw SwiftTransactionEncoderError.unsupportedSigningAlgorithm(signingKey.algorithm)
         }
@@ -800,6 +827,9 @@ extension SwiftTransactionEncoder {
         guard request.policyVersion > 0 else {
             throw ValidationFeeTransferRequestError.invalidPolicyVersion
         }
+        let feeSponsor = try principal.feeSponsor.map {
+            try TransactionInputValidator.sanitizeAccountId($0, field: "feeSponsor")
+        }
         var metadata = request.transactionMetadata
         metadata[IrohaValidationFeeTransactionMetadataKey.policyVersion] =
             .number(Double(request.policyVersion))
@@ -807,30 +837,63 @@ extension SwiftTransactionEncoder {
             .string(normalizedPolicyHash)
         metadata[IrohaValidationFeeTransactionMetadataKey.instructionIndex] = .number(1)
         let metadataJSON = try ToriiJSONValue.object(metadata).encodedData()
-        let memo = request.principal.description?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let memo: String?
+        if metadata["memo"] == nil {
+            let candidate = principal.description?.trimmingCharacters(in: .whitespacesAndNewlines)
+            memo = candidate?.isEmpty == true ? nil : candidate
+        } else {
+            memo = nil
+        }
         let privateKey = try SwiftTransactionEncoder.privateKeyBytes(from: signingKey)
-        let native = try SwiftTransactionEncoder.bridgeOrThrow {
-            try NoritoNativeBridge.shared.encodeValidationFeeTransfer(
-                chainId: ids.chainId,
-                authority: ids.authorityId,
-                creationTimeMs: creationTimeMs,
-                ttlMs: principal.ttlMs,
-                nonce: principal.nonce,
-                principalAssetDefinitionId: principalAssetDefinitionID,
-                principalQuantity: principal.quantity,
-                destination: destination,
-                feeAssetDefinitionId: feeAssetDefinitionID,
-                feeQuantity: request.feeQuantity,
-                treasury: treasury,
-                policyVersion: request.policyVersion,
-                policyHashHex: normalizedPolicyHash,
-                feeInstructionIndex: 1,
-                feeSponsor: principal.feeSponsor,
-                memo: memo?.isEmpty == true ? nil : memo,
-                transactionMetadataJSON: metadataJSON,
-                privateKey: privateKey
-            )
+        let input = ValidationFeeTransferNativeInput(
+            chainId: ids.chainId,
+            authority: ids.authorityId,
+            creationTimeMs: creationTimeMs,
+            ttlMs: principal.ttlMs,
+            nonce: principal.nonce,
+            principalAssetDefinitionId: principalAssetDefinitionID,
+            principalQuantity: principal.quantity,
+            destination: destination,
+            feeAssetDefinitionId: feeAssetDefinitionID,
+            feeQuantity: request.feeQuantity,
+            treasury: treasury,
+            policyVersion: request.policyVersion,
+            policyHashHex: normalizedPolicyHash,
+            feeInstructionIndex: 1,
+            feeSponsor: feeSponsor,
+            memo: memo,
+            transactionMetadataJSON: metadataJSON,
+            privateKey: privateKey
+        )
+        let native: NativeSignedTransaction
+        if let nativeEncoder {
+            guard let encoded = try nativeEncoder(input) else {
+                throw SwiftTransactionEncoderError.nativeBridgeUnavailable
+            }
+            native = encoded
+        } else {
+            native = try SwiftTransactionEncoder.bridgeOrThrow {
+                try NoritoNativeBridge.shared.encodeValidationFeeTransfer(
+                    chainId: input.chainId,
+                    authority: input.authority,
+                    creationTimeMs: input.creationTimeMs,
+                    ttlMs: input.ttlMs,
+                    nonce: input.nonce,
+                    principalAssetDefinitionId: input.principalAssetDefinitionId,
+                    principalQuantity: input.principalQuantity,
+                    destination: input.destination,
+                    feeAssetDefinitionId: input.feeAssetDefinitionId,
+                    feeQuantity: input.feeQuantity,
+                    treasury: input.treasury,
+                    policyVersion: input.policyVersion,
+                    policyHashHex: input.policyHashHex,
+                    feeInstructionIndex: input.feeInstructionIndex,
+                    feeSponsor: input.feeSponsor,
+                    memo: input.memo,
+                    transactionMetadataJSON: input.transactionMetadataJSON,
+                    privateKey: input.privateKey
+                )
+            }
         }
         return try SwiftTransactionEncoder.wrap(native: native)
     }

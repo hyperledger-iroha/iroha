@@ -23,6 +23,7 @@ public sealed class ToriiClient : IDisposable
     private const string QueryProjectionRowsetCodec = "application/x-iroha-query-shard-rowset+norito";
     private const string QueryProjectionCompression = "zstd";
     private const int QueryProjectionDefaultPartitionCount = 4096;
+    private const int SoraFsManifestPayloadMaxBytes = 512 * 1024;
     private const string InvalidUtf8ResponseBody = "<response body is not valid UTF-8>";
     private static readonly string[] QueryRowEnrichmentFields =
     [
@@ -6310,73 +6311,67 @@ public sealed class ToriiClient : IDisposable
     private static ToriiSoraFsPinRegisterWireRequest NormalizeSoraFsPinRegisterRequest(
         ToriiSoraFsPinRegisterRequest request)
     {
-        var chunker = request.Chunker ?? throw new ArgumentNullException(nameof(request.Chunker));
-        var pinPolicy = request.PinPolicy ?? throw new ArgumentNullException(nameof(request.PinPolicy));
-        var normalizedChunker = NormalizeSoraFsChunker(chunker);
-
         return new ToriiSoraFsPinRegisterWireRequest
         {
             Authority = ToriiAccountFaucetPow.RequireExactAccountId(request.Authority, nameof(request.Authority)),
             PrivateKey = NormalizeExactValue(request.PrivateKey, nameof(request.PrivateKey)),
-            ChunkerProfileId = normalizedChunker.ProfileId,
-            ChunkerNamespace = normalizedChunker.Namespace,
-            ChunkerName = normalizedChunker.Name,
-            ChunkerSemver = normalizedChunker.Semver,
-            ChunkerMultihashCode = normalizedChunker.MultihashCode,
-            PinPolicy = NormalizeSoraFsPinPolicy(pinPolicy),
-            ManifestDigestHex = NormalizeSoraFsDigestHex(
-                request.ManifestDigestHex,
-                nameof(request.ManifestDigestHex)),
-            ManifestBase64 = NormalizeOptionalSoraFsManifestPayload(
-                request.ManifestBase64,
+            ManifestPayloadBase64 = NormalizeRequiredSoraFsManifestPayload(
+                request.ManifestPayloadBase64,
                 request.ManifestBytes),
-            ChunkDigestSha3_256Hex = NormalizeSoraFsDigestHex(
-                request.ChunkDigestSha3_256Hex,
-                nameof(request.ChunkDigestSha3_256Hex)),
-            ContentLength = RequireSoraFsUnsigned(
-                request.ContentLength,
-                nameof(request.ContentLength),
-                allowZero: true),
             SubmittedEpoch = RequireSoraFsUnsigned(
                 request.SubmittedEpoch,
                 nameof(request.SubmittedEpoch),
                 allowZero: true),
+            GasAssetId = request.GasAssetId is null
+                ? null
+                : NormalizeExactValue(request.GasAssetId, nameof(request.GasAssetId)),
             Alias = request.Alias is null
                 ? null
                 : NormalizeSoraFsPinAlias(request.Alias, nameof(request.Alias)),
             SuccessorOfHex = request.SuccessorOfHex is null
                 ? null
-                : NormalizeSoraFsDigestHex(request.SuccessorOfHex, nameof(request.SuccessorOfHex)),
+                : NormalizeNonzeroSoraFsDigestHex(
+                    request.SuccessorOfHex,
+                    nameof(request.SuccessorOfHex)),
         };
     }
 
-    private static string? NormalizeOptionalSoraFsManifestPayload(
-        string? manifestBase64,
+    private static string NormalizeRequiredSoraFsManifestPayload(
+        string? manifestPayloadBase64,
         byte[]? manifestBytes)
     {
-        if (manifestBase64 is not null && manifestBytes is not null)
+        if (manifestPayloadBase64 is not null && manifestBytes is not null)
         {
             throw new ArgumentException(
-                "Provide either ManifestBase64 or ManifestBytes, not both.",
-                nameof(ToriiSoraFsPinRegisterRequest.ManifestBase64));
+                "Provide either ManifestPayloadBase64 or ManifestBytes, not both.",
+                nameof(ToriiSoraFsPinRegisterRequest.ManifestPayloadBase64));
         }
 
-        if (manifestBase64 is not null)
+        if (manifestPayloadBase64 is not null)
         {
-            return NormalizeRequiredBase64(
-                manifestBase64,
-                nameof(ToriiSoraFsPinRegisterRequest.ManifestBase64));
+            var canonical = NormalizeRequiredBase64(
+                manifestPayloadBase64,
+                nameof(ToriiSoraFsPinRegisterRequest.ManifestPayloadBase64));
+            var decodedLength = Convert.FromBase64String(canonical).Length;
+            if (decodedLength > SoraFsManifestPayloadMaxBytes)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(ToriiSoraFsPinRegisterRequest.ManifestPayloadBase64),
+                    $"Manifest payload must not exceed {SoraFsManifestPayloadMaxBytes} bytes.");
+            }
+            return canonical;
         }
 
         if (manifestBytes is null)
         {
-            return null;
+            throw new ArgumentException(
+                "Manifest payload must be provided.",
+                nameof(ToriiSoraFsPinRegisterRequest.ManifestBytes));
         }
 
-        if (manifestBytes.Length == 0)
+        if (manifestBytes.Length == 0 || manifestBytes.Length > SoraFsManifestPayloadMaxBytes)
         {
-            throw new ArgumentException(
-                "Value must be a non-empty base64 payload.",
+            throw new ArgumentOutOfRangeException(
                 nameof(ToriiSoraFsPinRegisterRequest.ManifestBytes));
         }
 
@@ -6420,37 +6415,6 @@ public sealed class ToriiClient : IDisposable
             SuccessorOfHex = response.SuccessorOfHex is null
                 ? null
                 : NormalizeSoraFsDigestHex(response.SuccessorOfHex, nameof(response.SuccessorOfHex)),
-        };
-    }
-
-    private static ToriiSoraFsChunkerHandle NormalizeSoraFsChunker(ToriiSoraFsChunkerHandle chunker)
-    {
-        return new ToriiSoraFsChunkerHandle
-        {
-            ProfileId = RequireSoraFsUnsigned(
-                chunker.ProfileId,
-                nameof(chunker.ProfileId),
-                allowZero: false),
-            Namespace = NormalizeExactValue(chunker.Namespace, nameof(chunker.Namespace)),
-            Name = NormalizeExactValue(chunker.Name, nameof(chunker.Name)),
-            Semver = NormalizeExactValue(chunker.Semver, nameof(chunker.Semver)),
-            MultihashCode = chunker.MultihashCode ?? 0,
-        };
-    }
-
-    private static ToriiSoraFsPinPolicy NormalizeSoraFsPinPolicy(ToriiSoraFsPinPolicy pinPolicy)
-    {
-        return new ToriiSoraFsPinPolicy
-        {
-            MinReplicas = RequireSoraFsUnsigned(
-                pinPolicy.MinReplicas,
-                nameof(pinPolicy.MinReplicas),
-                allowZero: false),
-            StorageClass = new ToriiSoraFsStorageClass
-            {
-                Type = NormalizeSoraFsStorageClass(pinPolicy.StorageClass),
-            },
-            RetentionEpoch = pinPolicy.RetentionEpoch ?? 0,
         };
     }
 
@@ -6529,6 +6493,16 @@ public sealed class ToriiClient : IDisposable
         }
 
         return normalized.ToLowerInvariant();
+    }
+
+    private static string NormalizeNonzeroSoraFsDigestHex(string? value, string paramName)
+    {
+        var normalized = NormalizeSoraFsDigestHex(value, paramName);
+        if (normalized.All(character => character == '0'))
+        {
+            throw new ArgumentException("Value must not be the all-zero digest.", paramName);
+        }
+        return normalized;
     }
 
     private static string NormalizeRequiredBase64(string? value, string paramName)

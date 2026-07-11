@@ -189,9 +189,9 @@ accepts traffic:
   - Live cutover guardrails: `mode_flip_kill_switch` mirrors `sumeragi.mode_flip_enabled`; `mode_flip_blocked` plus the `{success,failure,blocked}_total` counters, `last_mode_flip_timestamp_ms`, and `last_mode_flip_error` show whether the node applied or rejected the staged flip. When the kill switch is false the node keeps exporting the staged mode but refuses to flip until the switch is restored.
   - Runtime flips are deferred while a commit is in flight or a pending block is actively processing; `mode_flip_blocked` records `pending_processing`/`commit_inflight` to explain the lag until the pipeline drains.
   - Runtime flips flush mode-sensitive caches (pending blocks/RBC sessions/certificate and proposal caches) and reset pacemaker/view-change trackers to the base pacemaker interval at flip time so post-flip timers/leaders are recomputed deterministically.
-  - `sumeragi_rbc_deliver_defer_{ready,chunks}_total` and the `/v1/sumeragi/status.pending_rbc` + `rbc_backlog` snapshots expose READY quorum vs chunk-gate stalls, stash totals by reason (`pending_rbc.stash_*`), stash age/drops, and pending session counts so dashboards can alarm on stuck RBC sessions before DA/commit stalls.
-  - `sumeragi_rbc_mismatch_total{peer,kind}` and `/v1/sumeragi/status.rbc_mismatch` track per-peer chunk digest/payload hash/chunk root mismatches; mismatched payloads are dropped (no penalties) and logs are throttled per peer/kind to keep behavior deterministic.
-  - `sumeragi_consensus_message_handling_total{kind,outcome,reason}` and `/v1/sumeragi/status.consensus_message_handling` capture drop/deferral reasons for BlockCreated, BlockSyncUpdate, CertifiedBlockFetch, ProposalHint, Proposal, QcVote, Qc, VrfCommit, VrfReveal, ExecWitness, RbcInit, RbcChunk, RbcReady, RbcDeliver, FetchPendingBlock, and Evidence to triage missing-payload warnings and backpressure drops.
+  - `sumeragi_rbc_deliver_defer_{ready,chunks}_total` and `/v1/sumeragi/telemetry.rbc_pending` + `rbc_backlog` expose READY quorum vs chunk-gate stalls, stash totals by reason, drops, and pending session counts so dashboards can alarm on stuck RBC sessions before DA/commit stalls.
+  - `sumeragi_rbc_mismatch_total{peer,kind}` tracks per-peer chunk digest/payload hash/chunk root mismatches; mismatched payloads are dropped (no penalties) and logs are throttled per peer/kind to keep behavior deterministic.
+  - `sumeragi_consensus_message_handling_total{kind,outcome,reason}` captures drop/deferral reasons for BlockCreated, BlockSyncUpdate, CertifiedBlockFetch, ProposalHint, Proposal, QcVote, Qc, VrfCommit, VrfReveal, ExecWitness, RbcInit, RbcChunk, RbcReady, RbcDeliver, FetchPendingBlock, and Evidence to triage missing-payload warnings and backpressure drops.
 - Block-sync roster telemetry: `/v1/sumeragi/status.block_sync_roster` (Norito) and `/v1/sumeragi/status.block_sync.roster` (JSON) expose drop counters (`drop_missing_total`, `drop_unsolicited_share_blocks_total`) plus source gauges (`commit_roster_journal`, `roster_sidecar`, paired `commit+checkpoint` hints, single cert/checkpoint history). Prometheus mirrors the same labels via `sumeragi_block_sync_roster_source_total{source}` and `sumeragi_block_sync_roster_drop_total{reason}`, and counts dropped unsolicited ShareBlocks via `sumeragi_block_sync_share_blocks_unsolicited_total`. Roster selection orders persisted snapshots (journal → sidecar) ahead of hints/history, and rejects `BlockSyncUpdate` payloads unless they carry a certified roster (commit certificate and/or validator checkpoint). Validator checkpoints embed the view index plus parent/post state roots in the signed preimage, so they validate without requiring commit-QC history. In NPoS, commit-certificate validation prefers a matching stake snapshot; when one is missing it derives a deterministic snapshot from local stake records (falling back to the minimum self-bond for missing peers) and only drops hints on roster or snapshot mismatch. Cached precommit signer records carry the stake snapshot so locally derived block-sync QCs still satisfy stake quorum. Block-sync share responses now propagate roster metadata so fresh peers can verify updates without waiting on local snapshots. Missing-block payload hydration uses `BlockCreated` replies instead of block-sync updates, removing the need for uncertified roster sources. Config parsing rejects incomplete PoP maps; if a mismatch still slips through, PoP filtering is skipped and the BLS baseline roster is used to avoid divergent topologies.
 - View-change causes: `/v1/sumeragi/status.view_change_causes` reports per-cause counters (commit failure/quorum timeout/stake quorum timeout/censorship evidence/missing payload/missing commit certificate (`missing_qc_total`)/validation reject; DA availability is reserved for compatibility) and the last labeled timestamp to help operators triage view changes; Prometheus mirrors these timestamps in `sumeragi_view_change_cause_last_timestamp_ms{cause}`.
 - Pending-block replay: after a view change installs, the leader rebroadcasts the highest pending `BlockCreated` payload on a cadence derived from `block_time` (small floor, 2x base multiplier for >=1s block times, 1x for sub-1s, plus the 2x payload multiplier) so peers missing the payload hydrate without waiting for hints/sidecars.
@@ -627,9 +627,10 @@ budget (permissioned `CommitTimeMs` or NPoS `effective_npos_timeouts.commit_ms`)
 - `sumeragi_phase_latency_ema_ms{phase="propose|collect_da|collect_prevote|collect_precommit|commit"}`
   — smoothed per-phase latency (EMA). The pacemaker consumes these phases;
   track drift between the EMA and raw histogram to catch sudden latency spikes.
-- `/v1/sumeragi/telemetry` (or `iroha_cli --output-format text ops sumeragi status`) — compact
-  JSON snapshot with per-collector vote counts, certificate latency, RBC backlog, and the
-  latest highest/locked certificate hashes (`highest_qc`/`locked_qc`) (CLI output truncates hashes for readability).
+- `/v1/sumeragi/telemetry` (or `iroha_cli --output-format text ops sumeragi telemetry`) — compact
+  JSON snapshot with per-collector vote counts, certificate latency, RBC backlog/pending stash
+  counters, and the latest VRF epoch summary. Authoritative reducer/QC identity remains on
+  `/v1/sumeragi/status`.
 - `/v1/sumeragi/status/sse` — SSE stream mirroring `/v1/sumeragi/status` for live dashboards (≈1s cadence).
 - `/v1/sumeragi/phases` (or `iroha_cli --output-format text ops sumeragi phases`) — latest
   `{ propose_ms, collect_da_ms, collect_prevote_ms, collect_precommit_ms, collect_aggregator_ms, commit_ms, pipeline_total_ms }`
@@ -710,14 +711,13 @@ the consensus backoff contract.
   }
   ```
 
-  `iroha --output-format text ops sumeragi status` mirrors the same data, including current
-  session/byte utilisation, aggregated governance-seal counters
-  (`lane_governance_sealed_total`, `lane_governance_sealed_aliases`), and the
-  active epoch scheduling tuple (`epoch_len`, `epoch_commit`, `epoch_reveal`), so
-  operators can eyeball backlog pressure, spot sealed lanes, and review
-  pacemaker timing without parsing JSON. Pair the view with
-  `iroha_cli app nexus lane-report --only-missing --fail-on-sealed` during upgrades
-  to exit pipelines when governance manifests are still missing.
+  `iroha --output-format text ops sumeragi status` reports the authoritative v2
+  reducer height/view/phase, frozen epoch/quorum, durable CommitQC, bounded queue
+  pressure, and canonical lane evidence counts. Use the dedicated telemetry,
+  RBC, and phase endpoints for non-consensus counters. Pair the view with
+  `iroha app nexus lane-report --only-incomplete --fail-on-incomplete` during
+  upgrades to fail a pipeline when retained lane sessions or certified blocks
+  have not completed their certification/application path.
 6. Once service resumes, document the incident and restore redundant-send and
    collector parameters to their baseline values.
 
@@ -781,9 +781,9 @@ Size `sumeragi.advanced.rbc.pending_max_bytes` to at least one chunk (`sumeragi.
 set `sumeragi.advanced.rbc.chunk_max_bytes` to a positive value (0 is rejected by config
 validation) so payloads can always split into at least one chunk. Then
 use the bound above to keep memory budgets deterministic. Drops and evictions
-are surfaced via `/v1/sumeragi/telemetry.pending_rbc.{drops_cap_total,drops_cap_bytes_total,drops_ttl_total,drops_ttl_bytes_total,drops_bytes_total,evicted_total,max_*}`
-and `iroha --output-format text ops sumeragi status`; sustained movement should trigger alerts
-and a manifest/collector audit. Stash counters (`/v1/sumeragi/status.pending_rbc.stash_*`)
+are surfaced via `/v1/sumeragi/telemetry.rbc_pending.{drops_cap_total,drops_cap_bytes_total,drops_ttl_total,drops_ttl_bytes_total,drops_bytes_total,evicted_total,max_*}`
+and `iroha --output-format text ops sumeragi telemetry`; sustained movement should trigger alerts
+and a manifest/collector audit. Stash counters (`/v1/sumeragi/telemetry.rbc_pending.stash_*`)
 track READY/DELIVER/chunk frames parked before INIT or roster verification and
 help correlate missing-block fetch retries with roster hydration. Evictions never mark availability on their own—
 availability still requires availability evidence (RBC `READY` quorum or availability votes) even when

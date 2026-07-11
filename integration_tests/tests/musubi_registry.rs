@@ -298,18 +298,7 @@ struct ReleaseFixture {
 }
 
 fn register_manifest_instruction(fixture: &ReleaseFixture) -> RegisterPinManifest {
-    let source_plan = fixture
-        .release
-        .source_archive_plan
-        .as_ref()
-        .expect("test release must include source plan");
-    RegisterPinManifest::new(
-        fixture.manifest_payload.clone(),
-        chunk_plan_digest(source_plan),
-        0,
-        None,
-        None,
-    )
+    RegisterPinManifest::new(fixture.manifest_payload.clone(), 0, None, None)
 }
 
 fn build_release<const DEPS: usize, const EXPORTS: usize>(
@@ -375,10 +364,12 @@ fn build_source_archive_plan(
         .first()
         .cloned()
         .ok_or_else(|| eyre!("test CAR writer produced no root CID"))?;
+    let chunk_digest_sha3_256 = compute_chunk_plan_digest_sha3(&plan.chunks);
     let manifest = ManifestBuilder::new()
         .root_cid(root_cid)
         .dag_codec(DagCodecId(stats.dag_codec))
         .chunking_from_registry(descriptor.id)
+        .chunk_digest_sha3_256(chunk_digest_sha3_256)
         .content_length(plan.content_length)
         .car_digest(archive_hash)
         .car_size(stats.car_size)
@@ -424,20 +415,6 @@ fn build_source_archive_plan(
         manifest_digest,
         manifest_payload,
     })
-}
-
-fn chunk_plan_digest(plan: &MusubiSourceArchivePlan) -> [u8; 32] {
-    let chunks = plan
-        .chunks
-        .iter()
-        .map(|chunk| sorafs_car::CarChunk {
-            offset: chunk.offset,
-            length: chunk.length,
-            digest: chunk.digest_blake3_256,
-            taikai_segment_hint: None,
-        })
-        .collect::<Vec<_>>();
-    compute_chunk_plan_digest_sha3(&chunks)
 }
 
 async fn eventually_find_release(

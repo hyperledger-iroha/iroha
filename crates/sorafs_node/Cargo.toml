@@ -39,6 +39,7 @@ url.workspace = true
 [dev-dependencies]
 assert_cmd = "2.1.1"
 blake3 = "1.8.2"
+ed25519-dalek = "2.2.0"
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "time"] }
 tower = { version = "0.5.2", features = ["util"] }

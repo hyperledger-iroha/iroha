@@ -19,6 +19,7 @@ use iroha::{
     client::{Client, Status},
     data_model::{
         Level,
+        block::consensus_v2::SumeragiV2StatusResponse,
         consensus::Qc,
         isi::{Log, SetParameter, Unregister},
         parameter::{
@@ -91,37 +92,6 @@ struct RbcSessionsProbe {
 }
 
 type CommitCertificate = Qc;
-
-#[allow(dead_code)]
-#[derive(Clone, Copy, Debug)]
-struct SumeragiSnapshot {
-    index: u64,
-    view_change_proof_accepted_total: u64,
-    view_change_proof_stale_total: u64,
-    view_change_proof_rejected_total: u64,
-    da_reschedule_total: u64,
-}
-
-impl SumeragiSnapshot {
-    fn from_json(value: &Value) -> Result<Self> {
-        Ok(Self {
-            index: require_json_u64(value, "view_change_index")?,
-            view_change_proof_accepted_total: require_json_u64(
-                value,
-                "view_change_proof_accepted_total",
-            )?,
-            view_change_proof_stale_total: require_json_u64(
-                value,
-                "view_change_proof_stale_total",
-            )?,
-            view_change_proof_rejected_total: require_json_u64(
-                value,
-                "view_change_proof_rejected_total",
-            )?,
-            da_reschedule_total: require_json_u64(value, "da_reschedule_total")?,
-        })
-    }
-}
 
 fn resolve_permissioned_leader_peer(
     peers: &[NetworkPeer],
@@ -229,57 +199,28 @@ impl PendingRbcStashCounters {
     }
 }
 
-async fn fetch_sumeragi_snapshot(
-    client: reqwest::Client,
-    torii_base: &str,
-) -> Result<SumeragiSnapshot> {
-    let url = reqwest::Url::parse(&format!("{torii_base}/v1/sumeragi/status"))
-        .wrap_err("compose sumeragi status URL")?;
-    let response = client
-        .get(url)
-        .header("Accept", "application/json")
-        .send()
+async fn fetch_sumeragi_snapshot(client: Client) -> Result<SumeragiV2StatusResponse> {
+    tokio::task::spawn_blocking(move || client.get_sumeragi_v2_status())
         .await
-        .wrap_err("fetch sumeragi status")?;
-    let status = response.status();
-    ensure!(
-        status.is_success(),
-        "GET {torii_base}/v1/sumeragi/status returned {status}"
-    );
-    let body = response
-        .text()
-        .await
-        .wrap_err("read sumeragi status body")?;
-    let value: Value = json::from_str(&body).wrap_err("parse sumeragi status JSON payload")?;
-    SumeragiSnapshot::from_json(&value)
-}
-
-fn require_json_u64(root: &Value, key: &str) -> Result<u64> {
-    let obj = root
-        .as_object()
-        .ok_or_else(|| eyre!("status payload is not an object while reading `{key}`: {root:?}"))?;
-    let raw = obj
-        .get(key)
-        .ok_or_else(|| eyre!("status payload is missing required `{key}` field: {root:?}"))?;
-    raw.as_u64()
-        .ok_or_else(|| eyre!("status field `{key}` is not a u64: {raw:?}"))
+        .wrap_err("join authoritative Sumeragi v2 status request")?
+        .wrap_err("fetch and validate authoritative Sumeragi v2 status")
 }
 
 fn pending_rbc_u64(pending: &Map, key: &str) -> Result<u64> {
     let raw = pending
         .get(key)
-        .ok_or_else(|| eyre!("pending_rbc is missing required `{key}` field: {pending:?}"))?;
+        .ok_or_else(|| eyre!("rbc_pending is missing required `{key}` field: {pending:?}"))?;
     raw.as_u64()
-        .ok_or_else(|| eyre!("pending_rbc field `{key}` is not a u64: {raw:?}"))
+        .ok_or_else(|| eyre!("rbc_pending field `{key}` is not a u64: {raw:?}"))
 }
 
 fn parse_pending_rbc_stash_counters(root: &Value) -> Result<PendingRbcStashCounters> {
     let pending = root
         .as_object()
-        .and_then(|obj| obj.get("pending_rbc"))
+        .and_then(|obj| obj.get("rbc_pending"))
         .and_then(Value::as_object)
         .ok_or_else(|| {
-            eyre!("status payload is missing required `pending_rbc` object: {root:?}")
+            eyre!("telemetry payload is missing required `rbc_pending` object: {root:?}")
         })?;
     Ok(PendingRbcStashCounters {
         stash_ready_total: pending_rbc_u64(pending, "stash_ready_total")?,
@@ -1633,12 +1574,10 @@ async fn sumeragi_da_payload_loss_does_not_block_commit() -> Result<()> {
         let commit_quorum = commit_quorum_from_len(peers.len()).max(1);
 
         let mut baseline_blocks = Vec::new();
-        let mut baseline_sumeragi_snapshots = Vec::new();
         for peer in peers.iter() {
             let status = peer.status().await?;
             baseline_blocks.push(status.blocks);
-            baseline_sumeragi_snapshots
-                .push(fetch_sumeragi_snapshot(http.clone(), &peer.torii_url()).await?);
+            fetch_sumeragi_snapshot(peer.client()).await?;
         }
         let expected_height = baseline_blocks
             .iter()
@@ -1694,9 +1633,7 @@ async fn sumeragi_da_payload_loss_does_not_block_commit() -> Result<()> {
                         continue;
                     }
                 }
-                if let Ok(snapshot) =
-                    fetch_sumeragi_snapshot(http.clone(), &peer.torii_url()).await
-                {
+                if let Ok(snapshot) = fetch_sumeragi_snapshot(peer.client()).await {
                     after_sumeragi_snapshots.push((idx, snapshot));
                 }
             }
@@ -1707,7 +1644,11 @@ async fn sumeragi_da_payload_loss_does_not_block_commit() -> Result<()> {
                     status.blocks >= expected_height
                         && after_sumeragi_snapshots
                             .iter()
-                            .any(|(snapshot_idx, _)| snapshot_idx == idx)
+                            .any(|(snapshot_idx, snapshot)| {
+                                snapshot_idx == idx
+                                    && snapshot.authoritative.last_committed_height
+                                        >= expected_height
+                            })
                 })
                 .count();
             let commits_ready = ready_count >= commit_quorum;
@@ -1739,7 +1680,11 @@ async fn sumeragi_da_payload_loss_does_not_block_commit() -> Result<()> {
                 status.blocks >= expected_height
                     && after_sumeragi_snapshots
                         .iter()
-                        .any(|(snapshot_idx, _)| snapshot_idx == idx)
+                        .any(|(snapshot_idx, snapshot)| {
+                            snapshot_idx == idx
+                                && snapshot.authoritative.last_committed_height
+                                    >= expected_height
+                        })
             })
             .count();
         ensure!(
@@ -1748,21 +1693,17 @@ async fn sumeragi_da_payload_loss_does_not_block_commit() -> Result<()> {
         );
 
         ensure!(
-            after_sumeragi_snapshots
-                .iter()
-                .filter(|(idx, _)| {
-                    status_after.iter().any(|(status_idx, status)| {
-                        status_idx == idx && status.blocks >= expected_height
+            after_sumeragi_snapshots.iter().all(|(_, snapshot)| {
+                snapshot
+                    .authoritative
+                    .last_commit_qc
+                    .is_some_and(|commit| {
+                        commit.certificate.round.height
+                            == snapshot.authoritative.last_committed_height
+                            && commit.has_quorum()
                     })
-                })
-                .all(|(idx, after)| {
-                    baseline_sumeragi_snapshots
-                        .get(*idx)
-                        .is_some_and(|baseline| {
-                            after.da_reschedule_total == baseline.da_reschedule_total
-                        })
-                }),
-            "expected da_reschedule_total to remain unchanged on peers that committed under payload loss"
+            }),
+            "every payload-loss status snapshot must carry an exact quorum-satisfying durable CommitQC"
         );
         ensure!(
             rbc_evidence.peers_with_nonterminal_session > 0,
@@ -1882,10 +1823,11 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
             .collect::<Result<_, _>>()
             .wrap_err("compose peer metrics URLs")?;
         let lagging_index = 1usize;
-        let lagging_sumeragi_url = peer_sumeragi_urls
-            .get(lagging_index)
-            .cloned()
-            .ok_or_else(|| eyre!("missing lagging peer sumeragi status URL"))?;
+        let lagging_telemetry_url = reqwest::Url::parse(&format!(
+            "{}/v1/sumeragi/telemetry",
+            lagging_peer.torii_url()
+        ))
+        .wrap_err("compose lagging peer Sumeragi telemetry URL")?;
         let lagging_metrics_url = peer_metrics_urls
             .get(lagging_index)
             .cloned()
@@ -1935,17 +1877,20 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
         loop {
             let mut ready = true;
             let response = http
-                .get(lagging_sumeragi_url.clone())
+                .get(lagging_telemetry_url.clone())
                 .header("Accept", "application/json")
                 .send()
                 .await
-                .wrap_err("fetch baseline sumeragi status")?;
+                .wrap_err("fetch baseline Sumeragi telemetry")?;
             if !response.status().is_success() {
                 ready = false;
             } else {
-                let body = response.text().await.wrap_err("baseline sumeragi status body")?;
+                let body = response
+                    .text()
+                    .await
+                    .wrap_err("baseline Sumeragi telemetry body")?;
                 let status_value: Value =
-                    json::from_str(&body).wrap_err("parse baseline sumeragi status JSON")?;
+                    json::from_str(&body).wrap_err("parse baseline Sumeragi telemetry JSON")?;
                 baseline_stash = parse_pending_rbc_stash_counters(&status_value)?;
             }
 
@@ -2015,15 +1960,15 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
                 ));
             }
             let response = http
-                .get(lagging_sumeragi_url.clone())
+                .get(lagging_telemetry_url.clone())
                 .header("Accept", "application/json")
                 .send()
                 .await
-                .wrap_err("fetch sumeragi status")?;
+                .wrap_err("fetch Sumeragi telemetry")?;
             if response.status().is_success() {
-                let body = response.text().await.wrap_err("sumeragi status body")?;
+                let body = response.text().await.wrap_err("Sumeragi telemetry body")?;
                 let status_value: Value =
-                    json::from_str(&body).wrap_err("parse sumeragi status JSON")?;
+                    json::from_str(&body).wrap_err("parse Sumeragi telemetry JSON")?;
                 let counters = parse_pending_rbc_stash_counters(&status_value)?;
                 let unverified_total = counters
                     .stash_ready_roster_unverified_total
@@ -3467,7 +3412,7 @@ fn truncate_for_error_shortens_long_snapshots() {
 #[test]
 fn parse_pending_rbc_stash_counters_reads_fields() {
     let raw = r#"{
-        "pending_rbc": {
+        "rbc_pending": {
             "stash_ready_total": 2,
             "stash_ready_init_missing_total": 1,
             "stash_ready_roster_missing_total": 0,
@@ -3498,46 +3443,12 @@ fn parse_pending_rbc_stash_counters_reads_fields() {
 }
 
 #[test]
-fn sumeragi_snapshot_parser_rejects_missing_or_malformed_fields() {
-    let valid = norito::json!({
-        "view_change_index": 2,
-        "view_change_proof_accepted_total": 3,
-        "view_change_proof_stale_total": 4,
-        "view_change_proof_rejected_total": 5,
-        "da_reschedule_total": 6
-    });
-    let snapshot = SumeragiSnapshot::from_json(&valid).expect("parse Sumeragi snapshot");
-    assert_eq!(snapshot.index, 2);
-    assert_eq!(snapshot.view_change_proof_accepted_total, 3);
-    assert_eq!(snapshot.view_change_proof_stale_total, 4);
-    assert_eq!(snapshot.view_change_proof_rejected_total, 5);
-    assert_eq!(snapshot.da_reschedule_total, 6);
-
-    let missing = norito::json!({
-        "view_change_index": 2,
-        "view_change_proof_accepted_total": 3,
-        "view_change_proof_stale_total": 4,
-        "view_change_proof_rejected_total": 5
-    });
-    assert!(SumeragiSnapshot::from_json(&missing).is_err());
-
-    let malformed = norito::json!({
-        "view_change_index": 2,
-        "view_change_proof_accepted_total": 3,
-        "view_change_proof_stale_total": "4",
-        "view_change_proof_rejected_total": 5,
-        "da_reschedule_total": 6
-    });
-    assert!(SumeragiSnapshot::from_json(&malformed).is_err());
-}
-
-#[test]
 fn parse_pending_rbc_stash_counters_rejects_missing_or_malformed_fields() {
     let missing_object = norito::json!({});
     assert!(parse_pending_rbc_stash_counters(&missing_object).is_err());
 
     let missing_field = norito::json!({
-        "pending_rbc": {
+        "rbc_pending": {
             "stash_ready_total": 2,
             "stash_ready_init_missing_total": 1,
             "stash_ready_roster_missing_total": 0,
@@ -3553,7 +3464,7 @@ fn parse_pending_rbc_stash_counters_rejects_missing_or_malformed_fields() {
     assert!(parse_pending_rbc_stash_counters(&missing_field).is_err());
 
     let malformed_field = norito::json!({
-        "pending_rbc": {
+        "rbc_pending": {
             "stash_ready_total": 2,
             "stash_ready_init_missing_total": "1",
             "stash_ready_roster_missing_total": 0,
@@ -4359,14 +4270,12 @@ async fn wait_for_height(
 ) -> Result<Duration> {
     let timeout = da_commit_wait_timeout();
     let mut last_blocks = None;
-    let mut last_commit_qc_height = None;
     loop {
         if start.elapsed() > timeout {
             return Err(eyre!(
-                "timed out waiting for height {target_height}; last elapsed {:?}; last blocks {:?}; last commit_qc_height {:?}",
+                "timed out waiting for height {target_height}; last elapsed {:?}; last committed blocks {:?}",
                 start.elapsed(),
-                last_blocks,
-                last_commit_qc_height
+                last_blocks
             ));
         }
         let response = http
@@ -4385,17 +4294,8 @@ async fn wait_for_height(
             .as_object()
             .and_then(|obj| obj.get("blocks"))
             .and_then(|val| extract_u64(val).ok());
-        let commit_qc_height = value
-            .as_object()
-            .and_then(|obj| obj.get("sumeragi"))
-            .and_then(Value::as_object)
-            .and_then(|obj| obj.get("commit_qc_height"))
-            .and_then(|val| extract_u64(val).ok());
         last_blocks = blocks_height;
-        last_commit_qc_height = commit_qc_height;
-        if blocks_height.is_some_and(|height| height >= target_height)
-            || commit_qc_height.is_some_and(|height| height >= target_height)
-        {
+        if blocks_height.is_some_and(|height| height >= target_height) {
             return Ok(start.elapsed());
         }
         sleep(Duration::from_millis(200)).await;

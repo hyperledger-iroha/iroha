@@ -148,14 +148,13 @@ reconciliation canaries require reviewed `--line-item` labels in the
 before locally generated evidence exercises the same policy-bound promotion
 path. The builder is an evidence
 packaging aid; it does not replace the missing collector service, daemonized
-pricing/exposure engine, billing aggregator, statement publisher, runtime API,
-or native bridge release process.
+pricing/exposure engine, billing aggregator, statement publisher, complete
+runtime service API, or native bridge release process.
 
-This is not yet a production hedging and billing stack. There is still no
+This is not yet a complete production hedging and billing stack. There is still no
 shipped `hedgingd`, price-feed collector service, `billingd`, statement
-publisher, SoraFS hedging/billing REST API, service-management CLI, released
-native bridge artifacts, runtime service wiring that populates the
-hedging/billing metric families, or captured staged rollout evidence that
+publisher, complete SoraFS hedging/billing service API, service-management CLI, released
+native bridge artifacts, or captured staged rollout evidence that
 passes the SFM-5 gate. The checked-in fixture generator, fixture manifest,
 README, and generated `.to`/`.json` byte suite now define the canonical SFM-5
 feed, reference-price, line-item, statement, and negative fixture set. A
@@ -183,6 +182,29 @@ must still remain disabled until the
 collector, hedging daemon, and statement publisher load the external policy and
 accept only these governed wrappers at their runtime boundaries.
 
+The embedded `sorafs_node` runtime now supplies that local governed boundary.
+When `hedging_feed_trust_policy_path` names a secure canonical policy file, the
+node accepts bounded exact-canonical `SignedHedgingPriceFeedV1` envelopes,
+persists one replay-validated latest high-water mark per feed in
+`economics/signed-hedging-feeds.to`, restores it on restart, and derives
+governed reference-price decisions only from those retained signed samples.
+Pre-commit persistence failures roll memory back; uncertain post-rename
+durability disables further durable mutation. Successful admission and decision
+derivation populate the existing feed-lag, reference-price, and divergence
+metric families. This is an in-process trusted boundary, not a collector or
+collector service. Torii now exposes its minimum authenticated operator surface:
+`POST /v1/sorafs/economics/hedging/feeds`,
+`GET /v1/sorafs/economics/status`, and
+`GET /v1/sorafs/economics/hedging/reference`. Every route requires exact
+X-Iroha canonical request authentication plus the
+`sorafs_economics_operator` role and returns `Cache-Control: private, no-store`.
+The reference route accepts optional `effective_at_unix`,
+`max_feed_age_secs`, and `max_divergence_bps` parameters, rejects duplicate or
+unknown parameters, defaults the age ceiling to the configured trust-policy
+maximum, and derives only from the durable latest signed high-water marks.
+These routes do not fetch feeds, manage secrets, execute hedges, aggregate
+billing events, or publish statements.
+
 Implemented adjacent foundations include SoraFS reserve quote/ledger tooling,
 DA rent/bonus telemetry, reserve ledger digest dashboards, generic subscription
 billing code, and generic oracle/feed tests. Those pieces do not yet constitute
@@ -199,11 +221,11 @@ runtime implementation.
 ## Target Architecture
 | Component | Responsibility | Current workspace status |
 |-----------|----------------|--------------------------|
-| Hedging engine | Aggregate price feeds, derive the reference XOR/USD rate, track exposure, and optionally execute hedges. | Local pure reference-price decision helper, governed signed-feed high-water/checkpoint state, and reference validator are shipped; daemon, exposure tracking, and hedge execution are not shipped. |
+| Hedging engine | Aggregate price feeds, derive the reference XOR/USD rate, track exposure, and optionally execute hedges. | Local pure reference-price helpers plus the durable `sorafs_node` governed signed-feed high-water runtime, restart checkpoint, metric emission, and authenticated Torii admission/status/reference routes are shipped; daemon, exposure tracking, collector automation, and hedge execution are not shipped. |
 | Price feed collectors | Fetch primary/secondary/tertiary feeds and normalize them into signed price payloads. | Not shipped for SoraFS hedging. |
 | Billing aggregator | Consume settlement, rent, egress, fee, and penalty events and produce account accruals. | Local line-item and statement builders are shipped; event ingestion and accrual service are not shipped. |
 | Statement publisher | Store, sign, publish, notify, and track acknowledgements for statements. | Not shipped. |
-| Alerting service | Monitor feed divergence, escrow runway, exposure limits, and statement failures. | Checked-in Grafana/Prometheus fixtures and telemetry helper methods are shipped; runtime service emission and service management are not shipped. |
+| Alerting service | Monitor feed divergence, escrow runway, exposure limits, and statement failures. | Checked-in Grafana/Prometheus fixtures and telemetry helpers are shipped; the embedded node emits feed lag/reference/divergence when its governed APIs are invoked, while always-on collector emission and service management are not shipped. |
 
 ## Target Price Feeds And Decisions
 - Primary feed: governance-approved on-chain XOR/USD or XOR/stablecoin TWAP.
@@ -231,7 +253,10 @@ keys, limits, failover rules, and reconciliation evidence.
 - Statement hashes should be publishable into governance evidence once the governance DAG pipeline is available.
 
 ## Target APIs And CLI
-No hedging or billing routes are currently shipped. The intended API surface is:
+The minimum authenticated local economics operator routes described above are
+shipped. No complete hedging or billing service routes under
+`/v1/sorafs/hedging` or `/v1/sorafs/billing` are currently shipped. The
+intended full service API surface is:
 
 - Latest XOR/USD reference price and feed status.
 - Hedging status, inventory, and exposure.
@@ -402,10 +427,12 @@ Required before rollout:
   and clears the mixed `valid_cycle_bindings` or `valid_policy_digests` set
   before aggregate promotion can report ready.
 - Remaining: implement collector service, daemonized pricing/exposure engine,
-  billing aggregator, statement publisher, signed APIs, runtime CLI helpers,
-  runtime service emission of the checked-in metric families, released native
-  bridge artifacts, reconciliation tests, governance approval flow, and at least
-  two successful staged billing cycles whose evidence passes the SFM-5 gate.
+  billing aggregator, statement publisher, signed exposure/billing/statement
+  APIs beyond the local economics operator boundary, runtime CLI helpers,
+  always-on service emission of the checked-in metric families, released
+  native bridge artifacts, reconciliation tests, governance approval flow, and
+  at least two successful staged billing cycles whose evidence passes the SFM-5
+  gate.
 
 The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.
 The shared runner plan guard also rejects non-canonical nested required-kind,

@@ -17,7 +17,7 @@ use sorafs_car::{
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
-    BLAKE3_256_MULTIHASH_CODE, ManifestV1,
+    BLAKE3_256_MULTIHASH_CODE, ManifestV1, decode_manifest_v1_canonical,
     por::{AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, PorProofV1},
 };
 use sorafs_node::{NodeHandle, PorVerdictOutcome, config::StorageConfig, store::StorageBackend};
@@ -119,7 +119,7 @@ fn ingest(
 ) -> Result<(), String> {
     let manifest_bytes = fs::read(&manifest_path)
         .map_err(|err| format!("failed to read manifest {}: {err}", manifest_path.display()))?;
-    let manifest: ManifestV1 = norito::decode_from_bytes(&manifest_bytes)
+    let manifest: ManifestV1 = decode_manifest_v1_canonical(&manifest_bytes)
         .map_err(|err| format!("failed to parse manifest: {err}"))?;
 
     let chunk_profile = chunk_profile_from_manifest(&manifest)?;

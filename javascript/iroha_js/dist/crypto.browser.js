@@ -1,6 +1,7 @@
 import { Buffer } from "buffer";
 import { ed25519 } from "@noble/curves/ed25519";
 import { sha256 } from "@noble/hashes/sha256";
+import { verifyEd25519Strict } from "./ed25519Strict.js";
 import {
   entropyToMnemonic,
   generateMnemonic,
@@ -273,7 +274,7 @@ export function verifyEd25519(message, signature, publicKey) {
   const messageBuffer = toBuffer(message, "message");
   const signatureBuffer = toBuffer(signature, "signature");
   const publicKeyBuffer = normalizePublicKey(publicKey);
-  return ed25519.verify(signatureBuffer, messageBuffer, publicKeyBuffer);
+  return verifyEd25519Strict(messageBuffer, signatureBuffer, publicKeyBuffer);
 }
 
 function recoveryPhraseWords(phrase) {

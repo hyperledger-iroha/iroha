@@ -24,6 +24,8 @@ pub struct StorageConfig {
     stream_token_signing_key_path: Option<PathBuf>,
     orderbook: OrderbookAdmissionPolicy,
     reputation_trust_policy_path: Option<PathBuf>,
+    pricing_trust_policy_path: Option<PathBuf>,
+    hedging_feed_trust_policy_path: Option<PathBuf>,
     privacy_aggregate_schedule: Option<PrivacyAggregateScheduleConfig>,
     evidence_viewer_audit_schedule: Option<PrivacyAggregateScheduleConfig>,
     reserve_lifecycle_schedule: Option<ReserveLifecycleScheduleConfig>,
@@ -130,6 +132,18 @@ impl StorageConfig {
         self.reputation_trust_policy_path.as_ref()
     }
 
+    /// Canonical external trust-policy file used for governed pricing admission.
+    #[must_use]
+    pub fn pricing_trust_policy_path(&self) -> Option<&PathBuf> {
+        self.pricing_trust_policy_path.as_ref()
+    }
+
+    /// Canonical external trust-policy file used for signed hedging-feed admission.
+    #[must_use]
+    pub fn hedging_feed_trust_policy_path(&self) -> Option<&PathBuf> {
+        self.hedging_feed_trust_policy_path.as_ref()
+    }
+
     /// Optional config-backed privacy aggregate due-cycle scheduler.
     #[must_use]
     pub fn privacy_aggregate_schedule(&self) -> Option<PrivacyAggregateScheduleConfig> {
@@ -215,6 +229,8 @@ impl StorageConfig {
             stream_token_signing_key_path: storage.stream_tokens.signing_key_path.clone(),
             orderbook: OrderbookAdmissionPolicy::from(storage.orderbook),
             reputation_trust_policy_path: storage.reputation_trust_policy_path.clone(),
+            pricing_trust_policy_path: storage.pricing_trust_policy_path.clone(),
+            hedging_feed_trust_policy_path: storage.hedging_feed_trust_policy_path.clone(),
             privacy_aggregate_schedule: storage.privacy_aggregates.into_schedule_config(),
             evidence_viewer_audit_schedule: storage.evidence_viewer_audits.into_schedule_config(),
             reserve_lifecycle_schedule: storage.reserve_lifecycle.into_schedule_config(),
@@ -343,6 +359,20 @@ impl StorageConfigBuilder {
     #[must_use]
     pub fn reputation_trust_policy_path(mut self, path: Option<PathBuf>) -> Self {
         self.inner.reputation_trust_policy_path = path;
+        self
+    }
+
+    /// Set the canonical external governed-pricing trust-policy file.
+    #[must_use]
+    pub fn pricing_trust_policy_path(mut self, path: Option<PathBuf>) -> Self {
+        self.inner.pricing_trust_policy_path = path;
+        self
+    }
+
+    /// Set the canonical external signed hedging-feed trust-policy file.
+    #[must_use]
+    pub fn hedging_feed_trust_policy_path(mut self, path: Option<PathBuf>) -> Self {
+        self.inner.hedging_feed_trust_policy_path = path;
         self
     }
 
@@ -1101,6 +1131,9 @@ mod tests {
         };
         actual.reputation_trust_policy_path =
             Some(PathBuf::from("/tmp/sorafs-reputation-policy.to"));
+        actual.pricing_trust_policy_path = Some(PathBuf::from("/tmp/sorafs-pricing-policy.to"));
+        actual.hedging_feed_trust_policy_path =
+            Some(PathBuf::from("/tmp/sorafs-hedging-policy.to"));
         actual.privacy_aggregates = actual::SorafsPrivacyAggregateSchedule {
             enabled: true,
             cycle_seconds: 12,
@@ -1151,6 +1184,14 @@ mod tests {
         assert_eq!(
             cfg.reputation_trust_policy_path(),
             Some(&PathBuf::from("/tmp/sorafs-reputation-policy.to"))
+        );
+        assert_eq!(
+            cfg.pricing_trust_policy_path(),
+            Some(&PathBuf::from("/tmp/sorafs-pricing-policy.to"))
+        );
+        assert_eq!(
+            cfg.hedging_feed_trust_policy_path(),
+            Some(&PathBuf::from("/tmp/sorafs-hedging-policy.to"))
         );
         assert_eq!(
             cfg.privacy_aggregate_schedule(),

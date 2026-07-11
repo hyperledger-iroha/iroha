@@ -29,7 +29,7 @@ use norito::{
 };
 use sha3::{Digest, Sha3_256};
 use sorafs_car::{
-    CarBuildPlan, CarWriter, ChunkStore, chunker_registry,
+    CarBuildPlan, CarWriter, ChunkStore, chunker_registry, compute_chunk_plan_digest_sha3,
     fetch_plan::{chunk_fetch_specs_from_json, chunk_fetch_specs_to_string},
     por_json::{proof_to_value, sample_to_map},
 };
@@ -586,21 +586,29 @@ fn proof_stream_command_consumes_ndjson() {
     let tempdir = tempdir().expect("tempdir");
 
     let payload: Vec<u8> = (0..512).map(|i| i as u8).collect();
+    let plan = CarBuildPlan::single_file(&payload).expect("proof-stream chunk plan");
     let mut chunk_store = ChunkStore::new();
     chunk_store.ingest_bytes(&payload).expect("ingest payload");
     let por_root_hex = hex_encode(chunk_store.por_tree().root());
 
     let manifest = ManifestBuilder::new()
-        .root_cid(vec![0xAA; 16])
+        .root_cid(sorafs_manifest::canonical_manifest_root_cid(
+            *blake3::hash(&payload).as_bytes(),
+        ))
         .dag_codec(DagCodecId(0x71))
         .chunking_from_profile(
             sorafs_chunker::ChunkProfile::DEFAULT,
             BLAKE3_256_MULTIHASH_CODE,
         )
+        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(payload.len() as u64)
         .car_digest(blake3::hash(&payload).into())
         .car_size(payload.len() as u64)
-        .pin_policy(PinPolicy::default())
+        .pin_policy(PinPolicy {
+            min_replicas: 1,
+            storage_class: StorageClass::Hot,
+            retention_epoch: 10,
+        })
         .build()
         .expect("manifest");
     let manifest_bytes = to_bytes(&manifest).expect("encode manifest");
@@ -1307,7 +1315,7 @@ fn storage_pin_treats_already_stored_conflict_as_success() {
 }
 
 #[test]
-fn deploy_posts_register_payload_with_content_length_and_pins_peers() {
+fn deploy_posts_canonical_manifest_payload_and_pins_peers() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("site.bin");
     let payload = b"sorafs deploy payload".to_vec();
@@ -1339,7 +1347,7 @@ fn deploy_posts_register_payload_with_content_length_and_pins_peers() {
     let register = primary.mock(|when, then| {
         when.method(POST)
             .path("/v1/sorafs/pin/register")
-            .body_includes("content_length");
+            .body_includes("manifest_payload");
         then.status(200)
             .header("Content-Type", "application/json")
             .body(
@@ -1463,7 +1471,7 @@ fn deploy_accepts_known_chain_client_config_without_account_chain_discriminant()
     let register = primary.mock(|when, then| {
         when.method(POST)
             .path("/v1/sorafs/pin/register")
-            .body_includes("content_length");
+            .body_includes("manifest_payload");
         then.status(200)
             .header("Content-Type", "application/json")
             .body(r#"{"manifest_digest_hex":"abc","pin_fee_nano":"1"}"#);
@@ -2200,13 +2208,14 @@ fn fetch_command_rejects_insecure_local_gateway_without_output() {
         .root_cid(car_stats.root_cids[0].clone())
         .dag_codec(DagCodecId(car_stats.dag_codec))
         .chunking_from_profile(plan.chunk_profile, chunker_registry::DEFAULT_MULTIHASH_CODE)
+        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(plan.content_length)
         .car_digest(car_stats.car_archive_digest.into())
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 1,
             storage_class: StorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch: 10,
         })
         .governance(council_signed_governance_proofs())
         .build()
@@ -5066,8 +5075,8 @@ fn ci_sample_fixtures_are_consistent() {
         "storage class must match documented default"
     );
     assert_eq!(
-        manifest.pin_policy.retention_epoch, 0,
-        "retention epoch should be set to immediate availability"
+        manifest.pin_policy.retention_epoch, 86_400,
+        "retention epoch should cover the documented one-day default"
     );
     let manifest_digest = manifest
         .digest()
@@ -5316,17 +5325,25 @@ fn compute_chunk_digest_hex(plan_path: &Path) -> String {
 fn write_proof_stream_manifest(dir: &Path, file_name: &str) -> PathBuf {
     let payload = b"proof-stream-fixture";
     let digest = blake3_hash(payload);
+    let plan = CarBuildPlan::single_file(payload).expect("proof-stream manifest plan");
     let manifest = ManifestBuilder::new()
-        .root_cid(digest.as_bytes().to_vec())
+        .root_cid(sorafs_manifest::canonical_manifest_root_cid(
+            *digest.as_bytes(),
+        ))
         .dag_codec(DagCodecId(0x71))
         .chunking_from_profile(
             sorafs_chunker::ChunkProfile::DEFAULT,
             BLAKE3_256_MULTIHASH_CODE,
         )
+        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(payload.len() as u64)
         .car_digest(digest.into())
         .car_size(payload.len() as u64)
-        .pin_policy(PinPolicy::default())
+        .pin_policy(PinPolicy {
+            min_replicas: 1,
+            storage_class: StorageClass::Hot,
+            retention_epoch: 10,
+        })
         .build()
         .expect("manifest build");
     let path = dir.join(file_name);
@@ -5722,13 +5739,14 @@ fn fetch_command_gateway_path_rejects_insecure_local_url() {
         .root_cid(car_stats.root_cids[0].clone())
         .dag_codec(DagCodecId(car_stats.dag_codec))
         .chunking_from_profile(plan.chunk_profile, chunker_registry::DEFAULT_MULTIHASH_CODE)
+        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(plan.content_length)
         .car_digest(car_stats.car_archive_digest.into())
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 1,
             storage_class: StorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch: 10,
         })
         .governance(council_signed_governance_proofs())
         .build()
@@ -5861,13 +5879,14 @@ fn fetch_command_direct_policy_does_not_bypass_gateway_url_security() {
         .root_cid(car_stats.root_cids[0].clone())
         .dag_codec(DagCodecId(car_stats.dag_codec))
         .chunking_from_profile(plan.chunk_profile, chunker_registry::DEFAULT_MULTIHASH_CODE)
+        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(plan.content_length)
         .car_digest(car_stats.car_archive_digest.into())
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 1,
             storage_class: StorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch: 10,
         })
         .governance(council_signed_governance_proofs())
         .build()
@@ -6000,13 +6019,14 @@ fn fetch_command_policy_override_does_not_bypass_gateway_url_security() {
             sorafs_chunker::ChunkProfile::DEFAULT,
             BLAKE3_256_MULTIHASH_CODE,
         )
+        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(payload.len() as u64)
         .car_digest(car_stats.car_archive_digest.into())
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 1,
             storage_class: StorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch: 10,
         })
         .governance(council_signed_governance_proofs())
         .build()
@@ -6097,13 +6117,14 @@ fn fetch_command_config_does_not_bypass_gateway_url_security() {
         .root_cid(car_stats.root_cids[0].clone())
         .dag_codec(DagCodecId(car_stats.dag_codec))
         .chunking_from_profile(plan.chunk_profile, chunker_registry::DEFAULT_MULTIHASH_CODE)
+        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(plan.content_length)
         .car_digest(car_stats.car_archive_digest.into())
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 1,
             storage_class: StorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch: 10,
         })
         .governance(council_signed_governance_proofs())
         .build()
@@ -6262,13 +6283,14 @@ fn fetch_command_scoreboard_flag_does_not_bypass_gateway_url_security() {
         .root_cid(car_stats.root_cids[0].clone())
         .dag_codec(DagCodecId(car_stats.dag_codec))
         .chunking_from_profile(plan.chunk_profile, chunker_registry::DEFAULT_MULTIHASH_CODE)
+        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(plan.content_length)
         .car_digest(car_stats.car_archive_digest.into())
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 1,
             storage_class: StorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch: 10,
         })
         .governance(council_signed_governance_proofs())
         .build()
@@ -6446,13 +6468,14 @@ fn fetch_command_proxy_does_not_bypass_gateway_url_security() {
         .root_cid(car_stats.root_cids[0].clone())
         .dag_codec(DagCodecId(car_stats.dag_codec))
         .chunking_from_profile(plan.chunk_profile, chunker_registry::DEFAULT_MULTIHASH_CODE)
+        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(plan.content_length)
         .car_digest(car_stats.car_archive_digest.into())
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 1,
             storage_class: StorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch: 10,
         })
         .governance(council_signed_governance_proofs())
         .build()

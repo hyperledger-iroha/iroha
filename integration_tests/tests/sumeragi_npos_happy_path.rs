@@ -1008,13 +1008,11 @@ async fn wait_for_block_height(
 ) -> eyre::Result<Duration> {
     let deadline = start + budget;
     let mut last_blocks = None;
-    let mut last_commit_qc_height = None;
     loop {
         if Instant::now() > deadline {
             return Err(eyre!(
-                "timed out waiting for commit height {target_height}; last blocks {:?}; last commit_qc_height {:?}",
-                last_blocks,
-                last_commit_qc_height
+                "timed out waiting for committed height {target_height}; last blocks {:?}",
+                last_blocks
             ));
         }
         let response = match http
@@ -1037,17 +1035,8 @@ async fn wait_for_block_height(
                 .as_object()
                 .and_then(|obj| obj.get("blocks"))
                 .and_then(Value::as_u64);
-            let commit_qc_height = value
-                .as_object()
-                .and_then(|obj| obj.get("sumeragi"))
-                .and_then(Value::as_object)
-                .and_then(|obj| obj.get("commit_qc_height"))
-                .and_then(Value::as_u64);
             last_blocks = blocks_height;
-            last_commit_qc_height = commit_qc_height;
-            if blocks_height.is_some_and(|height| height >= target_height)
-                || commit_qc_height.is_some_and(|height| height >= target_height)
-            {
+            if blocks_height.is_some_and(|height| height >= target_height) {
                 return Ok(start.elapsed());
             }
         }
@@ -1102,18 +1091,8 @@ async fn wait_for_block_height_quorum(
                 .as_object()
                 .and_then(|obj| obj.get("blocks"))
                 .and_then(Value::as_u64);
-            let commit_qc_height = value
-                .as_object()
-                .and_then(|obj| obj.get("sumeragi"))
-                .and_then(Value::as_object)
-                .and_then(|obj| obj.get("commit_qc_height"))
-                .and_then(Value::as_u64);
-            last_observed.push(format!(
-                "{url}: blocks={blocks_height:?}, commit_qc_height={commit_qc_height:?}"
-            ));
-            if blocks_height.is_some_and(|height| height >= target_height)
-                || commit_qc_height.is_some_and(|height| height >= target_height)
-            {
+            last_observed.push(format!("{url}: blocks={blocks_height:?}"));
+            if blocks_height.is_some_and(|height| height >= target_height) {
                 reached = reached.saturating_add(1);
             }
         }

@@ -24,7 +24,7 @@ points before state or fee side effects.
 flowchart LR
     cli["sorafs_cli / SDK clients"] --> torii["Torii /v1/sorafs/pin/register"]
     torii --> validator["sorafs_manifest::validation"]
-    torii --> manifest["required canonical ManifestV1 from manifest_b64"]
+    torii --> manifest["required canonical ManifestV1 from manifest_payload"]
     validator --> registry["Pin Registry ISI"]
     registry --> pending["pending record when council approval is required"]
     pending --> approval["permissioned ApprovePinManifest + verified envelope"]
@@ -44,7 +44,7 @@ flowchart LR
   its governance-signature list cleared, eliminating the self-reference.
 - `manifest_pin_policy_constraints_from_config` maps governance configuration
   into `sorafs_manifest::PinPolicyConstraints`.
-- `/v1/sorafs/pin/register` requires `manifest_b64`, rejects non-canonical or
+- `/v1/sorafs/pin/register` requires `manifest_payload`, rejects non-canonical or
   oversized Norito before transaction construction, and returns stable
   `sorafs_pin_*` application-validation labels. Summary commitments supplied by
   callers are not an authority boundary.
@@ -90,7 +90,7 @@ flowchart LR
   inferring layout from inline parameters. The first release has one canonical
   Norito layout; alternate legacy flag layouts are rejected at Torii ingress.
 - Council-signature requirements are driven by governance configuration. Torii
-  always requires `manifest_b64` so malformed full manifests can be rejected
+  always requires `manifest_payload` so malformed full manifests can be rejected
   early, regardless of whether approval is automatic or governed. This host-side check is not the authority
   boundary: consensus keeps the record pending until `ApprovePinManifest`
   verifies the supplied council envelope under an account carrying

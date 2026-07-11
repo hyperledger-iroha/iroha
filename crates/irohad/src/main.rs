@@ -3604,8 +3604,30 @@ impl NetworkRelayShared {
                     Some(qc.body.lane_block_view),
                 )
             }
-            V2(_) => ("SumeragiV2", None, None),
             KuraReplicaAdvert(advert) => ("KuraReplicaAdvert", Some(advert.height), None),
+            V2(message) => {
+                use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload;
+
+                let round = match &message.payload {
+                    ConsensusMessageV2Payload::Proposal(value) => Some(value.round),
+                    ConsensusMessageV2Payload::Vote(value) => Some(value.round),
+                    ConsensusMessageV2Payload::QuorumCertificate(value) => Some(value.round),
+                    ConsensusMessageV2Payload::TimeoutVote(value) => Some(value.round),
+                    ConsensusMessageV2Payload::TimeoutCertificate(value) => Some(value.round),
+                    ConsensusMessageV2Payload::PayloadManifest(value) => Some(value.round),
+                    ConsensusMessageV2Payload::CertifiedBodyRequest(value) => Some(value.round),
+                    ConsensusMessageV2Payload::CertifiedBodyResponse(value) => {
+                        Some(value.manifest.round)
+                    }
+                    ConsensusMessageV2Payload::PayloadChunk(_)
+                    | ConsensusMessageV2Payload::CommitCertificateRequest(_)
+                    | ConsensusMessageV2Payload::CommitCertificateResponse(_) => None,
+                };
+                match round {
+                    Some(round) => ("SumeragiV2", Some(round.height), Some(round.view)),
+                    None => ("SumeragiV2", None, None),
+                }
+            }
         }
     }
 
@@ -4896,6 +4918,50 @@ mod network_relay_tests {
         }))
     }
 
+    fn sample_v2_round(height: u64, view: u64) -> wire::ConsensusRound {
+        wire::ConsensusRound {
+            context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::prehashed(
+                [0x61; 32],
+            ))),
+            height,
+            view,
+        }
+    }
+
+    fn sample_v2_subject() -> wire::BlockSubject {
+        wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x62; 32])),
+            payload_hash: Hash::prehashed([0x63; 32]),
+        }
+    }
+
+    fn v2_vote_block_message() -> BlockMessage {
+        BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Vote(wire::Vote {
+                round: sample_v2_round(5, 7),
+                phase: wire::GlobalPhase::Prepare,
+                subject: sample_v2_subject(),
+                signer: 0,
+                signature: vec![0x64],
+            }),
+        ))
+    }
+
+    fn v2_payload_chunk_block_message() -> BlockMessage {
+        BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+                manifest_hash: HashOf::<wire::PayloadManifest>::from_untyped_unchecked(
+                    Hash::prehashed([0x65; 32]),
+                ),
+                index: 0,
+                bytes: vec![0x66],
+                sender: 0,
+                signature: vec![0x67],
+            }),
+        ))
+    }
+
     fn consensus_params_msg() -> iroha_core::NetworkMessage {
         let advert = ConsensusParamsAdvert {
             collectors_k: 1,
@@ -5535,6 +5601,16 @@ mod network_relay_tests {
     }
 
     #[test]
+    fn consensus_ingress_v2_vote_uses_critical_bucket() {
+        let policy =
+            ConsensusIngressLimiter::ingress_policy(&sumeragi_msg(v2_vote_block_message()));
+
+        assert_eq!(policy.rate_class, Some(IngressRateClass::Critical));
+        assert!(!policy.apply_penalty);
+        assert!(!policy.apply_rbc_session_limit);
+    }
+
+    #[test]
     fn block_message_meta_labels_lane_block_messages() {
         assert_eq!(
             NetworkRelayShared::block_message_meta(&BlockMessage::LaneBlockProposal(
@@ -5682,6 +5758,18 @@ mod network_relay_tests {
         assert_eq!(
             rate_limited.should_drop(&peer, &vote, encoded_len),
             Some(ConsensusIngressDropReason::Rate)
+        );
+    }
+
+    #[test]
+    fn block_message_meta_reports_v2_round_when_available() {
+        assert_eq!(
+            NetworkRelayShared::block_message_meta(&v2_vote_block_message()),
+            ("SumeragiV2", Some(5), Some(7))
+        );
+        assert_eq!(
+            NetworkRelayShared::block_message_meta(&v2_payload_chunk_block_message()),
+            ("SumeragiV2", None, None)
         );
     }
 
@@ -12987,8 +13075,21 @@ mod tests {
                 [],
             );
             let kura = Kura::blank_kura_for_testing();
-            let state =
-                State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
+            let mut state = State::new_with_chain_for_testing(
+                world,
+                Arc::clone(&kura),
+                LiveQueryStore::start_test(),
+                chain_id.clone(),
+            );
+            state.set_pipeline(iroha_config::parameters::actual::Pipeline::default());
+            state
+                .set_nexus(iroha_config::parameters::actual::Nexus::default())
+                .expect("default Nexus config");
+            let nexus = state.nexus_snapshot();
+            let lane_manifests = Arc::new(
+                LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+            );
+            state.install_lane_manifests(&lane_manifests);
             let mut crypto = iroha_config::parameters::actual::Crypto::default();
             if !crypto.allowed_signing.contains(&Algorithm::BlsNormal) {
                 crypto.allowed_signing.push(Algorithm::BlsNormal);

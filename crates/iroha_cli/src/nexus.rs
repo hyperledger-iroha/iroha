@@ -1,15 +1,22 @@
 //! Nexus helpers (lane governance reports and public-lane snapshots).
 
 use eyre::{Result, eyre};
-use iroha::data_model::nexus::LaneId;
+use iroha::data_model::{
+    block::consensus::committed_lane_block_status_counts_as_progress,
+    block::consensus_v2::SumeragiV2StatusResponse, nexus::LaneId,
+};
 use norito::json::{Map, Value};
-use std::{convert::TryFrom, fmt::Write};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    convert::TryFrom,
+    fmt::Write,
+};
 
 use crate::{Run, RunContext};
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
-    /// Show governance manifest status per lane
+    /// Show canonical Sumeragi v2 certification/application evidence per lane
     LaneReport(LaneReportArgs),
     /// Inspect public-lane validator lifecycle and stake state
     #[command(subcommand)]
@@ -21,12 +28,20 @@ pub struct LaneReportArgs {
     /// Print a compact table instead of JSON
     #[arg(long, default_value_t = false)]
     pub summary: bool,
-    /// Show only lanes that require a manifest but remain sealed
-    #[arg(long, default_value_t = false)]
-    pub only_missing: bool,
-    /// Exit with non-zero status if any manifest is missing
-    #[arg(long, default_value_t = false)]
-    pub fail_on_sealed: bool,
+    /// Show only lanes with incomplete certification or application evidence
+    #[arg(
+        long = "only-incomplete",
+        alias = "only-missing",
+        default_value_t = false
+    )]
+    pub only_incomplete: bool,
+    /// Exit with non-zero status if any lane has incomplete evidence
+    #[arg(
+        long = "fail-on-incomplete",
+        alias = "fail-on-sealed",
+        default_value_t = false
+    )]
+    pub fail_on_incomplete: bool,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -74,51 +89,33 @@ impl Run for Command {
 
 fn lane_report<C: RunContext>(context: &mut C, args: &LaneReportArgs) -> Result<()> {
     let client = context.client_from_config();
-    let status = client.get_sumeragi_status_json()?;
-    let lanes = status
-        .get("lane_governance")
-        .cloned()
-        .unwrap_or(Value::Null);
-    let sealed_count = status
-        .get("lane_governance_sealed_total")
-        .and_then(Value::as_u64)
-        .and_then(|value| usize::try_from(value).ok())
-        .unwrap_or_else(|| count_sealed(&lanes));
-    let sealed_aliases = status
-        .get("lane_governance_sealed_aliases")
-        .and_then(Value::as_array)
-        .map_or_else(
-            || collect_sealed_aliases(&lanes),
-            |arr| {
-                arr.iter()
-                    .filter_map(Value::as_str)
-                    .map(ToOwned::to_owned)
-                    .collect::<Vec<_>>()
-            },
-        );
-    let filtered_lanes = if args.only_missing {
+    let status = client.get_sumeragi_v2_status()?;
+    let lanes = canonical_lane_entries(&status);
+    let incomplete_count = count_incomplete(&lanes);
+    let incomplete_lane_ids = collect_incomplete_lane_ids(&lanes);
+    let filtered_lanes = if args.only_incomplete {
         filter_lane_entries(lanes, true)
     } else {
         lanes
     };
     if args.summary {
-        context.println(format_lane_summary(&filtered_lanes, args.only_missing))?;
+        context.println(format_lane_summary(&filtered_lanes, args.only_incomplete))?;
     } else {
         let mut map = Map::new();
         map.insert(
-            "sealed_total".into(),
-            Value::from(u64::try_from(sealed_count).unwrap_or(u64::MAX)),
+            "incomplete_total".into(),
+            Value::from(u64::try_from(incomplete_count).unwrap_or(u64::MAX)),
         );
         map.insert(
-            "sealed_aliases".into(),
-            Value::Array(sealed_aliases.iter().cloned().map(Value::from).collect()),
+            "incomplete_lane_ids".into(),
+            Value::Array(incomplete_lane_ids.into_iter().map(Value::from).collect()),
         );
         map.insert("lanes".into(), filtered_lanes);
         context.print_data(&Value::Object(map))?;
     }
-    if args.fail_on_sealed && sealed_count > 0 {
+    if args.fail_on_incomplete && incomplete_count > 0 {
         return Err(eyre!(
-            "{sealed_count} lane(s) still sealed (governance manifest missing)"
+            "{incomplete_count} lane(s) have incomplete canonical certification/application evidence"
         ));
     }
     Ok(())
@@ -155,157 +152,258 @@ fn public_lane_stake<C: RunContext>(context: &mut C, args: &PublicLaneStakeArgs)
     Ok(())
 }
 
-fn filter_lane_entries(value: Value, only_missing: bool) -> Value {
-    if !only_missing {
+#[derive(Debug, Default)]
+struct CanonicalLaneEvidence {
+    lane_id: u32,
+    dataspaces: BTreeSet<u64>,
+    incarnations: BTreeSet<String>,
+    settlement_commitments: u64,
+    relay_envelopes: u64,
+    payload_ownerships: u64,
+    committed_blocks: u64,
+    active_sessions: u64,
+    incomplete_sessions: u64,
+    blocked_committed_blocks: u64,
+    latest_global_height: u64,
+    latest_lane_height: u64,
+}
+
+fn lane_evidence(
+    lanes: &mut BTreeMap<u32, CanonicalLaneEvidence>,
+    lane_id: LaneId,
+) -> &mut CanonicalLaneEvidence {
+    let lane_id = lane_id.as_u32();
+    lanes
+        .entry(lane_id)
+        .or_insert_with(|| CanonicalLaneEvidence {
+            lane_id,
+            ..CanonicalLaneEvidence::default()
+        })
+}
+
+fn canonical_lane_entries(status: &SumeragiV2StatusResponse) -> Value {
+    let mut lanes = BTreeMap::<u32, CanonicalLaneEvidence>::new();
+
+    for commitment in &status.lane_settlement_commitments {
+        let lane = lane_evidence(&mut lanes, commitment.lane_id);
+        lane.dataspaces.insert(commitment.dataspace_id.as_u64());
+        lane.incarnations
+            .insert(commitment.lane_incarnation.to_string());
+        lane.settlement_commitments = lane.settlement_commitments.saturating_add(1);
+        lane.latest_global_height = lane.latest_global_height.max(commitment.block_height);
+    }
+    for relay in &status.lane_relay_envelopes {
+        let lane = lane_evidence(&mut lanes, relay.lane_id);
+        lane.dataspaces.insert(relay.dataspace_id.as_u64());
+        lane.incarnations.insert(relay.lane_incarnation.to_string());
+        lane.relay_envelopes = lane.relay_envelopes.saturating_add(1);
+        lane.latest_global_height = lane.latest_global_height.max(relay.block_height);
+    }
+    for ownership in &status.lane_payload_ownerships {
+        let lane = lane_evidence(&mut lanes, ownership.lane_id);
+        lane.dataspaces.insert(ownership.dataspace_id.as_u64());
+        lane.incarnations
+            .insert(ownership.lane_incarnation.to_string());
+        lane.payload_ownerships = lane.payload_ownerships.saturating_add(1);
+        lane.latest_global_height = lane.latest_global_height.max(ownership.proposal_height);
+        lane.latest_lane_height = lane.latest_lane_height.max(ownership.lane_block_height);
+    }
+    for committed in &status.committed_lane_blocks {
+        let lane = lane_evidence(&mut lanes, committed.lane_id);
+        lane.dataspaces.insert(committed.dataspace_id.as_u64());
+        lane.incarnations
+            .insert(committed.lane_incarnation.to_string());
+        lane.committed_blocks = lane.committed_blocks.saturating_add(1);
+        lane.latest_lane_height = lane.latest_lane_height.max(committed.lane_block_height);
+        if !committed_lane_block_status_counts_as_progress(
+            &committed.execution_status,
+            committed.executable_payload_available,
+        ) {
+            lane.blocked_committed_blocks = lane.blocked_committed_blocks.saturating_add(1);
+        }
+    }
+    for session in &status.lane_block_sessions {
+        let lane = lane_evidence(&mut lanes, session.lane_id);
+        lane.dataspaces.insert(session.dataspace_id.as_u64());
+        lane.incarnations
+            .insert(session.lane_incarnation.to_string());
+        lane.active_sessions = lane.active_sessions.saturating_add(1);
+        lane.latest_lane_height = lane.latest_lane_height.max(session.lane_block_height);
+        if !session.has_commit_qc || !session.committed_session_drained {
+            lane.incomplete_sessions = lane.incomplete_sessions.saturating_add(1);
+        }
+    }
+
+    Value::Array(
+        lanes
+            .into_values()
+            .map(|lane| {
+                let incomplete = lane.incomplete_sessions > 0 || lane.blocked_committed_blocks > 0;
+                let status = if incomplete {
+                    "incomplete"
+                } else if lane.committed_blocks > 0 {
+                    "committed"
+                } else {
+                    "observed"
+                };
+                Value::Object(Map::from_iter([
+                    ("lane_id".into(), Value::from(u64::from(lane.lane_id))),
+                    (
+                        "dataspace_ids".into(),
+                        Value::Array(lane.dataspaces.into_iter().map(Value::from).collect()),
+                    ),
+                    (
+                        "incarnations".into(),
+                        Value::Array(lane.incarnations.into_iter().map(Value::from).collect()),
+                    ),
+                    (
+                        "settlement_commitments".into(),
+                        Value::from(lane.settlement_commitments),
+                    ),
+                    ("relay_envelopes".into(), Value::from(lane.relay_envelopes)),
+                    (
+                        "payload_ownerships".into(),
+                        Value::from(lane.payload_ownerships),
+                    ),
+                    (
+                        "committed_blocks".into(),
+                        Value::from(lane.committed_blocks),
+                    ),
+                    ("active_sessions".into(), Value::from(lane.active_sessions)),
+                    (
+                        "incomplete_sessions".into(),
+                        Value::from(lane.incomplete_sessions),
+                    ),
+                    (
+                        "blocked_committed_blocks".into(),
+                        Value::from(lane.blocked_committed_blocks),
+                    ),
+                    (
+                        "latest_global_height".into(),
+                        Value::from(lane.latest_global_height),
+                    ),
+                    (
+                        "latest_lane_height".into(),
+                        Value::from(lane.latest_lane_height),
+                    ),
+                    ("status".into(), Value::from(status)),
+                    ("incomplete".into(), Value::from(incomplete)),
+                ]))
+            })
+            .collect(),
+    )
+}
+
+fn lane_is_incomplete(entry: &Value) -> bool {
+    entry
+        .as_object()
+        .and_then(|map| map.get("incomplete"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+fn filter_lane_entries(value: Value, only_incomplete: bool) -> Value {
+    if !only_incomplete {
         return value;
     }
     if let Value::Array(entries) = value {
-        let filtered: Vec<_> = entries.into_iter().filter(lane_still_sealed).collect();
-        Value::Array(filtered)
+        Value::Array(entries.into_iter().filter(lane_is_incomplete).collect())
     } else {
         value
     }
 }
 
-fn lane_still_sealed(entry: &Value) -> bool {
-    let Some(map) = entry.as_object() else {
-        return false;
-    };
-    let required = map
-        .get("manifest_required")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let ready = map
-        .get("manifest_ready")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    required && !ready
-}
-
-fn count_sealed(value: &Value) -> usize {
-    match value {
-        Value::Array(entries) => entries
+fn count_incomplete(value: &Value) -> usize {
+    value.as_array().map_or(0, |entries| {
+        entries
             .iter()
-            .filter(|entry| lane_still_sealed(entry))
-            .count(),
-        _ => 0,
-    }
+            .filter(|entry| lane_is_incomplete(entry))
+            .count()
+    })
 }
 
-fn collect_sealed_aliases(value: &Value) -> Vec<String> {
-    match value {
-        Value::Array(entries) => entries
-            .iter()
-            .filter(|entry| lane_still_sealed(entry))
-            .filter_map(|entry| {
-                entry
-                    .as_object()
-                    .and_then(|map| map.get("alias"))
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned)
-            })
-            .collect(),
-        _ => Vec::new(),
-    }
+fn collect_incomplete_lane_ids(value: &Value) -> Vec<u64> {
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|entry| lane_is_incomplete(entry))
+        .filter_map(|entry| entry.get("lane_id").and_then(Value::as_u64))
+        .collect()
 }
 
-fn format_lane_summary(value: &Value, only_missing: bool) -> String {
+fn format_lane_summary(value: &Value, only_incomplete: bool) -> String {
     let Some(array) = value.as_array() else {
-        return "No lane governance entries returned.".to_string();
+        return "Canonical lane evidence response was not an array.".to_owned();
     };
     if array.is_empty() {
-        return if only_missing {
-            "All governance manifests are provisioned.".to_string()
+        return if only_incomplete {
+            "No incomplete canonical lane evidence.".to_owned()
         } else {
-            "No lane governance entries returned.".to_string()
+            "No canonical lane evidence retained.".to_owned()
         };
     }
 
-    let mut rows = Vec::with_capacity(array.len());
-    for entry in array {
-        if let Some(map) = entry.as_object() {
-            rows.push(build_lane_row(map));
-        }
-    }
-    if rows.is_empty() {
-        return if only_missing {
-            "All governance manifests are provisioned.".to_string()
-        } else {
-            "No lane governance entries returned.".to_string()
-        };
-    }
-
+    let rows = array
+        .iter()
+        .filter_map(Value::as_object)
+        .map(build_lane_row)
+        .collect::<Vec<_>>();
     let header = format!(
-        "{:>4}  {:<16}  {:<16}  {:<7}  {:>6}  {:>10}  {}",
-        "ID", "ALIAS", "MODULE", "STATUS", "QUORUM", "VALIDATORS", "DETAIL"
+        "{:>4}  {:<10}  {:<14}  {:>6}  {:>6}  {:>6}  {:>6}  {:>6}  {:>8}  {:>8}",
+        "ID",
+        "STATUS",
+        "DATASPACES",
+        "SETTLE",
+        "RELAY",
+        "OWNER",
+        "COMMIT",
+        "SESS",
+        "GLOBAL_H",
+        "LANE_H"
     );
     let mut formatted = String::with_capacity((rows.len() + 1) * header.len());
     formatted.push_str(&header);
-    formatted.push('\n');
     for row in rows {
-        formatted.push_str(&row);
         formatted.push('\n');
+        formatted.push_str(&row);
     }
-    formatted.trim_end().to_string()
+    formatted
 }
 
 fn build_lane_row(entry: &Map) -> String {
-    let lane_id = entry
-        .get("lane_id")
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
-    let alias = entry
-        .get("alias")
+    let lane_id = object_u64(entry, "lane_id");
+    let status = entry
+        .get("status")
         .and_then(Value::as_str)
-        .map_or_else(|| "-".to_string(), normalize_width);
-    let module = entry
-        .get("governance")
-        .and_then(Value::as_str)
-        .map_or_else(|| "-".to_string(), normalize_width);
-    let manifest_required = entry
-        .get("manifest_required")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let manifest_ready = entry
-        .get("manifest_ready")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let status = if manifest_required {
-        if manifest_ready { "READY" } else { "SEALED" }
-    } else {
-        "N/A"
-    };
-    let quorum = entry
-        .get("quorum")
-        .and_then(Value::as_u64)
-        .map_or_else(|| "-".to_string(), |q| q.to_string());
-    let validator_count = entry
-        .get("validator_ids")
+        .unwrap_or("malformed");
+    let dataspaces = entry
+        .get("dataspace_ids")
         .and_then(Value::as_array)
-        .map_or(0, Vec::len);
-    let validators = validator_count.to_string();
-    let detail = lane_detail(entry, manifest_required, manifest_ready);
-
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_u64)
+                .map(|value| value.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "-".to_owned());
     format!(
-        "{lane_id:>4}  {alias:<16}  {module:<16}  {status:<7}  {quorum:>6}  {validators:>10}  {detail}"
+        "{lane_id:>4}  {status:<10}  {dataspaces:<14}  {:>6}  {:>6}  {:>6}  {:>6}  {:>6}  {:>8}  {:>8}",
+        object_u64(entry, "settlement_commitments"),
+        object_u64(entry, "relay_envelopes"),
+        object_u64(entry, "payload_ownerships"),
+        object_u64(entry, "committed_blocks"),
+        object_u64(entry, "active_sessions"),
+        object_u64(entry, "latest_global_height"),
+        object_u64(entry, "latest_lane_height"),
     )
 }
 
-fn lane_detail(entry: &Map, manifest_required: bool, manifest_ready: bool) -> String {
-    if !manifest_required {
-        return "governance not configured".to_string();
-    }
-    if manifest_ready {
-        if let Some(path) = entry
-            .get("manifest_path")
-            .and_then(Value::as_str)
-            .filter(|p| !p.is_empty())
-        {
-            return path.to_string();
-        }
-        return "manifest loaded".to_string();
-    }
-    "manifest missing".to_string()
+fn object_u64(entry: &Map, key: &str) -> u64 {
+    entry.get(key).and_then(Value::as_u64).unwrap_or_default()
 }
 
 fn format_validator_summary(payload: &Value) -> Result<String> {
@@ -584,83 +682,69 @@ mod tests {
         );
     }
 
-    #[test]
-    fn lane_summary_formats_rows() {
-        let entry = Map::from_iter([
-            ("lane_id".into(), Value::from(2u64)),
-            ("alias".into(), Value::from("governance")),
-            ("governance".into(), Value::from("parliament")),
-            ("manifest_required".into(), Value::from(true)),
-            ("manifest_ready".into(), Value::from(false)),
-            ("quorum".into(), Value::from(3u64)),
+    fn canonical_lane_row(lane_id: u64, incomplete: bool) -> Value {
+        Value::Object(Map::from_iter([
+            ("lane_id".into(), Value::from(lane_id)),
             (
-                "validator_ids".into(),
-                Value::Array(vec![
-                    Value::from("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
-                    Value::from("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"),
-                ]),
+                "dataspace_ids".into(),
+                Value::Array(vec![Value::from(lane_id.saturating_add(10))]),
             ),
-            ("manifest_path".into(), Value::Null),
-        ]);
-        let value = Value::Array(vec![Value::Object(entry)]);
+            ("settlement_commitments".into(), Value::from(1_u64)),
+            ("relay_envelopes".into(), Value::from(2_u64)),
+            ("payload_ownerships".into(), Value::from(3_u64)),
+            ("committed_blocks".into(), Value::from(4_u64)),
+            ("active_sessions".into(), Value::from(u64::from(incomplete))),
+            ("latest_global_height".into(), Value::from(8_u64)),
+            ("latest_lane_height".into(), Value::from(6_u64)),
+            (
+                "status".into(),
+                Value::from(if incomplete {
+                    "incomplete"
+                } else {
+                    "committed"
+                }),
+            ),
+            ("incomplete".into(), Value::from(incomplete)),
+        ]))
+    }
+
+    #[test]
+    fn lane_summary_formats_canonical_evidence_rows() {
+        let value = Value::Array(vec![canonical_lane_row(2, true)]);
         let table = format_lane_summary(&value, false);
-        assert!(table.contains("SEALED"));
-        assert!(table.contains("manifest missing"));
+        assert!(table.contains("incomplete"));
+        assert!(table.contains("    2"));
+        assert!(table.contains("     4"));
     }
 
     #[test]
     fn lane_summary_handles_empty() {
         let value = Value::Array(Vec::new());
-        let table = format_lane_summary(&value, false);
-        assert_eq!(table, "No lane governance entries returned.");
-        let filtered = format_lane_summary(&value, true);
-        assert_eq!(filtered, "All governance manifests are provisioned.");
-    }
-
-    #[test]
-    fn filter_removes_ready_lanes() {
-        let sealed = Map::from_iter([
-            ("lane_id".into(), Value::from(1u64)),
-            ("alias".into(), Value::from("sealed")),
-            ("governance".into(), Value::from("parliament")),
-            ("manifest_required".into(), Value::from(true)),
-            ("manifest_ready".into(), Value::from(false)),
-        ]);
-        let ready = Map::from_iter([
-            ("lane_id".into(), Value::from(2u64)),
-            ("alias".into(), Value::from("ready")),
-            ("governance".into(), Value::from("parliament")),
-            ("manifest_required".into(), Value::from(true)),
-            ("manifest_ready".into(), Value::from(true)),
-        ]);
-        let filtered = filter_lane_entries(
-            Value::Array(vec![Value::Object(sealed.clone()), Value::Object(ready)]),
-            true,
-        );
-        match &filtered {
-            Value::Array(entries) => {
-                assert_eq!(entries.len(), 1);
-                let map = entries[0].as_object().expect("object");
-                assert_eq!(map.get("alias").and_then(Value::as_str), Some("sealed"));
-            }
-            _ => panic!("expected array"),
-        }
-        let summary = format_lane_summary(&filtered, true);
-        assert!(summary.contains("sealed"));
-        assert!(!summary.contains("ready"));
         assert_eq!(
-            count_sealed(&Value::Array(vec![Value::Object(sealed.clone())])),
-            1
+            format_lane_summary(&value, false),
+            "No canonical lane evidence retained."
         );
         assert_eq!(
-            collect_sealed_aliases(&Value::Array(vec![Value::Object(sealed)])),
-            vec![String::from("sealed")]
+            format_lane_summary(&value, true),
+            "No incomplete canonical lane evidence."
         );
     }
 
     #[test]
-    fn collect_sealed_aliases_returns_empty_on_non_array() {
-        assert!(collect_sealed_aliases(&Value::Null).is_empty());
+    fn incomplete_filter_and_count_fail_closed() {
+        let incomplete = canonical_lane_row(1, true);
+        let complete = canonical_lane_row(2, false);
+        let malformed = Value::Object(Map::new());
+        let all = Value::Array(vec![incomplete, complete, malformed]);
+        let filtered = filter_lane_entries(all.clone(), true);
+        let entries = filtered.as_array().expect("filtered array");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(count_incomplete(&all), 2);
+        assert_eq!(collect_incomplete_lane_ids(&all), vec![1]);
+        assert!(
+            lane_is_incomplete(&Value::Null),
+            "malformed lane evidence must never be reported as complete"
+        );
     }
 
     #[test]

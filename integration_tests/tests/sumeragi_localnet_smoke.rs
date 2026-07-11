@@ -4278,13 +4278,37 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
             .wrap_err("read sumeragi status JSON body")?;
         let payload: Value =
             norito::json::from_slice(&body).wrap_err("parse sumeragi status JSON payload")?;
-        let mode_tag = payload
-            .get("mode_tag")
-            .and_then(Value::as_str)
+        let protocol_version = payload
+            .get("protocol_version")
+            .and_then(Value::as_u64)
             .unwrap_or_default();
         ensure!(
-            !mode_tag.is_empty(),
-            "decoded sumeragi status JSON payload has empty mode_tag"
+            protocol_version == 2,
+            "decoded sumeragi status JSON payload did not advertise protocol v2"
+        );
+        ensure!(
+            payload.get("height_context").is_some_and(Value::is_object),
+            "decoded sumeragi status JSON payload omitted the frozen height context"
+        );
+        ensure!(
+            payload.get("operator").is_some_and(Value::is_object),
+            "decoded sumeragi status JSON payload omitted bounded operator diagnostics"
+        );
+        for lane_field in [
+            "lane_settlement_commitments",
+            "lane_relay_envelopes",
+            "lane_payload_ownerships",
+            "committed_lane_blocks",
+            "lane_block_sessions",
+        ] {
+            ensure!(
+                payload.get(lane_field).is_some_and(Value::is_array),
+                "decoded sumeragi status JSON payload omitted canonical {lane_field} evidence"
+            );
+        }
+        ensure!(
+            payload.get("mode_tag").is_none(),
+            "authoritative v2 JSON unexpectedly exposed the retired legacy mode_tag field"
         );
         network.shutdown().await;
         Ok(())

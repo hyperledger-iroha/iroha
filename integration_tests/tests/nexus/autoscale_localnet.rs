@@ -2109,16 +2109,24 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
                 .filter_map(|lane_id| fetch_lane_validator_snapshot(&client, *lane_id))
                 .into_iter()
                 .collect::<Vec<_>>();
-            let commit_signatures_required = status
-                .sumeragi
-                .as_ref()
-                .map(|sumeragi| sumeragi.commit_signatures_required)
-                .unwrap_or_default();
-            let commit_qc_validator_set_len = status
-                .sumeragi
-                .as_ref()
-                .map(|sumeragi| sumeragi.commit_qc_validator_set_len)
-                .unwrap_or_default();
+            let commit_signatures_required = u64::from(
+                sumeragi_status
+                    .authoritative
+                    .last_commit_qc
+                    .map_or(
+                        sumeragi_status.authoritative.height_context.quorum.min_signers,
+                        |commit| commit.min_signers,
+                    ),
+            );
+            let commit_qc_validator_set_len = u64::from(
+                sumeragi_status
+                    .authoritative
+                    .last_commit_qc
+                    .map_or(
+                        sumeragi_status.authoritative.height_context.validator_count,
+                        |commit| commit.validator_count,
+                    ),
+            );
             Ok(PeerStatusSnapshot {
                 lanes,
                 lane_settlements,

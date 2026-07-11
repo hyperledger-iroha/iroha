@@ -23,6 +23,12 @@ pub mod gar;
 /// Moderation reproducibility manifests, `SoraFS` ballot payloads, and helpers.
 pub mod moderation;
 
+/// Authoritative on-chain moderation commit/reveal policy and records.
+pub mod moderation_ledger;
+
+/// Authoritative orderbook policy and on-chain audit records.
+pub mod orderbook;
+
 /// Pin registry manifest metadata and lifecycle records.
 pub mod pin_registry;
 
@@ -91,6 +97,34 @@ pub mod prelude {
             SoraFsModerationBallotContextV1, SoraFsModerationBallotError,
             SoraFsModerationBallotRevealV1, SoraFsModerationVoteChoice,
             is_canonical_moderation_artifact_path_v1, moderation_model_required_operations_v1,
+        },
+        moderation_ledger::{
+            MODERATION_LEDGER_CASE_VERSION_V1, MODERATION_LEDGER_MAX_CHALLENGES_V1,
+            MODERATION_LEDGER_MAX_EVIDENCE_URI_BYTES_V1, MODERATION_LEDGER_MAX_IDENTIFIER_BYTES_V1,
+            MODERATION_LEDGER_MAX_NONCE_BYTES_V1, MODERATION_LEDGER_MAX_PANEL_SIZE_V1,
+            MODERATION_LEDGER_MAX_PENALTY_POINTS_V1, MODERATION_LEDGER_MAX_REASON_BYTES_V1,
+            MODERATION_LEDGER_MAX_TOTAL_WINDOW_MS_V1, MODERATION_LEDGER_POLICY_DIGEST_DOMAIN_V1,
+            MODERATION_LEDGER_POLICY_VERSION_V1, MODERATION_LEDGER_ROSTER_HASH_DOMAIN_V1,
+            ModerationCaseRecordV1, ModerationCaseSpecError, ModerationCaseSpecV1,
+            ModerationCaseStatusV1, ModerationChallengeDecisionV1, ModerationChallengeKindV1,
+            ModerationChallengeRecordV1, ModerationCommitRecordV1, ModerationLedgerPolicyError,
+            ModerationLedgerPolicyRecord, ModerationLedgerPolicyV1, ModerationLedgerStatusV1,
+            ModerationNoShowKindV1, ModerationNoShowRecordV1, ModerationOutcomeKindV1,
+            ModerationOutcomeRecordV1, ModerationRevealRecordV1, ModerationVoteCountsV1,
+            sorafs_moderation_panel_roster_hash_v1,
+        },
+        orderbook::{
+            ORDERBOOK_ADMISSION_POLICY_DIGEST_DOMAIN_V1, ORDERBOOK_ADMISSION_POLICY_VERSION_V1,
+            ORDERBOOK_MAX_CLOCK_SKEW_SECS_V1, ORDERBOOK_MAX_ORDER_LIFETIME_SECS_V1,
+            ORDERBOOK_MAX_RECEIPT_AGE_SECS_V1, ORDERBOOK_MAX_RECEIPT_BYTES_V1,
+            ORDERBOOK_MAX_RECEIPTS_PER_CHANNEL_V1, ORDERBOOK_QUERY_MAX_ITEMS_V1,
+            ORDERBOOK_SETTLEMENT_ESCROW_ID_DOMAIN_V1, OrderbookAdmissionPolicyRecord,
+            OrderbookAdmissionPolicyV1, OrderbookCancellationRecord, OrderbookLedgerStatusV1,
+            OrderbookOrderPageV1, OrderbookOrderRecord, OrderbookOrderStatusV1,
+            OrderbookOwnerNonceRecord, OrderbookPolicyValidationError,
+            OrderbookSettlementIndexRecord, OrderbookSettlementRangeRecord,
+            OrderbookSettlementReceiptPageV1, OrderbookSettlementReceiptRecord,
+            orderbook_settlement_escrow_id,
         },
         pin_registry::{
             ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,

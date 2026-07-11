@@ -31,7 +31,6 @@ class RegisterPinManifestInstructionTest {
             setOf(
                 "action",
                 "manifest_payload_base64",
-                "chunk_digest_sha3_256_hex",
                 "submitted_epoch",
                 "successor_of_hex",
                 "alias.name",
@@ -52,7 +51,6 @@ class RegisterPinManifestInstructionTest {
         val expected = source.copyOf()
         val instruction = RegisterPinManifestInstruction.builder()
             .setManifestPayload(source)
-            .setChunkDigestSha3Hex("b0".repeat(32))
             .setSubmittedEpoch(1)
             .build()
         source.fill(0)
@@ -84,41 +82,21 @@ class RegisterPinManifestInstructionTest {
     }
 
     @Test
-    fun `builder requires payload chunk digest and epoch`() {
+    fun `builder requires payload and epoch`() {
         assertFailsWith<IllegalStateException> {
             RegisterPinManifestInstruction.builder()
-                .setChunkDigestSha3Hex("b0".repeat(32))
                 .setSubmittedEpoch(1)
                 .build()
         }
         assertFailsWith<IllegalStateException> {
             RegisterPinManifestInstruction.builder()
                 .setManifestPayloadBase64(CANONICAL_MANIFEST_BASE64)
-                .setSubmittedEpoch(1)
-                .build()
-        }
-        assertFailsWith<IllegalStateException> {
-            RegisterPinManifestInstruction.builder()
-                .setManifestPayloadBase64(CANONICAL_MANIFEST_BASE64)
-                .setChunkDigestSha3Hex("b0".repeat(32))
                 .build()
         }
     }
 
     @Test
-    fun `digests require nonzero canonical lowercase 32 byte hex`() {
-        for (digest in listOf(
-            "00".repeat(32),
-            "b0".repeat(31),
-            "b0".repeat(33),
-            "B0".repeat(32),
-            "0x" + "b0".repeat(32),
-            "zz".repeat(32),
-        )) {
-            assertFailsWith<IllegalArgumentException> {
-                RegisterPinManifestInstruction.builder().setChunkDigestSha3Hex(digest)
-            }
-        }
+    fun `successor digest requires nonzero canonical lowercase 32 byte hex`() {
         for (digest in listOf(
             "00".repeat(32),
             "c1".repeat(31),
@@ -175,6 +153,11 @@ class RegisterPinManifestInstructionTest {
         assertFailsWith<IllegalArgumentException> {
             RegisterPinManifestInstruction.fromArguments(legacy)
         }
+        val retiredChunkDigest = baseBuilder().build().arguments.toMutableMap()
+        retiredChunkDigest["chunk_digest_sha3_256_hex"] = "b0".repeat(32)
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.fromArguments(retiredChunkDigest)
+        }
 
         val wrongAction = baseBuilder().build().arguments.toMutableMap()
         wrongAction["action"] = "ApprovePinManifest"
@@ -185,7 +168,6 @@ class RegisterPinManifestInstructionTest {
         for (required in listOf(
             "action",
             "manifest_payload_base64",
-            "chunk_digest_sha3_256_hex",
             "submitted_epoch",
         )) {
             val missing = baseBuilder().build().arguments.toMutableMap()
@@ -207,6 +189,5 @@ class RegisterPinManifestInstructionTest {
     private fun baseBuilder(): RegisterPinManifestInstruction.Builder =
         RegisterPinManifestInstruction.builder()
             .setManifestPayloadBase64(CANONICAL_MANIFEST_BASE64)
-            .setChunkDigestSha3Hex("b0".repeat(32))
             .setSubmittedEpoch(1)
 }

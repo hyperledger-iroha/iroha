@@ -100,14 +100,40 @@ PLIST
     mkdir -p "$root/dist/NoritoBridge.xcframework/$slice/Headers"
     printf 'fake static library for %s\n' "$slice" >"$root/dist/NoritoBridge.xcframework/$slice/libNoritoBridge.a"
     printf 'void norito_%s(void);\n' "$slice" >"$root/dist/NoritoBridge.xcframework/$slice/Headers/NoritoBridge.h"
-    printf 'void connect_%s(void);\n' "$slice" >"$root/dist/NoritoBridge.xcframework/$slice/Headers/connect_norito_bridge.h"
+    printf 'uint32_t connect_norito_bridge_abi_version(void);\n' >"$root/dist/NoritoBridge.xcframework/$slice/Headers/connect_norito_bridge.h"
     printf 'module NoritoBridge {}\n' >"$root/dist/NoritoBridge.xcframework/$slice/Headers/module.modulemap"
   done
+
+  hash_a="$(shasum -a 256 "$root/dist/NoritoBridge.xcframework/ios-arm64/libNoritoBridge.a" | awk '{print $1}')"
+  hash_b="$(shasum -a 256 "$root/dist/NoritoBridge.xcframework/ios-arm64_x86_64-simulator/libNoritoBridge.a" | awk '{print $1}')"
+  hash_c="$(shasum -a 256 "$root/dist/NoritoBridge.xcframework/macos-arm64/libNoritoBridge.a" | awk '{print $1}')"
+  local header_hash
+  header_hash="$(shasum -a 256 "$root/dist/NoritoBridge.xcframework/ios-arm64/Headers/connect_norito_bridge.h" | awk '{print $1}')"
 
   cat >"$root/dist/NoritoBridge.artifacts.json" <<JSON
 {
   "version": "1.0.0",
+  "native_bridge_abi_version": 16,
   "privacy_production_enabled": false,
+  "source_commit": "0000000000000000000000000000000000000000",
+  "source_tree_dirty": false,
+  "source_fingerprint_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "bridge_header_sha256": "$header_hash",
+  "required_symbols": [
+    "connect_norito_bridge_abi_version",
+    "connect_norito_kagemusha_recursive_spend_init",
+    "connect_norito_kagemusha_recursive_spend_append",
+    "connect_norito_kagemusha_recursive_spend_verify",
+    "connect_norito_kagemusha_recursive_spend_redeem",
+    "connect_norito_kagemusha_recursive_spend_topup",
+    "connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result",
+    "connect_norito_kagemusha_recursive_spend_lineage_witness_append_result",
+    "connect_norito_kagemusha_recursive_spend_init_v2",
+    "connect_norito_kagemusha_recursive_spend_topup_v2",
+    "connect_norito_kagemusha_recursive_spend_append_v2",
+    "connect_norito_kagemusha_recursive_spend_verify_v2",
+    "connect_norito_kagemusha_recursive_spend_redeem_v2"
+  ],
   "hashes": {
     "ios-arm64": "$hash_a",
     "ios-arm64_x86_64-simulator": "$hash_b",
@@ -134,7 +160,7 @@ run_expect_pass() {
   local root="$1"
   shift
   local output
-  if ! output="$(bash "$CHECK_SCRIPT" "$root" "$@" 2>&1)"; then
+  if ! output="$(MOBILE_SDK_SKIP_BINARY_INSPECTION=1 bash "$CHECK_SCRIPT" "$root" "$@" 2>&1)"; then
     printf '%s\n' "$output" >&2
     fail "expected validation to pass for $root"
   fi
@@ -145,7 +171,7 @@ run_expect_fail() {
   local expected="$2"
   shift 2
   local output
-  if output="$(bash "$CHECK_SCRIPT" "$root" "$@" 2>&1)"; then
+  if output="$(MOBILE_SDK_SKIP_BINARY_INSPECTION=1 bash "$CHECK_SCRIPT" "$root" "$@" 2>&1)"; then
     printf '%s\n' "$output" >&2
     fail "expected validation to fail for $root"
   fi
@@ -230,6 +256,24 @@ cat >"$missing_hash/dist/NoritoBridge.artifacts.json" <<'JSON'
 }
 JSON
 run_expect_fail "$missing_hash" "NoritoBridge artifact manifest hash for ios-arm64_x86_64-simulator"
+
+hash_mismatch="$TMP_DIR/hash-mismatch"
+make_fixture "$hash_mismatch"
+printf 'tampered\n' >>"$hash_mismatch/dist/NoritoBridge.xcframework/ios-arm64/libNoritoBridge.a"
+run_expect_fail "$hash_mismatch" "NoritoBridge artifact hash mismatch for ios-arm64"
+
+header_mismatch="$TMP_DIR/header-mismatch"
+make_fixture "$header_mismatch"
+printf 'void unexpected(void);\n' >>"$header_mismatch/dist/NoritoBridge.xcframework/ios-arm64_x86_64-simulator/Headers/connect_norito_bridge.h"
+run_expect_fail "$header_mismatch" "NoritoBridge bridge header differs in ios-arm64_x86_64-simulator"
+
+symbol_inventory_mismatch="$TMP_DIR/symbol-inventory-mismatch"
+make_fixture "$symbol_inventory_mismatch"
+sed -i.bak \
+  's/connect_norito_kagemusha_recursive_spend_lineage_witness_append_result/unexpected_symbol/' \
+  "$symbol_inventory_mismatch/dist/NoritoBridge.artifacts.json"
+rm -f "$symbol_inventory_mismatch/dist/NoritoBridge.artifacts.json.bak"
+run_expect_fail "$symbol_inventory_mismatch" "required symbol inventory is missing or non-canonical"
 
 missing_android_publication="$TMP_DIR/missing-android-publication"
 make_fixture "$missing_android_publication"

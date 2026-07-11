@@ -6913,8 +6913,8 @@ fn map_local_fetch_error(err: LocalFetchError) -> napi::Error {
         LocalFetchError::UnknownChunkerHandle(handle) => {
             invalid_arg(format!("unknown chunker handle '{handle}'"))
         }
-        LocalFetchError::IntegrityVerificationDisabled(option) => invalid_arg(format!(
-            "{option} must remain enabled for first-release SoraFS fetch integrity"
+        LocalFetchError::IntegrityVerificationDisabled(field) => invalid_arg(format!(
+            "{field} must remain enabled for first-release SoraFS fetch integrity"
         )),
     }
 }
@@ -11320,20 +11320,14 @@ fn decode_signed_transaction(bytes: &[u8]) -> napi::Result<SignedTransaction> {
 }
 
 #[allow(clippy::too_many_arguments)] // mirrors TransactionBuilder inputs for clarity
-fn assemble_executable_transaction(
-    chain_id: ChainId,
-    authority: AccountId,
-    executable: Executable,
+fn configure_transaction_builder(
+    mut builder: TransactionBuilder,
     metadata: Metadata,
     attachments: Option<ProofAttachmentList>,
     creation_time_ms: Option<i64>,
     ttl_ms: Option<i64>,
     nonce: Option<u32>,
-    secret: &[u8],
-    algorithm: Option<String>,
-) -> napi::Result<JsSignedTransaction> {
-    let mut builder = TransactionBuilder::new(chain_id, authority).with_executable(executable);
-
+) -> napi::Result<TransactionBuilder> {
     if let Some(ms) = creation_time_ms {
         let millis = u64::try_from(ms).map_err(|_| {
             napi::Error::new(
@@ -11364,6 +11358,30 @@ fn assemble_executable_transaction(
     if let Some(attachments) = attachments {
         builder = builder.with_attachments(attachments);
     }
+    Ok(builder)
+}
+
+#[allow(clippy::too_many_arguments)] // mirrors TransactionBuilder inputs for clarity
+fn assemble_executable_transaction(
+    chain_id: ChainId,
+    authority: AccountId,
+    executable: Executable,
+    metadata: Metadata,
+    attachments: Option<ProofAttachmentList>,
+    creation_time_ms: Option<i64>,
+    ttl_ms: Option<i64>,
+    nonce: Option<u32>,
+    secret: &[u8],
+    algorithm: Option<String>,
+) -> napi::Result<JsSignedTransaction> {
+    let builder = configure_transaction_builder(
+        TransactionBuilder::new(chain_id, authority).with_executable(executable),
+        metadata,
+        attachments,
+        creation_time_ms,
+        ttl_ms,
+        nonce,
+    )?;
 
     let algorithm = parse_crypto_algorithm(algorithm.as_deref())?;
     let private_key = PrivateKey::from_bytes(algorithm, secret).map_err(norito_to_napi)?;
@@ -14202,6 +14220,30 @@ pub struct JsSignedTransaction {
     pub hash: Buffer,
 }
 
+/// Canonical transaction payload prepared for an external signer.
+#[napi(object)]
+pub struct JsTransactionPayload {
+    /// Bare adaptive-Norito transaction payload bytes.
+    pub payload_bytes: Buffer,
+    /// Iroha transaction prehash signed by an external signer.
+    pub payload_hash: Buffer,
+}
+
+/// Input accepted by the external-signature transaction finalizer.
+#[napi(object)]
+pub struct JsExternalTransactionSignature {
+    /// Bare adaptive-Norito payload previously returned by the payload builder.
+    pub payload_bytes: Buffer,
+    /// Optional lowercase hexadecimal copy of the expected payload hash.
+    pub payload_hash_hex: Option<String>,
+    /// Raw Ed25519 signature bytes over the Iroha payload prehash.
+    pub signature: Buffer,
+    /// Raw Ed25519 public-key bytes expected to control the authority account.
+    pub public_key: Buffer,
+    /// Optional authority assertion used to detect caller-side transaction mixups.
+    pub authority: Option<String>,
+}
+
 /// Result of building an authority-free private Kaigi transaction entrypoint.
 #[napi(object)]
 pub struct JsPrivateKaigiTransactionEntrypoint {
@@ -14677,6 +14719,233 @@ fn build_private_kaigi_entrypoint_result(
         hash: Buffer::from(hash.as_ref().to_vec()),
         action_hash: Buffer::from(action_hash.as_ref().to_vec()),
     }
+}
+
+const EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES: usize = 1024 * 1024;
+const EXTERNAL_TRANSACTION_METADATA_MAX_BYTES: usize = 64 * 1024;
+const EXTERNAL_TRANSACTION_CHAIN_ID_MAX_BYTES: usize = 1024;
+
+fn validate_external_transaction_chain_id(chain_id: &str) -> napi::Result<()> {
+    if chain_id.is_empty()
+        || chain_id.len() > EXTERNAL_TRANSACTION_CHAIN_ID_MAX_BYTES
+        || chain_id.chars().any(char::is_control)
+    {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "chain id must contain 1..=1024 non-control UTF-8 bytes",
+        ));
+    }
+    Ok(())
+}
+
+fn require_matching_i105_discriminant(
+    expected: u16,
+    account: &str,
+    label: &str,
+) -> napi::Result<()> {
+    let actual = AccountAddress::i105_discriminant(account).map_err(account_address_err)?;
+    if actual != expected {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{label} uses chain discriminant {actual}, expected {expected} from authority"),
+        ));
+    }
+    Ok(())
+}
+
+/// Build the exact transparent asset-transfer payload consumed by an external signer.
+#[napi]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+pub fn build_transfer_asset_payload(
+    chain_id: String,
+    authority: String,
+    source_asset_holding_id: String,
+    quantity: String,
+    destination_account_id: String,
+    metadata_json: Option<String>,
+    creation_time_ms: Option<i64>,
+    ttl_ms: Option<i64>,
+    nonce: Option<u32>,
+) -> napi::Result<JsTransactionPayload> {
+    validate_external_transaction_chain_id(&chain_id)?;
+    if authority.trim() != authority || destination_account_id.trim() != destination_account_id {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "authority and destination account ids must not contain surrounding whitespace",
+        ));
+    }
+    if source_asset_holding_id.trim() != source_asset_holding_id {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "source asset holding id must not contain surrounding whitespace",
+        ));
+    }
+    let authority_discriminant =
+        AccountAddress::i105_discriminant(&authority).map_err(account_address_err)?;
+    require_matching_i105_discriminant(
+        authority_discriminant,
+        &destination_account_id,
+        "destination account",
+    )?;
+    let source_account_literal = source_asset_holding_id.split('#').nth(1).ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            "source asset holding id must include an I105 owner account",
+        )
+    })?;
+    require_matching_i105_discriminant(
+        authority_discriminant,
+        source_account_literal,
+        "source asset owner",
+    )?;
+    if source_account_literal != authority {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "transparent browser transfer requires the source asset owner to equal authority",
+        ));
+    }
+
+    let _chain_guard = ChainDiscriminantGuard::enter(authority_discriminant);
+    let authority = parse_account_id(&authority, "authority account id")?;
+    let authority_signatory = authority.try_signatory().ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            "transparent browser transfer requires a single-key authority",
+        )
+    })?;
+    if authority_signatory
+        .try_algorithm()
+        .map_err(norito_to_napi)?
+        != Algorithm::Ed25519
+    {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "transparent browser transfer supports only Ed25519 authorities",
+        ));
+    }
+    let source = AssetId::parse_literal(&source_asset_holding_id).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid source asset holding id: {err}"),
+        )
+    })?;
+    if source.canonical_literal() != source_asset_holding_id {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "source asset holding id must use its exact canonical literal",
+        ));
+    }
+    let destination = parse_account_id(&destination_account_id, "destination account id")?;
+    let quantity = Numeric::from_str(&quantity).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid transfer quantity: {err}"),
+        )
+    })?;
+    if quantity <= Numeric::zero() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "transfer quantity must be greater than zero",
+        ));
+    }
+    if metadata_json
+        .as_ref()
+        .is_some_and(|metadata| metadata.len() > EXTERNAL_TRANSACTION_METADATA_MAX_BYTES)
+    {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "transaction metadata json exceeds 65536 bytes",
+        ));
+    }
+    let metadata = parse_metadata_payload("transaction", metadata_json)?;
+    let instruction: InstructionBox = Transfer::asset_numeric(source, quantity, destination).into();
+    let builder = configure_transaction_builder(
+        TransactionBuilder::new(ChainId::from(chain_id), authority)
+            .with_instructions([instruction]),
+        metadata,
+        None,
+        creation_time_ms,
+        ttl_ms,
+        nonce,
+    )?;
+    let payload_bytes = builder.encode_payload();
+    if payload_bytes.len() > EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "transaction payload exceeds 1048576 bytes",
+        ));
+    }
+    Ok(JsTransactionPayload {
+        payload_hash: Buffer::from(builder.payload_hash_bytes().to_vec()),
+        payload_bytes: Buffer::from(payload_bytes),
+    })
+}
+
+/// Finalize an externally signed Ed25519 transaction into exact versioned Norito bytes.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn finalize_signed_transaction(
+    input: JsExternalTransactionSignature,
+) -> napi::Result<JsSignedTransaction> {
+    if input.payload_bytes.is_empty()
+        || input.payload_bytes.len() > EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES
+    {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "payloadBytes must contain 1..=1048576 bytes",
+        ));
+    }
+    let builder =
+        TransactionBuilder::decode_payload(input.payload_bytes.as_ref()).map_err(|err| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("invalid canonical transaction payload: {err}"),
+            )
+        })?;
+    let payload_hash = builder.payload_hash_bytes();
+    if let Some(expected) = input.payload_hash_hex {
+        let normalized = expected.strip_prefix("0x").unwrap_or(&expected);
+        let decoded = hex::decode(normalized).map_err(|_| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                "payloadHashHex must be exactly 32 hexadecimal bytes",
+            )
+        })?;
+        if decoded.len() != Hash::LENGTH || decoded.as_slice() != payload_hash {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                "payloadHashHex does not match payloadBytes",
+            ));
+        }
+    }
+    let public_key = PublicKey::from_bytes(Algorithm::Ed25519, input.public_key.as_ref())
+        .map_err(norito_to_napi)?;
+    let signature =
+        iroha_crypto::ed25519_parse_signature(input.signature.as_ref()).map_err(norito_to_napi)?;
+    let tx = builder.build_with_signature(signature);
+    if tx.authority().try_signatory() != Some(&public_key) {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "publicKey does not control the transaction authority",
+        ));
+    }
+    if let Some(authority) = input.authority {
+        let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
+        let expected = parse_account_id(&authority, "asserted authority account id")?;
+        if tx.authority() != &expected {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                "asserted authority does not match payloadBytes",
+            ));
+        }
+    }
+    tx.verify_signature().map_err(norito_to_napi)?;
+    let signed_transaction =
+        <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&tx);
+    Ok(JsSignedTransaction {
+        signed_transaction: Buffer::from(signed_transaction),
+        hash: Buffer::from(tx.hash().as_ref().to_vec()),
+    })
 }
 
 fn encode_private_kaigi_fee_proof(
@@ -15220,7 +15489,8 @@ mod tests {
         to_bytes,
     };
     use sorafs_car::{
-        CarBuildPlan, CarWriter, chunker_registry, fetch_plan::chunk_fetch_specs_to_string,
+        CarBuildPlan, CarWriter, chunker_registry, compute_chunk_plan_digest_sha3,
+        fetch_plan::chunk_fetch_specs_to_string,
     };
     use sorafs_chunker::ChunkProfile;
     use sorafs_manifest::{
@@ -15235,6 +15505,17 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    fn disabled_local_fetch_integrity_checks_are_invalid_arguments() {
+        for field in ["verify_digests", "verify_lengths"] {
+            let error =
+                map_local_fetch_error(LocalFetchError::IntegrityVerificationDisabled(field));
+            assert_eq!(error.status, napi::Status::InvalidArg);
+            assert!(error.reason.contains(field));
+            assert!(error.reason.contains("must remain enabled"));
+        }
+    }
 
     fn assert_subslice_absent(haystack: &[u8], needle: &[u8], context: &str) {
         assert!(
@@ -23527,6 +23808,7 @@ mod tests {
                 plan.chunk_profile,
                 chunker_registry::DEFAULT_MULTIHASH_CODE,
             ))
+            .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
             .content_length(plan.content_length)
             .car_digest(car_stats.car_archive_digest.into())
             .car_size(car_stats.car_size)
@@ -25231,17 +25513,22 @@ mod tests {
         let manifest: Value = json::from_slice(&manifest_bytes)
             .unwrap_or_else(|err| panic!("failed to parse {}: {err}", manifest_path.display()));
         let names = ["ivm_transfer"];
+        let fixtures = manifest
+            .get("fixtures")
+            .and_then(Value::as_array)
+            .expect("norito fixture manifest fixtures array");
 
         for name in names {
-            let fixture = manifest
-                .get("fixtures")
-                .and_then(Value::as_array)
-                .and_then(|fixtures| {
-                    fixtures
-                        .iter()
-                        .find(|fixture| fixture.get("name").and_then(Value::as_str) == Some(name))
-                })
-                .unwrap_or_else(|| panic!("fixture {name} missing from norito fixture manifest"));
+            let matches: Vec<_> = fixtures
+                .iter()
+                .filter(|fixture| fixture.get("name").and_then(Value::as_str) == Some(name))
+                .collect();
+            assert_eq!(
+                matches.len(),
+                1,
+                "fixture {name} must occur exactly once in norito fixture manifest"
+            );
+            let fixture = matches[0];
             let signed_base64 = fixture
                 .get("signed_base64")
                 .and_then(Value::as_str)
@@ -25249,9 +25536,217 @@ mod tests {
             let signed_bytes = BASE64
                 .decode(signed_base64)
                 .unwrap_or_else(|err| panic!("failed to decode {name} signed payload: {err}"));
+            assert_eq!(
+                BASE64.encode(&signed_bytes),
+                signed_base64,
+                "fixture {name} signed_base64 must be canonical"
+            );
             decode_signed_transaction(&signed_bytes)
                 .unwrap_or_else(|err| panic!("failed to decode fixture {name}: {err}"));
         }
+    }
+
+    #[test]
+    fn external_transfer_payload_builder_and_finalizer_match_native_transaction_model() {
+        let authority_key =
+            KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Ed25519).expect("authority key");
+        let destination_key =
+            KeyPair::try_from_seed(vec![0x42; 32], Algorithm::Ed25519).expect("destination key");
+        let authority = AccountId::new(authority_key.public_key().clone());
+        let destination = AccountId::new(destination_key.public_key().clone());
+        let authority_i105 = AccountAddress::from_account_id(&authority)
+            .expect("authority address")
+            .to_i105_for_discriminant(0x02F1)
+            .expect("authority I105");
+        let destination_i105 = AccountAddress::from_account_id(&destination)
+            .expect("destination address")
+            .to_i105_for_discriminant(0x02F1)
+            .expect("destination I105");
+        let definition: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("asset definition address");
+        let source = AssetId::new(definition, authority.clone()).canonical_literal();
+
+        let built = build_transfer_asset_payload(
+            "browser-native-parity".to_owned(),
+            authority_i105.clone(),
+            source,
+            "1.25".to_owned(),
+            destination_i105,
+            Some(r#"{"memo":"native","order":2}"#.to_owned()),
+            Some(1_700_000_000_000),
+            Some(5_000),
+            Some(42),
+        )
+        .expect("build external transfer payload");
+        assert!(!built.payload_bytes.is_empty());
+        assert_eq!(built.payload_hash.len(), Hash::LENGTH);
+
+        let builder = TransactionBuilder::decode_payload(built.payload_bytes.as_ref())
+            .expect("native payload builder must emit canonical bytes");
+        assert_eq!(builder.encode_payload(), built.payload_bytes.as_ref());
+        assert_eq!(
+            builder.payload_hash_bytes().as_slice(),
+            built.payload_hash.as_ref()
+        );
+
+        let signature =
+            Signature::try_new(authority_key.private_key(), built.payload_hash.as_ref())
+                .expect("external payload signature");
+        let (_, public_key_bytes) = authority_key
+            .public_key()
+            .try_to_bytes()
+            .expect("raw Ed25519 public key");
+        let finalized = finalize_signed_transaction(JsExternalTransactionSignature {
+            payload_bytes: Buffer::from(built.payload_bytes.as_ref().to_vec()),
+            payload_hash_hex: Some(hex::encode(built.payload_hash.as_ref())),
+            signature: Buffer::from(signature.payload().to_vec()),
+            public_key: Buffer::from(public_key_bytes.to_vec()),
+            authority: Some(authority_i105),
+        })
+        .expect("finalize externally signed transaction");
+
+        let transaction = decode_signed_transaction(finalized.signed_transaction.as_ref())
+            .expect("finalized versioned transaction must decode");
+        transaction
+            .verify_signature()
+            .expect("finalized transaction signature must verify");
+        assert_eq!(transaction.authority(), &authority);
+        assert_eq!(
+            finalized.signed_transaction.as_ref(),
+            <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(
+                &transaction
+            )
+        );
+        assert_eq!(finalized.hash.as_ref(), transaction.hash().as_ref());
+    }
+
+    #[test]
+    fn external_transfer_builder_and_finalizer_reject_adversarial_inputs() {
+        let authority_key =
+            KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519).expect("authority key");
+        let other_key =
+            KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519).expect("other key");
+        let authority = AccountId::new(authority_key.public_key().clone());
+        let other = AccountId::new(other_key.public_key().clone());
+        let authority_i105 = AccountAddress::from_account_id(&authority)
+            .expect("authority address")
+            .to_i105_for_discriminant(0x02F1)
+            .expect("authority I105");
+        let other_i105 = AccountAddress::from_account_id(&other)
+            .expect("other address")
+            .to_i105_for_discriminant(0x02F1)
+            .expect("other I105");
+        let wrong_network_i105 = AccountAddress::from_account_id(&other)
+            .expect("other address")
+            .to_i105_for_discriminant(42)
+            .expect("other-network I105");
+        let definition: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("asset definition address");
+        let source = AssetId::new(definition.clone(), authority.clone()).canonical_literal();
+        let other_source = AssetId::new(definition, other.clone()).canonical_literal();
+
+        assert!(
+            build_transfer_asset_payload(
+                "browser-native-adversarial".to_owned(),
+                authority_i105.clone(),
+                source.clone(),
+                "1".to_owned(),
+                wrong_network_i105,
+                None,
+                Some(1),
+                None,
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            build_transfer_asset_payload(
+                "browser-native-adversarial".to_owned(),
+                authority_i105.clone(),
+                other_source,
+                "1".to_owned(),
+                other_i105.clone(),
+                None,
+                Some(1),
+                None,
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            build_transfer_asset_payload(
+                "browser-native-adversarial".to_owned(),
+                authority_i105.clone(),
+                source.clone(),
+                "0".to_owned(),
+                other_i105.clone(),
+                None,
+                Some(1),
+                None,
+                None,
+            )
+            .is_err()
+        );
+
+        let built = build_transfer_asset_payload(
+            "browser-native-adversarial".to_owned(),
+            authority_i105.clone(),
+            source,
+            "1".to_owned(),
+            other_i105,
+            None,
+            Some(1),
+            None,
+            None,
+        )
+        .expect("valid adversarial baseline payload");
+        let signature =
+            Signature::try_new(authority_key.private_key(), built.payload_hash.as_ref())
+                .expect("baseline signature");
+        let (_, public_key_bytes) = authority_key
+            .public_key()
+            .try_to_bytes()
+            .expect("authority public key bytes");
+        let (_, other_public_key_bytes) = other_key
+            .public_key()
+            .try_to_bytes()
+            .expect("other public key bytes");
+        let valid_input = || JsExternalTransactionSignature {
+            payload_bytes: Buffer::from(built.payload_bytes.as_ref().to_vec()),
+            payload_hash_hex: Some(hex::encode(built.payload_hash.as_ref())),
+            signature: Buffer::from(signature.payload().to_vec()),
+            public_key: Buffer::from(public_key_bytes.to_vec()),
+            authority: Some(authority_i105.clone()),
+        };
+
+        let mut mismatched_hash = valid_input();
+        mismatched_hash.payload_hash_hex = Some("00".repeat(Hash::LENGTH));
+        assert!(finalize_signed_transaction(mismatched_hash).is_err());
+
+        let mut wrong_public_key = valid_input();
+        wrong_public_key.public_key = Buffer::from(other_public_key_bytes.to_vec());
+        assert!(finalize_signed_transaction(wrong_public_key).is_err());
+
+        let mut bad_signature = valid_input();
+        bad_signature.signature[0] ^= 0x80;
+        assert!(finalize_signed_transaction(bad_signature).is_err());
+
+        let mut overlong_payload = valid_input();
+        let canonical = overlong_payload.payload_bytes.as_ref();
+        assert!(
+            canonical[0] < 0x80,
+            "fixture begins with a one-byte field length"
+        );
+        let mut overlong = Vec::with_capacity(canonical.len() + 1);
+        overlong.extend_from_slice(&[canonical[0] | 0x80, 0]);
+        overlong.extend_from_slice(&canonical[1..]);
+        overlong_payload.payload_bytes = Buffer::from(overlong);
+        overlong_payload.payload_hash_hex = None;
+        assert!(finalize_signed_transaction(overlong_payload).is_err());
+
+        assert!(finalize_signed_transaction(valid_input()).is_ok());
     }
 
     #[test]

@@ -24,7 +24,6 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
               Arrays.asList(
                   "action",
                   "manifest_payload_base64",
-                  "chunk_digest_sha3_256_hex",
                   "submitted_epoch")));
   private static final Set<String> OPTIONAL_ARGUMENTS =
       Collections.unmodifiableSet(
@@ -33,7 +32,6 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
                   "successor_of_hex", "alias.name", "alias.namespace", "alias.proof_hex")));
 
   private final String manifestPayloadBase64;
-  private final String chunkDigestSha3Hex;
   private final long submittedEpoch;
   private final String successorOfHex;
   private final AliasBinding aliasBinding;
@@ -41,7 +39,6 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
 
   private RegisterPinManifestInstruction(final Builder builder) {
     manifestPayloadBase64 = builder.manifestPayloadBase64;
-    chunkDigestSha3Hex = builder.chunkDigestSha3Hex;
     submittedEpoch = builder.submittedEpoch;
     successorOfHex = builder.successorOfHex;
     aliasBinding = builder.aliasBinding;
@@ -55,10 +52,6 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
   /** Returns a fresh copy of the canonical Norito manifest payload. */
   public byte[] manifestPayloadBytes() {
     return Base64.getDecoder().decode(manifestPayloadBase64);
-  }
-
-  public String chunkDigestSha3Hex() {
-    return chunkDigestSha3Hex;
   }
 
   public long submittedEpoch() {
@@ -102,7 +95,6 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
     }
     return builder()
         .setManifestPayloadBase64(require(arguments, "manifest_payload_base64"))
-        .setChunkDigestSha3Hex(require(arguments, "chunk_digest_sha3_256_hex"))
         .setSubmittedEpoch(requireLong(arguments, "submitted_epoch"))
         .setSuccessorOfHex(arguments.get("successor_of_hex"))
         .setAliasBinding(AliasBinding.fromArguments(arguments))
@@ -120,24 +112,17 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
     final RegisterPinManifestInstruction other = (RegisterPinManifestInstruction) obj;
     return submittedEpoch == other.submittedEpoch
         && Objects.equals(manifestPayloadBase64, other.manifestPayloadBase64)
-        && Objects.equals(chunkDigestSha3Hex, other.chunkDigestSha3Hex)
         && Objects.equals(successorOfHex, other.successorOfHex)
         && Objects.equals(aliasBinding, other.aliasBinding);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(
-        manifestPayloadBase64,
-        chunkDigestSha3Hex,
-        submittedEpoch,
-        successorOfHex,
-        aliasBinding);
+    return Objects.hash(manifestPayloadBase64, submittedEpoch, successorOfHex, aliasBinding);
   }
 
   public static final class Builder {
     private String manifestPayloadBase64;
-    private String chunkDigestSha3Hex;
     private Long submittedEpoch;
     private String successorOfHex;
     private AliasBinding aliasBinding;
@@ -157,11 +142,6 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
       }
       this.manifestPayloadBase64 =
           Base64.getEncoder().encodeToString(Arrays.copyOf(manifestPayload, manifestPayload.length));
-      return this;
-    }
-
-    public Builder setChunkDigestSha3Hex(final String chunkDigestSha3Hex) {
-      this.chunkDigestSha3Hex = requireNonzeroDigest(chunkDigestSha3Hex, "chunkDigestSha3Hex");
       return this;
     }
 
@@ -190,9 +170,6 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
       if (manifestPayloadBase64 == null) {
         throw new IllegalStateException("manifestPayload must be set");
       }
-      if (chunkDigestSha3Hex == null) {
-        throw new IllegalStateException("chunkDigestSha3Hex must be set");
-      }
       if (submittedEpoch == null) {
         throw new IllegalStateException("submittedEpoch must be set");
       }
@@ -203,7 +180,6 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
       final Map<String, String> result = new LinkedHashMap<>();
       result.put("action", ACTION);
       result.put("manifest_payload_base64", manifestPayloadBase64);
-      result.put("chunk_digest_sha3_256_hex", chunkDigestSha3Hex);
       result.put("submitted_epoch", Long.toString(submittedEpoch));
       if (successorOfHex != null) {
         result.put("successor_of_hex", successorOfHex);
@@ -245,7 +221,12 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
       target.put("alias.proof_hex", proofHex);
     }
 
-    private static AliasBinding fromArguments(final Map<String, String> arguments) {
+    static AliasBinding fromArguments(final Map<String, String> arguments) {
+      return fromArguments(arguments, false);
+    }
+
+    static AliasBinding fromArguments(
+        final Map<String, String> arguments, final boolean required) {
       int present = 0;
       if (arguments.containsKey("alias.name")) {
         present++;
@@ -257,6 +238,10 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
         present++;
       }
       if (present == 0) {
+        if (required) {
+          throw new IllegalArgumentException(
+              "Alias binding requires alias.name, alias.namespace, and alias.proof_hex");
+        }
         return null;
       }
       if (present != 3) {

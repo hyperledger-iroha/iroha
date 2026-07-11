@@ -126,6 +126,27 @@ public enum KagemushaRecursiveSpendProver {
         return recursiveSpendAvailable ? .recursiveSpendV1 : nil
     }
 
+    /// Selects a mode that represents cash which can be spent again offline.
+    ///
+    /// `preferredMode` retains the cross-SDK proof-surface preference for
+    /// compatibility. Product wallets must use this selector so an
+    /// admission-neutral recursive-compact projection is never presented as
+    /// a spendable balance.
+    public static var preferredSpendableCashMode: KagemushaOfflineSpendMode? {
+        preferredSpendableCashMode(
+            recursiveCompactAvailable: KagemushaRecursiveCompactPaymentTokenProver.isNativeAvailable,
+            recursiveSpendAvailable: isNativeAvailable
+        )
+    }
+
+    public static func preferredSpendableCashMode(
+        recursiveCompactAvailable: Bool,
+        recursiveSpendAvailable: Bool
+    ) -> KagemushaOfflineSpendMode? {
+        _ = recursiveCompactAvailable
+        return recursiveSpendAvailable ? .recursiveSpendV1 : nil
+    }
+
     public static func canRedeemWitnessless(circuitId: String, hopCount: UInt32) -> Bool {
         recursiveSpendLineageTransitionCircuitWiredV1
             && isLineageProofCircuitId(circuitId)

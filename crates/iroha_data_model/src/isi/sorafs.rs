@@ -3,6 +3,11 @@ use crate::sorafs::{
     capacity::{
         CapacityDeclarationRecord, CapacityDisputeRecord, CapacityTelemetryRecord, ProviderId,
     },
+    moderation_ledger::{
+        ModerationCaseSpecV1, ModerationChallengeDecisionV1, ModerationChallengeKindV1,
+        ModerationLedgerPolicyV1,
+    },
+    orderbook::OrderbookAdmissionPolicyV1,
     pin_registry::{ManifestAliasBinding, ManifestDigest, ReplicationOrderId},
     pricing::{PricingScheduleRecord, ProviderCreditRecord},
 };
@@ -195,6 +200,151 @@ isi! {
 
 impl crate::seal::Instruction for UpsertProviderCredit {}
 
+isi! {
+    /// Activate the next governance-controlled SoraFS orderbook policy revision.
+    pub struct SetSorafsOrderbookPolicy {
+        /// Policy revision to validate and activate.
+        pub policy: OrderbookAdmissionPolicyV1,
+    }
+}
+
+impl crate::seal::Instruction for SetSorafsOrderbookPolicy {}
+
+isi! {
+    /// Submit a signed canonical order to the authoritative SoraFS orderbook ledger.
+    pub struct SubmitSorafsOrderbookOrder {
+        /// Exact canonical Norito `sorafs_manifest::orderbook::OrderRequestV1` bytes.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        pub order_payload: Vec<u8>,
+        /// Active governance policy digest expected by the submitter.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub policy_digest: [u8; 32],
+    }
+}
+
+impl crate::seal::Instruction for SubmitSorafsOrderbookOrder {}
+
+isi! {
+    /// Commit a signed owner cancellation to the authoritative SoraFS orderbook ledger.
+    pub struct CancelSorafsOrderbookOrder {
+        /// Exact canonical Norito `sorafs_manifest::orderbook::OrderCancelV1` bytes.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        pub cancel_payload: Vec<u8>,
+        /// Active governance policy digest expected by the submitter.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub policy_digest: [u8; 32],
+    }
+}
+
+impl crate::seal::Instruction for CancelSorafsOrderbookOrder {}
+
+isi! {
+    /// Settle a funded channel lock and record its signed receipt in the authoritative ledger.
+    pub struct RecordSorafsOrderbookSettlementReceipt {
+        /// Exact canonical Norito `sorafs_manifest::orderbook::SettlementReceiptV1` bytes.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        pub receipt_payload: Vec<u8>,
+        /// Active governance policy digest expected by the recorder.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub policy_digest: [u8; 32],
+    }
+}
+
+impl crate::seal::Instruction for RecordSorafsOrderbookSettlementReceipt {}
+
+isi! {
+    /// Activate the next authoritative SoraFS moderation-ledger policy revision.
+    pub struct SetSorafsModerationPolicy {
+        /// Policy revision to validate and activate.
+        pub policy: ModerationLedgerPolicyV1,
+    }
+}
+
+impl crate::seal::Instruction for SetSorafsModerationPolicy {}
+
+isi! {
+    /// Open one authoritative SoraFS moderation case and commit/reveal round.
+    pub struct OpenSorafsModerationCase {
+        /// Immutable case, roster, quorum, deadline, and policy scope.
+        pub spec: ModerationCaseSpecV1,
+    }
+}
+
+impl crate::seal::Instruction for OpenSorafsModerationCase {}
+
+isi! {
+    /// Submit one canonical juror commitment to an authoritative moderation case.
+    pub struct SubmitSorafsModerationCommit {
+        /// Exact canonical Norito `SoraFsModerationBallotCommitV1` bytes.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        pub commit_payload: Vec<u8>,
+    }
+}
+
+impl crate::seal::Instruction for SubmitSorafsModerationCommit {}
+
+isi! {
+    /// Raise one bounded payload-free challenge during a moderation challenge window.
+    pub struct RaiseSorafsModerationChallenge {
+        /// Moderation case identifier.
+        pub case_id: String,
+        /// Ballot round identifier.
+        pub round_id: String,
+        /// Challenge id unique within the case and round.
+        pub challenge_id: String,
+        /// Fixed challenge category.
+        pub kind: ModerationChallengeKindV1,
+        /// Optional canonical juror target.
+        pub target_juror: Option<AccountId>,
+        /// Digest of external evidence; raw evidence is not placed on-chain.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub evidence_digest: [u8; 32],
+        /// Bounded payload-free reason label.
+        pub reason: String,
+    }
+}
+
+impl crate::seal::Instruction for RaiseSorafsModerationChallenge {}
+
+isi! {
+    /// Resolve one pending authoritative moderation challenge.
+    pub struct ResolveSorafsModerationChallenge {
+        /// Moderation case identifier.
+        pub case_id: String,
+        /// Ballot round identifier.
+        pub round_id: String,
+        /// Existing challenge identifier.
+        pub challenge_id: String,
+        /// Governance decision.
+        pub decision: ModerationChallengeDecisionV1,
+    }
+}
+
+impl crate::seal::Instruction for ResolveSorafsModerationChallenge {}
+
+isi! {
+    /// Submit one canonical juror reveal to an authoritative moderation case.
+    pub struct SubmitSorafsModerationReveal {
+        /// Exact canonical Norito `SoraFsModerationBallotRevealV1` bytes.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        pub reveal_payload: Vec<u8>,
+    }
+}
+
+impl crate::seal::Instruction for SubmitSorafsModerationReveal {}
+
+isi! {
+    /// Finalize a closed moderation case and atomically record outcome and no-shows.
+    pub struct FinalizeSorafsModerationCase {
+        /// Moderation case identifier.
+        pub case_id: String,
+        /// Ballot round identifier.
+        pub round_id: String,
+    }
+}
+
+impl crate::seal::Instruction for FinalizeSorafsModerationCase {}
+
 impl RegisterPinManifest {
     /// Create a new `RegisterPinManifest` instruction.
     #[must_use]
@@ -342,6 +492,130 @@ impl UpsertProviderCredit {
     }
 }
 
+impl SetSorafsOrderbookPolicy {
+    /// Construct a policy-activation instruction.
+    #[must_use]
+    pub fn new(policy: OrderbookAdmissionPolicyV1) -> Self {
+        Self { policy }
+    }
+}
+
+impl SubmitSorafsOrderbookOrder {
+    /// Construct a signed order-submission instruction.
+    #[must_use]
+    pub fn new(order_payload: Vec<u8>, policy_digest: [u8; 32]) -> Self {
+        Self {
+            order_payload,
+            policy_digest,
+        }
+    }
+}
+
+impl CancelSorafsOrderbookOrder {
+    /// Construct a signed owner-cancellation instruction.
+    #[must_use]
+    pub fn new(cancel_payload: Vec<u8>, policy_digest: [u8; 32]) -> Self {
+        Self {
+            cancel_payload,
+            policy_digest,
+        }
+    }
+}
+
+impl RecordSorafsOrderbookSettlementReceipt {
+    /// Construct a signed funded-lock settlement and receipt instruction.
+    #[must_use]
+    pub fn new(receipt_payload: Vec<u8>, policy_digest: [u8; 32]) -> Self {
+        Self {
+            receipt_payload,
+            policy_digest,
+        }
+    }
+}
+
+impl SetSorafsModerationPolicy {
+    /// Construct a moderation policy activation instruction.
+    #[must_use]
+    pub fn new(policy: ModerationLedgerPolicyV1) -> Self {
+        Self { policy }
+    }
+}
+
+impl OpenSorafsModerationCase {
+    /// Construct an authoritative case-opening instruction.
+    #[must_use]
+    pub fn new(spec: ModerationCaseSpecV1) -> Self {
+        Self { spec }
+    }
+}
+
+impl SubmitSorafsModerationCommit {
+    /// Construct a canonical commitment submission.
+    #[must_use]
+    pub fn new(commit_payload: Vec<u8>) -> Self {
+        Self { commit_payload }
+    }
+}
+
+impl RaiseSorafsModerationChallenge {
+    /// Construct a payload-free challenge submission.
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn new(
+        case_id: String,
+        round_id: String,
+        challenge_id: String,
+        kind: ModerationChallengeKindV1,
+        target_juror: Option<AccountId>,
+        evidence_digest: [u8; 32],
+        reason: String,
+    ) -> Self {
+        Self {
+            case_id,
+            round_id,
+            challenge_id,
+            kind,
+            target_juror,
+            evidence_digest,
+            reason,
+        }
+    }
+}
+
+impl ResolveSorafsModerationChallenge {
+    /// Construct a challenge-resolution instruction.
+    #[must_use]
+    pub fn new(
+        case_id: String,
+        round_id: String,
+        challenge_id: String,
+        decision: ModerationChallengeDecisionV1,
+    ) -> Self {
+        Self {
+            case_id,
+            round_id,
+            challenge_id,
+            decision,
+        }
+    }
+}
+
+impl SubmitSorafsModerationReveal {
+    /// Construct a canonical reveal submission.
+    #[must_use]
+    pub fn new(reveal_payload: Vec<u8>) -> Self {
+        Self { reveal_payload }
+    }
+}
+
+impl FinalizeSorafsModerationCase {
+    /// Construct a terminal case-finalization instruction.
+    #[must_use]
+    pub fn new(case_id: String, round_id: String) -> Self {
+        Self { case_id, round_id }
+    }
+}
+
 impl RegisterProviderOwner {
     /// Create a new `RegisterProviderOwner` instruction.
     #[must_use]
@@ -461,6 +735,63 @@ impl_sorafs_decode_from_slice!(UpsertProviderCredit {
     record: ProviderCreditRecord,
 });
 
+impl_sorafs_decode_from_slice!(SetSorafsOrderbookPolicy {
+    policy: OrderbookAdmissionPolicyV1,
+});
+
+impl_sorafs_decode_from_slice!(SubmitSorafsOrderbookOrder {
+    order_payload: Vec<u8>,
+    policy_digest: [u8; 32],
+});
+
+impl_sorafs_decode_from_slice!(CancelSorafsOrderbookOrder {
+    cancel_payload: Vec<u8>,
+    policy_digest: [u8; 32],
+});
+
+impl_sorafs_decode_from_slice!(RecordSorafsOrderbookSettlementReceipt {
+    receipt_payload: Vec<u8>,
+    policy_digest: [u8; 32],
+});
+
+impl_sorafs_decode_from_slice!(SetSorafsModerationPolicy {
+    policy: ModerationLedgerPolicyV1,
+});
+
+impl_sorafs_decode_from_slice!(OpenSorafsModerationCase {
+    spec: ModerationCaseSpecV1,
+});
+
+impl_sorafs_decode_from_slice!(SubmitSorafsModerationCommit {
+    commit_payload: Vec<u8>,
+});
+
+impl_sorafs_decode_from_slice!(RaiseSorafsModerationChallenge {
+    case_id: String,
+    round_id: String,
+    challenge_id: String,
+    kind: ModerationChallengeKindV1,
+    target_juror: Option<AccountId>,
+    evidence_digest: [u8; 32],
+    reason: String,
+});
+
+impl_sorafs_decode_from_slice!(ResolveSorafsModerationChallenge {
+    case_id: String,
+    round_id: String,
+    challenge_id: String,
+    decision: ModerationChallengeDecisionV1,
+});
+
+impl_sorafs_decode_from_slice!(SubmitSorafsModerationReveal {
+    reveal_payload: Vec<u8>,
+});
+
+impl_sorafs_decode_from_slice!(FinalizeSorafsModerationCase {
+    case_id: String,
+    round_id: String,
+});
+
 #[cfg(test)]
 mod tests {
     use norito::core::DecodeFromSlice;
@@ -562,6 +893,65 @@ mod tests {
         )
     }
 
+    fn orderbook_policy() -> OrderbookAdmissionPolicyV1 {
+        OrderbookAdmissionPolicyV1 {
+            version: crate::sorafs::orderbook::ORDERBOOK_ADMISSION_POLICY_VERSION_V1,
+            revision: 1,
+            predecessor_policy_digest: None,
+            market_id: [0xA5; 32],
+            paused: false,
+            min_order_gib: 1,
+            max_order_gib: 1_024,
+            price_tick_micro_xor: 10,
+            max_maker_fee_bps: 100,
+            max_taker_fee_bps: 200,
+            max_order_lifetime_secs: 86_400,
+            max_receipt_age_secs: 3_600,
+            max_clock_skew_secs: 30,
+            max_receipt_bytes: 1 << 30,
+            max_receipts_per_channel: 1_024,
+        }
+    }
+
+    fn moderation_policy() -> ModerationLedgerPolicyV1 {
+        ModerationLedgerPolicyV1 {
+            version: crate::sorafs::moderation_ledger::MODERATION_LEDGER_POLICY_VERSION_V1,
+            revision: 1,
+            predecessor_policy_digest: None,
+            max_panel_size: 5,
+            max_total_window_ms: 60_000,
+            max_challenges_per_case: 4,
+            missing_commit_penalty_points: 10,
+            unrevealed_commit_penalty_points: 20,
+        }
+    }
+
+    fn moderation_case_spec() -> ModerationCaseSpecV1 {
+        let jurors = vec![owner()];
+        ModerationCaseSpecV1 {
+            version: crate::sorafs::moderation_ledger::MODERATION_LEDGER_CASE_VERSION_V1,
+            context: crate::sorafs::moderation::SoraFsModerationBallotContextV1 {
+                version: crate::sorafs::moderation::SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
+                case_id: "case-1".to_owned(),
+                evidence_bundle_digest: [0x31; 32],
+                appeal_finance_config_version: "finance-v1".to_owned(),
+                panel_roster_hash:
+                    crate::sorafs::moderation_ledger::sorafs_moderation_panel_roster_hash_v1(
+                        &jurors, 1,
+                    ),
+                policy_reference: "policy-v1".to_owned(),
+                evidence_uri: None,
+            },
+            round_id: "round-1".to_owned(),
+            jurors,
+            quorum: 1,
+            commit_deadline_unix_ms: 2_000,
+            challenge_deadline_unix_ms: 3_000,
+            reveal_deadline_unix_ms: 4_000,
+            policy_digest: moderation_policy().digest().expect("policy digest"),
+        }
+    }
+
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -641,6 +1031,42 @@ mod tests {
             PricingScheduleRecord::launch_default(),
         ));
         assert_slice_roundtrip(UpsertProviderCredit::new(provider_credit()));
+        assert_slice_roundtrip(SetSorafsOrderbookPolicy::new(orderbook_policy()));
+        assert_slice_roundtrip(SubmitSorafsOrderbookOrder::new(
+            vec![0x01, 0x02],
+            [0x51; 32],
+        ));
+        assert_slice_roundtrip(CancelSorafsOrderbookOrder::new(
+            vec![0x03, 0x04],
+            [0x52; 32],
+        ));
+        assert_slice_roundtrip(RecordSorafsOrderbookSettlementReceipt::new(
+            vec![0x05, 0x06],
+            [0x53; 32],
+        ));
+        assert_slice_roundtrip(SetSorafsModerationPolicy::new(moderation_policy()));
+        assert_slice_roundtrip(OpenSorafsModerationCase::new(moderation_case_spec()));
+        assert_slice_roundtrip(SubmitSorafsModerationCommit::new(vec![0x07, 0x08]));
+        assert_slice_roundtrip(RaiseSorafsModerationChallenge::new(
+            "case-1".to_owned(),
+            "round-1".to_owned(),
+            "challenge-1".to_owned(),
+            ModerationChallengeKindV1::EvidenceMismatch,
+            None,
+            [0x61; 32],
+            "evidence mismatch".to_owned(),
+        ));
+        assert_slice_roundtrip(ResolveSorafsModerationChallenge::new(
+            "case-1".to_owned(),
+            "round-1".to_owned(),
+            "challenge-1".to_owned(),
+            ModerationChallengeDecisionV1::Rejected,
+        ));
+        assert_slice_roundtrip(SubmitSorafsModerationReveal::new(vec![0x09, 0x0A]));
+        assert_slice_roundtrip(FinalizeSorafsModerationCase::new(
+            "case-1".to_owned(),
+            "round-1".to_owned(),
+        ));
     }
 
     #[test]
@@ -687,5 +1113,59 @@ mod tests {
             RegisterProviderOwner::new(provider(0x35), owner()),
         );
         assert_registry_decodes(&registry, UnregisterProviderOwner::new(provider(0x35)));
+        assert_registry_decodes(&registry, SetSorafsOrderbookPolicy::new(orderbook_policy()));
+        assert_registry_decodes(
+            &registry,
+            SubmitSorafsOrderbookOrder::new(vec![0x01, 0x02], [0x51; 32]),
+        );
+        assert_registry_decodes(
+            &registry,
+            CancelSorafsOrderbookOrder::new(vec![0x03, 0x04], [0x52; 32]),
+        );
+        assert_registry_decodes(
+            &registry,
+            RecordSorafsOrderbookSettlementReceipt::new(vec![0x05, 0x06], [0x53; 32]),
+        );
+        assert_registry_decodes(
+            &registry,
+            SetSorafsModerationPolicy::new(moderation_policy()),
+        );
+        assert_registry_decodes(
+            &registry,
+            OpenSorafsModerationCase::new(moderation_case_spec()),
+        );
+        assert_registry_decodes(
+            &registry,
+            SubmitSorafsModerationCommit::new(vec![0x07, 0x08]),
+        );
+        assert_registry_decodes(
+            &registry,
+            RaiseSorafsModerationChallenge::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                "challenge-1".to_owned(),
+                ModerationChallengeKindV1::EvidenceMismatch,
+                None,
+                [0x61; 32],
+                "evidence mismatch".to_owned(),
+            ),
+        );
+        assert_registry_decodes(
+            &registry,
+            ResolveSorafsModerationChallenge::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                "challenge-1".to_owned(),
+                ModerationChallengeDecisionV1::Rejected,
+            ),
+        );
+        assert_registry_decodes(
+            &registry,
+            SubmitSorafsModerationReveal::new(vec![0x09, 0x0A]),
+        );
+        assert_registry_decodes(
+            &registry,
+            FinalizeSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned()),
+        );
     }
 }

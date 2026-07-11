@@ -1,8 +1,10 @@
 package org.hyperledger.iroha.sdk.tx.norito
 
+import java.nio.ByteBuffer
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.util.Base64
 import kotlin.io.path.readText
 import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.core.model.Executable
@@ -19,11 +21,16 @@ internal data class TransactionPayloadFixture(
     val nonce: Int?,
     val payload: Map<String, Any?>?,
     val encodedBase64: String?,
+    val payloadHash: String?,
+    val signedBase64: String?,
+    val signedHash: String?,
 ) {
     fun materializePayload(adapter: NoritoJavaCodecAdapter): TransactionPayload {
         payload?.let { return AndroidFixtureSupport.buildPayload(name, it) }
         check(!encodedBase64.isNullOrBlank()) { "$name: fixture missing payload and encoded data" }
-        return adapter.decodeTransaction(java.util.Base64.getDecoder().decode(encodedBase64))
+        return adapter.decodeTransaction(
+            AndroidFixtureSupport.decodeCanonicalBase64(encodedBase64, "$name.encoded"),
+        )
     }
 }
 
@@ -49,9 +56,11 @@ internal object AndroidFixtureSupport {
     fun loadPayloadFixtures(): List<TransactionPayloadFixture> {
         val path = resolveSharedResource("transaction_payloads.json")
         val parsed = JsonParser.parse(path.readText())
-        return asList(parsed, path.toString()).map { entry ->
+        val fixtures = asList(parsed, path.toString()).map { entry ->
             payloadFixtureFromValue(entry)
         }
+        validatePayloadFixtureIdentities(fixtures)
+        return fixtures
     }
 
     fun payloadFixtureFromValue(value: Any?): TransactionPayloadFixture {
@@ -73,6 +82,9 @@ internal object AndroidFixtureSupport {
             nonce = nonce,
             payload = payload,
             encodedBase64 = encodedBase64,
+            payloadHash = optionalString(map["payload_hash"]),
+            signedBase64 = optionalString(map["signed_base64"]),
+            signedHash = optionalString(map["signed_hash"]),
         )
     }
 
@@ -80,7 +92,7 @@ internal object AndroidFixtureSupport {
         val path = resolveSharedResource("transaction_fixtures.manifest.json")
         val parsed = JsonParser.parse(path.readText())
         val manifest = asMap(parsed, path.toString())
-        return asList(manifest["fixtures"], "manifest.fixtures").map { entry ->
+        val fixtures = asList(manifest["fixtures"], "manifest.fixtures").map { entry ->
             val map = asMap(entry, "manifest.fixture")
             val name = requiredString(map["name"], "manifest.fixture.name")
             TransactionManifestFixture(
@@ -98,6 +110,99 @@ internal object AndroidFixtureSupport {
                 signedHash = requiredString(map["signed_hash"], "$name.signed_hash"),
                 signedLen = requiredLong(map["signed_len"], "$name.signed_len"),
             )
+        }
+        validateManifestFixtureIdentities(fixtures)
+        return fixtures
+    }
+
+    internal fun decodeCanonicalBase64(value: String, field: String): ByteArray {
+        val decoded = try {
+            Base64.getDecoder().decode(value)
+        } catch (ex: IllegalArgumentException) {
+            throw IllegalStateException("$field is not valid base64", ex)
+        }
+        check(Base64.getEncoder().encodeToString(decoded) == value) {
+            "$field is not canonical base64"
+        }
+        return decoded
+    }
+
+    internal fun validatePayloadFixtureIdentities(fixtures: List<TransactionPayloadFixture>) {
+        val names = mutableSetOf<String>()
+        val payloadHashes = mutableSetOf<String>()
+        val payloadBytes = mutableSetOf<ByteBuffer>()
+        val signedHashes = mutableSetOf<String>()
+        val signedBytes = mutableSetOf<ByteBuffer>()
+        for (fixture in fixtures) {
+            check(names.add(fixture.name)) { "Duplicate fixture name: ${fixture.name}" }
+            val encoded = checkNotNull(fixture.encodedBase64) {
+                "${fixture.name}: fixture missing encoded payload"
+            }
+            val payloadHash = checkNotNull(fixture.payloadHash) {
+                "${fixture.name}: fixture missing payload_hash"
+            }
+            val signedBase64 = checkNotNull(fixture.signedBase64) {
+                "${fixture.name}: fixture missing signed_base64"
+            }
+            val signedHash = checkNotNull(fixture.signedHash) {
+                "${fixture.name}: fixture missing signed_hash"
+            }
+            check(payloadHashes.add(payloadHash)) { "Duplicate fixture payload_hash: $payloadHash" }
+            check(
+                payloadBytes.add(
+                    ByteBuffer.wrap(decodeCanonicalBase64(encoded, "${fixture.name}.encoded"))
+                        .asReadOnlyBuffer(),
+                ),
+            ) { "Duplicate fixture payload bytes: ${fixture.name}" }
+            check(signedHashes.add(signedHash)) { "Duplicate fixture signed_hash: $signedHash" }
+            check(
+                signedBytes.add(
+                    ByteBuffer.wrap(
+                        decodeCanonicalBase64(signedBase64, "${fixture.name}.signed_base64"),
+                    ).asReadOnlyBuffer(),
+                ),
+            ) { "Duplicate fixture signed bytes: ${fixture.name}" }
+        }
+    }
+
+    internal fun validateManifestFixtureIdentities(fixtures: List<TransactionManifestFixture>) {
+        val names = mutableSetOf<String>()
+        val encodedFiles = mutableSetOf<String>()
+        val payloadHashes = mutableSetOf<String>()
+        val payloadBytes = mutableSetOf<ByteBuffer>()
+        val signedHashes = mutableSetOf<String>()
+        val signedBytes = mutableSetOf<ByteBuffer>()
+        for (fixture in fixtures) {
+            check(names.add(fixture.name)) { "Duplicate fixture name: ${fixture.name}" }
+            check(encodedFiles.add(fixture.encodedFile)) {
+                "Duplicate fixture encoded_file: ${fixture.encodedFile}"
+            }
+            check(payloadHashes.add(fixture.payloadHash)) {
+                "Duplicate fixture payload_hash: ${fixture.payloadHash}"
+            }
+            check(
+                payloadBytes.add(
+                    ByteBuffer.wrap(
+                        decodeCanonicalBase64(
+                            fixture.payloadBase64,
+                            "${fixture.name}.payload_base64",
+                        ),
+                    ).asReadOnlyBuffer(),
+                ),
+            ) { "Duplicate fixture payload bytes: ${fixture.name}" }
+            check(signedHashes.add(fixture.signedHash)) {
+                "Duplicate fixture signed_hash: ${fixture.signedHash}"
+            }
+            check(
+                signedBytes.add(
+                    ByteBuffer.wrap(
+                        decodeCanonicalBase64(
+                            fixture.signedBase64,
+                            "${fixture.name}.signed_base64",
+                        ),
+                    ).asReadOnlyBuffer(),
+                ),
+            ) { "Duplicate fixture signed bytes: ${fixture.name}" }
         }
     }
 
@@ -118,8 +223,9 @@ internal object AndroidFixtureSupport {
         val executableMap = asMap(payload["executable"], "$name.payload.executable")
         val executable = when {
             executableMap.containsKey("Ivm") -> {
-                val bytes = java.util.Base64.getDecoder().decode(
+                val bytes = decodeCanonicalBase64(
                     requiredString(executableMap["Ivm"], "$name.payload.executable.Ivm"),
+                    "$name.payload.executable.Ivm",
                 )
                 Executable.ivm(bytes)
             }
@@ -142,8 +248,11 @@ internal object AndroidFixtureSupport {
                         "$name.payload.executable.Instructions[$index].payload_base64",
                     )
                     val bytes = try {
-                        java.util.Base64.getDecoder().decode(payloadBase64)
-                    } catch (ex: IllegalArgumentException) {
+                        decodeCanonicalBase64(
+                            payloadBase64,
+                            "$name.payload.executable.Instructions[$index].payload_base64",
+                        )
+                    } catch (ex: IllegalStateException) {
                         throw IllegalStateException(
                             "$name: instruction payload_base64 is not valid base64",
                             ex,

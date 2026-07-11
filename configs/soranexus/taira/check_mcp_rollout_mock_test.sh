@@ -165,25 +165,25 @@ elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/status" ]]; then
     content_type="text/plain"
     body='service unavailable'
   elif [[ "$scenario" == "status_build_sha_missing" ]]; then
-    body='{"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}],"sumeragi":{"commit_qc_height":707,"highest_qc_height":707,"locked_qc_height":707,"commit_qc_validator_set_len":4,"tx_queue_depth":1,"tx_queue_saturated":false}}'
+    body='{"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}]}'
   elif [[ "$scenario" == "status_build_sha_too_short" ]]; then
-    body='{"build":{"git_commit_sha":"490dac"},"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}],"sumeragi":{"commit_qc_height":707,"highest_qc_height":707,"locked_qc_height":707,"commit_qc_validator_set_len":4,"tx_queue_depth":1,"tx_queue_saturated":false}}'
+    body='{"build":{"git_commit_sha":"490dac"},"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}]}'
   elif [[ "$scenario" == "status_build_sha_mismatch" ]]; then
-    body='{"build":{"git_commit_sha":"94dcbf7c28"},"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}],"sumeragi":{"commit_qc_height":707,"highest_qc_height":707,"locked_qc_height":707,"commit_qc_validator_set_len":4,"tx_queue_depth":1,"tx_queue_saturated":false}}'
+    body='{"build":{"git_commit_sha":"94dcbf7c28"},"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}]}'
   else
-    body='{"build":{"git_commit_sha":"490dacc287"},"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}],"sumeragi":{"commit_qc_height":707,"highest_qc_height":707,"locked_qc_height":707,"commit_qc_validator_set_len":4,"tx_queue_depth":1,"tx_queue_saturated":false}}'
+    body='{"build":{"git_commit_sha":"490dacc287"},"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}]}'
   fi
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sumeragi/status" ]]; then
-  if [[ "$scenario" == "post_canary_sumeragi_missing_validator_set" ]]; then
-    body='{"commit_qc_height":707,"highest_qc_height":708,"locked_qc_height":708,"view_change_causes":{"last_cause":"missing_qc"},"worker_loop":{"stage":"idle"}}'
-  elif [[ "$scenario" == "sumeragi_highest_qc_behind_commit" ]]; then
-    body='{"commit_qc_height":9532,"highest_qc_height":6544,"locked_qc_height":9532,"commit_qc_validator_set_len":4,"view_change_causes":{"last_cause":null},"worker_loop":{"stage":"idle"}}'
-  elif [[ "$scenario" == "sumeragi_locked_qc_behind_commit" ]]; then
-    body='{"commit_qc_height":9532,"highest_qc_height":9532,"locked_qc_height":6544,"commit_qc_validator_set_len":4,"view_change_causes":{"last_cause":null},"worker_loop":{"stage":"idle"}}'
-  elif [[ "$scenario" == "sumeragi_idle_high_view_missing_qc" ]]; then
-    body='{"commit_qc_height":707,"highest_qc_height":707,"locked_qc_height":707,"commit_qc_validator_set_len":4,"canonical":{"height":708,"phase":"prepare","view":42,"pending_finality":null,"rbc_status":"disabled"},"membership":{"height":708,"view":42},"pending_rbc":{"sessions":0},"view_change_causes":{"last_cause":"missing_qc"},"tx_queue":{"depth":1,"capacity":20000,"saturated_by_age":true,"oldest_queued_age_ms":30000},"worker_loop":{"stage":"idle"}}'
-  else
-    body='{"commit_qc_height":707,"highest_qc_height":708,"locked_qc_height":708,"commit_qc_validator_set_len":4,"canonical":{"height":707,"pending_finality":null,"rbc_status":"disabled"},"membership":{"height":707},"pending_rbc":{"sessions":0,"entries":[]},"view_change_causes":{"last_cause":"missing_qc"},"worker_loop":{"stage":"idle"}}'
+  body='{"protocol_version":2,"node_fingerprint":"hash:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","build_fingerprint":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB","config_fingerprint":"hash:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC","height_context_id":["hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"],"height":708,"view":0,"phase":{"phase":"prepare","details":null},"leader":0,"body_state":{"state":"missing","details":null},"last_committed_height":707,"last_committed_subject":{"block_hash":"hash:EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE","payload_hash":"hash:FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"},"height_context":{"epoch":1,"epoch_end_height":720,"mode":{"mode":"permissioned","details":null},"epoch_seed":"0000000000000000000000000000000000000000000000000000000000000000","validator_count":4,"quorum":{"min_signers":3,"total_power":4}},"last_commit_qc":{"certificate":{"round":{"height":707,"view":0},"phase":{"phase":"commit","details":null},"subject":{"block_hash":"hash:EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE","payload_hash":"hash:FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"}},"validator_count":4,"signer_count":3,"min_signers":3,"signed_power":3,"total_power":4},"lane_settlement_commitments":[],"lane_relay_envelopes":[],"lane_payload_ownerships":[],"committed_lane_blocks":[],"lane_block_sessions":[],"local_peer_removed":false,"operator":{"view_change_install_total":2,"busy_deferral_total":0,"adapter_queues":{"ingress_keys":0,"ingress_capacity":64,"deferred_completion":0,"deferred_progress":0,"deferred_progress_capacity":64,"deferred_normal":0,"deferred_normal_capacity":64},"tx_queue":{"tracked_transactions":1,"queued_transactions":1,"capacity":100,"retained_bytes":128,"max_retained_bytes":8192,"oldest_queued_age_ms":5,"saturated_by_count":false,"saturated_by_bytes":false,"saturated_by_age":false}}}'
+  if [[ $after_ping -eq 1 && "$scenario" == "sumeragi_highest_qc_behind_commit" ]]; then
+    body="${body/\"height\":707,\"view\":0/\"height\":6544,\"view\":0}"
+  elif [[ $after_ping -eq 1 && "$scenario" == "sumeragi_locked_qc_behind_commit" ]]; then
+    body="${body/\"signed_power\":3/\"signed_power\":2}"
+  elif [[ $after_ping -eq 1 && "$scenario" == "sumeragi_idle_high_view_missing_qc" ]]; then
+    body="${body/\"last_commit_qc\"/\"invalid_commit_qc\"}"
+    body="${body/\"view\":0,\"phase\"/\"view\":42,\"phase\"}"
+  elif [[ $after_ping -eq 1 && "$scenario" == "post_canary_sumeragi_missing_validator_set" ]]; then
+    body="${body/\"validator_count\":4/\"validator_count\":0}"
   fi
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sccp/capabilities" ]]; then
   body='{}'
@@ -240,7 +240,7 @@ if [[ "$*" == *"ledger transaction ping"* ]]; then
         echo "ping failed while public ingress was degrading"
         exit 1
         ;;
-      post_canary_sumeragi_missing_validator_set)
+      sumeragi_highest_qc_behind_commit|sumeragi_locked_qc_behind_commit|sumeragi_idle_high_view_missing_qc|post_canary_sumeragi_missing_validator_set)
         echo "pong"
         exit 0
         ;;
@@ -327,8 +327,8 @@ run_case() {
   fi
 }
 
-run_case txn_expired 'write canary failed: transaction expired' '"highest_qc_height": 708'
-run_case permission_403 'write canary failed: signer or permission check returned 403' '"commit_qc_height": 707'
+run_case txn_expired 'write canary failed: transaction expired' '"commit_qc_height": 707'
+run_case permission_403 'write canary failed: signer or permission check returned 403' '"blocks": 707'
 run_case public_502 'public Torii ingress looks degraded' 'HTTP 502'
 run_case public_503 'public Torii ingress looks degraded' 'HTTP 503'
 run_case public_503_mcp 'public MCP ingress looks degraded' 'HTTP 503'
@@ -336,10 +336,10 @@ run_case initialized_timeout 'initialized notification failed with HTTP curl_err
 run_case status_build_sha_missing '/status did not publish build.git_commit_sha' '' '490dacc'
 run_case status_build_sha_too_short '/status build git SHA 490dac is not a 7 to 40 character hexadecimal SHA prefix' '' '490dacc'
 run_case status_build_sha_mismatch '/status build git SHA 94dcbf7c28 does not match expected 490dacc' '' '490dacc'
-run_case sumeragi_highest_qc_behind_commit '/v1/sumeragi/status highest QC height 6544 is behind commit QC height 9532'
-run_case sumeragi_locked_qc_behind_commit '/v1/sumeragi/status locked QC height 6544 is behind commit QC height 9532'
-run_case sumeragi_idle_high_view_missing_qc '/v1/sumeragi/status reports a finality fault'
-run_case post_canary_sumeragi_missing_validator_set '/v1/sumeragi/status still did not publish a healthy commit QC snapshot after the signed write canary' 'reported an empty commit validator set'
+run_case sumeragi_highest_qc_behind_commit 'durable CommitQC height does not match last_committed_height'
+run_case sumeragi_locked_qc_behind_commit 'durable CommitQC does not satisfy its frozen dual quorum'
+run_case sumeragi_idle_high_view_missing_qc 'v2 status omitted required last_commit_qc object'
+run_case post_canary_sumeragi_missing_validator_set '/v1/sumeragi/status still did not publish a healthy commit QC snapshot after the signed write canary' 'reported invalid height_context.validator_count: 0'
 
 root="$(mktemp -d)"
 cleanup_paths+=("$root")

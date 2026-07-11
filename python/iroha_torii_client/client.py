@@ -11,6 +11,8 @@ The API mirrors the app-facing endpoints exposed by Torii:
 * `/v1/zk/prover/reports` for querying background prover results.
 * `/v1/telemetry/peers-info` for peer telemetry snapshots (connectivity,
   config, and connected peers).
+* `/v1/sumeragi/status` for fail-closed authoritative protocol-v2 consensus
+  and canonical lane evidence.
 
 Example
 -------
@@ -394,6 +396,16 @@ __all__ = [
     "StatusPayload",
     "SumeragiConsensusCaps",
     "StatusSnapshot",
+    "SumeragiV2Round",
+    "SumeragiV2BlockSubject",
+    "SumeragiV2QcReference",
+    "SumeragiV2TimeoutReference",
+    "SumeragiV2HeightContextStatus",
+    "SumeragiV2CommitQcStatus",
+    "SumeragiV2AdapterQueueStatus",
+    "SumeragiV2TxQueueStatus",
+    "SumeragiV2OperatorStatus",
+    "SumeragiV2Status",
     "PipelinePreflightSumeragi",
     "PipelinePreflightAdmission",
     "PipelinePreflightBlock",
@@ -3792,6 +3804,145 @@ class StatusSnapshot:
 
 
 @dataclass(frozen=True)
+class SumeragiV2Round:
+    """Consensus round bound to one frozen v2 height context."""
+
+    context_id: Tuple[str]
+    height: int
+    view: int
+
+
+@dataclass(frozen=True)
+class SumeragiV2BlockSubject:
+    """Exact block and payload identity certified by Sumeragi v2."""
+
+    parent_block_hash: Optional[str]
+    block_hash: str
+    payload_hash: str
+
+
+@dataclass(frozen=True)
+class SumeragiV2QcReference:
+    """Stable semantic reference to a v2 quorum certificate."""
+
+    round: SumeragiV2Round
+    phase: str
+    subject: SumeragiV2BlockSubject
+
+
+@dataclass(frozen=True)
+class SumeragiV2TimeoutReference:
+    """Stable reference to the latest installed timeout certificate."""
+
+    round: SumeragiV2Round
+    highest_prepare_qc: Optional[SumeragiV2QcReference]
+    certificate_hash: str
+
+
+@dataclass(frozen=True)
+class SumeragiV2HeightContextStatus:
+    """Frozen election and dual-quorum inputs governing one height."""
+
+    epoch: int
+    epoch_end_height: int
+    mode: str
+    epoch_seed: str
+    validator_count: int
+    min_signers: int
+    total_power: int
+
+
+@dataclass(frozen=True)
+class SumeragiV2CommitQcStatus:
+    """Latest durable CommitQC with exact count and voting-power totals."""
+
+    certificate: SumeragiV2QcReference
+    validator_count: int
+    signer_count: int
+    min_signers: int
+    signed_power: int
+    total_power: int
+
+
+@dataclass(frozen=True)
+class SumeragiV2AdapterQueueStatus:
+    """Bounded v2 reducer-adapter queue occupancy."""
+
+    ingress_keys: int
+    ingress_capacity: int
+    deferred_completion: int
+    deferred_progress: int
+    deferred_progress_capacity: int
+    deferred_normal: int
+    deferred_normal_capacity: int
+
+
+@dataclass(frozen=True)
+class SumeragiV2TxQueueStatus:
+    """Exact transaction-queue pressure sampled by the v2 runner."""
+
+    tracked_transactions: int
+    queued_transactions: int
+    capacity: int
+    retained_bytes: int
+    max_retained_bytes: int
+    oldest_queued_age_ms: int
+    saturated_by_count: bool
+    saturated_by_bytes: bool
+    saturated_by_age: bool
+
+
+@dataclass(frozen=True)
+class SumeragiV2OperatorStatus:
+    """Local diagnostics kept outside reducer-authoritative consensus state."""
+
+    view_change_install_total: int
+    busy_deferral_total: int
+    adapter_queues: SumeragiV2AdapterQueueStatus
+    tx_queue: SumeragiV2TxQueueStatus
+
+
+@dataclass(frozen=True)
+class SumeragiV2Status:
+    """Validated flattened JSON response from ``GET /v1/sumeragi/status``."""
+
+    protocol_version: int
+    node_fingerprint: str
+    build_fingerprint: str
+    config_fingerprint: str
+    height_context_id: Tuple[str]
+    height: int
+    view: int
+    phase: str
+    leader: int
+    locked_prepare_qc: Optional[SumeragiV2QcReference]
+    highest_prepare_qc: Optional[SumeragiV2QcReference]
+    last_timeout_certificate: Optional[SumeragiV2TimeoutReference]
+    body_state: str
+    pending_persistence_id: Optional[int]
+    last_committed_height: int
+    last_committed_subject: Optional[SumeragiV2BlockSubject]
+    height_context: SumeragiV2HeightContextStatus
+    last_commit_qc: Optional[SumeragiV2CommitQcStatus]
+    lane_settlement_commitments: List[Dict[str, Any]]
+    lane_relay_envelopes: List[Dict[str, Any]]
+    lane_payload_ownerships: List[Dict[str, Any]]
+    committed_lane_blocks: List[Dict[str, Any]]
+    lane_block_sessions: List[Dict[str, Any]]
+    local_peer_removed: bool
+    operator: SumeragiV2OperatorStatus
+
+    @classmethod
+    def from_payload(cls, payload: Any) -> "SumeragiV2Status":
+        """Validate and decode the authoritative flattened v2 JSON response."""
+
+        parsed = _SumeragiV2StatusParser.parse(payload)
+        if not isinstance(parsed, cls):
+            raise RuntimeError("sumeragi status parser returned an unexpected type")
+        return parsed
+
+
+@dataclass(frozen=True)
 class PipelinePreflightSumeragi:
     """Consensus timing limits used by pipeline liveness helpers."""
 
@@ -3879,6 +4030,834 @@ class PipelinePreflight:
         """Classify status liveness using the preflight stall threshold."""
 
         return status.is_queue_stalled(self.sumeragi.stall_threshold_ms)
+
+
+class _SumeragiV2StatusParser:
+    """Fail-closed parser for the flattened authoritative v2 JSON projection."""
+
+    MAX_VALIDATORS = 128
+    MAX_U32 = (1 << 32) - 1
+    MAX_U128 = (1 << 128) - 1
+
+    @classmethod
+    def parse(cls, payload: Any) -> SumeragiV2Status:
+        record = cls._mapping(payload, "sumeragi status")
+        allowed_fields = {
+            "protocol_version",
+            "node_fingerprint",
+            "build_fingerprint",
+            "config_fingerprint",
+            "height_context_id",
+            "height",
+            "view",
+            "phase",
+            "leader",
+            "locked_prepare_qc",
+            "highest_prepare_qc",
+            "last_timeout_certificate",
+            "body_state",
+            "pending_persistence_id",
+            "last_committed_height",
+            "last_committed_subject",
+            "height_context",
+            "last_commit_qc",
+            "lane_settlement_commitments",
+            "lane_relay_envelopes",
+            "lane_payload_ownerships",
+            "committed_lane_blocks",
+            "lane_block_sessions",
+            "local_peer_removed",
+            "operator",
+        }
+        unknown_fields = set(record) - allowed_fields
+        if unknown_fields:
+            unknown = sorted(unknown_fields)[0]
+            raise RuntimeError(f"sumeragi status contains unknown field {unknown}")
+        protocol_version = cls._unsigned(
+            record.get("protocol_version"),
+            "sumeragi.protocol_version",
+            maximum=0xFFFF,
+        )
+        if protocol_version != 2:
+            raise RuntimeError("sumeragi.protocol_version must equal 2")
+
+        height = cls._unsigned(record.get("height"), "sumeragi.height")
+        view = cls._unsigned(record.get("view"), "sumeragi.view")
+        leader = cls._unsigned(
+            record.get("leader"), "sumeragi.leader", maximum=cls.MAX_U32
+        )
+        height_context = cls._height_context(
+            record.get("height_context"), context="sumeragi.height_context"
+        )
+        if height_context.epoch_end_height < height:
+            raise RuntimeError(
+                "sumeragi.height_context.epoch_end_height must cover height"
+            )
+        if leader >= height_context.validator_count:
+            raise RuntimeError(
+                "sumeragi.leader must index the frozen validator roster"
+            )
+
+        last_committed_height = cls._unsigned(
+            record.get("last_committed_height"),
+            "sumeragi.last_committed_height",
+        )
+        if last_committed_height > height:
+            raise RuntimeError(
+                "sumeragi.last_committed_height must not exceed height"
+            )
+        last_subject_value = record.get("last_committed_subject")
+        last_subject = (
+            None
+            if last_subject_value is None
+            else cls._subject(
+                last_subject_value, context="sumeragi.last_committed_subject"
+            )
+        )
+        last_commit_value = record.get("last_commit_qc")
+        last_commit = (
+            None
+            if last_commit_value is None
+            else cls._commit_qc(last_commit_value, context="sumeragi.last_commit_qc")
+        )
+        if last_committed_height == 0:
+            if last_subject is not None or last_commit is not None:
+                raise RuntimeError(
+                    "sumeragi committed subject and QC must be absent at height zero"
+                )
+        else:
+            if last_subject is None or last_commit is None:
+                raise RuntimeError(
+                    "sumeragi committed subject and QC are required after height zero"
+                )
+            if (
+                last_commit.certificate.phase != "commit"
+                or last_commit.certificate.round.height != last_committed_height
+                or last_commit.certificate.subject != last_subject
+            ):
+                raise RuntimeError(
+                    "sumeragi.last_commit_qc does not certify the committed subject"
+                )
+
+        return SumeragiV2Status(
+            protocol_version=protocol_version,
+            node_fingerprint=cls._hash(
+                record.get("node_fingerprint"), "sumeragi.node_fingerprint"
+            ),
+            build_fingerprint=cls._hash(
+                record.get("build_fingerprint"), "sumeragi.build_fingerprint"
+            ),
+            config_fingerprint=cls._hash(
+                record.get("config_fingerprint"), "sumeragi.config_fingerprint"
+            ),
+            height_context_id=cls._context_id(
+                record.get("height_context_id"), "sumeragi.height_context_id"
+            ),
+            height=height,
+            view=view,
+            phase=cls._tagged(
+                record.get("phase"),
+                tag="phase",
+                allowed={
+                    "awaiting_proposal",
+                    "reconstructing_payload",
+                    "validating_payload",
+                    "prepare",
+                    "commit",
+                    "pending_apply",
+                },
+                context="sumeragi.phase",
+            ),
+            leader=leader,
+            locked_prepare_qc=cls._optional_qc(
+                record.get("locked_prepare_qc"),
+                context="sumeragi.locked_prepare_qc",
+            ),
+            highest_prepare_qc=cls._optional_qc(
+                record.get("highest_prepare_qc"),
+                context="sumeragi.highest_prepare_qc",
+            ),
+            last_timeout_certificate=cls._optional_timeout(
+                record.get("last_timeout_certificate"),
+                context="sumeragi.last_timeout_certificate",
+            ),
+            body_state=cls._tagged(
+                record.get("body_state"),
+                tag="state",
+                allowed={
+                    "missing",
+                    "reconstructing",
+                    "stored",
+                    "validated",
+                    "pending_apply",
+                    "applied",
+                },
+                context="sumeragi.body_state",
+            ),
+            pending_persistence_id=cls._optional_unsigned(
+                record.get("pending_persistence_id"),
+                "sumeragi.pending_persistence_id",
+            ),
+            last_committed_height=last_committed_height,
+            last_committed_subject=last_subject,
+            height_context=height_context,
+            last_commit_qc=last_commit,
+            lane_settlement_commitments=cls._settlements(
+                record.get("lane_settlement_commitments")
+            ),
+            lane_relay_envelopes=cls._relays(record.get("lane_relay_envelopes")),
+            lane_payload_ownerships=cls._ownerships(
+                record.get("lane_payload_ownerships")
+            ),
+            committed_lane_blocks=cls._committed_blocks(
+                record.get("committed_lane_blocks")
+            ),
+            lane_block_sessions=cls._sessions(record.get("lane_block_sessions")),
+            local_peer_removed=cls._boolean(
+                record.get("local_peer_removed"), "sumeragi.local_peer_removed"
+            ),
+            operator=cls._operator(record.get("operator"), context="sumeragi.operator"),
+        )
+
+    @staticmethod
+    def _mapping(value: Any, context: str) -> Mapping[str, Any]:
+        if not isinstance(value, Mapping):
+            raise RuntimeError(f"{context} must be a JSON object")
+        return value
+
+    @staticmethod
+    def _array(value: Any, context: str) -> List[Any]:
+        if not isinstance(value, list):
+            raise RuntimeError(f"{context} must be an array")
+        return value
+
+    @staticmethod
+    def _clone_mapping(value: Any, context: str) -> Dict[str, Any]:
+        record = _SumeragiV2StatusParser._mapping(value, context)
+        try:
+            cloned = json.loads(json.dumps(record))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"{context} must be JSON-serialisable") from exc
+        if not isinstance(cloned, dict):
+            raise RuntimeError(f"{context} must be a JSON object")
+        return cloned
+
+    @classmethod
+    def _unsigned(
+        cls,
+        value: Any,
+        context: str,
+        *,
+        positive: bool = False,
+        maximum: Optional[int] = None,
+    ) -> int:
+        if isinstance(value, bool):
+            raise RuntimeError(f"{context} must be an integer")
+        if isinstance(value, int):
+            number = value
+        elif isinstance(value, str) and re.fullmatch(r"[0-9]+", value):
+            number = int(value, 10)
+        else:
+            raise RuntimeError(f"{context} must be an integer")
+        if number < 0 or (positive and number == 0):
+            qualifier = "positive" if positive else "non-negative"
+            raise RuntimeError(f"{context} must be {qualifier}")
+        if maximum is not None and number > maximum:
+            raise RuntimeError(f"{context} exceeds its protocol bound")
+        return number
+
+    @classmethod
+    def _optional_unsigned(cls, value: Any, context: str) -> Optional[int]:
+        if value is None:
+            return None
+        return cls._unsigned(value, context)
+
+    @staticmethod
+    def _boolean(value: Any, context: str) -> bool:
+        if not isinstance(value, bool):
+            raise RuntimeError(f"{context} must be a boolean")
+        return value
+
+    @classmethod
+    def _decimal_u128(cls, value: Any, context: str) -> str:
+        number = cls._unsigned(value, context, maximum=cls.MAX_U128)
+        return str(number)
+
+    @staticmethod
+    def _crc16(tag: str, body: str) -> int:
+        crc = 0xFFFF
+        for byte in f"{tag}:{body}".encode("ascii"):
+            crc ^= byte << 8
+            for _ in range(8):
+                crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+        return crc
+
+    @classmethod
+    def _hash(cls, value: Any, context: str) -> str:
+        if not isinstance(value, str):
+            raise RuntimeError(f"{context} must be a canonical hash literal")
+        match = re.fullmatch(r"hash:([0-9A-F]{64})#([0-9A-F]{4})", value)
+        if match is None:
+            raise RuntimeError(f"{context} must be a canonical hash literal")
+        body, checksum = match.groups()
+        if cls._crc16("hash", body) != int(checksum, 16):
+            raise RuntimeError(f"{context} has an invalid hash checksum")
+        if bytes.fromhex(body)[-1] & 1 == 0:
+            raise RuntimeError(f"{context} has an invalid Iroha hash marker bit")
+        return value
+
+    @classmethod
+    def _nonzero_hash(cls, value: Any, context: str) -> str:
+        literal = cls._hash(value, context)
+        body = literal[5:69]
+        if int(body, 16) == 0:
+            raise RuntimeError(f"{context} must not be the zero hash")
+        return literal
+
+    @classmethod
+    def _byte32(cls, value: Any, context: str) -> str:
+        if isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{64}", value):
+            return value.lower()
+        raise RuntimeError(f"{context} must contain exactly 32 bytes")
+
+    @classmethod
+    def _context_id(cls, value: Any, context: str) -> Tuple[str]:
+        items = cls._array(value, context)
+        if len(items) != 1:
+            raise RuntimeError(f"{context} must be a one-element hash tuple")
+        return (cls._hash(items[0], f"{context}[0]"),)
+
+    @classmethod
+    def _tagged(
+        cls, value: Any, *, tag: str, allowed: set[str], context: str
+    ) -> str:
+        return cls._tagged_content(
+            value,
+            tag=tag,
+            content="details",
+            allowed=allowed,
+            context=context,
+        )
+
+    @classmethod
+    def _tagged_content(
+        cls,
+        value: Any,
+        *,
+        tag: str,
+        content: str,
+        allowed: set[str],
+        context: str,
+    ) -> str:
+        record = cls._mapping(value, context)
+        if set(record) - {tag, content}:
+            raise RuntimeError(f"{context} contains an unknown tagged-enum field")
+        variant = record.get(tag)
+        if not isinstance(variant, str) or variant not in allowed:
+            raise RuntimeError(f"{context}.{tag} is not a supported v2 variant")
+        if content not in record or record.get(content) is not None:
+            raise RuntimeError(f"{context}.{content} must be explicitly null")
+        return variant
+
+    @classmethod
+    def _round(cls, value: Any, *, context: str) -> SumeragiV2Round:
+        record = cls._mapping(value, context)
+        return SumeragiV2Round(
+            context_id=cls._context_id(record.get("context_id"), f"{context}.context_id"),
+            height=cls._unsigned(record.get("height"), f"{context}.height"),
+            view=cls._unsigned(record.get("view"), f"{context}.view"),
+        )
+
+    @classmethod
+    def _subject(cls, value: Any, *, context: str) -> SumeragiV2BlockSubject:
+        record = cls._mapping(value, context)
+        parent_value = record.get("parent_block_hash")
+        return SumeragiV2BlockSubject(
+            parent_block_hash=(
+                None
+                if parent_value is None
+                else cls._hash(parent_value, f"{context}.parent_block_hash")
+            ),
+            block_hash=cls._hash(record.get("block_hash"), f"{context}.block_hash"),
+            payload_hash=cls._hash(
+                record.get("payload_hash"), f"{context}.payload_hash"
+            ),
+        )
+
+    @classmethod
+    def _qc(cls, value: Any, *, context: str) -> SumeragiV2QcReference:
+        record = cls._mapping(value, context)
+        return SumeragiV2QcReference(
+            round=cls._round(record.get("round"), context=f"{context}.round"),
+            phase=cls._tagged(
+                record.get("phase"),
+                tag="phase",
+                allowed={"prepare", "commit"},
+                context=f"{context}.phase",
+            ),
+            subject=cls._subject(record.get("subject"), context=f"{context}.subject"),
+        )
+
+    @classmethod
+    def _optional_qc(
+        cls, value: Any, *, context: str
+    ) -> Optional[SumeragiV2QcReference]:
+        return None if value is None else cls._qc(value, context=context)
+
+    @classmethod
+    def _optional_timeout(
+        cls, value: Any, *, context: str
+    ) -> Optional[SumeragiV2TimeoutReference]:
+        if value is None:
+            return None
+        record = cls._mapping(value, context)
+        return SumeragiV2TimeoutReference(
+            round=cls._round(record.get("round"), context=f"{context}.round"),
+            highest_prepare_qc=cls._optional_qc(
+                record.get("highest_prepare_qc"),
+                context=f"{context}.highest_prepare_qc",
+            ),
+            certificate_hash=cls._hash(
+                record.get("certificate_hash"), f"{context}.certificate_hash"
+            ),
+        )
+
+    @classmethod
+    def _height_context(
+        cls, value: Any, *, context: str
+    ) -> SumeragiV2HeightContextStatus:
+        record = cls._mapping(value, context)
+        validator_count = cls._unsigned(
+            record.get("validator_count"),
+            f"{context}.validator_count",
+            positive=True,
+            maximum=cls.MAX_VALIDATORS,
+        )
+        quorum = cls._mapping(record.get("quorum"), f"{context}.quorum")
+        min_signers = cls._unsigned(
+            quorum.get("min_signers"),
+            f"{context}.quorum.min_signers",
+            positive=True,
+            maximum=cls.MAX_VALIDATORS,
+        )
+        total_power = cls._unsigned(
+            quorum.get("total_power"),
+            f"{context}.quorum.total_power",
+            positive=True,
+        )
+        expected_min = validator_count * 2 // 3 + 1
+        if min_signers != expected_min or total_power < validator_count:
+            raise RuntimeError(
+                f"{context}.quorum is not canonical for validator_count"
+            )
+        mode = cls._tagged(
+            record.get("mode"),
+            tag="mode",
+            allowed={"permissioned", "npos"},
+            context=f"{context}.mode",
+        )
+        if mode == "permissioned" and total_power != validator_count:
+            raise RuntimeError(
+                f"{context}.quorum.total_power must equal validator_count in permissioned mode"
+            )
+        return SumeragiV2HeightContextStatus(
+            epoch=cls._unsigned(record.get("epoch"), f"{context}.epoch"),
+            epoch_end_height=cls._unsigned(
+                record.get("epoch_end_height"), f"{context}.epoch_end_height"
+            ),
+            mode=mode,
+            epoch_seed=cls._byte32(record.get("epoch_seed"), f"{context}.epoch_seed"),
+            validator_count=validator_count,
+            min_signers=min_signers,
+            total_power=total_power,
+        )
+
+    @classmethod
+    def _commit_qc(cls, value: Any, *, context: str) -> SumeragiV2CommitQcStatus:
+        record = cls._mapping(value, context)
+        validator_count = cls._unsigned(
+            record.get("validator_count"),
+            f"{context}.validator_count",
+            positive=True,
+            maximum=cls.MAX_VALIDATORS,
+        )
+        signer_count = cls._unsigned(record.get("signer_count"), f"{context}.signer_count")
+        min_signers = cls._unsigned(
+            record.get("min_signers"),
+            f"{context}.min_signers",
+            positive=True,
+            maximum=cls.MAX_VALIDATORS,
+        )
+        signed_power = cls._unsigned(record.get("signed_power"), f"{context}.signed_power")
+        total_power = cls._unsigned(
+            record.get("total_power"), f"{context}.total_power", positive=True
+        )
+        if (
+            signer_count > validator_count
+            or min_signers != validator_count * 2 // 3 + 1
+            or signed_power > total_power
+            or total_power < validator_count
+            or signer_count < min_signers
+            or signed_power * 3 <= total_power * 2
+        ):
+            raise RuntimeError(f"{context} does not satisfy its frozen dual quorum")
+        return SumeragiV2CommitQcStatus(
+            certificate=cls._qc(record.get("certificate"), context=f"{context}.certificate"),
+            validator_count=validator_count,
+            signer_count=signer_count,
+            min_signers=min_signers,
+            signed_power=signed_power,
+            total_power=total_power,
+        )
+
+    @classmethod
+    def _operator(cls, value: Any, *, context: str) -> SumeragiV2OperatorStatus:
+        record = cls._mapping(value, context)
+        adapter = cls._mapping(record.get("adapter_queues"), f"{context}.adapter_queues")
+        adapter_status = SumeragiV2AdapterQueueStatus(
+            ingress_keys=cls._unsigned(adapter.get("ingress_keys"), f"{context}.adapter_queues.ingress_keys"),
+            ingress_capacity=cls._unsigned(adapter.get("ingress_capacity"), f"{context}.adapter_queues.ingress_capacity"),
+            deferred_completion=cls._unsigned(adapter.get("deferred_completion"), f"{context}.adapter_queues.deferred_completion"),
+            deferred_progress=cls._unsigned(adapter.get("deferred_progress"), f"{context}.adapter_queues.deferred_progress"),
+            deferred_progress_capacity=cls._unsigned(adapter.get("deferred_progress_capacity"), f"{context}.adapter_queues.deferred_progress_capacity"),
+            deferred_normal=cls._unsigned(adapter.get("deferred_normal"), f"{context}.adapter_queues.deferred_normal"),
+            deferred_normal_capacity=cls._unsigned(adapter.get("deferred_normal_capacity"), f"{context}.adapter_queues.deferred_normal_capacity"),
+        )
+        if (
+            adapter_status.ingress_keys > adapter_status.ingress_capacity
+            or adapter_status.deferred_completion > adapter_status.deferred_progress_capacity
+            or adapter_status.deferred_progress > adapter_status.deferred_progress_capacity
+            or adapter_status.deferred_normal > adapter_status.deferred_normal_capacity
+        ):
+            raise RuntimeError(f"{context}.adapter_queues occupancy exceeds capacity")
+        queue = cls._mapping(record.get("tx_queue"), f"{context}.tx_queue")
+        tx_queue = SumeragiV2TxQueueStatus(
+            tracked_transactions=cls._unsigned(queue.get("tracked_transactions"), f"{context}.tx_queue.tracked_transactions"),
+            queued_transactions=cls._unsigned(queue.get("queued_transactions"), f"{context}.tx_queue.queued_transactions"),
+            capacity=cls._unsigned(queue.get("capacity"), f"{context}.tx_queue.capacity", positive=True),
+            retained_bytes=cls._unsigned(queue.get("retained_bytes"), f"{context}.tx_queue.retained_bytes"),
+            max_retained_bytes=cls._unsigned(queue.get("max_retained_bytes"), f"{context}.tx_queue.max_retained_bytes", positive=True),
+            oldest_queued_age_ms=cls._unsigned(queue.get("oldest_queued_age_ms"), f"{context}.tx_queue.oldest_queued_age_ms"),
+            saturated_by_count=cls._boolean(queue.get("saturated_by_count"), f"{context}.tx_queue.saturated_by_count"),
+            saturated_by_bytes=cls._boolean(queue.get("saturated_by_bytes"), f"{context}.tx_queue.saturated_by_bytes"),
+            saturated_by_age=cls._boolean(queue.get("saturated_by_age"), f"{context}.tx_queue.saturated_by_age"),
+        )
+        if (
+            tx_queue.queued_transactions > tx_queue.tracked_transactions
+            or tx_queue.tracked_transactions > tx_queue.capacity
+            or tx_queue.retained_bytes > tx_queue.max_retained_bytes
+        ):
+            raise RuntimeError(f"{context}.tx_queue occupancy exceeds capacity")
+        return SumeragiV2OperatorStatus(
+            view_change_install_total=cls._unsigned(
+                record.get("view_change_install_total"),
+                f"{context}.view_change_install_total",
+            ),
+            busy_deferral_total=cls._unsigned(
+                record.get("busy_deferral_total"), f"{context}.busy_deferral_total"
+            ),
+            adapter_queues=adapter_status,
+            tx_queue=tx_queue,
+        )
+
+    @classmethod
+    def _settlements(cls, value: Any) -> List[Dict[str, Any]]:
+        context = "sumeragi.lane_settlement_commitments"
+        return [
+            cls._settlement(entry, context=f"{context}[{index}]")
+            for index, entry in enumerate(cls._array(value, context))
+        ]
+
+    @classmethod
+    def _settlement(cls, value: Any, *, context: str) -> Dict[str, Any]:
+        record = cls._mapping(value, context)
+        receipts = []
+        for index, receipt_value in enumerate(
+            cls._array(record.get("receipts"), f"{context}.receipts")
+        ):
+            receipt_context = f"{context}.receipts[{index}]"
+            receipt = cls._mapping(receipt_value, receipt_context)
+            receipts.append(
+                {
+                    "source_id": cls._byte32(receipt.get("source_id"), f"{receipt_context}.source_id"),
+                    "local_amount_micro": cls._decimal_u128(receipt.get("local_amount_micro"), f"{receipt_context}.local_amount_micro"),
+                    "xor_due_micro": cls._decimal_u128(receipt.get("xor_due_micro"), f"{receipt_context}.xor_due_micro"),
+                    "xor_after_haircut_micro": cls._decimal_u128(receipt.get("xor_after_haircut_micro"), f"{receipt_context}.xor_after_haircut_micro"),
+                    "xor_variance_micro": cls._decimal_u128(receipt.get("xor_variance_micro"), f"{receipt_context}.xor_variance_micro"),
+                    "timestamp_ms": cls._unsigned(receipt.get("timestamp_ms"), f"{receipt_context}.timestamp_ms"),
+                }
+            )
+        swap_value = record.get("swap_metadata")
+        if swap_value is None:
+            swap_metadata = None
+        else:
+            swap_context = f"{context}.swap_metadata"
+            swap = cls._mapping(swap_value, swap_context)
+            swap_metadata = {
+                "epsilon_bps": cls._unsigned(
+                    swap.get("epsilon_bps"),
+                    f"{swap_context}.epsilon_bps",
+                    maximum=0xFFFF,
+                ),
+                "twap_window_seconds": cls._unsigned(
+                    swap.get("twap_window_seconds"),
+                    f"{swap_context}.twap_window_seconds",
+                    maximum=cls.MAX_U32,
+                ),
+                "liquidity_profile": {
+                    "profile": cls._tagged_content(
+                        swap.get("liquidity_profile"),
+                        tag="profile",
+                        content="state",
+                        allowed={"Tier1", "Tier2", "Tier3"},
+                        context=f"{swap_context}.liquidity_profile",
+                    ),
+                    "state": None,
+                },
+                "twap_local_per_xor": cls._non_empty_string(
+                    swap.get("twap_local_per_xor"),
+                    f"{swap_context}.twap_local_per_xor",
+                ),
+                "volatility_class": {
+                    "bucket": cls._tagged_content(
+                        swap.get("volatility_class"),
+                        tag="bucket",
+                        content="state",
+                        allowed={"Stable", "Elevated", "Dislocated"},
+                        context=f"{swap_context}.volatility_class",
+                    ),
+                    "state": None,
+                },
+            }
+        return {
+            "block_height": cls._unsigned(record.get("block_height"), f"{context}.block_height"),
+            "lane_id": cls._unsigned(record.get("lane_id"), f"{context}.lane_id", maximum=cls.MAX_U32),
+            "lane_incarnation": cls._nonzero_hash(record.get("lane_incarnation"), f"{context}.lane_incarnation"),
+            "dataspace_id": cls._unsigned(record.get("dataspace_id"), f"{context}.dataspace_id"),
+            "tx_count": cls._unsigned(record.get("tx_count"), f"{context}.tx_count"),
+            "total_local_micro": cls._decimal_u128(record.get("total_local_micro"), f"{context}.total_local_micro"),
+            "total_xor_due_micro": cls._decimal_u128(record.get("total_xor_due_micro"), f"{context}.total_xor_due_micro"),
+            "total_xor_after_haircut_micro": cls._decimal_u128(record.get("total_xor_after_haircut_micro"), f"{context}.total_xor_after_haircut_micro"),
+            "total_xor_variance_micro": cls._decimal_u128(record.get("total_xor_variance_micro"), f"{context}.total_xor_variance_micro"),
+            "swap_metadata": swap_metadata,
+            "receipts": receipts,
+            "nexus_fee_receipts": [
+                cls._clone_mapping(item, f"{context}.nexus_fee_receipts[{index}]")
+                for index, item in enumerate(cls._array(record.get("nexus_fee_receipts"), f"{context}.nexus_fee_receipts"))
+            ],
+            "native_amx_receipts": [
+                cls._clone_mapping(item, f"{context}.native_amx_receipts[{index}]")
+                for index, item in enumerate(cls._array(record.get("native_amx_receipts"), f"{context}.native_amx_receipts"))
+            ],
+        }
+
+    @classmethod
+    def _relays(cls, value: Any) -> List[Dict[str, Any]]:
+        context = "sumeragi.lane_relay_envelopes"
+        relays: List[Dict[str, Any]] = []
+        for index, relay_value in enumerate(cls._array(value, context)):
+            item_context = f"{context}[{index}]"
+            record = cls._mapping(relay_value, item_context)
+            lane_id = cls._unsigned(record.get("lane_id"), f"{item_context}.lane_id", maximum=cls.MAX_U32)
+            lane_incarnation = cls._nonzero_hash(record.get("lane_incarnation"), f"{item_context}.lane_incarnation")
+            dataspace_id = cls._unsigned(record.get("dataspace_id"), f"{item_context}.dataspace_id")
+            block_height = cls._unsigned(record.get("block_height"), f"{item_context}.block_height")
+            settlement = cls._settlement(record.get("settlement_commitment"), context=f"{item_context}.settlement_commitment")
+            if (
+                settlement["lane_id"] != lane_id
+                or settlement["lane_incarnation"] != lane_incarnation
+                or settlement["dataspace_id"] != dataspace_id
+                or settlement["block_height"] != block_height
+            ):
+                raise RuntimeError(
+                    f"{item_context}.settlement_commitment identity must match its relay"
+                )
+            qc_value = record.get("qc")
+            manifest_value = record.get("manifest_root")
+            proof_value = record.get("fastpq_proof")
+            descriptor_value = record.get("lane_block_descriptor_hash")
+            da_value = record.get("da_commitment_hash")
+            relays.append(
+                {
+                    "lane_id": lane_id,
+                    "lane_incarnation": lane_incarnation,
+                    "dataspace_id": dataspace_id,
+                    "block_height": block_height,
+                    "block_header": cls._clone_mapping(record.get("block_header"), f"{item_context}.block_header"),
+                    "qc": None if qc_value is None else cls._clone_mapping(qc_value, f"{item_context}.qc"),
+                    "da_commitment_hash": None if da_value is None else cls._hash(da_value, f"{item_context}.da_commitment_hash"),
+                    "lane_block_descriptor_hash": None if descriptor_value is None else cls._hash(descriptor_value, f"{item_context}.lane_block_descriptor_hash"),
+                    "settlement_commitment": settlement,
+                    "settlement_hash": cls._hash(record.get("settlement_hash"), f"{item_context}.settlement_hash"),
+                    "rbc_bytes_total": cls._unsigned(record.get("rbc_bytes_total"), f"{item_context}.rbc_bytes_total"),
+                    "manifest_root": None if manifest_value is None else cls._byte32(manifest_value, f"{item_context}.manifest_root"),
+                    "fastpq_proof": None if proof_value is None else cls._fastpq_proof(proof_value, context=f"{item_context}.fastpq_proof"),
+                }
+            )
+        return relays
+
+    @classmethod
+    def _fastpq_proof(cls, value: Any, *, context: str) -> Dict[str, Any]:
+        record = cls._mapping(value, context)
+        return {
+            "proof_digest": cls._hash(record.get("proof_digest"), f"{context}.proof_digest"),
+            "verified_at_height": cls._unsigned(record.get("verified_at_height"), f"{context}.verified_at_height"),
+        }
+
+    @classmethod
+    def _ownerships(cls, value: Any) -> List[Dict[str, Any]]:
+        context = "sumeragi.lane_payload_ownerships"
+        ownerships: List[Dict[str, Any]] = []
+        for index, ownership_value in enumerate(cls._array(value, context)):
+            item_context = f"{context}[{index}]"
+            record = cls._mapping(ownership_value, item_context)
+            lane_height = cls._unsigned(record.get("lane_block_height"), f"{item_context}.lane_block_height", positive=True)
+            indices = [
+                cls._unsigned(item, f"{item_context}.accepted_candidate_indices[{offset}]")
+                for offset, item in enumerate(cls._array(record.get("accepted_candidate_indices"), f"{item_context}.accepted_candidate_indices"))
+            ]
+            if not indices or any(left >= right for left, right in zip(indices, indices[1:])):
+                raise RuntimeError(
+                    f"{item_context}.accepted_candidate_indices must be non-empty and strictly ordered"
+                )
+            hashes = [
+                cls._hash(item, f"{item_context}.accepted_transaction_hashes[{offset}]")
+                for offset, item in enumerate(cls._array(record.get("accepted_transaction_hashes"), f"{item_context}.accepted_transaction_hashes"))
+            ]
+            if len(hashes) != len(indices):
+                raise RuntimeError(f"{item_context} candidate/hash counts must match")
+            validators = [
+                cls._non_empty_string(item, f"{item_context}.lane_block_descriptor_validator_set[{offset}]")
+                for offset, item in enumerate(cls._array(record.get("lane_block_descriptor_validator_set"), f"{item_context}.lane_block_descriptor_validator_set"))
+            ]
+            if not validators or len(set(validators)) != len(validators):
+                raise RuntimeError(
+                    f"{item_context}.lane_block_descriptor_validator_set must be non-empty and unique"
+                )
+            validator_count = cls._unsigned(record.get("lane_block_descriptor_validator_count"), f"{item_context}.lane_block_descriptor_validator_count", positive=True, maximum=cls.MAX_U32)
+            min_quorum = cls._unsigned(record.get("lane_block_descriptor_min_quorum"), f"{item_context}.lane_block_descriptor_min_quorum", positive=True, maximum=cls.MAX_U32)
+            if validator_count != len(validators) or min_quorum > validator_count:
+                raise RuntimeError(f"{item_context} descriptor quorum does not match its validator set")
+            previous_height = cls._unsigned(record.get("previous_lane_block_height"), f"{item_context}.previous_lane_block_height")
+            if previous_height != lane_height - 1:
+                raise RuntimeError(f"{item_context}.previous_lane_block_height must precede lane_block_height")
+            previous_value = record.get("previous_lane_block_descriptor_hash")
+            previous_hash = None if previous_value is None else cls._hash(previous_value, f"{item_context}.previous_lane_block_descriptor_hash")
+            if previous_height == 0 and previous_hash is not None:
+                raise RuntimeError(f"{item_context} genesis lane block must not name a predecessor descriptor")
+            descriptor_value = record.get("lane_block_descriptor_hash")
+            if descriptor_value is None:
+                raise RuntimeError(f"{item_context}.lane_block_descriptor_hash is required")
+            ownerships.append(
+                {
+                    "proposal_height": cls._unsigned(record.get("proposal_height"), f"{item_context}.proposal_height"),
+                    "proposal_view": cls._unsigned(record.get("proposal_view"), f"{item_context}.proposal_view"),
+                    "lane_id": cls._unsigned(record.get("lane_id"), f"{item_context}.lane_id", maximum=cls.MAX_U32),
+                    "dataspace_id": cls._unsigned(record.get("dataspace_id"), f"{item_context}.dataspace_id"),
+                    "lane_incarnation": cls._nonzero_hash(record.get("lane_incarnation"), f"{item_context}.lane_incarnation"),
+                    "lane_block_height": lane_height,
+                    "lane_block_view": cls._unsigned(record.get("lane_block_view"), f"{item_context}.lane_block_view"),
+                    "subject_hash": cls._hash(record.get("subject_hash"), f"{item_context}.subject_hash"),
+                    "qc_mode_tag": cls._non_empty_string(record.get("qc_mode_tag"), f"{item_context}.qc_mode_tag"),
+                    "accepted_candidate_indices": indices,
+                    "accepted_transaction_hashes": hashes,
+                    "previous_lane_block_height": previous_height,
+                    "previous_lane_block_descriptor_hash": previous_hash,
+                    "lane_block_descriptor_hash": cls._hash(descriptor_value, f"{item_context}.lane_block_descriptor_hash"),
+                    "lane_block_descriptor_validator_set": validators,
+                    "lane_block_descriptor_validator_count": validator_count,
+                    "lane_block_descriptor_min_quorum": min_quorum,
+                    "payload_ownership_hash": cls._hash(record.get("payload_ownership_hash"), f"{item_context}.payload_ownership_hash"),
+                    "rbc_instance_hash": cls._hash(record.get("rbc_instance_hash"), f"{item_context}.rbc_instance_hash"),
+                }
+            )
+        return ownerships
+
+    @classmethod
+    def _committed_blocks(cls, value: Any) -> List[Dict[str, Any]]:
+        context = "sumeragi.committed_lane_blocks"
+        blocks: List[Dict[str, Any]] = []
+        for index, block_value in enumerate(cls._array(value, context)):
+            item_context = f"{context}[{index}]"
+            record = cls._mapping(block_value, item_context)
+            validator_count = cls._unsigned(record.get("validator_count"), f"{item_context}.validator_count", positive=True, maximum=cls.MAX_U32)
+            min_quorum = cls._unsigned(record.get("min_quorum"), f"{item_context}.min_quorum", positive=True, maximum=cls.MAX_U32)
+            prepare_count = cls._unsigned(record.get("prepare_qc_signer_count"), f"{item_context}.prepare_qc_signer_count", maximum=cls.MAX_U32)
+            commit_count = cls._unsigned(record.get("commit_qc_signer_count"), f"{item_context}.commit_qc_signer_count", maximum=cls.MAX_U32)
+            if min_quorum > validator_count or not (min_quorum <= prepare_count <= validator_count) or not (min_quorum <= commit_count <= validator_count):
+                raise RuntimeError(f"{item_context} carries an impossible certified quorum")
+            blocks.append(
+                {
+                    "lane_id": cls._unsigned(record.get("lane_id"), f"{item_context}.lane_id", maximum=cls.MAX_U32),
+                    "dataspace_id": cls._unsigned(record.get("dataspace_id"), f"{item_context}.dataspace_id"),
+                    "lane_incarnation": cls._nonzero_hash(record.get("lane_incarnation"), f"{item_context}.lane_incarnation"),
+                    "lane_block_height": cls._unsigned(record.get("lane_block_height"), f"{item_context}.lane_block_height", positive=True),
+                    "lane_block_view": cls._unsigned(record.get("lane_block_view"), f"{item_context}.lane_block_view"),
+                    "descriptor_hash": cls._hash(record.get("descriptor_hash"), f"{item_context}.descriptor_hash"),
+                    "proposal_hash": cls._hash(record.get("proposal_hash"), f"{item_context}.proposal_hash"),
+                    "execution_status": cls._non_empty_string(record.get("execution_status"), f"{item_context}.execution_status"),
+                    "executable_payload_available": cls._boolean(record.get("executable_payload_available"), f"{item_context}.executable_payload_available"),
+                    "subject_hash": cls._hash(record.get("subject_hash"), f"{item_context}.subject_hash"),
+                    "payload_ownership_hash": cls._hash(record.get("payload_ownership_hash"), f"{item_context}.payload_ownership_hash"),
+                    "rbc_instance_hash": cls._hash(record.get("rbc_instance_hash"), f"{item_context}.rbc_instance_hash"),
+                    "qc_mode_tag": cls._non_empty_string(record.get("qc_mode_tag"), f"{item_context}.qc_mode_tag"),
+                    "validator_count": validator_count,
+                    "min_quorum": min_quorum,
+                    "prepare_qc_signer_count": prepare_count,
+                    "commit_qc_signer_count": commit_count,
+                }
+            )
+        return blocks
+
+    @classmethod
+    def _sessions(cls, value: Any) -> List[Dict[str, Any]]:
+        context = "sumeragi.lane_block_sessions"
+        sessions: List[Dict[str, Any]] = []
+        for index, session_value in enumerate(cls._array(value, context)):
+            item_context = f"{context}[{index}]"
+            record = cls._mapping(session_value, item_context)
+            validator_count = cls._unsigned(record.get("validator_count"), f"{item_context}.validator_count", maximum=cls.MAX_U32)
+            min_quorum = cls._unsigned(record.get("min_quorum"), f"{item_context}.min_quorum", maximum=cls.MAX_U32)
+            prepare_count = cls._unsigned(record.get("prepare_vote_count"), f"{item_context}.prepare_vote_count", maximum=cls.MAX_U32)
+            commit_count = cls._unsigned(record.get("commit_vote_count"), f"{item_context}.commit_vote_count", maximum=cls.MAX_U32)
+            if validator_count == 0:
+                invalid_counts = min_quorum != 0 or prepare_count != 0 or commit_count != 0
+            else:
+                invalid_counts = (
+                    min_quorum == 0
+                    or min_quorum > validator_count
+                    or prepare_count > validator_count
+                    or commit_count > validator_count
+                )
+            if invalid_counts:
+                raise RuntimeError(f"{item_context} carries impossible session quorum counts")
+            sessions.append(
+                {
+                    "lane_id": cls._unsigned(record.get("lane_id"), f"{item_context}.lane_id", maximum=cls.MAX_U32),
+                    "dataspace_id": cls._unsigned(record.get("dataspace_id"), f"{item_context}.dataspace_id"),
+                    "lane_incarnation": cls._nonzero_hash(record.get("lane_incarnation"), f"{item_context}.lane_incarnation"),
+                    "lane_block_height": cls._unsigned(record.get("lane_block_height"), f"{item_context}.lane_block_height"),
+                    "lane_block_view": cls._unsigned(record.get("lane_block_view"), f"{item_context}.lane_block_view"),
+                    "proposal_hash": cls._hash(record.get("proposal_hash"), f"{item_context}.proposal_hash"),
+                    "has_proposal": cls._boolean(record.get("has_proposal"), f"{item_context}.has_proposal"),
+                    "prepare_vote_count": prepare_count,
+                    "commit_vote_count": commit_count,
+                    "has_prepare_qc": cls._boolean(record.get("has_prepare_qc"), f"{item_context}.has_prepare_qc"),
+                    "has_commit_qc": cls._boolean(record.get("has_commit_qc"), f"{item_context}.has_commit_qc"),
+                    "pending_commit_vote_request": cls._boolean(record.get("pending_commit_vote_request"), f"{item_context}.pending_commit_vote_request"),
+                    "pending_committed_session_drain": cls._boolean(record.get("pending_committed_session_drain"), f"{item_context}.pending_committed_session_drain"),
+                    "committed_session_drained": cls._boolean(record.get("committed_session_drained"), f"{item_context}.committed_session_drained"),
+                    "validator_count": validator_count,
+                    "min_quorum": min_quorum,
+                }
+            )
+        return sessions
+
+    @staticmethod
+    def _non_empty_string(value: Any, context: str) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise RuntimeError(f"{context} must be a non-empty string")
+        return value.strip()
 
 
 class ToriiClient:
@@ -5708,6 +6687,20 @@ class ToriiClient:
     # ------------------------------------------------------------------
     # Sumeragi telemetry & RBC helpers
     # ------------------------------------------------------------------
+    def get_sumeragi_status(self) -> SumeragiV2Status:
+        """Fetch and validate authoritative v2 consensus status.
+
+        This method is intentionally separate from :meth:`get_status_snapshot`:
+        the general status route is operational telemetry, while this route is
+        the fail-closed reducer and lane-evidence projection.
+        """
+
+        payload = self._get_json_object(
+            "/v1/sumeragi/status",
+            context="sumeragi status",
+        )
+        return _SumeragiV2StatusParser.parse(payload)
+
     def get_sumeragi_rbc(self) -> SumeragiRbcSnapshot:
         """Return aggregated RBC counters (`GET /v1/sumeragi/rbc`)."""
 

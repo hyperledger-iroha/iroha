@@ -762,7 +762,6 @@ impl PublishArgs {
             }
             let pin_hash = client.submit_blocking(RegisterPinManifest::new(
                 generated_sorafs.manifest_bytes.clone(),
-                generated_sorafs.chunk_digest_sha3_256,
                 0,
                 None,
                 None,
@@ -2409,10 +2408,12 @@ fn build_sorafs_source_manifest(
         .first()
         .cloned()
         .ok_or_else(|| eyre!("SoraFS CAR writer produced no root CID"))?;
+    let chunk_digest_sha3_256 = compute_chunk_plan_digest_sha3(&plan.chunks);
     let manifest_v1 = ManifestBuilder::new()
         .root_cid(root_cid)
         .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
         .chunking_from_profile(plan.chunk_profile, BLAKE3_256_MULTIHASH_CODE)
+        .chunk_digest_sha3_256(chunk_digest_sha3_256)
         .content_length(plan.content_length)
         .car_digest(*stats.car_archive_digest.as_bytes())
         .car_size(stats.car_size)
@@ -2443,7 +2444,6 @@ fn build_sorafs_source_manifest(
         .map_err(|err| eyre!("failed to build SoraFS manifest: {err}"))?;
     let digest = ManifestDigest::from_manifest(&manifest_v1)
         .map_err(|err| eyre!("failed to digest SoraFS manifest: {err}"))?;
-    let chunk_digest_sha3_256 = compute_chunk_plan_digest_sha3(&plan.chunks);
     let source_plan = source_archive_plan_from_car_plan(
         &plan,
         *stats.car_archive_digest.as_bytes(),

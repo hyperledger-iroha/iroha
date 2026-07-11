@@ -10936,13 +10936,14 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   rejects duplicate or unsupported `--source-entry` kinds before dry-run output
   or live canaries.
   `scripts/build_sorafs_ai_prescreen_canary.py` now builds payload-free
-  checked-in SFM-4a canary artifacts for each gate kind, fails closed on
-  missing runner/workflow binding inputs, committee-result inventory
-  mismatches or labels outside the `ai-prescreen-committee-result-*` production
-  family, incomplete operator-route, transparency-source, Governance DAG
+  checked-in non-runner SFM-4a canary artifacts for operator workflow,
+  notification transport, commit/reveal executor, transparency publication,
+  Governance DAG, and end-to-end workflow evidence. Runner and committee
+  evidence must come from their deployed `runner-canary` and
+  `committee-canary` live-probe commands so promotion cannot substitute
+  operator-supplied synthetic service facts. The non-runner builder fails
+  closed on incomplete operator-route, transparency-source, Governance DAG
   producer, or workflow-step coverage, non-production or malformed
-  `--subject` references outside the gate's `cid:*` production shape,
-  non-production or malformed
   `--workflow-id` labels outside the gate's `sfm-4a-*` production shape,
   duplicate or unknown reviewed route,
   source-kind, producer, and workflow-step inputs, Governance DAG
@@ -10954,9 +10955,7 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   shipped action inventory,
   commit/reveal executor action-count breakdowns that do not sum to
   `--action-count`,
-  rejects unsupported `--verdict` labels and out-of-range `--score-bps` values
-  before runner or committee evidence is written,
-  runs runner/committee/operator/webhook URL inputs through the shared URL
+  runs operator/webhook URL inputs through the shared URL
   preflight before writing evidence,
   rejects unsafe `--manifest-path` and `--execution-summary-path` path labels
   before writing evidence,
@@ -11573,7 +11572,22 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   signer binding, local known-channel receipt provider-role authorization,
   local provider-advert capability authorization for asks and known-channel
   receipts, local config-backed order admission policy for minimum order
-  quantity and price tick, and local runtime metric emission for order flow,
+  quantity and price tick, an authoritative native ledger foundation with
+  `SetSorafsOrderbookPolicy`, `SubmitSorafsOrderbookOrder`,
+  `CancelSorafsOrderbookOrder`, and
+  `RecordSorafsOrderbookSettlementReceipt` ISIs, exactly chained governance
+  policy digests, canonical I105 owner and embedded signer/authority binding,
+  shared order/cancel nonce high-waters, bounded receipt freshness/size/count
+  policy, immutable receipt-id replay protection, and sorted non-overlapping
+  channel receipt indexes. Receipt admission now also derives the authoritative
+  native asset-lock id from the channel id, requires the configured SoraFS XOR
+  asset, explicit settlement release authority, registered provider
+  destination, active sufficient custody, and prevalidated transfer policies,
+  then atomically debits custody and credits provider plus configured treasury
+  before persisting the receipt/index. Seven typed signed-query variants expose
+  active policy, order, cancellation, receipt, constant-time status counters,
+  and cursor-bounded order/receipt pages with a hard 500-record ceiling; the
+  default executor restricts them to pricing or settlement operators. Local runtime metric emission covers order flow,
   depth, matcher lag, settlement
   backlog, escrow runway, API error ratios, and mirror divergence. Local
   snapshots now also expose a deterministic `OrderbookSettlementLedger` derived
@@ -11668,21 +11682,22 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   reconciliation response-file examples, and writes atomically without following
   output symlinks. The
   rollout-gate static contract now pins
-  the on-chain contract, durable matcher, daemonized settlement, escrow-custody,
+  the durable matcher, automatic channel-lock lifecycle, daemonized settlement,
   contract-stream, and live-dashboard orderbook service surfaces as unshipped
-  in the SFM-2 plan with reusable matchers and segment-aware negative controls
-  while preserving shipped local order/cancel/receipt/book/trade/channel/event
-  APIs, local SSE/WebSocket streams, `sorafs-validate orderbook`, local
-  submit/read helpers, and payload-free canary evidence labels. It also scans
+  in the SFM-2 plan with reusable matchers and segment-aware negative controls,
+  while recognizing the shipped native policy/order/cancellation/receipt ISIs,
+  funded-lock custody settlement, permissioned typed queries, local
+  order/cancel/receipt/book/trade/channel/event APIs, local SSE/WebSocket
+  streams, `sorafs-validate orderbook`, local submit/read helpers, and
+  payload-free canary evidence labels. It also scans
   CLI sources for nested deployed-only `orderbook
   matcher-service|settlement-daemon|contract-submit|dashboard-serve` spellings
   without blocking shipped local `orderbook orders|cancel|receipts|book|trades`
   commands,
-  but still needs the on-chain contract surface, durable matcher service,
-  daemonized settlement receipt service with contract/on-chain escrow custody
-  mutation,
-  on-chain/governance-backed admission policy, contract-backed capability
-  policy authorization, contract forwarding,
+  but still needs deterministic authoritative matching/fill and automatic
+  channel-lock creation/funding/refund/expiry state transitions, durable matcher
+  service, daemonized settlement receipt service, contract-backed capability policy authorization,
+  Torii ISI forwarding,
   durable contract/matcher-backed WebSocket/SSE streams,
   SDK release artifacts/live smoke evidence,
   live dashboard wiring and alert routing,
@@ -12023,6 +12038,19 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   lifecycle and challenge submit/resolve events now publish into the SoraFS
   Governance DAG filesystem publisher, `publish-index.json`, CAR queue, and
   optional signed runtime DAG.
+  SFM-4b4 now also has an authoritative on-chain moderation ledger in
+  `iroha_data_model::sorafs::moderation_ledger` and
+  `iroha_core::smartcontracts::isi::sorafs_moderation`. First-class ISIs
+  activate bounded governance policy revisions, open policy-digest-bound cases,
+  accept authority-bound canonical juror commitments and reveals, record and
+  resolve payload-free challenges, and finalize decisions, contested ties,
+  missed-quorum outcomes, or accepted-challenge outcomes. Finalization
+  atomically persists distinct missing-commit and unrevealed-commit penalty
+  records. Typed queries expose policy, case, commitment, reveal, challenge,
+  outcome, no-show, and counter state through the existing generic Torii query
+  surface; `CanManageSorafsModeration` gates privileged transitions while
+  native execution independently enforces permissions, block-time phases,
+  resource bounds, canonical payloads, policy snapshots, and counter safety.
   The SFM-4b moderation-panel rollout
   evidence gate now validates payload-free appeal intake, sortition roster,
   evidence viewer, operator workflow, juror notifications, commit/reveal,
@@ -12259,8 +12287,8 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   events, unresolved or accepted-challenge with reveal/tally, or bad-tally
   checkpoint corruption without promoting local state. The rollout-gate static
   contract now pins the
-  SFM-4b4 voting contract, durable ballot orchestrator, juror CLI/portal,
-  production challenge monitor/dispute service, contract/ledger recording, and
+  SFM-4b4 durable ballot orchestrator, juror CLI/portal,
+  production challenge monitor/dispute service, and
   public decision/challenge DAG as unshipped production-service work with
   reusable matchers and segment-aware negative controls while preserving the
   local `ballots*` API, shipped local challenge record/API event/Governance DAG
@@ -12273,11 +12301,11 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
 	  executor/canary commands. The commit-reveal production-service route matcher
 	  now also requires a left boundary so prefixed internal paths cannot satisfy
 	  reserved public route checks, and the SoraFS docs warning-only scan covers
-	  the unshipped voting-contract, ballot-orchestrator, juror portal, and
+	  the unshipped ballot-orchestrator, juror portal, and
 	  deployed ballot-service names across canonical, localized, nested, portal,
 	  and portal-i18n docs before those names can appear outside an explicit
 	  do-not-document-as-shipped warning. SFM-4b4 still
-	  needs production orchestration, on-chain or ledger recording, scheduled
+	  needs production orchestration, scheduled
   no-show dispatch/settlement handoff, production juror portal flows, public
   decision/challenge DAG
   rollout, end-to-end panel simulations, and deployed evidence that passes this
@@ -12286,8 +12314,19 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   helpers for XOR/USD feed samples, weighted reference-price decisions,
   stale/rejected-feed refusal, divergence degradation, billing line items,
   statement totals, micro-XOR to USD-micro conversion, and BLAKE3 line/statement
-  ids. The reference validator now gates those feed/decision/line/statement
-  payloads through `validate_hedging_payload_bytes`, and `sorafs-validate
+  ids. The embedded SoraFS node now also loads secure exact-canonical external
+  pricing and hedging trust policies, durably checkpoints and fully replays the
+  governed pricing chain and signed-feed high-water ledger, selects active
+  pricing, derives governed reference decisions only from the latest signed
+  feeds, rolls memory back on pre-commit persistence failure, and fails future
+  durable mutation closed after uncertain committed durability. Its minimum
+  Torii operator boundary now accepts governed pricing and signed feeds and
+  serves status, active-pricing, and governed-reference readbacks behind exact
+  canonical request authentication plus the `sorafs_economics_operator` role;
+  this is not the missing collector, hedging daemon, billing aggregator, or
+  statement service. The reference validator now gates those
+  feed/decision/line/statement payloads through
+  `validate_hedging_payload_bytes`, and `sorafs-validate
   hedging`/`billing` provides local operator validation for those artifacts.
   The source bridge surface now exposes the same validator through
   `sorafs_reference_validate_hedging_json`, Connect C/JNI ABI 15
@@ -12441,7 +12480,8 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   negative fixture byte suite is now checked in and pinned by the rollout
   contract so future deletions or unmanifested fixture drift fail closed. The
   rollout-gate static contract now also pins the collector, hedging daemon,
-  billing daemon, statement publisher, REST API, service-management CLI,
+  billing daemon, statement publisher, complete hedging/billing service API,
+  service-management CLI,
   automated hedge execution, and runtime metric-emission service surfaces as
   unshipped in the SFM-5 plan with reusable matchers and segment-aware negative
   controls while preserving local `sorafs-validate hedging`/`billing`, fixture
@@ -12457,8 +12497,9 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   state that lab/staging fixtures must carry a signed Parliament hash, and the
   rollout contract pins that service-wide surface. SFM-5
   still needs the collector service, daemonized
-  pricing/exposure engine, billing aggregator, statement publisher, signed APIs,
-  runtime CLI helpers, runtime service emission of those metric families,
+  pricing/exposure engine, billing aggregator, statement publisher, signed
+  exposure/billing/statement APIs beyond the local economics operator boundary,
+  runtime CLI helpers, always-on service emission of those metric families,
   released native bridge artifacts, reconciliation tests, governance approval
   flow, and staged billing evidence that passes the gate; SFM-6
   currently ships the

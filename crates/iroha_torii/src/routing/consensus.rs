@@ -6359,7 +6359,15 @@ pub fn handle_v1_sumeragi_status_sse(
         loop {
             ticker.tick().await;
             if let Some(status) = sumeragi::status::v2_status() {
-                let payload = sumeragi_v2_status_json(status, state.as_ref(), nexus_enabled);
+                let response = sumeragi_v2_status_response(status, state.as_ref(), nexus_enabled);
+                if let Err(error) = response.validate() {
+                    iroha_logger::error!(
+                        ?error,
+                        "refusing to stream invalid authoritative Sumeragi v2 status"
+                    );
+                    continue;
+                }
+                let payload = SumeragiV2StatusJson::from(response);
                 match norito::json::to_json(&payload) {
                     Ok(body) => {
                         let event = SseEvent::default().data(body);
@@ -6526,6 +6534,41 @@ pub async fn handle_v1_sumeragi_telemetry(state: Arc<CoreState>) -> Result<impl 
                 json_entry("drops_ttl_bytes_total", pending.drops_ttl_bytes_total),
                 json_entry("drops_bytes_total", pending.drops_bytes_total),
                 json_entry("evicted_total", pending.evicted_total),
+                json_entry("stash_ready_total", pending.stash_ready_total),
+                json_entry(
+                    "stash_ready_init_missing_total",
+                    pending.stash_ready_init_missing_total,
+                ),
+                json_entry(
+                    "stash_ready_roster_missing_total",
+                    pending.stash_ready_roster_missing_total,
+                ),
+                json_entry(
+                    "stash_ready_roster_hash_mismatch_total",
+                    pending.stash_ready_roster_hash_mismatch_total,
+                ),
+                json_entry(
+                    "stash_ready_roster_unverified_total",
+                    pending.stash_ready_roster_unverified_total,
+                ),
+                json_entry("stash_deliver_total", pending.stash_deliver_total),
+                json_entry(
+                    "stash_deliver_init_missing_total",
+                    pending.stash_deliver_init_missing_total,
+                ),
+                json_entry(
+                    "stash_deliver_roster_missing_total",
+                    pending.stash_deliver_roster_missing_total,
+                ),
+                json_entry(
+                    "stash_deliver_roster_hash_mismatch_total",
+                    pending.stash_deliver_roster_hash_mismatch_total,
+                ),
+                json_entry(
+                    "stash_deliver_roster_unverified_total",
+                    pending.stash_deliver_roster_unverified_total,
+                ),
+                json_entry("stash_chunk_total", pending.stash_chunk_total),
                 json_entry("session_cap", pending.session_cap),
                 json_entry("max_chunks_per_session", pending.max_chunks_per_session),
                 json_entry("max_bytes_per_session", pending.max_bytes_per_session),

@@ -86,6 +86,8 @@ mkdir -p "${TARGET_DIR}"
 
 echo "[swift-fixtures] syncing fixtures from ${SOURCE_DIR} to ${TARGET_DIR}"
 rsync -a --delete --prune-empty-dirs \
+  --exclude '/swift_*.norito' \
+  --exclude '/transaction_payload.json' \
   --include '*/' \
   --include '*.norito' \
   --include '*transaction_payload*.json' \

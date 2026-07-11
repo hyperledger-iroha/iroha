@@ -238,6 +238,92 @@ import { noritoEncodeInstruction } from "@iroha/iroha-js/norito";
 import { generateKeyPair } from "@iroha/iroha-js/crypto";
 ```
 
+### Browser-safe external transaction signing
+
+Use `@iroha/iroha-js/transaction-codec` when a browser wallet needs to build
+and finalize a canonical transparent transfer without loading the native Node
+binding. This deliberately narrow surface supports one `Transfer::Asset`
+instruction, single-key Ed25519 I105 authorities, canonical asset identifiers,
+and accounts sharing one Taira-style network prefix/chain discriminant.
+
+```js
+import {
+  browserTransactionPayloadHashHex,
+  buildBrowserTransferPayload,
+  finalizeBrowserSignedTransaction,
+} from "@iroha/iroha-js/transaction-codec";
+
+const payloadBytes = buildBrowserTransferPayload({
+  chainId,
+  authority,
+  sourceAssetHoldingId: `${assetDefinitionId}#${authority}`,
+  quantity: "1.25",
+  destinationAccountId,
+  metadata: { memo: "wallet transfer" },
+  creationTimeMs: Date.now(),
+  ttlMs: 30_000,
+  nonce: 42,
+  networkPrefix,
+});
+
+// Sign the exact 32-byte Iroha prehash, not the payload bytes or hex text.
+const payloadHashHex = browserTransactionPayloadHashHex(payloadBytes);
+const payloadHash = Uint8Array.from(
+  payloadHashHex.match(/../g),
+  (octet) => Number.parseInt(octet, 16),
+);
+const signature = await wallet.signEd25519(payloadHash);
+
+const finalized = finalizeBrowserSignedTransaction(
+  {
+    payloadBytes,
+    payloadHashHex,
+    authority,
+    signingPublicKey: wallet.publicKey,
+    signatureAlgorithm: "ed25519",
+  },
+  { algorithm: "ed25519", signature },
+  wallet.publicKey,
+);
+
+console.log(finalized.hashHex, finalized.signedTransaction);
+```
+
+Finalization fails closed when the payload, asserted prehash, authority,
+signing key, signature, metadata limits, or canonical Norito framing disagree.
+Ed25519 verification uses the same strict, uncofactored equation as the Rust
+node and rejects ZIP-215/mixed-torsion aliases. Metadata arrays must be dense
+plain arrays containing data elements only; metadata numbers must be safe
+integers (encode decimal values as strings), and all strings must contain
+well-formed Unicode scalar values. Metadata supplied as a JSON string must
+already use the exact canonical encoding; use an object when canonicalization
+is desired. Transfer quantities use positive plain-decimal syntax, at most 28
+fractional digits, and the current Rust 64-byte signed-integer positive range
+(`2^511 - 1`).
+The codec only returns verified bytes and the canonical compact-entrypoint
+pipeline hash: importing it does not enable Nexus, connect a wallet, submit to
+Torii, or turn on live-send behavior. Applications must authorize and perform
+those steps separately.
+
+The `@iroha/iroha-js/nexus-app` export is also a browser-only dependency graph:
+it uses the browser codec and strict browser Ed25519 verifier by default and
+contains no native binding or `node:` imports. Supplying `toriiBaseUrl` gives
+the facade a bounded Fetch-based pipeline submit/status client; applications
+may instead inject `toriiClient` and `transactionCodec`. Torii response bodies
+are capped at 64 KiB, submission requests time out after 15 seconds, polling
+defaults to a 30-second budget, and credentials/query/fragment components are
+rejected in the configured Torii base URL. Requests omit ambient credentials
+and referrers and reject redirects.
+
+When supplying a custom `transactionCodec` to `NexusAppClient`, payload hash
+aliases must be exact lowercase 64-character hex and must match the returned
+payload bytes. Finalization must return canonical version-1, single-signature
+`Transfer::Asset` bytes plus the exact compact-entrypoint hash. Before any
+submission, the facade independently finalizes and hashes those bytes with the
+browser codec, rejects conflicting byte/hash aliases, and rechecks the signable
+payload prehash. Torii response hash aliases are likewise conflict-checked
+before status polling or receipt construction.
+
 For offline cash screens and headless wallet flows, use the dedicated
 `offline-cash` subpath. It validates cached setup for local exchange, syncs
 pending audit receipts before loading more cash, and hides NFC unless the app
@@ -1340,75 +1426,61 @@ const response = await fetch(`${toriiBaseUrl}/v1/aliases/resolve`, request);
 > jobs can hash blinded elements and confirm deterministic account bindings
 > without writing bespoke tooling.
 
-Sumeragi consensus status now exposes deterministic membership hashes. Inspecting
-the `membership` block is a quick way to verify roster alignment across peers:
+Sumeragi consensus status is the authoritative protocol-v2 reducer snapshot.
+Use the typed helper for operator or automation decisions: it rejects unsupported
+protocol versions, non-canonical frozen quorums, out-of-range leaders,
+inconsistent CommitQCs, impossible queue occupancy, and missing lane arrays.
 
 ```js
-const status = await torii.getSumeragiStatus();
-if (status.membership) {
-  const { height, view, epoch, view_hash: hash } = status.membership;
-  console.log(`membership ${height}/${view}/${epoch} hash=${hash}`);
+const status = await torii.getSumeragiStatusTyped();
+
+console.log(
+  `height=${status.height} view=${status.view} ` +
+  `mode=${status.height_context.mode.mode} leader=${status.leader}`,
+);
+
+if (status.last_commit_qc) {
+  console.log(
+    `commit height=${status.last_commit_qc.certificate.round.height} ` +
+    `signers=${status.last_commit_qc.signer_count}/${status.last_commit_qc.validator_count} ` +
+    `power=${status.last_commit_qc.signed_power}/${status.last_commit_qc.total_power}`,
+  );
 }
 
-if (status.lane_governance) {
-  for (const lane of status.lane_governance) {
-    const manifest = lane.manifest_ready ? "ready" : "missing";
-    console.log(`lane ${lane.alias} manifest ${manifest}; validators=${lane.validator_ids.join(",")}`);
-    for (const commitment of lane.privacy_commitments) {
-      if (commitment.scheme === "merkle" && commitment.merkle) {
-        console.log(`  merkle commitment ${commitment.id} root=${commitment.merkle.root}`);
-      } else if (commitment.scheme === "snark" && commitment.snark) {
-        console.log(`  snark commitment ${commitment.id} circuit=${commitment.snark.circuit_id}`);
-      }
-    }
-  }
-}
-if (typeof status.lane_governance_sealed_total === "number") {
-  console.log(`sealed lanes remaining: ${status.lane_governance_sealed_total}`);
-}
-if (Array.isArray(status.lane_governance_sealed_aliases) && status.lane_governance_sealed_aliases.length > 0) {
-  console.log(`sealed aliases: ${status.lane_governance_sealed_aliases.join(", ")}`);
+for (const block of status.committed_lane_blocks) {
+  console.log(
+    `lane ${block.lane_id} incarnation=${block.lane_incarnation} ` +
+    `height=${block.lane_block_height} status=${block.execution_status}`,
+  );
 }
 
-if (status.lane_commitments) {
-  for (const lane of status.lane_commitments) {
-    console.log(
-      `lane ${lane.lane_id} committed ${lane.teu_total} TEU across ${lane.tx_count} transactions`,
-    );
-  }
-}
-
-if (typeof status.da_reschedule_total === "number") {
-  console.log(`DA reschedules so far: ${status.da_reschedule_total}`);
-}
-
-if (status.dataspace_commitments) {
-  for (const dataspace of status.dataspace_commitments) {
-    console.log(
-      `lane ${dataspace.lane_id} dataspace ${dataspace.dataspace_id} accounted for ${dataspace.teu_total} TEU`,
-    );
-  }
-}
+const queue = status.operator.tx_queue;
+console.log(
+  `queue=${queue.queued_transactions}/${queue.capacity} ` +
+  `bytes=${queue.retained_bytes}/${queue.max_retained_bytes}`,
+);
 ```
 
-All Sumeragi status helpers accept the standard `{signal}` option so you can
-cancel a fetch when rolling the telemetry window:
+The JSON endpoint flattens the authoritative reducer fields and adds
+`lane_settlement_commitments`, `lane_relay_envelopes`,
+`lane_payload_ownerships`, `committed_lane_blocks`, `lane_block_sessions`,
+`local_peer_removed`, and `operator`. The binary Norito response uses the
+typed envelope with those same reducer fields nested under `authoritative`.
+The general `GET /v1/status` API remains a separate operational-health
+snapshot and is not parsed as consensus authority.
+
+All Sumeragi status helpers accept the standard `{signal}` option:
 
 ```js
 const abortController = new AbortController();
-const status = await torii.getSumeragiStatus({ signal: abortController.signal });
+const status = await torii.getSumeragiStatusTyped({
+  signal: abortController.signal,
+});
 ```
 
-When you prefer fully-normalized lane data (numeric IDs and the sealed-lane
-summary), call `getSumeragiStatusTyped()` instead; it reuses the same endpoint
-but runs the Nexus parsers internally:
-
-```js
-const typed = await torii.getSumeragiStatusTyped();
-console.log(typed.lane_governance_sealed_total);
-console.log(typed.lane_governance_sealed_aliases.join(", "));
-```
-
+Call `getSumeragiStatus()` only when you explicitly need the unmodified JSON
+projection. It performs HTTP handling but deliberately leaves validation to the
+caller.
 ## Advanced Sumeragi Telemetry
 
 Torii exposes additional consensus observability endpoints. The JS SDK now
@@ -1602,6 +1674,11 @@ canceled requests never reach Torii.
 
 ## SoraFS Storage Helpers
 
+Pin registration accepts only canonical HTTP field names. The manifest must be
+canonical padded base64 whose decoded size is between 1 byte and 512 KiB;
+legacy out-of-band chunker, digest, content-length, and pin-policy fields are
+rejected before any request is sent.
+
 ```js
 const pinResult = await torii.pinSorafsManifest({
   manifest: fs.readFileSync("./manifest.norito"),
@@ -1611,21 +1688,14 @@ console.log(`manifest=${pinResult.manifest_id_hex} digest=${pinResult.payload_di
 
 const registerRequest = {
   authority: process.env.SORAFS_OPERATOR_ID ?? "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
-  privateKey: process.env.SORAFS_OPERATOR_KEY ?? "ed25519:deadbeef",
-  manifestDigestHex: pinResult.manifest_id_hex,
-  chunkDigestSha3_256Hex: process.env.SORAFS_CHUNK_DIGEST ?? "1".repeat(64),
-  submittedEpoch: Date.now(),
-  chunker: {
-    profileId: 1,
-    namespace: "sorafs",
-    name: "sf1",
-    semver: "1.0.0",
-  },
-  pinPolicy: { minReplicas: 3, storageClass: "Hot", retentionEpoch: 86_400 },
+  private_key: process.env.SORAFS_OPERATOR_KEY ?? "ed25519:deadbeef",
+  manifest_payload: fs.readFileSync("./manifest.norito").toString("base64"),
+  submitted_epoch: Date.now(),
+  gas_asset_id: "xor#universal",
   alias: {
     namespace: "docs",
     name: "main",
-    proof: fs.readFileSync("./artifacts/docs_alias.proof"),
+    proof_base64: fs.readFileSync("./artifacts/docs_alias.proof").toString("base64"),
   },
 };
 const registerResponse = await torii.registerSorafsPinManifest(registerRequest);
@@ -2993,7 +3063,7 @@ if (features.rbcSampling?.enabled) {
 
 - Cache both `npm` and `cargo` directories so native bindings rebuild quickly across matrix runs.
 - Run `npm run lint:test` before the dockerised integration job. The script enforces ESLint with zero warnings, builds the native addon, and runs the Node test suite so the JS-10 gate matches what the publish workflow executes.
-- Prefer Node LTS releases (currently 18 and 20) alongside the `rust-toolchain.toml` version to minimise drift across environments.
+- Test the declared minimum Node 18 runtime plus the maintained even-numbered Node release lines alongside the `rust-toolchain.toml` version to minimise drift across environments.
 - Use `node --test` for quick smoke runs when native artifacts are already built (for example after `npm run build:native` in a cached workspace); keep `npm run lint:test` in CI to cover the full pipeline.
 - Layer any project-specific linting or formatting checks on top of `npm run lint:test` if your monorepo enforces stricter policies.
 - See `docs/source/examples/iroha_js_ci.md` for extended guidance and optional smoke-job templates.

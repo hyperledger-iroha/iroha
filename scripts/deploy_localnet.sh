@@ -1122,29 +1122,29 @@ curl -sf --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" 
 curl -s --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" \
   "http://$PUBLIC_HOST_URL:$BASE_API_PORT/status" || true
 
-echo "Waiting for consensus mode tag..."
-MODE_TAG=""
+echo "Waiting for the frozen consensus mode..."
+CONSENSUS_MODE=""
 MODE_READY=false
-# Mode tag is informational and may be behind operator auth depending on Torii config.
+# The v2 frozen height context is informational and may be behind operator auth.
 # Don't block localnet startup for the full readiness timeout.
-MODE_TAG_TIMEOUT_SECS=10
-for ((i = 1; i <= MODE_TAG_TIMEOUT_SECS; i++)); do
-  MODE_TAG="$(
+MODE_CONTEXT_TIMEOUT_SECS=10
+for ((i = 1; i <= MODE_CONTEXT_TIMEOUT_SECS; i++)); do
+  CONSENSUS_MODE="$(
     { curl -s --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" \
         "http://$PUBLIC_HOST_URL:$BASE_API_PORT/v1/sumeragi/status" 2>/dev/null || true; } \
-      | LC_ALL=C sed -n 's/.*"mode_tag"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
-      | head -n1
+      | python3 -c 'import json, sys; payload = json.load(sys.stdin); print((payload.get("height_context") or {}).get("mode", {}).get("mode", ""))' \
+        2>/dev/null || true
   )"
-  if [[ -n "$MODE_TAG" ]]; then
+  if [[ -n "$CONSENSUS_MODE" ]]; then
     MODE_READY=true
     break
   fi
   sleep 1
 done
 if [[ "$MODE_READY" == true ]]; then
-  echo "Consensus mode tag: $MODE_TAG"
+  echo "Frozen consensus mode: $CONSENSUS_MODE"
 else
-  echo "Warning: consensus mode tag not reported yet; /status may show a default mode briefly." >&2
+  echo "Warning: the authoritative v2 height context is not available yet." >&2
 fi
 
 CFG="$OUT_DIR/client.toml"

@@ -10,6 +10,7 @@
 pub mod capacity;
 pub mod config;
 pub mod deal;
+mod economics;
 pub mod gateway;
 mod governance;
 pub mod metering;
@@ -28,6 +29,9 @@ mod transparency;
 pub use deal::{
     ClientSnapshot, DealEngine, DealEngineError, DealSettlementOutcome, DealSnapshot,
     ProviderSnapshot, UsageOutcome, derive_micropayment_ticket_id,
+};
+pub use economics::{
+    EconomicsRuntimeError, GovernedPricingAdmissionOutcome, SignedHedgingFeedAdmissionOutcome,
 };
 pub use moderation::{
     ModerationAppealDeposit, ModerationBallotAnnouncement, ModerationBallotChallengeDecision,
@@ -202,6 +206,9 @@ const APPEAL_FINANCE_WEEKLY_ROLLUP_KIND: &str = "appeal_finance_weekly_rollup";
 const ORDERBOOK_STATE_DIR: &str = "orderbook";
 const ORDERBOOK_RUNTIME_SNAPSHOT_FILE: &str = "runtime-snapshot.to";
 const ORDERBOOK_RUNTIME_STATE_VERSION_V1: u8 = 1;
+const ECONOMICS_RUNTIME_STATE_DIR: &str = "economics";
+const PRICING_RUNTIME_SNAPSHOT_FILE: &str = "governed-pricing.to";
+const HEDGING_RUNTIME_SNAPSHOT_FILE: &str = "signed-hedging-feeds.to";
 const MODERATION_MODEL_REGISTRY_DIR: &str = "moderation-model-registry";
 const MODERATION_MODEL_REGISTRY_SNAPSHOT_FILE: &str = "registry-snapshot.to";
 const MODERATION_SCREENING_DIR: &str = "moderation-screening";
@@ -322,6 +329,17 @@ use sorafs_manifest::{
     },
     validate_reputation_snapshot_transition,
 };
+use sorafs_manifest::{
+    hedging::signed::{
+        GovernedHedgingReferencePriceDecisionV1, HedgingFeedTrustPolicyV1,
+        MAX_HEDGING_TRUST_POLICY_BYTES, SignedHedgingFeedLedgerV1, SignedHedgingPriceFeedV1,
+        decode_hedging_feed_trust_policy, decode_signed_hedging_price_feed,
+    },
+    pricing::signed::{
+        GovernedPricingManifestV1, GovernedPricingSeriesV1, MAX_PRICING_TRUST_POLICY_BYTES,
+        PricingTrustPolicyV1, decode_governed_pricing_manifest, decode_pricing_trust_policy,
+    },
+};
 use thiserror::Error;
 use tokio::sync::broadcast;
 pub use transparency::{
@@ -340,6 +358,11 @@ pub use transparency::{
 use crate::{
     capacity::CapacityRuntimeCheckpointV1,
     deal::DealRuntimeCheckpointV1,
+    economics::{
+        MAX_HEDGING_RUNTIME_CHECKPOINT_BYTES, MAX_PRICING_RUNTIME_CHECKPOINT_BYTES,
+        decode_hedging_checkpoint, decode_pricing_checkpoint, encode_hedging_checkpoint,
+        encode_pricing_checkpoint,
+    },
     governance::FilesystemGovernancePublisher,
     metering::{CapacityMeter, MeteringSnapshot, ReplicationUsageSample},
     moderation::{
@@ -574,6 +597,18 @@ fn orderbook_runtime_snapshot_path(data_dir: &Path) -> PathBuf {
         .join(ORDERBOOK_RUNTIME_SNAPSHOT_FILE)
 }
 
+fn pricing_runtime_snapshot_path(data_dir: &Path) -> PathBuf {
+    data_dir
+        .join(ECONOMICS_RUNTIME_STATE_DIR)
+        .join(PRICING_RUNTIME_SNAPSHOT_FILE)
+}
+
+fn hedging_runtime_snapshot_path(data_dir: &Path) -> PathBuf {
+    data_dir
+        .join(ECONOMICS_RUNTIME_STATE_DIR)
+        .join(HEDGING_RUNTIME_SNAPSHOT_FILE)
+}
+
 fn moderation_model_registry_checkpoint_path(data_dir: &Path) -> PathBuf {
     data_dir
         .join(MODERATION_MODEL_REGISTRY_DIR)
@@ -622,11 +657,19 @@ fn runtime_state_initialization_path(data_dir: &Path) -> PathBuf {
         .join(RUNTIME_STATE_INITIALIZATION_FILE)
 }
 
-fn required_runtime_checkpoint_paths(data_dir: &Path) -> [(&'static str, PathBuf); 7] {
+fn required_runtime_checkpoint_paths(data_dir: &Path) -> [(&'static str, PathBuf); 9] {
     [
         (
             "orderbook runtime",
             orderbook_runtime_snapshot_path(data_dir),
+        ),
+        (
+            "governed pricing runtime",
+            pricing_runtime_snapshot_path(data_dir),
+        ),
+        (
+            "signed hedging-feed runtime",
+            hedging_runtime_snapshot_path(data_dir),
         ),
         (
             "moderation model registry",
@@ -1045,17 +1088,62 @@ fn read_local_checkpoint_bounded(path: &Path, max_bytes: u64) -> io::Result<Opti
     Ok(Some(bytes))
 }
 
+pub(crate) fn decode_local_checkpoint_canonical<T>(
+    bytes: &[u8],
+    max_bytes: u64,
+    max_sequence_elements: usize,
+) -> Result<T, String>
+where
+    for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes {
+        return Err(format!(
+            "checkpoint is {} bytes, exceeding limit {max_bytes}",
+            bytes.len()
+        ));
+    }
+    let maximum_bytes = usize::try_from(max_bytes)
+        .map_err(|_| "checkpoint byte limit does not fit memory address space".to_owned())?;
+    let limits = norito::DecodeLimits::new(
+        max_sequence_elements.max(1),
+        maximum_bytes,
+        maximum_bytes.saturating_mul(2),
+        maximum_bytes.saturating_mul(4),
+        64,
+    );
+    let checkpoint: T = norito::decode_from_bytes_with_limits(bytes, limits)
+        .map_err(|err| format!("bounded checkpoint decode failed: {err}"))?;
+    let canonical = norito::to_bytes(&checkpoint)
+        .map_err(|err| format!("canonical checkpoint encoding failed: {err}"))?;
+    if canonical != bytes {
+        return Err("checkpoint is not the exact canonical Norito encoding".to_owned());
+    }
+    Ok(checkpoint)
+}
+
 fn read_reputation_trust_policy_file(path: &Path) -> io::Result<Vec<u8>> {
+    read_trust_policy_file(
+        path,
+        MAX_REPUTATION_TRUST_POLICY_ENCODED_BYTES,
+        "reputation trust policy",
+    )
+}
+
+fn read_trust_policy_file(
+    path: &Path,
+    max_bytes: usize,
+    label: &'static str,
+) -> io::Result<Vec<u8>> {
     let path = absolute_local_checkpoint_path(path)?;
     let path = path.as_path();
     reject_unsafe_checkpoint_ancestors(path)?;
     let before_open = fs::symlink_metadata(path)?;
-    validate_reputation_trust_policy_file_metadata(path, &before_open)?;
-    let max_bytes = u64::try_from(MAX_REPUTATION_TRUST_POLICY_ENCODED_BYTES)
-        .map_err(|_| io::Error::other("reputation trust-policy size cap does not fit u64"))?;
+    validate_trust_policy_file_metadata(path, &before_open, label)?;
+    let max_bytes = u64::try_from(max_bytes)
+        .map_err(|_| io::Error::other(format!("{label} size cap does not fit u64")))?;
     if before_open.len() > max_bytes {
         return Err(io::Error::other(format!(
-            "reputation trust policy `{}` is {} bytes, exceeding limit {max_bytes}",
+            "{label} `{}` is {} bytes, exceeding limit {max_bytes}",
             path.display(),
             before_open.len()
         )));
@@ -1065,23 +1153,23 @@ fn read_reputation_trust_policy_file(path: &Path) -> io::Result<Vec<u8>> {
     set_local_no_follow_flag(&mut options);
     let file = options.open(path)?;
     let opened = file.metadata()?;
-    validate_reputation_trust_policy_file_metadata(path, &opened)?;
+    validate_trust_policy_file_metadata(path, &opened, label)?;
     if opened.len() > max_bytes || !reputation_policy_metadata_stable(&before_open, &opened) {
         return Err(io::Error::other(format!(
-            "reputation trust policy `{}` changed identity or exceeded its size limit while opening",
+            "{label} `{}` changed identity or exceeded its size limit while opening",
             path.display()
         )));
     }
     let capacity = usize::try_from(opened.len()).map_err(|_| {
         io::Error::other(format!(
-            "reputation trust policy `{}` length does not fit memory address space",
+            "{label} `{}` length does not fit memory address space",
             path.display()
         ))
     })?;
     let mut bytes = Vec::new();
     bytes.try_reserve_exact(capacity).map_err(|_| {
         io::Error::other(format!(
-            "failed to reserve memory for reputation trust policy `{}`",
+            "failed to reserve memory for {label} `{}`",
             path.display()
         ))
     })?;
@@ -1089,18 +1177,18 @@ fn read_reputation_trust_policy_file(path: &Path) -> io::Result<Vec<u8>> {
     limited.read_to_end(&mut bytes)?;
     if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes {
         return Err(io::Error::other(format!(
-            "reputation trust policy `{}` grew beyond limit {max_bytes} while reading",
+            "{label} `{}` grew beyond limit {max_bytes} while reading",
             path.display()
         )));
     }
     let after_read_file = limited.get_ref().metadata()?;
     let after_read = fs::symlink_metadata(path)?;
-    validate_reputation_trust_policy_file_metadata(path, &after_read)?;
+    validate_trust_policy_file_metadata(path, &after_read, label)?;
     if !reputation_policy_metadata_stable(&opened, &after_read_file)
         || !reputation_policy_metadata_stable(&after_read_file, &after_read)
     {
         return Err(io::Error::other(format!(
-            "reputation trust policy `{}` changed while being read",
+            "{label} `{}` changed while being read",
             path.display()
         )));
     }
@@ -1125,13 +1213,14 @@ fn reputation_policy_metadata_stable(expected: &fs::Metadata, observed: &fs::Met
         && same_local_file_identity(expected, observed)
 }
 
-fn validate_reputation_trust_policy_file_metadata(
+fn validate_trust_policy_file_metadata(
     path: &Path,
     metadata: &fs::Metadata,
+    label: &'static str,
 ) -> io::Result<()> {
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(io::Error::other(format!(
-            "reputation trust policy `{}` must be a regular non-symlink file",
+            "{label} `{}` must be a regular non-symlink file",
             path.display()
         )));
     }
@@ -1139,13 +1228,13 @@ fn validate_reputation_trust_policy_file_metadata(
     {
         if metadata.nlink() != 1 {
             return Err(io::Error::other(format!(
-                "reputation trust policy `{}` must have exactly one hard link",
+                "{label} `{}` must have exactly one hard link",
                 path.display()
             )));
         }
         if metadata.permissions().mode() & 0o022 != 0 {
             return Err(io::Error::other(format!(
-                "reputation trust policy `{}` must not be writable by group or other users",
+                "{label} `{}` must not be writable by group or other users",
                 path.display()
             )));
         }
@@ -2193,6 +2282,12 @@ pub struct NodeHandle {
     orderbook_checkpoint_path: Option<PathBuf>,
     orderbook_events: Arc<RwLock<BoundedEventHistory<OrderbookEvent>>>,
     orderbook_event_sender: broadcast::Sender<OrderbookEvent>,
+    pricing_trust_policy: Option<Arc<PricingTrustPolicyV1>>,
+    governed_pricing: Arc<RwLock<Option<GovernedPricingSeriesV1>>>,
+    pricing_checkpoint_path: Option<PathBuf>,
+    hedging_feed_trust_policy: Option<Arc<HedgingFeedTrustPolicyV1>>,
+    signed_hedging_feeds: Arc<RwLock<Option<SignedHedgingFeedLedgerV1>>>,
+    hedging_checkpoint_path: Option<PathBuf>,
     reserve_lifecycle: Arc<RwLock<ReserveLifecycleRuntime>>,
     reserve_lifecycle_event_sender: broadcast::Sender<ReserveLifecycleEvent>,
     reserve_movement_event_sender: broadcast::Sender<ReserveMovementRecord>,
@@ -3599,6 +3694,28 @@ pub enum NodeInitError {
         /// Validation or I/O diagnostic.
         message: String,
     },
+    /// The configured external pricing trust policy could not be read or validated.
+    #[error(
+        "failed to load SoraFS pricing trust policy `{path}`: {message}",
+        path = path.display()
+    )]
+    PricingTrustPolicy {
+        /// Configured trust-policy path.
+        path: PathBuf,
+        /// Validation or I/O diagnostic.
+        message: String,
+    },
+    /// The configured external hedging-feed trust policy could not be read or validated.
+    #[error(
+        "failed to load SoraFS hedging-feed trust policy `{path}`: {message}",
+        path = path.display()
+    )]
+    HedgingFeedTrustPolicy {
+        /// Configured trust-policy path.
+        path: PathBuf,
+        /// Validation or I/O diagnostic.
+        message: String,
+    },
 }
 
 impl NodeInitError {
@@ -3623,6 +3740,37 @@ fn load_reputation_trust_policy(
     decode_reputation_trust_policy(&bytes).map_err(|error| NodeInitError::ReputationTrustPolicy {
         path: path.to_path_buf(),
         message: error.to_string(),
+    })
+}
+
+fn load_pricing_trust_policy(path: &Path) -> Result<PricingTrustPolicyV1, NodeInitError> {
+    let bytes =
+        read_trust_policy_file(path, MAX_PRICING_TRUST_POLICY_BYTES, "pricing trust policy")
+            .map_err(|error| NodeInitError::PricingTrustPolicy {
+                path: path.to_path_buf(),
+                message: error.to_string(),
+            })?;
+    decode_pricing_trust_policy(&bytes).map_err(|error| NodeInitError::PricingTrustPolicy {
+        path: path.to_path_buf(),
+        message: error.to_string(),
+    })
+}
+
+fn load_hedging_feed_trust_policy(path: &Path) -> Result<HedgingFeedTrustPolicyV1, NodeInitError> {
+    let bytes = read_trust_policy_file(
+        path,
+        MAX_HEDGING_TRUST_POLICY_BYTES,
+        "hedging-feed trust policy",
+    )
+    .map_err(|error| NodeInitError::HedgingFeedTrustPolicy {
+        path: path.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    decode_hedging_feed_trust_policy(&bytes).map_err(|error| {
+        NodeInitError::HedgingFeedTrustPolicy {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        }
     })
 }
 
@@ -3704,6 +3852,40 @@ impl NodeHandle {
             .map(|path| load_reputation_trust_policy(path))
             .transpose()?
             .map(Arc::new);
+        let pricing_trust_policy = config
+            .pricing_trust_policy_path()
+            .map(|path| load_pricing_trust_policy(path))
+            .transpose()?
+            .map(Arc::new);
+        let governed_pricing = match pricing_trust_policy.as_deref() {
+            Some(policy) => Some(GovernedPricingSeriesV1::new(policy).map_err(|error| {
+                NodeInitError::PricingTrustPolicy {
+                    path: config
+                        .pricing_trust_policy_path()
+                        .cloned()
+                        .unwrap_or_else(|| PathBuf::from("<configured-pricing-policy>")),
+                    message: error.to_string(),
+                }
+            })?),
+            None => None,
+        };
+        let hedging_feed_trust_policy = config
+            .hedging_feed_trust_policy_path()
+            .map(|path| load_hedging_feed_trust_policy(path))
+            .transpose()?
+            .map(Arc::new);
+        let signed_hedging_feeds = match hedging_feed_trust_policy.as_deref() {
+            Some(policy) => Some(SignedHedgingFeedLedgerV1::new(policy).map_err(|error| {
+                NodeInitError::HedgingFeedTrustPolicy {
+                    path: config
+                        .hedging_feed_trust_policy_path()
+                        .cloned()
+                        .unwrap_or_else(|| PathBuf::from("<configured-hedging-policy>")),
+                    message: error.to_string(),
+                }
+            })?),
+            None => None,
+        };
         let repair_config = repair_config.with_default_state_dir(config.data_dir());
         let gc_config = gc_config.with_default_state_dir(config.data_dir());
         let scheduler_config = StorageSchedulerConfig::from_storage_config(&config);
@@ -3742,6 +3924,12 @@ impl NodeHandle {
         let orderbook_checkpoint_path = storage
             .as_ref()
             .map(|_| orderbook_runtime_snapshot_path(config.data_dir()));
+        let pricing_checkpoint_path = storage
+            .as_ref()
+            .map(|_| pricing_runtime_snapshot_path(config.data_dir()));
+        let hedging_checkpoint_path = storage
+            .as_ref()
+            .map(|_| hedging_runtime_snapshot_path(config.data_dir()));
         let moderation_model_registry_checkpoint_path = storage
             .as_ref()
             .map(|_| moderation_model_registry_checkpoint_path(config.data_dir()));
@@ -3827,6 +4015,12 @@ impl NodeHandle {
             orderbook_checkpoint_path,
             orderbook_events: Arc::new(RwLock::new(BoundedEventHistory::new(event_history_limit))),
             orderbook_event_sender,
+            pricing_trust_policy,
+            governed_pricing: Arc::new(RwLock::new(governed_pricing)),
+            pricing_checkpoint_path,
+            hedging_feed_trust_policy,
+            signed_hedging_feeds: Arc::new(RwLock::new(signed_hedging_feeds)),
+            hedging_checkpoint_path,
             reserve_lifecycle: Arc::new(RwLock::new(ReserveLifecycleRuntime::with_limits(
                 state_entry_limit,
                 event_history_limit,
@@ -3870,6 +4064,8 @@ impl NodeHandle {
                 }
                 Some(RuntimeCheckpointInitialization::Initialized) => {
                     node.load_orderbook_checkpoint()?;
+                    node.load_pricing_checkpoint()?;
+                    node.load_hedging_checkpoint()?;
                     node.load_moderation_model_registry_checkpoint()?;
                     node.load_moderation_screening_checkpoint()?;
                     node.load_moderation_quarantine_object_index_checkpoint()?;
@@ -4057,6 +4253,22 @@ impl NodeHandle {
         self.persist_orderbook_checkpoint(&orderbook_checkpoint)
             .map_err(|err| NodeInitError::checkpoint("orderbook runtime", orderbook_path, err))?;
 
+        let pricing_path = self
+            .pricing_checkpoint_path
+            .as_ref()
+            .expect("storage-backed node has a governed-pricing checkpoint path");
+        self.persist_pricing_checkpoint().map_err(|err| {
+            NodeInitError::checkpoint("governed pricing runtime", pricing_path, err)
+        })?;
+
+        let hedging_path = self
+            .hedging_checkpoint_path
+            .as_ref()
+            .expect("storage-backed node has a signed-feed checkpoint path");
+        self.persist_hedging_checkpoint().map_err(|err| {
+            NodeInitError::checkpoint("signed hedging-feed runtime", hedging_path, err)
+        })?;
+
         let model_path = self
             .moderation_model_registry_checkpoint_path
             .as_ref()
@@ -4124,6 +4336,235 @@ impl NodeHandle {
     #[must_use]
     pub fn deal_engine(&self) -> DealEngine {
         self.deal_engine.clone()
+    }
+
+    /// Admit one exact-canonical threshold-governed pricing manifest durably.
+    ///
+    /// The configured external policy supplies all trust roots. The submitted
+    /// bytes are decoded with protocol bounds, required to be canonical, and
+    /// never interpreted as a source of trust policy or signing secrets.
+    pub fn admit_governed_pricing_manifest(
+        &self,
+        canonical_envelope: &[u8],
+        admitted_at_unix: u64,
+    ) -> Result<GovernedPricingAdmissionOutcome, EconomicsRuntimeError> {
+        let governed = decode_governed_pricing_manifest(canonical_envelope)?;
+        let pricing_id = governed.pricing_id;
+        let effective_from_unix = governed.manifest.effective_from_unix;
+        let policy = self
+            .pricing_trust_policy
+            .as_deref()
+            .ok_or(EconomicsRuntimeError::PricingNotConfigured)?;
+        if self.pricing_checkpoint_path.is_none() {
+            return Err(EconomicsRuntimeError::Checkpoint(
+                "governed pricing admission requires enabled durable storage".to_owned(),
+            ));
+        }
+        let _mutation_guard = self
+            .runtime_mutation_lock
+            .lock()
+            .map_err(|_| EconomicsRuntimeError::StateLockPoisoned)?;
+        self.ensure_durability_healthy()
+            .map_err(EconomicsRuntimeError::Checkpoint)?;
+        let mut state = self
+            .governed_pricing
+            .write()
+            .map_err(|_| EconomicsRuntimeError::StateLockPoisoned)?;
+        let previous = state.clone();
+        let series = state
+            .as_mut()
+            .ok_or(EconomicsRuntimeError::PricingNotConfigured)?;
+        if let Err(error) = series.admit(policy, governed, admitted_at_unix) {
+            *state = previous;
+            return Err(error.into());
+        }
+        let admission_count = series.len();
+        if let Err(error) = self.persist_pricing_checkpoint_state(Some(series)) {
+            if !error.committed {
+                *state = previous;
+            }
+            return Err(EconomicsRuntimeError::Checkpoint(error.to_string()));
+        }
+        Ok(GovernedPricingAdmissionOutcome {
+            pricing_id,
+            effective_from_unix,
+            admitted_at_unix,
+            admission_count,
+        })
+    }
+
+    /// Return a validated clone of the durable governed-pricing series.
+    pub fn governed_pricing_series(
+        &self,
+    ) -> Result<GovernedPricingSeriesV1, EconomicsRuntimeError> {
+        let policy = self
+            .pricing_trust_policy
+            .as_deref()
+            .ok_or(EconomicsRuntimeError::PricingNotConfigured)?;
+        let state = self
+            .governed_pricing
+            .read()
+            .map_err(|_| EconomicsRuntimeError::StateLockPoisoned)?;
+        let series = state
+            .as_ref()
+            .ok_or(EconomicsRuntimeError::PricingNotConfigured)?;
+        series.validate(policy)?;
+        Ok(series.clone())
+    }
+
+    /// Return the latest governed pricing manifest effective at `observed_at_unix`.
+    pub fn active_governed_pricing(
+        &self,
+        observed_at_unix: u64,
+    ) -> Result<Option<GovernedPricingManifestV1>, EconomicsRuntimeError> {
+        let policy = self
+            .pricing_trust_policy
+            .as_deref()
+            .ok_or(EconomicsRuntimeError::PricingNotConfigured)?;
+        let state = self
+            .governed_pricing
+            .read()
+            .map_err(|_| EconomicsRuntimeError::StateLockPoisoned)?;
+        let series = state
+            .as_ref()
+            .ok_or(EconomicsRuntimeError::PricingNotConfigured)?;
+        Ok(series.active_at(policy, observed_at_unix)?.cloned())
+    }
+
+    /// Admit one exact-canonical externally signed hedging-feed sample durably.
+    pub fn admit_signed_hedging_feed(
+        &self,
+        canonical_envelope: &[u8],
+        admitted_at_unix: u64,
+    ) -> Result<SignedHedgingFeedAdmissionOutcome, EconomicsRuntimeError> {
+        let envelope = decode_signed_hedging_price_feed(canonical_envelope)?;
+        let feed_id = envelope.feed.feed_id.clone();
+        let source = envelope.feed.source.clone();
+        let observed_at_unix = envelope.feed.observed_at_unix;
+        let policy = self
+            .hedging_feed_trust_policy
+            .as_deref()
+            .ok_or(EconomicsRuntimeError::HedgingNotConfigured)?;
+        if self.hedging_checkpoint_path.is_none() {
+            return Err(EconomicsRuntimeError::Checkpoint(
+                "signed hedging-feed admission requires enabled durable storage".to_owned(),
+            ));
+        }
+        let _mutation_guard = self
+            .runtime_mutation_lock
+            .lock()
+            .map_err(|_| EconomicsRuntimeError::StateLockPoisoned)?;
+        self.ensure_durability_healthy()
+            .map_err(EconomicsRuntimeError::Checkpoint)?;
+        let mut state = self
+            .signed_hedging_feeds
+            .write()
+            .map_err(|_| EconomicsRuntimeError::StateLockPoisoned)?;
+        let previous = state.clone();
+        let ledger = state
+            .as_mut()
+            .ok_or(EconomicsRuntimeError::HedgingNotConfigured)?;
+        if let Err(error) = ledger.admit(policy, envelope, admitted_at_unix) {
+            *state = previous;
+            return Err(error.into());
+        }
+        let feed_count = ledger.len();
+        if let Err(error) = self.persist_hedging_checkpoint_state(Some(ledger)) {
+            if !error.committed {
+                *state = previous;
+            }
+            return Err(EconomicsRuntimeError::Checkpoint(error.to_string()));
+        }
+        drop(state);
+        let cluster = self.config.alias().map_or("local", String::as_str);
+        global_or_default().set_sorafs_hedging_feed_lag_seconds(
+            cluster,
+            &source,
+            admitted_at_unix.saturating_sub(observed_at_unix),
+        );
+        Ok(SignedHedgingFeedAdmissionOutcome {
+            feed_id,
+            source,
+            observed_at_unix,
+            admitted_at_unix,
+            feed_count,
+        })
+    }
+
+    /// Return a validated clone of the durable signed-feed high-water ledger.
+    pub fn signed_hedging_feed_ledger(
+        &self,
+    ) -> Result<SignedHedgingFeedLedgerV1, EconomicsRuntimeError> {
+        let policy = self
+            .hedging_feed_trust_policy
+            .as_deref()
+            .ok_or(EconomicsRuntimeError::HedgingNotConfigured)?;
+        let state = self
+            .signed_hedging_feeds
+            .read()
+            .map_err(|_| EconomicsRuntimeError::StateLockPoisoned)?;
+        let ledger = state
+            .as_ref()
+            .ok_or(EconomicsRuntimeError::HedgingNotConfigured)?;
+        ledger.validate(policy)?;
+        Ok(ledger.clone())
+    }
+
+    /// Return the latest authenticated sample retained for every feed id.
+    pub fn latest_signed_hedging_feeds(
+        &self,
+    ) -> Result<Vec<SignedHedgingPriceFeedV1>, EconomicsRuntimeError> {
+        let policy = self
+            .hedging_feed_trust_policy
+            .as_deref()
+            .ok_or(EconomicsRuntimeError::HedgingNotConfigured)?;
+        let state = self
+            .signed_hedging_feeds
+            .read()
+            .map_err(|_| EconomicsRuntimeError::StateLockPoisoned)?;
+        let ledger = state
+            .as_ref()
+            .ok_or(EconomicsRuntimeError::HedgingNotConfigured)?;
+        ledger.latest_signed_feeds(policy).map_err(Into::into)
+    }
+
+    /// Return the maximum feed age authorized by the configured hedging policy.
+    pub fn hedging_max_sample_age_secs(&self) -> Result<u64, EconomicsRuntimeError> {
+        self.hedging_feed_trust_policy
+            .as_deref()
+            .map(|policy| policy.max_sample_age_secs)
+            .ok_or(EconomicsRuntimeError::HedgingNotConfigured)
+    }
+
+    /// Derive a governed reference-price decision from durable latest samples.
+    pub fn derive_latest_hedging_reference_price(
+        &self,
+        effective_at_unix: u64,
+        admitted_at_unix: u64,
+        max_feed_age_secs: u64,
+        max_divergence_bps: u16,
+    ) -> Result<GovernedHedgingReferencePriceDecisionV1, EconomicsRuntimeError> {
+        let policy = self
+            .hedging_feed_trust_policy
+            .as_deref()
+            .ok_or(EconomicsRuntimeError::HedgingNotConfigured)?;
+        let state = self
+            .signed_hedging_feeds
+            .read()
+            .map_err(|_| EconomicsRuntimeError::StateLockPoisoned)?;
+        let ledger = state
+            .as_ref()
+            .ok_or(EconomicsRuntimeError::HedgingNotConfigured)?;
+        let governed = ledger.derive_latest_reference_price(
+            policy,
+            effective_at_unix,
+            admitted_at_unix,
+            max_feed_age_secs,
+            max_divergence_bps,
+        )?;
+        drop(state);
+        self.record_hedging_reference_price_metrics(&governed);
+        Ok(governed)
     }
 
     /// Apply an authenticated provider bond funding request at the exact next sequence.
@@ -8800,8 +9241,15 @@ impl NodeHandle {
         else {
             return Ok(());
         };
-        let snapshot = norito::decode_from_bytes::<ModerationModelRegistrySnapshot>(&bytes)
-            .map_err(|err| NodeInitError::checkpoint("moderation model registry", path, err))?;
+        let retention = self.config.runtime_retention();
+        let snapshot = decode_local_checkpoint_canonical::<ModerationModelRegistrySnapshot>(
+            &bytes,
+            retention.checkpoint_max_bytes(),
+            retention
+                .state_entry_limit()
+                .max(retention.event_history_limit()),
+        )
+        .map_err(|err| NodeInitError::checkpoint("moderation model registry", path, err))?;
         let repro_count = snapshot.reproducibility_manifests.len();
         let corpus_count = snapshot.adversarial_corpora.len();
         self.moderation_model_registry
@@ -8854,8 +9302,15 @@ impl NodeHandle {
         else {
             return Ok(());
         };
-        let snapshot = norito::decode_from_bytes::<ModerationScreeningSnapshot>(&bytes)
-            .map_err(|err| NodeInitError::checkpoint("moderation screening", path, err))?;
+        let retention = self.config.runtime_retention();
+        let snapshot = decode_local_checkpoint_canonical::<ModerationScreeningSnapshot>(
+            &bytes,
+            retention.checkpoint_max_bytes(),
+            retention
+                .state_entry_limit()
+                .max(retention.event_history_limit()),
+        )
+        .map_err(|err| NodeInitError::checkpoint("moderation screening", path, err))?;
         let screening_count = snapshot.screening_records.len();
         let quarantine_count = snapshot.quarantine_records.len();
         self.moderation_screening
@@ -8910,10 +9365,17 @@ impl NodeHandle {
         else {
             return Ok(());
         };
-        let snapshot = norito::decode_from_bytes::<ModerationQuarantineObjectSnapshot>(&bytes)
-            .map_err(|err| {
-                NodeInitError::checkpoint("moderation quarantine object index", path, err)
-            })?;
+        let retention = self.config.runtime_retention();
+        let snapshot = decode_local_checkpoint_canonical::<ModerationQuarantineObjectSnapshot>(
+            &bytes,
+            retention.checkpoint_max_bytes(),
+            retention
+                .state_entry_limit()
+                .max(retention.event_history_limit()),
+        )
+        .map_err(|err| {
+            NodeInitError::checkpoint("moderation quarantine object index", path, err)
+        })?;
         let object_count = snapshot.objects.len();
         self.moderation_quarantine_objects
             .read()
@@ -9126,8 +9588,15 @@ impl NodeHandle {
         else {
             return Ok(());
         };
-        let snapshot = norito::decode_from_bytes::<ModerationEvidenceViewerSnapshot>(&bytes)
-            .map_err(|err| NodeInitError::checkpoint("moderation evidence viewer", path, err))?;
+        let retention = self.config.runtime_retention();
+        let snapshot = decode_local_checkpoint_canonical::<ModerationEvidenceViewerSnapshot>(
+            &bytes,
+            retention.checkpoint_max_bytes(),
+            retention
+                .state_entry_limit()
+                .max(retention.event_history_limit()),
+        )
+        .map_err(|err| NodeInitError::checkpoint("moderation evidence viewer", path, err))?;
         let session_count = snapshot.sessions.len();
         let access_event_count = snapshot.access_events.len();
         self.validate_moderation_evidence_viewer_snapshot_refs(&snapshot)
@@ -9633,8 +10102,17 @@ impl NodeHandle {
         else {
             return Ok(());
         };
-        let checkpoint = norito::decode_from_bytes::<AuxiliaryRuntimeCheckpointV1>(&bytes)
-            .map_err(|err| NodeInitError::checkpoint("auxiliary runtime", path, err))?;
+        let retention = self.config.runtime_retention();
+        let maximum_sequence_elements = retention
+            .state_entry_limit()
+            .saturating_mul(2)
+            .saturating_add(retention.event_history_limit());
+        let checkpoint = decode_local_checkpoint_canonical::<AuxiliaryRuntimeCheckpointV1>(
+            &bytes,
+            retention.checkpoint_max_bytes(),
+            maximum_sequence_elements,
+        )
+        .map_err(|err| NodeInitError::checkpoint("auxiliary runtime", path, err))?;
         self.restore_auxiliary_runtime_checkpoint(checkpoint)
             .map_err(|err| NodeInitError::checkpoint("auxiliary runtime", path, err))?;
         Ok(())
@@ -11264,8 +11742,15 @@ impl NodeHandle {
         else {
             return Ok(());
         };
-        let snapshot = norito::decode_from_bytes::<ModerationBallotSnapshot>(&bytes)
-            .map_err(|err| NodeInitError::checkpoint("moderation ballot", path, err))?;
+        let retention = self.config.runtime_retention();
+        let snapshot = decode_local_checkpoint_canonical::<ModerationBallotSnapshot>(
+            &bytes,
+            retention.checkpoint_max_bytes(),
+            retention
+                .state_entry_limit()
+                .max(retention.event_history_limit()),
+        )
+        .map_err(|err| NodeInitError::checkpoint("moderation ballot", path, err))?;
         let (ballot_count, event_count) = self
             .restore_moderation_ballot_snapshot_in_memory(snapshot)
             .map_err(|err| NodeInitError::checkpoint("moderation ballot", path, err))?;
@@ -11456,6 +11941,148 @@ impl NodeHandle {
             }
         }
         Ok(())
+    }
+
+    fn pricing_checkpoint_max_bytes(&self) -> u64 {
+        self.config
+            .runtime_retention()
+            .checkpoint_max_bytes()
+            .min(u64::try_from(MAX_PRICING_RUNTIME_CHECKPOINT_BYTES).unwrap_or(u64::MAX))
+    }
+
+    fn hedging_checkpoint_max_bytes(&self) -> u64 {
+        self.config
+            .runtime_retention()
+            .checkpoint_max_bytes()
+            .min(u64::try_from(MAX_HEDGING_RUNTIME_CHECKPOINT_BYTES).unwrap_or(u64::MAX))
+    }
+
+    fn persist_pricing_checkpoint(&self) -> Result<(), RuntimeCheckpointPersistError> {
+        let state = self.governed_pricing.read().map_err(|_| {
+            RuntimeCheckpointPersistError::precommit(
+                "governed-pricing state lock poisoned while checkpointing",
+            )
+        })?;
+        self.persist_pricing_checkpoint_state(state.as_ref())
+    }
+
+    fn persist_pricing_checkpoint_state(
+        &self,
+        series: Option<&GovernedPricingSeriesV1>,
+    ) -> Result<(), RuntimeCheckpointPersistError> {
+        let Some(path) = self.pricing_checkpoint_path.as_ref() else {
+            return Ok(());
+        };
+        let bytes = encode_pricing_checkpoint(self.pricing_trust_policy.as_deref(), series)
+            .map_err(|error| {
+                RuntimeCheckpointPersistError::precommit(format!(
+                    "encode governed-pricing checkpoint `{}`: {error}",
+                    path.display()
+                ))
+            })?;
+        self.finish_local_checkpoint_write(
+            "governed pricing runtime",
+            path,
+            write_local_checkpoint_atomic_bounded(
+                path,
+                &bytes,
+                self.pricing_checkpoint_max_bytes(),
+            ),
+        )
+    }
+
+    fn load_pricing_checkpoint(&self) -> Result<(), NodeInitError> {
+        let Some(path) = self.pricing_checkpoint_path.as_ref() else {
+            return Ok(());
+        };
+        let Some(bytes) = read_local_checkpoint_bounded(path, self.pricing_checkpoint_max_bytes())
+            .map_err(|error| NodeInitError::checkpoint("governed pricing runtime", path, error))?
+        else {
+            return Ok(());
+        };
+        let restored = decode_pricing_checkpoint(&bytes, self.pricing_trust_policy.as_deref())
+            .map_err(|error| NodeInitError::checkpoint("governed pricing runtime", path, error))?;
+        *self.governed_pricing.write().map_err(|_| {
+            NodeInitError::checkpoint("governed pricing runtime", path, "state lock poisoned")
+        })? = restored;
+        Ok(())
+    }
+
+    fn persist_hedging_checkpoint(&self) -> Result<(), RuntimeCheckpointPersistError> {
+        let state = self.signed_hedging_feeds.read().map_err(|_| {
+            RuntimeCheckpointPersistError::precommit(
+                "signed hedging-feed state lock poisoned while checkpointing",
+            )
+        })?;
+        self.persist_hedging_checkpoint_state(state.as_ref())
+    }
+
+    fn persist_hedging_checkpoint_state(
+        &self,
+        ledger: Option<&SignedHedgingFeedLedgerV1>,
+    ) -> Result<(), RuntimeCheckpointPersistError> {
+        let Some(path) = self.hedging_checkpoint_path.as_ref() else {
+            return Ok(());
+        };
+        let bytes = encode_hedging_checkpoint(self.hedging_feed_trust_policy.as_deref(), ledger)
+            .map_err(|error| {
+                RuntimeCheckpointPersistError::precommit(format!(
+                    "encode signed hedging-feed checkpoint `{}`: {error}",
+                    path.display()
+                ))
+            })?;
+        self.finish_local_checkpoint_write(
+            "signed hedging-feed runtime",
+            path,
+            write_local_checkpoint_atomic_bounded(
+                path,
+                &bytes,
+                self.hedging_checkpoint_max_bytes(),
+            ),
+        )
+    }
+
+    fn load_hedging_checkpoint(&self) -> Result<(), NodeInitError> {
+        let Some(path) = self.hedging_checkpoint_path.as_ref() else {
+            return Ok(());
+        };
+        let Some(bytes) = read_local_checkpoint_bounded(path, self.hedging_checkpoint_max_bytes())
+            .map_err(|error| {
+                NodeInitError::checkpoint("signed hedging-feed runtime", path, error)
+            })?
+        else {
+            return Ok(());
+        };
+        let restored = decode_hedging_checkpoint(&bytes, self.hedging_feed_trust_policy.as_deref())
+            .map_err(|error| {
+                NodeInitError::checkpoint("signed hedging-feed runtime", path, error)
+            })?;
+        *self.signed_hedging_feeds.write().map_err(|_| {
+            NodeInitError::checkpoint("signed hedging-feed runtime", path, "state lock poisoned")
+        })? = restored;
+        Ok(())
+    }
+
+    fn record_hedging_reference_price_metrics(
+        &self,
+        governed: &GovernedHedgingReferencePriceDecisionV1,
+    ) {
+        let cluster = self.config.alias().map_or("local", String::as_str);
+        let reference = governed.decision.xor_usd_micros;
+        let metrics = global_or_default();
+        metrics.set_sorafs_hedging_reference_price_micro_usd(cluster, reference);
+        for feed in &governed.decision.feeds {
+            let difference = feed.xor_usd_micros.abs_diff(reference);
+            let divergence = u128::from(difference)
+                .saturating_mul(10_000)
+                .checked_div(u128::from(reference))
+                .unwrap_or(u128::MAX);
+            metrics.set_sorafs_hedging_feed_divergence_bps(
+                cluster,
+                &feed.source,
+                u64::try_from(divergence).unwrap_or(u64::MAX),
+            );
+        }
     }
 
     fn resolve_moderation_quarantine_object_path(
@@ -16184,6 +16811,31 @@ mod tests {
         );
         assert!(write_local_checkpoint_atomic_bounded(&path, b"too-large", 4).is_err());
         assert!(read_local_checkpoint_bounded(&path, 4).is_err());
+    }
+
+    #[test]
+    fn local_checkpoint_decoder_rejects_trailing_bytes_and_sequence_bombs() {
+        let value = vec![1_u64, 2];
+        let canonical = norito::to_bytes(&value).expect("encode canonical checkpoint fixture");
+        assert_eq!(
+            decode_local_checkpoint_canonical::<Vec<u64>>(&canonical, 4_096, 2)
+                .expect("decode canonical checkpoint fixture"),
+            value
+        );
+
+        let mut trailing = canonical;
+        trailing.push(0);
+        assert!(
+            decode_local_checkpoint_canonical::<Vec<u64>>(&trailing, 4_096, 2).is_err(),
+            "trailing bytes must not be accepted as an equivalent checkpoint"
+        );
+
+        let oversized_sequence =
+            norito::to_bytes(&vec![1_u64, 2, 3]).expect("encode sequence bomb fixture");
+        assert!(
+            decode_local_checkpoint_canonical::<Vec<u64>>(&oversized_sequence, 4_096, 2).is_err(),
+            "declared sequence length must fail before allocation beyond the configured bound"
+        );
     }
 
     #[test]

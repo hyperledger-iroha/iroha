@@ -13,6 +13,7 @@ use iroha_core::sumeragi::consensus::{
 };
 use iroha_data_model::{
     ChainId, Level,
+    block::consensus_v2::{ConsensusMode, SumeragiV2StatusResponse},
     isi::{Log, SetParameter},
     parameter::{
         Parameter, Parameters,
@@ -89,24 +90,14 @@ fn cutover_builder(peers: usize, npos_params: SumeragiNposParameters) -> Network
         )))
 }
 
-fn epoch_length(status: &norito::json::Value) -> u64 {
-    status
-        .get("epoch")
-        .and_then(|epoch| epoch.get("length_blocks"))
-        .and_then(norito::json::Value::as_u64)
-        .or_else(|| {
-            // Backwards compatibility with legacy sumeragi status shape.
-            status
-                .get("epoch_length_blocks")
-                .and_then(norito::json::Value::as_u64)
-        })
-        .unwrap_or_default()
-}
-
-fn collectors_consensus_mode(value: &norito::json::Value) -> Option<String> {
-    value
-        .get("consensus_mode")
-        .and_then(|v| v.as_str().map(str::to_string))
+fn has_bounded_frozen_epoch(status: &SumeragiV2StatusResponse, max_length: u64) -> bool {
+    let context = status.authoritative.height_context;
+    context.mode == ConsensusMode::Npos
+        && context.epoch_end_height >= status.authoritative.height
+        && context
+            .epoch_end_height
+            .saturating_sub(status.authoritative.height)
+            < max_length
 }
 
 fn commit_quorum_size(validator_count: usize) -> usize {
@@ -297,9 +288,9 @@ fn consensus_fingerprint_bytes(
     compute_consensus_fingerprint_from_params(chain_id, &canon, mode_tag).to_vec()
 }
 
-async fn wait_for_collectors_mode_quorum(
+async fn wait_for_v2_mode_quorum(
     clients: &[Client],
-    expected: &str,
+    expected: ConsensusMode,
     quorum: usize,
 ) -> Result<()> {
     let mut last_observed = Vec::new();
@@ -307,13 +298,10 @@ async fn wait_for_collectors_mode_quorum(
         last_observed.clear();
         let mut matches = 0;
         for client in clients {
-            match client.get_sumeragi_collectors_json() {
-                Ok(value) => {
-                    let mode = collectors_consensus_mode(&value);
-                    if mode
-                        .as_deref()
-                        .is_some_and(|mode| mode.eq_ignore_ascii_case(expected))
-                    {
+            match client.get_sumeragi_v2_status() {
+                Ok(status) => {
+                    let mode = status.authoritative.height_context.mode;
+                    if mode == expected {
                         matches += 1;
                     }
                     last_observed.push(format!("ok:{mode:?}"));
@@ -331,31 +319,31 @@ async fn wait_for_collectors_mode_quorum(
     }
 
     bail!(
-        "collectors mode never reached expected value `{expected}` on quorum {quorum}; last observed {last_observed:?}"
+        "authoritative v2 height context never reached mode {expected:?} on quorum {quorum}; last observed {last_observed:?}"
     )
 }
 
-async fn wait_for_epoch_length_quorum(
+async fn wait_for_bounded_npos_epoch_quorum(
     clients: &[Client],
     expected: u64,
     quorum: usize,
-) -> Result<norito::json::Value> {
+) -> Result<SumeragiV2StatusResponse> {
     let mut last_observed = Vec::new();
     for attempt in 0..STATUS_POLL_LIMIT {
         last_observed.clear();
         let mut first_match = None;
         let mut matches = 0;
         for client in clients {
-            match client.get_sumeragi_status_json() {
+            match client.get_sumeragi_v2_status() {
                 Ok(status) => {
-                    let observed = epoch_length(&status);
-                    if observed == expected {
+                    let observed = has_bounded_frozen_epoch(&status, expected);
+                    if observed {
                         matches += 1;
                         if first_match.is_none() {
                             first_match = Some(status);
                         }
                     }
-                    last_observed.push(format!("ok:{observed}"));
+                    last_observed.push(format!("ok:{observed:?}"));
                 }
                 Err(err) => last_observed.push(format!("err:{err}")),
             }
@@ -372,7 +360,7 @@ async fn wait_for_epoch_length_quorum(
     }
 
     bail!(
-        "epoch_length_blocks never reached {expected} on quorum {quorum}; last observed {last_observed:?}"
+        "authoritative v2 status never exposed a bounded NPoS epoch of at most {expected} blocks on quorum {quorum}; last observed {last_observed:?}"
     )
 }
 
@@ -462,17 +450,18 @@ async fn permissioned_to_npos_cutover_switches_mode_at_activation_height() -> Re
     );
     let quorum = commit_quorum_size(clients.len());
     let progress_witness = progress_witness_count(clients.len());
-    let pre_status = client.get_sumeragi_status_json()?;
+    let pre_status = client.get_sumeragi_v2_status()?;
     ensure!(
-        epoch_length(&pre_status) == 0,
-        "epoch_length_blocks should reflect permissioned mode before activation, got {pre_status:?}"
+        pre_status.authoritative.height_context.mode == ConsensusMode::Permissioned
+            && pre_status.authoritative.height_context.epoch_end_height == u64::MAX,
+        "the pre-activation v2 height context must be the unbounded permissioned epoch, got {pre_status:?}"
     );
 
     advance_to_height_quorum(&clients, &client, ACTIVATION_HEIGHT, quorum, "cutover seed").await?;
     // Activation is a BFT-committed transition. A lagging validator may catch
     // up later, so assert that a commit quorum has flipped to NPoS instead of
     // requiring every peer to move in lockstep.
-    wait_for_collectors_mode_quorum(&clients, "npos", quorum).await?;
+    wait_for_v2_mode_quorum(&clients, ConsensusMode::Npos, quorum).await?;
     // Once a commit quorum reports NPoS, a post-activation block only needs an
     // f+1 witness set for this endpoint-shape assertion. Requiring another
     // immediate height quorum makes the test depend on how quickly lagging
@@ -485,14 +474,14 @@ async fn permissioned_to_npos_cutover_switches_mode_at_activation_height() -> Re
         "cutover npos settle",
     )
     .await?;
-    wait_for_collectors_mode_quorum(&clients, "npos", quorum).await?;
+    wait_for_v2_mode_quorum(&clients, ConsensusMode::Npos, quorum).await?;
 
     // The status endpoint reports epoch metadata from each peer's local epoch
     // tracker; lagging validators may expose the new mode before their local
     // status sample includes the post-activation epoch. After a commit quorum
     // has switched to NPoS, one matching status sample is enough to validate
     // the post-activation endpoint shape.
-    let post_status = wait_for_epoch_length_quorum(&clients, EPOCH_LENGTH_BLOCKS, 1).await?;
+    let post_status = wait_for_bounded_npos_epoch_quorum(&clients, EPOCH_LENGTH_BLOCKS, 1).await?;
 
     let params = client.get_parameters()?;
     let sp = params.sumeragi();
@@ -505,8 +494,9 @@ async fn permissioned_to_npos_cutover_switches_mode_at_activation_height() -> Re
         "system parameters should advertise staged next_mode Npos, got {sp:?}"
     );
     ensure!(
-        epoch_length(&post_status) == EPOCH_LENGTH_BLOCKS,
-        "post-activation status should reflect NPoS epoch length, got {post_status:?}"
+        post_status.authoritative.height_context.mode == ConsensusMode::Npos
+            && has_bounded_frozen_epoch(&post_status, EPOCH_LENGTH_BLOCKS),
+        "post-activation v2 height context should expose a finite frozen NPoS epoch, got {post_status:?}"
     );
 
     network.shutdown().await;

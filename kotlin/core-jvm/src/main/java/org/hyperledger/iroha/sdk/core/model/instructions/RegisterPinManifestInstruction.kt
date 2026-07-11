@@ -67,7 +67,6 @@ private fun requireAliasText(value: String?, fieldName: String): String {
 /** Typed first-release builder for the consensus `RegisterPinManifest` instruction. */
 class RegisterPinManifestInstruction private constructor(
     @JvmField val manifestPayloadBase64: String,
-    @JvmField val chunkDigestSha3Hex: String,
     @JvmField val submittedEpoch: Long,
     @JvmField val successorOfHex: String?,
     @JvmField val aliasBinding: AliasBinding?,
@@ -83,7 +82,6 @@ class RegisterPinManifestInstruction private constructor(
         if (this === other) return true
         if (other !is RegisterPinManifestInstruction) return false
         return manifestPayloadBase64 == other.manifestPayloadBase64 &&
-            chunkDigestSha3Hex == other.chunkDigestSha3Hex &&
             submittedEpoch == other.submittedEpoch &&
             successorOfHex == other.successorOfHex &&
             aliasBinding == other.aliasBinding
@@ -91,7 +89,6 @@ class RegisterPinManifestInstruction private constructor(
 
     override fun hashCode(): Int {
         var result = manifestPayloadBase64.hashCode()
-        result = 31 * result + chunkDigestSha3Hex.hashCode()
         result = 31 * result + submittedEpoch.hashCode()
         result = 31 * result + (successorOfHex?.hashCode() ?: 0)
         result = 31 * result + (aliasBinding?.hashCode() ?: 0)
@@ -101,7 +98,6 @@ class RegisterPinManifestInstruction private constructor(
     /** Builder for a canonical register-pin instruction. */
     class Builder internal constructor() {
         private var manifestPayloadBase64: String? = null
-        private var chunkDigestSha3Hex: String? = null
         private var submittedEpoch: Long? = null
         private var successorOfHex: String? = null
         private var aliasBinding: AliasBinding? = null
@@ -115,10 +111,6 @@ class RegisterPinManifestInstruction private constructor(
                 "manifestPayload must contain 1..$MAX_MANIFEST_PAYLOAD_BYTES bytes"
             }
             this.manifestPayloadBase64 = Base64.encode(manifestPayload.copyOf())
-        }
-
-        fun setChunkDigestSha3Hex(chunkDigestSha3Hex: String) = apply {
-            this.chunkDigestSha3Hex = requireNonzeroDigest(chunkDigestSha3Hex, "chunkDigestSha3Hex")
         }
 
         fun setSubmittedEpoch(submittedEpoch: Long) = apply {
@@ -138,18 +130,15 @@ class RegisterPinManifestInstruction private constructor(
 
         fun build(): RegisterPinManifestInstruction {
             val payload = checkNotNull(manifestPayloadBase64) { "manifestPayload must be set" }
-            val chunkDigest = checkNotNull(chunkDigestSha3Hex) { "chunkDigestSha3Hex must be set" }
             val epoch = checkNotNull(submittedEpoch) { "submittedEpoch must be set" }
             val args = canonicalArguments(
                 payload,
-                chunkDigest,
                 epoch,
                 successorOfHex,
                 aliasBinding,
             )
             return RegisterPinManifestInstruction(
                 payload,
-                chunkDigest,
                 epoch,
                 successorOfHex,
                 aliasBinding,
@@ -215,11 +204,17 @@ class RegisterPinManifestInstruction private constructor(
             @JvmStatic
             fun builder(): Builder = Builder()
 
-            internal fun fromArguments(arguments: Map<String, String>): AliasBinding? {
+            internal fun fromArguments(
+                arguments: Map<String, String>,
+                required: Boolean = false,
+            ): AliasBinding? {
                 val keys = setOf("alias.name", "alias.namespace", "alias.proof_hex")
                 val present = keys.count(arguments::containsKey)
                 require(present == 0 || present == keys.size) {
                     "alias binding requires alias.name, alias.namespace, and alias.proof_hex together"
+                }
+                require(!required || present == keys.size) {
+                    "alias binding requires alias.name, alias.namespace, and alias.proof_hex"
                 }
                 if (present == 0) return null
                 return builder()
@@ -237,7 +232,6 @@ class RegisterPinManifestInstruction private constructor(
         private val mandatoryArgumentKeys = setOf(
             "action",
             "manifest_payload_base64",
-            "chunk_digest_sha3_256_hex",
             "submitted_epoch",
         )
         private val optionalArgumentKeys = setOf(
@@ -261,7 +255,6 @@ class RegisterPinManifestInstruction private constructor(
             }
             return builder()
                 .setManifestPayloadBase64(requireArgument(arguments, "manifest_payload_base64"))
-                .setChunkDigestSha3Hex(requireArgument(arguments, "chunk_digest_sha3_256_hex"))
                 .setSubmittedEpoch(requireLong(arguments, "submitted_epoch"))
                 .setSuccessorOfHex(arguments["successor_of_hex"])
                 .setAliasBinding(AliasBinding.fromArguments(arguments))
@@ -270,14 +263,12 @@ class RegisterPinManifestInstruction private constructor(
 
         private fun canonicalArguments(
             manifestPayloadBase64: String,
-            chunkDigestSha3Hex: String,
             submittedEpoch: Long,
             successorOfHex: String?,
             aliasBinding: AliasBinding?,
         ): Map<String, String> = buildMap {
             put("action", ACTION)
             put("manifest_payload_base64", manifestPayloadBase64)
-            put("chunk_digest_sha3_256_hex", chunkDigestSha3Hex)
             put("submitted_epoch", submittedEpoch.toString())
             successorOfHex?.let { put("successor_of_hex", it) }
             aliasBinding?.appendArguments(this)

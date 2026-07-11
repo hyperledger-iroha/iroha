@@ -1027,6 +1027,61 @@ impl From<crate::prelude::UpsertProviderCredit> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::sorafs::SetSorafsOrderbookPolicy> for InstructionBox {
+    fn from(i: crate::isi::sorafs::SetSorafsOrderbookPolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::SubmitSorafsOrderbookOrder> for InstructionBox {
+    fn from(i: crate::isi::sorafs::SubmitSorafsOrderbookOrder) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::CancelSorafsOrderbookOrder> for InstructionBox {
+    fn from(i: crate::isi::sorafs::CancelSorafsOrderbookOrder) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::RecordSorafsOrderbookSettlementReceipt> for InstructionBox {
+    fn from(i: crate::isi::sorafs::RecordSorafsOrderbookSettlementReceipt) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::SetSorafsModerationPolicy> for InstructionBox {
+    fn from(i: crate::isi::sorafs::SetSorafsModerationPolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::OpenSorafsModerationCase> for InstructionBox {
+    fn from(i: crate::isi::sorafs::OpenSorafsModerationCase) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::SubmitSorafsModerationCommit> for InstructionBox {
+    fn from(i: crate::isi::sorafs::SubmitSorafsModerationCommit) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::RaiseSorafsModerationChallenge> for InstructionBox {
+    fn from(i: crate::isi::sorafs::RaiseSorafsModerationChallenge) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::ResolveSorafsModerationChallenge> for InstructionBox {
+    fn from(i: crate::isi::sorafs::ResolveSorafsModerationChallenge) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::SubmitSorafsModerationReveal> for InstructionBox {
+    fn from(i: crate::isi::sorafs::SubmitSorafsModerationReveal) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::FinalizeSorafsModerationCase> for InstructionBox {
+    fn from(i: crate::isi::sorafs::FinalizeSorafsModerationCase) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::space_directory::PublishSpaceDirectoryManifest> for InstructionBox {
     fn from(i: crate::isi::space_directory::PublishSpaceDirectoryManifest) -> Self {
         InstructionBox(Box::new(i))
@@ -1189,6 +1244,18 @@ impl From<crate::isi::offline::TopUpKagemushaRecursive> for InstructionBox {
 
 impl From<crate::isi::offline::RedeemKagemushaRecursive> for InstructionBox {
     fn from(i: crate::isi::offline::RedeemKagemushaRecursive) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::offline::TopUpKagemushaRecursiveV2> for InstructionBox {
+    fn from(i: crate::isi::offline::TopUpKagemushaRecursiveV2) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::offline::RedeemKagemushaRecursiveV2> for InstructionBox {
+    fn from(i: crate::isi::offline::RedeemKagemushaRecursiveV2) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -3901,10 +3968,14 @@ pub mod prelude {
             SetDirectoryRotationPolicy, SubmitDirectoryDraft, UnrevokeResolver,
         },
         sorafs::{
-            ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder,
-            ExpireReplicationOrder, IssueReplicationOrder, RecordCapacityTelemetry,
+            ApprovePinManifest, BindManifestAlias, CancelSorafsOrderbookOrder,
+            CompleteReplicationOrder, ExpireReplicationOrder, FinalizeSorafsModerationCase,
+            IssueReplicationOrder, OpenSorafsModerationCase, RaiseSorafsModerationChallenge,
+            RecordCapacityTelemetry, RecordSorafsOrderbookSettlementReceipt,
             RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
-            RetirePinManifest, SetPricingSchedule, UpsertProviderCredit,
+            ResolveSorafsModerationChallenge, RetirePinManifest, SetPricingSchedule,
+            SetSorafsModerationPolicy, SetSorafsOrderbookPolicy, SubmitSorafsModerationCommit,
+            SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder, UpsertProviderCredit,
         },
         space_directory::{
             ExpireSpaceDirectoryManifest, PublishSpaceDirectoryManifest,

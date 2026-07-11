@@ -101,10 +101,22 @@ signature to the exact policy digest, pricing payload, and predecessor id.
 checkpoint, rejects replay, forks, clock rollback, policy substitution,
 non-monotonic activation, and retroactive activation before admission, and
 selects the active schedule deterministically by observation time. This library
-state machine is shipped and restart-tested, but it is not yet wired as a
-replacement for the on-chain `SetPricingSchedule` instruction; a production
-pricing daemon must use the same governed boundary before forwarding an
-accepted schedule on-chain.
+state machine is also integrated into `sorafs_node`: operators may configure a
+canonical `pricing_trust_policy_path`, after which the node admits only bounded
+exact-canonical governed envelopes and persists the replay-validated series in
+`economics/governed-pricing.to`. Mutations roll back on pre-commit persistence
+failure and uncertain post-rename durability forces the node's durable mutation
+surface fail-closed. Restart rejects missing, oversized, noncanonical, tampered,
+or policy-substituted checkpoints, and the runtime exposes deterministic
+active-price lookup. This local trusted boundary is not yet a replacement for
+the on-chain `SetPricingSchedule` instruction and does not provide a daemon that
+forwards accepted schedules on-chain. Torii exposes the boundary through
+canonical-request-authenticated `POST /v1/sorafs/economics/pricing/manifests`,
+`GET /v1/sorafs/economics/status`, and
+`GET /v1/sorafs/economics/pricing/active`; every route additionally requires the
+`sorafs_economics_operator` role, signs the exact method/URI/body, returns
+private no-store responses, and rejects malformed, noncanonical, replayed,
+forked, policy-substituted, or clock-rollback admissions without mutation.
 
 ## Provider Credit Ledger Fields
 

@@ -68,6 +68,10 @@ def default_gate_metadata(
         add_hex_list("valid_policy_digests", "policy_digest_hex")
 
     if gate_name == "ai_prescreen":
+        metadata["deployment_context"] = {
+            "deployment_id": deployment_id,
+            "environment": environment,
+        }
         metadata["valid_runner_bindings"] = [
             {
                 "manifest_id_hex": "12" * 16,

@@ -14027,7 +14027,7 @@ mod tests {
     use iroha_torii::sorafs::AdmissionRegistry;
     use rand::rand_core::{TryCryptoRng, TryRngCore};
     use serial_test::serial;
-    use sorafs_car::CarBuildPlan;
+    use sorafs_car::{CarBuildPlan, compute_chunk_plan_digest_sha3};
     use sorafs_chunker::ChunkProfile;
     use sorafs_manifest::{
         AdvertEndpoint, AvailabilityTier, BLAKE3_256_MULTIHASH_CODE, CapabilityTlv, CapabilityType,
@@ -16198,6 +16198,7 @@ mod tests {
             ))
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
+            .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
             .content_length(plan.content_length)
             .car_digest(digest.into())
             .car_size(plan.content_length)

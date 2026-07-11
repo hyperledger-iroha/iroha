@@ -35,6 +35,8 @@ import {
   SM2_DEFAULT_DISTINGUISHED_ID,
   sm2FixtureFromSeed,
 } from "../src/crypto.js";
+import { verifyEd25519 as verifyBrowserEd25519 } from "../src/crypto.browser.js";
+import { ed25519 } from "@noble/curves/ed25519";
 import {
   normalizeCryptoAlgorithm as normalizeDistCryptoAlgorithm,
 } from "../dist/crypto.js";
@@ -110,6 +112,53 @@ test("signEd25519 and verifyEd25519 round-trip", () => {
   assert.equal(signature.length, 64);
   assert.equal(verifyEd25519(MESSAGE, signature, publicKey), true);
   assert.equal(verifyEd25519(Buffer.from("other"), signature, publicKey), false);
+  assert.equal(verifyBrowserEd25519(MESSAGE, signature, publicKey), true);
+});
+
+test("Ed25519 verification matches Rust strict rejection semantics", () => {
+  const message = Buffer.from(
+    "e249bef6c1b5202881c8996347ee0e7c5a65aa8078c5d7848d004781b0cf79e3",
+    "hex",
+  );
+  const publicKey = Buffer.from(
+    "48075a597e721a156e2e0799de5cc0c5324dc6e7eaf1cdd46250868ec53215dd",
+    "hex",
+  );
+  const mixedTorsion = Buffer.from(
+    "88fc2ecb6b72920cf6476056977d8dde846c8fc3b180ea9dc3973a1d0f2d0fb3eda13e150fc47692e90dd4a773d83dfaf454c7d0de9af8e68c5fbbd503f6a10c",
+    "hex",
+  );
+  assert.equal(ed25519.verify(mixedTorsion, message, publicKey, { zip215: false }), true);
+  assert.equal(verifyEd25519(message, mixedTorsion, publicKey), false);
+  assert.equal(verifyBrowserEd25519(message, mixedTorsion, publicKey), false);
+
+  const seed = Buffer.alloc(32, 0x31);
+  const ordinaryPublicKey = Buffer.from(ed25519.getPublicKey(seed));
+  const ordinary = Buffer.from(ed25519.sign(message, seed));
+  assert.equal(verifyEd25519(message, ordinary, ordinaryPublicKey), true);
+  assert.equal(verifyBrowserEd25519(message, ordinary, ordinaryPublicKey), true);
+
+  const scalarAtOrder = Buffer.alloc(32);
+  let order = ed25519.CURVE.n;
+  for (let index = 0; index < scalarAtOrder.length; index += 1) {
+    scalarAtOrder[index] = Number(order & 0xffn);
+    order >>= 8n;
+  }
+  const scalarOverflow = Buffer.concat([ordinary.subarray(0, 32), scalarAtOrder]);
+  const smallOrderR = Buffer.concat([
+    Buffer.from("01" + "00".repeat(31), "hex"),
+    ordinary.subarray(32),
+  ]);
+  const nonCanonicalR = Buffer.concat([
+    Buffer.from("ed" + "ff".repeat(30) + "7f", "hex"),
+    ordinary.subarray(32),
+  ]);
+  for (const invalid of [scalarOverflow, smallOrderR, nonCanonicalR]) {
+    assert.equal(verifyEd25519(message, invalid, ordinaryPublicKey), false);
+    assert.equal(verifyBrowserEd25519(message, invalid, ordinaryPublicKey), false);
+  }
+  assert.equal(verifyEd25519(message, ordinary, Buffer.alloc(32, 0x02)), false);
+  assert.equal(verifyBrowserEd25519(message, ordinary, Buffer.alloc(32, 0x02)), false);
 });
 
 test("publicKeyFromPrivate round-trips generated keys", () => {
@@ -160,6 +209,25 @@ test("recovery phrase helpers generate and derive 12-word phrases", () => {
   assert.equal(seed.length, 32);
   assert.notDeepEqual(seed, entropy);
   assert.equal(validateRecoveryPhrase(recovery.phrase), true);
+});
+
+test("Node recovery phrase generation does not require global Web Crypto", () => {
+  const cryptoDescriptor = Object.getOwnPropertyDescriptor(globalThis, "crypto");
+  try {
+    Object.defineProperty(globalThis, "crypto", {
+      configurable: true,
+      value: undefined,
+    });
+    const recovery = generateRecoveryPhrase(12);
+    assert.equal(recovery.wordCount, 12);
+    assert.equal(validateRecoveryPhrase(recovery.phrase), true);
+  } finally {
+    if (cryptoDescriptor) {
+      Object.defineProperty(globalThis, "crypto", cryptoDescriptor);
+    } else {
+      delete globalThis.crypto;
+    }
+  }
 });
 
 test("recovery phrase helpers reject malformed phrases and entropy", () => {

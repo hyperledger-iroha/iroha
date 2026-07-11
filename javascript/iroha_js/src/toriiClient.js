@@ -6643,7 +6643,8 @@ export class ToriiClient {
 
   /**
    * Fetch Sumeragi consensus status (`GET /v1/sumeragi/status`).
-   * Includes view-change proof counters (`view_change_proof_{accepted,stale,rejected}_total`) alongside QC, epoch, membership hash (`membership.{height,view,epoch,view_hash}`), RBC, and queue fields.
+   * JSON is the flattened authoritative v2 reducer snapshot plus canonical lane
+   * evidence and a separate bounded operator-diagnostics object.
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<any>}
    */
@@ -6685,7 +6686,7 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch Sumeragi consensus status and normalize Nexus fields.
+   * Fetch and fail-closed validate the authoritative Sumeragi v2 status.
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<ToriiSumeragiStatus>}
    */
@@ -13144,9 +13145,6 @@ function parseLanePrivacyCommitment(entry, context) {
 }
 
 function parseLaneSettlementCommitments(payload) {
-  if (payload == null) {
-    return [];
-  }
   if (!Array.isArray(payload)) {
     throw new TypeError("status.lane_settlement_commitments must be an array");
   }
@@ -13160,28 +13158,34 @@ function parseLaneSettlementCommitments(payload) {
         `status.lane_settlement_commitments[${index}].swap_metadata`,
       );
       swapMetadata = {
-        epsilon_bps: coerceNestedInt(
-          metadata,
-          "epsilon_bps",
-          `status.lane_settlement_commitments[${index}].swap_metadata`,
+        epsilon_bps: parseSumeragiUnsigned(
+          metadata.epsilon_bps,
+          `status.lane_settlement_commitments[${index}].swap_metadata.epsilon_bps`,
+          { max: 0xffff },
         ),
-        twap_window_seconds: coerceNestedInt(
-          metadata,
-          "twap_window_seconds",
-          `status.lane_settlement_commitments[${index}].swap_metadata`,
+        twap_window_seconds: parseSumeragiUnsigned(
+          metadata.twap_window_seconds,
+          `status.lane_settlement_commitments[${index}].swap_metadata.twap_window_seconds`,
+          { max: 0xffffffff },
         ),
-        liquidity_profile:
-          metadata.liquidity_profile === undefined || metadata.liquidity_profile === null
-            ? ""
-            : String(metadata.liquidity_profile),
-        twap_local_per_xor:
-          metadata.twap_local_per_xor === undefined || metadata.twap_local_per_xor === null
-            ? ""
-            : String(metadata.twap_local_per_xor),
-        volatility_class:
-          metadata.volatility_class === undefined || metadata.volatility_class === null
-            ? ""
-            : String(metadata.volatility_class),
+        liquidity_profile: parseSumeragiTaggedUnitWithContent(
+          metadata.liquidity_profile,
+          "profile",
+          "state",
+          ["Tier1", "Tier2", "Tier3"],
+          `status.lane_settlement_commitments[${index}].swap_metadata.liquidity_profile`,
+        ),
+        twap_local_per_xor: requireNonEmptyString(
+          metadata.twap_local_per_xor,
+          `status.lane_settlement_commitments[${index}].swap_metadata.twap_local_per_xor`,
+        ),
+        volatility_class: parseSumeragiTaggedUnitWithContent(
+          metadata.volatility_class,
+          "bucket",
+          "state",
+          ["Stable", "Elevated", "Dislocated"],
+          `status.lane_settlement_commitments[${index}].swap_metadata.volatility_class`,
+        ),
       };
     }
     const receiptsRecord = record.receipts;
@@ -13196,80 +13200,87 @@ function parseLaneSettlementCommitments(payload) {
         `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}]`,
       );
       return {
-        source_id:
-          receiptRecord.source_id === undefined || receiptRecord.source_id === null
-            ? ""
-            : String(receiptRecord.source_id),
-        local_amount_micro: coerceNestedInt(
-          receiptRecord,
-          "local_amount_micro",
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}]`,
+        source_id: parseSumeragiByte32(
+          receiptRecord.source_id,
+          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].source_id`,
         ),
-        xor_due_micro: coerceNestedInt(
-          receiptRecord,
-          "xor_due_micro",
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}]`,
+        local_amount_micro: parseSumeragiUnsignedDecimal(
+          receiptRecord.local_amount_micro,
+          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].local_amount_micro`,
         ),
-        xor_after_haircut_micro: coerceNestedInt(
-          receiptRecord,
-          "xor_after_haircut_micro",
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}]`,
+        xor_due_micro: parseSumeragiUnsignedDecimal(
+          receiptRecord.xor_due_micro,
+          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].xor_due_micro`,
         ),
-        xor_variance_micro: coerceNestedInt(
-          receiptRecord,
-          "xor_variance_micro",
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}]`,
+        xor_after_haircut_micro: parseSumeragiUnsignedDecimal(
+          receiptRecord.xor_after_haircut_micro,
+          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].xor_after_haircut_micro`,
         ),
-        timestamp_ms: coerceNestedInt(
-          receiptRecord,
-          "timestamp_ms",
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}]`,
+        xor_variance_micro: parseSumeragiUnsignedDecimal(
+          receiptRecord.xor_variance_micro,
+          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].xor_variance_micro`,
+        ),
+        timestamp_ms: parseSumeragiUnsigned(
+          receiptRecord.timestamp_ms,
+          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].timestamp_ms`,
         ),
       };
     });
+    const nexusFeeReceipts = parseSumeragiRecordArray(
+      record.nexus_fee_receipts,
+      `status.lane_settlement_commitments[${index}].nexus_fee_receipts`,
+    );
+    const nativeAmxReceipts = parseSumeragiRecordArray(
+      record.native_amx_receipts,
+      `status.lane_settlement_commitments[${index}].native_amx_receipts`,
+    );
     return {
-      block_height: coerceNestedInt(
-        record,
-        "block_height",
-        `status.lane_settlement_commitments[${index}]`,
+      block_height: parseSumeragiUnsigned(
+        record.block_height,
+        `status.lane_settlement_commitments[${index}].block_height`,
       ),
-      lane_id: coerceNestedInt(record, "lane_id", `status.lane_settlement_commitments[${index}]`),
-      dataspace_id: coerceNestedInt(
-        record,
-        "dataspace_id",
-        `status.lane_settlement_commitments[${index}]`,
+      lane_id: parseSumeragiUnsigned(
+        record.lane_id,
+        `status.lane_settlement_commitments[${index}].lane_id`,
+        { max: 0xffffffff },
       ),
-      tx_count: coerceNestedInt(record, "tx_count", `status.lane_settlement_commitments[${index}]`),
-      total_local_micro: coerceNestedInt(
-        record,
-        "total_local_micro",
-        `status.lane_settlement_commitments[${index}]`,
+      lane_incarnation: parseSumeragiNonzeroHash(
+        record.lane_incarnation,
+        `status.lane_settlement_commitments[${index}].lane_incarnation`,
       ),
-      total_xor_due_micro: coerceNestedInt(
-        record,
-        "total_xor_due_micro",
-        `status.lane_settlement_commitments[${index}]`,
+      dataspace_id: parseSumeragiUnsigned(
+        record.dataspace_id,
+        `status.lane_settlement_commitments[${index}].dataspace_id`,
       ),
-      total_xor_after_haircut_micro: coerceNestedInt(
-        record,
-        "total_xor_after_haircut_micro",
-        `status.lane_settlement_commitments[${index}]`,
+      tx_count: parseSumeragiUnsigned(
+        record.tx_count,
+        `status.lane_settlement_commitments[${index}].tx_count`,
       ),
-      total_xor_variance_micro: coerceNestedInt(
-        record,
-        "total_xor_variance_micro",
-        `status.lane_settlement_commitments[${index}]`,
+      total_local_micro: parseSumeragiUnsignedDecimal(
+        record.total_local_micro,
+        `status.lane_settlement_commitments[${index}].total_local_micro`,
+      ),
+      total_xor_due_micro: parseSumeragiUnsignedDecimal(
+        record.total_xor_due_micro,
+        `status.lane_settlement_commitments[${index}].total_xor_due_micro`,
+      ),
+      total_xor_after_haircut_micro: parseSumeragiUnsignedDecimal(
+        record.total_xor_after_haircut_micro,
+        `status.lane_settlement_commitments[${index}].total_xor_after_haircut_micro`,
+      ),
+      total_xor_variance_micro: parseSumeragiUnsignedDecimal(
+        record.total_xor_variance_micro,
+        `status.lane_settlement_commitments[${index}].total_xor_variance_micro`,
       ),
       swap_metadata: swapMetadata,
       receipts,
+      nexus_fee_receipts: nexusFeeReceipts,
+      native_amx_receipts: nativeAmxReceipts,
     };
   });
 }
 
 function parseLaneRelayEnvelopes(payload) {
-  if (payload == null) {
-    return [];
-  }
   if (!Array.isArray(payload)) {
     throw new TypeError("status.lane_relay_envelopes must be an array");
   }
@@ -13285,38 +13296,71 @@ function parseLaneRelayEnvelopes(payload) {
     if (settlementCommitments.length !== 1) {
       throw new TypeError(`${context}.settlement_commitment must be an object`);
     }
-    const settlementHash = requireNonEmptyString(
+    const laneId = parseSumeragiUnsigned(record.lane_id, `${context}.lane_id`, {
+      max: 0xffffffff,
+    });
+    const laneIncarnation = parseSumeragiNonzeroHash(
+      record.lane_incarnation,
+      `${context}.lane_incarnation`,
+    );
+    const dataspaceId = parseSumeragiUnsigned(record.dataspace_id, `${context}.dataspace_id`);
+    const blockHeight = parseSumeragiUnsigned(record.block_height, `${context}.block_height`);
+    const settlementHash = parseSumeragiHash(
       record.settlement_hash,
       `${context}.settlement_hash`,
     );
-    const manifestRoot =
-      record.manifest_root === undefined || record.manifest_root === null
-        ? null
-        : requireNonEmptyString(record.manifest_root, `${context}.manifest_root`);
+    const manifestRoot = parseSumeragiOptionalByte32(
+      record.manifest_root,
+      `${context}.manifest_root`,
+    );
     let fastpqProof = null;
     if (record.fastpq_proof !== undefined && record.fastpq_proof !== null) {
       const proof = ensureRecord(record.fastpq_proof, `${context}.fastpq_proof`);
       fastpqProof = {
-        proof_digest: requireNonEmptyString(proof.proof_digest, `${context}.fastpq_proof.proof_digest`),
-        verified_at_height:
-          proof.verified_at_height === undefined || proof.verified_at_height === null
-            ? null
-            : coerceNestedInt(proof, "verified_at_height", `${context}.fastpq_proof`),
+        proof_digest: parseSumeragiHash(
+          proof.proof_digest,
+          `${context}.fastpq_proof.proof_digest`,
+        ),
+        verified_at_height: parseSumeragiUnsigned(
+          proof.verified_at_height,
+          `${context}.fastpq_proof.verified_at_height`,
+        ),
       };
     }
+    const settlement = settlementCommitments[0];
+    if (
+      settlement.lane_id !== laneId ||
+      settlement.lane_incarnation !== laneIncarnation ||
+      settlement.dataspace_id !== dataspaceId ||
+      settlement.block_height !== blockHeight
+    ) {
+      throw new TypeError(`${context}.settlement_commitment identity must match its relay`);
+    }
     return {
-      lane_id: coerceNestedInt(record, "lane_id", context),
-      dataspace_id: coerceNestedInt(record, "dataspace_id", context),
-      block_height: coerceNestedInt(record, "block_height", context),
+      lane_id: laneId,
+      lane_incarnation: laneIncarnation,
+      dataspace_id: dataspaceId,
+      block_height: blockHeight,
       block_header: blockHeader,
       qc,
       da_commitment_hash:
         record.da_commitment_hash === undefined || record.da_commitment_hash === null
           ? null
-          : String(record.da_commitment_hash),
-      settlement_commitment: settlementCommitments[0],
+          : parseSumeragiHash(record.da_commitment_hash, `${context}.da_commitment_hash`),
+      lane_block_descriptor_hash:
+        record.lane_block_descriptor_hash === undefined ||
+        record.lane_block_descriptor_hash === null
+          ? null
+          : parseSumeragiHash(
+              record.lane_block_descriptor_hash,
+              `${context}.lane_block_descriptor_hash`,
+            ),
+      settlement_commitment: settlement,
       settlement_hash: settlementHash,
-      rbc_bytes_total: coerceNestedInt(record, "rbc_bytes_total", context),
+      rbc_bytes_total: parseSumeragiUnsigned(
+        record.rbc_bytes_total,
+        `${context}.rbc_bytes_total`,
+      ),
       manifest_root: manifestRoot,
       fastpq_proof: fastpqProof,
     };
@@ -13414,157 +13458,796 @@ function parseLaneGovernance(payload) {
 
 function parseSumeragiStatusPayload(payload) {
   const record = ensureRecord(payload, "sumeragi status payload");
-  const normalized = { ...record };
-  normalized.mode_tag = requireNonEmptyString(
-    record.mode_tag ?? "",
-    "sumeragi.mode_tag",
+  const allowedFields = new Set([
+    "protocol_version",
+    "node_fingerprint",
+    "build_fingerprint",
+    "config_fingerprint",
+    "height_context_id",
+    "height",
+    "view",
+    "phase",
+    "leader",
+    "locked_prepare_qc",
+    "highest_prepare_qc",
+    "last_timeout_certificate",
+    "body_state",
+    "pending_persistence_id",
+    "last_committed_height",
+    "last_committed_subject",
+    "height_context",
+    "last_commit_qc",
+    "lane_settlement_commitments",
+    "lane_relay_envelopes",
+    "lane_payload_ownerships",
+    "committed_lane_blocks",
+    "lane_block_sessions",
+    "local_peer_removed",
+    "operator",
+  ]);
+  const unknownField = Object.keys(record).find((field) => !allowedFields.has(field));
+  if (unknownField !== undefined) {
+    throw new TypeError(`sumeragi status payload contains unknown field ${unknownField}`);
+  }
+  const protocolVersion = parseSumeragiUnsigned(
+    record.protocol_version,
+    "sumeragi.protocol_version",
+    { max: 0xffff },
   );
-  normalized.staged_mode_tag =
-    record.staged_mode_tag == null
-      ? null
-      : requireNonEmptyString(
-          record.staged_mode_tag,
-          "sumeragi.staged_mode_tag",
-        );
-  normalized.staged_mode_activation_height =
-    record.staged_mode_activation_height == null
-      ? null
-      : coerceInteger(
-          record.staged_mode_activation_height,
-          "sumeragi.staged_mode_activation_height",
-        );
-  normalized.mode_activation_lag_blocks =
-    record.mode_activation_lag_blocks == null
-      ? null
-      : coerceInteger(
-          record.mode_activation_lag_blocks,
-          "sumeragi.mode_activation_lag_blocks",
-        );
-  normalized.consensus_caps = record.consensus_caps
-    ? parseConsensusCaps(record.consensus_caps)
-    : null;
-  normalized.commit_qc =
-    record.commit_qc == null
-      ? null
-      : parseCommitQc(record.commit_qc, "sumeragi.commit_qc");
-  normalized.commit_quorum =
-    record.commit_quorum == null
-      ? null
-      : parseCommitQuorum(record.commit_quorum, "sumeragi.commit_quorum");
-  normalized.lane_commitments = parseLaneCommitments(record.lane_commitments);
-  normalized.dataspace_commitments = parseDataspaceCommitments(
-    record.dataspace_commitments,
+  if (protocolVersion !== 2) {
+    throw new RangeError("sumeragi.protocol_version must equal 2");
+  }
+  const height = parseSumeragiUnsigned(record.height, "sumeragi.height");
+  const view = parseSumeragiUnsigned(record.view, "sumeragi.view");
+  const leader = parseSumeragiUnsigned(record.leader, "sumeragi.leader", {
+    max: 0xffffffff,
+  });
+  const heightContext = parseSumeragiHeightContext(
+    record.height_context,
+    "sumeragi.height_context",
   );
-  normalized.lane_settlement_commitments = parseLaneSettlementCommitments(
+  if (heightContext.epoch_end_height < height) {
+    throw new RangeError("sumeragi.height_context.epoch_end_height must cover height");
+  }
+  if (leader >= heightContext.validator_count) {
+    throw new RangeError("sumeragi.leader must index the frozen validator roster");
+  }
+
+  const lastCommittedHeight = parseSumeragiUnsigned(
+    record.last_committed_height,
+    "sumeragi.last_committed_height",
+  );
+  if (lastCommittedHeight > height) {
+    throw new RangeError("sumeragi.last_committed_height must not exceed height");
+  }
+  const lastCommittedSubject =
+    record.last_committed_subject == null
+      ? null
+      : parseSumeragiBlockSubject(
+          record.last_committed_subject,
+          "sumeragi.last_committed_subject",
+        );
+  const lastCommitQc =
+    record.last_commit_qc == null
+      ? null
+      : parseSumeragiCommitQcStatus(record.last_commit_qc, "sumeragi.last_commit_qc");
+  if (lastCommittedHeight === 0) {
+    if (lastCommittedSubject !== null || lastCommitQc !== null) {
+      throw new TypeError(
+        "sumeragi last committed subject and QC must be absent at height zero",
+      );
+    }
+  } else {
+    if (lastCommittedSubject === null || lastCommitQc === null) {
+      throw new TypeError(
+        "sumeragi last committed subject and QC are required after height zero",
+      );
+    }
+    if (
+      lastCommitQc.certificate.phase.phase !== "commit" ||
+      lastCommitQc.certificate.round.height !== lastCommittedHeight ||
+      !sumeragiSubjectsEqual(lastCommitQc.certificate.subject, lastCommittedSubject)
+    ) {
+      throw new TypeError("sumeragi.last_commit_qc does not certify the committed subject");
+    }
+  }
+
+  const operator = parseSumeragiOperatorStatus(record.operator, "sumeragi.operator");
+  const laneSettlementCommitments = parseLaneSettlementCommitments(
     record.lane_settlement_commitments,
   );
-  normalized.lane_relay_envelopes = parseLaneRelayEnvelopes(record.lane_relay_envelopes);
-  normalized.lane_governance = parseLaneGovernance(record.lane_governance);
-  normalized.lane_governance_sealed_total = coerceStatusInt(
-    record.lane_governance_sealed_total,
-    "sumeragi.lane_governance_sealed_total",
+  const laneRelayEnvelopes = parseLaneRelayEnvelopes(record.lane_relay_envelopes);
+  const lanePayloadOwnerships = parseSumeragiLanePayloadOwnerships(
+    record.lane_payload_ownerships,
   );
-  normalized.lane_governance_sealed_aliases = parseStringArray(
-    record.lane_governance_sealed_aliases,
-    "sumeragi.lane_governance_sealed_aliases",
-  );
-  return Object.freeze(normalized);
-}
+  const committedLaneBlocks = parseSumeragiCommittedLaneBlocks(record.committed_lane_blocks);
+  const laneBlockSessions = parseSumeragiLaneBlockSessions(record.lane_block_sessions);
 
-function parseConsensusCaps(value) {
-  const record = ensureRecord(value, "sumeragi.consensus_caps");
   return Object.freeze({
-    collectors_k: coerceInteger(record.collectors_k, "sumeragi.consensus_caps.collectors_k"),
-    redundant_send_r: coerceInteger(
-      record.redundant_send_r,
-      "sumeragi.consensus_caps.redundant_send_r",
+    protocol_version: protocolVersion,
+    node_fingerprint: parseSumeragiHash(
+      record.node_fingerprint,
+      "sumeragi.node_fingerprint",
     ),
-    da_enabled: coerceBoolean(record.da_enabled, "sumeragi.consensus_caps.da_enabled"),
-    rbc_chunk_max_bytes: coerceInteger(
-      record.rbc_chunk_max_bytes,
-      "sumeragi.consensus_caps.rbc_chunk_max_bytes",
+    build_fingerprint: parseSumeragiHash(
+      record.build_fingerprint,
+      "sumeragi.build_fingerprint",
     ),
-    rbc_session_ttl_ms: coerceInteger(
-      record.rbc_session_ttl_ms,
-      "sumeragi.consensus_caps.rbc_session_ttl_ms",
+    config_fingerprint: parseSumeragiHash(
+      record.config_fingerprint,
+      "sumeragi.config_fingerprint",
     ),
-    rbc_store_max_sessions: coerceInteger(
-      record.rbc_store_max_sessions,
-      "sumeragi.consensus_caps.rbc_store_max_sessions",
+    height_context_id: parseSumeragiContextId(
+      record.height_context_id,
+      "sumeragi.height_context_id",
     ),
-    rbc_store_soft_sessions: coerceInteger(
-      record.rbc_store_soft_sessions,
-      "sumeragi.consensus_caps.rbc_store_soft_sessions",
+    height,
+    view,
+    phase: parseSumeragiTaggedUnit(
+      record.phase,
+      "phase",
+      [
+        "awaiting_proposal",
+        "reconstructing_payload",
+        "validating_payload",
+        "prepare",
+        "commit",
+        "pending_apply",
+      ],
+      "sumeragi.phase",
     ),
-    rbc_store_max_bytes: coerceInteger(
-      record.rbc_store_max_bytes,
-      "sumeragi.consensus_caps.rbc_store_max_bytes",
-    ),
-    rbc_store_soft_bytes: coerceInteger(
-      record.rbc_store_soft_bytes,
-      "sumeragi.consensus_caps.rbc_store_soft_bytes",
-    ),
-  });
-}
-
-function parseCommitQc(value, context) {
-  const record = ensureRecord(value, context);
-  return Object.freeze({
-    height: coerceInteger(record.height, `${context}.height`),
-    view: coerceInteger(record.view, `${context}.view`),
-    epoch: coerceInteger(record.epoch, `${context}.epoch`),
-    block_hash:
-      record.block_hash == null
+    leader,
+    locked_prepare_qc:
+      record.locked_prepare_qc == null
         ? null
-        : requireNonEmptyString(record.block_hash, `${context}.block_hash`),
-    validator_set_hash:
-      record.validator_set_hash == null
-        ? null
-        : requireNonEmptyString(
-            record.validator_set_hash,
-            `${context}.validator_set_hash`,
+        : parseSumeragiQcReference(
+            record.locked_prepare_qc,
+            "sumeragi.locked_prepare_qc",
           ),
-    validator_set_len: coerceInteger(
-      record.validator_set_len,
-      `${context}.validator_set_len`,
+    highest_prepare_qc:
+      record.highest_prepare_qc == null
+        ? null
+        : parseSumeragiQcReference(
+            record.highest_prepare_qc,
+            "sumeragi.highest_prepare_qc",
+          ),
+    last_timeout_certificate:
+      record.last_timeout_certificate == null
+        ? null
+        : parseSumeragiTimeoutReference(
+            record.last_timeout_certificate,
+            "sumeragi.last_timeout_certificate",
+          ),
+    body_state: parseSumeragiTaggedUnit(
+      record.body_state,
+      "state",
+      ["missing", "reconstructing", "stored", "validated", "pending_apply", "applied"],
+      "sumeragi.body_state",
     ),
-    signatures_total: coerceInteger(
-      record.signatures_total,
-      `${context}.signatures_total`,
+    pending_persistence_id:
+      record.pending_persistence_id == null
+        ? null
+        : parseSumeragiUnsigned(
+            record.pending_persistence_id,
+            "sumeragi.pending_persistence_id",
+          ),
+    last_committed_height: lastCommittedHeight,
+    last_committed_subject: lastCommittedSubject,
+    height_context: heightContext,
+    last_commit_qc: lastCommitQc,
+    lane_settlement_commitments: laneSettlementCommitments,
+    lane_relay_envelopes: laneRelayEnvelopes,
+    lane_payload_ownerships: lanePayloadOwnerships,
+    committed_lane_blocks: committedLaneBlocks,
+    lane_block_sessions: laneBlockSessions,
+    local_peer_removed: parseSumeragiBoolean(
+      record.local_peer_removed,
+      "sumeragi.local_peer_removed",
+    ),
+    operator,
+  });
+}
+
+function parseSumeragiUnsigned(value, context, options = {}) {
+  const numeric = requireNonNegativeIntegerLike(value, context);
+  if (options.positive === true && numeric === 0) {
+    throw new RangeError(`${context} must be positive`);
+  }
+  if (options.max !== undefined && numeric > options.max) {
+    throw new RangeError(`${context} exceeds its protocol bound`);
+  }
+  return numeric;
+}
+
+function parseSumeragiUnsignedDecimal(value, context) {
+  const maximum = (1n << 128n) - 1n;
+  if (typeof value === "number") {
+    const parsed = BigInt(parseSumeragiUnsigned(value, context));
+    if (parsed > maximum) {
+      throw new RangeError(`${context} exceeds u128`);
+    }
+    return parsed.toString(10);
+  }
+  if (typeof value !== "string" || !/^[0-9]+$/u.test(value)) {
+    throw new TypeError(`${context} must be an unsigned decimal string`);
+  }
+  const parsed = BigInt(value);
+  if (parsed > maximum) {
+    throw new RangeError(`${context} exceeds u128`);
+  }
+  return parsed.toString(10);
+}
+
+function parseSumeragiBoolean(value, context) {
+  if (typeof value !== "boolean") {
+    throw new TypeError(`${context} must be a boolean`);
+  }
+  return value;
+}
+
+function parseSumeragiHash(value, context) {
+  if (typeof value !== "string" || !/^hash:[0-9A-F]{64}#[0-9A-F]{4}$/u.test(value)) {
+    throw new TypeError(`${context} must be a canonical Iroha hash literal`);
+  }
+  const body = parseHashLiteralToHex(value, context);
+  if ((Number.parseInt(body.slice(-2), 16) & 1) === 0) {
+    throw new TypeError(`${context} has an invalid Iroha hash marker bit`);
+  }
+  return value;
+}
+
+function parseSumeragiOptionalByte32(value, context) {
+  if (value == null) {
+    return null;
+  }
+  return parseSumeragiByte32(value, context);
+}
+
+function parseSumeragiByte32(value, context) {
+  if (typeof value !== "string" || !/^[0-9a-fA-F]{64}$/u.test(value)) {
+    throw new TypeError(`${context} must be a 32-byte hex string`);
+  }
+  return value.toLowerCase();
+}
+
+function parseSumeragiContextId(value, context) {
+  if (!Array.isArray(value) || value.length !== 1) {
+    throw new TypeError(`${context} must be a one-element hash tuple`);
+  }
+  return Object.freeze([parseSumeragiHash(value[0], `${context}[0]`)]);
+}
+
+function parseSumeragiTaggedUnit(value, tag, allowed, context) {
+  return parseSumeragiTaggedUnitWithContent(
+    value,
+    tag,
+    "details",
+    allowed,
+    context,
+  );
+}
+
+function parseSumeragiTaggedUnitWithContent(value, tag, content, allowed, context) {
+  const record = ensureRecord(value, context);
+  if (Object.keys(record).some((field) => field !== tag && field !== content)) {
+    throw new TypeError(`${context} contains an unknown tagged-enum field`);
+  }
+  const variant = requireNonEmptyString(record[tag], `${context}.${tag}`);
+  if (!allowed.includes(variant)) {
+    throw new TypeError(`${context}.${tag} is not a supported v2 variant`);
+  }
+  if (!Object.prototype.hasOwnProperty.call(record, content) || record[content] !== null) {
+    throw new TypeError(`${context}.${content} must be explicitly null`);
+  }
+  return Object.freeze({ [tag]: variant, [content]: null });
+}
+
+function parseSumeragiRound(value, context) {
+  const record = ensureRecord(value, context);
+  return Object.freeze({
+    context_id: parseSumeragiContextId(record.context_id, `${context}.context_id`),
+    height: parseSumeragiUnsigned(record.height, `${context}.height`),
+    view: parseSumeragiUnsigned(record.view, `${context}.view`),
+  });
+}
+
+function parseSumeragiBlockSubject(value, context) {
+  const record = ensureRecord(value, context);
+  return Object.freeze({
+    parent_block_hash:
+      record.parent_block_hash == null
+        ? null
+        : parseSumeragiHash(record.parent_block_hash, `${context}.parent_block_hash`),
+    block_hash: parseSumeragiHash(record.block_hash, `${context}.block_hash`),
+    payload_hash: parseSumeragiHash(record.payload_hash, `${context}.payload_hash`),
+  });
+}
+
+function parseSumeragiQcReference(value, context) {
+  const record = ensureRecord(value, context);
+  return Object.freeze({
+    round: parseSumeragiRound(record.round, `${context}.round`),
+    phase: parseSumeragiTaggedUnit(
+      record.phase,
+      "phase",
+      ["prepare", "commit"],
+      `${context}.phase`,
+    ),
+    subject: parseSumeragiBlockSubject(record.subject, `${context}.subject`),
+  });
+}
+
+function parseSumeragiTimeoutReference(value, context) {
+  const record = ensureRecord(value, context);
+  return Object.freeze({
+    round: parseSumeragiRound(record.round, `${context}.round`),
+    highest_prepare_qc:
+      record.highest_prepare_qc == null
+        ? null
+        : parseSumeragiQcReference(
+            record.highest_prepare_qc,
+            `${context}.highest_prepare_qc`,
+          ),
+    certificate_hash: parseSumeragiHash(
+      record.certificate_hash,
+      `${context}.certificate_hash`,
     ),
   });
 }
 
-function parseCommitQuorum(value, context) {
+function parseSumeragiHeightContext(value, context) {
   const record = ensureRecord(value, context);
-  return Object.freeze({
-    height: coerceInteger(record.height, `${context}.height`),
-    view: coerceInteger(record.view, `${context}.view`),
-    block_hash:
-      record.block_hash == null
-        ? null
-        : requireNonEmptyString(record.block_hash, `${context}.block_hash`),
-    signatures_present: coerceInteger(
-      record.signatures_present,
-      `${context}.signatures_present`,
+  const validatorCount = parseSumeragiUnsigned(
+    record.validator_count,
+    `${context}.validator_count`,
+    { positive: true, max: 128 },
+  );
+  const quorumRecord = ensureRecord(record.quorum, `${context}.quorum`);
+  const quorum = Object.freeze({
+    min_signers: parseSumeragiUnsigned(
+      quorumRecord.min_signers,
+      `${context}.quorum.min_signers`,
+      { positive: true, max: 128 },
     ),
-    signatures_counted: coerceInteger(
-      record.signatures_counted,
-      `${context}.signatures_counted`,
-    ),
-    signatures_set_b: coerceInteger(
-      record.signatures_set_b,
-      `${context}.signatures_set_b`,
-    ),
-    signatures_required: coerceInteger(
-      record.signatures_required,
-      `${context}.signatures_required`,
-    ),
-    last_updated_ms: coerceInteger(
-      record.last_updated_ms,
-      `${context}.last_updated_ms`,
+    total_power: parseSumeragiUnsigned(
+      quorumRecord.total_power,
+      `${context}.quorum.total_power`,
+      { positive: true },
     ),
   });
+  const expectedMinSigners = Math.floor((validatorCount * 2) / 3) + 1;
+  if (quorum.min_signers !== expectedMinSigners || quorum.total_power < validatorCount) {
+    throw new RangeError(`${context}.quorum is not canonical for validator_count`);
+  }
+  const mode = parseSumeragiTaggedUnit(
+    record.mode,
+    "mode",
+    ["permissioned", "npos"],
+    `${context}.mode`,
+  );
+  if (mode.mode === "permissioned" && quorum.total_power !== validatorCount) {
+    throw new RangeError(`${context}.quorum.total_power must equal validator_count in permissioned mode`);
+  }
+  const epochSeed = parseSumeragiByte32(record.epoch_seed, `${context}.epoch_seed`);
+  return Object.freeze({
+    epoch: parseSumeragiUnsigned(record.epoch, `${context}.epoch`),
+    epoch_end_height: parseSumeragiUnsigned(
+      record.epoch_end_height,
+      `${context}.epoch_end_height`,
+    ),
+    mode,
+    epoch_seed: epochSeed,
+    validator_count: validatorCount,
+    quorum,
+  });
+}
+
+function parseSumeragiCommitQcStatus(value, context) {
+  const record = ensureRecord(value, context);
+  const validatorCount = parseSumeragiUnsigned(
+    record.validator_count,
+    `${context}.validator_count`,
+    { positive: true, max: 128 },
+  );
+  const signerCount = parseSumeragiUnsigned(record.signer_count, `${context}.signer_count`);
+  const minSigners = parseSumeragiUnsigned(
+    record.min_signers,
+    `${context}.min_signers`,
+    { positive: true, max: 128 },
+  );
+  const signedPower = parseSumeragiUnsigned(
+    record.signed_power,
+    `${context}.signed_power`,
+  );
+  const totalPower = parseSumeragiUnsigned(
+    record.total_power,
+    `${context}.total_power`,
+    { positive: true },
+  );
+  if (
+    signerCount > validatorCount ||
+    minSigners !== Math.floor((validatorCount * 2) / 3) + 1 ||
+    signedPower > totalPower ||
+    totalPower < validatorCount ||
+    signerCount < minSigners ||
+    BigInt(signedPower) * 3n <= BigInt(totalPower) * 2n
+  ) {
+    throw new RangeError(`${context} does not satisfy its frozen dual quorum`);
+  }
+  return Object.freeze({
+    certificate: parseSumeragiQcReference(record.certificate, `${context}.certificate`),
+    validator_count: validatorCount,
+    signer_count: signerCount,
+    min_signers: minSigners,
+    signed_power: signedPower,
+    total_power: totalPower,
+  });
+}
+
+function parseSumeragiOperatorStatus(value, context) {
+  const record = ensureRecord(value, context);
+  const adapter = ensureRecord(record.adapter_queues, `${context}.adapter_queues`);
+  const adapterQueues = Object.freeze({
+    ingress_keys: parseSumeragiUnsigned(adapter.ingress_keys, `${context}.adapter_queues.ingress_keys`),
+    ingress_capacity: parseSumeragiUnsigned(
+      adapter.ingress_capacity,
+      `${context}.adapter_queues.ingress_capacity`,
+    ),
+    deferred_completion: parseSumeragiUnsigned(
+      adapter.deferred_completion,
+      `${context}.adapter_queues.deferred_completion`,
+    ),
+    deferred_progress: parseSumeragiUnsigned(
+      adapter.deferred_progress,
+      `${context}.adapter_queues.deferred_progress`,
+    ),
+    deferred_progress_capacity: parseSumeragiUnsigned(
+      adapter.deferred_progress_capacity,
+      `${context}.adapter_queues.deferred_progress_capacity`,
+    ),
+    deferred_normal: parseSumeragiUnsigned(
+      adapter.deferred_normal,
+      `${context}.adapter_queues.deferred_normal`,
+    ),
+    deferred_normal_capacity: parseSumeragiUnsigned(
+      adapter.deferred_normal_capacity,
+      `${context}.adapter_queues.deferred_normal_capacity`,
+    ),
+  });
+  if (
+    adapterQueues.ingress_keys > adapterQueues.ingress_capacity ||
+    adapterQueues.deferred_completion > adapterQueues.deferred_progress_capacity ||
+    adapterQueues.deferred_progress > adapterQueues.deferred_progress_capacity ||
+    adapterQueues.deferred_normal > adapterQueues.deferred_normal_capacity
+  ) {
+    throw new RangeError(`${context}.adapter_queues occupancy exceeds capacity`);
+  }
+  const queue = ensureRecord(record.tx_queue, `${context}.tx_queue`);
+  const txQueue = Object.freeze({
+    tracked_transactions: parseSumeragiUnsigned(
+      queue.tracked_transactions,
+      `${context}.tx_queue.tracked_transactions`,
+    ),
+    queued_transactions: parseSumeragiUnsigned(
+      queue.queued_transactions,
+      `${context}.tx_queue.queued_transactions`,
+    ),
+    capacity: parseSumeragiUnsigned(queue.capacity, `${context}.tx_queue.capacity`, {
+      positive: true,
+    }),
+    retained_bytes: parseSumeragiUnsigned(
+      queue.retained_bytes,
+      `${context}.tx_queue.retained_bytes`,
+    ),
+    max_retained_bytes: parseSumeragiUnsigned(
+      queue.max_retained_bytes,
+      `${context}.tx_queue.max_retained_bytes`,
+      { positive: true },
+    ),
+    oldest_queued_age_ms: parseSumeragiUnsigned(
+      queue.oldest_queued_age_ms,
+      `${context}.tx_queue.oldest_queued_age_ms`,
+    ),
+    saturated_by_count: parseSumeragiBoolean(
+      queue.saturated_by_count,
+      `${context}.tx_queue.saturated_by_count`,
+    ),
+    saturated_by_bytes: parseSumeragiBoolean(
+      queue.saturated_by_bytes,
+      `${context}.tx_queue.saturated_by_bytes`,
+    ),
+    saturated_by_age: parseSumeragiBoolean(
+      queue.saturated_by_age,
+      `${context}.tx_queue.saturated_by_age`,
+    ),
+  });
+  if (
+    txQueue.queued_transactions > txQueue.tracked_transactions ||
+    txQueue.tracked_transactions > txQueue.capacity ||
+    txQueue.retained_bytes > txQueue.max_retained_bytes
+  ) {
+    throw new RangeError(`${context}.tx_queue occupancy exceeds capacity`);
+  }
+  return Object.freeze({
+    view_change_install_total: parseSumeragiUnsigned(
+      record.view_change_install_total,
+      `${context}.view_change_install_total`,
+    ),
+    busy_deferral_total: parseSumeragiUnsigned(
+      record.busy_deferral_total,
+      `${context}.busy_deferral_total`,
+    ),
+    adapter_queues: adapterQueues,
+    tx_queue: txQueue,
+  });
+}
+
+function parseSumeragiRecordArray(value, context) {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return Object.freeze(
+    value.map((entry, index) => Object.freeze({ ...ensureRecord(entry, `${context}[${index}]`) })),
+  );
+}
+
+function parseSumeragiLanePayloadOwnerships(value) {
+  const context = "status.lane_payload_ownerships";
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return Object.freeze(value.map((entry, index) => {
+    const itemContext = `${context}[${index}]`;
+    const record = ensureRecord(entry, itemContext);
+    const laneBlockHeight = parseSumeragiUnsigned(
+      record.lane_block_height,
+      `${itemContext}.lane_block_height`,
+      { positive: true },
+    );
+    if (!Array.isArray(record.accepted_candidate_indices)) {
+      throw new TypeError(`${itemContext}.accepted_candidate_indices must be an array`);
+    }
+    const acceptedCandidateIndices = record.accepted_candidate_indices.map((candidate, offset) =>
+      parseSumeragiUnsigned(candidate, `${itemContext}.accepted_candidate_indices[${offset}]`),
+    );
+    if (acceptedCandidateIndices.length === 0) {
+      throw new TypeError(`${itemContext}.accepted_candidate_indices must not be empty`);
+    }
+    for (let offset = 1; offset < acceptedCandidateIndices.length; offset += 1) {
+      if (acceptedCandidateIndices[offset - 1] >= acceptedCandidateIndices[offset]) {
+        throw new TypeError(`${itemContext}.accepted_candidate_indices must be strictly ordered`);
+      }
+    }
+    if (!Array.isArray(record.accepted_transaction_hashes)) {
+      throw new TypeError(`${itemContext}.accepted_transaction_hashes must be an array`);
+    }
+    const acceptedTransactionHashes = record.accepted_transaction_hashes.map((hash, offset) =>
+      parseSumeragiHash(hash, `${itemContext}.accepted_transaction_hashes[${offset}]`),
+    );
+    if (acceptedTransactionHashes.length !== acceptedCandidateIndices.length) {
+      throw new TypeError(`${itemContext} candidate/hash counts must match`);
+    }
+    if (!Array.isArray(record.lane_block_descriptor_validator_set)) {
+      throw new TypeError(`${itemContext}.lane_block_descriptor_validator_set must be an array`);
+    }
+    const validators = record.lane_block_descriptor_validator_set.map((peer, offset) =>
+      requireNonEmptyString(peer, `${itemContext}.lane_block_descriptor_validator_set[${offset}]`),
+    );
+    if (validators.length === 0 || new Set(validators).size !== validators.length) {
+      throw new TypeError(`${itemContext}.lane_block_descriptor_validator_set must be non-empty and unique`);
+    }
+    const validatorCount = parseSumeragiUnsigned(
+      record.lane_block_descriptor_validator_count,
+      `${itemContext}.lane_block_descriptor_validator_count`,
+      { positive: true, max: 0xffffffff },
+    );
+    const minQuorum = parseSumeragiUnsigned(
+      record.lane_block_descriptor_min_quorum,
+      `${itemContext}.lane_block_descriptor_min_quorum`,
+      { positive: true, max: 0xffffffff },
+    );
+    if (validatorCount !== validators.length || minQuorum > validatorCount) {
+      throw new RangeError(`${itemContext} descriptor quorum does not match its validator set`);
+    }
+    const previousHeight = parseSumeragiUnsigned(
+      record.previous_lane_block_height,
+      `${itemContext}.previous_lane_block_height`,
+    );
+    if (previousHeight !== laneBlockHeight - 1) {
+      throw new RangeError(`${itemContext}.previous_lane_block_height must precede lane_block_height`);
+    }
+    const previousDescriptor =
+      record.previous_lane_block_descriptor_hash == null
+        ? null
+        : parseSumeragiHash(
+            record.previous_lane_block_descriptor_hash,
+            `${itemContext}.previous_lane_block_descriptor_hash`,
+          );
+    if (previousHeight === 0 && previousDescriptor !== null) {
+      throw new TypeError(`${itemContext} genesis lane block must not name a predecessor descriptor`);
+    }
+    if (record.lane_block_descriptor_hash == null) {
+      throw new TypeError(`${itemContext}.lane_block_descriptor_hash is required`);
+    }
+    return Object.freeze({
+      proposal_height: parseSumeragiUnsigned(record.proposal_height, `${itemContext}.proposal_height`),
+      proposal_view: parseSumeragiUnsigned(record.proposal_view, `${itemContext}.proposal_view`),
+      lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, { max: 0xffffffff }),
+      dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${itemContext}.dataspace_id`),
+      lane_incarnation: parseSumeragiNonzeroHash(record.lane_incarnation, `${itemContext}.lane_incarnation`),
+      lane_block_height: laneBlockHeight,
+      lane_block_view: parseSumeragiUnsigned(record.lane_block_view, `${itemContext}.lane_block_view`),
+      subject_hash: parseSumeragiHash(record.subject_hash, `${itemContext}.subject_hash`),
+      qc_mode_tag: requireNonEmptyString(record.qc_mode_tag, `${itemContext}.qc_mode_tag`),
+      accepted_candidate_indices: Object.freeze(acceptedCandidateIndices),
+      accepted_transaction_hashes: Object.freeze(acceptedTransactionHashes),
+      previous_lane_block_height: previousHeight,
+      previous_lane_block_descriptor_hash: previousDescriptor,
+      lane_block_descriptor_hash: parseSumeragiHash(
+        record.lane_block_descriptor_hash,
+        `${itemContext}.lane_block_descriptor_hash`,
+      ),
+      lane_block_descriptor_validator_set: Object.freeze(validators),
+      lane_block_descriptor_validator_count: validatorCount,
+      lane_block_descriptor_min_quorum: minQuorum,
+      payload_ownership_hash: parseSumeragiHash(
+        record.payload_ownership_hash,
+        `${itemContext}.payload_ownership_hash`,
+      ),
+      rbc_instance_hash: parseSumeragiHash(
+        record.rbc_instance_hash,
+        `${itemContext}.rbc_instance_hash`,
+      ),
+    });
+  }));
+}
+
+function parseSumeragiCommittedLaneBlocks(value) {
+  const context = "status.committed_lane_blocks";
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return Object.freeze(value.map((entry, index) => {
+    const itemContext = `${context}[${index}]`;
+    const record = ensureRecord(entry, itemContext);
+    const validatorCount = parseSumeragiUnsigned(
+      record.validator_count,
+      `${itemContext}.validator_count`,
+      { positive: true, max: 0xffffffff },
+    );
+    const minQuorum = parseSumeragiUnsigned(
+      record.min_quorum,
+      `${itemContext}.min_quorum`,
+      { positive: true, max: 0xffffffff },
+    );
+    const prepareSigners = parseSumeragiUnsigned(
+      record.prepare_qc_signer_count,
+      `${itemContext}.prepare_qc_signer_count`,
+      { max: 0xffffffff },
+    );
+    const commitSigners = parseSumeragiUnsigned(
+      record.commit_qc_signer_count,
+      `${itemContext}.commit_qc_signer_count`,
+      { max: 0xffffffff },
+    );
+    if (
+      minQuorum > validatorCount ||
+      prepareSigners < minQuorum ||
+      commitSigners < minQuorum ||
+      prepareSigners > validatorCount ||
+      commitSigners > validatorCount
+    ) {
+      throw new RangeError(`${itemContext} carries an impossible certified quorum`);
+    }
+    return Object.freeze({
+      lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, { max: 0xffffffff }),
+      dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${itemContext}.dataspace_id`),
+      lane_incarnation: parseSumeragiNonzeroHash(record.lane_incarnation, `${itemContext}.lane_incarnation`),
+      lane_block_height: parseSumeragiUnsigned(record.lane_block_height, `${itemContext}.lane_block_height`, { positive: true }),
+      lane_block_view: parseSumeragiUnsigned(record.lane_block_view, `${itemContext}.lane_block_view`),
+      descriptor_hash: parseSumeragiHash(record.descriptor_hash, `${itemContext}.descriptor_hash`),
+      proposal_hash: parseSumeragiHash(record.proposal_hash, `${itemContext}.proposal_hash`),
+      execution_status: requireNonEmptyString(record.execution_status, `${itemContext}.execution_status`),
+      executable_payload_available: parseSumeragiBoolean(
+        record.executable_payload_available,
+        `${itemContext}.executable_payload_available`,
+      ),
+      subject_hash: parseSumeragiHash(record.subject_hash, `${itemContext}.subject_hash`),
+      payload_ownership_hash: parseSumeragiHash(record.payload_ownership_hash, `${itemContext}.payload_ownership_hash`),
+      rbc_instance_hash: parseSumeragiHash(record.rbc_instance_hash, `${itemContext}.rbc_instance_hash`),
+      qc_mode_tag: requireNonEmptyString(record.qc_mode_tag, `${itemContext}.qc_mode_tag`),
+      validator_count: validatorCount,
+      min_quorum: minQuorum,
+      prepare_qc_signer_count: prepareSigners,
+      commit_qc_signer_count: commitSigners,
+    });
+  }));
+}
+
+function parseSumeragiLaneBlockSessions(value) {
+  const context = "status.lane_block_sessions";
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return Object.freeze(value.map((entry, index) => {
+    const itemContext = `${context}[${index}]`;
+    const record = ensureRecord(entry, itemContext);
+    const validatorCount = parseSumeragiUnsigned(
+      record.validator_count,
+      `${itemContext}.validator_count`,
+      { max: 0xffffffff },
+    );
+    const minQuorum = parseSumeragiUnsigned(
+      record.min_quorum,
+      `${itemContext}.min_quorum`,
+      { max: 0xffffffff },
+    );
+    const prepareVotes = parseSumeragiUnsigned(
+      record.prepare_vote_count,
+      `${itemContext}.prepare_vote_count`,
+      { max: 0xffffffff },
+    );
+    const commitVotes = parseSumeragiUnsigned(
+      record.commit_vote_count,
+      `${itemContext}.commit_vote_count`,
+      { max: 0xffffffff },
+    );
+    if (validatorCount === 0) {
+      if (minQuorum !== 0 || prepareVotes !== 0 || commitVotes !== 0) {
+        throw new RangeError(`${itemContext} carries impossible session quorum counts`);
+      }
+    } else if (
+      minQuorum === 0 ||
+      minQuorum > validatorCount ||
+      prepareVotes > validatorCount ||
+      commitVotes > validatorCount
+    ) {
+      throw new RangeError(`${itemContext} carries impossible session quorum counts`);
+    }
+    return Object.freeze({
+      lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, { max: 0xffffffff }),
+      dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${itemContext}.dataspace_id`),
+      lane_incarnation: parseSumeragiNonzeroHash(record.lane_incarnation, `${itemContext}.lane_incarnation`),
+      lane_block_height: parseSumeragiUnsigned(record.lane_block_height, `${itemContext}.lane_block_height`),
+      lane_block_view: parseSumeragiUnsigned(record.lane_block_view, `${itemContext}.lane_block_view`),
+      proposal_hash: parseSumeragiHash(record.proposal_hash, `${itemContext}.proposal_hash`),
+      has_proposal: parseSumeragiBoolean(record.has_proposal, `${itemContext}.has_proposal`),
+      prepare_vote_count: prepareVotes,
+      commit_vote_count: commitVotes,
+      has_prepare_qc: parseSumeragiBoolean(record.has_prepare_qc, `${itemContext}.has_prepare_qc`),
+      has_commit_qc: parseSumeragiBoolean(record.has_commit_qc, `${itemContext}.has_commit_qc`),
+      pending_commit_vote_request: parseSumeragiBoolean(
+        record.pending_commit_vote_request,
+        `${itemContext}.pending_commit_vote_request`,
+      ),
+      pending_committed_session_drain: parseSumeragiBoolean(
+        record.pending_committed_session_drain,
+        `${itemContext}.pending_committed_session_drain`,
+      ),
+      committed_session_drained: parseSumeragiBoolean(
+        record.committed_session_drained,
+        `${itemContext}.committed_session_drained`,
+      ),
+      validator_count: validatorCount,
+      min_quorum: minQuorum,
+    });
+  }));
+}
+
+function parseSumeragiNonzeroHash(value, context) {
+  const hash = parseSumeragiHash(value, context);
+  if (/^0{64}$/u.test(hash.slice(5, 69))) {
+    throw new TypeError(`${context} must not be the zero hash`);
+  }
+  return hash;
+}
+
+function sumeragiSubjectsEqual(left, right) {
+  return (
+    left.parent_block_hash === right.parent_block_hash &&
+    left.block_hash === right.block_hash &&
+    left.payload_hash === right.payload_hash
+  );
 }
 
 function normalizeSumeragiCommitQcRecord(payload, context) {
@@ -26014,254 +26697,127 @@ function normalizeSorafsManifestResponse(
 }
 
 function buildSorafsPinRegisterPayload(record, context) {
-  const credentials = normalizeAuthorityCredentials(record, context);
-  const chunkerInput = record.chunker;
-  if (!chunkerInput || typeof chunkerInput !== "object") {
-    throw new TypeError(`${context}.chunker is required`);
-  }
-  const chunker = ensureRecord(chunkerInput, `${context}.chunker`);
-  const chunkerProfileId = ToriiClient._normalizeUnsignedInteger(
-    pickSorafsRegisterField(
-      chunker,
-      ["profileId", "profile_id"],
-      `${context}.chunker.profileId`,
-    ),
-    `${context}.chunker.profileId`,
-    { allowZero: false },
-  );
-  const chunkerNamespace = requireNonEmptyString(
-    pickSorafsRegisterField(
-      chunker,
-      ["namespace", "ns", "profile_namespace", "profileNamespace"],
-      `${context}.chunker.namespace`,
-    ),
-    `${context}.chunker.namespace`,
-  );
-  const chunkerName = requireNonEmptyString(
-    pickSorafsRegisterField(
-      chunker,
-      ["name", "handle", "profile", "id"],
-      `${context}.chunker.name`,
-    ),
-    `${context}.chunker.name`,
-  );
-  const chunkerSemver = requireNonEmptyString(
-    pickSorafsRegisterField(
-      chunker,
-      ["semver", "version", "rev"],
-      `${context}.chunker.semver`,
-    ),
-    `${context}.chunker.semver`,
-  );
-  const multihashCode = ToriiClient._normalizeUnsignedInteger(
-    valueOrDefault(
-      pickSorafsRegisterField(
-        chunker,
-        ["multihashCode", "multihash_code", "multihash"],
-        `${context}.chunker.multihashCode`,
-      ),
-      0,
-    ),
-    `${context}.chunker.multihashCode`,
-    { allowZero: true },
-  );
-  const pinPolicySource = pickSorafsRegisterField(
+  assertSupportedOptionKeys(
     record,
-    ["pinPolicy", "pin_policy"],
-    `${context}.pinPolicy`,
-  );
-  if (!pinPolicySource || typeof pinPolicySource !== "object") {
-    throw new TypeError(`${context}.pinPolicy is required`);
-  }
-  const pinPolicy = normalizeSorafsPinPolicyRequest(pinPolicySource, `${context}.pinPolicy`);
-  const manifestDigestHex = normalizeHex32String(
-    pickSorafsRegisterField(
-      record,
-      ["manifestDigestHex", "manifest_digest_hex"],
-      `${context}.manifestDigestHex`,
-    ),
-    `${context}.manifestDigestHex`,
-  );
-  const chunkDigestHex = normalizeHex32String(
-    pickSorafsRegisterField(
-      record,
-      [
-        "chunkDigestSha3_256Hex",
-        "chunk_digest_sha3_256_hex",
-        "chunkDigest",
-        "chunk_digest",
-      ],
-      `${context}.chunkDigestSha3_256Hex`,
-    ),
-    `${context}.chunkDigestSha3_256Hex`,
-  );
-  const contentLength = ToriiClient._normalizeUnsignedInteger(
-    pickSorafsRegisterField(
-      record,
-      ["contentLength", "content_length"],
-      `${context}.contentLength`,
-    ),
-    `${context}.contentLength`,
-    { allowZero: true },
-  );
-  const submittedEpoch = ToriiClient._normalizeUnsignedInteger(
-    pickSorafsRegisterField(
-      record,
-      ["submittedEpoch", "submitted_epoch"],
-      `${context}.submittedEpoch`,
-    ),
-    `${context}.submittedEpoch`,
-    { allowZero: true },
-  );
-  const manifestPayload = pickSorafsRegisterField(
-    record,
-    [
-      "manifest",
-      "manifestBytes",
-      "manifest_bytes",
-      "manifestB64",
-      "manifest_b64",
-      "manifestBase64",
-      "manifest_base64",
-    ],
-    `${context}.manifest`,
+    new Set([
+      "authority",
+      "private_key",
+      "manifest_payload",
+      "submitted_epoch",
+      "gas_asset_id",
+      "alias",
+      "successor_of_hex",
+      "signal",
+    ]),
+    context,
   );
   const payload = {
-    authority: credentials.authority,
-    private_key: credentials.private_key,
-    chunker_profile_id: chunkerProfileId,
-    chunker_namespace: chunkerNamespace,
-    chunker_name: chunkerName,
-    chunker_semver: chunkerSemver,
-    chunker_multihash_code: multihashCode,
-    pin_policy: pinPolicy,
-    manifest_digest_hex: manifestDigestHex,
-    chunk_digest_sha3_256_hex: chunkDigestHex,
-    content_length: contentLength,
-    submitted_epoch: submittedEpoch,
+    authority: ToriiClient._normalizeAccountId(record.authority, `${context}.authority`),
+    private_key: requireExactNonEmptyString(record.private_key, `${context}.private_key`),
+    manifest_payload: normalizeSorafsPinRegisterBase64(
+      record.manifest_payload,
+      `${context}.manifest_payload`,
+      SORAFS_PIN_REGISTER_MAX_MANIFEST_BYTES,
+    ),
+    submitted_epoch: ToriiClient._normalizeUnsignedInteger(
+      record.submitted_epoch,
+      `${context}.submitted_epoch`,
+      { allowZero: true },
+    ),
   };
-  if (manifestPayload !== SORAFS_REGISTER_FIELD_MISSING && manifestPayload !== null) {
-    payload.manifest_b64 = normalizeRequiredBase64Payload(
-      manifestPayload,
-      `${context}.manifest`,
+  if (record.gas_asset_id !== undefined && record.gas_asset_id !== null) {
+    payload.gas_asset_id = requireExactNonEmptyString(
+      record.gas_asset_id,
+      `${context}.gas_asset_id`,
     );
   }
-  const aliasObject = pickSorafsRegisterField(record, ["alias"], `${context}.alias`);
-  const aliasNamespace = pickSorafsRegisterField(
-    record,
-    ["aliasNamespace", "alias_namespace"],
-    `${context}.aliasNamespace`,
-  );
-  const aliasName = pickSorafsRegisterField(
-    record,
-    ["aliasName", "alias_name"],
-    `${context}.aliasName`,
-  );
-  const aliasProof = pickSorafsRegisterField(
-    record,
-    [
-      "aliasProof",
-      "alias_proof",
-      "aliasProofB64",
-      "alias_proof_b64",
-      "aliasProofBase64",
-      "alias_proof_base64",
-    ],
-    `${context}.aliasProof`,
-  );
-  const hasFlatAlias =
-    aliasNamespace !== SORAFS_REGISTER_FIELD_MISSING ||
-    aliasName !== SORAFS_REGISTER_FIELD_MISSING ||
-    aliasProof !== SORAFS_REGISTER_FIELD_MISSING;
-  if (aliasObject !== SORAFS_REGISTER_FIELD_MISSING && hasFlatAlias) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.alias must not be combined with flat alias fields`,
-      `${context}.alias`,
-    );
+  if (record.alias !== undefined && record.alias !== null) {
+    payload.alias = normalizeSorafsPinRegisterAlias(record.alias, `${context}.alias`);
   }
-  const aliasInput =
-    aliasObject !== SORAFS_REGISTER_FIELD_MISSING
-      ? aliasObject
-      : hasFlatAlias
-        ? {
-            namespace:
-              aliasNamespace === SORAFS_REGISTER_FIELD_MISSING ? undefined : aliasNamespace,
-            name: aliasName === SORAFS_REGISTER_FIELD_MISSING ? undefined : aliasName,
-            proof: aliasProof === SORAFS_REGISTER_FIELD_MISSING ? undefined : aliasProof,
-          }
-        : null;
-  if (aliasInput) {
-    payload.alias = normalizeSorafsPinAliasRequest(aliasInput, `${context}.alias`);
-  }
-  const successorHex = pickSorafsRegisterField(
-    record,
-    ["successorOfHex", "successor_of_hex"],
-    `${context}.successorOfHex`,
-  );
-  if (successorHex !== SORAFS_REGISTER_FIELD_MISSING && successorHex !== null) {
-    payload.successor_of_hex = normalizeHex32String(
-      successorHex,
-      `${context}.successorOfHex`,
+  if (record.successor_of_hex !== undefined && record.successor_of_hex !== null) {
+    const successorHex = normalizeHex32String(
+      record.successor_of_hex,
+      `${context}.successor_of_hex`,
     );
+    if (/^0{64}$/u.test(successorHex)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_STRING,
+        `${context}.successor_of_hex must not be zero`,
+        `${context}.successor_of_hex`,
+      );
+    }
+    payload.successor_of_hex = successorHex;
   }
   return payload;
 }
 
-function normalizeSorafsPinPolicyRequest(value, context) {
-  const record = ensureRecord(value ?? {}, context);
-  const minReplicas = ToriiClient._normalizeUnsignedInteger(
-    pickSorafsRegisterField(
-      record,
-      ["minReplicas", "min_replicas"],
-      `${context}.minReplicas`,
-    ),
-    `${context}.minReplicas`,
-  );
-  const retentionEpochInput = pickSorafsRegisterField(
-    record,
-    ["retentionEpoch", "retention_epoch"],
-    `${context}.retentionEpoch`,
-  );
-  const retentionEpoch = ToriiClient._normalizeUnsignedInteger(
-    valueOrDefault(retentionEpochInput, 0),
-    `${context}.retentionEpoch`,
-    { allowZero: true },
-  );
-  const storageClass = normalizeSorafsStorageClass(
-    pickSorafsRegisterField(
-      record,
-      ["storageClass", "storage_class"],
-      `${context}.storageClass`,
-    ),
-    `${context}.storageClass`,
-  );
-  return {
-    min_replicas: minReplicas,
-    storage_class: { type: storageClass },
-    retention_epoch: retentionEpoch,
-  };
+const SORAFS_PIN_REGISTER_MAX_MANIFEST_BYTES = 512 * 1024;
+const SORAFS_PIN_REGISTER_MAX_ALIAS_PROOF_BYTES = 1024 * 1024;
+
+function normalizeSorafsPinRegisterBase64(value, context, maximumDecodedBytes) {
+  if (typeof value !== "string") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must be a canonical padded base64 string`,
+      context,
+    );
+  }
+  const maximumEncodedBytes = Math.ceil(maximumDecodedBytes / 3) * 4;
+  if (value.length === 0 || value.length > maximumEncodedBytes) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must encode 1..=${maximumDecodedBytes} bytes`,
+      context,
+    );
+  }
+  if (value.trim() !== value || /\s/u.test(value)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must be canonical padded base64`,
+      context,
+    );
+  }
+  let decoded;
+  try {
+    decoded = strictDecodeBase64(value);
+  } catch (error) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must be canonical padded base64`,
+      context,
+      error instanceof Error ? error : undefined,
+    );
+  }
+  if (
+    decoded.byteLength === 0 ||
+    decoded.byteLength > maximumDecodedBytes ||
+    Buffer.from(decoded).toString("base64") !== value
+  ) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must be canonical padded base64 encoding of 1..=${maximumDecodedBytes} bytes`,
+      context,
+    );
+  }
+  return value;
 }
 
-function normalizeSorafsStorageClass(value, context) {
-  if (!value) {
-    throw new TypeError(`${context} is required`);
-  }
-  let label = value;
-  if (typeof value === "object") {
-    label = pickSorafsRegisterField(value, ["type", "name", "label"], context);
-  }
-  const normalized = requireNonEmptyString(label, context).toLowerCase();
-  switch (normalized) {
-    case "hot":
-      return "Hot";
-    case "warm":
-      return "Warm";
-    case "cold":
-      return "Cold";
-    default:
-      throw new TypeError(`${context} must be Hot, Warm, or Cold`);
-  }
+function normalizeSorafsPinRegisterAlias(value, context) {
+  const record = ensureRecord(value, context);
+  assertSupportedOptionKeys(
+    record,
+    new Set(["namespace", "name", "proof_base64"]),
+    context,
+  );
+  return {
+    namespace: requireExactNonEmptyString(record.namespace, `${context}.namespace`),
+    name: requireExactNonEmptyString(record.name, `${context}.name`),
+    proof_base64: normalizeSorafsPinRegisterBase64(
+      record.proof_base64,
+      `${context}.proof_base64`,
+      SORAFS_PIN_REGISTER_MAX_ALIAS_PROOF_BYTES,
+    ),
+  };
 }
 
 function normalizeSorafsPinAliasRequest(value, context) {
@@ -26299,10 +26855,6 @@ function pickSorafsRegisterField(record, aliases, context) {
     );
   }
   return present.length === 0 ? SORAFS_REGISTER_FIELD_MISSING : record[present[0]];
-}
-
-function valueOrDefault(value, fallback) {
-  return value === SORAFS_REGISTER_FIELD_MISSING ? fallback : value;
 }
 
 function normalizeDaSamplingPlan(payload, context = "da manifest response.sampling_plan") {

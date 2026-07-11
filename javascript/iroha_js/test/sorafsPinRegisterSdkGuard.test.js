@@ -435,20 +435,41 @@ test("SoraFS pin-register SDK guard exposes typed JavaScript helpers", () => {
     assert.match(text, /"\/v1\/sorafs\/pin\/register"/);
     assert.match(text, /buildSorafsPinRegisterPayload/);
     assert.match(text, /normalizeSorafsPinRegisterResponse/);
-    assert.match(text, /ambiguous aliases/);
-    assert.match(text, /"manifestBytes"/);
-    assert.match(text, /"manifest_b64"/);
-    assert.match(text, /payload\.manifest_b64 = normalizeRequiredBase64Payload/);
+    assert.match(text, /"manifest_payload"/);
+    assert.match(text, /SORAFS_PIN_REGISTER_MAX_MANIFEST_BYTES = 512 \* 1024/);
+    assert.match(text, /successor_of_hex must not be zero/);
+    const builder = text.match(
+      /function buildSorafsPinRegisterPayload[\s\S]*?const SORAFS_PIN_REGISTER_MAX_MANIFEST_BYTES/,
+    )?.[0];
+    assert.ok(builder, "pin-register request builder missing");
+    assert.doesNotMatch(builder, /manifest_b64|chunker_profile_id|pin_policy|content_length/);
   }
   assert.match(dts, /registerSorafsPinManifest\(/);
   assert.match(dts, /registerSorafsPinManifestTyped\(/);
-  assert.match(dts, /manifestBytes\?: BinaryLike \| string \| null;/);
-  assert.match(dts, /manifest_b64\?: BinaryLike \| string \| null;/);
+  const requestType = dts.match(
+    /export interface SorafsPinRegisterRequest \{[\s\S]*?\n\}/,
+  )?.[0];
+  assert.ok(requestType, "SorafsPinRegisterRequest declaration missing");
+  assert.match(requestType, /private_key: string;/);
+  assert.match(requestType, /manifest_payload: string;/);
+  assert.match(requestType, /submitted_epoch: NumericLike;/);
+  assert.match(requestType, /gas_asset_id\?: string \| null;/);
+  assert.doesNotMatch(
+    requestType,
+    /manifestBytes|manifest_b64|chunker|pinPolicy|pin_policy|contentLength|content_length/,
+  );
   assert.match(
     tests,
-    /registerSorafsPinManifest rejects ambiguous request field aliases before fetch/,
+    /registerSorafsPinManifest rejects all unknown and retired fields before fetch/,
   );
-  assert.match(tests, /registerSorafsPinManifest rejects malformed manifest payload before fetch/);
+  assert.match(
+    tests,
+    /registerSorafsPinManifest rejects non-canonical and malformed manifests before fetch/,
+  );
+  assert.match(
+    tests,
+    /registerSorafsPinManifest rejects malformed and zero successor digests before fetch/,
+  );
   assert.match(tests, /registerSorafsPinManifestTyped rejects ambiguous response aliases/);
 
   assert.match(pythonClient, /"manifest_b64"/);

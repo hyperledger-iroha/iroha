@@ -26014,254 +26014,127 @@ function normalizeSorafsManifestResponse(
 }
 
 function buildSorafsPinRegisterPayload(record, context) {
-  const credentials = normalizeAuthorityCredentials(record, context);
-  const chunkerInput = record.chunker;
-  if (!chunkerInput || typeof chunkerInput !== "object") {
-    throw new TypeError(`${context}.chunker is required`);
-  }
-  const chunker = ensureRecord(chunkerInput, `${context}.chunker`);
-  const chunkerProfileId = ToriiClient._normalizeUnsignedInteger(
-    pickSorafsRegisterField(
-      chunker,
-      ["profileId", "profile_id"],
-      `${context}.chunker.profileId`,
-    ),
-    `${context}.chunker.profileId`,
-    { allowZero: false },
-  );
-  const chunkerNamespace = requireNonEmptyString(
-    pickSorafsRegisterField(
-      chunker,
-      ["namespace", "ns", "profile_namespace", "profileNamespace"],
-      `${context}.chunker.namespace`,
-    ),
-    `${context}.chunker.namespace`,
-  );
-  const chunkerName = requireNonEmptyString(
-    pickSorafsRegisterField(
-      chunker,
-      ["name", "handle", "profile", "id"],
-      `${context}.chunker.name`,
-    ),
-    `${context}.chunker.name`,
-  );
-  const chunkerSemver = requireNonEmptyString(
-    pickSorafsRegisterField(
-      chunker,
-      ["semver", "version", "rev"],
-      `${context}.chunker.semver`,
-    ),
-    `${context}.chunker.semver`,
-  );
-  const multihashCode = ToriiClient._normalizeUnsignedInteger(
-    valueOrDefault(
-      pickSorafsRegisterField(
-        chunker,
-        ["multihashCode", "multihash_code", "multihash"],
-        `${context}.chunker.multihashCode`,
-      ),
-      0,
-    ),
-    `${context}.chunker.multihashCode`,
-    { allowZero: true },
-  );
-  const pinPolicySource = pickSorafsRegisterField(
+  assertSupportedOptionKeys(
     record,
-    ["pinPolicy", "pin_policy"],
-    `${context}.pinPolicy`,
-  );
-  if (!pinPolicySource || typeof pinPolicySource !== "object") {
-    throw new TypeError(`${context}.pinPolicy is required`);
-  }
-  const pinPolicy = normalizeSorafsPinPolicyRequest(pinPolicySource, `${context}.pinPolicy`);
-  const manifestDigestHex = normalizeHex32String(
-    pickSorafsRegisterField(
-      record,
-      ["manifestDigestHex", "manifest_digest_hex"],
-      `${context}.manifestDigestHex`,
-    ),
-    `${context}.manifestDigestHex`,
-  );
-  const chunkDigestHex = normalizeHex32String(
-    pickSorafsRegisterField(
-      record,
-      [
-        "chunkDigestSha3_256Hex",
-        "chunk_digest_sha3_256_hex",
-        "chunkDigest",
-        "chunk_digest",
-      ],
-      `${context}.chunkDigestSha3_256Hex`,
-    ),
-    `${context}.chunkDigestSha3_256Hex`,
-  );
-  const contentLength = ToriiClient._normalizeUnsignedInteger(
-    pickSorafsRegisterField(
-      record,
-      ["contentLength", "content_length"],
-      `${context}.contentLength`,
-    ),
-    `${context}.contentLength`,
-    { allowZero: true },
-  );
-  const submittedEpoch = ToriiClient._normalizeUnsignedInteger(
-    pickSorafsRegisterField(
-      record,
-      ["submittedEpoch", "submitted_epoch"],
-      `${context}.submittedEpoch`,
-    ),
-    `${context}.submittedEpoch`,
-    { allowZero: true },
-  );
-  const manifestPayload = pickSorafsRegisterField(
-    record,
-    [
-      "manifest",
-      "manifestBytes",
-      "manifest_bytes",
-      "manifestB64",
-      "manifest_b64",
-      "manifestBase64",
-      "manifest_base64",
-    ],
-    `${context}.manifest`,
+    new Set([
+      "authority",
+      "private_key",
+      "manifest_payload",
+      "submitted_epoch",
+      "gas_asset_id",
+      "alias",
+      "successor_of_hex",
+      "signal",
+    ]),
+    context,
   );
   const payload = {
-    authority: credentials.authority,
-    private_key: credentials.private_key,
-    chunker_profile_id: chunkerProfileId,
-    chunker_namespace: chunkerNamespace,
-    chunker_name: chunkerName,
-    chunker_semver: chunkerSemver,
-    chunker_multihash_code: multihashCode,
-    pin_policy: pinPolicy,
-    manifest_digest_hex: manifestDigestHex,
-    chunk_digest_sha3_256_hex: chunkDigestHex,
-    content_length: contentLength,
-    submitted_epoch: submittedEpoch,
+    authority: ToriiClient._normalizeAccountId(record.authority, `${context}.authority`),
+    private_key: requireExactNonEmptyString(record.private_key, `${context}.private_key`),
+    manifest_payload: normalizeSorafsPinRegisterBase64(
+      record.manifest_payload,
+      `${context}.manifest_payload`,
+      SORAFS_PIN_REGISTER_MAX_MANIFEST_BYTES,
+    ),
+    submitted_epoch: ToriiClient._normalizeUnsignedInteger(
+      record.submitted_epoch,
+      `${context}.submitted_epoch`,
+      { allowZero: true },
+    ),
   };
-  if (manifestPayload !== SORAFS_REGISTER_FIELD_MISSING && manifestPayload !== null) {
-    payload.manifest_b64 = normalizeRequiredBase64Payload(
-      manifestPayload,
-      `${context}.manifest`,
+  if (record.gas_asset_id !== undefined && record.gas_asset_id !== null) {
+    payload.gas_asset_id = requireExactNonEmptyString(
+      record.gas_asset_id,
+      `${context}.gas_asset_id`,
     );
   }
-  const aliasObject = pickSorafsRegisterField(record, ["alias"], `${context}.alias`);
-  const aliasNamespace = pickSorafsRegisterField(
-    record,
-    ["aliasNamespace", "alias_namespace"],
-    `${context}.aliasNamespace`,
-  );
-  const aliasName = pickSorafsRegisterField(
-    record,
-    ["aliasName", "alias_name"],
-    `${context}.aliasName`,
-  );
-  const aliasProof = pickSorafsRegisterField(
-    record,
-    [
-      "aliasProof",
-      "alias_proof",
-      "aliasProofB64",
-      "alias_proof_b64",
-      "aliasProofBase64",
-      "alias_proof_base64",
-    ],
-    `${context}.aliasProof`,
-  );
-  const hasFlatAlias =
-    aliasNamespace !== SORAFS_REGISTER_FIELD_MISSING ||
-    aliasName !== SORAFS_REGISTER_FIELD_MISSING ||
-    aliasProof !== SORAFS_REGISTER_FIELD_MISSING;
-  if (aliasObject !== SORAFS_REGISTER_FIELD_MISSING && hasFlatAlias) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.alias must not be combined with flat alias fields`,
-      `${context}.alias`,
-    );
+  if (record.alias !== undefined && record.alias !== null) {
+    payload.alias = normalizeSorafsPinRegisterAlias(record.alias, `${context}.alias`);
   }
-  const aliasInput =
-    aliasObject !== SORAFS_REGISTER_FIELD_MISSING
-      ? aliasObject
-      : hasFlatAlias
-        ? {
-            namespace:
-              aliasNamespace === SORAFS_REGISTER_FIELD_MISSING ? undefined : aliasNamespace,
-            name: aliasName === SORAFS_REGISTER_FIELD_MISSING ? undefined : aliasName,
-            proof: aliasProof === SORAFS_REGISTER_FIELD_MISSING ? undefined : aliasProof,
-          }
-        : null;
-  if (aliasInput) {
-    payload.alias = normalizeSorafsPinAliasRequest(aliasInput, `${context}.alias`);
-  }
-  const successorHex = pickSorafsRegisterField(
-    record,
-    ["successorOfHex", "successor_of_hex"],
-    `${context}.successorOfHex`,
-  );
-  if (successorHex !== SORAFS_REGISTER_FIELD_MISSING && successorHex !== null) {
-    payload.successor_of_hex = normalizeHex32String(
-      successorHex,
-      `${context}.successorOfHex`,
+  if (record.successor_of_hex !== undefined && record.successor_of_hex !== null) {
+    const successorHex = normalizeHex32String(
+      record.successor_of_hex,
+      `${context}.successor_of_hex`,
     );
+    if (/^0{64}$/u.test(successorHex)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_STRING,
+        `${context}.successor_of_hex must not be zero`,
+        `${context}.successor_of_hex`,
+      );
+    }
+    payload.successor_of_hex = successorHex;
   }
   return payload;
 }
 
-function normalizeSorafsPinPolicyRequest(value, context) {
-  const record = ensureRecord(value ?? {}, context);
-  const minReplicas = ToriiClient._normalizeUnsignedInteger(
-    pickSorafsRegisterField(
-      record,
-      ["minReplicas", "min_replicas"],
-      `${context}.minReplicas`,
-    ),
-    `${context}.minReplicas`,
-  );
-  const retentionEpochInput = pickSorafsRegisterField(
-    record,
-    ["retentionEpoch", "retention_epoch"],
-    `${context}.retentionEpoch`,
-  );
-  const retentionEpoch = ToriiClient._normalizeUnsignedInteger(
-    valueOrDefault(retentionEpochInput, 0),
-    `${context}.retentionEpoch`,
-    { allowZero: true },
-  );
-  const storageClass = normalizeSorafsStorageClass(
-    pickSorafsRegisterField(
-      record,
-      ["storageClass", "storage_class"],
-      `${context}.storageClass`,
-    ),
-    `${context}.storageClass`,
-  );
-  return {
-    min_replicas: minReplicas,
-    storage_class: { type: storageClass },
-    retention_epoch: retentionEpoch,
-  };
+const SORAFS_PIN_REGISTER_MAX_MANIFEST_BYTES = 512 * 1024;
+const SORAFS_PIN_REGISTER_MAX_ALIAS_PROOF_BYTES = 1024 * 1024;
+
+function normalizeSorafsPinRegisterBase64(value, context, maximumDecodedBytes) {
+  if (typeof value !== "string") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must be a canonical padded base64 string`,
+      context,
+    );
+  }
+  const maximumEncodedBytes = Math.ceil(maximumDecodedBytes / 3) * 4;
+  if (value.length === 0 || value.length > maximumEncodedBytes) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must encode 1..=${maximumDecodedBytes} bytes`,
+      context,
+    );
+  }
+  if (value.trim() !== value || /\s/u.test(value)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must be canonical padded base64`,
+      context,
+    );
+  }
+  let decoded;
+  try {
+    decoded = strictDecodeBase64(value);
+  } catch (error) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must be canonical padded base64`,
+      context,
+      error instanceof Error ? error : undefined,
+    );
+  }
+  if (
+    decoded.byteLength === 0 ||
+    decoded.byteLength > maximumDecodedBytes ||
+    Buffer.from(decoded).toString("base64") !== value
+  ) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must be canonical padded base64 encoding of 1..=${maximumDecodedBytes} bytes`,
+      context,
+    );
+  }
+  return value;
 }
 
-function normalizeSorafsStorageClass(value, context) {
-  if (!value) {
-    throw new TypeError(`${context} is required`);
-  }
-  let label = value;
-  if (typeof value === "object") {
-    label = pickSorafsRegisterField(value, ["type", "name", "label"], context);
-  }
-  const normalized = requireNonEmptyString(label, context).toLowerCase();
-  switch (normalized) {
-    case "hot":
-      return "Hot";
-    case "warm":
-      return "Warm";
-    case "cold":
-      return "Cold";
-    default:
-      throw new TypeError(`${context} must be Hot, Warm, or Cold`);
-  }
+function normalizeSorafsPinRegisterAlias(value, context) {
+  const record = ensureRecord(value, context);
+  assertSupportedOptionKeys(
+    record,
+    new Set(["namespace", "name", "proof_base64"]),
+    context,
+  );
+  return {
+    namespace: requireExactNonEmptyString(record.namespace, `${context}.namespace`),
+    name: requireExactNonEmptyString(record.name, `${context}.name`),
+    proof_base64: normalizeSorafsPinRegisterBase64(
+      record.proof_base64,
+      `${context}.proof_base64`,
+      SORAFS_PIN_REGISTER_MAX_ALIAS_PROOF_BYTES,
+    ),
+  };
 }
 
 function normalizeSorafsPinAliasRequest(value, context) {
@@ -26299,10 +26172,6 @@ function pickSorafsRegisterField(record, aliases, context) {
     );
   }
   return present.length === 0 ? SORAFS_REGISTER_FIELD_MISSING : record[present[0]];
-}
-
-function valueOrDefault(value, fallback) {
-  return value === SORAFS_REGISTER_FIELD_MISSING ? fallback : value;
 }
 
 function normalizeDaSamplingPlan(payload, context = "da manifest response.sampling_plan") {

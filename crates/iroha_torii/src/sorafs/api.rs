@@ -121,16 +121,19 @@ use sorafs_manifest::{
     capacity::CapacityTelemetryV1,
     chunker_registry,
     deal::XorAmount,
-    decode_order_cancel_v1, decode_order_request_v1, decode_settlement_receipt_v1,
-    derive_orderbook_order_id_v1,
+    decode_manifest_v1_canonical, decode_order_cancel_v1, decode_order_request_v1,
+    decode_settlement_receipt_v1, derive_orderbook_order_id_v1,
+    hedging::signed::SignedHedgingError,
     por::{AuditVerdictV1, PorChallengeV1, PorProofV1},
     potr::{PotrReceiptV1, PotrSignatureAlgorithm, PotrSignatureV1, PotrStatus},
+    pricing::signed::GovernedPricingError,
     repair::{RepairTaskEventV1, RepairTaskStatusV1},
     validate_manifest,
 };
 use sorafs_node::{
-    ModerationAppealDeposit, ModerationBallotAnnouncement, ModerationBallotChallengeDecision,
-    ModerationBallotChallengeInput, ModerationBallotChallengeKind, ModerationBallotChallengeRecord,
+    EconomicsRuntimeError, ModerationAppealDeposit, ModerationBallotAnnouncement,
+    ModerationBallotChallengeDecision, ModerationBallotChallengeInput,
+    ModerationBallotChallengeKind, ModerationBallotChallengeRecord,
     ModerationBallotChallengeResolution, ModerationBallotCommitOutcome, ModerationBallotEvent,
     ModerationBallotEventKind, ModerationBallotNoShowPlan, ModerationBallotRecord,
     ModerationBallotRevealOutcome, ModerationBallotRuntimeError, ModerationBallotTally,
@@ -281,6 +284,18 @@ const ORDERBOOK_ROUTE_EVENTS: &str = "/v1/sorafs/orderbook/events";
 const ORDERBOOK_ROUTE_EVENTS_STREAM: &str = "/v1/sorafs/orderbook/events/stream";
 const ORDERBOOK_ROUTE_EVENTS_WS: &str = "/v1/sorafs/orderbook/events/ws";
 #[cfg(test)]
+const ECONOMICS_ROUTE_PRICING_MANIFESTS: &str = "/v1/sorafs/economics/pricing/manifests";
+#[cfg(test)]
+const ECONOMICS_ROUTE_HEDGING_FEEDS: &str = "/v1/sorafs/economics/hedging/feeds";
+#[cfg(test)]
+const ECONOMICS_ROUTE_STATUS: &str = "/v1/sorafs/economics/status";
+#[cfg(test)]
+const ECONOMICS_ROUTE_ACTIVE_PRICING: &str = "/v1/sorafs/economics/pricing/active";
+#[cfg(test)]
+const ECONOMICS_ROUTE_HEDGING_REFERENCE: &str = "/v1/sorafs/economics/hedging/reference";
+const ECONOMICS_PRIVATE_CACHE_CONTROL: &str = "private, no-store";
+const ECONOMICS_DEFAULT_MAX_DIVERGENCE_BPS: u16 = 500;
+#[cfg(test)]
 const RESERVE_LIFECYCLE_ROUTE: &str = "/v1/sorafs/reserve/lifecycle";
 const RESERVE_GATEWAY_COMPLIANCE_SOURCE_PACK_ID: &str = "sorafs-reserve-lifecycle";
 const RESERVE_GATEWAY_COMPLIANCE_REVIEW_REFERENCE: &str = "sorafs-reserve-lifecycle-compliance-v1";
@@ -320,6 +335,12 @@ static SORAFS_MODERATION_OPERATOR_ROLE_ID: LazyLock<RoleId> = LazyLock::new(|| {
     SORAFS_MODERATION_OPERATOR_ROLE
         .parse()
         .expect("SoraFS moderation operator role id is valid")
+});
+const SORAFS_ECONOMICS_OPERATOR_ROLE: &str = "sorafs_economics_operator";
+static SORAFS_ECONOMICS_OPERATOR_ROLE_ID: LazyLock<RoleId> = LazyLock::new(|| {
+    SORAFS_ECONOMICS_OPERATOR_ROLE
+        .parse()
+        .expect("SoraFS economics operator role id is valid")
 });
 #[cfg(test)]
 const APPEAL_FINANCE_ROUTE_REPORTS: &str = "/v1/sorafs/appeals/finance/reports";
@@ -2379,30 +2400,6 @@ pub struct ModerationBallotTallyRequestDto {
 }
 
 #[cfg(feature = "app_api")]
-#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload retained for the retired `/v1/sorafs/storage/por-challenge` route.
-pub struct StoragePorChallengeDto {
-    /// Base64-encoded Norito PoR challenge payload.
-    pub challenge_b64: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload retained for the retired `/v1/sorafs/storage/por-proof` route.
-pub struct StoragePorProofDto {
-    /// Base64-encoded Norito PoR proof payload.
-    pub proof_b64: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload retained for the retired `/v1/sorafs/storage/por-verdict` route.
-pub struct StoragePorVerdictDto {
-    /// Base64-encoded Norito PoR verdict payload.
-    pub verdict_b64: String,
-}
-
-#[cfg(feature = "app_api")]
 #[derive(Clone, Copy, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 /// JSON payload returned by `/v1/sorafs/storage/state`.
 pub struct StorageStateResponseDto {
@@ -2695,6 +2692,18 @@ struct OrderbookReadbackQuery {
     limit: Option<u32>,
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct EconomicsActivePricingQuery {
+    observed_at_unix: Option<u64>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct EconomicsReferencePriceQuery {
+    effective_at_unix: Option<u64>,
+    max_feed_age_secs: Option<u64>,
+    max_divergence_bps: Option<u16>,
+}
+
 #[derive(Debug, Clone, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 struct ReserveLifecycleUpdateRequestDto {
     provider_id_hex: String,
@@ -2970,6 +2979,66 @@ impl OrderbookReadbackQuery {
     }
 }
 
+impl EconomicsActivePricingQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let mut query = Self::default();
+        walk_query_params(raw, |key, value| match key {
+            "observed_at_unix" => {
+                parse_economics_u64_field(&mut query.observed_at_unix, "observed_at_unix", value)
+            }
+            _ => Err(ResponseError::from(json_error(
+                StatusCode::BAD_REQUEST,
+                format!("unknown SoraFS economics query parameter `{key}`"),
+            ))),
+        })?;
+        Ok(query)
+    }
+}
+
+impl EconomicsReferencePriceQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let mut query = Self::default();
+        walk_query_params(raw, |key, value| match key {
+            "effective_at_unix" => {
+                parse_economics_u64_field(&mut query.effective_at_unix, "effective_at_unix", value)
+            }
+            "max_feed_age_secs" => {
+                parse_economics_u64_field(&mut query.max_feed_age_secs, "max_feed_age_secs", value)
+            }
+            "max_divergence_bps" => parse_economics_u16_field(
+                &mut query.max_divergence_bps,
+                "max_divergence_bps",
+                value,
+            ),
+            _ => Err(ResponseError::from(json_error(
+                StatusCode::BAD_REQUEST,
+                format!("unknown SoraFS economics query parameter `{key}`"),
+            ))),
+        })?;
+        if query.effective_at_unix == Some(0) {
+            return Err(ResponseError::from(json_error(
+                StatusCode::BAD_REQUEST,
+                "SoraFS economics effective_at_unix must not be zero",
+            )));
+        }
+        if query.max_feed_age_secs == Some(0) {
+            return Err(ResponseError::from(json_error(
+                StatusCode::BAD_REQUEST,
+                "SoraFS economics max_feed_age_secs must not be zero",
+            )));
+        }
+        if query.max_divergence_bps == Some(0)
+            || query.max_divergence_bps.is_some_and(|value| value > 10_000)
+        {
+            return Err(ResponseError::from(json_error(
+                StatusCode::BAD_REQUEST,
+                "SoraFS economics max_divergence_bps must be in 1..=10000",
+            )));
+        }
+        Ok(query)
+    }
+}
+
 impl GovernancePublishReadbackQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
         let mut query = Self::default();
@@ -3007,6 +3076,60 @@ fn parse_u64_field(target: &mut Option<u64>, name: &str, raw: &str) -> ApiResult
             Err(ResponseError::from(json_error(
                 StatusCode::BAD_REQUEST,
                 format!("invalid {name} value `{raw}`"),
+            )))
+        },
+        |value| {
+            *target = Some(value);
+            Ok(())
+        },
+    )
+}
+
+fn parse_economics_u64_field(target: &mut Option<u64>, name: &str, raw: &str) -> ApiResult<()> {
+    if target.is_some() {
+        return Err(ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("duplicate SoraFS economics query parameter `{name}`"),
+        )));
+    }
+    if raw.is_empty() {
+        return Err(ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("SoraFS economics query parameter `{name}` must not be empty"),
+        )));
+    }
+    raw.parse::<u64>().map_or_else(
+        |_| {
+            Err(ResponseError::from(json_error(
+                StatusCode::BAD_REQUEST,
+                format!("invalid SoraFS economics {name} value `{raw}`"),
+            )))
+        },
+        |value| {
+            *target = Some(value);
+            Ok(())
+        },
+    )
+}
+
+fn parse_economics_u16_field(target: &mut Option<u16>, name: &str, raw: &str) -> ApiResult<()> {
+    if target.is_some() {
+        return Err(ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("duplicate SoraFS economics query parameter `{name}`"),
+        )));
+    }
+    if raw.is_empty() {
+        return Err(ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("SoraFS economics query parameter `{name}` must not be empty"),
+        )));
+    }
+    raw.parse::<u16>().map_or_else(
+        |_| {
+            Err(ResponseError::from(json_error(
+                StatusCode::BAD_REQUEST,
+                format!("invalid SoraFS economics {name} value `{raw}`"),
             )))
         },
         |value| {
@@ -9532,6 +9655,329 @@ pub(crate) async fn handle_post_sorafs_moderation_viewer_audit_report_publish_du
     (StatusCode::OK, JsonBody(body)).into_response()
 }
 
+/// Admit one exact-canonical threshold-governed pricing manifest.
+pub(crate) async fn handle_post_sorafs_economics_pricing_manifest(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    let response = (|| {
+        if !state.sorafs_node.is_enabled() {
+            return feature_disabled("SoraFS economics API is not enabled on this node");
+        }
+        if let Err(response) =
+            authorize_economics_request(&state, &headers, &method, &uri, body.as_ref())
+        {
+            return response;
+        }
+        match state
+            .sorafs_node
+            .admit_governed_pricing_manifest(body.as_ref(), unix_timestamp_now())
+        {
+            Ok(outcome) => (
+                StatusCode::ACCEPTED,
+                JsonBody(json_object(vec![
+                    json_entry("schema", "sorafs.economics.pricing_admission.v1"),
+                    json_entry("pricing_id_hex", encode(outcome.pricing_id)),
+                    json_entry("effective_from_unix", outcome.effective_from_unix),
+                    json_entry("admitted_at_unix", outcome.admitted_at_unix),
+                    json_entry("admission_count", outcome.admission_count as u64),
+                ])),
+            )
+                .into_response(),
+            Err(err) => economics_runtime_error_response(err),
+        }
+    })();
+    economics_private_response(response)
+}
+
+/// Admit one exact-canonical externally authenticated hedging-feed sample.
+pub(crate) async fn handle_post_sorafs_economics_hedging_feed(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    let response = (|| {
+        if !state.sorafs_node.is_enabled() {
+            return feature_disabled("SoraFS economics API is not enabled on this node");
+        }
+        if let Err(response) =
+            authorize_economics_request(&state, &headers, &method, &uri, body.as_ref())
+        {
+            return response;
+        }
+        match state
+            .sorafs_node
+            .admit_signed_hedging_feed(body.as_ref(), unix_timestamp_now())
+        {
+            Ok(outcome) => (
+                StatusCode::ACCEPTED,
+                JsonBody(json_object(vec![
+                    json_entry("schema", "sorafs.economics.hedging_feed_admission.v1"),
+                    json_entry("feed_id", outcome.feed_id),
+                    json_entry("source", outcome.source),
+                    json_entry("observed_at_unix", outcome.observed_at_unix),
+                    json_entry("admitted_at_unix", outcome.admitted_at_unix),
+                    json_entry("feed_count", outcome.feed_count as u64),
+                ])),
+            )
+                .into_response(),
+            Err(err) => economics_runtime_error_response(err),
+        }
+    })();
+    economics_private_response(response)
+}
+
+/// Return policy bindings and durable high-water state without secret material.
+pub(crate) async fn handle_get_sorafs_economics_status(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+) -> Response {
+    let response = (|| {
+        if !state.sorafs_node.is_enabled() {
+            return feature_disabled("SoraFS economics API is not enabled on this node");
+        }
+        if let Err(response) = authorize_economics_request(&state, &headers, &method, &uri, &[]) {
+            return response;
+        }
+        match economics_status_json(&state) {
+            Ok(value) => JsonBody(value).into_response(),
+            Err(err) => economics_runtime_error_response(err),
+        }
+    })();
+    economics_private_response(response)
+}
+
+/// Return the latest governed pricing manifest effective at an observation time.
+pub(crate) async fn handle_get_sorafs_economics_active_pricing(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    let response = (|| {
+        if !state.sorafs_node.is_enabled() {
+            return feature_disabled("SoraFS economics API is not enabled on this node");
+        }
+        if let Err(response) = authorize_economics_request(&state, &headers, &method, &uri, &[]) {
+            return response;
+        }
+        let query = match EconomicsActivePricingQuery::parse(raw_query.as_deref()) {
+            Ok(query) => query,
+            Err(err) => return err.into_response(),
+        };
+        let observed_at_unix = query.observed_at_unix.unwrap_or_else(unix_timestamp_now);
+        if observed_at_unix == 0 {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "SoraFS economics observed_at_unix must not be zero",
+            );
+        }
+        match state.sorafs_node.active_governed_pricing(observed_at_unix) {
+            Ok(Some(governed)) => match json::to_value(&governed) {
+                Ok(governed) => JsonBody(json_object(vec![
+                    json_entry("schema", "sorafs.economics.active_pricing.v1"),
+                    json_entry("observed_at_unix", observed_at_unix),
+                    json_entry("governed_pricing", governed),
+                ]))
+                .into_response(),
+                Err(err) => json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("failed to encode active SoraFS governed pricing: {err}"),
+                ),
+            },
+            Ok(None) => json_error(
+                StatusCode::NOT_FOUND,
+                format!(
+                    "no governed SoraFS pricing is effective at Unix second {observed_at_unix}"
+                ),
+            ),
+            Err(err) => economics_runtime_error_response(err),
+        }
+    })();
+    economics_private_response(response)
+}
+
+/// Derive a governed reference price from the latest durable signed feeds.
+pub(crate) async fn handle_get_sorafs_economics_hedging_reference(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    let response = (|| {
+        if !state.sorafs_node.is_enabled() {
+            return feature_disabled("SoraFS economics API is not enabled on this node");
+        }
+        if let Err(response) = authorize_economics_request(&state, &headers, &method, &uri, &[]) {
+            return response;
+        }
+        let query = match EconomicsReferencePriceQuery::parse(raw_query.as_deref()) {
+            Ok(query) => query,
+            Err(err) => return err.into_response(),
+        };
+        let now_unix = unix_timestamp_now();
+        let effective_at_unix = query.effective_at_unix.unwrap_or(now_unix);
+        let max_feed_age_secs = match query.max_feed_age_secs {
+            Some(value) => value,
+            None => match state.sorafs_node.hedging_max_sample_age_secs() {
+                Ok(value) => value,
+                Err(err) => return economics_runtime_error_response(err),
+            },
+        };
+        let max_divergence_bps = query
+            .max_divergence_bps
+            .unwrap_or(ECONOMICS_DEFAULT_MAX_DIVERGENCE_BPS);
+        match state.sorafs_node.derive_latest_hedging_reference_price(
+            effective_at_unix,
+            now_unix,
+            max_feed_age_secs,
+            max_divergence_bps,
+        ) {
+            Ok(governed) => match json::to_value(&governed) {
+                Ok(governed) => JsonBody(json_object(vec![
+                    json_entry("schema", "sorafs.economics.hedging_reference.v1"),
+                    json_entry("admitted_at_unix", now_unix),
+                    json_entry("governed_reference_price", governed),
+                ]))
+                .into_response(),
+                Err(err) => json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("failed to encode SoraFS governed reference price: {err}"),
+                ),
+            },
+            Err(err) => economics_runtime_error_response(err),
+        }
+    })();
+    economics_private_response(response)
+}
+
+fn economics_status_json(state: &SharedAppState) -> Result<Value, EconomicsRuntimeError> {
+    let pricing = match state.sorafs_node.governed_pricing_series() {
+        Ok(series) => {
+            let head = series.admissions().last().map(|admission| {
+                let governed = admission.governed();
+                json_object(vec![
+                    json_entry("pricing_id_hex", encode(governed.pricing_id)),
+                    json_entry("effective_from_unix", governed.manifest.effective_from_unix),
+                    json_entry("admitted_at_unix", admission.admitted_at_unix()),
+                ])
+            });
+            json_object(vec![
+                json_entry("configured", true),
+                json_entry("policy_digest_hex", encode(series.policy_digest())),
+                json_entry("admission_count", series.len() as u64),
+                json_entry("head", head.unwrap_or(Value::Null)),
+            ])
+        }
+        Err(EconomicsRuntimeError::PricingNotConfigured) => {
+            json_object(vec![json_entry("configured", false)])
+        }
+        Err(err) => return Err(err),
+    };
+    let hedging = match state.sorafs_node.signed_hedging_feed_ledger() {
+        Ok(ledger) => json_object(vec![
+            json_entry("configured", true),
+            json_entry("policy_digest_hex", encode(ledger.policy_digest())),
+            json_entry(
+                "max_sample_age_secs",
+                state.sorafs_node.hedging_max_sample_age_secs()?,
+            ),
+            json_entry("feed_count", ledger.len() as u64),
+            json_entry("last_admitted_at_unix", ledger.last_admitted_at_unix()),
+        ]),
+        Err(EconomicsRuntimeError::HedgingNotConfigured) => {
+            json_object(vec![json_entry("configured", false)])
+        }
+        Err(err) => return Err(err),
+    };
+    Ok(json_object(vec![
+        json_entry("schema", "sorafs.economics.status.v1"),
+        json_entry("pricing", pricing),
+        json_entry("hedging", hedging),
+    ]))
+}
+
+fn economics_private_response(mut response: Response) -> Response {
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static(ECONOMICS_PRIVATE_CACHE_CONTROL),
+    );
+    response.headers_mut().insert(
+        VARY,
+        HeaderValue::from_static(MODERATION_QUARANTINE_OBJECT_PAYLOAD_VARY),
+    );
+    response
+}
+
+fn economics_runtime_error_response(err: EconomicsRuntimeError) -> Response {
+    match &err {
+        EconomicsRuntimeError::Checkpoint(_) => {
+            error!(?err, "SoraFS economics durable checkpoint operation failed");
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "SoraFS economics durable state is unavailable",
+            );
+        }
+        EconomicsRuntimeError::StateLockPoisoned => {
+            error!(?err, "SoraFS economics runtime state lock failed");
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "SoraFS economics runtime state is unavailable",
+            );
+        }
+        EconomicsRuntimeError::PricingNotConfigured => {
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "governed SoraFS pricing is not configured on this node",
+            );
+        }
+        EconomicsRuntimeError::HedgingNotConfigured => {
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "signed SoraFS hedging feeds are not configured on this node",
+            );
+        }
+        EconomicsRuntimeError::Pricing(_) | EconomicsRuntimeError::Hedging(_) => {}
+    }
+    let status = match &err {
+        EconomicsRuntimeError::Pricing(
+            GovernedPricingError::PreviousPricingMismatch
+            | GovernedPricingError::ActivationDidNotAdvance
+            | GovernedPricingError::UnexpectedInitialPredecessor
+            | GovernedPricingError::AdmissionTimeRollback { .. },
+        )
+        | EconomicsRuntimeError::Hedging(
+            SignedHedgingError::FeedAdmissionTimeRollback { .. }
+            | SignedHedgingError::FeedReplay { .. }
+            | SignedHedgingError::FeedObservationEquivocation { .. }
+            | SignedHedgingError::FeedObservationRollback { .. }
+            | SignedHedgingError::FeedEvidenceReplay,
+        ) => StatusCode::CONFLICT,
+        EconomicsRuntimeError::Hedging(SignedHedgingError::ResourceLimitExceeded {
+            field: "signed_feeds",
+            count: 0,
+            ..
+        }) => StatusCode::PRECONDITION_FAILED,
+        EconomicsRuntimeError::Pricing(_) | EconomicsRuntimeError::Hedging(_) => {
+            StatusCode::BAD_REQUEST
+        }
+        EconomicsRuntimeError::PricingNotConfigured
+        | EconomicsRuntimeError::HedgingNotConfigured
+        | EconomicsRuntimeError::Checkpoint(_)
+        | EconomicsRuntimeError::StateLockPoisoned => unreachable!("handled above"),
+    };
+    json_error(status, format!("SoraFS economics request failed: {err}"))
+}
+
 pub(crate) async fn handle_post_sorafs_orderbook_order(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -9970,6 +10416,64 @@ fn require_moderation_request_auth(
             ))
         }
     }
+}
+
+fn require_economics_request_auth(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+) -> Result<crate::app_auth::VerifiedCanonicalRequest, Response> {
+    match crate::app_auth::verify_canonical_request(&state.state, headers, method, uri, body, None)
+    {
+        Ok(Some(verified)) => Ok(verified),
+        Ok(None) => Err(json_error(
+            StatusCode::UNAUTHORIZED,
+            "SoraFS economics requests require X-Iroha canonical request authentication",
+        )),
+        Err(err) => {
+            warn!(?err, "SoraFS economics request authentication rejected");
+            Err(json_error(
+                StatusCode::UNAUTHORIZED,
+                "invalid SoraFS economics request authentication",
+            ))
+        }
+    }
+}
+
+fn sorafs_economics_operator_role_id() -> &'static RoleId {
+    &SORAFS_ECONOMICS_OPERATOR_ROLE_ID
+}
+
+fn require_economics_operator_role(
+    state: &SharedAppState,
+    verified: &crate::app_auth::VerifiedCanonicalRequest,
+) -> Result<(), Response> {
+    let world = state.state.world_view();
+    let has_role = world
+        .account_roles_iter(&verified.account)
+        .any(|role| role == sorafs_economics_operator_role_id());
+    if has_role {
+        Ok(())
+    } else {
+        Err(json_error(
+            StatusCode::FORBIDDEN,
+            format!("SoraFS economics requests require role `{SORAFS_ECONOMICS_OPERATOR_ROLE}`"),
+        ))
+    }
+}
+
+fn authorize_economics_request(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+) -> Result<crate::app_auth::VerifiedCanonicalRequest, Response> {
+    let verified = require_economics_request_auth(state, headers, method, uri, body)?;
+    require_economics_operator_role(state, &verified)?;
+    Ok(verified)
 }
 
 fn sorafs_moderation_operator_role_id() -> &'static RoleId {
@@ -22734,17 +23238,9 @@ async fn fetch_remote_site_bundle_from_source_with_client(
             "remote manifest base64 is oversized or non-canonical".to_string(),
         ));
     }
-    let manifest: ManifestV1 = norito::decode_from_bytes(&manifest_bytes).map_err(|err| {
+    let manifest: ManifestV1 = decode_manifest_v1_canonical(&manifest_bytes).map_err(|err| {
         RemoteFetchError::Source(format!("failed to decode remote manifest bytes: {err}"))
     })?;
-    let canonical_manifest_bytes = norito::to_bytes(&manifest).map_err(|err| {
-        RemoteFetchError::Source(format!("failed to re-encode remote manifest: {err}"))
-    })?;
-    if canonical_manifest_bytes != manifest_bytes {
-        return Err(RemoteFetchError::Source(
-            "remote manifest does not use canonical Norito encoding".to_string(),
-        ));
-    }
     let manifest_constraints =
         manifest_pin_policy_constraints_from_config(&state.state.gov.sorafs_pin_policy);
     validate_manifest(&manifest, &manifest_constraints).map_err(|err| {
@@ -24485,6 +24981,13 @@ pub(crate) async fn handle_post_sorafs_storage_pin(
         return storage_pin_quota_response(err);
     }
 
+    let maximum_manifest_b64_bytes = MAX_REMOTE_MANIFEST_BYTES.div_ceil(3).saturating_mul(4);
+    if req.manifest_b64.len() > maximum_manifest_b64_bytes {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            format!("manifest_b64 exceeds {maximum_manifest_b64_bytes} encoded bytes"),
+        );
+    }
     let manifest_bytes =
         match base64::engine::general_purpose::STANDARD.decode(req.manifest_b64.as_bytes()) {
             Ok(bytes) => bytes,
@@ -24495,7 +24998,13 @@ pub(crate) async fn handle_post_sorafs_storage_pin(
                 );
             }
         };
-    let manifest: ManifestV1 = match norito::decode_from_bytes(&manifest_bytes) {
+    if BASE64_STANDARD.encode(&manifest_bytes) != req.manifest_b64 {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "manifest_b64 must use canonical padded base64".to_owned(),
+        );
+    }
+    let manifest: ManifestV1 = match decode_manifest_v1_canonical(&manifest_bytes) {
         Ok(value) => value,
         Err(err) => {
             return json_error(
@@ -28175,97 +28684,6 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
     }
 }
 
-#[cfg(feature = "app_api")]
-pub(crate) async fn handle_post_sorafs_storage_por_challenge(
-    State(_state): State<SharedAppState>,
-    JsonOnly(_req): JsonOnly<StoragePorChallengeDto>,
-) -> Response {
-    retired_storage_por_mutation_response("challenge")
-}
-
-#[cfg(feature = "app_api")]
-pub(crate) fn manual_por_trigger_retired_response() -> Response {
-    let response = json_object(vec![
-        json_entry("error", "manual_por_trigger_retired"),
-        json_entry("route_state", "retired"),
-        json_entry("replacement", "trusted PoR coordinator scheduler"),
-        json_entry(
-            "message",
-            "manual PoR trigger requests are retired; challenges are issued only by the trusted PoR coordinator scheduler",
-        ),
-    ]);
-    (StatusCode::GONE, JsonBody(response)).into_response()
-}
-
-#[cfg(feature = "app_api")]
-pub(crate) async fn handle_post_sorafs_storage_por_proof(
-    State(_state): State<SharedAppState>,
-    JsonOnly(_req): JsonOnly<StoragePorProofDto>,
-) -> Response {
-    retired_storage_por_mutation_response("proof")
-}
-
-#[cfg(feature = "app_api")]
-pub(crate) async fn handle_post_sorafs_storage_por_verdict(
-    State(_state): State<SharedAppState>,
-    JsonOnly(_req): JsonOnly<StoragePorVerdictDto>,
-) -> Response {
-    retired_storage_por_mutation_response("verdict")
-}
-
-#[cfg(feature = "app_api")]
-fn retired_storage_por_mutation_response(kind: &str) -> Response {
-    let replacement = match kind {
-        "challenge" => "trusted PoR coordinator scheduler".to_owned(),
-        _ => format!("/v1/sorafs/capacity/por-{kind}"),
-    };
-    (
-        StatusCode::GONE,
-        JsonBody(json_object(vec![
-            json_entry("error", "storage_por_mutation_retired"),
-            json_entry("kind", kind),
-            json_entry("replacement", replacement),
-            json_entry(
-                "message",
-                "direct storage PoR mutation routes are retired; use the authenticated capacity PoR lifecycle",
-            ),
-        ])),
-    )
-        .into_response()
-}
-
-#[cfg(feature = "app_api")]
-/// Build a stable retirement response for unsafe legacy capacity PoR mutations.
-pub(crate) fn capacity_por_mutation_retired_response(kind: &str) -> Response {
-    let (error, replacement, message) = match kind {
-        "challenge" => (
-            "capacity_por_challenge_retired",
-            "trusted PoR coordinator scheduler",
-            "externally supplied PoR challenges are retired because beacon and VRF evidence must originate from the trusted coordinator scheduler",
-        ),
-        "observation" => (
-            "capacity_por_observation_retired",
-            "/v1/sorafs/capacity/por-proof and /v1/sorafs/capacity/por-verdict",
-            "manual PoR success/failure observations are retired; metering is derived from the authenticated proof and verdict lifecycle",
-        ),
-        _ => (
-            "capacity_por_mutation_retired",
-            "trusted PoR lifecycle",
-            "this PoR mutation route is retired",
-        ),
-    };
-    (
-        StatusCode::GONE,
-        JsonBody(json_object(vec![
-            json_entry("error", error),
-            json_entry("kind", kind),
-            json_entry("replacement", replacement),
-            json_entry("message", message),
-        ])),
-    )
-        .into_response()
-}
-
 fn header_value(value: impl AsRef<str>, name: &str) -> HeaderValue {
     HeaderValue::from_str(value.as_ref())
         .unwrap_or_else(|_| panic!("{name} header produced invalid value: {}", value.as_ref()))
@@ -30638,6 +31056,12 @@ mod advert_tests {
         capacity::{CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, ChunkerCommitmentV1},
         chunker_registry, compute_advert_body_digest, compute_envelope_authorization_digest,
         compute_proposal_digest,
+        hedging::signed::{
+            HEDGING_FEED_BINDING_VERSION_V1, HEDGING_FEED_TRUST_POLICY_VERSION_V1,
+            HEDGING_TRUSTED_SIGNER_VERSION_V1, HedgingFeedBindingV1, HedgingFeedTrustPolicyV1,
+            HedgingTrustedSignerV1, SIGNED_HEDGING_PRICE_FEED_VERSION_V1, SignedHedgingPriceFeedV1,
+        },
+        hedging::{HEDGING_PRICE_FEED_VERSION_V1, HedgingFeedStatusV1, HedgingPriceFeedV1},
         pin_registry::{
             AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
         },
@@ -30647,9 +31071,19 @@ mod advert_tests {
             derive_challenge_id, derive_challenge_seed,
         },
         potr::{POTR_RECEIPT_VERSION_V1, PotrReceiptV1, PotrStatus},
+        pricing::signed::{
+            GOVERNED_PRICING_MANIFEST_VERSION_V1, GovernedPricingManifestV1,
+            PRICING_MANIFEST_SIGNATURE_VERSION_V1, PRICING_TRUST_POLICY_VERSION_V1,
+            PRICING_TRUSTED_SIGNER_VERSION_V1, PricingManifestSignatureV1, PricingTrustPolicyV1,
+            PricingTrustedSignerV1, derive_pricing_id,
+        },
+        pricing::{
+            BondPolicyV1, CreditPolicyV1, PRICING_MANIFEST_VERSION_V1, PricingManifestV1,
+            PricingMicropaymentPolicyV1, PricingTierV1,
+        },
         proof_stream::ProofStreamTier,
     };
-    use sorafs_node::config::StorageConfig;
+    use sorafs_node::config::{RuntimeRetentionPolicy, StorageConfig};
     use std::collections::{BTreeMap, HashSet};
     use tempfile::{NamedTempFile, TempDir};
     use tokio::net::TcpListener;
@@ -34227,6 +34661,210 @@ mod advert_tests {
         world
     }
 
+    fn orderbook_world_with_economics_operator(auth: &OrderbookAuthFixture) -> World {
+        let mut world = orderbook_world(auth);
+        world.grant_role_for_tests(
+            auth.provider.account.clone(),
+            sorafs_economics_operator_role_id().clone(),
+        );
+        world
+    }
+
+    fn economics_pricing_key() -> SigningKey {
+        SigningKey::from_bytes(&[0x31; 32])
+    }
+
+    fn economics_pricing_policy(now_unix: u64) -> PricingTrustPolicyV1 {
+        PricingTrustPolicyV1 {
+            version: PRICING_TRUST_POLICY_VERSION_V1,
+            policy_id: [0xB5; 32],
+            valid_from_unix: now_unix.saturating_sub(60),
+            valid_until_unix: now_unix.saturating_add(3_600),
+            currency: "xor".to_owned(),
+            max_future_activation_secs: 600,
+            min_signatures: 1,
+            signers: vec![PricingTrustedSignerV1 {
+                version: PRICING_TRUSTED_SIGNER_VERSION_V1,
+                signer_id: "economics-council-1".to_owned(),
+                public_key: economics_pricing_key().verifying_key().to_bytes(),
+            }],
+            revoked_signer_ids: Vec::new(),
+        }
+    }
+
+    fn economics_governed_pricing(
+        policy: &PricingTrustPolicyV1,
+        effective_from_unix: u64,
+    ) -> GovernedPricingManifestV1 {
+        let manifest = PricingManifestV1 {
+            version: PRICING_MANIFEST_VERSION_V1,
+            currency: "xor".to_owned(),
+            effective_from_unix,
+            tiers: vec![PricingTierV1 {
+                tier_id: "hot".to_owned(),
+                storage_price_milliu_per_gib_hour: 500,
+                egress_price_milliu_per_gib: 50,
+                min_collateral_ratio_bps: Some(15_000),
+                notes: None,
+            }],
+            credit_policy: CreditPolicyV1 {
+                settlement_window_secs: 86_400,
+                auto_top_up_threshold_bps: 2_000,
+            },
+            bond_policy: BondPolicyV1 {
+                collateral_ratio_bps: 30_000,
+                new_provider_grace_days: 30,
+            },
+            micropayment_policy: Some(PricingMicropaymentPolicyV1 {
+                payout_probability_bps: 100,
+                max_voucher_value_nanos: 5_000_000_000,
+                notes: None,
+            }),
+        };
+        let mut governed = GovernedPricingManifestV1 {
+            version: GOVERNED_PRICING_MANIFEST_VERSION_V1,
+            policy_digest: policy
+                .canonical_digest()
+                .expect("economics pricing policy digest"),
+            pricing_id: derive_pricing_id(&manifest, None).expect("economics pricing id"),
+            previous_pricing_id: None,
+            manifest,
+            signatures: Vec::new(),
+        };
+        let digest = governed
+            .signing_digest()
+            .expect("economics pricing signing digest");
+        governed.signatures.push(PricingManifestSignatureV1 {
+            version: PRICING_MANIFEST_SIGNATURE_VERSION_V1,
+            signer_id: "economics-council-1".to_owned(),
+            signature: economics_pricing_key().sign(&digest).to_bytes(),
+        });
+        governed
+    }
+
+    fn economics_hedging_key() -> SigningKey {
+        SigningKey::from_bytes(&[0x11; 32])
+    }
+
+    fn economics_hedging_policy(now_unix: u64) -> HedgingFeedTrustPolicyV1 {
+        HedgingFeedTrustPolicyV1 {
+            version: HEDGING_FEED_TRUST_POLICY_VERSION_V1,
+            policy_id: [0xA5; 32],
+            valid_from_unix: now_unix.saturating_sub(60),
+            valid_until_unix: now_unix.saturating_add(3_600),
+            max_sample_age_secs: 300,
+            max_future_skew_secs: 30,
+            signers: vec![HedgingTrustedSignerV1 {
+                version: HEDGING_TRUSTED_SIGNER_VERSION_V1,
+                signer_id: "economics-collector-1".to_owned(),
+                public_key: economics_hedging_key().verifying_key().to_bytes(),
+                authorized_feeds: vec![HedgingFeedBindingV1 {
+                    version: HEDGING_FEED_BINDING_VERSION_V1,
+                    feed_id: "primary".to_owned(),
+                    source: "primary-source".to_owned(),
+                }],
+            }],
+            revoked_signer_ids: Vec::new(),
+        }
+    }
+
+    fn economics_signed_feed(
+        policy: &HedgingFeedTrustPolicyV1,
+        observed_at_unix: u64,
+    ) -> SignedHedgingPriceFeedV1 {
+        let mut envelope = SignedHedgingPriceFeedV1 {
+            version: SIGNED_HEDGING_PRICE_FEED_VERSION_V1,
+            policy_digest: policy
+                .canonical_digest()
+                .expect("economics hedging policy digest"),
+            feed: HedgingPriceFeedV1 {
+                version: HEDGING_PRICE_FEED_VERSION_V1,
+                feed_id: "primary".to_owned(),
+                source: "primary-source".to_owned(),
+                observed_at_unix,
+                xor_usd_micros: 2_000_000,
+                weight_bps: 10_000,
+                evidence_digest: [0xD1; 32],
+                status: HedgingFeedStatusV1::Ok,
+            },
+            signer_id: "economics-collector-1".to_owned(),
+            signature: [0; ed25519_dalek::SIGNATURE_LENGTH],
+        };
+        envelope.signature = economics_hedging_key()
+            .sign(
+                &envelope
+                    .signing_digest()
+                    .expect("economics feed signing digest"),
+            )
+            .to_bytes();
+        envelope
+    }
+
+    fn write_economics_policy(path: &StdPath, bytes: &[u8]) {
+        fs::write(path, bytes).expect("write economics trust policy");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+                .expect("secure economics trust policy permissions");
+        }
+    }
+
+    fn sorafs_app_state_with_economics_auth(
+        grant_operator_role: bool,
+    ) -> (
+        SharedAppState,
+        TempDir,
+        OrderbookAuthFixture,
+        PricingTrustPolicyV1,
+        HedgingFeedTrustPolicyV1,
+    ) {
+        let auth = orderbook_auth_fixture();
+        let world = if grant_operator_role {
+            orderbook_world_with_economics_operator(&auth)
+        } else {
+            orderbook_world(&auth)
+        };
+        let mut app = mk_app_state_for_tests_with_world(world);
+        let temp_dir = tempfile::tempdir().expect("create economics API temp dir");
+        let root = temp_dir
+            .path()
+            .canonicalize()
+            .expect("canonical economics API temp dir");
+        let now_unix = unix_timestamp_now();
+        let pricing_policy = economics_pricing_policy(now_unix);
+        let hedging_policy = economics_hedging_policy(now_unix);
+        let pricing_policy_path = root.join("pricing-policy.to");
+        let hedging_policy_path = root.join("hedging-policy.to");
+        write_economics_policy(
+            &pricing_policy_path,
+            &pricing_policy
+                .canonical_bytes()
+                .expect("encode economics pricing policy"),
+        );
+        write_economics_policy(
+            &hedging_policy_path,
+            &hedging_policy
+                .canonical_bytes()
+                .expect("encode economics hedging policy"),
+        );
+        let config = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(root.join("storage"))
+            .runtime_retention(RuntimeRetentionPolicy::new(16, 64, 64 * 1024 * 1024))
+            .pricing_trust_policy_path(Some(pricing_policy_path))
+            .hedging_feed_trust_policy_path(Some(hedging_policy_path))
+            .build();
+        let app_inner = Arc::get_mut(&mut app).expect("unique economics API app state");
+        app_inner.sorafs_node = sorafs_node::NodeHandle::try_new(config)
+            .expect("initialize economics API node runtime");
+        #[cfg(feature = "telemetry")]
+        {
+            app_inner.telemetry = isolated_test_telemetry();
+        }
+        (app, temp_dir, auth, pricing_policy, hedging_policy)
+    }
+
     fn sorafs_app_state_with_orderbook_auth() -> (SharedAppState, TempDir, OrderbookAuthFixture) {
         let auth = orderbook_auth_fixture();
         let mut app = mk_app_state_for_tests_with_world(orderbook_world(&auth));
@@ -37115,6 +37753,78 @@ mod advert_tests {
         handle_post_sorafs_orderbook_receipt(State(app), headers, method, uri, body).await
     }
 
+    async fn post_economics_pricing(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = Uri::from_static(ECONOMICS_ROUTE_PRICING_MANIFESTS);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_economics_pricing_manifest(State(app), headers, method, uri, body).await
+    }
+
+    async fn post_economics_feed(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = Uri::from_static(ECONOMICS_ROUTE_HEDGING_FEEDS);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_economics_hedging_feed(State(app), headers, method, uri, body).await
+    }
+
+    async fn get_economics_status(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+    ) -> Response {
+        let method = Method::GET;
+        let uri = Uri::from_static(ECONOMICS_ROUTE_STATUS);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &[]);
+        handle_get_sorafs_economics_status(State(app), headers, method, uri).await
+    }
+
+    async fn get_economics_active_pricing(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        raw_query: &str,
+    ) -> Response {
+        let method = Method::GET;
+        let uri: Uri = format!("{ECONOMICS_ROUTE_ACTIVE_PRICING}?{raw_query}")
+            .parse()
+            .expect("economics active-pricing URI");
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &[]);
+        handle_get_sorafs_economics_active_pricing(
+            State(app),
+            headers,
+            method,
+            uri,
+            axum::extract::RawQuery(Some(raw_query.to_owned())),
+        )
+        .await
+    }
+
+    async fn get_economics_reference(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        raw_query: &str,
+    ) -> Response {
+        let method = Method::GET;
+        let uri: Uri = format!("{ECONOMICS_ROUTE_HEDGING_REFERENCE}?{raw_query}")
+            .parse()
+            .expect("economics hedging-reference URI");
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &[]);
+        handle_get_sorafs_economics_hedging_reference(
+            State(app),
+            headers,
+            method,
+            uri,
+            axum::extract::RawQuery(Some(raw_query.to_owned())),
+        )
+        .await
+    }
+
     async fn post_reserve_lifecycle_update(
         app: SharedAppState,
         signer: &OrderbookAccountFixture,
@@ -38546,6 +39256,279 @@ mod advert_tests {
         .await;
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn economics_endpoints_require_canonical_request_auth() {
+        let (app, _dir, auth, pricing, _hedging) = sorafs_app_state_with_economics_auth(true);
+        let response = handle_post_sorafs_economics_pricing_manifest(
+            State(app.clone()),
+            HeaderMap::new(),
+            Method::POST,
+            Uri::from_static(ECONOMICS_ROUTE_PRICING_MANIFESTS),
+            Bytes::from_static(b"not-norito"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response.headers().get(CACHE_CONTROL),
+            Some(&HeaderValue::from_static(ECONOMICS_PRIVATE_CACHE_CONTROL))
+        );
+
+        let method = Method::POST;
+        let uri = Uri::from_static(ECONOMICS_ROUTE_PRICING_MANIFESTS);
+        let canonical =
+            economics_governed_pricing(&pricing, unix_timestamp_now().saturating_add(5))
+                .canonical_bytes()
+                .expect("encode economics auth-binding fixture");
+        let headers = signed_app_headers(
+            &auth.provider.account,
+            &auth.provider.keypair,
+            &method,
+            &uri,
+            &canonical,
+        );
+        let mut tampered = canonical;
+        tampered.push(0);
+        let response = handle_post_sorafs_economics_pricing_manifest(
+            State(app.clone()),
+            headers,
+            method,
+            uri,
+            Bytes::from(tampered),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(
+            app.sorafs_node
+                .governed_pricing_series()
+                .expect("pricing series after authentication rejection")
+                .is_empty()
+        );
+
+        let response = handle_get_sorafs_economics_status(
+            State(app),
+            HeaderMap::new(),
+            Method::GET,
+            Uri::from_static(ECONOMICS_ROUTE_STATUS),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn economics_endpoints_require_operator_role_before_payload_decode() {
+        let (app, _dir, auth, _pricing, _hedging) = sorafs_app_state_with_economics_auth(false);
+        let response = post_economics_pricing(
+            app.clone(),
+            &auth.provider,
+            Bytes::from_static(b"not-norito"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let response = get_economics_status(app, &auth.provider).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn economics_endpoints_reject_malformed_canonical_bodies_without_mutation() {
+        let (app, _dir, auth, pricing, _hedging) = sorafs_app_state_with_economics_auth(true);
+        let mut trailing =
+            economics_governed_pricing(&pricing, unix_timestamp_now().saturating_add(5))
+                .canonical_bytes()
+                .expect("encode trailing-byte economics pricing fixture");
+        trailing.push(0);
+        for body in [
+            Bytes::from_static(b"not-norito"),
+            Bytes::from(trailing),
+            Bytes::from(vec![0_u8; 2 * 1024 * 1024 + 1]),
+        ] {
+            let response = post_economics_pricing(app.clone(), &auth.provider, body).await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+        assert!(
+            app.sorafs_node
+                .governed_pricing_series()
+                .expect("economics pricing series after malformed requests")
+                .is_empty()
+        );
+
+        let response = post_economics_feed(
+            app.clone(),
+            &auth.provider,
+            Bytes::from_static(b"not-norito"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            app.sorafs_node
+                .signed_hedging_feed_ledger()
+                .expect("economics feed ledger after malformed request")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn economics_endpoints_admit_once_and_drive_authenticated_readbacks() {
+        let (app, _dir, auth, pricing_policy, hedging_policy) =
+            sorafs_app_state_with_economics_auth(true);
+        let now_unix = unix_timestamp_now();
+        let effective_at_unix = now_unix.saturating_add(5);
+        let governed = economics_governed_pricing(&pricing_policy, effective_at_unix);
+        let pricing_body = Bytes::from(
+            governed
+                .canonical_bytes()
+                .expect("encode economics governed pricing"),
+        );
+
+        let accepted =
+            post_economics_pricing(app.clone(), &auth.provider, pricing_body.clone()).await;
+        assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+        let replay = post_economics_pricing(app.clone(), &auth.provider, pricing_body).await;
+        assert_eq!(replay.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            app.sorafs_node
+                .governed_pricing_series()
+                .expect("economics pricing series")
+                .len(),
+            1
+        );
+
+        let active = get_economics_active_pricing(
+            app.clone(),
+            &auth.provider,
+            &format!("observed_at_unix={effective_at_unix}"),
+        )
+        .await;
+        assert_eq!(active.status(), StatusCode::OK);
+        assert_eq!(
+            active.headers().get(CACHE_CONTROL),
+            Some(&HeaderValue::from_static(ECONOMICS_PRIVATE_CACHE_CONTROL))
+        );
+
+        let feed = economics_signed_feed(&hedging_policy, now_unix);
+        let feed_body = Bytes::from(
+            feed.canonical_bytes()
+                .expect("encode economics signed hedging feed"),
+        );
+        let accepted = post_economics_feed(app.clone(), &auth.provider, feed_body.clone()).await;
+        assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+        let replay = post_economics_feed(app.clone(), &auth.provider, feed_body).await;
+        assert_eq!(replay.status(), StatusCode::CONFLICT);
+
+        let status = get_economics_status(app.clone(), &auth.provider).await;
+        assert_eq!(status.status(), StatusCode::OK);
+        let status_body = body::to_bytes(status.into_body(), usize::MAX)
+            .await
+            .expect("collect economics status body");
+        let status_value: Value =
+            norito::json::from_slice(&status_body).expect("decode economics status body");
+        assert_eq!(
+            status_value
+                .get("pricing")
+                .and_then(|value| value.get("admission_count"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            status_value
+                .get("hedging")
+                .and_then(|value| value.get("feed_count"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+
+        let default_reference = get_economics_reference(
+            app.clone(),
+            &auth.provider,
+            &format!("effective_at_unix={effective_at_unix}"),
+        )
+        .await;
+        assert_eq!(default_reference.status(), StatusCode::OK);
+
+        let reference = get_economics_reference(
+            app,
+            &auth.provider,
+            &format!(
+                "effective_at_unix={effective_at_unix}&max_feed_age_secs=60&max_divergence_bps=500"
+            ),
+        )
+        .await;
+        assert_eq!(reference.status(), StatusCode::OK);
+        let reference_body = body::to_bytes(reference.into_body(), usize::MAX)
+            .await
+            .expect("collect economics reference body");
+        let reference_value: Value =
+            norito::json::from_slice(&reference_body).expect("decode economics reference body");
+        assert_eq!(
+            reference_value
+                .get("governed_reference_price")
+                .and_then(|value| value.get("decision"))
+                .and_then(|value| value.get("xor_usd_micros"))
+                .and_then(Value::as_u64),
+            Some(2_000_000)
+        );
+    }
+
+    #[tokio::test]
+    async fn economics_reference_query_rejects_ambiguous_and_out_of_range_inputs() {
+        let (app, _dir, auth, _pricing, _hedging) = sorafs_app_state_with_economics_auth(true);
+        for raw_query in [
+            "max_feed_age_secs=60&max_feed_age_secs=61",
+            "max_feed_age_secs=0",
+            "max_divergence_bps=0",
+            "max_divergence_bps=10001",
+            "effective_at_unix=0",
+            "unexpected=1",
+            "%ZZ=1",
+        ] {
+            let response = get_economics_reference(app.clone(), &auth.provider, raw_query).await;
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "query should fail closed: {raw_query}"
+            );
+        }
+        for raw_query in [
+            "observed_at_unix=1&observed_at_unix=2",
+            "observed_at_unix=0",
+            "unexpected=1",
+        ] {
+            let response =
+                get_economics_active_pricing(app.clone(), &auth.provider, raw_query).await;
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "active-pricing query should fail closed: {raw_query}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn economics_reference_requires_at_least_one_durable_signed_feed() {
+        let (app, _dir, auth, _pricing, _hedging) = sorafs_app_state_with_economics_auth(true);
+        let response = get_economics_reference(
+            app,
+            &auth.provider,
+            "max_feed_age_secs=60&max_divergence_bps=500",
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+    }
+
+    #[tokio::test]
+    async fn economics_checkpoint_errors_do_not_disclose_internal_paths() {
+        let response = economics_runtime_error_response(EconomicsRuntimeError::Checkpoint(
+            "persist failed at /runtime/secrets/economics.to".to_owned(),
+        ));
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect economics checkpoint error body");
+        let body = String::from_utf8(body.to_vec()).expect("economics error body is UTF-8");
+        assert!(!body.contains("/runtime/secrets"));
+        assert!(!body.contains("economics.to"));
     }
 
     #[tokio::test]
@@ -46916,6 +47899,58 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    async fn storage_pin_rejects_noncanonical_and_oversized_manifest_frames() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+        let payload = vec![0xCD; 128];
+        let manifest = manifest_for_payload(0x33, &payload);
+
+        let mut trailing = norito::to_bytes(&manifest).expect("encode manifest");
+        trailing.push(0xA5);
+        let trailing_request = StoragePinRequestDto {
+            manifest_b64: BASE64_STANDARD.encode(trailing),
+            payload_b64: BASE64_STANDARD.encode(&payload),
+            ..Default::default()
+        };
+        let response = handle_post_sorafs_storage_pin(
+            State(Arc::clone(&state)),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))),
+            JsonOnly(trailing_request),
+        )
+        .await;
+        assert_storage_pin_error_contains(
+            response,
+            StatusCode::BAD_REQUEST,
+            "invalid manifest payload",
+        )
+        .await;
+
+        let maximum_manifest_b64_bytes = MAX_REMOTE_MANIFEST_BYTES.div_ceil(3) * 4;
+        let oversized_request = StoragePinRequestDto {
+            manifest_b64: "A".repeat(maximum_manifest_b64_bytes + 1),
+            payload_b64: BASE64_STANDARD.encode(payload),
+            ..Default::default()
+        };
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))),
+            JsonOnly(oversized_request),
+        )
+        .await;
+        assert_storage_pin_error_contains(
+            response,
+            StatusCode::BAD_REQUEST,
+            "manifest_b64 exceeds",
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn storage_pin_rejects_paid_record_missing_fee_payment_metadata() {
         let app = mk_app_state_for_tests();
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
@@ -49589,115 +50624,6 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn manual_por_trigger_route_is_explicitly_retired() {
-        let response = manual_por_trigger_retired_response();
-        assert_eq!(response.status(), StatusCode::GONE);
-
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode retirement response");
-        assert_eq!(
-            value.get("error").and_then(Value::as_str),
-            Some("manual_por_trigger_retired")
-        );
-        assert_eq!(
-            value.get("route_state").and_then(Value::as_str),
-            Some("retired")
-        );
-        assert_eq!(
-            value.get("replacement").and_then(Value::as_str),
-            Some("trusted PoR coordinator scheduler")
-        );
-    }
-
-    #[tokio::test]
-    async fn capacity_challenge_and_manual_observation_routes_are_retired() {
-        for (kind, expected_error) in [
-            ("challenge", "capacity_por_challenge_retired"),
-            ("observation", "capacity_por_observation_retired"),
-        ] {
-            let response = capacity_por_mutation_retired_response(kind);
-            assert_eq!(response.status(), StatusCode::GONE);
-            let body = body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("retirement response body");
-            let value: Value = norito::json::from_slice(&body).expect("decode retirement response");
-            assert_eq!(
-                value.get("error").and_then(Value::as_str),
-                Some(expected_error)
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn storage_por_mutation_routes_are_retired_without_side_effects() {
-        let (challenge, proof, verdict) = sample_por_artifacts();
-
-        let app = mk_app_state_for_tests();
-        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        let node_view = node.clone();
-        inner.sorafs_node = node;
-        let state = Arc::new(inner);
-
-        let challenge_b64 = base64::engine::general_purpose::STANDARD
-            .encode(norito::to_bytes(&challenge).expect("encode challenge"));
-        let challenge_req = StoragePorChallengeDto { challenge_b64 };
-        let challenge_resp =
-            handle_post_sorafs_storage_por_challenge(State(state.clone()), JsonOnly(challenge_req))
-                .await;
-        assert_eq!(challenge_resp.status(), StatusCode::GONE);
-        let challenge_body = body::to_bytes(challenge_resp.into_body(), usize::MAX)
-            .await
-            .expect("body bytes");
-        let challenge_json: Value =
-            norito::json::from_slice(&challenge_body).expect("challenge response");
-        assert_eq!(
-            challenge_json.get("error").and_then(Value::as_str),
-            Some("storage_por_mutation_retired")
-        );
-
-        let proof_b64 = base64::engine::general_purpose::STANDARD
-            .encode(norito::to_bytes(&proof).expect("encode proof"));
-        let proof_req = StoragePorProofDto { proof_b64 };
-        let proof_resp =
-            handle_post_sorafs_storage_por_proof(State(state.clone()), JsonOnly(proof_req)).await;
-        assert_eq!(proof_resp.status(), StatusCode::GONE);
-        let proof_body = body::to_bytes(proof_resp.into_body(), usize::MAX)
-            .await
-            .expect("body bytes");
-        let proof_json: Value = norito::json::from_slice(&proof_body).expect("proof response");
-        assert_eq!(
-            proof_json.get("replacement").and_then(Value::as_str),
-            Some("/v1/sorafs/capacity/por-proof")
-        );
-
-        let verdict_b64 = base64::engine::general_purpose::STANDARD
-            .encode(norito::to_bytes(&verdict).expect("encode verdict"));
-        let verdict_req = StoragePorVerdictDto { verdict_b64 };
-        let verdict_resp =
-            handle_post_sorafs_storage_por_verdict(State(state.clone()), JsonOnly(verdict_req))
-                .await;
-        assert_eq!(verdict_resp.status(), StatusCode::GONE);
-        let verdict_body = body::to_bytes(verdict_resp.into_body(), usize::MAX)
-            .await
-            .expect("body bytes");
-        let verdict_json: Value =
-            norito::json::from_slice(&verdict_body).expect("verdict response");
-        assert_eq!(
-            verdict_json.get("replacement").and_then(Value::as_str),
-            Some("/v1/sorafs/capacity/por-verdict")
-        );
-
-        let snapshot = node_view.metering_snapshot();
-        assert_eq!(snapshot.por_samples_success, 0);
-        assert_eq!(snapshot.por_samples_total, 0);
-        assert!(node_view.por_ingestion_overview().is_empty());
-    }
-
-    #[tokio::test]
     async fn por_ingestion_readback_limit_bounds_provider_statuses() {
         let (challenge, _, _) = sample_por_artifacts();
         let mut second_challenge = challenge.clone();
@@ -49758,32 +50684,6 @@ mod advert_tests {
                 .and_then(Value::as_u64),
             Some(1)
         );
-    }
-
-    #[tokio::test]
-    async fn retired_storage_por_challenge_does_not_parse_or_mutate_payload() {
-        let app = mk_app_state_for_tests();
-        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        inner.sorafs_node = node;
-        let state = Arc::new(inner);
-
-        let request = StoragePorChallengeDto {
-            challenge_b64: "!!not_base64!!".to_owned(),
-        };
-        let response =
-            handle_post_sorafs_storage_por_challenge(State(state.clone()), JsonOnly(request)).await;
-        assert_eq!(response.status(), StatusCode::GONE);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode error response");
-        let error_msg = value
-            .get("error")
-            .and_then(Value::as_str)
-            .expect("error string");
-        assert_eq!(error_msg, "storage_por_mutation_retired");
-        assert!(state.sorafs_node.por_ingestion_overview().is_empty());
     }
 
     #[tokio::test]

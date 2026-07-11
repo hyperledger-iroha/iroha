@@ -486,11 +486,12 @@ pub use transparency::{
     TransparencyLedgerError,
 };
 pub use validation::{
+    ManifestDecodeError,
     MAX_MANIFEST_ALIAS_CLAIMS, MAX_MANIFEST_ALIAS_PROOF_BYTES, MAX_MANIFEST_COUNCIL_SIGNATURES,
     MAX_MANIFEST_ENCODED_BYTES, MAX_MANIFEST_METADATA_BYTES, MAX_MANIFEST_METADATA_ENTRIES,
     MAX_MANIFEST_ROOT_CID_BYTES, ManifestValidationError, PinPolicyConstraints,
-    validate_chunker_handle, validate_manifest, validate_manifest_root_cid, validate_pin_policy,
-    validate_registered_chunker_profile,
+    decode_manifest_v1_canonical, validate_chunker_handle, validate_manifest,
+    validate_manifest_root_cid, validate_pin_policy, validate_registered_chunker_profile,
 };
 
 pub use self::gateway_fixture::{

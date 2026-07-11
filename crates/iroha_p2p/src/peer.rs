@@ -2754,6 +2754,19 @@ mod run {
         None
     }
 
+    fn outbound_receiver_can_yield<T>(receiver: &post_channel::Receiver<T>) -> bool {
+        // A closed receiver may still contain buffered posts. Once it is both closed and
+        // empty, however, `recv()` is permanently ready with `None`; keeping that branch
+        // enabled in the biased actor select would spin and starve every later branch.
+        !(receiver.is_closed() && receiver.is_empty())
+    }
+
+    fn any_outbound_receiver_can_yield<T, const N: usize>(
+        receivers: [&post_channel::Receiver<T>; N],
+    ) -> bool {
+        receivers.into_iter().any(outbound_receiver_can_yield)
+    }
+
     fn high_outbound_pending<T>(
         hi_consensus_safety_rx: &post_channel::Receiver<T>,
         hi_control_rx: &post_channel::Receiver<T>,
@@ -3248,6 +3261,34 @@ mod run {
                     }
                 }
 
+                let hi_consensus_safety_can_yield =
+                    outbound_receiver_can_yield(&hi_consensus_safety_rx);
+                let hi_control_can_yield = outbound_receiver_can_yield(&hi_control_rx);
+                let hi_consensus_can_yield = outbound_receiver_can_yield(&hi_consensus_rx);
+                let hi_consensus_payload_can_yield =
+                    outbound_receiver_can_yield(&hi_consensus_payload_rx);
+                let hi_consensus_chunk_can_yield =
+                    outbound_receiver_can_yield(&hi_consensus_chunk_rx);
+                let low_outbound_can_yield = any_outbound_receiver_can_yield([
+                    &lo_block_sync_rx,
+                    &lo_tx_gossip_rx,
+                    &lo_peer_gossip_rx,
+                    &lo_health_rx,
+                    &lo_other_rx,
+                ]);
+                if !(hi_consensus_safety_can_yield
+                    || hi_control_can_yield
+                    || hi_consensus_can_yield
+                    || hi_consensus_payload_can_yield
+                    || hi_consensus_chunk_can_yield
+                    || low_outbound_can_yield)
+                {
+                    iroha_logger::trace!(
+                        "Peer handle dropped and all per-topic outbound queues drained"
+                    );
+                    break;
+                }
+
                 let consensus_direct_pending = !hi_consensus_rx.is_empty();
                 let non_safety_direct_pending = !hi_control_rx.is_empty()
                     || consensus_direct_pending
@@ -3281,6 +3322,7 @@ mod run {
                         break;
                     }
                     msg = hi_consensus_safety_rx.recv(), if hi_budget > 0
+                        && hi_consensus_safety_can_yield
                         && (hi_safety_burst < HI_SAFETY_BURST_MAX || !non_safety_direct_pending) => {
                         if let Some(m) = msg {
                             note_high_topic_served(
@@ -3299,7 +3341,7 @@ mod run {
                             hi_budget = hi_budget.saturating_sub(1);
                         }
                     }
-                    msg = hi_control_rx.recv(), if hi_budget > 0 => {
+                    msg = hi_control_rx.recv(), if hi_budget > 0 && hi_control_can_yield => {
                         if let Some(m) = msg {
                             note_high_topic_served(
                                 &mut hi_safety_burst,
@@ -3317,7 +3359,7 @@ mod run {
                             hi_budget = hi_budget.saturating_sub(1);
                         }
                     }
-                    msg = hi_consensus_rx.recv(), if hi_budget > 0 => {
+                    msg = hi_consensus_rx.recv(), if hi_budget > 0 && hi_consensus_can_yield => {
                         if let Some(m) = msg {
                             note_high_topic_served(
                                 &mut hi_safety_burst,
@@ -3335,7 +3377,8 @@ mod run {
                             hi_budget = hi_budget.saturating_sub(1);
                         }
                     }
-                    msg = hi_consensus_payload_rx.recv(), if hi_budget > 0 && availability_direct_allowed => {
+                    msg = hi_consensus_payload_rx.recv(), if hi_budget > 0
+                        && hi_consensus_payload_can_yield && availability_direct_allowed => {
                         if let Some(m) = msg {
                             note_high_topic_served(
                                 &mut hi_safety_burst,
@@ -3353,7 +3396,8 @@ mod run {
                             hi_budget = hi_budget.saturating_sub(1);
                         }
                     }
-                    msg = hi_consensus_chunk_rx.recv(), if hi_budget > 0 && availability_direct_allowed => {
+                    msg = hi_consensus_chunk_rx.recv(), if hi_budget > 0
+                        && hi_consensus_chunk_can_yield && availability_direct_allowed => {
                         if let Some(m) = msg {
                             note_high_topic_served(
                                 &mut hi_safety_burst,
@@ -3379,7 +3423,7 @@ mod run {
                         &mut lo_peer_gossip_rx,
                         &mut lo_health_rx,
                         &mut lo_other_rx,
-	                    ) => {
+	                    ), if low_outbound_can_yield => {
 	                        if let Some((topic, msg)) = low {
 	                            iroha_logger::trace!("Post message ({})", low_topic_label(topic));
 	                            #[cfg(feature = "quic")]
@@ -5308,6 +5352,168 @@ mod run {
             }
         }
 
+        struct TestOutboundReceivers<T> {
+            hi_consensus_safety: post_channel::Receiver<T>,
+            hi_consensus: post_channel::Receiver<T>,
+            hi_consensus_payload: post_channel::Receiver<T>,
+            hi_consensus_chunk: post_channel::Receiver<T>,
+            hi_control: post_channel::Receiver<T>,
+            lo_block_sync: post_channel::Receiver<T>,
+            lo_tx_gossip: post_channel::Receiver<T>,
+            lo_peer_gossip: post_channel::Receiver<T>,
+            lo_health: post_channel::Receiver<T>,
+            lo_other: post_channel::Receiver<T>,
+        }
+
+        impl<T> TestOutboundReceivers<T> {
+            fn all_closed(&self) -> bool {
+                [
+                    &self.hi_consensus_safety,
+                    &self.hi_consensus,
+                    &self.hi_consensus_payload,
+                    &self.hi_consensus_chunk,
+                    &self.hi_control,
+                    &self.lo_block_sync,
+                    &self.lo_tx_gossip,
+                    &self.lo_peer_gossip,
+                    &self.lo_health,
+                    &self.lo_other,
+                ]
+                .into_iter()
+                .all(post_channel::Receiver::is_closed)
+            }
+
+            fn can_yield(&self) -> bool {
+                any_outbound_receiver_can_yield([
+                    &self.hi_consensus_safety,
+                    &self.hi_consensus,
+                    &self.hi_consensus_payload,
+                    &self.hi_consensus_chunk,
+                    &self.hi_control,
+                    &self.lo_block_sync,
+                    &self.lo_tx_gossip,
+                    &self.lo_peer_gossip,
+                    &self.lo_health,
+                    &self.lo_other,
+                ])
+            }
+
+            async fn drain_after_handle_drop(&mut self) -> Vec<T> {
+                assert!(
+                    self.all_closed(),
+                    "test requires every sender to be dropped"
+                );
+
+                let mut drained = Vec::new();
+                let mut low_rr = 0;
+                loop {
+                    let hi_consensus_safety_can_yield =
+                        outbound_receiver_can_yield(&self.hi_consensus_safety);
+                    let hi_control_can_yield = outbound_receiver_can_yield(&self.hi_control);
+                    let hi_consensus_can_yield = outbound_receiver_can_yield(&self.hi_consensus);
+                    let hi_consensus_payload_can_yield =
+                        outbound_receiver_can_yield(&self.hi_consensus_payload);
+                    let hi_consensus_chunk_can_yield =
+                        outbound_receiver_can_yield(&self.hi_consensus_chunk);
+                    let low_outbound_can_yield = any_outbound_receiver_can_yield([
+                        &self.lo_block_sync,
+                        &self.lo_tx_gossip,
+                        &self.lo_peer_gossip,
+                        &self.lo_health,
+                        &self.lo_other,
+                    ]);
+                    if !(hi_consensus_safety_can_yield
+                        || hi_control_can_yield
+                        || hi_consensus_can_yield
+                        || hi_consensus_payload_can_yield
+                        || hi_consensus_chunk_can_yield
+                        || low_outbound_can_yield)
+                    {
+                        break;
+                    }
+
+                    // Mirror the actor's biased direct-receive order. Closed-and-drained
+                    // receivers ahead of live buffered receivers must not win with `None`.
+                    tokio::select! {
+                        biased;
+                        message = self.hi_consensus_safety.recv(), if hi_consensus_safety_can_yield => {
+                            drained.push(message.expect("active safety receiver must be buffered after handle drop"));
+                        }
+                        message = self.hi_control.recv(), if hi_control_can_yield => {
+                            drained.push(message.expect("active control receiver must be buffered after handle drop"));
+                        }
+                        message = self.hi_consensus.recv(), if hi_consensus_can_yield => {
+                            drained.push(message.expect("active consensus receiver must be buffered after handle drop"));
+                        }
+                        message = self.hi_consensus_payload.recv(), if hi_consensus_payload_can_yield => {
+                            drained.push(message.expect("active payload receiver must be buffered after handle drop"));
+                        }
+                        message = self.hi_consensus_chunk.recv(), if hi_consensus_chunk_can_yield => {
+                            drained.push(message.expect("active chunk receiver must be buffered after handle drop"));
+                        }
+                        message = recv_low_rr(
+                            &mut low_rr,
+                            &mut self.lo_block_sync,
+                            &mut self.lo_tx_gossip,
+                            &mut self.lo_peer_gossip,
+                            &mut self.lo_health,
+                            &mut self.lo_other,
+                        ), if low_outbound_can_yield => {
+                            let (_, message) = message
+                                .expect("active low receiver set must be buffered after handle drop");
+                            drained.push(message);
+                        }
+                        else => panic!("at least one outbound receiver is active"),
+                    }
+                }
+                drained
+            }
+        }
+
+        fn test_outbound_mailbox<T: Pload>(
+            capacity: usize,
+        ) -> (handles::PeerHandle<T>, TestOutboundReceivers<T>) {
+            let (hi_consensus_safety_tx, hi_consensus_safety) = post_channel::channel(capacity);
+            let (hi_consensus_tx, hi_consensus) = post_channel::channel(capacity);
+            let (hi_consensus_payload_tx, hi_consensus_payload) = post_channel::channel(capacity);
+            let (hi_consensus_chunk_tx, hi_consensus_chunk) = post_channel::channel(capacity);
+            let (hi_control_tx, hi_control) = post_channel::channel(capacity);
+            let (lo_block_sync_tx, lo_block_sync) = post_channel::channel(capacity);
+            let (lo_tx_gossip_tx, lo_tx_gossip) = post_channel::channel(capacity);
+            let (lo_peer_gossip_tx, lo_peer_gossip) = post_channel::channel(capacity);
+            let (lo_health_tx, lo_health) = post_channel::channel(capacity);
+            let (lo_other_tx, lo_other) = post_channel::channel(capacity);
+
+            (
+                handles::PeerHandle {
+                    senders: handles::TopicSenders {
+                        hi_consensus_safety: hi_consensus_safety_tx,
+                        hi_consensus: hi_consensus_tx,
+                        hi_consensus_payload: hi_consensus_payload_tx,
+                        hi_consensus_chunk: hi_consensus_chunk_tx,
+                        hi_control: hi_control_tx,
+                        lo_block_sync: lo_block_sync_tx,
+                        lo_tx_gossip: lo_tx_gossip_tx,
+                        lo_peer_gossip: lo_peer_gossip_tx,
+                        lo_health: lo_health_tx,
+                        lo_other: lo_other_tx,
+                    },
+                },
+                TestOutboundReceivers {
+                    hi_consensus_safety,
+                    hi_consensus,
+                    hi_consensus_payload,
+                    hi_consensus_chunk,
+                    hi_control,
+                    lo_block_sync,
+                    lo_tx_gossip,
+                    lo_peer_gossip,
+                    lo_health,
+                    lo_other,
+                },
+            )
+        }
+
         #[derive(Default)]
         struct WriteStats {
             writes: usize,
@@ -6355,6 +6561,97 @@ mod run {
                 Message::Data(blob) => assert_eq!(blob.0, vec![1u8, 2, 3]),
                 _ => panic!("expected data message"),
             }
+        }
+
+        #[test]
+        fn live_empty_outbound_receiver_remains_selectable() {
+            let (sender, mut receiver) = post_channel::channel(1);
+
+            assert!(
+                outbound_receiver_can_yield(&receiver),
+                "an open empty queue must remain eligible for future posts"
+            );
+            sender.try_send(Dummy).expect("queue live post");
+            assert!(outbound_receiver_can_yield(&receiver));
+            assert!(receiver.try_recv_now().is_some());
+            assert!(
+                outbound_receiver_can_yield(&receiver),
+                "draining a live queue must not disable it"
+            );
+
+            drop(sender);
+            assert!(receiver.is_closed());
+            assert!(receiver.is_empty());
+            assert!(
+                !outbound_receiver_can_yield(&receiver),
+                "only a closed and drained queue must be disabled"
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn dropped_mixed_outbound_handle_does_not_spin_on_empty_safety_queue() {
+            let (handle, mut receivers) = test_outbound_mailbox(4);
+            let queued = [
+                RoutedMsg::Control(1),
+                RoutedMsg::Consensus(2),
+                RoutedMsg::ConsensusPayload(3),
+                RoutedMsg::ConsensusChunk(4),
+                RoutedMsg::TxGossip(5),
+            ];
+            for message in queued.iter().cloned() {
+                handle.post(message).expect("queue mixed outbound post");
+            }
+
+            drop(handle);
+            assert!(receivers.all_closed());
+            assert!(
+                !outbound_receiver_can_yield(&receivers.hi_consensus_safety),
+                "the first biased branch starts closed and drained in this adversarial case"
+            );
+            assert!(
+                receivers.can_yield(),
+                "later per-topic queues still contain buffered posts"
+            );
+
+            let drained = tokio::time::timeout(
+                Duration::from_millis(100),
+                receivers.drain_after_handle_drop(),
+            )
+            .await
+            .expect("closed empty safety queue must not spin ahead of buffered queues");
+
+            assert_eq!(drained.as_slice(), queued.as_slice());
+            assert!(!receivers.can_yield());
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn dropped_safety_only_outbound_handle_drains_and_terminates() {
+            let (handle, mut receivers) = test_outbound_mailbox(32);
+            let queued = (0_u8..24)
+                .map(RoutedMsg::ConsensusSafety)
+                .collect::<Vec<_>>();
+            for message in queued.iter().cloned() {
+                handle
+                    .post(message)
+                    .expect("queue authoritative-consensus safety post");
+            }
+
+            drop(handle);
+            assert!(receivers.all_closed());
+            assert!(
+                outbound_receiver_can_yield(&receivers.hi_consensus_safety),
+                "closed safety queue must remain eligible while buffered"
+            );
+
+            let drained = tokio::time::timeout(
+                Duration::from_millis(100),
+                receivers.drain_after_handle_drop(),
+            )
+            .await
+            .expect("safety-only handle teardown must terminate after draining its bounded queue");
+
+            assert_eq!(drained, queued);
+            assert!(!receivers.can_yield());
         }
 
         #[tokio::test(flavor = "current_thread")]

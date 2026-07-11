@@ -570,6 +570,207 @@ function fakeHashHex(byte) {
   return Buffer.alloc(32, byte & 0xff).toString("hex");
 }
 
+function fakeSumeragiHash(byte) {
+  const bytes = Buffer.alloc(32, byte & 0xff);
+  bytes[31] |= 1;
+  const body = bytes.toString("hex").toUpperCase();
+  let crc = 0xffff;
+  for (const value of Buffer.from(`hash:${body}`, "ascii")) {
+    crc ^= value << 8;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc & 0x8000) !== 0 ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
+    }
+  }
+  return `hash:${body}#${crc.toString(16).toUpperCase().padStart(4, "0")}`;
+}
+
+function createSumeragiV2Subject(overrides = {}) {
+  return {
+    parent_block_hash: fakeSumeragiHash(0x31),
+    block_hash: fakeSumeragiHash(0x32),
+    payload_hash: fakeSumeragiHash(0x33),
+    ...overrides,
+  };
+}
+
+function createSumeragiV2StatusPayload(overrides = {}) {
+  const subject = createSumeragiV2Subject();
+  const commitContextId = [fakeSumeragiHash(0x41)];
+  return {
+    protocol_version: 2,
+    node_fingerprint: fakeSumeragiHash(0x11),
+    build_fingerprint: fakeSumeragiHash(0x12),
+    config_fingerprint: fakeSumeragiHash(0x13),
+    height_context_id: [fakeSumeragiHash(0x14)],
+    height: 10,
+    view: 2,
+    phase: { phase: "prepare", details: null },
+    leader: 1,
+    locked_prepare_qc: null,
+    highest_prepare_qc: null,
+    last_timeout_certificate: null,
+    body_state: { state: "validated", details: null },
+    pending_persistence_id: null,
+    last_committed_height: 9,
+    last_committed_subject: subject,
+    height_context: {
+      epoch: 1,
+      epoch_end_height: 20,
+      mode: { mode: "permissioned", details: null },
+      epoch_seed: Buffer.from(Array.from({ length: 32 }, (_, index) => index)).toString("hex"),
+      validator_count: 4,
+      quorum: { min_signers: 3, total_power: 4 },
+    },
+    last_commit_qc: {
+      certificate: {
+        round: { context_id: commitContextId, height: 9, view: 1 },
+        phase: { phase: "commit", details: null },
+        subject: { ...subject },
+      },
+      validator_count: 4,
+      signer_count: 3,
+      min_signers: 3,
+      signed_power: 3,
+      total_power: 4,
+    },
+    lane_settlement_commitments: [],
+    lane_relay_envelopes: [],
+    lane_payload_ownerships: [],
+    committed_lane_blocks: [],
+    lane_block_sessions: [],
+    local_peer_removed: false,
+    operator: {
+      view_change_install_total: 7,
+      busy_deferral_total: 3,
+      adapter_queues: {
+        ingress_keys: 2,
+        ingress_capacity: 16,
+        deferred_completion: 1,
+        deferred_progress: 2,
+        deferred_progress_capacity: 4,
+        deferred_normal: 3,
+        deferred_normal_capacity: 8,
+      },
+      tx_queue: {
+        tracked_transactions: 5,
+        queued_transactions: 3,
+        capacity: 32,
+        retained_bytes: 4096,
+        max_retained_bytes: 65536,
+        oldest_queued_age_ms: 25,
+        saturated_by_count: false,
+        saturated_by_bytes: false,
+        saturated_by_age: false,
+      },
+    },
+    ...overrides,
+  };
+}
+
+function createLaneSettlementCommitment(overrides = {}) {
+  return {
+    block_height: 9,
+    lane_id: 2,
+    lane_incarnation: fakeSumeragiHash(0x51),
+    dataspace_id: 7,
+    tx_count: 1,
+    total_local_micro: "10",
+    total_xor_due_micro: "5",
+    total_xor_after_haircut_micro: "4",
+    total_xor_variance_micro: "1",
+    swap_metadata: {
+      epsilon_bps: 5,
+      twap_window_seconds: 60,
+      liquidity_profile: { profile: "Tier1", state: null },
+      twap_local_per_xor: "2.5",
+      volatility_class: { bucket: "Stable", state: null },
+    },
+    receipts: [
+      {
+        source_id: fakeHashHex(0x52),
+        local_amount_micro: "10",
+        xor_due_micro: "5",
+        xor_after_haircut_micro: "4",
+        xor_variance_micro: "1",
+        timestamp_ms: 1700,
+      },
+    ],
+    nexus_fee_receipts: [],
+    native_amx_receipts: [],
+    ...overrides,
+  };
+}
+
+function createLanePayloadOwnership(overrides = {}) {
+  return {
+    proposal_height: 10,
+    proposal_view: 2,
+    lane_id: 2,
+    dataspace_id: 7,
+    lane_incarnation: fakeSumeragiHash(0x51),
+    lane_block_height: 1,
+    lane_block_view: 0,
+    subject_hash: fakeSumeragiHash(0x53),
+    qc_mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
+    accepted_candidate_indices: [0],
+    accepted_transaction_hashes: [fakeSumeragiHash(0x54)],
+    previous_lane_block_height: 0,
+    previous_lane_block_descriptor_hash: null,
+    lane_block_descriptor_hash: fakeSumeragiHash(0x55),
+    lane_block_descriptor_validator_set: ["alice", "bob", "carol", "dave"],
+    lane_block_descriptor_validator_count: 4,
+    lane_block_descriptor_min_quorum: 3,
+    payload_ownership_hash: fakeSumeragiHash(0x56),
+    rbc_instance_hash: fakeSumeragiHash(0x57),
+    ...overrides,
+  };
+}
+
+function createCommittedLaneBlock(overrides = {}) {
+  return {
+    lane_id: 2,
+    dataspace_id: 7,
+    lane_incarnation: fakeSumeragiHash(0x51),
+    lane_block_height: 1,
+    lane_block_view: 0,
+    descriptor_hash: fakeSumeragiHash(0x55),
+    proposal_hash: fakeSumeragiHash(0x58),
+    execution_status: "state_applied_by_canonical_block",
+    executable_payload_available: true,
+    subject_hash: fakeSumeragiHash(0x53),
+    payload_ownership_hash: fakeSumeragiHash(0x56),
+    rbc_instance_hash: fakeSumeragiHash(0x57),
+    qc_mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
+    validator_count: 4,
+    min_quorum: 3,
+    prepare_qc_signer_count: 3,
+    commit_qc_signer_count: 3,
+    ...overrides,
+  };
+}
+
+function createLaneBlockSession(overrides = {}) {
+  return {
+    lane_id: 2,
+    dataspace_id: 7,
+    lane_incarnation: fakeSumeragiHash(0x51),
+    lane_block_height: 1,
+    lane_block_view: 0,
+    proposal_hash: fakeSumeragiHash(0x58),
+    has_proposal: true,
+    prepare_vote_count: 3,
+    commit_vote_count: 3,
+    has_prepare_qc: true,
+    has_commit_qc: true,
+    pending_commit_vote_request: false,
+    pending_committed_session_drain: false,
+    committed_session_drained: true,
+    validator_count: 4,
+    min_quorum: 3,
+    ...overrides,
+  };
+}
+
 function sampleVerifyingKeyRegisterPayload() {
   return {
     authority: SAMPLE_ACCOUNT_ID,
@@ -2727,8 +2928,9 @@ test("getSorafsPinManifestTyped rejects when Torii responds with 404", async () 
 
 test("registerSorafsPinManifest posts payload and returns JSON", async () => {
   const manifestHex = "a".repeat(64);
-  const chunkHex = "b".repeat(64);
   const successorHex = "c".repeat(64);
+  const manifestPayload = Buffer.from("manifest-norito").toString("base64");
+  const aliasProof = Buffer.from("alias-proof").toString("base64");
   let captured = null;
   const fetchImpl = async (url, init) => {
     captured = { url, init };
@@ -2741,504 +2943,295 @@ test("registerSorafsPinManifest posts payload and returns JSON", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.registerSorafsPinManifest({
     authority: FIXTURE_ALICE_ID,
-    privateKey: "ed25519:deadbeef",
-    chunker: {
-      profileId: 1,
-      namespace: "sorafs",
-      name: "sf1",
-      semver: "1.0.0",
-      multihashCode: 0,
-    },
-    pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: 72 },
-    manifestDigestHex: manifestHex,
-    manifestBytes: Buffer.from("manifest-norito"),
-    chunkDigestSha3_256Hex: chunkHex,
-    contentLength: 4096,
-    submittedEpoch: 42,
-    alias: { namespace: "docs", name: "main", proof: Buffer.from("alias-proof") },
-    successorOfHex: successorHex,
+    private_key: "ed25519:deadbeef",
+    manifest_payload: manifestPayload,
+    submitted_epoch: 42,
+    gas_asset_id: "xor#universal",
+    alias: { namespace: "docs", name: "main", proof_base64: aliasProof },
+    successor_of_hex: successorHex.toUpperCase(),
   });
   assert.equal(captured?.url, `${BASE_URL}/v1/sorafs/pin/register`);
   assert.equal(captured?.init?.method, "POST");
   const body = JSON.parse(captured?.init?.body ?? "{}");
-  assert.equal(body.authority, FIXTURE_ALICE_ID);
-  assert.equal(body.chunker_profile_id, 1);
-  assert.equal(body.pin_policy?.storage_class?.type, "Hot");
-  assert.equal(body.manifest_b64, Buffer.from("manifest-norito").toString("base64"));
-  assert.equal(body.chunk_digest_sha3_256_hex, chunkHex);
-  assert.equal(body.content_length, 4096);
-  assert.equal(
-    body.alias?.proof_base64,
-    Buffer.from("alias-proof").toString("base64"),
-  );
-  assert.equal(body.successor_of_hex, successorHex);
+  assert.deepEqual(body, {
+    authority: FIXTURE_ALICE_ID,
+    private_key: "ed25519:deadbeef",
+    manifest_payload: manifestPayload,
+    submitted_epoch: 42,
+    gas_asset_id: "xor#universal",
+    alias: { namespace: "docs", name: "main", proof_base64: aliasProof },
+    successor_of_hex: successorHex,
+  });
   assert.deepEqual(result, { status: "queued", manifest_digest_hex: manifestHex });
 });
 
 function sorafsPinRegisterInput(overrides = {}) {
   return {
     authority: FIXTURE_ALICE_ID,
-    privateKey: "ed25519:deadbeef",
-    chunker: {
-      profileId: 1,
-      namespace: "sorafs",
-      name: "sf1",
-      semver: "1.0.0",
-      multihashCode: 0,
-    },
-    pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: 72 },
-    manifestDigestHex: "a".repeat(64),
-    chunkDigestSha3_256Hex: "b".repeat(64),
-    contentLength: 4096,
-    submittedEpoch: 42,
+    private_key: "ed25519:deadbeef",
+    manifest_payload: Buffer.from("manifest-norito").toString("base64"),
+    submitted_epoch: 42,
     ...overrides,
   };
 }
 
-test("registerSorafsPinManifest accepts snake case successor digest", async () => {
-  const successorHex = "c".repeat(64);
-  const manifestB64 = Buffer.from("explicit-manifest").toString("base64");
+test("registerSorafsPinManifest omits null optionals and keeps signal out of JSON", async () => {
+  const controller = new AbortController();
   let captured = null;
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: { status: "queued", manifest_digest_hex: "a".repeat(64) },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.registerSorafsPinManifest(
-    sorafsPinRegisterInput({
-      pinPolicy: undefined,
-      pin_policy: { min_replicas: 3, storage_class: "warm", retention_epoch: 72 },
-      manifest_b64: manifestB64,
-      successor_of_hex: successorHex.toUpperCase(),
-    }),
-  );
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url, init) => {
+      captured = { url, init };
+      return createResponse({
+        status: 200,
+        jsonData: { status: "queued" },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const input = sorafsPinRegisterInput({
+    gas_asset_id: null,
+    alias: null,
+    successor_of_hex: null,
+    signal: controller.signal,
+  });
+  await client.registerSorafsPinManifest(input);
 
-  const body = JSON.parse(captured?.init?.body ?? "{}");
-  assert.equal(body.pin_policy?.storage_class?.type, "Warm");
-  assert.equal(body.manifest_b64, manifestB64);
-  assert.equal(body.successor_of_hex, successorHex);
+  assert.equal(captured?.init?.signal, controller.signal);
+  assert.deepEqual(JSON.parse(captured?.init?.body ?? "{}"), {
+    authority: input.authority,
+    private_key: input.private_key,
+    manifest_payload: input.manifest_payload,
+    submitted_epoch: input.submitted_epoch,
+  });
 });
 
-test("registerSorafsPinManifest rejects ambiguous request field aliases before fetch", async () => {
+test("registerSorafsPinManifest rejects all unknown and retired fields before fetch", async () => {
+  let fetchCalls = 0;
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: () => {
+      fetchCalls += 1;
+      throw new Error("fetch should not be called");
+    },
+  });
+  const retiredFields = [
+    ["privateKey", "ed25519:deadbeef"],
+    ["manifest", Buffer.from("manifest")],
+    ["manifestBytes", Buffer.from("manifest")],
+    ["manifest_bytes", Buffer.from("manifest")],
+    ["manifestB64", "bWFuaWZlc3Q="],
+    ["manifest_b64", "bWFuaWZlc3Q="],
+    ["manifestBase64", "bWFuaWZlc3Q="],
+    ["manifest_base64", "bWFuaWZlc3Q="],
+    ["chunker", {}],
+    ["chunker_profile_id", 1],
+    ["pinPolicy", {}],
+    ["pin_policy", {}],
+    ["manifestDigestHex", "a".repeat(64)],
+    ["manifest_digest_hex", "a".repeat(64)],
+    ["chunkDigestSha3_256Hex", "b".repeat(64)],
+    ["chunk_digest_sha3_256_hex", "b".repeat(64)],
+    ["chunkDigest", "b".repeat(64)],
+    ["chunk_digest", "b".repeat(64)],
+    ["contentLength", 1],
+    ["content_length", 1],
+    ["submittedEpoch", 42],
+    ["gasAssetId", "xor#universal"],
+    ["aliasNamespace", "docs"],
+    ["alias_namespace", "docs"],
+    ["aliasName", "main"],
+    ["alias_name", "main"],
+    ["aliasProof", "cHJvb2Y="],
+    ["alias_proof", "cHJvb2Y="],
+    ["successorOfHex", "c".repeat(64)],
+    ["unexpected", undefined],
+  ];
+
+  for (const [field, value] of retiredFields) {
+    await assert.rejects(
+      () => client.registerSorafsPinManifest(sorafsPinRegisterInput({ [field]: value })),
+      new RegExp(`unsupported fields: ${field}`, "i"),
+      field,
+    );
+  }
+  assert.equal(fetchCalls, 0);
+});
+
+test("registerSorafsPinManifest requires every canonical field before fetch", async () => {
+  let fetchCalls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: () => {
+      fetchCalls += 1;
+      throw new Error("fetch should not be called");
+    },
+  });
+  for (const field of ["authority", "private_key", "manifest_payload", "submitted_epoch"]) {
+    const input = sorafsPinRegisterInput();
+    delete input[field];
+    await assert.rejects(
+      () => client.registerSorafsPinManifest(input),
+      new RegExp(field, "i"),
+      field,
+    );
+  }
+  assert.equal(fetchCalls, 0);
+});
+
+test("registerSorafsPinManifest rejects non-canonical and malformed manifests before fetch", async () => {
+  let fetchCalls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: () => {
+      fetchCalls += 1;
       throw new Error("fetch should not be called");
     },
   });
   const cases = [
-    {
-      label: "manifest digest",
-      input: sorafsPinRegisterInput({ manifest_digest_hex: "a".repeat(64) }),
-      pattern: /manifestDigestHex.*ambiguous aliases/i,
-    },
-    {
-      label: "chunk digest",
-      input: sorafsPinRegisterInput({ chunk_digest_sha3_256_hex: "b".repeat(64) }),
-      pattern: /chunkDigestSha3_256Hex.*ambiguous aliases/i,
-    },
-    {
-      label: "content length",
-      input: sorafsPinRegisterInput({ content_length: 4096 }),
-      pattern: /contentLength.*ambiguous aliases/i,
-    },
-    {
-      label: "submitted epoch",
-      input: sorafsPinRegisterInput({ submitted_epoch: 42 }),
-      pattern: /submittedEpoch.*ambiguous aliases/i,
-    },
-    {
-      label: "successor digest",
-      input: sorafsPinRegisterInput({
-        successorOfHex: "c".repeat(64),
-        successor_of_hex: "d".repeat(64),
-      }),
-      pattern: /successorOfHex.*ambiguous aliases/i,
-    },
-    {
-      label: "manifest payload",
-      input: sorafsPinRegisterInput({
-        manifestB64: Buffer.from("manifest").toString("base64"),
-        manifestBytes: Buffer.from("other-manifest"),
-      }),
-      pattern: /manifest.*ambiguous aliases/i,
-    },
-    {
-      label: "pin policy",
-      input: sorafsPinRegisterInput({
-        pin_policy: { min_replicas: 3, storage_class: "hot" },
-      }),
-      pattern: /pinPolicy.*ambiguous aliases/i,
-    },
-    {
-      label: "chunker profile",
-      input: sorafsPinRegisterInput({
-        chunker: {
-          profileId: 1,
-          profile_id: 1,
-          namespace: "sorafs",
-          name: "sf1",
-          semver: "1.0.0",
-        },
-      }),
-      pattern: /chunker\.profileId.*ambiguous aliases/i,
-    },
+    [Buffer.from("manifest"), /manifest_payload.*string/i],
+    ["", /manifest_payload.*1\.\.=524288/i],
+    ["not base64!", /manifest_payload.*base64/i],
+    [" YQ==", /manifest_payload.*canonical/i],
+    ["YQ==\n", /manifest_payload.*canonical/i],
+    ["YQ", /manifest_payload.*canonical/i],
+    ["_w==", /manifest_payload.*canonical/i],
+    ["YQ=====", /manifest_payload.*canonical/i],
+    ["A".repeat(Math.ceil((512 * 1024) / 3) * 4 + 1), /manifest_payload.*524288/i],
+    [Buffer.alloc(512 * 1024 + 1).toString("base64"), /manifest_payload.*524288/i],
   ];
-
-  for (const { label, input, pattern } of cases) {
+  for (const [manifestPayload, pattern] of cases) {
     await assert.rejects(
-      () => client.registerSorafsPinManifest(input),
+      () =>
+        client.registerSorafsPinManifest(
+          sorafsPinRegisterInput({ manifest_payload: manifestPayload }),
+        ),
       pattern,
-      label,
     );
   }
+  assert.equal(fetchCalls, 0);
 });
 
-test("registerSorafsPinManifest rejects ambiguous alias fields before fetch", async () => {
+test("registerSorafsPinManifest accepts the maximum manifest payload", async () => {
+  let fetchCalls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return createResponse({
+        status: 200,
+        jsonData: { status: "queued" },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  await client.registerSorafsPinManifest(
+    sorafsPinRegisterInput({
+      manifest_payload: Buffer.alloc(512 * 1024, 0xa5).toString("base64"),
+    }),
+  );
+  assert.equal(fetchCalls, 1);
+});
+
+test("registerSorafsPinManifest rejects invalid scalar fields before fetch", async () => {
+  let fetchCalls = 0;
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: () => {
+      fetchCalls += 1;
       throw new Error("fetch should not be called");
     },
   });
-
-  await assert.rejects(
-    () =>
-      client.registerSorafsPinManifest(
-        sorafsPinRegisterInput({
-          alias: { namespace: "docs", name: "main", proof: Buffer.from("alias-proof") },
-          aliasNamespace: "docs",
-          aliasName: "main",
-          aliasProof: Buffer.from("alias-proof"),
-        }),
-      ),
-    /alias must not be combined with flat alias fields/i,
-  );
-  await assert.rejects(
-    () =>
-      client.registerSorafsPinManifest(
-        sorafsPinRegisterInput({
-          aliasNamespace: "docs",
-          alias_namespace: "docs",
-          aliasName: "main",
-          aliasProof: Buffer.from("alias-proof"),
-        }),
-      ),
-    /aliasNamespace.*ambiguous aliases/i,
-  );
-  await assert.rejects(
-    () =>
-      client.registerSorafsPinManifest(
-        sorafsPinRegisterInput({
-          alias: {
-            namespace: "docs",
-            name: "main",
-            proof: Buffer.from("alias-proof"),
-            proofB64: Buffer.from("alias-proof").toString("base64"),
-          },
-        }),
-      ),
-    /alias\.proof.*ambiguous aliases/i,
-  );
+  for (const submittedEpoch of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, Infinity, null]) {
+    await assert.rejects(
+      () =>
+        client.registerSorafsPinManifest(
+          sorafsPinRegisterInput({ submitted_epoch: submittedEpoch }),
+        ),
+      /submitted_epoch/i,
+    );
+  }
+  for (const privateKey of ["", "   ", " ed25519:deadbeef", 42, {}, []]) {
+    await assert.rejects(
+      () =>
+        client.registerSorafsPinManifest(
+          sorafsPinRegisterInput({ private_key: privateKey }),
+        ),
+      /private_key/i,
+    );
+  }
+  for (const gasAssetId of ["", "   ", " xor#universal", 42, {}, []]) {
+    await assert.rejects(
+      () =>
+        client.registerSorafsPinManifest(
+          sorafsPinRegisterInput({ gas_asset_id: gasAssetId }),
+        ),
+      /gas_asset_id/i,
+    );
+  }
+  assert.equal(fetchCalls, 0);
 });
 
-test("registerSorafsPinManifest validates storage class input", async () => {
+test("registerSorafsPinManifest rejects malformed and oversized aliases before fetch", async () => {
+  let fetchCalls = 0;
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: () => {
+      fetchCalls += 1;
       throw new Error("fetch should not be called");
     },
   });
-  await assert.rejects(
-    () =>
-      client.registerSorafsPinManifest({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        chunker: {
-          profileId: 1,
-          namespace: "sorafs",
-          name: "sf1",
-          semver: "1.0.0",
-        },
-        pinPolicy: { minReplicas: 3, storageClass: "lava" },
-        manifestDigestHex: "a".repeat(64),
-        chunkDigestSha3_256Hex: "b".repeat(64),
-        submittedEpoch: 1,
-      }),
-    /storageClass must be Hot, Warm, or Cold/i,
-  );
+  const cases = [
+    [[], /alias.*object/i],
+    [{ namespace: "docs", name: "main", proof_base64: "cHJvb2Y=", proof: "cHJvb2Y=" }, /unsupported fields: proof/i],
+    [{ namespace: " docs", name: "main", proof_base64: "cHJvb2Y=" }, /alias\.namespace.*whitespace/i],
+    [{ namespace: "docs", name: "main ", proof_base64: "cHJvb2Y=" }, /alias\.name.*whitespace/i],
+    [{ name: "main", proof_base64: "cHJvb2Y=" }, /alias\.namespace/i],
+    [{ namespace: "docs", proof_base64: "cHJvb2Y=" }, /alias\.name/i],
+    [{ namespace: "docs", name: "main" }, /alias\.proof_base64/i],
+    [{ namespace: "docs", name: "main", proof_base64: "" }, /alias\.proof_base64/i],
+    [{ namespace: "docs", name: "main", proof_base64: "cHJvb2Y" }, /alias\.proof_base64.*canonical/i],
+    [{ namespace: "docs", name: "main", proof_base64: "not base64!" }, /alias\.proof_base64.*base64/i],
+    [
+      {
+        namespace: "docs",
+        name: "main",
+        proof_base64: Buffer.alloc(1024 * 1024 + 1).toString("base64"),
+      },
+      /alias\.proof_base64.*1048576/i,
+    ],
+    [
+      {
+        namespace: "docs",
+        name: "main",
+        proof_base64: "A".repeat(Math.ceil((1024 * 1024) / 3) * 4 + 1),
+      },
+      /alias\.proof_base64.*1048576/i,
+    ],
+  ];
+  for (const [alias, pattern] of cases) {
+    await assert.rejects(
+      () => client.registerSorafsPinManifest(sorafsPinRegisterInput({ alias })),
+      pattern,
+    );
+  }
+  assert.equal(fetchCalls, 0);
 });
 
-test("registerSorafsPinManifest requires content length before fetch", async () => {
+test("registerSorafsPinManifest rejects malformed and zero successor digests before fetch", async () => {
+  let fetchCalls = 0;
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: () => {
+      fetchCalls += 1;
       throw new Error("fetch should not be called");
     },
   });
-  await assert.rejects(
-    () =>
-      client.registerSorafsPinManifest({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        chunker: {
-          profileId: 1,
-          namespace: "sorafs",
-          name: "sf1",
-          semver: "1.0.0",
-        },
-        pinPolicy: { minReplicas: 3, storageClass: "hot" },
-        manifestDigestHex: "a".repeat(64),
-        chunkDigestSha3_256Hex: "b".repeat(64),
-        submittedEpoch: 1,
-      }),
-    /contentLength/i,
-  );
-});
-
-test("registerSorafsPinManifest rejects negative content length before fetch", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: () => {
-      throw new Error("fetch should not be called");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.registerSorafsPinManifest({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        chunker: {
-          profileId: 1,
-          namespace: "sorafs",
-          name: "sf1",
-          semver: "1.0.0",
-        },
-        pinPolicy: { minReplicas: 3, storageClass: "hot" },
-        manifestDigestHex: "a".repeat(64),
-        chunkDigestSha3_256Hex: "b".repeat(64),
-        contentLength: -1,
-        submittedEpoch: 1,
-      }),
-    /contentLength.*non-negative/i,
-  );
-});
-
-test("registerSorafsPinManifest rejects zero replicas before fetch", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: () => {
-      throw new Error("fetch should not be called");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.registerSorafsPinManifest({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        chunker: {
-          profileId: 1,
-          namespace: "sorafs",
-          name: "sf1",
-          semver: "1.0.0",
-        },
-        pinPolicy: { minReplicas: 0, storageClass: "hot" },
-        manifestDigestHex: "a".repeat(64),
-        chunkDigestSha3_256Hex: "b".repeat(64),
-        contentLength: 4096,
-        submittedEpoch: 1,
-      }),
-    /minReplicas.*positive/i,
-  );
-});
-
-test("registerSorafsPinManifest rejects negative retention epoch before fetch", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: () => {
-      throw new Error("fetch should not be called");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.registerSorafsPinManifest({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        chunker: {
-          profileId: 1,
-          namespace: "sorafs",
-          name: "sf1",
-          semver: "1.0.0",
-        },
-        pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: -1 },
-        manifestDigestHex: "a".repeat(64),
-        chunkDigestSha3_256Hex: "b".repeat(64),
-        contentLength: 4096,
-        submittedEpoch: 1,
-      }),
-    /retentionEpoch.*non-negative/i,
-  );
-});
-
-test("registerSorafsPinManifest rejects negative submitted epoch before fetch", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: () => {
-      throw new Error("fetch should not be called");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.registerSorafsPinManifest({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        chunker: {
-          profileId: 1,
-          namespace: "sorafs",
-          name: "sf1",
-          semver: "1.0.0",
-        },
-        pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: 72 },
-        manifestDigestHex: "a".repeat(64),
-        chunkDigestSha3_256Hex: "b".repeat(64),
-        contentLength: 4096,
-        submittedEpoch: -1,
-      }),
-    /submittedEpoch.*non-negative/i,
-  );
-});
-
-test("registerSorafsPinManifest rejects malformed manifest digest before fetch", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: () => {
-      throw new Error("fetch should not be called");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.registerSorafsPinManifest({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        chunker: {
-          profileId: 1,
-          namespace: "sorafs",
-          name: "sf1",
-          semver: "1.0.0",
-        },
-        pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: 72 },
-        manifestDigestHex: "abc123",
-        chunkDigestSha3_256Hex: "b".repeat(64),
-        contentLength: 4096,
-        submittedEpoch: 1,
-      }),
-    /manifestDigestHex.*32-byte hex/i,
-  );
-});
-
-test("registerSorafsPinManifest rejects malformed manifest payload before fetch", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: () => {
-      throw new Error("fetch should not be called");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.registerSorafsPinManifest(
-        sorafsPinRegisterInput({
-          manifestB64: "not base64!",
-        }),
-      ),
-    /manifest.*base64/i,
-  );
-  await assert.rejects(
-    () =>
-      client.registerSorafsPinManifest(
-        sorafsPinRegisterInput({
-          manifestBytes: Buffer.alloc(0),
-        }),
-      ),
-    /manifest.*non-empty base64/i,
-  );
-});
-
-test("registerSorafsPinManifest rejects alias without proof before fetch", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: () => {
-      throw new Error("fetch should not be called");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.registerSorafsPinManifest({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        chunker: {
-          profileId: 1,
-          namespace: "sorafs",
-          name: "sf1",
-          semver: "1.0.0",
-        },
-        pinPolicy: { minReplicas: 3, storageClass: "hot" },
-        manifestDigestHex: "a".repeat(64),
-        chunkDigestSha3_256Hex: "b".repeat(64),
-        contentLength: 4096,
-        submittedEpoch: 1,
-        alias: { namespace: "docs", name: "main" },
-      }),
-    /alias\.proof/i,
-  );
-});
-
-test("registerSorafsPinManifest rejects malformed alias proof before fetch", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: () => {
-      throw new Error("fetch should not be called");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.registerSorafsPinManifest({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        chunker: {
-          profileId: 1,
-          namespace: "sorafs",
-          name: "sf1",
-          semver: "1.0.0",
-        },
-        pinPolicy: { minReplicas: 3, storageClass: "hot" },
-        manifestDigestHex: "a".repeat(64),
-        chunkDigestSha3_256Hex: "b".repeat(64),
-        contentLength: 4096,
-        submittedEpoch: 1,
-        alias: { namespace: "docs", name: "main", proof: "not base64!" },
-      }),
-    /alias\.proof.*base64/i,
-  );
-});
-
-test("registerSorafsPinManifest rejects malformed successor digest before fetch", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: () => {
-      throw new Error("fetch should not be called");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.registerSorafsPinManifest({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        chunker: {
-          profileId: 1,
-          namespace: "sorafs",
-          name: "sf1",
-          semver: "1.0.0",
-        },
-        pinPolicy: { minReplicas: 3, storageClass: "hot" },
-        manifestDigestHex: "a".repeat(64),
-        chunkDigestSha3_256Hex: "b".repeat(64),
-        contentLength: 4096,
-        submittedEpoch: 1,
-        successorOfHex: "zz",
-      }),
-    /successorOfHex/i,
-  );
+  for (const [successor, pattern] of [
+    ["zz", /successor_of_hex.*32-byte hex/i],
+    ["0".repeat(64), /successor_of_hex.*must not be zero/i],
+  ]) {
+    await assert.rejects(
+      () =>
+        client.registerSorafsPinManifest(
+          sorafsPinRegisterInput({ successor_of_hex: successor }),
+        ),
+      pattern,
+    );
+  }
+  assert.equal(fetchCalls, 0);
 });
 
 test("registerSorafsPinManifestTyped normalizes response payloads", async () => {
@@ -3266,22 +3259,9 @@ test("registerSorafsPinManifestTyped normalizes response payloads", async () => 
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.registerSorafsPinManifestTyped({
-    authority: FIXTURE_ALICE_ID,
-    privateKey: "ed25519:deadbeef",
-    chunker: {
-      profileId: 1,
-      namespace: "sorafs",
-      name: "sf1",
-      semver: "1.0.0",
-      multihashCode: 0,
-    },
-    pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: 72 },
-    manifestDigestHex: manifestHex,
-    chunkDigestSha3_256Hex: "c".repeat(64),
-    contentLength: 4096,
-    submittedEpoch: 42,
-  });
+  const result = await client.registerSorafsPinManifestTyped(
+    sorafsPinRegisterInput(),
+  );
   assert.deepEqual(result, {
     manifest_digest_hex: manifestHex,
     chunker_handle: "sorafs.sf1@1.0.0",
@@ -3316,22 +3296,7 @@ test("registerSorafsPinManifestTyped rejects response without fee receipt", asyn
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
     () =>
-      client.registerSorafsPinManifestTyped({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        chunker: {
-          profileId: 1,
-          namespace: "sorafs",
-          name: "sf1",
-          semver: "1.0.0",
-          multihashCode: 0,
-        },
-        pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: 72 },
-        manifestDigestHex: manifestHex,
-        chunkDigestSha3_256Hex: "c".repeat(64),
-        contentLength: 4096,
-        submittedEpoch: 42,
-      }),
+      client.registerSorafsPinManifestTyped(sorafsPinRegisterInput()),
     /pin_fee_asset_id/,
   );
 });
@@ -3355,22 +3320,7 @@ test("registerSorafsPinManifestTyped rejects negative fee receipt", async () => 
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
     () =>
-      client.registerSorafsPinManifestTyped({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        chunker: {
-          profileId: 1,
-          namespace: "sorafs",
-          name: "sf1",
-          semver: "1.0.0",
-          multihashCode: 0,
-        },
-        pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: 72 },
-        manifestDigestHex: manifestHex,
-        chunkDigestSha3_256Hex: "c".repeat(64),
-        contentLength: 4096,
-        submittedEpoch: 42,
-      }),
+      client.registerSorafsPinManifestTyped(sorafsPinRegisterInput()),
     /pin_fee_nano.*non-negative/i,
   );
 });
@@ -3394,22 +3344,7 @@ test("registerSorafsPinManifestTyped rejects negative response content length", 
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
     () =>
-      client.registerSorafsPinManifestTyped({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        chunker: {
-          profileId: 1,
-          namespace: "sorafs",
-          name: "sf1",
-          semver: "1.0.0",
-          multihashCode: 0,
-        },
-        pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: 72 },
-        manifestDigestHex: manifestHex,
-        chunkDigestSha3_256Hex: "c".repeat(64),
-        contentLength: 4096,
-        submittedEpoch: 42,
-      }),
+      client.registerSorafsPinManifestTyped(sorafsPinRegisterInput()),
     /content_length.*non-negative/i,
   );
 });
@@ -3433,22 +3368,7 @@ test("registerSorafsPinManifestTyped rejects negative response submitted epoch",
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
     () =>
-      client.registerSorafsPinManifestTyped({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        chunker: {
-          profileId: 1,
-          namespace: "sorafs",
-          name: "sf1",
-          semver: "1.0.0",
-          multihashCode: 0,
-        },
-        pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: 72 },
-        manifestDigestHex: manifestHex,
-        chunkDigestSha3_256Hex: "c".repeat(64),
-        contentLength: 4096,
-        submittedEpoch: 42,
-      }),
+      client.registerSorafsPinManifestTyped(sorafsPinRegisterInput()),
     /submitted_epoch.*non-negative/i,
   );
 });
@@ -3473,22 +3393,7 @@ test("registerSorafsPinManifestTyped rejects malformed response successor digest
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
     () =>
-      client.registerSorafsPinManifestTyped({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        chunker: {
-          profileId: 1,
-          namespace: "sorafs",
-          name: "sf1",
-          semver: "1.0.0",
-          multihashCode: 0,
-        },
-        pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: 72 },
-        manifestDigestHex: manifestHex,
-        chunkDigestSha3_256Hex: "c".repeat(64),
-        contentLength: 4096,
-        submittedEpoch: 42,
-      }),
+      client.registerSorafsPinManifestTyped(sorafsPinRegisterInput()),
     /successor_of_hex.*32-byte hex/i,
   );
 });
@@ -3513,22 +3418,7 @@ test("registerSorafsPinManifestTyped rejects response alias without proof", asyn
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
     () =>
-      client.registerSorafsPinManifestTyped({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        chunker: {
-          profileId: 1,
-          namespace: "sorafs",
-          name: "sf1",
-          semver: "1.0.0",
-          multihashCode: 0,
-        },
-        pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: 72 },
-        manifestDigestHex: manifestHex,
-        chunkDigestSha3_256Hex: "c".repeat(64),
-        contentLength: 4096,
-        submittedEpoch: 42,
-      }),
+      client.registerSorafsPinManifestTyped(sorafsPinRegisterInput()),
     /alias\.proof/i,
   );
 });
@@ -10351,628 +10241,259 @@ test("getSumeragiStatus validates options", async () => {
   );
 });
 
-test("getSumeragiStatus fetches consensus metrics", async () => {
+test("getSumeragiStatus fetches the flattened v2 payload without rewriting it", async () => {
+  const expected = createSumeragiV2StatusPayload();
   const fetchImpl = async (url, init) => {
     assert.equal(url, `${BASE_URL}/v1/sumeragi/status`);
     assert.equal(init.headers.Accept, "application/json");
     return createResponse({
       status: 200,
-      jsonData: {
-        leader_index: 1,
-        membership: { height: 11, view: 3, epoch: 2, view_hash: "deadbeef" },
-        lane_commitments: [
-          {
-            block_height: 11,
-            lane_id: 2,
-            tx_count: 3,
-            total_chunks: 4,
-            rbc_bytes_total: 512,
-            teu_total: 120,
-            block_hash: "cafebabe",
-          },
-        ],
-        dataspace_commitments: [
-          {
-            block_height: 11,
-            lane_id: 2,
-            dataspace_id: 7,
-            tx_count: 1,
-            total_chunks: 2,
-            rbc_bytes_total: 128,
-            teu_total: 32,
-            block_hash: "cafedead",
-          },
-        ],
-        lane_governance: [
-          {
-            lane_id: 2,
-            alias: "alpha-lane",
-            dataspace_id: 7,
-            visibility: "public",
-            storage_profile: "full_replica",
-            governance: "parliament",
-            manifest_required: true,
-            manifest_ready: true,
-            manifest_path: "/etc/iroha/lanes/alpha.json",
-            validator_ids: ["alice@test", "bob@test"],
-            quorum: 2,
-            protected_namespaces: ["finance"],
-        runtime_upgrade: {
-          allow: true,
-          require_metadata: true,
-          metadata_key: "upgrade_id",
-          allowed_ids: ["alpha-upgrade"],
-        },
-        privacy_commitments: [
-          {
-            id: 7,
-            scheme: "merkle",
-            merkle: { root: "0xaaaabbbb", max_depth: 16 },
-            snark: null,
-          },
-          {
-            id: 9,
-            scheme: "snark",
-            merkle: null,
-            snark: {
-              circuit_id: 5,
-              verifying_key_digest: "0x11112222",
-              statement_hash: "0x33334444",
-              proof_hash: "0x55556666",
-            },
-          },
-        ],
-      },
-    ],
-        lane_settlement_commitments: [
-          {
-            block_height: 11,
-            lane_id: 2,
-            dataspace_id: 7,
-            tx_count: 1,
-            total_local_micro: 10,
-            total_xor_due_micro: 5,
-            total_xor_after_haircut_micro: 4,
-            total_xor_variance_micro: 1,
-            swap_metadata: {
-              epsilon_bps: 12,
-              twap_window_seconds: 30,
-              liquidity_profile: "tier2",
-              twap_local_per_xor: "1.0",
-              volatility_class: "elevated",
-            },
-            receipts: [
-              {
-                source_id: "0xabc",
-                local_amount_micro: 10,
-                xor_due_micro: 5,
-                xor_after_haircut_micro: 4,
-                xor_variance_micro: 1,
-                timestamp_ms: 1700,
-              },
-            ],
-          },
-        ],
-        lane_relay_envelopes: [
-          {
-            lane_id: 2,
-            dataspace_id: 7,
-            block_height: 11,
-            block_header: { height: 11, view: 3 },
-            qc: { subject_block_hash: "feedface" },
-            da_commitment_hash: "0xcafe",
-            settlement_commitment: {
-              block_height: 11,
-              lane_id: 2,
-              dataspace_id: 7,
-              tx_count: 1,
-              total_local_micro: 10,
-              total_xor_due_micro: 5,
-              total_xor_after_haircut_micro: 4,
-              total_xor_variance_micro: 1,
-              swap_metadata: null,
-              receipts: [
-                {
-                  source_id: "0xdef",
-                  local_amount_micro: 10,
-                  xor_due_micro: 5,
-                  xor_after_haircut_micro: 4,
-                  xor_variance_micro: 1,
-                  timestamp_ms: 1701,
-                },
-              ],
-            },
-            settlement_hash: "0x1234",
-            rbc_bytes_total: 256,
-          },
-        ],
-        da_reschedule_total: 3,
-      },
+      jsonData: expected,
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.getSumeragiStatus();
-  assert.deepEqual(payload, {
-    leader_index: 1,
-    membership: { height: 11, view: 3, epoch: 2, view_hash: "deadbeef" },
-    lane_commitments: [
-      {
-        block_height: 11,
-        lane_id: 2,
-        tx_count: 3,
-        total_chunks: 4,
-        rbc_bytes_total: 512,
-        teu_total: 120,
-        block_hash: "cafebabe",
-      },
-    ],
-    dataspace_commitments: [
-      {
-        block_height: 11,
-        lane_id: 2,
-        dataspace_id: 7,
-        tx_count: 1,
-        total_chunks: 2,
-        rbc_bytes_total: 128,
-        teu_total: 32,
-        block_hash: "cafedead",
-      },
-    ],
-    lane_governance: [
-      {
-        lane_id: 2,
-        alias: "alpha-lane",
-        dataspace_id: 7,
-        visibility: "public",
-        storage_profile: "full_replica",
-        governance: "parliament",
-        manifest_required: true,
-        manifest_ready: true,
-        manifest_path: "/etc/iroha/lanes/alpha.json",
-        validator_ids: ["alice@test", "bob@test"],
-        quorum: 2,
-        protected_namespaces: ["finance"],
-        runtime_upgrade: {
-          allow: true,
-          require_metadata: true,
-          metadata_key: "upgrade_id",
-          allowed_ids: ["alpha-upgrade"],
-        },
-        privacy_commitments: [
-          {
-            id: 7,
-            scheme: "merkle",
-            merkle: { root: "0xaaaabbbb", max_depth: 16 },
-            snark: null,
-          },
-          {
-            id: 9,
-            scheme: "snark",
-            merkle: null,
-            snark: {
-              circuit_id: 5,
-              verifying_key_digest: "0x11112222",
-              statement_hash: "0x33334444",
-              proof_hash: "0x55556666",
-            },
-          },
-        ],
-      },
-    ],
-    lane_settlement_commitments: [
-      {
-        block_height: 11,
-        lane_id: 2,
-        dataspace_id: 7,
-        tx_count: 1,
-        total_local_micro: 10,
-        total_xor_due_micro: 5,
-        total_xor_after_haircut_micro: 4,
-        total_xor_variance_micro: 1,
-        swap_metadata: {
-          epsilon_bps: 12,
-          twap_window_seconds: 30,
-          liquidity_profile: "tier2",
-          twap_local_per_xor: "1.0",
-          volatility_class: "elevated",
-        },
-        receipts: [
-          {
-            source_id: "0xabc",
-            local_amount_micro: 10,
-            xor_due_micro: 5,
-            xor_after_haircut_micro: 4,
-            xor_variance_micro: 1,
-            timestamp_ms: 1700,
-          },
-        ],
-      },
-    ],
+  assert.deepEqual(await client.getSumeragiStatus(), expected);
+});
+
+function sumeragiClientForPayload(payload) {
+  return new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: payload,
+        headers: { "content-type": "application/json" },
+      }),
+  });
+}
+
+test("getSumeragiStatusTyped validates and normalizes authoritative v2 status", async () => {
+  const settlement = createLaneSettlementCommitment();
+  const relay = {
+    lane_id: settlement.lane_id,
+    lane_incarnation: settlement.lane_incarnation,
+    dataspace_id: settlement.dataspace_id,
+    block_height: settlement.block_height,
+    block_header: { height: settlement.block_height },
+    qc: null,
+    da_commitment_hash: null,
+    lane_block_descriptor_hash: null,
+    settlement_commitment: settlement,
+    settlement_hash: fakeSumeragiHash(0x61),
+    rbc_bytes_total: 256,
+    manifest_root: null,
+    fastpq_proof: {
+      proof_digest: fakeSumeragiHash(0x62),
+      verified_at_height: 10,
+    },
+  };
+  const payload = createSumeragiV2StatusPayload({
+    lane_settlement_commitments: [settlement],
+    lane_relay_envelopes: [relay],
+    lane_payload_ownerships: [createLanePayloadOwnership()],
+    committed_lane_blocks: [createCommittedLaneBlock()],
+    lane_block_sessions: [createLaneBlockSession()],
+  });
+
+  const status = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
+
+  assert.equal(status.protocol_version, 2);
+  assert.equal(status.height, 10);
+  assert.equal(status.height_context.mode.mode, "permissioned");
+  assert.equal(status.height_context.quorum.min_signers, 3);
+  assert.equal(status.last_commit_qc.certificate.round.height, 9);
+  assert.equal(status.last_commit_qc.signed_power, 3);
+  assert.equal(status.lane_settlement_commitments[0].total_local_micro, "10");
+  assert.equal(
+    status.lane_settlement_commitments[0].swap_metadata.liquidity_profile.profile,
+    "Tier1",
+  );
+  assert.equal(status.lane_relay_envelopes[0].settlement_hash, fakeSumeragiHash(0x61));
+  assert.equal(status.lane_payload_ownerships[0].lane_block_descriptor_validator_count, 4);
+  assert.equal(status.committed_lane_blocks[0].commit_qc_signer_count, 3);
+  assert.equal(status.lane_block_sessions[0].has_commit_qc, true);
+  assert.equal(status.operator.tx_queue.queued_transactions, 3);
+  assert.equal(status.local_peer_removed, false);
+  assert.equal("mode_tag" in status, false);
+  assert.equal("lane_commitments" in status, false);
+});
+
+test("getSumeragiStatusTyped rejects unsupported protocol and invalid frozen contexts", async () => {
+  const legacyField = createSumeragiV2StatusPayload({ mode_tag: "retired" });
+  await assert.rejects(
+    () => sumeragiClientForPayload(legacyField).getSumeragiStatusTyped(),
+    /contains unknown field mode_tag/,
+  );
+
+  const wrongVersion = createSumeragiV2StatusPayload({ protocol_version: 1 });
+  await assert.rejects(
+    () => sumeragiClientForPayload(wrongVersion).getSumeragiStatusTyped(),
+    /protocol_version must equal 2/,
+  );
+
+  const wrongQuorum = createSumeragiV2StatusPayload();
+  wrongQuorum.height_context.quorum.min_signers = 2;
+  await assert.rejects(
+    () => sumeragiClientForPayload(wrongQuorum).getSumeragiStatusTyped(),
+    /quorum is not canonical/,
+  );
+
+  const shortSeed = createSumeragiV2StatusPayload();
+  shortSeed.height_context.epoch_seed = shortSeed.height_context.epoch_seed.slice(2);
+  await assert.rejects(
+    () => sumeragiClientForPayload(shortSeed).getSumeragiStatusTyped(),
+    /epoch_seed must be a 32-byte hex string/,
+  );
+
+  const missingEnumDetails = createSumeragiV2StatusPayload();
+  delete missingEnumDetails.phase.details;
+  await assert.rejects(
+    () => sumeragiClientForPayload(missingEnumDetails).getSumeragiStatusTyped(),
+    /phase.details must be explicitly null/,
+  );
+
+  const outOfRangeLeader = createSumeragiV2StatusPayload({ leader: 4 });
+  await assert.rejects(
+    () => sumeragiClientForPayload(outOfRangeLeader).getSumeragiStatusTyped(),
+    /leader must index the frozen validator roster/,
+  );
+});
+
+test("getSumeragiStatusTyped rejects inconsistent or under-quorum commits", async () => {
+  const wrongSubject = createSumeragiV2StatusPayload();
+  wrongSubject.last_commit_qc.certificate.subject.block_hash = fakeSumeragiHash(0x77);
+  await assert.rejects(
+    () => sumeragiClientForPayload(wrongSubject).getSumeragiStatusTyped(),
+    /does not certify the committed subject/,
+  );
+
+  const wrongHeight = createSumeragiV2StatusPayload();
+  wrongHeight.last_commit_qc.certificate.round.height = 8;
+  await assert.rejects(
+    () => sumeragiClientForPayload(wrongHeight).getSumeragiStatusTyped(),
+    /does not certify the committed subject/,
+  );
+
+  const underpowered = createSumeragiV2StatusPayload();
+  underpowered.last_commit_qc.signed_power = 2;
+  await assert.rejects(
+    () => sumeragiClientForPayload(underpowered).getSumeragiStatusTyped(),
+    /does not satisfy its frozen dual quorum/,
+  );
+
+  const missingQc = createSumeragiV2StatusPayload({ last_commit_qc: null });
+  await assert.rejects(
+    () => sumeragiClientForPayload(missingQc).getSumeragiStatusTyped(),
+    /subject and QC are required/,
+  );
+});
+
+test("getSumeragiStatusTyped rejects impossible bounded queue snapshots", async () => {
+  const ingressOverflow = createSumeragiV2StatusPayload();
+  ingressOverflow.operator.adapter_queues.ingress_keys =
+    ingressOverflow.operator.adapter_queues.ingress_capacity + 1;
+  await assert.rejects(
+    () => sumeragiClientForPayload(ingressOverflow).getSumeragiStatusTyped(),
+    /adapter_queues occupancy exceeds capacity/,
+  );
+
+  const completionOverflow = createSumeragiV2StatusPayload();
+  completionOverflow.operator.adapter_queues.deferred_completion =
+    completionOverflow.operator.adapter_queues.deferred_progress_capacity + 1;
+  await assert.rejects(
+    () => sumeragiClientForPayload(completionOverflow).getSumeragiStatusTyped(),
+    /adapter_queues occupancy exceeds capacity/,
+  );
+
+  const queueOverflow = createSumeragiV2StatusPayload();
+  queueOverflow.operator.tx_queue.queued_transactions =
+    queueOverflow.operator.tx_queue.tracked_transactions + 1;
+  await assert.rejects(
+    () => sumeragiClientForPayload(queueOverflow).getSumeragiStatusTyped(),
+    /tx_queue occupancy exceeds capacity/,
+  );
+
+  const zeroByteCapacity = createSumeragiV2StatusPayload();
+  zeroByteCapacity.operator.tx_queue.max_retained_bytes = 0;
+  await assert.rejects(
+    () => sumeragiClientForPayload(zeroByteCapacity).getSumeragiStatusTyped(),
+    /max_retained_bytes must be positive/,
+  );
+});
+
+test("getSumeragiStatusTyped requires every canonical lane array", async () => {
+  for (const field of [
+    "lane_settlement_commitments",
+    "lane_relay_envelopes",
+    "lane_payload_ownerships",
+    "committed_lane_blocks",
+    "lane_block_sessions",
+  ]) {
+    const payload = createSumeragiV2StatusPayload();
+    delete payload[field];
+    await assert.rejects(
+      () => sumeragiClientForPayload(payload).getSumeragiStatusTyped(),
+      new RegExp(`${field} must be an array`),
+      field,
+    );
+  }
+});
+
+test("getSumeragiStatusTyped rejects adversarial lane evidence", async () => {
+  const mismatchedRelaySettlement = createLaneSettlementCommitment();
+  const relayPayload = createSumeragiV2StatusPayload({
     lane_relay_envelopes: [
       {
-        lane_id: 2,
-        dataspace_id: 7,
-        block_height: 11,
-        block_header: { height: 11, view: 3 },
-        qc: { subject_block_hash: "feedface" },
-        da_commitment_hash: "0xcafe",
-        settlement_commitment: {
-          block_height: 11,
-          lane_id: 2,
-          dataspace_id: 7,
-          tx_count: 1,
-          total_local_micro: 10,
-          total_xor_due_micro: 5,
-          total_xor_after_haircut_micro: 4,
-          total_xor_variance_micro: 1,
-          swap_metadata: null,
-          receipts: [
-            {
-              source_id: "0xdef",
-              local_amount_micro: 10,
-              xor_due_micro: 5,
-              xor_after_haircut_micro: 4,
-              xor_variance_micro: 1,
-              timestamp_ms: 1701,
-            },
-          ],
-        },
-        settlement_hash: "0x1234",
-        rbc_bytes_total: 256,
+        lane_id: 3,
+        lane_incarnation: mismatchedRelaySettlement.lane_incarnation,
+        dataspace_id: mismatchedRelaySettlement.dataspace_id,
+        block_height: mismatchedRelaySettlement.block_height,
+        block_header: {},
+        qc: null,
+        da_commitment_hash: null,
+        lane_block_descriptor_hash: null,
+        settlement_commitment: mismatchedRelaySettlement,
+        settlement_hash: fakeSumeragiHash(0x61),
+        rbc_bytes_total: 0,
+        manifest_root: null,
+        fastpq_proof: null,
       },
     ],
-    da_reschedule_total: 3,
   });
-});
+  await assert.rejects(
+    () => sumeragiClientForPayload(relayPayload).getSumeragiStatusTyped(),
+    /settlement_commitment identity must match its relay/,
+  );
 
-test("getSumeragiStatusTyped normalizes governance seals", async () => {
-  const fetchImpl = async (url, init) => {
-    assert.equal(url, `${BASE_URL}/v1/sumeragi/status`);
-    assert.equal(init.headers.Accept, "application/json");
-    return createResponse({
-      status: 200,
-      jsonData: {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
-        staged_mode_tag: "iroha2-consensus::npos-sumeragi@v2",
-        staged_mode_activation_height: "10",
-        mode_activation_lag_blocks: 2,
-        consensus_caps: {
-          collectors_k: "2",
-          redundant_send_r: "1",
-          da_enabled: true,
-          rbc_chunk_max_bytes: "1024",
-          rbc_session_ttl_ms: 5000,
-          rbc_store_max_sessions: "64",
-          rbc_store_soft_sessions: "32",
-          rbc_store_max_bytes: "4096",
-          rbc_store_soft_bytes: "2048",
-        },
-        commit_qc: {
-          height: "41",
-          view: "2",
-          epoch: "5",
-          block_hash: "0xabc",
-          validator_set_hash: "0xdef",
-          validator_set_len: "4",
-          signatures_total: "3",
-        },
-        commit_quorum: {
-          height: "41",
-          view: "2",
-          block_hash: "0xabc",
-          signatures_present: "3",
-          signatures_counted: "3",
-          signatures_set_b: "2",
-          signatures_required: "3",
-          last_updated_ms: "1700",
-        },
-        leader_index: "5",
-        lane_commitments: [
-          {
-            block_height: "42",
-            lane_id: "7",
-            tx_count: 3,
-            total_chunks: 4,
-            rbc_bytes_total: 256,
-            teu_total: 64,
-            block_hash: "feedface",
-          },
-        ],
-        dataspace_commitments: [
-          {
-            block_height: "42",
-            lane_id: "7",
-            dataspace_id: 9,
-            tx_count: 1,
-            total_chunks: 1,
-            rbc_bytes_total: 96,
-            teu_total: 16,
-            block_hash: "facedead",
-          },
-        ],
-        lane_governance: [
-          {
-            lane_id: "7",
-            alias: "archive",
-            dataspace_id: "9",
-            visibility: "public",
-            storage_profile: "full_replica",
-            manifest_required: true,
-            manifest_ready: false,
-            validator_ids: ["alice@test"],
-            protected_namespaces: ["finance"],
-            privacy_commitments: [
-              {
-                id: "4",
-                scheme: "merkle",
-                merkle: { root: "0xffff", max_depth: "12" },
-              },
-              {
-                id: 5,
-                scheme: "snark",
-                snark: {
-                  circuit_id: "8",
-                  verifying_key_digest: "0xaaaa",
-                  statement_hash: "0xbbbb",
-                  proof_hash: "0xcccc",
-                },
-              },
-            ],
-          },
-        ],
-        lane_governance_sealed_total: "2",
-        lane_governance_sealed_aliases: ["archive", "payments"],
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.getSumeragiStatusTyped();
-  assert.equal(payload.mode_tag, "iroha2-consensus::permissioned-sumeragi@v2");
-  assert.equal(payload.staged_mode_tag, "iroha2-consensus::npos-sumeragi@v2");
-  assert.equal(payload.staged_mode_activation_height, 10);
-  assert.equal(payload.mode_activation_lag_blocks, 2);
-  assert.ok(payload.consensus_caps);
-  assert.equal(payload.consensus_caps.collectors_k, 2);
-  assert.equal(payload.consensus_caps.rbc_chunk_max_bytes, 1024);
-  assert.deepEqual(payload.commit_qc, {
-    height: 41,
-    view: 2,
-    epoch: 5,
-    block_hash: "0xabc",
-    validator_set_hash: "0xdef",
-    validator_set_len: 4,
-    signatures_total: 3,
+  const ownershipPayload = createSumeragiV2StatusPayload({
+    lane_payload_ownerships: [
+      createLanePayloadOwnership({
+        accepted_candidate_indices: [1, 1],
+        accepted_transaction_hashes: [fakeSumeragiHash(0x70), fakeSumeragiHash(0x71)],
+      }),
+    ],
   });
-  assert.deepEqual(payload.commit_quorum, {
-    height: 41,
-    view: 2,
-    block_hash: "0xabc",
-    signatures_present: 3,
-    signatures_counted: 3,
-    signatures_set_b: 2,
-    signatures_required: 3,
-    last_updated_ms: 1700,
+  await assert.rejects(
+    () => sumeragiClientForPayload(ownershipPayload).getSumeragiStatusTyped(),
+    /accepted_candidate_indices must be strictly ordered/,
+  );
+
+  const committedPayload = createSumeragiV2StatusPayload({
+    committed_lane_blocks: [createCommittedLaneBlock({ commit_qc_signer_count: 2 })],
   });
-  assert.equal(payload.leader_index, "5");
-  assert.deepEqual(payload.lane_commitments, [
-    {
-      block_height: 42,
-      lane_id: 7,
-      tx_count: 3,
-      total_chunks: 4,
-      rbc_bytes_total: 256,
-      teu_total: 64,
-      block_hash: "feedface",
-    },
-  ]);
-  assert.deepEqual(payload.dataspace_commitments, [
-    {
-      block_height: 42,
-      lane_id: 7,
-      dataspace_id: 9,
-      tx_count: 1,
-      total_chunks: 1,
-      rbc_bytes_total: 96,
-      teu_total: 16,
-      block_hash: "facedead",
-    },
-  ]);
-  assert.deepEqual(payload.lane_governance, [
-    {
-      lane_id: 7,
-      alias: "archive",
-      dataspace_id: 9,
-      visibility: "public",
-      storage_profile: "full_replica",
-      governance: null,
-      manifest_required: true,
-      manifest_ready: false,
-      manifest_path: null,
-      validator_ids: ["alice@test"],
-      quorum: null,
-      protected_namespaces: ["finance"],
-      runtime_upgrade: null,
-      privacy_commitments: [
-        {
-          id: 4,
-          scheme: "merkle",
-          merkle: { root: "0xffff", max_depth: 12 },
-          snark: null,
-        },
-        {
-          id: 5,
-          scheme: "snark",
-          merkle: null,
-          snark: {
-            circuit_id: 8,
-            verifying_key_digest: "0xaaaa",
-            statement_hash: "0xbbbb",
-            proof_hash: "0xcccc",
-          },
-        },
-      ],
-    },
-  ]);
-  assert.equal(payload.lane_governance_sealed_total, 2);
-  assert.deepEqual(payload.lane_governance_sealed_aliases, ["archive", "payments"]);
-});
+  await assert.rejects(
+    () => sumeragiClientForPayload(committedPayload).getSumeragiStatusTyped(),
+    /impossible certified quorum/,
+  );
 
-test("getSumeragiStatusTyped parses settlement and relay envelopes", async () => {
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
-        lane_settlement_commitments: [
-          {
-            block_height: "21",
-            lane_id: "4",
-            dataspace_id: "9",
-            tx_count: 2,
-            total_local_micro: 42,
-            total_xor_due_micro: 21,
-            total_xor_after_haircut_micro: 20,
-            total_xor_variance_micro: 1,
-            swap_metadata: {
-              epsilon_bps: "5",
-              twap_window_seconds: 60,
-              liquidity_profile: "tier1",
-              twap_local_per_xor: "2.5",
-              volatility_class: "stable",
-            },
-            receipts: [
-              {
-                source_id: "0xaaaa",
-                local_amount_micro: 42,
-                xor_due_micro: 21,
-                xor_after_haircut_micro: 20,
-                xor_variance_micro: 1,
-                timestamp_ms: 1700,
-              },
-            ],
-          },
-        ],
-        lane_relay_envelopes: [
-          {
-            lane_id: 4,
-            dataspace_id: 9,
-            block_height: 21,
-            block_header: { height: 21 },
-            qc: { subject_block_hash: "abcd" },
-            da_commitment_hash: null,
-            settlement_commitment: {
-              block_height: 21,
-              lane_id: 4,
-              dataspace_id: 9,
-              tx_count: 2,
-              total_local_micro: 42,
-              total_xor_due_micro: 21,
-              total_xor_after_haircut_micro: 20,
-              total_xor_variance_micro: 1,
-              receipts: [
-                {
-                  source_id: "0xbbbb",
-                  local_amount_micro: 10,
-                  xor_due_micro: 5,
-                  xor_after_haircut_micro: 4,
-                  xor_variance_micro: 1,
-                  timestamp_ms: 1701,
-                },
-              ],
-            },
-            settlement_hash: "0xfeed",
-            rbc_bytes_total: "64",
-            manifest_root: "0xcafe",
-            fastpq_proof: {
-              proof_digest: "0xdeadbeef",
-              verified_at_height: "22",
-            },
-          },
-        ],
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const status = await client.getSumeragiStatusTyped();
-  assert.equal(status.lane_settlement_commitments[0].total_local_micro, 42);
-  assert.equal(status.lane_relay_envelopes[0].settlement_hash, "0xfeed");
-  assert.equal(status.lane_relay_envelopes[0].rbc_bytes_total, 64);
-  assert.equal(status.lane_relay_envelopes[0].manifest_root, "0xcafe");
-  assert.equal(status.lane_relay_envelopes[0].fastpq_proof.proof_digest, "0xdeadbeef");
-  assert.equal(status.lane_relay_envelopes[0].fastpq_proof.verified_at_height, 22);
+  const sessionPayload = createSumeragiV2StatusPayload({
+    lane_block_sessions: [createLaneBlockSession({ prepare_vote_count: 5 })],
+  });
+  await assert.rejects(
+    () => sumeragiClientForPayload(sessionPayload).getSumeragiStatusTyped(),
+    /impossible session quorum counts/,
+  );
 });
-
-test("getSumeragiStatusTyped rejects invalid relay settlement hash", async () => {
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
-        lane_relay_envelopes: [
-          {
-            lane_id: 1,
-            dataspace_id: 1,
-            block_height: 1,
-            block_header: { height: 1 },
-            settlement_commitment: {
-              block_height: 1,
-              lane_id: 1,
-              dataspace_id: 1,
-              tx_count: 0,
-              total_local_micro: 0,
-              total_xor_due_micro: 0,
-              total_xor_after_haircut_micro: 0,
-              total_xor_variance_micro: 0,
-              receipts: [],
-            },
-            settlement_hash: 42,
-            rbc_bytes_total: 0,
-          },
-        ],
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(() => client.getSumeragiStatusTyped(), /settlement_hash/);
-});
-
-test("getSumeragiStatusTyped rejects invalid relay fastpq_proof digest", async () => {
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
-        lane_relay_envelopes: [
-          {
-            lane_id: 1,
-            dataspace_id: 1,
-            block_height: 1,
-            block_header: { height: 1 },
-            settlement_commitment: {
-              block_height: 1,
-              lane_id: 1,
-              dataspace_id: 1,
-              tx_count: 0,
-              total_local_micro: 0,
-              total_xor_due_micro: 0,
-              total_xor_after_haircut_micro: 0,
-              total_xor_variance_micro: 0,
-              receipts: [],
-            },
-            settlement_hash: "0x00",
-            rbc_bytes_total: 0,
-            fastpq_proof: { proof_digest: 42 },
-          },
-        ],
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(() => client.getSumeragiStatusTyped(), /fastpq_proof.proof_digest/);
-});
-
 test("getSumeragiPacemaker returns null when gated and decodes payload otherwise", async () => {
   const snapshots = [
     createResponse({ status: 403, jsonData: { ok: false }, headers: { "content-type": "application/json" } }),

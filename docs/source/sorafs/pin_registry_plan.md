@@ -140,7 +140,7 @@ Dashboards:
 ## Dependencies & Sequencing
 
 1. Endpoint/client submission polish, shared validation, governance config mapping,
-   Torii `manifest_b64` validation, and registry DTO policy checks are wired.
+   Torii `manifest_payload` validation, and canonical manifest-derived policy checks are wired.
 2. Norito schema, policy defaults, contract state, service facade, telemetry,
    fixtures, and local integration coverage are implemented.
 3. Ongoing SF-4 work is rollout evidence: live registry audits, governance archive

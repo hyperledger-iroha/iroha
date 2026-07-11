@@ -50,7 +50,7 @@ use sorafs_car::{
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
     AvailabilityTier, CapabilityType, ManifestV1, ProviderAdvertV1, ProviderCapabilityRangeV1,
-    TransportHintV1, TransportProtocol,
+    TransportHintV1, TransportProtocol, decode_manifest_v1_canonical,
     hybrid_envelope::{HYBRID_PAYLOAD_ENVELOPE_VERSION_V1, HybridPayloadEnvelopeV1},
     provider_admission::{
         AdmissionRecord, ProviderAdmissionCouncilPolicy, ProviderAdmissionEnvelopeV1,
@@ -2027,7 +2027,7 @@ fn decode_manifest_hex(hex_str: &str) -> Result<ManifestV1, String> {
 }
 
 fn decode_manifest_bytes(bytes: &[u8]) -> Result<ManifestV1, String> {
-    decode_from_bytes(bytes)
+    decode_manifest_v1_canonical(bytes)
         .map_err(|err| format!("failed to decode manifest payload as Norito: {err}"))
 }
 

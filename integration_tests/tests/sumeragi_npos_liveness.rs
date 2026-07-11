@@ -369,19 +369,26 @@ fn ordered_submit_peer_indices(
 
 async fn submit_peer_indices_for_network(network: &Network, probe: &Client) -> Vec<usize> {
     let peer_count = network.peers().len();
-    let status = tokio::task::spawn_blocking({
+    let health_status = tokio::task::spawn_blocking({
         let client = probe.clone();
         move || client.get_status()
     })
     .await
     .ok()
     .and_then(Result::ok);
-    let leader_index = status
+    let consensus_status = tokio::task::spawn_blocking({
+        let client = probe.clone();
+        move || client.get_sumeragi_v2_status()
+    })
+    .await
+    .ok()
+    .and_then(Result::ok);
+    let leader_index = consensus_status
         .as_ref()
-        .and_then(|status| status.sumeragi.as_ref().map(|s| s.leader_index))
+        .map(|status| status.authoritative.leader)
         .and_then(|idx| usize::try_from(idx).ok())
         .filter(|&idx| idx < peer_count);
-    let leader_is_connected = status
+    let leader_is_connected = health_status
         .as_ref()
         .is_some_and(|status| status.peers >= min_connected_peers_for_submit(peer_count));
     let fallback_totals = network

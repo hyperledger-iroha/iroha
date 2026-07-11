@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 
 use iroha_crypto::{Algorithm, Hash};
 use iroha_data_model::{
-    ChainId, block::consensus_v2 as wire, isi::RegisterPeerWithPop,
-    nexus::PublicLaneValidatorStatus, peer::PeerId, transaction::Executable,
+    ChainId, block::consensus_v2 as wire, isi::RegisterBox, nexus::PublicLaneValidatorStatus,
+    peer::PeerId, transaction::Executable,
 };
 use iroha_genesis::GenesisBlock;
 use mv::storage::StorageReadOnly;
@@ -167,10 +167,13 @@ fn signed_genesis_validator_pops(
         let Executable::Instructions(instructions) = transaction.instructions() else {
             return Err(V2GenesisBootstrapError::UnsupportedGenesisExecutable);
         };
-        for register in instructions
-            .iter()
-            .filter_map(|instruction| instruction.as_any().downcast_ref::<RegisterPeerWithPop>())
-        {
+        for register in instructions.iter().filter_map(|instruction| {
+            let RegisterBox::Peer(register) = instruction.as_any().downcast_ref::<RegisterBox>()?
+            else {
+                return None;
+            };
+            Some(register)
+        }) {
             if register.peer.public_key().try_algorithm() != Ok(Algorithm::BlsNormal) {
                 return Err(V2GenesisBootstrapError::NonBlsValidator);
             }

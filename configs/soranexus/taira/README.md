@@ -624,15 +624,17 @@ is stale and missing the SoraFS capacity/order entries in
 `iroha_core`'s instruction dispatch table even if the Torii route surface is
 otherwise up.
 
-On a freshly reset local bundle, the same signed canary now tolerates the brief
-startup window where detailed Sumeragi commit-QC health is not published yet,
+On a freshly reset local bundle, the same signed canary tolerates an
+authoritative v2 snapshot at the genesis frontier before a CommitQC exists,
 submits the first post-genesis write, and then re-checks `/status` plus
 `/v1/sumeragi/status` strictly after that write lands.
 
-The rollout script now also requires `/v1/sumeragi/status` to show at least 4
-validators in the commit QC set and rejects stalled one-block-ahead finality
-states where `membership.height > commit_qc.height`, the worker is idle or
-waiting on RBC, and the node is reporting missing-QC/quorum-timeout symptoms.
+The rollout script requires `/v1/sumeragi/status` to advertise protocol v2, a
+frozen `height_context` with at least 4 validators and a consistent dual
+quorum, an exact durable `last_commit_qc` after genesis, bounded `operator`
+queues, and all canonical lane-evidence arrays. It rejects mismatched CommitQC
+height/subject, insufficient signer count or power, out-of-range leaders,
+impossible queue occupancy, and any legacy RBC/recovery status shape.
 If it fails that check, rebuild the validator configs from the shared roster or
 clear volatile consensus state before debugging ingress or MCP. It also verifies
 that the same direct node serves:
@@ -683,7 +685,7 @@ Before long public writes such as Soracloud releases or large SoraFS publishes:
 - confirm that `/status` counters advance and use `/v1/sumeragi/status` for
   detailed finality and queue health:
   - `curl -sS "${PUBLIC_TORII_ROOT}/status" | jq '{build_git_sha: .build.git_commit_sha, blocks, queue_size, peers, teu_dataspace_backlog}'`
-  - `curl -sS "${PUBLIC_TORII_ROOT}/v1/sumeragi/status" | jq '{commit_qc_height: (.commit_qc_height // .commit_qc.height // null), highest_qc_height: (.highest_qc_height // .highest_qc.height // null), locked_qc_height: (.locked_qc_height // .locked_qc.height // null), canonical_height: (.canonical.height // null), canonical_phase: (.canonical.phase // null), membership_height: (.membership.height // null), pending_finality: (.canonical.pending_finality // null), pending_rbc_sessions: (.pending_rbc.sessions // null), view_change_last_cause: (.view_change_causes.last_cause // null), tx_queue_depth: (.tx_queue_depth // .tx_queue.depth // null), tx_queue_capacity: (.tx_queue_capacity // .tx_queue.capacity // null), saturated_by_count: (.tx_queue_saturated_by_count // .tx_queue.saturated_by_count // null), saturated_by_age: (.tx_queue_saturated_by_age // .tx_queue.saturated_by_age // null), oldest_queued_age_ms: (.tx_queue_oldest_queued_age_ms // .tx_queue.oldest_queued_age_ms // null)}'`
+  - `curl -sS "${PUBLIC_TORII_ROOT}/v1/sumeragi/status" | jq '{protocol_version, height, view, phase: .phase.phase, body_state: .body_state.state, pending_persistence_id, mode: .height_context.mode.mode, epoch: .height_context.epoch, validator_count: .height_context.validator_count, quorum: .height_context.quorum, last_committed_height, commit_qc_height: .last_commit_qc.certificate.round.height, commit_qc_signers: .last_commit_qc.signer_count, commit_qc_min_signers: .last_commit_qc.min_signers, commit_qc_signed_power: .last_commit_qc.signed_power, commit_qc_total_power: .last_commit_qc.total_power, view_change_install_total: .operator.view_change_install_total, busy_deferral_total: .operator.busy_deferral_total, tx_queue_depth: .operator.tx_queue.queued_transactions, tx_queue_capacity: .operator.tx_queue.capacity, saturated_by_count: .operator.tx_queue.saturated_by_count, saturated_by_age: .operator.tx_queue.saturated_by_age, oldest_queued_age_ms: .operator.tx_queue.oldest_queued_age_ms, lane_block_sessions: (.lane_block_sessions | length)}'`
 - verify the signer you intend to use still exists on the current Taira chain
   and still has a positive fee-asset balance
 - for Soracloud mutations specifically, also verify that the signer still
@@ -717,11 +719,10 @@ Interpret the common public failures as follows:
 - `Transaction expired`:
   likely chain-health, consensus-latency, or queue-saturation trouble first.
   Report the current `blocks`, `queue_size`, `teu_dataspace_backlog`,
-  `commit_qc_height`, `highest_qc_height`, `locked_qc_height`,
-  `membership_height`, `tx_queue_depth`, `tx_queue_capacity`,
-  `tx_queue_saturated_by_count`, `tx_queue_saturated_by_age`,
-  `pending_rbc_sessions`, and `view_change_last_cause` samples alongside the
-  failure.
+  v2 `height`, `view`, `phase`, `body_state`, `pending_persistence_id`,
+  `last_committed_height`, exact CommitQC count/power, frozen mode/epoch/roster,
+  `operator` queue occupancy/saturation, view-change installs, busy deferrals,
+  and canonical lane-session evidence alongside the failure.
 - `403 Forbidden` immediately after a reset or redeploy:
   likely signer-permission or signer-state drift first. Re-check that the
   signer still exists on-chain, still holds a fee asset balance, and still has
@@ -731,14 +732,16 @@ Interpret the common public failures as follows:
   the queried public node currently has no visibility for that hash. Do not
   infer commit, reject, or network-wide disappearance from that result alone.
 
-If the latest committed block timestamp stops advancing and `/v1/sumeragi/status`
-shows signals such as `membership.height > commit_qc.height`,
-`view_change_causes.last_cause = "missing_qc"`, or `worker_loop.stage = "idle"`,
-report that the queried public Torii finality path appears stalled. Unless you
-also have validator-side access, describe that as a public-node or
-public-finality-path observation rather than proof that the full validator set
-is down. With validator-shell access, use the checked-in recovery helper from
-the Taira host and pin the runtime digest before restarting, for example:
+If the latest committed block timestamp and v2 `last_committed_height` stop
+advancing across repeated samples while reducer `height`/`view`,
+`operator.view_change_install_total`, busy deferrals, persistence blockage, or
+bounded queue occupancy continue to rise, report that the queried public Torii
+finality path appears stalled. A single one-height reducer/commit gap is normal
+pipeline state and is not sufficient evidence by itself. Unless you also have
+validator-side access, describe this as a public-node or public-finality-path
+observation rather than proof that the full validator set is down. With
+validator-shell access, use the checked-in recovery helper from the Taira host
+and pin the runtime digest before restarting, for example:
 
 ```bash
 bash configs/soranexus/taira/clear_volatile_consensus_state.sh \
@@ -1081,7 +1084,7 @@ From `../iroha2-block-explorer-web`:
    - before DNS propagates or before the SAN cert is refreshed, you can still
      validate local SNI routing on the edge host with `curl --resolve` plus
      `-k`, for example:
-     `curl -sk --resolve taira-validator-1.sora.org:443:127.0.0.1 https://taira-validator-1.sora.org/status | jq '.blocks, .sumeragi.commit_qc_height'`
+     `curl -sk --resolve taira-validator-1.sora.org:443:127.0.0.1 https://taira-validator-1.sora.org/v1/sumeragi/status | jq '.height, .last_committed_height, .last_commit_qc.certificate.round.height'`
    - if a client network intercepts or blocks `sora.net`, HTTP may be replaced
      before nginx and HTTPS may reset during the TLS ClientHello. This is stale
      reputation filtering from `sora.net` prior ownership, not evidence that
@@ -1116,10 +1119,11 @@ From `../iroha2-block-explorer-web`:
    - verify native counters and detailed Sumeragi health before trusting public
      writes:
      `curl -sS "${PUBLIC_TORII_ROOT}/status" | jq '{build_git_sha: .build.git_commit_sha, blocks, queue_size, peers, teu_dataspace_backlog}'`
-     `curl -sS "${PUBLIC_TORII_ROOT}/v1/sumeragi/status" | jq '{commit_qc_height: (.commit_qc_height // .commit_qc.height // null), highest_qc_height: (.highest_qc_height // .highest_qc.height // null), locked_qc_height: (.locked_qc_height // .locked_qc.height // null), commit_qc_validator_set_len: (.commit_qc_validator_set_len // .commit_qc.validator_set_len // null), tx_queue_depth: (.tx_queue_depth // .tx_queue.depth // null), tx_queue_capacity: (.tx_queue_capacity // .tx_queue.capacity // null), saturated_by_count: (.tx_queue_saturated_by_count // .tx_queue.saturated_by_count // null), saturated_by_age: (.tx_queue_saturated_by_age // .tx_queue.saturated_by_age // null), view_change_last_cause: (.view_change_causes.last_cause // null)}'`
+     `curl -sS "${PUBLIC_TORII_ROOT}/v1/sumeragi/status" | jq '{protocol_version, height, view, phase: .phase.phase, body_state: .body_state.state, mode: .height_context.mode.mode, epoch: .height_context.epoch, validator_count: .height_context.validator_count, quorum: .height_context.quorum, last_committed_height, commit_qc_height: .last_commit_qc.certificate.round.height, commit_qc_signers: .last_commit_qc.signer_count, commit_qc_min_signers: .last_commit_qc.min_signers, commit_qc_signed_power: .last_commit_qc.signed_power, commit_qc_total_power: .last_commit_qc.total_power, tx_queue_depth: .operator.tx_queue.queued_transactions, tx_queue_capacity: .operator.tx_queue.capacity, saturated_by_count: .operator.tx_queue.saturated_by_count, saturated_by_age: .operator.tx_queue.saturated_by_age, view_change_install_total: .operator.view_change_install_total, busy_deferral_total: .operator.busy_deferral_total}'`
    - remember that `/status.peers` is the queried node's current remote-peer
      count, not the validator-set size; use
-     `/v1/sumeragi/status` commit-QC validator fields or
+     `/v1/sumeragi/status` `height_context.validator_count` and
+     `last_commit_qc.validator_count`, or
      `/v1/sumeragi/validator-sets` for validator-set visibility.
    - create a Connect session through the proxy and ask explicitly for JSON:
      `curl -sS -X POST "${PUBLIC_TORII_ROOT}/v1/connect/session" -H 'content-type: application/json' -H 'accept: application/json' -d '{"sid":"<32-byte-base64url-sid>"}'`

@@ -7754,95 +7754,6 @@ public struct NativeDaProofSummaryGenerator: DaProofSummaryGenerating {
     }
 }
 
-public struct ToriiSoraFsChunkerHandle: Codable, Sendable, Equatable {
-    public var profileId: UInt32?
-    public var namespace: String?
-    public var name: String?
-    public var semver: String?
-    public var multihashCode: UInt32?
-
-    public init(profileId: UInt32? = nil,
-                namespace: String? = nil,
-                name: String? = nil,
-                semver: String? = nil,
-                multihashCode: UInt32? = nil) {
-        self.profileId = profileId
-        self.namespace = namespace
-        self.name = name
-        self.semver = semver
-        self.multihashCode = multihashCode
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case profileId = "profile_id"
-        case namespace
-        case name
-        case semver
-        case multihashCode = "multihash_code"
-    }
-
-    func normalized() throws -> ToriiSoraFsChunkerHandle {
-        ToriiSoraFsChunkerHandle(
-            profileId: try ToriiSoraFsPinValidation.requiredUInt32(
-                profileId,
-                field: "chunker.profile_id",
-                allowZero: false
-            ),
-            namespace: try ToriiSoraFsPinValidation.requiredString(namespace,
-                                                                   field: "chunker.namespace"),
-            name: try ToriiSoraFsPinValidation.requiredString(name,
-                                                              field: "chunker.name"),
-            semver: try ToriiSoraFsPinValidation.requiredString(semver,
-                                                                field: "chunker.semver"),
-            multihashCode: multihashCode ?? 0
-        )
-    }
-}
-
-public struct ToriiSoraFsStorageClass: Codable, Sendable, Equatable {
-    public var type: String?
-
-    public init(type: String? = nil) {
-        self.type = type
-    }
-
-    public static func from(_ type: String) -> ToriiSoraFsStorageClass {
-        ToriiSoraFsStorageClass(type: type)
-    }
-}
-
-public struct ToriiSoraFsPinPolicy: Codable, Sendable, Equatable {
-    public var minReplicas: UInt32?
-    public var storageClass: ToriiSoraFsStorageClass?
-    public var retentionEpoch: UInt64?
-
-    public init(minReplicas: UInt32? = nil,
-                storageClass: ToriiSoraFsStorageClass? = nil,
-                retentionEpoch: UInt64? = nil) {
-        self.minReplicas = minReplicas
-        self.storageClass = storageClass
-        self.retentionEpoch = retentionEpoch
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case minReplicas = "min_replicas"
-        case storageClass = "storage_class"
-        case retentionEpoch = "retention_epoch"
-    }
-
-    func normalized() throws -> ToriiSoraFsPinPolicy {
-        ToriiSoraFsPinPolicy(
-            minReplicas: try ToriiSoraFsPinValidation.requiredUInt32(
-                minReplicas,
-                field: "pin_policy.min_replicas",
-                allowZero: false
-            ),
-            storageClass: try ToriiSoraFsPinValidation.storageClass(storageClass),
-            retentionEpoch: retentionEpoch ?? 0
-        )
-    }
-}
-
 public struct ToriiSoraFsPinAlias: Codable, Sendable, Equatable {
     public var namespace: String?
     public var name: String?
@@ -7877,39 +7788,24 @@ public struct ToriiSoraFsPinAlias: Codable, Sendable, Equatable {
 public struct ToriiSoraFsPinRegisterRequest: Codable, Sendable, Equatable {
     public var authority: String?
     public var privateKey: String?
-    public var chunker: ToriiSoraFsChunkerHandle?
-    public var pinPolicy: ToriiSoraFsPinPolicy?
-    public var manifestDigestHex: String?
-    public var manifestBase64: String?
-    public var manifestBytes: Data?
-    public var chunkDigestSha3_256Hex: String?
-    public var contentLength: UInt64?
+    public var manifestPayload: String?
     public var submittedEpoch: UInt64?
+    public var gasAssetId: String?
     public var alias: ToriiSoraFsPinAlias?
     public var successorOfHex: String?
 
     public init(authority: String? = nil,
                 privateKey: String? = nil,
-                chunker: ToriiSoraFsChunkerHandle? = nil,
-                pinPolicy: ToriiSoraFsPinPolicy? = nil,
-                manifestDigestHex: String? = nil,
-                manifestBase64: String? = nil,
-                manifestBytes: Data? = nil,
-                chunkDigestSha3_256Hex: String? = nil,
-                contentLength: UInt64? = nil,
+                manifestPayload: String? = nil,
                 submittedEpoch: UInt64? = nil,
+                gasAssetId: String? = nil,
                 alias: ToriiSoraFsPinAlias? = nil,
                 successorOfHex: String? = nil) {
         self.authority = authority
         self.privateKey = privateKey
-        self.chunker = chunker
-        self.pinPolicy = pinPolicy
-        self.manifestDigestHex = manifestDigestHex
-        self.manifestBase64 = manifestBase64
-        self.manifestBytes = manifestBytes
-        self.chunkDigestSha3_256Hex = chunkDigestSha3_256Hex
-        self.contentLength = contentLength
+        self.manifestPayload = manifestPayload
         self.submittedEpoch = submittedEpoch
+        self.gasAssetId = gasAssetId
         self.alias = alias
         self.successorOfHex = successorOfHex
     }
@@ -7917,55 +7813,35 @@ public struct ToriiSoraFsPinRegisterRequest: Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case authority
         case privateKey = "private_key"
-        case chunker
-        case pinPolicy = "pin_policy"
-        case manifestDigestHex = "manifest_digest_hex"
-        case manifestBase64 = "manifest_b64"
-        case chunkDigestSha3_256Hex = "chunk_digest_sha3_256_hex"
-        case contentLength = "content_length"
+        case manifestPayload = "manifest_payload"
         case submittedEpoch = "submitted_epoch"
+        case gasAssetId = "gas_asset_id"
         case alias
         case successorOfHex = "successor_of_hex"
     }
 
     func normalized() throws -> ToriiSoraFsPinRegisterRequest {
-        guard let chunker else {
-            throw ToriiClientError.invalidPayload("chunker must be provided.")
-        }
-        guard let pinPolicy else {
-            throw ToriiClientError.invalidPayload("pin_policy must be provided.")
-        }
         return ToriiSoraFsPinRegisterRequest(
             authority: try ToriiSoraFsPinValidation.requiredString(authority,
                                                                    field: "authority"),
             privateKey: try ToriiSoraFsPinValidation.requiredString(privateKey,
                                                                     field: "private_key"),
-            chunker: try chunker.normalized(),
-            pinPolicy: try pinPolicy.normalized(),
-            manifestDigestHex: try ToriiSoraFsPinValidation.digest(manifestDigestHex,
-                                                                   field: "manifest_digest_hex"),
-            manifestBase64: try ToriiSoraFsPinValidation.optionalManifestPayload(
-                manifestBase64: manifestBase64,
-                manifestBytes: manifestBytes
-            ),
-            manifestBytes: nil,
-            chunkDigestSha3_256Hex: try ToriiSoraFsPinValidation.digest(
-                chunkDigestSha3_256Hex,
-                field: "chunk_digest_sha3_256_hex"
-            ),
-            contentLength: try ToriiSoraFsPinValidation.requiredUInt64(
-                contentLength,
-                field: "content_length",
-                allowZero: true
+            manifestPayload: try ToriiSoraFsPinValidation.requiredManifestPayload(
+                manifestPayload
             ),
             submittedEpoch: try ToriiSoraFsPinValidation.requiredUInt64(
                 submittedEpoch,
                 field: "submitted_epoch",
                 allowZero: true
             ),
+            gasAssetId: try gasAssetId.map {
+                try ToriiSoraFsPinValidation.requiredString($0, field: "gas_asset_id")
+            },
             alias: try alias?.normalized(),
-            successorOfHex: try ToriiSoraFsPinValidation.optionalDigest(successorOfHex,
-                                                                        field: "successor_of_hex")
+            successorOfHex: try ToriiSoraFsPinValidation.optionalNonZeroDigest(
+                successorOfHex,
+                field: "successor_of_hex"
+            )
         )
     }
 }
@@ -7973,50 +7849,25 @@ public struct ToriiSoraFsPinRegisterRequest: Codable, Sendable, Equatable {
 fileprivate struct ToriiSoraFsPinRegisterWireRequest: Encodable, Sendable, Equatable {
     var authority: String
     var privateKey: String
-    var chunkerProfileId: UInt32
-    var chunkerNamespace: String
-    var chunkerName: String
-    var chunkerSemver: String
-    var chunkerMultihashCode: UInt32
-    var pinPolicy: ToriiSoraFsPinPolicy
-    var manifestDigestHex: String
-    var manifestBase64: String?
-    var chunkDigestSha3_256Hex: String
-    var contentLength: UInt64
+    var manifestPayload: String
     var submittedEpoch: UInt64
+    var gasAssetId: String?
     var alias: ToriiSoraFsPinAlias?
     var successorOfHex: String?
 
     init(_ request: ToriiSoraFsPinRegisterRequest) throws {
         guard let authority = request.authority,
               let privateKey = request.privateKey,
-              let chunker = request.chunker,
-              let chunkerProfileId = chunker.profileId,
-              let chunkerNamespace = chunker.namespace,
-              let chunkerName = chunker.name,
-              let chunkerSemver = chunker.semver,
-              let chunkerMultihashCode = chunker.multihashCode,
-              let pinPolicy = request.pinPolicy,
-              let manifestDigestHex = request.manifestDigestHex,
-              let chunkDigestSha3_256Hex = request.chunkDigestSha3_256Hex,
-              let contentLength = request.contentLength,
+              let manifestPayload = request.manifestPayload,
               let submittedEpoch = request.submittedEpoch else {
             throw ToriiClientError.invalidPayload("normalized SoraFS pin request is incomplete.")
         }
 
         self.authority = authority
         self.privateKey = privateKey
-        self.chunkerProfileId = chunkerProfileId
-        self.chunkerNamespace = chunkerNamespace
-        self.chunkerName = chunkerName
-        self.chunkerSemver = chunkerSemver
-        self.chunkerMultihashCode = chunkerMultihashCode
-        self.pinPolicy = pinPolicy
-        self.manifestDigestHex = manifestDigestHex
-        self.manifestBase64 = request.manifestBase64
-        self.chunkDigestSha3_256Hex = chunkDigestSha3_256Hex
-        self.contentLength = contentLength
+        self.manifestPayload = manifestPayload
         self.submittedEpoch = submittedEpoch
+        self.gasAssetId = request.gasAssetId
         self.alias = request.alias
         self.successorOfHex = request.successorOfHex
     }
@@ -8024,17 +7875,9 @@ fileprivate struct ToriiSoraFsPinRegisterWireRequest: Encodable, Sendable, Equat
     private enum CodingKeys: String, CodingKey {
         case authority
         case privateKey = "private_key"
-        case chunkerProfileId = "chunker_profile_id"
-        case chunkerNamespace = "chunker_namespace"
-        case chunkerName = "chunker_name"
-        case chunkerSemver = "chunker_semver"
-        case chunkerMultihashCode = "chunker_multihash_code"
-        case pinPolicy = "pin_policy"
-        case manifestDigestHex = "manifest_digest_hex"
-        case manifestBase64 = "manifest_b64"
-        case chunkDigestSha3_256Hex = "chunk_digest_sha3_256_hex"
-        case contentLength = "content_length"
+        case manifestPayload = "manifest_payload"
         case submittedEpoch = "submitted_epoch"
+        case gasAssetId = "gas_asset_id"
         case alias
         case successorOfHex = "successor_of_hex"
     }
@@ -8118,21 +7961,14 @@ public struct ToriiSoraFsPinRegisterResponse: Codable, Sendable, Equatable {
 }
 
 fileprivate enum ToriiSoraFsPinValidation {
+    static let maximumManifestBytes = 512 * 1024
+    static let maximumManifestBase64Bytes = ((maximumManifestBytes + 2) / 3) * 4
+
     static func requiredString(_ value: String?, field: String) throws -> String {
         guard let value else {
             throw ToriiClientError.invalidPayload("\(field) must be provided.")
         }
         return try ToriiRequestValidation.normalizedNonEmpty(value, field: field)
-    }
-
-    static func requiredUInt32(_ value: UInt32?, field: String, allowZero: Bool) throws -> UInt32 {
-        guard let value else {
-            throw ToriiClientError.invalidPayload("\(field) must be provided.")
-        }
-        guard allowZero || value > 0 else {
-            throw ToriiClientError.invalidPayload("\(field) must be positive.")
-        }
-        return value
     }
 
     static func requiredUInt64(_ value: UInt64?, field: String, allowZero: Bool) throws -> UInt64 {
@@ -8159,6 +7995,17 @@ fileprivate enum ToriiSoraFsPinValidation {
         return try ToriiRequestValidation.normalized32ByteHex(value, field: field)
     }
 
+    static func optionalNonZeroDigest(_ value: String?, field: String) throws -> String? {
+        guard let value else {
+            return nil
+        }
+        let digest = try ToriiRequestValidation.normalized32ByteHex(value, field: field)
+        guard digest != String(repeating: "0", count: 64) else {
+            throw ToriiClientError.invalidPayload("\(field) must not be zero.")
+        }
+        return digest
+    }
+
     static func requiredBase64(_ value: String?, field: String) throws -> String {
         guard let value else {
             throw ToriiClientError.invalidPayload("\(field) must be provided.")
@@ -8175,38 +8022,30 @@ fileprivate enum ToriiSoraFsPinValidation {
         return decoded.base64EncodedString()
     }
 
-    static func optionalManifestPayload(manifestBase64: String?, manifestBytes: Data?) throws -> String? {
-        if manifestBase64 != nil, manifestBytes != nil {
-            throw ToriiClientError.invalidPayload("manifest_b64 and manifest_bytes are mutually exclusive.")
+    static func requiredManifestPayload(_ value: String?) throws -> String {
+        guard let value else {
+            throw ToriiClientError.invalidPayload("manifest_payload must be provided.")
         }
-        if let manifestBase64 {
-            return try requiredBase64(manifestBase64, field: "manifest_b64")
+        guard value.utf8.count <= maximumManifestBase64Bytes else {
+            throw ToriiClientError.invalidPayload(
+                "manifest_payload must encode at most \(maximumManifestBytes) bytes."
+            )
         }
-        guard let manifestBytes else {
-            return nil
+        guard !value.isEmpty,
+              !value.contains(where: \.isWhitespace),
+              let decoded = Data(base64Encoded: value),
+              !decoded.isEmpty,
+              decoded.base64EncodedString() == value else {
+            throw ToriiClientError.invalidPayload(
+                "manifest_payload must be canonical padded base64 without whitespace."
+            )
         }
-        guard !manifestBytes.isEmpty else {
-            throw ToriiClientError.invalidPayload("manifest_bytes must be non-empty.")
+        guard decoded.count <= maximumManifestBytes else {
+            throw ToriiClientError.invalidPayload(
+                "manifest_payload must encode at most \(maximumManifestBytes) bytes."
+            )
         }
-        return manifestBytes.base64EncodedString()
-    }
-
-    static func storageClass(_ storageClass: ToriiSoraFsStorageClass?) throws -> ToriiSoraFsStorageClass {
-        guard let storageClass else {
-            throw ToriiClientError.invalidPayload("pin_policy.storage_class must be provided.")
-        }
-        let normalized = try requiredString(storageClass.type,
-                                            field: "pin_policy.storage_class.type").lowercased()
-        switch normalized {
-        case "hot":
-            return ToriiSoraFsStorageClass(type: "Hot")
-        case "warm":
-            return ToriiSoraFsStorageClass(type: "Warm")
-        case "cold":
-            return ToriiSoraFsStorageClass(type: "Cold")
-        default:
-            throw ToriiClientError.invalidPayload("pin_policy.storage_class.type must be Hot, Warm, or Cold.")
-        }
+        return value
     }
 }
 

@@ -174,6 +174,7 @@ declare_permissions! {
     iroha_executor_data_model::permission::sorafs::{CanIssueSorafsReplicationOrder},
     iroha_executor_data_model::permission::sorafs::{CanCompleteSorafsReplicationOrder},
     iroha_executor_data_model::permission::sorafs::{CanSetSorafsPricing},
+    iroha_executor_data_model::permission::sorafs::{CanManageSorafsModeration},
     iroha_executor_data_model::permission::sorafs::{CanUpsertSorafsProviderCredit},
     iroha_executor_data_model::permission::sorafs::{CanRegisterSorafsProviderOwner},
     iroha_executor_data_model::permission::sorafs::{CanUnregisterSorafsProviderOwner},
@@ -483,9 +484,9 @@ mod sorafs {
     use iroha_executor_data_model::permission::sorafs::{
         CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
         CanDeclareSorafsCapacity, CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
-        CanRegisterSorafsPin, CanRegisterSorafsProviderOwner, CanRetireSorafsPin,
-        CanSetSorafsPricing, CanSubmitSorafsTelemetry, CanUnregisterSorafsProviderOwner,
-        CanUpsertSorafsProviderCredit,
+        CanManageSorafsModeration, CanRegisterSorafsPin, CanRegisterSorafsProviderOwner,
+        CanRetireSorafsPin, CanSetSorafsPricing, CanSubmitSorafsTelemetry,
+        CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
     };
 
     use super::*;
@@ -500,6 +501,7 @@ mod sorafs {
         CanFileSorafsCapacityDispute,
         CanIssueSorafsReplicationOrder,
         CanCompleteSorafsReplicationOrder,
+        CanManageSorafsModeration,
         CanSetSorafsPricing,
         CanUpsertSorafsProviderCredit,
         CanRegisterSorafsProviderOwner,

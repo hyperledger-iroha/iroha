@@ -578,10 +578,12 @@ fn run() -> Result<(), String> {
         por_samples = Some(proofs);
     }
 
+    let chunk_digest_sha3 = compute_chunk_digest_sha3(&car_plan.chunks);
     let manifest = ManifestBuilder::new()
         .root_cid(computed_root.clone())
         .dag_codec(DagCodecId(dag_codec))
         .chunking_profile(chunk_profile.clone())
+        .chunk_digest_sha3_256(chunk_digest_sha3)
         .content_length(car_plan.content_length)
         .car_digest(car_payload_digest)
         .car_size(car_size)
@@ -604,7 +606,6 @@ fn run() -> Result<(), String> {
         path.file_name()
             .map(|name| name.to_string_lossy().into_owned())
     });
-    let chunk_digest_sha3 = compute_chunk_digest_sha3(&car_plan.chunks);
     let mut hybrid_output: Option<HybridEnvelopeArtefact> = None;
 
     if produce_hybrid_envelope {
@@ -986,6 +987,10 @@ fn build_report(ctx: ReportContext<'_>) -> Result<Value, String> {
     manifest_obj.insert(
         "content_length".into(),
         Value::from(ctx.manifest.content_length),
+    );
+    manifest_obj.insert(
+        "chunk_digest_sha3_256_hex".into(),
+        Value::from(to_hex(&ctx.manifest.chunk_digest_sha3_256)),
     );
     manifest_obj.insert(
         "car_digest_hex".into(),
@@ -1994,6 +1999,7 @@ mod tests {
             .root_cid(sorafs_manifest::canonical_manifest_root_cid([0xAA; 32]))
             .dag_codec(DagCodecId(0x71))
             .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
+            .chunk_digest_sha3_256([0xAC; 32])
             .content_length(17)
             .car_digest([0x42; 32])
             .car_size(97)

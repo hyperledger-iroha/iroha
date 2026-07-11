@@ -14,19 +14,11 @@ use axum::{
 use color_eyre::{Result, eyre::eyre};
 use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
-    block::{
-        BlockHeader,
-        consensus::{
-            SumeragiBlockSyncRosterStatus, SumeragiCommitQuorumStatus, SumeragiDaGateReason,
-            SumeragiDaGateSatisfaction, SumeragiDaGateStatus, SumeragiDataspaceCommitment,
-            SumeragiKuraStoreStatus, SumeragiLaneCommitment, SumeragiLaneGovernance,
-            SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
-            SumeragiMissingBlockFetchStatus, SumeragiPendingRbcStatus, SumeragiRbcStoreStatus,
-            SumeragiRuntimeUpgradeHook, SumeragiStatusWire, SumeragiValidationRejectStatus,
-            SumeragiViewChangeCauseStatus,
-        },
+    block::consensus_v2::{
+        ConsensusMode, DualQuorum, HeightContext, HeightContextId, PROTOCOL_VERSION,
+        SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2OperatorStatus,
+        SumeragiV2Status, SumeragiV2StatusPhase, SumeragiV2StatusResponse, SumeragiV2TxQueueStatus,
     },
-    nexus::{DataSpaceId, LaneId},
     parameter::system::SumeragiConsensusMode,
 };
 use iroha_telemetry::metrics::{
@@ -55,7 +47,7 @@ pub struct MockToriiData {
     /// Snapshot returned from `GET /status`.
     pub status: TelemetryStatus,
     /// Snapshot returned from `GET /v1/sumeragi/status`.
-    pub sumeragi: SumeragiStatusWire,
+    pub sumeragi: SumeragiV2StatusResponse,
     /// JSON payload returned from `GET /configuration`.
     pub configuration: Value,
     /// Prometheus metrics payload returned from `GET /metrics`.
@@ -121,145 +113,63 @@ impl Default for MockToriiData {
             da_receipt_cursors: Vec::new(),
         };
 
-        let sumeragi = SumeragiStatusWire {
-            mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
-            staged_mode_tag: None,
-            staged_mode_activation_height: None,
-            mode_activation_lag_blocks: None,
-            mode_flip_kill_switch: true,
-            mode_flip_blocked: false,
-            mode_flip_success_total: 0,
-            mode_flip_fail_total: 0,
-            mode_flip_blocked_total: 0,
-            last_mode_flip_timestamp_ms: None,
-            last_mode_flip_error: None,
-            consensus_caps: None,
-            leader_index: 0,
-            highest_qc_height: 10,
-            highest_qc_view: 4,
-            highest_qc_subject: None,
-            locked_qc_height: 9,
-            locked_qc_view: 3,
-            locked_qc_subject: None,
-            commit_quorum: SumeragiCommitQuorumStatus::default(),
-            view_change_proof_accepted_total: 1,
-            view_change_proof_stale_total: 0,
-            view_change_proof_rejected_total: 0,
-            view_change_suggest_total: 1,
-            view_change_install_total: 1,
-            view_change_causes: SumeragiViewChangeCauseStatus::default(),
-            gossip_fallback_total: 0,
-            block_created_dropped_by_lock_total: 0,
-            block_created_hint_mismatch_total: 0,
-            block_created_proposal_mismatch_total: 0,
-            validation_reject_total: 0,
-            validation_reject_reason: None,
-            validation_rejects: SumeragiValidationRejectStatus::default(),
-            peer_key_policy: Default::default(),
-            block_sync_roster: SumeragiBlockSyncRosterStatus::default(),
-            pacemaker_backpressure_deferrals_total: 0,
-            commit_pipeline_tick_total: 0,
-            da_reschedule_total: 0,
-            missing_block_fetch: SumeragiMissingBlockFetchStatus {
-                total: 0,
-                last_targets: 0,
-                last_dwell_ms: 0,
+        let sumeragi = SumeragiV2StatusResponse {
+            authoritative: SumeragiV2Status {
+                protocol_version: PROTOCOL_VERSION,
+                node_fingerprint: Hash::new(b"mochi-mock-v2-node"),
+                build_fingerprint: Hash::new(b"mochi-mock-v2-build"),
+                config_fingerprint: Hash::new(b"mochi-mock-v2-config"),
+                height_context_id: HeightContextId(
+                    HashOf::<HeightContext>::from_untyped_unchecked(Hash::new(
+                        b"mochi-mock-v2-context",
+                    )),
+                ),
+                height: 10,
+                view: 4,
+                phase: SumeragiV2StatusPhase::Prepare,
+                leader: 0,
+                locked_prepare_qc: None,
+                highest_prepare_qc: None,
+                last_timeout_certificate: None,
+                body_state: SumeragiV2BodyState::Validated,
+                pending_persistence_id: None,
+                last_committed_height: 0,
+                last_committed_subject: None,
+                height_context: SumeragiV2HeightContextStatus {
+                    epoch: 0,
+                    epoch_end_height: 100,
+                    mode: ConsensusMode::Permissioned,
+                    epoch_seed: [0x11; 32],
+                    validator_count: 4,
+                    quorum: DualQuorum {
+                        min_signers: 3,
+                        total_power: 4,
+                    },
+                },
+                last_commit_qc: None,
             },
-            committed_edge_conflict_obsolete_total: 0,
-            da_gate: SumeragiDaGateStatus {
-                reason: SumeragiDaGateReason::None,
-                last_satisfied: SumeragiDaGateSatisfaction::None,
-                missing_local_data_total: 0,
-                manifest_guard_total: 0,
-            },
-            kura_store: SumeragiKuraStoreStatus {
-                failures_total: 0,
-                abort_total: 0,
-                last_retry_attempt: 0,
-                last_retry_backoff_ms: 0,
-                last_height: 0,
-                last_view: 0,
-                last_hash: None,
-                ..Default::default()
-            },
-            rbc_store: SumeragiRbcStoreStatus {
-                sessions: 0,
-                bytes: 0,
-                pressure_level: 0,
-                backpressure_deferrals_total: 0,
-                persist_drops_total: 0,
-                evictions_total: 0,
-                recent_evictions: Vec::new(),
-            },
-            pending_rbc: SumeragiPendingRbcStatus::default(),
-            tx_queue_depth: 0,
-            tx_queue_capacity: 100,
-            tx_queue_saturated: false,
-            epoch_length_blocks: 0,
-            epoch_commit_deadline_offset: 0,
-            epoch_reveal_deadline_offset: 0,
-            prf_epoch_seed: None,
-            prf_height: 9,
-            prf_view: 3,
-            vrf_penalty_epoch: 0,
-            vrf_committed_no_reveal_total: 0,
-            vrf_no_participation_total: 0,
-            vrf_late_reveals_total: 0,
-            consensus_penalties_applied_total: 0,
-            consensus_penalties_pending: 0,
-            vrf_penalties_applied_total: 0,
-            vrf_penalties_pending: 0,
-            membership: SumeragiMembershipStatus::default(),
-            membership_mismatch: SumeragiMembershipMismatchStatus::default(),
-            lane_commitments: vec![SumeragiLaneCommitment {
-                block_height: 10,
-                lane_id: LaneId::new(0),
-                tx_count: 3,
-                total_chunks: 5,
-                rbc_bytes_total: 512,
-                teu_total: 120,
-                block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-                    [0x10; Hash::LENGTH],
-                )),
-            }],
-            dataspace_commitments: vec![SumeragiDataspaceCommitment {
-                block_height: 10,
-                lane_id: LaneId::new(0),
-                dataspace_id: DataSpaceId::new(4),
-                tx_count: 2,
-                total_chunks: 3,
-                rbc_bytes_total: 256,
-                teu_total: 64,
-                block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-                    [0x11; Hash::LENGTH],
-                )),
-            }],
             lane_settlement_commitments: Vec::new(),
             lane_relay_envelopes: Vec::new(),
-            lane_governance_sealed_total: 0,
-            lane_governance_sealed_aliases: Vec::new(),
-            lane_governance: vec![SumeragiLaneGovernance {
-                lane_id: LaneId::new(0),
-                alias: "alpha".to_owned(),
-                governance: Some("parliament".to_owned()),
-                manifest_required: true,
-                manifest_ready: true,
-                manifest_path: Some("/etc/iroha/lanes/alpha.json".to_owned()),
-                validator_ids: vec![
-                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_owned(),
-                ],
-                quorum: Some(2),
-                protected_namespaces: vec!["finance".to_owned()],
-                runtime_upgrade: Some(SumeragiRuntimeUpgradeHook {
-                    allow: true,
-                    require_metadata: true,
-                    metadata_key: Some("upgrade_id".to_owned()),
-                    allowed_ids: vec!["alpha-upgrade".to_owned()],
-                }),
-            }],
-            worker_loop: Default::default(),
-            commit_inflight: Default::default(),
-            ..Default::default()
+            lane_payload_ownerships: Vec::new(),
+            committed_lane_blocks: Vec::new(),
+            lane_block_sessions: Vec::new(),
+            local_peer_removed: false,
+            operator: SumeragiV2OperatorStatus {
+                view_change_install_total: 1,
+                busy_deferral_total: 0,
+                tx_queue: SumeragiV2TxQueueStatus {
+                    tracked_transactions: 4,
+                    queued_transactions: 4,
+                    capacity: 100,
+                    retained_bytes: 256,
+                    max_retained_bytes: 8_192,
+                    oldest_queued_age_ms: 0,
+                    saturated_by_count: false,
+                    saturated_by_bytes: false,
+                    saturated_by_age: false,
+                },
+                ..SumeragiV2OperatorStatus::default()
+            },
         };
 
         let configuration = norito::json!({
@@ -308,13 +218,19 @@ impl MockToriiData {
 
         let sumeragi_path = dir.join("sumeragi.json");
         let sumeragi_bytes = read_bytes(&sumeragi_path)?;
-        let sumeragi: SumeragiStatusWire =
-            norito::json::from_slice(&sumeragi_bytes).map_err(|err| {
+        let sumeragi: SumeragiV2StatusResponse = norito::json::from_slice(&sumeragi_bytes)
+            .map_err(|err| {
                 eyre!(
                     "failed to decode Sumeragi status fixture {}: {err}",
                     sumeragi_path.display()
                 )
             })?;
+        sumeragi.validate().map_err(|err| {
+            eyre!(
+                "Sumeragi v2 status fixture {} is structurally invalid: {err}",
+                sumeragi_path.display()
+            )
+        })?;
 
         let configuration_path = dir.join("configuration.json");
         let configuration_bytes = read_bytes(&configuration_path)?;

@@ -387,19 +387,18 @@ def check_javascript_contract():
         require_contains(path, '"/v1/sorafs/pin/register"', "paid-pin endpoint")
         require_contains(path, "buildSorafsPinRegisterPayload", "request normalization")
         require_contains(path, "normalizeSorafsPinRegisterResponse", "typed response normalization")
-        require_contains(path, "ambiguous aliases", "ambiguous alias rejection")
-        require_contains(path, "contentLength", "content-length validation")
-        require_contains(path, '"manifestBytes"', "manifest byte payload alias")
-        require_contains(path, '"manifest_b64"', "canonical manifest payload field")
-        require_contains(path, "payload.manifest_b64 = normalizeRequiredBase64Payload", "manifest payload normalization")
+        require_contains(path, '"manifest_payload"', "canonical manifest payload field")
+        require_contains(path, "SORAFS_PIN_REGISTER_MAX_MANIFEST_BYTES = 512 * 1024", "manifest payload bound")
+        require_contains(path, "successor_of_hex must not be zero", "inert successor rejection")
     require_contains("javascript/iroha_js/index.d.ts", "registerSorafsPinManifest(", "TypeScript register declaration")
     require_contains("javascript/iroha_js/index.d.ts", "registerSorafsPinManifestTyped(", "TypeScript typed register declaration")
-    require_contains("javascript/iroha_js/index.d.ts", "manifestBytes?: BinaryLike | string | null;", "TypeScript manifest bytes input")
-    require_contains("javascript/iroha_js/index.d.ts", "manifest_b64?: BinaryLike | string | null;", "TypeScript canonical manifest payload input")
-    require_contains("javascript/iroha_js/test/toriiClient.test.js", "registerSorafsPinManifest rejects ambiguous request field aliases before fetch", "request alias adversarial test")
-    require_contains("javascript/iroha_js/test/toriiClient.test.js", "registerSorafsPinManifest rejects ambiguous alias fields before fetch", "alias object adversarial test")
-    require_contains("javascript/iroha_js/test/toriiClient.test.js", "registerSorafsPinManifest rejects negative content length before fetch", "content-length adversarial test")
-    require_contains("javascript/iroha_js/test/toriiClient.test.js", "registerSorafsPinManifest rejects malformed manifest payload before fetch", "manifest payload adversarial test")
+    require_contains("javascript/iroha_js/index.d.ts", "private_key: string;", "TypeScript canonical private key input")
+    require_contains("javascript/iroha_js/index.d.ts", "manifest_payload: string;", "TypeScript canonical manifest payload input")
+    require_contains("javascript/iroha_js/index.d.ts", "submitted_epoch: NumericLike;", "TypeScript canonical epoch input")
+    require_contains("javascript/iroha_js/test/toriiClient.test.js", "registerSorafsPinManifest rejects all unknown and retired fields before fetch", "unknown-field adversarial test")
+    require_contains("javascript/iroha_js/test/toriiClient.test.js", "registerSorafsPinManifest rejects malformed and oversized aliases before fetch", "alias object adversarial test")
+    require_contains("javascript/iroha_js/test/toriiClient.test.js", "registerSorafsPinManifest rejects non-canonical and malformed manifests before fetch", "manifest payload adversarial test")
+    require_contains("javascript/iroha_js/test/toriiClient.test.js", "registerSorafsPinManifest rejects malformed and zero successor digests before fetch", "successor adversarial test")
     require_contains("javascript/iroha_js/test/toriiClient.test.js", "registerSorafsPinManifestTyped rejects ambiguous response aliases", "response alias adversarial test")
 
 
@@ -787,8 +786,8 @@ source_modes = {
     ),
     "--negative-control-js-adversarial-test": (
         "javascript/iroha_js/test/toriiClient.test.js",
-        "registerSorafsPinManifest rejects ambiguous request field aliases before fetch",
-        "registerSorafsPinManifest request alias test disabled",
+        "registerSorafsPinManifest rejects all unknown and retired fields before fetch",
+        "registerSorafsPinManifest unknown-field test disabled",
         "JavaScript adversarial test drift",
     ),
     "--negative-control-python-adversarial-test": (

@@ -634,6 +634,12 @@ pub mod sorafs {
     }
 
     permission! {
+        /// Permission to configure, open, resolve, and finalize authoritative `SoraFS` moderation ballots.
+        #[derive(Copy)]
+        pub struct CanManageSorafsModeration;
+    }
+
+    permission! {
         /// Permission to upsert `SoraFS` provider credit records.
         #[derive(Copy)]
         pub struct CanUpsertSorafsProviderCredit;

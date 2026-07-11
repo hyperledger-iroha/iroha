@@ -257,8 +257,7 @@ use iroha_data_model::{
 };
 use sorafs_manifest::{
     ManifestV1, ManifestValidationError, PinPolicy as ManifestPinPolicy,
-    PinPolicyConstraints as ManifestPinPolicyConstraints, ProfileId,
-    StorageClass as ManifestStorageClass,
+    PinPolicyConstraints as ManifestPinPolicyConstraints, StorageClass as ManifestStorageClass,
     capacity::{
         CapacityDeclarationV1, CapacityDeclarationValidationError, CapacityDisputeV1,
         ReplicationOrderV1, ReplicationOrderValidationError,
@@ -273,7 +272,7 @@ use sorafs_manifest::{
         RepairTicketId, RepairWorkerSignaturePayloadV1, SignedAuditorRequestPayloadV1,
         SignedAuditorRequestV1,
     },
-    validate_chunker_handle, validate_manifest, validate_pin_policy,
+    validate_manifest,
 };
 use sorafs_node::{DealEngineError, DealSettlementOutcome, RepairTaskFilters, UsageOutcome};
 
@@ -7559,18 +7558,38 @@ fn sccp_counterparty_capabilities(
 
 fn sccp_capabilities_snapshot(state: &CoreState) -> Result<SccpCapabilitiesDto> {
     let zk_config = state.zk_snapshot();
-    let production_policy = iroha_sccp::sccp_production_policy_v1();
-    let launch_ready = match production_policy.launch_mode {
-        iroha_sccp::SccpLaunchModeV1::AllLanesAtOnce => {
+    let mut production_policy = iroha_sccp::sccp_production_policy_v1();
+    production_policy.launch_mode = match zk_config.sccp_launch_mode {
+        iroha_config::parameters::actual::SccpLaunchMode::AllLanesAtOnce => {
+            iroha_sccp::SccpLaunchModeV1::AllLanesAtOnce
+        }
+        iroha_config::parameters::actual::SccpLaunchMode::EthereumMainnetLane => {
+            iroha_sccp::SccpLaunchModeV1::EthereumMainnetLane
+        }
+        iroha_config::parameters::actual::SccpLaunchMode::BscMainnetLane => {
+            iroha_sccp::SccpLaunchModeV1::BscMainnetLane
+        }
+        iroha_config::parameters::actual::SccpLaunchMode::SolanaTestnetLane => {
+            iroha_sccp::SccpLaunchModeV1::SolanaTestnetLane
+        }
+        iroha_config::parameters::actual::SccpLaunchMode::TonMainnetLane => {
+            iroha_sccp::SccpLaunchModeV1::TonMainnetLane
+        }
+    };
+    let launch_ready = match zk_config.sccp_launch_mode {
+        iroha_config::parameters::actual::SccpLaunchMode::AllLanesAtOnce => {
             sccp_configured_all_lanes_launch_ready(&zk_config).is_ok()
         }
-        iroha_sccp::SccpLaunchModeV1::EthereumMainnetLane => {
+        iroha_config::parameters::actual::SccpLaunchMode::EthereumMainnetLane => {
             sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_ETH).is_ok()
         }
-        iroha_sccp::SccpLaunchModeV1::BscMainnetLane => {
+        iroha_config::parameters::actual::SccpLaunchMode::BscMainnetLane => {
             sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_BSC).is_ok()
         }
-        iroha_sccp::SccpLaunchModeV1::TonMainnetLane => {
+        iroha_config::parameters::actual::SccpLaunchMode::SolanaTestnetLane => {
+            sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_SOL).is_ok()
+        }
+        iroha_config::parameters::actual::SccpLaunchMode::TonMainnetLane => {
             sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_TON).is_ok()
         }
     };
@@ -8886,28 +8905,41 @@ fn sccp_configured_launch_ready_for_domain(
             sccp_unsupported_launch_blocker_for_domain(domain),
         ));
     }
-    let (launch_domain, launch_policy_label, launch_source_label) =
-        match iroha_sccp::sccp_production_policy_v1().launch_mode {
-            iroha_sccp::SccpLaunchModeV1::AllLanesAtOnce => {
-                return sccp_configured_all_lanes_launch_ready(zk_config);
-            }
-            iroha_sccp::SccpLaunchModeV1::EthereumMainnetLane => (
-                iroha_sccp::SCCP_DOMAIN_ETH,
-                "SCCP Ethereum mainnet lane launch policy",
-                "Ethereum mainnet",
-            ),
-            iroha_sccp::SccpLaunchModeV1::BscMainnetLane => (
-                iroha_sccp::SCCP_DOMAIN_BSC,
-                "SCCP BSC mainnet lane launch policy",
-                "BSC mainnet",
-            ),
-            iroha_sccp::SccpLaunchModeV1::TonMainnetLane => (
-                iroha_sccp::SCCP_DOMAIN_TON,
-                "SCCP TON mainnet lane launch policy",
-                "TON mainnet",
-            ),
-        };
+    let (launch_domain, launch_policy_label, launch_source_label) = match zk_config.sccp_launch_mode
+    {
+        iroha_config::parameters::actual::SccpLaunchMode::AllLanesAtOnce => {
+            return sccp_configured_all_lanes_launch_ready(zk_config);
+        }
+        iroha_config::parameters::actual::SccpLaunchMode::EthereumMainnetLane => (
+            iroha_sccp::SCCP_DOMAIN_ETH,
+            "SCCP Ethereum mainnet lane launch policy",
+            "Ethereum mainnet",
+        ),
+        iroha_config::parameters::actual::SccpLaunchMode::BscMainnetLane => (
+            iroha_sccp::SCCP_DOMAIN_BSC,
+            "SCCP BSC mainnet lane launch policy",
+            "BSC mainnet",
+        ),
+        iroha_config::parameters::actual::SccpLaunchMode::SolanaTestnetLane => (
+            iroha_sccp::SCCP_DOMAIN_SOL,
+            "SCCP Solana testnet lane launch policy",
+            "Solana testnet",
+        ),
+        iroha_config::parameters::actual::SccpLaunchMode::TonMainnetLane => (
+            iroha_sccp::SCCP_DOMAIN_TON,
+            "SCCP TON mainnet lane launch policy",
+            "TON mainnet",
+        ),
+    };
     if domain != launch_domain {
+        if matches!(
+            zk_config.sccp_launch_mode,
+            iroha_config::parameters::actual::SccpLaunchMode::SolanaTestnetLane
+        ) {
+            return Err(sccp_bad_request(format!(
+                "{launch_policy_label} only admits {launch_source_label} source proofs before domain {domain} is enabled"
+            )));
+        }
         if sccp_configured_source_lane_for_domain(zk_config, domain)?.is_none() {
             return Err(sccp_bad_request(format!(
                 "{launch_policy_label} only admits {launch_source_label} source proofs before domain {domain} is enabled"
@@ -8925,6 +8957,17 @@ fn sccp_configured_launch_ready_for_domain(
             "{launch_policy_label} requires configured production material for domain {domain}"
         ))
     })?;
+    if matches!(
+        zk_config.sccp_launch_mode,
+        iroha_config::parameters::actual::SccpLaunchMode::SolanaTestnetLane
+    ) && !iroha_sccp::sccp_solana_source_verifier_material_matches_network_v1(
+        &lane.material,
+        iroha_sccp::SccpSolanaSourceNetworkV1::Testnet,
+    ) {
+        return Err(sccp_bad_request(
+            "SCCP Solana testnet lane launch policy requires the exact testnet genesis, backend, and verifier profile tuple",
+        ));
+    }
     let route_allowlist = sccp_configured_route_allowlist_for_domain(zk_config, domain)?
         .ok_or_else(|| {
             sccp_bad_request(format!(
@@ -10967,6 +11010,7 @@ mod sccp_message_backend_tests {
         domains: [u32; N],
     ) -> iroha_config::parameters::actual::Zk {
         let mut zk = iroha_core::state::default_zk_config();
+        zk.sccp_launch_mode = iroha_config::parameters::actual::SccpLaunchMode::AllLanesAtOnce;
         zk.sccp_source_verifier_materials.clear();
         zk.sccp_source_adapter_engine_deployments.clear();
         zk.sccp_destination_rollouts.clear();
@@ -35092,27 +35136,8 @@ pub struct RegisterPinManifestDto {
     pub authority: iroha_data_model::account::AccountId,
     /// Signing key exposed for API transport.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
-    /// Numeric profile identifier advertised by the manifest/descriptor.
-    pub chunker_profile_id: u32,
-    /// Chunker namespace (e.g., `sorafs`).
-    pub chunker_namespace: String,
-    /// Chunker name (e.g., `sf1`).
-    pub chunker_name: String,
-    /// Chunker semantic version.
-    pub chunker_semver: String,
-    /// Multihash code used for chunk digests.
-    pub chunker_multihash_code: u64,
-    /// Replication policy attached to the manifest.
-    pub pin_policy: PinPolicyDto,
-    /// Hex-encoded canonical manifest digest (BLAKE3-256).
-    pub manifest_digest_hex: String,
-    /// Optional base64-encoded Norito `ManifestV1` payload for full Torii-side validation.
-    #[norito(default)]
-    pub manifest_b64: Option<String>,
-    /// SHA3-256 digest of chunk metadata (hex-encoded, optional 0x prefix accepted).
-    pub chunk_digest_sha3_256_hex: String,
-    /// Total content length covered by the manifest.
-    pub content_length: u64,
+    /// Canonical base64-encoded Norito `ManifestV1` payload.
+    pub manifest_payload: String,
     /// Epoch (inclusive) recorded for submission.
     pub submitted_epoch: u64,
     /// Optional gas asset id to attach to the server-built registration transaction.
@@ -35131,59 +35156,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterPinManifestDto {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         norito::core::decode_field_canonical(bytes)
     }
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// DTO for SoraFS pin policy input.
-pub struct PinPolicyDto {
-    /// Minimum replica count required for the manifest to stay admissible.
-    pub min_replicas: u16,
-    /// Desired storage temperature for the pinned payload.
-    pub storage_class: PinPolicyStorageClassDto,
-    /// Epoch at which the operator wants the manifest to expire.
-    pub retention_epoch: u64,
-}
-
-#[cfg(feature = "app_api")]
-impl<'a> norito::core::DecodeFromSlice<'a> for PinPolicyDto {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        norito::core::decode_field_canonical(bytes)
-    }
-}
-
-#[cfg(feature = "app_api")]
-/// Storage-class tiers supported by the pin policy handler.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-#[allow(clippy::enum_variant_names)]
-#[norito(tag = "type", content = "value")]
-pub enum PinPolicyStorageClassDto {
-    /// Highest availability, lowest latency tier.
-    Hot,
-    /// Balanced durability and cost tier.
-    Warm,
-    /// Archival tier for long-term retention.
-    Cold,
 }
 
 #[cfg(feature = "app_api")]
@@ -35268,7 +35240,6 @@ const _: () = {
 
     fn assert_all() {
         assert_manifest_traits::<RegisterPinManifestDto>();
-        assert_manifest_traits::<PinPolicyDto>();
         assert_manifest_traits::<PinAliasDto>();
     }
 
@@ -37256,58 +37227,25 @@ pub async fn handle_post_sorafs_register_manifest(
 
     let manifest_constraints =
         manifest_pin_policy_constraints_from_config(&state.gov.sorafs_pin_policy);
-
-    let descriptor = validate_chunker_handle(
-        ProfileId(req.chunker_profile_id),
-        &req.chunker_namespace,
-        &req.chunker_name,
-        &req.chunker_semver,
-        req.chunker_multihash_code,
-        None,
-    )
-    .map_err(|err| {
-        sorafs_pin_manifest_validation_error("sorafs_pin_manifest_chunker_invalid", err)
-    })?;
-
-    let manifest_policy = manifest_policy_from_dto(&req.pin_policy);
-
-    validate_pin_policy(&manifest_policy, &manifest_constraints).map_err(|err| {
-        sorafs_pin_manifest_validation_error("sorafs_pin_manifest_policy_invalid", err)
-    })?;
-    if manifest_policy.retention_epoch <= req.submitted_epoch {
+    let (manifest_payload, manifest) =
+        decode_register_manifest_payload(&req.manifest_payload, &manifest_constraints)?;
+    if manifest.pin_policy.retention_epoch <= req.submitted_epoch {
         return Err(sorafs_pin_validation_error(
             "sorafs_pin_manifest_retention_invalid",
             format!(
                 "retention_epoch {} must be greater than submitted_epoch {}",
-                manifest_policy.retention_epoch, req.submitted_epoch
+                manifest.pin_policy.retention_epoch, req.submitted_epoch
             ),
         ));
     }
-
-    let manifest_digest_bytes =
-        parse_sorafs_pin_hex_array::<32>(&req.manifest_digest_hex, "manifest_digest_hex")?;
-    let chunk_digest =
-        parse_sorafs_pin_hex_array::<32>(&req.chunk_digest_sha3_256_hex, "chunk_digest_sha3_256")?;
-    if manifest_digest_bytes.iter().all(|byte| *byte == 0) {
-        return Err(sorafs_pin_validation_error(
-            "sorafs_pin_manifest_digest_inert",
-            "manifest_digest_hex must not be zero",
-        ));
-    }
-    if chunk_digest.iter().all(|byte| *byte == 0) {
-        return Err(sorafs_pin_validation_error(
-            "sorafs_pin_chunk_digest_inert",
-            "chunk_digest_sha3_256_hex must not be zero",
-        ));
-    }
-    let manifest_payload = validate_manifest_payload_matches_request(
-        &req,
-        &manifest_constraints,
-        &manifest_digest_bytes,
-        &manifest_policy,
-    )?;
-
-    let policy = convert_manifest_policy(&manifest_policy);
+    let manifest_digest = manifest.digest().map_err(|error| {
+        sorafs_pin_validation_error(
+            "sorafs_pin_manifest_payload_digest_failed",
+            format!("failed to digest manifest_payload: {error}"),
+        )
+    })?;
+    let manifest_digest_bytes = *manifest_digest.as_bytes();
+    let policy = convert_manifest_policy(&manifest.pin_policy);
 
     let alias_binding = if let Some(alias) = req.alias.as_ref() {
         let max_proof_bytes = sorafs_manifest::pin_registry::MAX_ALIAS_PROOF_ENCODED_BYTES;
@@ -37374,7 +37312,6 @@ pub async fn handle_post_sorafs_register_manifest(
 
     let isi = sorafs::RegisterPinManifest::new(
         manifest_payload,
-        chunk_digest,
         req.submitted_epoch,
         alias_binding,
         successor_digest,
@@ -37402,7 +37339,7 @@ pub async fn handle_post_sorafs_register_manifest(
         .sorafs_pricing
         .public_pin_fee_nano(
             policy.storage_class,
-            req.content_length,
+            manifest.content_length,
             policy.min_replicas,
             req.submitted_epoch,
             policy.retention_epoch,
@@ -37430,10 +37367,10 @@ pub async fn handle_post_sorafs_register_manifest(
         manifest_digest_hex: hex::encode(manifest_digest_bytes),
         chunker_handle: format!(
             "{}.{}@{}",
-            descriptor.namespace, descriptor.name, descriptor.semver
+            manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
         ),
         submitted_epoch: req.submitted_epoch,
-        content_length: req.content_length,
+        content_length: manifest.content_length,
         pin_fee_nano,
         pin_fee_asset_id,
         pin_fee_treasury_account_id,
@@ -40193,33 +40130,10 @@ mod repair_worker_tests {
 }
 
 #[cfg(feature = "app_api")]
-fn manifest_policy_from_dto(dto: &PinPolicyDto) -> ManifestPinPolicy {
-    let storage_class = match dto.storage_class {
-        PinPolicyStorageClassDto::Hot => ManifestStorageClass::Hot,
-        PinPolicyStorageClassDto::Warm => ManifestStorageClass::Warm,
-        PinPolicyStorageClassDto::Cold => ManifestStorageClass::Cold,
-    };
-    ManifestPinPolicy {
-        min_replicas: dto.min_replicas,
-        storage_class,
-        retention_epoch: dto.retention_epoch,
-    }
-}
-
-#[cfg(feature = "app_api")]
-fn validate_manifest_payload_matches_request(
-    req: &RegisterPinManifestDto,
+fn decode_register_manifest_payload(
+    manifest_payload: &str,
     constraints: &ManifestPinPolicyConstraints,
-    expected_digest: &[u8; 32],
-    expected_policy: &ManifestPinPolicy,
-) -> Result<Vec<u8>> {
-    let Some(manifest_b64) = req.manifest_b64.as_ref() else {
-        return Err(sorafs_pin_validation_error(
-            "sorafs_pin_manifest_payload_required",
-            "manifest_b64 is required for consensus manifest registration",
-        ));
-    };
-
+) -> Result<(Vec<u8>, ManifestV1)> {
     let maximum_manifest_bytes = sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES;
     let maximum_base64_bytes = maximum_manifest_bytes
         .checked_add(2)
@@ -40231,105 +40145,44 @@ fn validate_manifest_payload_matches_request(
                 "manifest payload base64 size limit overflow",
             )
         })?;
-    if manifest_b64.is_empty() || manifest_b64.len() > maximum_base64_bytes {
+    if manifest_payload.is_empty() || manifest_payload.len() > maximum_base64_bytes {
         return Err(sorafs_pin_validation_error(
             "sorafs_pin_manifest_payload_size_invalid",
-            format!("manifest_b64 must encode 1..={maximum_manifest_bytes} bytes"),
+            format!("manifest_payload must encode 1..={maximum_manifest_bytes} bytes"),
         ));
     }
 
     let manifest_bytes = base64::engine::general_purpose::STANDARD
-        .decode(manifest_b64.as_bytes())
+        .decode(manifest_payload.as_bytes())
         .map_err(|err| {
             sorafs_pin_validation_error(
                 "sorafs_pin_manifest_payload_base64_invalid",
-                format!("invalid base64 in manifest_b64: {err}"),
+                format!("invalid base64 in manifest_payload: {err}"),
             )
         })?;
     if manifest_bytes.is_empty()
         || manifest_bytes.len() > maximum_manifest_bytes
-        || base64::engine::general_purpose::STANDARD.encode(&manifest_bytes) != *manifest_b64
+        || base64::engine::general_purpose::STANDARD.encode(&manifest_bytes) != manifest_payload
     {
         return Err(sorafs_pin_validation_error(
             "sorafs_pin_manifest_payload_noncanonical_base64",
             format!(
-                "manifest_b64 must be canonical base64 encoding of 1..={maximum_manifest_bytes} bytes"
+                "manifest_payload must be canonical base64 encoding of 1..={maximum_manifest_bytes} bytes"
             ),
         ));
     }
-    let manifest: ManifestV1 = norito::decode_from_bytes(&manifest_bytes).map_err(|err| {
-        sorafs_pin_validation_error(
-            "sorafs_pin_manifest_payload_decode_failed",
-            format!("invalid Norito ManifestV1 in manifest_b64: {err}"),
-        )
-    })?;
-    let canonical_manifest_bytes = manifest.encode().map_err(|err| {
-        sorafs_pin_validation_error(
-            "sorafs_pin_manifest_payload_encode_failed",
-            format!("failed to canonicalize ManifestV1 in manifest_b64: {err}"),
-        )
-    })?;
-    if canonical_manifest_bytes != manifest_bytes {
-        return Err(sorafs_pin_validation_error(
-            "sorafs_pin_manifest_payload_noncanonical",
-            "manifest_b64 must use the canonical first-release Norito layout",
-        ));
-    }
+    let manifest =
+        sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes).map_err(|err| {
+            sorafs_pin_validation_error(
+                "sorafs_pin_manifest_payload_decode_failed",
+                format!("invalid canonical Norito ManifestV1 in manifest_payload: {err}"),
+            )
+        })?;
 
     validate_manifest(&manifest, constraints).map_err(|err| {
         sorafs_pin_manifest_validation_error("sorafs_pin_manifest_payload_invalid", err)
     })?;
-
-    let digest = manifest.digest().map_err(|err| {
-        sorafs_pin_validation_error(
-            "sorafs_pin_manifest_payload_digest_failed",
-            format!("failed to digest manifest_b64: {err}"),
-        )
-    })?;
-    if digest.as_bytes() != expected_digest {
-        return Err(sorafs_pin_validation_error(
-            "sorafs_pin_manifest_digest_mismatch",
-            format!(
-                "manifest_b64 digest {} does not match manifest_digest_hex {}",
-                hex::encode(digest.as_bytes()),
-                hex::encode(expected_digest)
-            ),
-        ));
-    }
-
-    if manifest.chunking.profile_id.0 != req.chunker_profile_id
-        || manifest.chunking.namespace != req.chunker_namespace
-        || manifest.chunking.name != req.chunker_name
-        || manifest.chunking.semver != req.chunker_semver
-        || manifest.chunking.multihash_code != req.chunker_multihash_code
-    {
-        return Err(sorafs_pin_validation_error(
-            "sorafs_pin_manifest_chunker_mismatch",
-            "manifest_b64 chunker descriptor does not match request chunker fields",
-        ));
-    }
-
-    if manifest.content_length != req.content_length {
-        return Err(sorafs_pin_validation_error(
-            "sorafs_pin_manifest_content_length_mismatch",
-            format!(
-                "manifest_b64 content_length {} does not match request content_length {}",
-                manifest.content_length, req.content_length
-            ),
-        ));
-    }
-
-    if manifest.pin_policy.min_replicas != expected_policy.min_replicas
-        || manifest.pin_policy.storage_class != expected_policy.storage_class
-        || manifest.pin_policy.retention_epoch != expected_policy.retention_epoch
-    {
-        return Err(sorafs_pin_validation_error(
-            "sorafs_pin_manifest_policy_mismatch",
-            "manifest_b64 pin_policy does not match request pin_policy",
-        ));
-    }
-
-    Ok(manifest_bytes)
+    Ok((manifest_bytes, manifest))
 }
 
 fn convert_manifest_policy(
@@ -41230,6 +41083,7 @@ mod sorafs_pin_tests {
                 sorafs_manifest::MANIFEST_DAG_CODEC,
             ))
             .chunking_from_registry(sorafs_manifest::ProfileId(1))
+            .chunk_digest_sha3_256([0xCD; 32])
             .content_length(1024)
             .car_digest([0xAB; 32])
             .car_size(4096)
@@ -41257,48 +41111,24 @@ mod sorafs_pin_tests {
         manifest
     }
 
-    fn pin_policy_dto_from_manifest(policy: &sorafs_manifest::PinPolicy) -> PinPolicyDto {
-        PinPolicyDto {
-            min_replicas: policy.min_replicas,
-            storage_class: match policy.storage_class {
-                ManifestStorageClass::Hot => PinPolicyStorageClassDto::Hot,
-                ManifestStorageClass::Warm => PinPolicyStorageClassDto::Warm,
-                ManifestStorageClass::Cold => PinPolicyStorageClassDto::Cold,
-            },
-            retention_epoch: policy.retention_epoch,
-        }
-    }
-
-    fn request_from_manifest(
-        manifest: &ManifestV1,
-        include_manifest_payload: bool,
-    ) -> RegisterPinManifestDto {
-        let manifest_digest = manifest.digest().expect("manifest digest");
-        let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
+    fn request_from_manifest(manifest: &ManifestV1) -> RegisterPinManifestDto {
         let kp = checked_pin_keypair(0x78, "derive pin manifest registration fixture key");
-        let manifest_b64 = include_manifest_payload.then(|| {
-            let bytes = manifest.encode().expect("encode canonical manifest");
-            base64::engine::general_purpose::STANDARD.encode(bytes)
-        });
+        let manifest_payload = encode_manifest_payload(manifest);
 
         RegisterPinManifestDto {
             authority: dm::AccountId::new(kp.public_key().clone()),
             private_key: dm::ExposedPrivateKey(kp.private_key().clone()),
-            chunker_profile_id: descriptor.id.0,
-            chunker_namespace: descriptor.namespace.to_string(),
-            chunker_name: descriptor.name.to_string(),
-            chunker_semver: descriptor.semver.to_string(),
-            chunker_multihash_code: descriptor.multihash_code,
-            pin_policy: pin_policy_dto_from_manifest(&manifest.pin_policy),
-            manifest_digest_hex: hex::encode(manifest_digest.as_bytes()),
-            manifest_b64,
-            chunk_digest_sha3_256_hex: hex::encode([0xCD; 32]),
-            content_length: manifest.content_length,
+            manifest_payload,
             submitted_epoch: 5,
             gas_asset_id: None,
             alias: None,
             successor_of_hex: None,
         }
+    }
+
+    fn encode_manifest_payload(manifest: &ManifestV1) -> String {
+        base64::engine::general_purpose::STANDARD
+            .encode(manifest.encode().expect("encode canonical manifest"))
     }
 
     fn handler_context<F>(
@@ -41352,38 +41182,21 @@ mod sorafs_pin_tests {
     }
 
     #[test]
-    fn manifest_policy_helpers_round_trip_all_storage_classes() {
+    fn manifest_policy_conversion_covers_all_storage_classes() {
         use iroha_data_model::sorafs::pin_registry::StorageClass as DmStorageClass;
 
         let cases = [
-            (
-                PinPolicyStorageClassDto::Hot,
-                ManifestStorageClass::Hot,
-                DmStorageClass::Hot,
-            ),
-            (
-                PinPolicyStorageClassDto::Warm,
-                ManifestStorageClass::Warm,
-                DmStorageClass::Warm,
-            ),
-            (
-                PinPolicyStorageClassDto::Cold,
-                ManifestStorageClass::Cold,
-                DmStorageClass::Cold,
-            ),
+            (ManifestStorageClass::Hot, DmStorageClass::Hot),
+            (ManifestStorageClass::Warm, DmStorageClass::Warm),
+            (ManifestStorageClass::Cold, DmStorageClass::Cold),
         ];
 
-        for (dto_storage_class, manifest_storage_class, dm_storage_class) in cases {
-            let dto = PinPolicyDto {
+        for (manifest_storage_class, dm_storage_class) in cases {
+            let manifest_policy = ManifestPinPolicy {
                 min_replicas: 3,
-                storage_class: dto_storage_class,
+                storage_class: manifest_storage_class,
                 retention_epoch: 42,
             };
-            let manifest_policy = manifest_policy_from_dto(&dto);
-            assert_eq!(manifest_policy.min_replicas, 3);
-            assert_eq!(manifest_policy.storage_class, manifest_storage_class);
-            assert_eq!(manifest_policy.retention_epoch, 42);
-
             let dm_policy = convert_manifest_policy(&manifest_policy);
             assert_eq!(dm_policy.min_replicas, 3);
             assert_eq!(dm_policy.storage_class, dm_storage_class);
@@ -41445,8 +41258,8 @@ mod sorafs_pin_tests {
     #[tokio::test]
     async fn sorafs_pin_validation_error_emits_stable_norito_envelope_code() {
         let response = sorafs_pin_validation_error(
-            "sorafs_pin_manifest_payload_required",
-            "manifest_b64 is required",
+            "sorafs_pin_manifest_payload_size_invalid",
+            "manifest_payload must not be empty",
         )
         .into_response();
         assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
@@ -41457,15 +41270,16 @@ mod sorafs_pin_tests {
             .to_bytes();
         let envelope =
             norito::decode_from_bytes::<crate::ErrorEnvelope>(&bytes).expect("error envelope");
-        assert_eq!(envelope.code(), "sorafs_pin_manifest_payload_required");
-        assert_eq!(envelope.message(), "manifest_b64 is required");
+        assert_eq!(envelope.code(), "sorafs_pin_manifest_payload_size_invalid");
+        assert_eq!(envelope.message(), "manifest_payload must not be empty");
     }
 
     #[tokio::test]
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_accepts_request() {
         let manifest = default_manifest();
-        let req = request_from_manifest(&manifest, true);
+        let expected_digest = hex::encode(manifest.digest().expect("manifest digest").as_bytes());
+        let req = request_from_manifest(&manifest);
         let (chain_id, queue, state, telemetry) = handler_context(|_| {});
 
         let resp = handle_post_sorafs_register_manifest(
@@ -41484,7 +41298,21 @@ mod sorafs_pin_tests {
             .unwrap()
             .to_bytes();
         let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-        assert!(v.get("manifest_digest_hex").is_some());
+        assert_eq!(
+            v.get("manifest_digest_hex")
+                .and_then(norito::json::Value::as_str),
+            Some(expected_digest.as_str())
+        );
+        assert_eq!(
+            v.get("chunker_handle")
+                .and_then(norito::json::Value::as_str),
+            Some("sorafs.sf1@1.0.0")
+        );
+        assert_eq!(
+            v.get("content_length")
+                .and_then(norito::json::Value::as_u64),
+            Some(manifest.content_length)
+        );
         assert_eq!(
             v.get("submitted_epoch")
                 .and_then(norito::json::Value::as_u64),
@@ -41496,7 +41324,7 @@ mod sorafs_pin_tests {
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_validates_manifest_payload() {
         let manifest = default_manifest();
-        let req = request_from_manifest(&manifest, true);
+        let req = request_from_manifest(&manifest);
         let (chain_id, queue, state, telemetry) = handler_context(|_| {});
 
         let resp = handle_post_sorafs_register_manifest(
@@ -41515,23 +41343,55 @@ mod sorafs_pin_tests {
     #[tokio::test]
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_rejects_inert_commitments_and_expired_retention() {
-        let manifest = default_manifest();
-        let base = request_from_manifest(&manifest, true);
+        let mut expired_manifest = default_manifest();
+        expired_manifest.pin_policy.retention_epoch = 5;
+        expired_manifest.governance.council_signatures.clear();
+        let expired = request_from_manifest(&expired_manifest);
 
-        let mut expired = base.clone();
-        expired.pin_policy.retention_epoch = expired.submitted_epoch;
-        let mut zero_manifest = base.clone();
-        zero_manifest.manifest_digest_hex = "00".repeat(32);
-        let mut zero_chunks = base.clone();
-        zero_chunks.chunk_digest_sha3_256_hex = "00".repeat(32);
-        let mut zero_successor = base;
+        let mut zero_root_manifest = default_manifest();
+        zero_root_manifest.root_cid = sorafs_manifest::canonical_manifest_root_cid([0; 32]);
+        zero_root_manifest.governance.council_signatures.clear();
+        let zero_root = request_from_manifest(&zero_root_manifest);
+
+        let mut zero_chunks_manifest = default_manifest();
+        zero_chunks_manifest.chunk_digest_sha3_256 = [0; 32];
+        zero_chunks_manifest.governance.council_signatures.clear();
+        let zero_chunks = request_from_manifest(&zero_chunks_manifest);
+
+        let mut zero_car_manifest = default_manifest();
+        zero_car_manifest.car_digest = [0; 32];
+        zero_car_manifest.governance.council_signatures.clear();
+        let zero_car = request_from_manifest(&zero_car_manifest);
+
+        let mut zero_successor = request_from_manifest(&default_manifest());
         zero_successor.successor_of_hex = Some("00".repeat(32));
 
-        for (req, expected_code) in [
-            (expired, "sorafs_pin_manifest_retention_invalid"),
-            (zero_manifest, "sorafs_pin_manifest_digest_inert"),
-            (zero_chunks, "sorafs_pin_chunk_digest_inert"),
-            (zero_successor, "sorafs_pin_successor_digest_inert"),
+        for (req, expected_code, expected_message) in [
+            (
+                expired,
+                "sorafs_pin_manifest_retention_invalid",
+                "must be greater than submitted_epoch",
+            ),
+            (
+                zero_root,
+                "sorafs_pin_manifest_payload_invalid",
+                "root CID digest must not be all zero",
+            ),
+            (
+                zero_chunks,
+                "sorafs_pin_manifest_payload_invalid",
+                "chunk-plan SHA3-256 digest must not be zero",
+            ),
+            (
+                zero_car,
+                "sorafs_pin_manifest_payload_invalid",
+                "CAR digest must not be zero",
+            ),
+            (
+                zero_successor,
+                "sorafs_pin_successor_digest_inert",
+                "successor_of_hex must not be zero",
+            ),
         ] {
             let (chain_id, queue, state, telemetry) = handler_context(|_| {});
             let error = match handle_post_sorafs_register_manifest(
@@ -41546,8 +41406,12 @@ mod sorafs_pin_tests {
                 Ok(_) => panic!("{expected_code} input must fail"),
                 Err(error) => error,
             };
-            let (code, _) = app_validation_error(error);
+            let (code, message) = app_validation_error(error);
             assert_eq!(code, expected_code);
+            assert!(
+                message.contains(expected_message),
+                "unexpected error message: {message}"
+            );
         }
     }
 
@@ -41555,13 +41419,13 @@ mod sorafs_pin_tests {
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_rejects_noncanonical_manifest_layout() {
         let manifest = default_manifest();
-        let mut req = request_from_manifest(&manifest, true);
+        let mut req = request_from_manifest(&manifest);
         let legacy_manifest_bytes = {
             let _guard = norito::core::DecodeFlagsGuard::enter(0);
             norito::to_bytes(&manifest).expect("noncanonical manifest fixture encoding")
         };
-        req.manifest_b64 =
-            Some(base64::engine::general_purpose::STANDARD.encode(legacy_manifest_bytes));
+        req.manifest_payload =
+            base64::engine::general_purpose::STANDARD.encode(legacy_manifest_bytes);
         let (chain_id, queue, state, telemetry) = handler_context(|_| {});
 
         let result = handle_post_sorafs_register_manifest(
@@ -41578,12 +41442,11 @@ mod sorafs_pin_tests {
 
     #[tokio::test]
     #[cfg(feature = "app_api")]
-    async fn register_manifest_handler_requires_manifest_payload_for_council_policy() {
+    async fn register_manifest_handler_rejects_empty_manifest_payload() {
         let manifest = default_manifest();
-        let req = request_from_manifest(&manifest, false);
-        let (chain_id, queue, state, telemetry) = handler_context(|state| {
-            state.gov.sorafs_pin_policy.require_council_signatures = true;
-        });
+        let mut req = request_from_manifest(&manifest);
+        req.manifest_payload.clear();
+        let (chain_id, queue, state, telemetry) = handler_context(|_| {});
 
         let err = match handle_post_sorafs_register_manifest(
             Arc::clone(&chain_id),
@@ -41594,15 +41457,13 @@ mod sorafs_pin_tests {
         )
         .await
         {
-            Ok(_) => {
-                panic!("missing manifest payload must fail when council signatures are required")
-            }
+            Ok(_) => panic!("empty manifest payload must fail"),
             Err(err) => err,
         };
         let (code, message) = app_validation_error(err);
-        assert_eq!(code, "sorafs_pin_manifest_payload_required");
+        assert_eq!(code, "sorafs_pin_manifest_payload_size_invalid");
         assert!(
-            message.contains("manifest_b64 is required"),
+            message.contains("manifest_payload must encode 1..="),
             "unexpected error message: {message}"
         );
     }
@@ -41613,7 +41474,7 @@ mod sorafs_pin_tests {
     {
         let mut manifest = default_manifest();
         manifest.governance.council_signatures.clear();
-        let req = request_from_manifest(&manifest, true);
+        let req = request_from_manifest(&manifest);
         let (chain_id, queue, state, telemetry) = handler_context(|state| {
             state.gov.sorafs_pin_policy.require_council_signatures = true;
         });
@@ -41640,10 +41501,12 @@ mod sorafs_pin_tests {
 
     #[tokio::test]
     #[cfg(feature = "app_api")]
-    async fn register_manifest_handler_rejects_manifest_digest_mismatch_with_stable_code() {
+    async fn register_manifest_handler_rejects_trailing_manifest_bytes() {
         let manifest = default_manifest();
-        let mut req = request_from_manifest(&manifest, true);
-        req.manifest_digest_hex = hex::encode([0xEE; 32]);
+        let mut req = request_from_manifest(&manifest);
+        let mut trailing = manifest.encode().expect("canonical manifest");
+        trailing.push(0);
+        req.manifest_payload = base64::engine::general_purpose::STANDARD.encode(trailing);
         let (chain_id, queue, state, telemetry) = handler_context(|_| {});
 
         let err = match handle_post_sorafs_register_manifest(
@@ -41655,14 +41518,59 @@ mod sorafs_pin_tests {
         )
         .await
         {
-            Ok(_) => panic!("manifest payload digest mismatch must fail"),
+            Ok(_) => panic!("manifest payload with trailing bytes must fail"),
             Err(err) => err,
         };
         let (code, message) = app_validation_error(err);
-        assert_eq!(code, "sorafs_pin_manifest_digest_mismatch");
+        assert_eq!(code, "sorafs_pin_manifest_payload_decode_failed");
         assert!(
-            message.contains("does not match manifest_digest_hex"),
+            message.contains("canonical Norito ManifestV1"),
             "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn register_manifest_payload_decoder_rejects_malformed_and_oversized_input() {
+        let constraints = ManifestPinPolicyConstraints::default();
+
+        let (code, _) = app_validation_error(
+            decode_register_manifest_payload("%%%%", &constraints)
+                .expect_err("malformed base64 must fail"),
+        );
+        assert_eq!(code, "sorafs_pin_manifest_payload_base64_invalid");
+
+        let oversized = vec![0_u8; sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES + 1];
+        let oversized = base64::engine::general_purpose::STANDARD.encode(oversized);
+        let (code, _) = app_validation_error(
+            decode_register_manifest_payload(&oversized, &constraints)
+                .expect_err("oversized decoded payload must fail"),
+        );
+        assert_eq!(code, "sorafs_pin_manifest_payload_noncanonical_base64");
+
+        let base64_bomb = "A".repeat((sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES + 2) / 3 * 4 + 1);
+        let (code, _) = app_validation_error(
+            decode_register_manifest_payload(&base64_bomb, &constraints)
+                .expect_err("oversized base64 must fail before decode"),
+        );
+        assert_eq!(code, "sorafs_pin_manifest_payload_size_invalid");
+    }
+
+    #[test]
+    fn register_manifest_json_rejects_retired_summary_fields() {
+        let req = request_from_manifest(&default_manifest());
+        let mut value = norito::json::to_value(&req).expect("serialize request");
+        let object = value.as_object_mut().expect("request object");
+        object.insert(
+            "manifest_digest_hex".to_owned(),
+            norito::json::Value::String("11".repeat(32)),
+        );
+
+        let err = norito::json::from_value::<RegisterPinManifestDto>(value)
+            .expect_err("retired summary field must fail closed");
+        assert!(
+            err.to_string()
+                .contains("unknown field `manifest_digest_hex`"),
+            "unexpected error: {err}"
         );
     }
 
@@ -41670,7 +41578,7 @@ mod sorafs_pin_tests {
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_rejects_invalid_alias_proof_with_stable_code() {
         let manifest = default_manifest();
-        let mut req = request_from_manifest(&manifest, true);
+        let mut req = request_from_manifest(&manifest);
         req.alias = Some(PinAliasDto {
             namespace: "sora".into(),
             name: "docs".into(),
@@ -41700,55 +41608,20 @@ mod sorafs_pin_tests {
 
     #[tokio::test]
     async fn register_manifest_accepts_alias_binding() {
-        use crate::{mk_app_state_for_tests, routing::PinPolicyStorageClassDto};
+        use crate::mk_app_state_for_tests;
 
         let app = mk_app_state_for_tests();
         let chain_id = Arc::clone(&app.chain_id);
         let queue = Arc::clone(&app.queue);
         let state = Arc::clone(&app.state);
         let manifest = default_manifest();
-        let manifest_digest = manifest.digest().expect("manifest digest");
-        let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
-        let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
-        let policy = manifest.pin_policy.clone();
-        let pin_policy_dto = PinPolicyDto {
-            min_replicas: policy.min_replicas,
-            storage_class: match policy.storage_class {
-                ManifestStorageClass::Hot => PinPolicyStorageClassDto::Hot,
-                ManifestStorageClass::Warm => PinPolicyStorageClassDto::Warm,
-                ManifestStorageClass::Cold => PinPolicyStorageClassDto::Cold,
-            },
-            retention_epoch: policy.retention_epoch,
-        };
-        let kp = checked_pin_keypair(0x79, "derive pin manifest alias fixture key");
-        let authority = dm::AccountId::new(kp.public_key().clone());
         let proof_bytes = b"alias-proof";
-        let req = RegisterPinManifestDto {
-            authority,
-            private_key: dm::ExposedPrivateKey(kp.private_key().clone()),
-            chunker_profile_id: descriptor.id.0,
-            chunker_namespace: descriptor.namespace.to_string(),
-            chunker_name: descriptor.name.to_string(),
-            chunker_semver: descriptor.semver.to_string(),
-            chunker_multihash_code: descriptor.multihash_code,
-            pin_policy: pin_policy_dto,
-            manifest_digest_hex,
-            manifest_b64: Some(
-                base64::engine::general_purpose::STANDARD
-                    .encode(manifest.encode().expect("encode canonical manifest")),
-            ),
-            chunk_digest_sha3_256_hex: hex::encode([0xCD; 32]),
-            content_length: manifest.content_length,
-            submitted_epoch: 5,
-            gas_asset_id: None,
-            alias: Some(PinAliasDto {
-                namespace: "sora".into(),
-                name: "docs".into(),
-                proof_base64: base64::engine::general_purpose::STANDARD
-                    .encode(proof_bytes.as_slice()),
-            }),
-            successor_of_hex: None,
-        };
+        let mut req = request_from_manifest(&manifest);
+        req.alias = Some(PinAliasDto {
+            namespace: "sora".into(),
+            name: "docs".into(),
+            proof_base64: base64::engine::general_purpose::STANDARD.encode(proof_bytes.as_slice()),
+        });
 
         #[cfg(feature = "telemetry")]
         let telemetry = app.telemetry.clone();
@@ -65639,7 +65512,15 @@ pub fn handle_v1_sumeragi_status_sse(
         loop {
             ticker.tick().await;
             if let Some(status) = sumeragi::status::v2_status() {
-                let payload = sumeragi_v2_status_json(status, state.as_ref(), nexus_enabled);
+                let response = sumeragi_v2_status_response(status, state.as_ref(), nexus_enabled);
+                if let Err(error) = response.validate() {
+                    iroha_logger::error!(
+                        ?error,
+                        "refusing to stream invalid authoritative Sumeragi v2 status"
+                    );
+                    continue;
+                }
+                let payload = SumeragiV2StatusJson::from(response);
                 match norito::json::to_json(&payload) {
                     Ok(body) => {
                         let event = SseEvent::default().data(body);
@@ -65808,6 +65689,41 @@ pub async fn handle_v1_sumeragi_telemetry(state: Arc<CoreState>) -> Result<impl 
                 json_entry("drops_ttl_bytes_total", pending.drops_ttl_bytes_total),
                 json_entry("drops_bytes_total", pending.drops_bytes_total),
                 json_entry("evicted_total", pending.evicted_total),
+                json_entry("stash_ready_total", pending.stash_ready_total),
+                json_entry(
+                    "stash_ready_init_missing_total",
+                    pending.stash_ready_init_missing_total,
+                ),
+                json_entry(
+                    "stash_ready_roster_missing_total",
+                    pending.stash_ready_roster_missing_total,
+                ),
+                json_entry(
+                    "stash_ready_roster_hash_mismatch_total",
+                    pending.stash_ready_roster_hash_mismatch_total,
+                ),
+                json_entry(
+                    "stash_ready_roster_unverified_total",
+                    pending.stash_ready_roster_unverified_total,
+                ),
+                json_entry("stash_deliver_total", pending.stash_deliver_total),
+                json_entry(
+                    "stash_deliver_init_missing_total",
+                    pending.stash_deliver_init_missing_total,
+                ),
+                json_entry(
+                    "stash_deliver_roster_missing_total",
+                    pending.stash_deliver_roster_missing_total,
+                ),
+                json_entry(
+                    "stash_deliver_roster_hash_mismatch_total",
+                    pending.stash_deliver_roster_hash_mismatch_total,
+                ),
+                json_entry(
+                    "stash_deliver_roster_unverified_total",
+                    pending.stash_deliver_roster_unverified_total,
+                ),
+                json_entry("stash_chunk_total", pending.stash_chunk_total),
                 json_entry("session_cap", pending.session_cap),
                 json_entry("max_chunks_per_session", pending.max_chunks_per_session),
                 json_entry("max_bytes_per_session", pending.max_bytes_per_session),

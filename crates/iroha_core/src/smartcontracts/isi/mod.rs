@@ -38,6 +38,10 @@ pub mod soracloud;
 pub mod soradns;
 /// `SoraFS` pin registry instruction handlers.
 pub mod sorafs;
+/// Authoritative `SoraFS` moderation commit/reveal ledger handlers.
+pub mod sorafs_moderation;
+/// Authoritative `SoraFS` orderbook instruction handlers.
+pub mod sorafs_orderbook;
 pub mod space_directory;
 /// Public lane staking instruction handlers.
 pub mod staking;
@@ -165,6 +169,17 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::sorafs::ExpireReplicationOrder>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SetPricingSchedule>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::UpsertProviderCredit>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsOrderbookPolicy>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsOrderbookOrder>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::CancelSorafsOrderbookOrder>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RecordSorafsOrderbookSettlementReceipt>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsModerationPolicy>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::OpenSorafsModerationCase>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsModerationCommit>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RaiseSorafsModerationChallenge>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::ResolveSorafsModerationChallenge>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsModerationReveal>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::FinalizeSorafsModerationCase>,
     dispatch_instruction::<iroha_data_model::isi::content::PublishContentBundle>,
     dispatch_instruction::<iroha_data_model::isi::content::RetireContentBundle>,
     dispatch_instruction::<iroha_data_model::isi::soradns::SubmitDirectoryDraft>,
@@ -206,6 +221,8 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::offline::KagemushaTransfer>,
     dispatch_instruction::<iroha_data_model::isi::offline::TopUpKagemushaRecursive>,
     dispatch_instruction::<iroha_data_model::isi::offline::RedeemKagemushaRecursive>,
+    dispatch_instruction::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV2>,
+    dispatch_instruction::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2>,
     dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation>,
     dispatch_instruction::<iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy>,
     dispatch_instruction::<iroha_data_model::isi::social::ClaimTwitterFollowReward>,

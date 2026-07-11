@@ -1042,7 +1042,6 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
             &submit_request,
             &authority_literal,
             &artifacts.manifest,
-            artifacts.chunk_digest_sha3,
             submitted_epoch,
             None,
         )
@@ -1396,6 +1395,7 @@ fn build_deploy_artifacts(
         .cloned()
         .ok_or_else(|| "CAR build did not emit a root CID".to_string())?;
     let car_digest: [u8; 32] = *stats.car_archive_digest.as_bytes();
+    let chunk_digest_sha3 = chunk_digest_sha3_from_specs(&plan_specs);
     let manifest_descriptor =
         manifest_chunker_registry::lookup_by_handle(handle).ok_or_else(|| {
             format!("unknown manifest chunker profile handle `{handle}`; refresh the registry")
@@ -1405,13 +1405,14 @@ fn build_deploy_artifacts(
         .root_cid(root_cid.clone())
         .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
         .chunking_profile(chunking_profile)
+        .chunk_digest_sha3_256(chunk_digest_sha3)
         .content_length(plan.content_length)
         .car_digest(car_digest)
         .car_size(stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 1,
             storage_class: StorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch: 86_400,
         })
         .build()
         .map_err(format_manifest_error)?;
@@ -1435,7 +1436,6 @@ fn build_deploy_artifacts(
     let payload_digest_hex = hex_encode(blake3_hash(&payload_bytes).as_bytes());
     let root_cid_hex = hex_encode(&root_cid);
     let root_cid_base32 = encode_content_cid_base32(&root_cid);
-    let chunk_digest_sha3 = chunk_digest_sha3_from_specs(&plan_specs);
     plan.chunks.shrink_to_fit();
 
     Ok(DeployPackArtifacts {
@@ -1512,7 +1512,6 @@ fn submit_pin_register_with_fallback(
     request: &ManifestSubmitRequest<'_>,
     authority_literal: &str,
     manifest: &ManifestV1,
-    chunk_digest_sha3: [u8; 32],
     submitted_epoch: u64,
     successor_digest: Option<[u8; 32]>,
 ) -> Result<ManifestRegisterSubmission, String> {
@@ -1521,41 +1520,12 @@ fn submit_pin_register_with_fallback(
         .join("v1/sorafs/pin/register")
         .map_err(|err| format!("failed to build Torii pin-register endpoint URL: {err}"))?;
     let requested_endpoint = endpoint.as_str().to_string();
-    if request
-        .gas_asset_id
-        .as_ref()
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
-    {
-        let fallback = submit_manifest_via_transaction_endpoint(
-            request,
-            manifest,
-            chunk_digest_sha3,
-            submitted_epoch,
-            successor_digest,
-        )
-        .map_err(|err| format!("direct /transaction manifest submit failed: {err}"))?;
-        return Ok(ManifestRegisterSubmission {
-            endpoint_requested: requested_endpoint,
-            endpoint_used: fallback.endpoint,
-            status: fallback.status,
-            response_bytes: fallback.response_bytes,
-            response_value: fallback.response_value,
-            submission_mode: "transaction_direct",
-            fallback_reason: Some(
-                "gas_asset_id requested; bypassed pin-register route".to_string(),
-            ),
-            chain_id_hint: Some(fallback.chain_id),
-            failure_message: fallback.failure_message,
-        });
-    }
-
     let payload = build_pin_register_payload(
         authority_literal,
         request.private_key.clone(),
         manifest,
-        chunk_digest_sha3,
         submitted_epoch,
+        request.gas_asset_id,
         request.alias_inputs,
         successor_digest,
     )?;
@@ -1605,7 +1575,6 @@ fn submit_pin_register_with_fallback(
                 api_version_hint: api_version_hint.as_deref(),
             },
             manifest,
-            chunk_digest_sha3,
             submitted_epoch,
             successor_digest,
         )
@@ -2974,6 +2943,10 @@ fn render_summary(
     obj.insert(
         "car_digest_hex".into(),
         Value::from(hex_encode(stats.car_archive_digest.as_bytes())),
+    );
+    obj.insert(
+        "chunk_digest_sha3_256_hex".into(),
+        Value::from(hex_encode(chunk_digest_sha3_from_chunks(&plan.chunks))),
     );
     obj.insert(
         "car_cid_hex".into(),
@@ -15623,6 +15596,13 @@ fn manifest_build(raw_args: Vec<String>) -> Result<(), String> {
         .ok_or_else(|| "summary missing `car_digest_hex`".to_string())?;
     let car_digest = parse_digest_hex(car_digest_hex)
         .map_err(|err| format!("invalid `car_digest_hex` in summary: {err}"))?;
+    let chunk_digest_hex = summary_obj
+        .get("chunk_digest_sha3_256_hex")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "summary missing `chunk_digest_sha3_256_hex`".to_string())?;
+    let chunk_digest = parse_digest_hex(chunk_digest_hex).map_err(|err| {
+        format!("invalid `chunk_digest_sha3_256_hex` in summary: {err}")
+    })?;
 
     let root_cids = summary_obj
         .get("root_cids_hex")
@@ -15639,13 +15619,14 @@ fn manifest_build(raw_args: Vec<String>) -> Result<(), String> {
     let pin_policy = PinPolicy {
         min_replicas: pin_min_replicas.unwrap_or(1),
         storage_class: pin_storage_class.unwrap_or_default(),
-        retention_epoch: pin_retention_epoch.unwrap_or(0),
+        retention_epoch: pin_retention_epoch.unwrap_or(86_400),
     };
 
     let mut builder = ManifestBuilder::new()
         .root_cid(root_cid)
         .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
         .chunking_profile(chunking_profile)
+        .chunk_digest_sha3_256(chunk_digest)
         .content_length(content_length)
         .car_digest(car_digest)
         .car_size(car_size)
@@ -15944,28 +15925,32 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     let plan_digest = plan_specs
         .as_ref()
         .map(|specs| chunk_digest_sha3_from_specs(specs));
-    let chunk_digest_arg_supplied = chunk_digest_hex_arg.is_some();
-
-    let chunk_digest = match (chunk_digest_hex_arg, plan_digest) {
-        (Some(hex), _) => {
-            parse_digest_hex(&hex).map_err(|err| format!("invalid `--chunk-digest-sha3`: {err}"))?
-        }
-        (None, Some(expected)) => expected,
-        (None, None) => {
-            return Err(
-                "must provide either `--chunk-plan` or `--chunk-digest-sha3` for `sorafs_cli manifest submit`"
-                    .to_string(),
-            )
-        }
-    };
-
-    if chunk_digest_arg_supplied && manifest.car_digest != chunk_digest {
-        let expected_hex = hex_encode(manifest.car_digest);
-        let provided_hex = hex_encode(chunk_digest);
+    let explicit_chunk_digest = chunk_digest_hex_arg
+        .map(|hex| {
+            parse_digest_hex(&hex)
+                .map_err(|err| format!("invalid `--chunk-digest-sha3`: {err}"))
+        })
+        .transpose()?;
+    if let (Some(explicit), Some(from_plan)) = (explicit_chunk_digest, plan_digest)
+        && explicit != from_plan
+    {
         return Err(format!(
-            "chunk digest `{provided_hex}` does not match manifest CAR digest `{expected_hex}`; regenerate the manifest or chunk plan so they originate from the same CAR build"
+            "explicit chunk digest {} does not match chunk-plan digest {}",
+            hex_encode(explicit),
+            hex_encode(from_plan),
         ));
     }
+    let supplied_chunk_digest = explicit_chunk_digest.or(plan_digest);
+    if let Some(supplied) = supplied_chunk_digest
+        && supplied != manifest.chunk_digest_sha3_256
+    {
+        let expected_hex = hex_encode(manifest.chunk_digest_sha3_256);
+        let provided_hex = hex_encode(supplied);
+        return Err(format!(
+            "chunk digest `{provided_hex}` does not match manifest chunk-plan commitment `{expected_hex}`"
+        ));
+    }
+    let chunk_digest = manifest.chunk_digest_sha3_256;
     let manifest_car_digest_hex = hex_encode(manifest.car_digest);
     let authority = parse_account_id_arg_with_prefix(
         "--authority",
@@ -16036,7 +16021,6 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         },
         &authority_literal,
         &manifest,
-        chunk_digest,
         submitted_epoch,
         successor_digest,
     )?;
@@ -16500,7 +16484,6 @@ fn sign_manifest_submit_fallback_transaction(
 fn submit_manifest_via_transaction_endpoint(
     request: &ManifestSubmitRequest<'_>,
     manifest: &ManifestV1,
-    chunk_digest: [u8; 32],
     submitted_epoch: u64,
     successor_digest: Option<[u8; 32]>,
 ) -> Result<ManifestSubmitFallback, String> {
@@ -16524,7 +16507,6 @@ fn submit_manifest_via_transaction_endpoint(
     let successor_of = successor_digest.map(ManifestDigest::new);
     let instruction = iroha_data_model::isi::sorafs::RegisterPinManifest::new(
         manifest_payload,
-        chunk_digest,
         submitted_epoch,
         alias,
         successor_of,
@@ -22496,37 +22478,14 @@ fn build_pin_register_payload(
     authority_literal: &str,
     private_key: PrivateKey,
     manifest: &ManifestV1,
-    chunk_digest_sha3: [u8; 32],
     submitted_epoch: u64,
+    gas_asset_id: Option<&str>,
     alias: Option<&AliasInputs>,
     successor_of: Option<[u8; 32]>,
 ) -> Result<Value, String> {
-    let manifest_digest = manifest
-        .digest()
-        .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
-    let chunker = &manifest.chunking;
-    let policy = &manifest.pin_policy;
-
-    let mut storage_class_map = Map::new();
-    storage_class_map.insert(
-        "type".into(),
-        Value::from(match policy.storage_class {
-            StorageClass::Hot => "Hot",
-            StorageClass::Warm => "Warm",
-            StorageClass::Cold => "Cold",
-        }),
-    );
-
-    let mut pin_policy_map = Map::new();
-    pin_policy_map.insert(
-        "min_replicas".into(),
-        Value::from(policy.min_replicas as u64),
-    );
-    pin_policy_map.insert("storage_class".into(), Value::from(storage_class_map));
-    pin_policy_map.insert(
-        "retention_epoch".into(),
-        Value::from(policy.retention_epoch),
-    );
+    let manifest_payload = manifest
+        .encode()
+        .map_err(|err| format!("failed to encode canonical manifest payload: {err}"))?;
 
     let mut map = Map::new();
     map.insert(
@@ -22539,33 +22498,13 @@ fn build_pin_register_payload(
             .map_err(|err| format!("failed to serialise private key: {err}"))?,
     );
     map.insert(
-        "chunker_profile_id".into(),
-        Value::from(u64::from(chunker.profile_id.0)),
-    );
-    map.insert(
-        "chunker_namespace".into(),
-        Value::from(chunker.namespace.clone()),
-    );
-    map.insert("chunker_name".into(), Value::from(chunker.name.clone()));
-    map.insert("chunker_semver".into(), Value::from(chunker.semver.clone()));
-    map.insert(
-        "chunker_multihash_code".into(),
-        Value::from(chunker.multihash_code),
-    );
-    map.insert("pin_policy".into(), Value::from(pin_policy_map));
-    map.insert(
-        "manifest_digest_hex".into(),
-        Value::from(hex_encode(manifest_digest.as_bytes())),
-    );
-    map.insert(
-        "chunk_digest_sha3_256_hex".into(),
-        Value::from(hex_encode(chunk_digest_sha3)),
-    );
-    map.insert(
-        "content_length".into(),
-        Value::from(manifest.content_length),
+        "manifest_payload".into(),
+        Value::from(BASE64_STANDARD.encode(manifest_payload)),
     );
     map.insert("submitted_epoch".into(), Value::from(submitted_epoch));
+    if let Some(gas_asset_id) = gas_asset_id.map(str::trim).filter(|value| !value.is_empty()) {
+        map.insert("gas_asset_id".into(), Value::from(gas_asset_id));
+    }
 
     if let Some(alias) = alias {
         let mut alias_map = Map::new();
@@ -22753,9 +22692,10 @@ mod tests {
     fn sample_manifest() -> ManifestV1 {
         let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
         ManifestBuilder::new()
-            .root_cid(vec![0x01, 0x02, 0x03])
+            .root_cid(sorafs_manifest::canonical_manifest_root_cid([0x01; 32]))
             .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
             .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
+            .chunk_digest_sha3_256([0xCD; 32])
             .content_length(1_024)
             .car_digest([0xAB; 32])
             .car_size(2_048)
@@ -23110,7 +23050,6 @@ mod tests {
         let manifest = sample_manifest();
         let instruction = iroha_data_model::isi::sorafs::RegisterPinManifest::new(
             manifest.encode().expect("canonical manifest payload"),
-            [0xCC; 32],
             42,
             None,
             Some(ManifestDigest::new([0xDD; 32])),
@@ -23208,8 +23147,8 @@ mod tests {
             &authority_literal,
             fixture_keypair(0x9E).private_key().clone(),
             &manifest,
-            [0xCD; 32],
             99,
+            None,
             None,
             None,
         )
@@ -23219,10 +23158,18 @@ mod tests {
             payload["authority"].as_str().expect("authority literal"),
             authority_literal
         );
+        let expected_manifest_payload = BASE64_STANDARD
+            .encode(manifest.encode().expect("canonical manifest payload"));
         assert_eq!(
-            payload["content_length"].as_u64().expect("content length"),
-            manifest.content_length
+            payload["manifest_payload"]
+                .as_str()
+                .expect("manifest payload"),
+            expected_manifest_payload
         );
+        assert_eq!(payload["submitted_epoch"], Value::from(99_u64));
+        assert!(payload.get("manifest_digest_hex").is_none());
+        assert!(payload.get("chunk_digest_sha3_256_hex").is_none());
+        assert!(payload.get("pin_policy").is_none());
     }
 
     #[test]

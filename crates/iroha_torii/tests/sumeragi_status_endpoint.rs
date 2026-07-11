@@ -319,6 +319,31 @@ async fn sumeragi_status_endpoint_exposes_complete_v2_json_shape() {
     );
     assert!(root.get("height_context").is_some());
     assert!(root.get("operator").is_some());
+    let phase = root
+        .get("phase")
+        .and_then(norito::json::Value::as_object)
+        .expect("tagged v2 phase");
+    assert_eq!(phase.get("phase").and_then(norito::json::Value::as_str), Some("prepare"));
+    assert_eq!(phase.get("details"), Some(&norito::json::Value::Null));
+    let context = root
+        .get("height_context")
+        .and_then(norito::json::Value::as_object)
+        .expect("v2 height context");
+    let mode = context
+        .get("mode")
+        .and_then(norito::json::Value::as_object)
+        .expect("tagged consensus mode");
+    assert_eq!(
+        mode.get("mode").and_then(norito::json::Value::as_str),
+        Some("permissioned")
+    );
+    assert_eq!(mode.get("details"), Some(&norito::json::Value::Null));
+    assert_eq!(
+        context
+            .get("epoch_seed")
+            .and_then(norito::json::Value::as_str),
+        Some("A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5")
+    );
 }
 
 #[allow(clippy::await_holding_lock)]

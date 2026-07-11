@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "iroha-torii-client"
 version = "0.0.1"
 description = "Lightweight Torii HTTP client helpers for Hyperledger Iroha."
+readme = "README.md"
 authors = [{name = "Hyperledger Iroha Contributors"}]
 license = {text = "Apache-2.0"}
 requires-python = ">=3.9"

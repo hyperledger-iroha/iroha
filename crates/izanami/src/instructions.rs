@@ -377,6 +377,7 @@ pub fn prepare_state(
             .root_cid(manifest_root_cid.clone())
             .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
             .chunking_from_registry(descriptor.id)
+            .chunk_digest_sha3_256(*Hash::new(b"izanami-sorafs-chunk-digest").as_ref())
             .content_length(1_073_741_824)
             .car_digest(*Hash::new(b"izanami-sorafs-car-archive").as_ref())
             .car_size(1_073_742_080)
@@ -2683,12 +2684,10 @@ impl ChaosState {
             )
         };
         let manifest_epoch = self.bump_replication();
-        let chunk_digest = *Hash::new(b"izanami-sorafs-chunk-digest").as_ref();
         let council_digest = *Hash::new(b"izanami-sorafs-council-digest").as_ref();
         let instructions = vec![
             InstructionBox::from(RegisterPinManifest::new(
                 manifest_payload,
-                chunk_digest,
                 manifest_epoch,
                 None,
                 None,

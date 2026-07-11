@@ -8597,6 +8597,10 @@ pub struct SorafsStorage {
     pub orderbook: SorafsOrderbook,
     /// Canonical Norito trust-policy file required for reputation snapshot admission.
     pub reputation_trust_policy_path: Option<PathBuf>,
+    /// Canonical Norito trust-policy file required for governed pricing admission.
+    pub pricing_trust_policy_path: Option<PathBuf>,
+    /// Canonical Norito trust-policy file required for signed hedging-feed admission.
+    pub hedging_feed_trust_policy_path: Option<PathBuf>,
     /// Local SFM-4c privacy aggregate publication scheduler.
     pub privacy_aggregates: SorafsPrivacyAggregateSchedule,
     /// Local SFM-4b3 evidence-viewer audit-report publication scheduler.
@@ -8787,6 +8791,8 @@ impl Default for SorafsStorage {
             stream_tokens: SorafsTokenConfig::default(),
             orderbook: SorafsOrderbook::default(),
             reputation_trust_policy_path: None,
+            pricing_trust_policy_path: None,
+            hedging_feed_trust_policy_path: None,
             privacy_aggregates: SorafsPrivacyAggregateSchedule::default(),
             evidence_viewer_audits: SorafsEvidenceViewerAuditSchedule::default(),
             reserve_lifecycle: SorafsReserveLifecycleSchedule::default(),
@@ -9799,6 +9805,27 @@ impl Default for IsoReferenceData {
     }
 }
 
+/// SCCP lane activation policy selected by node configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SccpLaunchMode {
+    /// Require every supported counterparty lane to be ready together.
+    AllLanesAtOnce,
+    /// Admit only the Ethereum mainnet lane.
+    EthereumMainnetLane,
+    /// Admit only the BSC mainnet lane.
+    BscMainnetLane,
+    /// Admit only the Solana testnet lane.
+    SolanaTestnetLane,
+    /// Admit only the TON mainnet lane.
+    TonMainnetLane,
+}
+
+impl Default for SccpLaunchMode {
+    fn default() -> Self {
+        Self::EthereumMainnetLane
+    }
+}
+
 /// Zero-knowledge proof configuration namespace.
 #[derive(Debug, Clone)]
 pub struct Zk {
@@ -9832,6 +9859,8 @@ pub struct Zk {
     pub bridge_proof_max_past_age_blocks: u64,
     /// Maximum future drift (in blocks) a bridge proof's end height may lead the current block (0 = unlimited).
     pub bridge_proof_max_future_drift_blocks: u64,
+    /// Explicit SCCP lane launch policy for this node deployment.
+    pub sccp_launch_mode: SccpLaunchMode,
     /// SCCP source-chain verifier material that can enable non-SORA source lanes.
     pub sccp_source_verifier_materials: Vec<SccpSourceVerifierMaterial>,
     /// SCCP source adapter engine deployments that can enable non-SORA source lanes.

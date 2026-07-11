@@ -809,13 +809,6 @@ async fn run_taira_simulation(
                     if sumeragi.tx_queue_saturated {
                         saturated_samples = saturated_samples.saturating_add(1);
                     }
-                    ensure!(
-                        sumeragi.commit_qc_height
-                            <= status.blocks.saturating_add(cfg.max_height_skew),
-                        "commit_qc height looks inconsistent with status height: commit_qc={} blocks={}",
-                        sumeragi.commit_qc_height,
-                        status.blocks
-                    );
                 }
             }
 

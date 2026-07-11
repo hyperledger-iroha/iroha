@@ -46,6 +46,9 @@ use std::{
 pub mod confidential_v2;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod halo2_backend;
+/// Branch-safe fractional Kagemusha recursive-spend V2 circuits and artifacts.
+#[cfg(feature = "zk-halo2-ipa")]
+pub mod kagemusha_v2;
 
 use iroha_data_model::proof::{ProofBox, VerifyingKeyBox, VerifyingKeyId};
 #[cfg(feature = "zk-preverify")]
@@ -195,9 +198,13 @@ const MAX_PROOF_LEN: usize = 8 * 1024 * 1024; // 8 MiB
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Upper bound for parsed public instance columns. This covers current IVM
 /// proofs, Offline recursive proofs, the 30-column Kagemusha folded token
-/// statement, and the 59-column Kagemusha recursive aggregation proof
-/// statement while keeping malformed envelopes bounded.
-const MAX_INST_COLS: usize = 64;
+/// statement, the 59-column Kagemusha recursive aggregation proof statement,
+/// and the additional fixed-row V2 branch-transition column while keeping
+/// malformed envelopes bounded.
+const MAX_INST_COLS: usize = 65;
+
+#[cfg(feature = "zk-halo2-ipa")]
+const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_V1_MAX_INST_COLS: usize = 64;
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 const MAX_INST_ROWS: usize = 8192;
@@ -6497,8 +6504,8 @@ fn kagemusha_recursive_spend_lineage_verifier_projection_side_column_min(
 
 #[cfg(feature = "zk-halo2-ipa")]
 fn kagemusha_recursive_spend_lineage_zk1_side_column_capacity() -> Option<usize> {
-    let side_columns =
-        MAX_INST_COLS.checked_sub(KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS)?;
+    let side_columns = KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_V1_MAX_INST_COLS
+        .checked_sub(KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS)?;
     if side_columns < 2 {
         return None;
     }
@@ -8874,16 +8881,24 @@ fn kagemusha_fold_open_verify_envelope(
 fn ensure_kagemusha_confidential_v2_envelope_metadata(
     envelope: &iroha_data_model::zk::OpenVerifyEnvelope,
 ) -> Result<(), String> {
-    if envelope.circuit_id != confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID {
-        return Err(
-            "Kagemusha fold Halo2/IPA hops must expose the canonical confidential-transfer-v2 circuit"
+    match envelope.circuit_id.as_str() {
+        confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID
+            if envelope.public_inputs
+                == confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1 =>
+        {
+            Ok(())
+        }
+        confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID
+            if envelope.public_inputs
+                == confidential_v2::CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1 =>
+        {
+            Ok(())
+        }
+        _ => Err(
+            "Kagemusha fold Halo2/IPA hops must expose canonical confidential-transfer-v2 or confidential-unshield-v3 metadata"
                 .to_owned(),
-        );
+        ),
     }
-    if envelope.public_inputs != confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1 {
-        return Err("Kagemusha fold Halo2/IPA proof schema mismatch".to_owned());
-    }
-    Ok(())
 }
 
 const KAGEMUSHA_CONFIDENTIAL_TRANSFER_V2_PUBLIC_INSTANCE_COLUMNS: usize = 9;
@@ -8893,7 +8908,7 @@ fn ensure_kagemusha_confidential_v2_public_instance_shape(
 ) -> Result<(), String> {
     if instance_columns.len() != KAGEMUSHA_CONFIDENTIAL_TRANSFER_V2_PUBLIC_INSTANCE_COLUMNS {
         return Err(format!(
-            "Kagemusha fold Halo2/IPA confidential-transfer-v2 proof must expose exactly {} single-row public instance columns; found {} columns",
+            "Kagemusha fold Halo2/IPA confidential-v2 proof must expose exactly {} single-row public instance columns; found {} columns",
             KAGEMUSHA_CONFIDENTIAL_TRANSFER_V2_PUBLIC_INSTANCE_COLUMNS,
             instance_columns.len()
         ));
@@ -8901,7 +8916,7 @@ fn ensure_kagemusha_confidential_v2_public_instance_shape(
     for (column_index, column) in instance_columns.iter().enumerate() {
         if column.len() != 1 {
             return Err(format!(
-                "Kagemusha fold Halo2/IPA confidential-transfer-v2 proof must expose exactly {} single-row public instance columns; column {column_index} has {} rows",
+                "Kagemusha fold Halo2/IPA confidential-v2 proof must expose exactly {} single-row public instance columns; column {column_index} has {} rows",
                 KAGEMUSHA_CONFIDENTIAL_TRANSFER_V2_PUBLIC_INSTANCE_COLUMNS,
                 column.len()
             ));
@@ -9039,7 +9054,18 @@ fn validate_kagemusha_fold_attachment(step: &KagemushaFoldProofStep<'_>) -> Resu
         return Err("Kagemusha fold verifier key bytes must be non-empty".to_owned());
     }
     if backend == ZK_BACKEND_HALO2_IPA {
-        confidential_v2::ensure_confidential_transfer_v2_canonical_vk_box(step.vk_box)?;
+        let envelope = kagemusha_fold_open_verify_envelope(&step.attachment.proof)?;
+        match envelope.circuit_id.as_str() {
+            confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID => {
+                confidential_v2::ensure_confidential_transfer_v2_canonical_vk_box(step.vk_box)?;
+            }
+            confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID => {
+                confidential_v2::ensure_confidential_unshield_v3_canonical_vk_box(step.vk_box)?;
+            }
+            _ => {
+                return Err("Kagemusha fold verifier key circuit is unsupported".to_owned());
+            }
+        }
     }
     if step.attachment.vk_ref.name.trim().is_empty() {
         return Err("Kagemusha fold verifier key id name must be non-empty".to_owned());
@@ -9213,28 +9239,14 @@ fn validate_kagemusha_fold_verifier_record(
         return Err("Kagemusha fold proof exceeds verifier record proof-size cap".to_owned());
     }
     let envelope = kagemusha_fold_open_verify_envelope(&step.attachment.proof)?;
-    if record.circuit_id != confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID
-        || envelope.circuit_id != confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID
-    {
-        return Err(
-            "Kagemusha fold verifier records must use the canonical confidential-transfer-v2 circuit"
-                .to_owned(),
-        );
-    }
-    let expected_schema_hash: [u8; 32] =
-        iroha_crypto::Hash::new(confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1)
-            .into();
-    if record.public_inputs_schema_hash != expected_schema_hash {
-        return Err("Kagemusha fold verifier record public-input schema mismatch".to_owned());
-    }
-    if envelope.public_inputs != confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1 {
-        return Err(
-            "Kagemusha fold proof envelope public-input schema is not confidential-transfer-v2"
-                .to_owned(),
-        );
-    }
+    ensure_kagemusha_confidential_v2_envelope_metadata(&envelope)?;
     if record.circuit_id != envelope.circuit_id {
         return Err("Kagemusha fold verifier record circuit id mismatch".to_owned());
+    }
+    let expected_schema_hash: [u8; 32] =
+        iroha_crypto::Hash::new(envelope.public_inputs.as_slice()).into();
+    if record.public_inputs_schema_hash != expected_schema_hash {
+        return Err("Kagemusha fold verifier record public-input schema mismatch".to_owned());
     }
     let schema_hash: [u8; 32] = iroha_crypto::Hash::new(envelope.public_inputs.as_slice()).into();
     if record.public_inputs_schema_hash != schema_hash {
@@ -9244,7 +9256,15 @@ fn validate_kagemusha_fold_verifier_record(
         return Err("Kagemusha fold verifier key bytes must be non-empty".to_owned());
     }
     if step.attachment.backend.as_str() == ZK_BACKEND_HALO2_IPA {
-        confidential_v2::ensure_confidential_transfer_v2_canonical_vk_box(step.vk_box)?;
+        match envelope.circuit_id.as_str() {
+            confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID => {
+                confidential_v2::ensure_confidential_transfer_v2_canonical_vk_box(step.vk_box)?;
+            }
+            confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID => {
+                confidential_v2::ensure_confidential_unshield_v3_canonical_vk_box(step.vk_box)?;
+            }
+            _ => return Err("Kagemusha fold verifier key circuit is unsupported".to_owned()),
+        }
     }
     let commitment = hash_vk(step.vk_box);
     if record.commitment == [0u8; 32] {
@@ -9294,13 +9314,24 @@ fn validate_required_kagemusha_confidential_v2_step_public_inputs(
                 .to_owned(),
         );
     }
-    let Ok((_input_commitments, proof_nullifiers, proof_outputs, proof_root, asset_tag, chain_tag)) =
-        confidential_v2::parse_transfer_public_inputs(&step.attachment.proof.bytes)
-    else {
-        return Err(
-            "Kagemusha fold confidential-transfer-v2 public inputs cannot be decoded".to_owned(),
-        );
-    };
+    let (proof_nullifiers, proof_outputs, proof_root, asset_tag, chain_tag) =
+        match envelope.circuit_id.as_str() {
+            confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID => {
+                let (_inputs, nullifiers, outputs, root, asset_tag, chain_tag) =
+                    confidential_v2::parse_transfer_public_inputs(
+                        &step.attachment.proof.bytes,
+                    )?;
+                (nullifiers, outputs, root, asset_tag, chain_tag)
+            }
+            confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID => {
+                let (_inputs, nullifiers, change, root, _amount, asset_tag, chain_tag) =
+                    confidential_v2::parse_unshield_public_inputs_v3(
+                        &step.attachment.proof.bytes,
+                    )?;
+                (nullifiers, [change, [0; 32]], root, asset_tag, chain_tag)
+            }
+            _ => return Err("Kagemusha fold confidential-v2 circuit is unsupported".to_owned()),
+        };
     if proof_root != step.root_before {
         return Err("Kagemusha fold confidential-v2 root mismatch".to_owned());
     }
@@ -9839,6 +9870,15 @@ fn kagemusha_confidential_v2_public_inputs_schema_hash() -> [u8; 32] {
         .into()
 }
 
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_confidential_public_inputs_schema_hash_for_step(
+    step: &KagemushaFoldProofStep<'_>,
+) -> Result<[u8; 32], String> {
+    let envelope = kagemusha_fold_open_verify_envelope(&step.attachment.proof)?;
+    ensure_kagemusha_confidential_v2_envelope_metadata(&envelope)?;
+    Ok(iroha_crypto::Hash::new(envelope.public_inputs.as_slice()).into())
+}
+
 /// Return the Pallas opening-envelope transcript metadata expected for one checked hop.
 ///
 /// Wallet/prover code can use this metadata when producing the transparent
@@ -9922,7 +9962,9 @@ fn kagemusha_pallas_open_envelope_metadata_for_step(
 
     Ok(iroha_zkp_halo2::PolyOpenTranscriptMetadata {
         vk_commitment: Some(actual_vk_commitment),
-        public_inputs_schema_hash: Some(kagemusha_confidential_v2_public_inputs_schema_hash()),
+        public_inputs_schema_hash: Some(
+            kagemusha_confidential_public_inputs_schema_hash_for_step(step)?,
+        ),
         domain_tag: Some(domain_tag),
     })
 }

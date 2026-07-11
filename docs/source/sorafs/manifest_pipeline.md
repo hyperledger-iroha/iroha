@@ -84,15 +84,16 @@ the manifest and CAR artifacts. When you receive an envelope from an external
 signer, add `--manifest-signatures-in=<path>` to have the CLI confirm the digests
 and verify each Ed25519 signature against the freshly computed manifest digest.
 
-When submitting through Torii, pass the Norito-encoded `ManifestV1` as base64 in
-`manifest_b64` on `POST /v1/sorafs/pin/register` to run the same full manifest
+When submitting through Torii, pass the exact canonical Norito-encoded
+`ManifestV1` as base64 in `manifest_payload` on
+`POST /v1/sorafs/pin/register` to run the same full manifest
 validator before the registration transaction is queued. Torii derives the
 manifest digest, chunk-plan digest, root CID, chunker descriptor, content
 length, and pin policy from those bytes; the request has no parallel summary
 fields that can disagree. The payload must use the single canonical first-release Norito
 layout and a positive retention epoch later than submission; legacy flag
 layouts, inert commitments, and inline chunker profiles fail before queueing.
-`manifest_b64` is mandatory in the first release. Torii places those exact
+`manifest_payload` is mandatory in the first release. Torii places those exact
 canonical bytes in `RegisterPinManifest`, and consensus decodes and revalidates
 the full manifest before deriving its digest, chunk-plan digest, root CID,
 chunker, content length, and pin policy. Direct instruction submission therefore cannot bypass Torii's

@@ -931,6 +931,8 @@ fn minimal_config_snapshot() {
                         price_tick_micro_xor: 1000,
                     },
                     reputation_trust_policy_path: None,
+                    pricing_trust_policy_path: None,
+                    hedging_feed_trust_policy_path: None,
                     privacy_aggregates: SorafsPrivacyAggregateSchedule {
                         enabled: false,
                         cycle_seconds: 604800,
@@ -2256,6 +2258,7 @@ fn minimal_config_snapshot() {
                 bridge_proof_max_range_len: 4096,
                 bridge_proof_max_past_age_blocks: 0,
                 bridge_proof_max_future_drift_blocks: 0,
+                sccp_launch_mode: EthereumMainnetLane,
                 sccp_source_verifier_materials: [],
                 sccp_source_adapter_engine_deployments: [],
                 sccp_destination_rollouts: [],

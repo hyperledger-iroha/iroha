@@ -16118,30 +16118,15 @@ id: 88
     }
 
     private func makeValidSoraFsPinRegisterRequest(
-        manifestDigestHex: String = String(repeating: "A", count: 64),
-        chunkDigestSha3_256Hex: String = "0x" + String(repeating: "b", count: 64),
+        manifestPayload: String = Data("manifest-norito".utf8).base64EncodedString(),
         successorOfHex: String? = String(repeating: "C", count: 64)
     ) -> ToriiSoraFsPinRegisterRequest {
         ToriiSoraFsPinRegisterRequest(
             authority: " alice@boi ",
             privateKey: " ed25519:deadbeef ",
-            chunker: ToriiSoraFsChunkerHandle(
-                profileId: 1,
-                namespace: " sorafs ",
-                name: " sf1 ",
-                semver: " 1.0.0 ",
-                multihashCode: nil
-            ),
-            pinPolicy: ToriiSoraFsPinPolicy(
-                minReplicas: 3,
-                storageClass: ToriiSoraFsStorageClass(type: "hot"),
-                retentionEpoch: 72
-            ),
-            manifestDigestHex: manifestDigestHex,
-            manifestBytes: Data("manifest-norito".utf8),
-            chunkDigestSha3_256Hex: chunkDigestSha3_256Hex,
-            contentLength: 4096,
+            manifestPayload: manifestPayload,
             submittedEpoch: 42,
+            gasAssetId: " xor#universal ",
             alias: ToriiSoraFsPinAlias(
                 namespace: " docs ",
                 name: " main ",
@@ -16159,26 +16144,6 @@ id: 88
         return request
     }
 
-    private func mutatedSoraFsChunker(
-        _ mutate: (inout ToriiSoraFsChunkerHandle) -> Void
-    ) -> ToriiSoraFsPinRegisterRequest {
-        mutatedSoraFsPinRequest { request in
-            var chunker = request.chunker!
-            mutate(&chunker)
-            request.chunker = chunker
-        }
-    }
-
-    private func mutatedSoraFsPinPolicy(
-        _ mutate: (inout ToriiSoraFsPinPolicy) -> Void
-    ) -> ToriiSoraFsPinRegisterRequest {
-        mutatedSoraFsPinRequest { request in
-            var policy = request.pinPolicy!
-            mutate(&policy)
-            request.pinPolicy = policy
-        }
-    }
-
     private func mutatedSoraFsAlias(
         _ mutate: (inout ToriiSoraFsPinAlias) -> Void
     ) -> ToriiSoraFsPinRegisterRequest {
@@ -16192,10 +16157,9 @@ id: 88
     @available(iOS 15.0, macOS 12.0, *)
     func testRegisterSoraFsPinManifestPostsNormalizedPayloadAndDecodesResponse() async throws {
         let manifestHex = String(repeating: "a", count: 64)
-        let chunkHex = String(repeating: "b", count: 64)
         let successorHex = String(repeating: "c", count: 64)
         let aliasProof = Data("alias-proof".utf8).base64EncodedString()
-        let manifestBase64 = Data("manifest-norito".utf8).base64EncodedString()
+        let manifestPayload = Data("manifest-norito".utf8).base64EncodedString()
 
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.httpMethod, "POST")
@@ -16205,27 +16169,26 @@ id: 88
             let root = self.bodyJSON(from: request)
             XCTAssertEqual(root["authority"] as? String, "alice@boi")
             XCTAssertEqual(root["private_key"] as? String, "ed25519:deadbeef")
-            XCTAssertNil(root["chunker"])
-            XCTAssertEqual(root["chunker_profile_id"] as? Int, 1)
-            XCTAssertEqual(root["chunker_namespace"] as? String, "sorafs")
-            XCTAssertEqual(root["chunker_name"] as? String, "sf1")
-            XCTAssertEqual(root["chunker_semver"] as? String, "1.0.0")
-            XCTAssertEqual(root["chunker_multihash_code"] as? Int, 0)
-            let pinPolicy = root["pin_policy"] as? [String: Any]
-            XCTAssertEqual(pinPolicy?["min_replicas"] as? Int, 3)
-            let storageClass = pinPolicy?["storage_class"] as? [String: Any]
-            XCTAssertEqual(storageClass?["type"] as? String, "Hot")
-            XCTAssertEqual(pinPolicy?["retention_epoch"] as? Int, 72)
-            XCTAssertEqual(root["manifest_digest_hex"] as? String, manifestHex)
-            XCTAssertEqual(root["manifest_b64"] as? String, manifestBase64)
-            XCTAssertEqual(root["chunk_digest_sha3_256_hex"] as? String, chunkHex)
-            XCTAssertEqual(root["content_length"] as? Int, 4096)
+            XCTAssertEqual(root["manifest_payload"] as? String, manifestPayload)
             XCTAssertEqual(root["submitted_epoch"] as? Int, 42)
+            XCTAssertEqual(root["gas_asset_id"] as? String, "xor#universal")
             let alias = root["alias"] as? [String: Any]
             XCTAssertEqual(alias?["namespace"] as? String, "docs")
             XCTAssertEqual(alias?["name"] as? String, "main")
             XCTAssertEqual(alias?["proof_base64"] as? String, aliasProof)
             XCTAssertEqual(root["successor_of_hex"] as? String, successorHex)
+            XCTAssertEqual(
+                Set(root.keys),
+                Set([
+                    "authority",
+                    "private_key",
+                    "manifest_payload",
+                    "submitted_epoch",
+                    "gas_asset_id",
+                    "alias",
+                    "successor_of_hex",
+                ])
+            )
 
             let responseObject: [String: Any] = [
                 "manifest_digest_hex": manifestHex.uppercased(),
@@ -16267,11 +16230,20 @@ id: 88
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testRegisterSoraFsPinManifestAcceptsManifestBase64Payload() async throws {
-        let manifestBase64 = Data("explicit-manifest".utf8).base64EncodedString()
+    func testRegisterSoraFsPinManifestAcceptsMaximumManifestAndOmitsOptionalFields() async throws {
+        let maximumManifest = Data(repeating: 0xA5, count: 512 * 1024)
+        let manifestPayload = maximumManifest.base64EncodedString()
         StubURLProtocol.handler = { request in
             let root = self.bodyJSON(from: request)
-            XCTAssertEqual(root["manifest_b64"] as? String, manifestBase64)
+            XCTAssertEqual(root["manifest_payload"] as? String, manifestPayload)
+            XCTAssertEqual(
+                Data(base64Encoded: root["manifest_payload"] as? String ?? "")?.count,
+                maximumManifest.count
+            )
+            XCTAssertEqual(
+                Set(root.keys),
+                Set(["authority", "private_key", "manifest_payload", "submitted_epoch"])
+            )
             let responseObject: [String: Any] = [
                 "manifest_digest_hex": String(repeating: "a", count: 64),
                 "chunker_handle": "sorafs.sf1@1.0.0",
@@ -16289,34 +16261,45 @@ id: 88
             return (response, body)
         }
 
-        var request = makeValidSoraFsPinRegisterRequest()
-        request.manifestBase64 = manifestBase64
-        request.manifestBytes = nil
+        let request = ToriiSoraFsPinRegisterRequest(
+            authority: "alice@boi",
+            privateKey: "ed25519:deadbeef",
+            manifestPayload: manifestPayload,
+            submittedEpoch: 0
+        )
         _ = try await makeClient().registerSoraFsPinManifest(request)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     func testRegisterSoraFsPinManifestRejectsMalformedInputsBeforeRequest() async throws {
+        let oversizedManifest = Data(repeating: 0xA5, count: 512 * 1024 + 1)
+            .base64EncodedString()
+        let encodedLengthBoundaryOverflow = String(repeating: "A", count: 699_052)
         let invalidRequests: [ToriiSoraFsPinRegisterRequest] = [
-            mutatedSoraFsPinRequest { $0.manifestDigestHex = "abc123" },
-            mutatedSoraFsPinRequest { $0.manifestBase64 = "not base64!"; $0.manifestBytes = nil },
-            mutatedSoraFsPinRequest { $0.manifestBase64 = Data("manifest".utf8).base64EncodedString() },
-            mutatedSoraFsPinRequest { $0.manifestBytes = Data() },
-            mutatedSoraFsPinRequest { $0.chunkDigestSha3_256Hex = String(repeating: "z", count: 64) },
+            mutatedSoraFsPinRequest { $0.authority = nil },
+            mutatedSoraFsPinRequest { $0.authority = " " },
+            mutatedSoraFsPinRequest { $0.privateKey = nil },
+            mutatedSoraFsPinRequest { $0.privateKey = "\n" },
+            mutatedSoraFsPinRequest { $0.manifestPayload = nil },
+            mutatedSoraFsPinRequest { $0.manifestPayload = "" },
+            mutatedSoraFsPinRequest { $0.manifestPayload = "not base64!" },
+            mutatedSoraFsPinRequest { $0.manifestPayload = "bWFuaWZlc3Q" },
+            mutatedSoraFsPinRequest { $0.manifestPayload = "YR==" },
+            mutatedSoraFsPinRequest { $0.manifestPayload = "_w==" },
+            mutatedSoraFsPinRequest {
+                $0.manifestPayload = Data("manifest".utf8).base64EncodedString() + "\n"
+            },
+            mutatedSoraFsPinRequest { $0.manifestPayload = oversizedManifest },
+            mutatedSoraFsPinRequest { $0.manifestPayload = encodedLengthBoundaryOverflow },
             mutatedSoraFsPinRequest { $0.successorOfHex = String(repeating: "c", count: 63) },
-            mutatedSoraFsPinRequest { $0.contentLength = nil },
+            mutatedSoraFsPinRequest { $0.successorOfHex = String(repeating: "z", count: 64) },
+            mutatedSoraFsPinRequest { $0.successorOfHex = String(repeating: "0", count: 64) },
+            mutatedSoraFsPinRequest { $0.successorOfHex = "0x" + String(repeating: "0", count: 64) },
+            mutatedSoraFsPinRequest { $0.successorOfHex = " " },
             mutatedSoraFsPinRequest { $0.submittedEpoch = nil },
-            mutatedSoraFsPinRequest { $0.chunker = nil },
-            mutatedSoraFsChunker { $0.profileId = nil },
-            mutatedSoraFsChunker { $0.profileId = 0 },
-            mutatedSoraFsChunker { $0.namespace = " " },
-            mutatedSoraFsChunker { $0.semver = "" },
-            mutatedSoraFsPinRequest { $0.pinPolicy = nil },
-            mutatedSoraFsPinPolicy { $0.minReplicas = nil },
-            mutatedSoraFsPinPolicy { $0.minReplicas = 0 },
-            mutatedSoraFsPinPolicy { $0.storageClass = nil },
-            mutatedSoraFsPinPolicy { $0.storageClass = ToriiSoraFsStorageClass(type: "lava") },
+            mutatedSoraFsPinRequest { $0.gasAssetId = " " },
             mutatedSoraFsAlias { $0.namespace = "" },
+            mutatedSoraFsAlias { $0.name = nil },
             mutatedSoraFsAlias { $0.proofBase64 = nil },
             mutatedSoraFsAlias { $0.proofBase64 = "not base64!" },
             mutatedSoraFsAlias { $0.proofBase64 = Data().base64EncodedString() },

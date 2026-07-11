@@ -26,10 +26,7 @@ use base64::{
 };
 use ed25519_dalek::VerifyingKey;
 use hex::FromHexError;
-use norito::{
-    decode_from_bytes,
-    json::{self, Value},
-};
+use norito::json::{self, Value};
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
 use reqwest::{
     Client, StatusCode, Url,
@@ -37,7 +34,7 @@ use reqwest::{
 };
 use sorafs_manifest::{
     ManifestV1, STREAM_TOKEN_MAX_BASE64_BYTES_V1, STREAM_TOKEN_MAX_TTL_SECS_V1,
-    STREAM_TOKEN_MAX_WIRE_BYTES_V1, StreamTokenV1,
+    STREAM_TOKEN_MAX_WIRE_BYTES_V1, StreamTokenV1, decode_manifest_v1_canonical,
 };
 use thiserror::Error;
 
@@ -1550,7 +1547,20 @@ fn decode_stream_token(value: &str) -> Result<StreamTokenV1, StreamTokenDecodeEr
     if STANDARD.encode(&bytes) != trimmed {
         return Err(StreamTokenDecodeError::NonCanonicalBase64);
     }
-    decode_from_bytes(&bytes).map_err(StreamTokenDecodeError::InvalidPayload)
+    let limits = norito::DecodeLimits::new(
+        STREAM_TOKEN_MAX_WIRE_BYTES_V1,
+        STREAM_TOKEN_MAX_WIRE_BYTES_V1,
+        STREAM_TOKEN_MAX_WIRE_BYTES_V1.saturating_mul(2),
+        STREAM_TOKEN_MAX_WIRE_BYTES_V1.saturating_mul(4),
+        32,
+    );
+    let token: StreamTokenV1 = norito::decode_from_bytes_with_limits(&bytes, limits)
+        .map_err(StreamTokenDecodeError::InvalidPayload)?;
+    let canonical = norito::to_bytes(&token).map_err(StreamTokenDecodeError::InvalidPayload)?;
+    if canonical != bytes {
+        return Err(StreamTokenDecodeError::NonCanonicalPayload);
+    }
+    Ok(token)
 }
 
 /// Errors emitted while constructing the gateway fetcher.
@@ -1793,11 +1803,12 @@ fn parse_manifest_response(
             error: "manifest_b64 must use canonical standard base64".to_owned(),
         });
     }
-    let manifest: ManifestV1 =
-        decode_from_bytes(&manifest_bytes).map_err(|err| GatewayManifestError::Decode {
+    let manifest: ManifestV1 = decode_manifest_v1_canonical(&manifest_bytes).map_err(|err| {
+        GatewayManifestError::Decode {
             provider: provider.to_string(),
             error: err.to_string(),
-        })?;
+        }
+    })?;
     let manifest_digest_hex = value
         .get("manifest_digest_hex")
         .and_then(Value::as_str)
@@ -2043,6 +2054,8 @@ pub enum StreamTokenDecodeError {
     InvalidBase64(base64::DecodeError),
     #[error("stream token payload is not valid Norito")]
     InvalidPayload(norito::Error),
+    #[error("stream token payload is not the exact canonical Norito encoding")]
+    NonCanonicalPayload,
 }
 
 impl fmt::Display for GatewayFetcher {
@@ -2171,7 +2184,8 @@ mod tests {
     fn fixture_manifest_response() -> Value {
         let manifest_bytes =
             include_bytes!("../../../fixtures/sorafs_manifest/ci_sample/manifest.to").to_vec();
-        let manifest: ManifestV1 = decode_from_bytes(&manifest_bytes).expect("fixture manifest");
+        let manifest: ManifestV1 =
+            norito::decode_from_bytes(&manifest_bytes).expect("fixture manifest");
         let digest = manifest.digest().expect("manifest digest");
         let profile = format!(
             "{}.{}@{}",
@@ -2244,6 +2258,40 @@ mod tests {
                 "tampered {field} must be rejected"
             );
         }
+
+        let mut trailing = canonical.clone();
+        let mut manifest_bytes = STANDARD
+            .decode(
+                canonical
+                    .get("manifest_b64")
+                    .and_then(Value::as_str)
+                    .expect("manifest base64"),
+            )
+            .expect("decode fixture manifest");
+        manifest_bytes.push(0xA5);
+        trailing
+            .as_object_mut()
+            .expect("object")
+            .insert("manifest_b64".to_owned(), Value::String(STANDARD.encode(manifest_bytes)));
+        let body = json::to_vec(&trailing).expect("response JSON");
+        assert!(matches!(
+            parse_manifest_response("alpha", &expected_manifest_id, &body, None),
+            Err(GatewayManifestError::Decode { .. })
+        ));
+
+        let mut oversized = canonical;
+        oversized.as_object_mut().expect("object").insert(
+            "manifest_b64".to_owned(),
+            Value::String(STANDARD.encode(vec![
+                0_u8;
+                sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES + 1
+            ])),
+        );
+        let body = json::to_vec(&oversized).expect("response JSON");
+        assert!(matches!(
+            parse_manifest_response("alpha", &expected_manifest_id, &body, None),
+            Err(GatewayManifestError::Decode { .. })
+        ));
     }
 
     fn build_test_context(
@@ -2631,6 +2679,13 @@ mod tests {
         assert!(matches!(
             decode_stream_token(&format!(" {encoded}")),
             Err(StreamTokenDecodeError::NonCanonicalBase64)
+        ));
+        let mut trailing_payload = norito::to_bytes(&token).expect("canonical token");
+        trailing_payload.push(0xA5);
+        assert!(matches!(
+            decode_stream_token(&STANDARD.encode(trailing_payload)),
+            Err(StreamTokenDecodeError::NonCanonicalPayload)
+                | Err(StreamTokenDecodeError::InvalidPayload(_))
         ));
         assert!(matches!(
             decode_stream_token(&"A".repeat(STREAM_TOKEN_MAX_BASE64_BYTES_V1 + 1)),

@@ -252,6 +252,7 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
     "ai_prescreen": frozenset(
         {
             "valid_executor_summary_digests",
+            "deployment_context",
             "valid_notification_manifest_digests",
             "valid_policy_digests",
             "valid_runner_bindings",

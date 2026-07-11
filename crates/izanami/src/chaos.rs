@@ -26,6 +26,10 @@ use iroha::client::{
 use iroha_config::{kura::FsyncMode, parameters::actual::SumeragiNposTimeouts};
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
+    block::{
+        consensus::committed_lane_block_status_counts_as_progress,
+        consensus_v2::SumeragiV2StatusResponse,
+    },
     isi::{
         RegisterBox,
         register::RegisterPeerWithPop,
@@ -5237,23 +5241,34 @@ async fn sample_sumeragi_phases(peers: &[NetworkPeer]) -> Result<SumeragiPhaseSn
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct SumeragiStatusDigest {
+    protocol_version: u16,
+    height: u64,
+    view: u64,
+    phase: String,
+    body_state: String,
+    last_committed_height: u64,
+    committed_height_advance: u64,
+    mode: String,
+    epoch: u64,
+    epoch_end_height: u64,
+    validator_count: u32,
+    min_signers: u32,
+    total_power: u64,
+    commit_qc_present: bool,
+    commit_qc_signer_count: u32,
+    commit_qc_min_signers: u32,
+    commit_qc_signed_power: u64,
+    commit_qc_total_power: u64,
     view_change_install_total: u64,
-    view_change_cause_total: u64,
-    view_change_commit_failure_total: u64,
-    view_change_quorum_timeout_total: u64,
-    view_change_stake_quorum_timeout_total: u64,
-    view_change_roster_unavailable_total: u64,
-    view_change_da_gate_total: u64,
-    view_change_censorship_evidence_total: u64,
-    view_change_missing_payload_total: u64,
-    view_change_missing_qc_total: u64,
-    view_change_validation_reject_total: u64,
-    view_change_last_cause: Option<String>,
-    commit_pipeline_last_total_ms: u64,
-    commit_pipeline_ema_total_ms: u64,
-    missing_block_fetch_total: u64,
-    missing_block_fetch_last_targets: u64,
-    missing_block_fetch_last_dwell_ms: u64,
+    busy_deferral_total: u64,
+    adapter_ingress_keys: u64,
+    adapter_ingress_capacity: u64,
+    adapter_deferred_completion: u64,
+    adapter_deferred_progress: u64,
+    adapter_deferred_progress_capacity: u64,
+    adapter_deferred_normal: u64,
+    adapter_deferred_normal_capacity: u64,
+    tx_queue_tracked: u64,
     tx_queue_depth: u64,
     tx_queue_capacity: u64,
     tx_queue_retained_bytes: u64,
@@ -5263,398 +5278,123 @@ struct SumeragiStatusDigest {
     tx_queue_saturated_by_bytes: bool,
     tx_queue_saturated_by_age: bool,
     tx_queue_oldest_queued_age_ms: u64,
-    pacemaker_backpressure_deferrals_total: u64,
-    commit_inflight_active: bool,
-    commit_inflight_height: u64,
-    commit_inflight_view: u64,
-    commit_inflight_elapsed_ms: u64,
-    commit_inflight_timeout_total: u64,
-    worker_loop_stage: String,
-    worker_loop_last_iteration_ms: u64,
-    worker_loop_queue_depth_total: u64,
-    qc_deferred_missing_payload_total: u64,
-    qc_deferred_resolved_total: u64,
-    qc_deferred_expired_total: u64,
-    consensus_missing_qc_reacquire_attempt_total: u64,
-    consensus_missing_qc_reacquire_success_total: u64,
-    consensus_missing_qc_reacquire_exhausted_total: u64,
-    consensus_forced_proposal_attempt_total: u64,
-    consensus_forced_proposal_success_total: u64,
-    blocksync_range_pull_escalation_total: u64,
-    blocksync_range_pull_success_total: u64,
-    blocksync_range_pull_failure_total: u64,
-    blocksync_range_pull_candidate_exhausted_total: u64,
-    rbc_store_pressure_level: u64,
-    rbc_store_evictions_total: u64,
-    rbc_store_backpressure_deferrals_total: u64,
-    rbc_store_persist_drops_total: u64,
-    pending_rbc_drops_total: u64,
-    pending_rbc_evicted_total: u64,
-    block_sync_roster_source_total: u64,
-    npos_repair_selected_stake_coverage_bps: u64,
-    npos_repair_reached_stake_quorum_coverage: bool,
-    pipeline_conflict_rate_bps: u64,
-    lane_tx_vertices_total: u64,
-    lane_tx_edges_total: u64,
-    lane_overlay_count_total: u64,
-    lane_overlay_instr_total: u64,
-    lane_overlay_bytes_total: u64,
-    lane_rbc_chunks_total: u64,
-    lane_rbc_bytes_total: u64,
-    detached_prepared_total: u64,
-    detached_merged_total: u64,
-    detached_fallback_total: u64,
-    quarantine_executed_total: u64,
+    lane_settlement_commitments: u64,
+    lane_relay_envelopes: u64,
+    lane_payload_ownerships: u64,
+    committed_lane_blocks: u64,
+    lane_block_sessions: u64,
+    incomplete_lane_block_sessions: u64,
+    blocked_committed_lane_blocks: u64,
+    local_peer_removed: bool,
 }
 
 impl SumeragiStatusDigest {
-    fn from_wire(wire: &iroha_data_model::block::consensus::SumeragiStatusWire) -> Self {
-        let view_change = &wire.view_change_causes;
-        let view_change_cause_total = view_change
-            .commit_failure_total
-            .saturating_add(view_change.quorum_timeout_total)
-            .saturating_add(view_change.stake_quorum_timeout_total)
-            .saturating_add(view_change.roster_unavailable_total)
-            .saturating_add(view_change.da_gate_total)
-            .saturating_add(view_change.censorship_evidence_total)
-            .saturating_add(view_change.missing_payload_total)
-            .saturating_add(view_change.missing_qc_total)
-            .saturating_add(view_change.validation_reject_total);
-        let block_sync_roster_source_total = wire
-            .block_sync_roster
-            .commit_qc_hint_total
-            .saturating_add(wire.block_sync_roster.checkpoint_hint_total)
-            .saturating_add(wire.block_sync_roster.commit_qc_history_total)
-            .saturating_add(wire.block_sync_roster.checkpoint_history_total)
-            .saturating_add(wire.block_sync_roster.roster_sidecar_total)
-            .saturating_add(wire.block_sync_roster.commit_roster_journal_total);
-        let worker_queue_depth_total = wire
-            .worker_loop
-            .queue_depths
-            .vote_rx
-            .saturating_add(wire.worker_loop.queue_depths.block_payload_rx)
-            .saturating_add(wire.worker_loop.queue_depths.rbc_chunk_rx)
-            .saturating_add(wire.worker_loop.queue_depths.block_rx)
-            .saturating_add(wire.worker_loop.queue_depths.consensus_rx)
-            .saturating_add(wire.worker_loop.queue_depths.lane_relay_rx)
-            .saturating_add(wire.worker_loop.queue_depths.background_rx);
+    fn from_v2(status: &SumeragiV2StatusResponse) -> Self {
+        let authoritative = &status.authoritative;
+        let context = authoritative.height_context;
+        let operator = status.operator;
+        let adapter = operator.adapter_queues;
+        let queue = operator.tx_queue;
+        let (
+            commit_qc_present,
+            commit_qc_signer_count,
+            commit_qc_min_signers,
+            commit_qc_signed_power,
+            commit_qc_total_power,
+        ) = authoritative
+            .last_commit_qc
+            .map_or((false, 0, 0, 0, 0), |commit| {
+                (
+                    true,
+                    commit.signer_count,
+                    commit.min_signers,
+                    commit.signed_power,
+                    commit.total_power,
+                )
+            });
+        let incomplete_lane_block_sessions = status
+            .lane_block_sessions
+            .iter()
+            .filter(|session| !session.has_commit_qc || !session.committed_session_drained)
+            .count();
+        let blocked_committed_lane_blocks = status
+            .committed_lane_blocks
+            .iter()
+            .filter(|block| {
+                !committed_lane_block_status_counts_as_progress(
+                    &block.execution_status,
+                    block.executable_payload_available,
+                )
+            })
+            .count();
         Self {
-            view_change_install_total: wire.view_change_install_total,
-            view_change_cause_total,
-            view_change_commit_failure_total: view_change.commit_failure_total,
-            view_change_quorum_timeout_total: view_change.quorum_timeout_total,
-            view_change_stake_quorum_timeout_total: view_change.stake_quorum_timeout_total,
-            view_change_roster_unavailable_total: view_change.roster_unavailable_total,
-            view_change_da_gate_total: view_change.da_gate_total,
-            view_change_censorship_evidence_total: view_change.censorship_evidence_total,
-            view_change_missing_payload_total: view_change.missing_payload_total,
-            view_change_missing_qc_total: view_change.missing_qc_total,
-            view_change_validation_reject_total: view_change.validation_reject_total,
-            view_change_last_cause: view_change.last_cause.clone(),
-            commit_pipeline_last_total_ms: wire.commit_pipeline.last_total_ms,
-            commit_pipeline_ema_total_ms: wire.commit_pipeline.ema_total_ms,
-            missing_block_fetch_total: wire.missing_block_fetch.total,
-            missing_block_fetch_last_targets: wire.missing_block_fetch.last_targets,
-            missing_block_fetch_last_dwell_ms: wire.missing_block_fetch.last_dwell_ms,
-            tx_queue_depth: wire.tx_queue_depth,
-            tx_queue_capacity: wire.tx_queue_capacity,
-            tx_queue_retained_bytes: wire.tx_queue_retained_bytes,
-            tx_queue_max_retained_bytes: wire.tx_queue_max_retained_bytes,
-            tx_queue_saturated: wire.tx_queue_saturated,
-            tx_queue_saturated_by_count: wire.tx_queue_saturated_by_count,
-            tx_queue_saturated_by_bytes: wire.tx_queue_saturated_by_bytes,
-            tx_queue_saturated_by_age: wire.tx_queue_saturated_by_age,
-            tx_queue_oldest_queued_age_ms: wire.tx_queue_oldest_queued_age_ms,
-            pacemaker_backpressure_deferrals_total: wire.pacemaker_backpressure_deferrals_total,
-            commit_inflight_active: wire.commit_inflight.active,
-            commit_inflight_height: wire.commit_inflight.height,
-            commit_inflight_view: wire.commit_inflight.view,
-            commit_inflight_elapsed_ms: wire.commit_inflight.elapsed_ms,
-            commit_inflight_timeout_total: wire.commit_inflight.timeout_total,
-            worker_loop_stage: wire.worker_loop.stage.clone(),
-            worker_loop_last_iteration_ms: wire.worker_loop.last_iteration_ms,
-            worker_loop_queue_depth_total: worker_queue_depth_total,
-            qc_deferred_missing_payload_total: wire.qc_deferred_missing_payload_total,
-            qc_deferred_resolved_total: wire.qc_deferred_resolved_total,
-            qc_deferred_expired_total: wire.qc_deferred_expired_total,
-            consensus_missing_qc_reacquire_attempt_total: wire
-                .consensus_missing_qc_reacquire_attempt_total,
-            consensus_missing_qc_reacquire_success_total: wire
-                .consensus_missing_qc_reacquire_success_total,
-            consensus_missing_qc_reacquire_exhausted_total: wire
-                .consensus_missing_qc_reacquire_exhausted_total,
-            consensus_forced_proposal_attempt_total: wire.consensus_forced_proposal_attempt_total,
-            consensus_forced_proposal_success_total: wire.consensus_forced_proposal_success_total,
-            blocksync_range_pull_escalation_total: wire.blocksync_range_pull_escalation_total,
-            blocksync_range_pull_success_total: wire.blocksync_range_pull_success_total,
-            blocksync_range_pull_failure_total: wire.blocksync_range_pull_failure_total,
-            blocksync_range_pull_candidate_exhausted_total: wire
-                .blocksync_range_pull_candidate_exhausted_total,
-            rbc_store_pressure_level: u64::from(wire.rbc_store.pressure_level),
-            rbc_store_evictions_total: wire.rbc_store.evictions_total,
-            rbc_store_backpressure_deferrals_total: wire.rbc_store.backpressure_deferrals_total,
-            rbc_store_persist_drops_total: wire.rbc_store.persist_drops_total,
-            pending_rbc_drops_total: wire.pending_rbc.drops_total,
-            pending_rbc_evicted_total: wire.pending_rbc.evicted_total,
-            block_sync_roster_source_total,
-            npos_repair_selected_stake_coverage_bps: wire
-                .npos_repair_coverage
-                .as_ref()
-                .map_or(0, |coverage| {
-                    u64::from(coverage.selected_stake_coverage_bps)
-                }),
-            npos_repair_reached_stake_quorum_coverage: wire
-                .npos_repair_coverage
-                .as_ref()
-                .is_some_and(|coverage| coverage.reached_stake_quorum_coverage),
-            pipeline_conflict_rate_bps: 0,
-            lane_tx_vertices_total: 0,
-            lane_tx_edges_total: 0,
-            lane_overlay_count_total: 0,
-            lane_overlay_instr_total: 0,
-            lane_overlay_bytes_total: 0,
-            lane_rbc_chunks_total: 0,
-            lane_rbc_bytes_total: 0,
-            detached_prepared_total: 0,
-            detached_merged_total: 0,
-            detached_fallback_total: 0,
-            quarantine_executed_total: 0,
+            protocol_version: authoritative.protocol_version,
+            height: authoritative.height,
+            view: authoritative.view,
+            phase: format!("{:?}", authoritative.phase),
+            body_state: format!("{:?}", authoritative.body_state),
+            last_committed_height: authoritative.last_committed_height,
+            committed_height_advance: 0,
+            mode: format!("{:?}", context.mode),
+            epoch: context.epoch,
+            epoch_end_height: context.epoch_end_height,
+            validator_count: context.validator_count,
+            min_signers: context.quorum.min_signers,
+            total_power: context.quorum.total_power,
+            commit_qc_present,
+            commit_qc_signer_count,
+            commit_qc_min_signers,
+            commit_qc_signed_power,
+            commit_qc_total_power,
+            view_change_install_total: operator.view_change_install_total,
+            busy_deferral_total: operator.busy_deferral_total,
+            adapter_ingress_keys: adapter.ingress_keys,
+            adapter_ingress_capacity: adapter.ingress_capacity,
+            adapter_deferred_completion: adapter.deferred_completion,
+            adapter_deferred_progress: adapter.deferred_progress,
+            adapter_deferred_progress_capacity: adapter.deferred_progress_capacity,
+            adapter_deferred_normal: adapter.deferred_normal,
+            adapter_deferred_normal_capacity: adapter.deferred_normal_capacity,
+            tx_queue_tracked: queue.tracked_transactions,
+            tx_queue_depth: queue.queued_transactions,
+            tx_queue_capacity: queue.capacity,
+            tx_queue_retained_bytes: queue.retained_bytes,
+            tx_queue_max_retained_bytes: queue.max_retained_bytes,
+            tx_queue_saturated: queue.is_saturated(),
+            tx_queue_saturated_by_count: queue.saturated_by_count,
+            tx_queue_saturated_by_bytes: queue.saturated_by_bytes,
+            tx_queue_saturated_by_age: queue.saturated_by_age,
+            tx_queue_oldest_queued_age_ms: queue.oldest_queued_age_ms,
+            lane_settlement_commitments: u64::try_from(status.lane_settlement_commitments.len())
+                .unwrap_or(u64::MAX),
+            lane_relay_envelopes: u64::try_from(status.lane_relay_envelopes.len())
+                .unwrap_or(u64::MAX),
+            lane_payload_ownerships: u64::try_from(status.lane_payload_ownerships.len())
+                .unwrap_or(u64::MAX),
+            committed_lane_blocks: u64::try_from(status.committed_lane_blocks.len())
+                .unwrap_or(u64::MAX),
+            lane_block_sessions: u64::try_from(status.lane_block_sessions.len())
+                .unwrap_or(u64::MAX),
+            incomplete_lane_block_sessions: u64::try_from(incomplete_lane_block_sessions)
+                .unwrap_or(u64::MAX),
+            blocked_committed_lane_blocks: u64::try_from(blocked_committed_lane_blocks)
+                .unwrap_or(u64::MAX),
+            local_peer_removed: status.local_peer_removed,
         }
     }
 
-    fn apply_json_extras(&mut self, value: &norito::json::Value) {
-        self.pipeline_conflict_rate_bps = json_u64(value, "pipeline_conflict_rate_bps");
-        let has_pipeline_execution = if let Some(execution) = value
-            .get("pipeline_execution")
-            .and_then(norito::json::Value::as_object)
-        {
-            self.lane_tx_vertices_total = object_u64(execution, "tx_vertices_total");
-            self.lane_tx_edges_total = object_u64(execution, "tx_edges_total");
-            self.lane_overlay_count_total = object_u64(execution, "overlay_count_total");
-            self.lane_overlay_instr_total = object_u64(execution, "overlay_instr_total");
-            self.lane_overlay_bytes_total = object_u64(execution, "overlay_bytes_total");
-            self.lane_rbc_chunks_total = object_u64(execution, "rbc_chunks_total");
-            self.lane_rbc_bytes_total = object_u64(execution, "rbc_bytes_total");
-            self.detached_prepared_total = object_u64(execution, "detached_prepared_total");
-            self.detached_merged_total = object_u64(execution, "detached_merged_total");
-            self.detached_fallback_total = object_u64(execution, "detached_fallback_total");
-            self.quarantine_executed_total = object_u64(execution, "quarantine_executed_total");
-            true
-        } else {
-            false
-        };
-        if has_pipeline_execution {
-            return;
-        }
-        let Some(lanes) = value
-            .get("lane_activity")
-            .and_then(norito::json::Value::as_array)
-        else {
-            return;
-        };
-        if lanes.is_empty() {
-            return;
-        }
-        let mut lane_tx_vertices_total = 0u64;
-        let mut lane_tx_edges_total = 0u64;
-        let mut lane_overlay_count_total = 0u64;
-        let mut lane_overlay_instr_total = 0u64;
-        let mut lane_overlay_bytes_total = 0u64;
-        let mut lane_rbc_chunks_total = 0u64;
-        let mut lane_rbc_bytes_total = 0u64;
-        let mut detached_prepared_total = 0u64;
-        let mut detached_merged_total = 0u64;
-        let mut detached_fallback_total = 0u64;
-        let mut quarantine_executed_total = 0u64;
-        for lane in lanes {
-            lane_tx_vertices_total =
-                lane_tx_vertices_total.saturating_add(json_u64(lane, "tx_vertices"));
-            lane_tx_edges_total = lane_tx_edges_total.saturating_add(json_u64(lane, "tx_edges"));
-            lane_overlay_count_total =
-                lane_overlay_count_total.saturating_add(json_u64(lane, "overlay_count"));
-            lane_overlay_instr_total =
-                lane_overlay_instr_total.saturating_add(json_u64(lane, "overlay_instr_total"));
-            lane_overlay_bytes_total =
-                lane_overlay_bytes_total.saturating_add(json_u64(lane, "overlay_bytes_total"));
-            lane_rbc_chunks_total =
-                lane_rbc_chunks_total.saturating_add(json_u64(lane, "rbc_chunks"));
-            lane_rbc_bytes_total =
-                lane_rbc_bytes_total.saturating_add(json_u64(lane, "rbc_bytes_total"));
-            detached_prepared_total =
-                detached_prepared_total.saturating_add(json_u64(lane, "detached_prepared"));
-            detached_merged_total =
-                detached_merged_total.saturating_add(json_u64(lane, "detached_merged"));
-            detached_fallback_total =
-                detached_fallback_total.saturating_add(json_u64(lane, "detached_fallback"));
-            quarantine_executed_total =
-                quarantine_executed_total.saturating_add(json_u64(lane, "quarantine_executed"));
-        }
-        self.lane_tx_vertices_total = lane_tx_vertices_total;
-        self.lane_tx_edges_total = lane_tx_edges_total;
-        self.lane_overlay_count_total = lane_overlay_count_total;
-        self.lane_overlay_instr_total = lane_overlay_instr_total;
-        self.lane_overlay_bytes_total = lane_overlay_bytes_total;
-        self.lane_rbc_chunks_total = lane_rbc_chunks_total;
-        self.lane_rbc_bytes_total = lane_rbc_bytes_total;
-        self.detached_prepared_total = detached_prepared_total;
-        self.detached_merged_total = detached_merged_total;
-        self.detached_fallback_total = detached_fallback_total;
-        self.quarantine_executed_total = quarantine_executed_total;
+    fn delta_from(mut self, start: Self) -> Self {
+        self.committed_height_advance = self
+            .last_committed_height
+            .saturating_sub(start.last_committed_height);
+        self.view_change_install_total = self
+            .view_change_install_total
+            .saturating_sub(start.view_change_install_total);
+        self.busy_deferral_total = self
+            .busy_deferral_total
+            .saturating_sub(start.busy_deferral_total);
+        self
     }
-
-    fn delta_from(self, start: Self) -> Self {
-        Self {
-            view_change_install_total: self
-                .view_change_install_total
-                .saturating_sub(start.view_change_install_total),
-            view_change_cause_total: self
-                .view_change_cause_total
-                .saturating_sub(start.view_change_cause_total),
-            view_change_commit_failure_total: self
-                .view_change_commit_failure_total
-                .saturating_sub(start.view_change_commit_failure_total),
-            view_change_quorum_timeout_total: self
-                .view_change_quorum_timeout_total
-                .saturating_sub(start.view_change_quorum_timeout_total),
-            view_change_stake_quorum_timeout_total: self
-                .view_change_stake_quorum_timeout_total
-                .saturating_sub(start.view_change_stake_quorum_timeout_total),
-            view_change_roster_unavailable_total: self
-                .view_change_roster_unavailable_total
-                .saturating_sub(start.view_change_roster_unavailable_total),
-            view_change_da_gate_total: self
-                .view_change_da_gate_total
-                .saturating_sub(start.view_change_da_gate_total),
-            view_change_censorship_evidence_total: self
-                .view_change_censorship_evidence_total
-                .saturating_sub(start.view_change_censorship_evidence_total),
-            view_change_missing_payload_total: self
-                .view_change_missing_payload_total
-                .saturating_sub(start.view_change_missing_payload_total),
-            view_change_missing_qc_total: self
-                .view_change_missing_qc_total
-                .saturating_sub(start.view_change_missing_qc_total),
-            view_change_validation_reject_total: self
-                .view_change_validation_reject_total
-                .saturating_sub(start.view_change_validation_reject_total),
-            view_change_last_cause: (self.view_change_cause_total > start.view_change_cause_total)
-                .then(|| self.view_change_last_cause.clone())
-                .flatten(),
-            commit_pipeline_last_total_ms: self.commit_pipeline_last_total_ms,
-            commit_pipeline_ema_total_ms: self.commit_pipeline_ema_total_ms,
-            missing_block_fetch_total: self
-                .missing_block_fetch_total
-                .saturating_sub(start.missing_block_fetch_total),
-            missing_block_fetch_last_targets: self.missing_block_fetch_last_targets,
-            missing_block_fetch_last_dwell_ms: self.missing_block_fetch_last_dwell_ms,
-            tx_queue_depth: self.tx_queue_depth,
-            tx_queue_capacity: self.tx_queue_capacity,
-            tx_queue_retained_bytes: self.tx_queue_retained_bytes,
-            tx_queue_max_retained_bytes: self.tx_queue_max_retained_bytes,
-            tx_queue_saturated: self.tx_queue_saturated,
-            tx_queue_saturated_by_count: self.tx_queue_saturated_by_count,
-            tx_queue_saturated_by_bytes: self.tx_queue_saturated_by_bytes,
-            tx_queue_saturated_by_age: self.tx_queue_saturated_by_age,
-            tx_queue_oldest_queued_age_ms: self.tx_queue_oldest_queued_age_ms,
-            pacemaker_backpressure_deferrals_total: self
-                .pacemaker_backpressure_deferrals_total
-                .saturating_sub(start.pacemaker_backpressure_deferrals_total),
-            commit_inflight_active: self.commit_inflight_active,
-            commit_inflight_height: self.commit_inflight_height,
-            commit_inflight_view: self.commit_inflight_view,
-            commit_inflight_elapsed_ms: self.commit_inflight_elapsed_ms,
-            commit_inflight_timeout_total: self
-                .commit_inflight_timeout_total
-                .saturating_sub(start.commit_inflight_timeout_total),
-            worker_loop_stage: self.worker_loop_stage.clone(),
-            worker_loop_last_iteration_ms: self.worker_loop_last_iteration_ms,
-            worker_loop_queue_depth_total: self.worker_loop_queue_depth_total,
-            qc_deferred_missing_payload_total: self
-                .qc_deferred_missing_payload_total
-                .saturating_sub(start.qc_deferred_missing_payload_total),
-            qc_deferred_resolved_total: self
-                .qc_deferred_resolved_total
-                .saturating_sub(start.qc_deferred_resolved_total),
-            qc_deferred_expired_total: self
-                .qc_deferred_expired_total
-                .saturating_sub(start.qc_deferred_expired_total),
-            consensus_missing_qc_reacquire_attempt_total: self
-                .consensus_missing_qc_reacquire_attempt_total
-                .saturating_sub(start.consensus_missing_qc_reacquire_attempt_total),
-            consensus_missing_qc_reacquire_success_total: self
-                .consensus_missing_qc_reacquire_success_total
-                .saturating_sub(start.consensus_missing_qc_reacquire_success_total),
-            consensus_missing_qc_reacquire_exhausted_total: self
-                .consensus_missing_qc_reacquire_exhausted_total
-                .saturating_sub(start.consensus_missing_qc_reacquire_exhausted_total),
-            consensus_forced_proposal_attempt_total: self
-                .consensus_forced_proposal_attempt_total
-                .saturating_sub(start.consensus_forced_proposal_attempt_total),
-            consensus_forced_proposal_success_total: self
-                .consensus_forced_proposal_success_total
-                .saturating_sub(start.consensus_forced_proposal_success_total),
-            blocksync_range_pull_escalation_total: self
-                .blocksync_range_pull_escalation_total
-                .saturating_sub(start.blocksync_range_pull_escalation_total),
-            blocksync_range_pull_success_total: self
-                .blocksync_range_pull_success_total
-                .saturating_sub(start.blocksync_range_pull_success_total),
-            blocksync_range_pull_failure_total: self
-                .blocksync_range_pull_failure_total
-                .saturating_sub(start.blocksync_range_pull_failure_total),
-            blocksync_range_pull_candidate_exhausted_total: self
-                .blocksync_range_pull_candidate_exhausted_total
-                .saturating_sub(start.blocksync_range_pull_candidate_exhausted_total),
-            rbc_store_pressure_level: self.rbc_store_pressure_level,
-            rbc_store_evictions_total: self
-                .rbc_store_evictions_total
-                .saturating_sub(start.rbc_store_evictions_total),
-            rbc_store_backpressure_deferrals_total: self
-                .rbc_store_backpressure_deferrals_total
-                .saturating_sub(start.rbc_store_backpressure_deferrals_total),
-            rbc_store_persist_drops_total: self
-                .rbc_store_persist_drops_total
-                .saturating_sub(start.rbc_store_persist_drops_total),
-            pending_rbc_drops_total: self
-                .pending_rbc_drops_total
-                .saturating_sub(start.pending_rbc_drops_total),
-            pending_rbc_evicted_total: self
-                .pending_rbc_evicted_total
-                .saturating_sub(start.pending_rbc_evicted_total),
-            block_sync_roster_source_total: self
-                .block_sync_roster_source_total
-                .saturating_sub(start.block_sync_roster_source_total),
-            npos_repair_selected_stake_coverage_bps: self.npos_repair_selected_stake_coverage_bps,
-            npos_repair_reached_stake_quorum_coverage: self
-                .npos_repair_reached_stake_quorum_coverage,
-            pipeline_conflict_rate_bps: self.pipeline_conflict_rate_bps,
-            lane_tx_vertices_total: self.lane_tx_vertices_total,
-            lane_tx_edges_total: self.lane_tx_edges_total,
-            lane_overlay_count_total: self.lane_overlay_count_total,
-            lane_overlay_instr_total: self.lane_overlay_instr_total,
-            lane_overlay_bytes_total: self.lane_overlay_bytes_total,
-            lane_rbc_chunks_total: self.lane_rbc_chunks_total,
-            lane_rbc_bytes_total: self.lane_rbc_bytes_total,
-            detached_prepared_total: self.detached_prepared_total,
-            detached_merged_total: self.detached_merged_total,
-            detached_fallback_total: self.detached_fallback_total,
-            quarantine_executed_total: self.quarantine_executed_total,
-        }
-    }
-}
-
-fn json_u64(value: &norito::json::Value, key: &str) -> u64 {
-    value
-        .get(key)
-        .and_then(norito::json::Value::as_u64)
-        .unwrap_or_default()
-}
-
-fn object_u64(object: &norito::json::Map, key: &str) -> u64 {
-    object
-        .get(key)
-        .and_then(norito::json::Value::as_u64)
-        .unwrap_or_default()
 }
 
 async fn sample_sumeragi_status_digest(
@@ -5675,16 +5415,12 @@ async fn sample_sumeragi_status_digest(
             client.set_operator_key_pair(sumeragi_phase_operator_keypair());
             client.torii_request_timeout =
                 bounded_sumeragi_status_sample_request_timeout(client.torii_request_timeout);
-            match client.get_sumeragi_status() {
-                Ok(status) => {
-                    let mut digest = SumeragiStatusDigest::from_wire(&status);
-                    if let Ok(json) = client.get_sumeragi_status_json() {
-                        digest.apply_json_extras(&json);
-                    }
-                    return Ok(digest);
-                }
+            match client.get_sumeragi_v2_status() {
+                Ok(status) => return Ok(SumeragiStatusDigest::from_v2(&status)),
                 Err(err) => {
-                    last_error = Some(format!("failed to fetch sumeragi status snapshot: {err}"));
+                    last_error = Some(format!(
+                        "failed to fetch authoritative Sumeragi v2 status snapshot: {err}"
+                    ));
                 }
             }
         }
@@ -13412,201 +13148,50 @@ mod tests {
     }
 
     #[test]
-    fn sumeragi_status_digest_preserves_detailed_liveness_evidence() {
-        use iroha_data_model::block::consensus::{
-            SumeragiNposRepairCoverageStatus, SumeragiStatusWire, SumeragiWorkerQueueDepths,
+    fn sumeragi_v2_status_digest_deltas_only_monotonic_fields() {
+        let start = SumeragiStatusDigest {
+            last_committed_height: 40,
+            view_change_install_total: 3,
+            busy_deferral_total: 5,
+            ..SumeragiStatusDigest::default()
+        };
+        let end = SumeragiStatusDigest {
+            protocol_version: 2,
+            height: 47,
+            view: 2,
+            phase: "Commit".to_owned(),
+            body_state: "Validated".to_owned(),
+            last_committed_height: 46,
+            view_change_install_total: 11,
+            busy_deferral_total: 19,
+            tx_queue_depth: 7,
+            tx_queue_capacity: 128,
+            tx_queue_saturated_by_bytes: true,
+            tx_queue_saturated: true,
+            commit_qc_present: true,
+            commit_qc_signer_count: 4,
+            commit_qc_min_signers: 3,
+            lane_block_sessions: 2,
+            incomplete_lane_block_sessions: 1,
+            blocked_committed_lane_blocks: 1,
+            ..SumeragiStatusDigest::default()
         };
 
-        let mut start = SumeragiStatusWire {
-            view_change_install_total: 2,
-            ..Default::default()
-        };
-        start.view_change_causes.quorum_timeout_total = 1;
-        start.view_change_causes.missing_qc_total = 2;
-        start.missing_block_fetch.total = 3;
-        start.pacemaker_backpressure_deferrals_total = 4;
-        start.commit_inflight.timeout_total = 5;
-        start.qc_deferred_missing_payload_total = 6;
-        start.qc_deferred_resolved_total = 7;
-        start.qc_deferred_expired_total = 8;
-        start.consensus_missing_qc_reacquire_attempt_total = 9;
-        start.consensus_missing_qc_reacquire_success_total = 10;
-        start.consensus_missing_qc_reacquire_exhausted_total = 11;
-        start.consensus_forced_proposal_attempt_total = 12;
-        start.consensus_forced_proposal_success_total = 13;
-        start.blocksync_range_pull_escalation_total = 14;
-        start.blocksync_range_pull_success_total = 15;
-        start.blocksync_range_pull_failure_total = 16;
-        start.blocksync_range_pull_candidate_exhausted_total = 17;
-
-        let mut end = start.clone();
-        end.view_change_install_total = 9;
-        end.view_change_causes.commit_failure_total = 1;
-        end.view_change_causes.quorum_timeout_total = 3;
-        end.view_change_causes.stake_quorum_timeout_total = 4;
-        end.view_change_causes.roster_unavailable_total = 5;
-        end.view_change_causes.da_gate_total = 6;
-        end.view_change_causes.censorship_evidence_total = 7;
-        end.view_change_causes.missing_payload_total = 8;
-        end.view_change_causes.missing_qc_total = 11;
-        end.view_change_causes.validation_reject_total = 10;
-        end.view_change_causes.last_cause = Some("missing_qc".to_owned());
-        end.missing_block_fetch.total = 19;
-        end.missing_block_fetch.last_targets = 5;
-        end.missing_block_fetch.last_dwell_ms = 1_200;
-        end.tx_queue_depth = 73;
-        end.tx_queue_capacity = 128;
-        end.tx_queue_retained_bytes = 98_304;
-        end.tx_queue_max_retained_bytes = 131_072;
-        end.tx_queue_saturated = true;
-        end.tx_queue_saturated_by_count = false;
-        end.tx_queue_saturated_by_bytes = true;
-        end.tx_queue_saturated_by_age = true;
-        end.tx_queue_oldest_queued_age_ms = 8_500;
-        end.pacemaker_backpressure_deferrals_total = 24;
-        end.commit_inflight.active = true;
-        end.commit_inflight.height = 42;
-        end.commit_inflight.view = 3;
-        end.commit_inflight.elapsed_ms = 456;
-        end.commit_inflight.timeout_total = 35;
-        end.worker_loop.stage = "proposal_wait".to_owned();
-        end.worker_loop.last_iteration_ms = 987;
-        end.worker_loop.queue_depths = SumeragiWorkerQueueDepths {
-            vote_rx: 1,
-            block_payload_rx: 2,
-            rbc_chunk_rx: 3,
-            block_rx: 4,
-            consensus_rx: 5,
-            lane_relay_rx: 6,
-            background_rx: 7,
-        };
-        end.qc_deferred_missing_payload_total = 16;
-        end.qc_deferred_resolved_total = 27;
-        end.qc_deferred_expired_total = 38;
-        end.consensus_missing_qc_reacquire_attempt_total = 49;
-        end.consensus_missing_qc_reacquire_success_total = 60;
-        end.consensus_missing_qc_reacquire_exhausted_total = 71;
-        end.consensus_forced_proposal_attempt_total = 82;
-        end.consensus_forced_proposal_success_total = 93;
-        end.blocksync_range_pull_escalation_total = 104;
-        end.blocksync_range_pull_success_total = 115;
-        end.blocksync_range_pull_failure_total = 126;
-        end.blocksync_range_pull_candidate_exhausted_total = 137;
-        end.npos_repair_coverage = Some(SumeragiNposRepairCoverageStatus {
-            last_repair_height: 44,
-            last_repair_view: 2,
-            reason: "missing_qc".to_owned(),
-            selected_repair_peer_count: 7,
-            required_stake_quorum_bps: 6_667,
-            selected_stake_coverage_bps: 7_500,
-            reached_stake_quorum_coverage: true,
-        });
-
-        let mut end_digest = SumeragiStatusDigest::from_wire(&end);
-        end_digest.apply_json_extras(&norito::json!({
-            "pipeline_conflict_rate_bps": 27,
-            "lane_activity": [
-                {
-                    "tx_vertices": 10,
-                    "tx_edges": 3,
-                    "overlay_count": 4,
-                    "overlay_instr_total": 40,
-                    "overlay_bytes_total": 400,
-                    "rbc_chunks": 2,
-                    "rbc_bytes_total": 2_048,
-                    "detached_prepared": 5,
-                    "detached_merged": 4,
-                    "detached_fallback": 1,
-                    "quarantine_executed": 0,
-                },
-                {
-                    "tx_vertices": 7,
-                    "tx_edges": 2,
-                    "overlay_count": 3,
-                    "overlay_instr_total": 30,
-                    "overlay_bytes_total": 300,
-                    "rbc_chunks": 1,
-                    "rbc_bytes_total": 1_024,
-                    "detached_prepared": 3,
-                    "detached_merged": 2,
-                    "detached_fallback": 1,
-                    "quarantine_executed": 1,
-                },
-            ],
-        }));
-        let delta = end_digest.delta_from(SumeragiStatusDigest::from_wire(&start));
-
-        assert_eq!(delta.view_change_install_total, 7);
-        assert_eq!(delta.view_change_cause_total, 52);
-        assert_eq!(delta.view_change_quorum_timeout_total, 2);
-        assert_eq!(delta.view_change_missing_qc_total, 9);
-        assert_eq!(delta.view_change_last_cause.as_deref(), Some("missing_qc"));
-        assert_eq!(delta.missing_block_fetch_total, 16);
-        assert_eq!(delta.missing_block_fetch_last_targets, 5);
-        assert_eq!(delta.missing_block_fetch_last_dwell_ms, 1_200);
-        assert_eq!(delta.tx_queue_depth, 73);
+        let delta = end.delta_from(start);
+        assert_eq!(delta.committed_height_advance, 6);
+        assert_eq!(delta.view_change_install_total, 8);
+        assert_eq!(delta.busy_deferral_total, 14);
+        assert_eq!(delta.last_committed_height, 46);
+        assert_eq!(delta.tx_queue_depth, 7);
         assert_eq!(delta.tx_queue_capacity, 128);
-        assert_eq!(delta.tx_queue_retained_bytes, 98_304);
-        assert_eq!(delta.tx_queue_max_retained_bytes, 131_072);
         assert!(delta.tx_queue_saturated);
-        assert!(!delta.tx_queue_saturated_by_count);
         assert!(delta.tx_queue_saturated_by_bytes);
-        assert!(delta.tx_queue_saturated_by_age);
-        assert_eq!(delta.tx_queue_oldest_queued_age_ms, 8_500);
-        assert_eq!(delta.pacemaker_backpressure_deferrals_total, 20);
-        assert!(delta.commit_inflight_active);
-        assert_eq!(delta.commit_inflight_height, 42);
-        assert_eq!(delta.commit_inflight_view, 3);
-        assert_eq!(delta.commit_inflight_elapsed_ms, 456);
-        assert_eq!(delta.commit_inflight_timeout_total, 30);
-        assert_eq!(delta.worker_loop_stage, "proposal_wait");
-        assert_eq!(delta.worker_loop_last_iteration_ms, 987);
-        assert_eq!(delta.worker_loop_queue_depth_total, 28);
-        assert_eq!(delta.qc_deferred_missing_payload_total, 10);
-        assert_eq!(delta.qc_deferred_resolved_total, 20);
-        assert_eq!(delta.qc_deferred_expired_total, 30);
-        assert_eq!(delta.consensus_missing_qc_reacquire_attempt_total, 40);
-        assert_eq!(delta.consensus_missing_qc_reacquire_success_total, 50);
-        assert_eq!(delta.consensus_missing_qc_reacquire_exhausted_total, 60);
-        assert_eq!(delta.consensus_forced_proposal_attempt_total, 70);
-        assert_eq!(delta.consensus_forced_proposal_success_total, 80);
-        assert_eq!(delta.blocksync_range_pull_escalation_total, 90);
-        assert_eq!(delta.blocksync_range_pull_success_total, 100);
-        assert_eq!(delta.blocksync_range_pull_failure_total, 110);
-        assert_eq!(delta.blocksync_range_pull_candidate_exhausted_total, 120);
-        assert_eq!(delta.npos_repair_selected_stake_coverage_bps, 7_500);
-        assert!(delta.npos_repair_reached_stake_quorum_coverage);
-        assert_eq!(delta.pipeline_conflict_rate_bps, 27);
-        assert_eq!(delta.lane_tx_vertices_total, 17);
-        assert_eq!(delta.lane_tx_edges_total, 5);
-        assert_eq!(delta.lane_overlay_count_total, 7);
-        assert_eq!(delta.lane_overlay_instr_total, 70);
-        assert_eq!(delta.lane_overlay_bytes_total, 700);
-        assert_eq!(delta.lane_rbc_chunks_total, 3);
-        assert_eq!(delta.lane_rbc_bytes_total, 3_072);
-        assert_eq!(delta.detached_prepared_total, 8);
-        assert_eq!(delta.detached_merged_total, 6);
-        assert_eq!(delta.detached_fallback_total, 2);
-        assert_eq!(delta.quarantine_executed_total, 1);
-
-        let mut compact_digest = SumeragiStatusDigest::default();
-        compact_digest.apply_json_extras(&norito::json!({
-            "pipeline_execution": {
-                "tx_vertices_total": 99,
-                "detached_merged_total": 44,
-                "detached_fallback_total": 3,
-            },
-            "lane_activity": [
-                {
-                    "tx_vertices": 1,
-                    "detached_merged": 1,
-                    "detached_fallback": 1,
-                },
-            ],
-        }));
-        assert_eq!(compact_digest.lane_tx_vertices_total, 99);
-        assert_eq!(compact_digest.detached_merged_total, 44);
-        assert_eq!(compact_digest.detached_fallback_total, 3);
+        assert!(delta.commit_qc_present);
+        assert_eq!(delta.commit_qc_signer_count, 4);
+        assert_eq!(delta.commit_qc_min_signers, 3);
+        assert_eq!(delta.lane_block_sessions, 2);
+        assert_eq!(delta.incomplete_lane_block_sessions, 1);
+        assert_eq!(delta.blocked_committed_lane_blocks, 1);
     }
 
     #[test]

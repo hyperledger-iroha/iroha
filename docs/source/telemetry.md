@@ -25,13 +25,13 @@ Endpoints
 - `/v1/sumeragi/new_view/json` (JSON): NEW_VIEW receipt snapshot `{ ts_ms, items: [{height, view, count}] }` (bounded in-memory window; oldest entries evicted).
   - Updated: also returns `locked_qc { height, view }`.
 
-Aggregate governance-seal counters (`lane_governance_sealed_total`,
-`lane_governance_sealed_aliases`) ride alongside the lane records. They provide a
-quick “are any lanes still sealed?” view in both `/v1/sumeragi/status` and
-`iroha_cli --output-format text ops sumeragi status`; the CLI prints the alias list inline so
-operators can reconcile outstanding manifests without diffing the full payload.
-Use `iroha_cli app nexus lane-report --only-missing --fail-on-sealed` during rollouts
-or CI to surface the same data with a non-zero exit when seals remain.
+The authoritative `/v1/sumeragi/status` response carries canonical settlement,
+relay, payload-ownership, committed-lane-block, and active-session evidence; it
+does not infer governance readiness from retired operator snapshots. Use
+`iroha app nexus lane-report --only-incomplete --fail-on-incomplete` during
+rollouts or CI to aggregate that typed evidence and exit non-zero when retained
+sessions or committed blocks have not completed certification/application.
+Governance-manifest admission remains observable through its dedicated metrics.
 
 SM helper telemetry (Prometheus metrics)
 - `iroha_sm_syscall_total{kind="hash|verify|seal|open",mode}` — cumulative SM helper syscall successes grouped by helper kind and mode (`gcm`/`ccm` for SM4 helpers).
@@ -729,7 +729,7 @@ Example response
 
 Sumeragi telemetry snapshot
 - Endpoint: `GET /v1/sumeragi/telemetry`
-- Shape: `{ availability: { total_votes_ingested, collectors: [{ collector_idx, peer_id, votes_ingested }] }, qc_latency_ms: [{ kind, last_ms }], rbc_backlog: { pending_sessions, total_missing_chunks, max_missing_chunks } }`
+- Shape: `{ availability: { total_votes_ingested, collectors: [{ collector_idx, peer_id, votes_ingested }] }, qc_latency_ms: [{ kind, last_ms }], rbc_backlog: { pending_sessions, total_missing_chunks, max_missing_chunks }, rbc_pending: { sessions, chunks, bytes, drops_*, evicted_total, stash_ready_*, stash_deliver_*, stash_chunk_total, session_cap, max_*, ttl_ms }, vrf: { ... } }`
 
 Example response
 ```json

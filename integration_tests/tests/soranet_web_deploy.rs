@@ -24,8 +24,7 @@ use norito::json::{self, Value};
 use reqwest::{Client as HttpClient, Url};
 use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3};
 use sorafs_manifest::{
-    CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1, PinPolicy,
-    StorageClass, chunker_registry,
+    DagCodecId, ManifestBuilder, ManifestV1, PinPolicy, StorageClass, chunker_registry,
 };
 
 const WELCOME_TEXT: &str = "welcome to SORA Nexus / Hyperledger Iroha 3";
@@ -36,15 +35,6 @@ const PLACEHOLDER_DS_ALGO: u8 = 13;
 const PLACEHOLDER_DS_DIGEST_TYPE: u8 = 2;
 const PLACEHOLDER_DS_DIGEST_HEX: &str =
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-
-fn test_governance_proofs() -> GovernanceProofs {
-    GovernanceProofs {
-        council_signatures: vec![CouncilSignature {
-            signer: [0x11; 32],
-            signature: vec![0x22; 64],
-        }],
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DnsRecord {
@@ -179,15 +169,15 @@ fn build_manifest_and_plan(payload: &[u8]) -> Result<(ManifestV1, CarBuildPlan)>
         .root_cid(root)
         .dag_codec(DagCodecId(stats.dag_codec))
         .chunking_from_registry(descriptor.id)
+        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(plan.content_length)
         .car_digest(stats.car_archive_digest.into())
         .car_size(stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 1,
             storage_class: StorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch: 10,
         })
-        .governance(test_governance_proofs())
         .add_metadata("content-type", "text/html; charset=utf-8")
         .build()?;
     Ok((manifest, plan))
@@ -227,15 +217,13 @@ fn sorafs_pin_fee_bootstrap_instructions() -> Vec<InstructionBox> {
 fn register_paid_pin_manifest(
     client: &Client,
     manifest: &ManifestV1,
-    plan: &CarBuildPlan,
 ) -> Result<()> {
     client.post_sorafs_pin_register(SorafsPinRegisterArgs {
         authority: &ALICE_ID,
         private_key: ALICE_KEYPAIR.private_key(),
         manifest,
-        manifest_bytes: None,
-        chunk_digest_sha3_256: compute_chunk_plan_digest_sha3(&plan.chunks),
         submitted_epoch: 1,
+        gas_asset_id: None,
         alias: None,
         successor_of: None,
     })?;
@@ -373,7 +361,7 @@ async fn soranet_webpage_deploy_and_dns_settings() -> Result<()> {
     let manifest_bytes = manifest.encode()?;
 
     let client = network.client();
-    register_paid_pin_manifest(&client, &manifest, &plan)?;
+    register_paid_pin_manifest(&client, &manifest)?;
     network.ensure_blocks(2).await?;
     let response = client.post_sorafs_storage_pin(&manifest_bytes, &payload, None)?;
     assert!(

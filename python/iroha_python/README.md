@@ -728,8 +728,30 @@ if status and status.enabled:
 
 # Fetch consensus status with structured accessors
 snapshot = client.get_sumeragi_status_typed()
-print(snapshot.highest_qc.height, snapshot.tx_queue.saturated)
-print("DA reschedules:", snapshot.da_reschedule_total)
+print(
+    "Sumeragi v2",
+    snapshot.protocol_version,
+    "height/view",
+    snapshot.height,
+    snapshot.view,
+    "leader",
+    snapshot.leader,
+)
+print(
+    "lane artifacts",
+    len(snapshot.lane_payload_ownerships),
+    len(snapshot.committed_lane_blocks),
+    len(snapshot.lane_block_sessions),
+)
+print("transaction queue saturated:", any((
+    snapshot.operator.tx_queue.saturated_by_count,
+    snapshot.operator.tx_queue.saturated_by_bytes,
+    snapshot.operator.tx_queue.saturated_by_age,
+)))
+
+# `get_status_snapshot_typed()` below is the generic node/operational status
+# surface. Its lane commitment and governance fields are intentionally distinct
+# from the authoritative reducer facts returned by `/v1/sumeragi/status`.
 
 # Inspect Nexus lane commitments and governance coverage from `/v1/status`
 status_snapshot = client.get_status_snapshot_typed()

@@ -66,13 +66,18 @@ At startup, nodes adopt the on‑chain values and log a mismatch if config diffe
 
 ### Sumeragi consensus helpers
 
-Fetch status (leader, HighestQC, LockedQC, membership digest):
+Fetch authoritative protocol-v2 status (frozen height context, PrepareQC locks,
+durable CommitQC, bounded queues, and canonical lane evidence):
 
 ```bash
 iroha --output-format text ops sumeragi status
 ```
 
-> `--output-format text` prints leader/HighestQC/LockedQC, membership height/view/epoch/hash, RBC pressure, and VRF counters in one line.
+> `--output-format text` prints the exact reducer height/view/phase, frozen
+> mode/epoch/quorum, durable commit frontier, queue pressure, and counts of
+> settlement, relay, ownership, committed-block, and active-session evidence.
+> JSON output is the typed v2 response; retired RBC/pacemaker counters live on
+> their dedicated operator endpoints instead of the consensus status payload.
 
 Fetch latest per-phase latencies (ms):
 

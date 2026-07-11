@@ -1,5 +1,10 @@
 # Offline Kagemusha
 
+Fractional transfers with independently redeemable sender change use the
+additive [recursive spend V2 contract](offline_kagemusha_v2_contract.md). The V2
+proof backend is intentionally fail-closed until branch lineage is proven
+in-circuit; V1 bundles must not be cloned to emulate a split.
+
 Kagemusha is the only active chain implementation for offline payments. Nodes
 expose offline-offline payments through `settlement.offline.kagemusha_enabled`,
 which defaults to `true`; runtime bearer-audit dispatch is not available.
