@@ -794,17 +794,49 @@ export const SCCP_SUBMIT_MESSAGE_PROOF_ABI_V1: "submitSccpMessageProof(bytes,byt
 export const SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_V1: string;
 export const SCCP_MESSAGE_TRANSPARENT_PUBLIC_INPUTS_BYTES_V1_LEN: 141;
 export const SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1: "sccp-solana-recursive-mainnet-v1";
+export const SCCP_SOLANA_TESTNET_RECURSIVE_PROOF_BACKEND_V1: "sccp-solana-recursive-testnet-v1";
 export const SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-solana-accounts-lt-hash-v1";
 export const SCCP_SOLANA_TOWER_REPLAY_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-solana-tower-replay-v1";
 export const SCCP_SOLANA_FULL_ACCOUNTSDB_LATTICE_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-solana-full-accountsdb-lattice-v1";
 export const SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-solana-bank-fork-choice-v1";
 export const SCCP_SOLANA_MAINNET_GENESIS_HASH: string;
+export const SCCP_SOLANA_TESTNET_GENESIS_HASH: string;
+export const SCCP_SOLANA_MAINNET_SOURCE_NETWORK_V1: "solana-mainnet-beta";
+export const SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1: "solana-testnet";
+export type SolanaSccpSourceNetwork =
+  | typeof SCCP_SOLANA_MAINNET_SOURCE_NETWORK_V1
+  | typeof SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1;
+export type SolanaSccpProofBackend =
+  | typeof SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1
+  | typeof SCCP_SOLANA_TESTNET_RECURSIVE_PROOF_BACKEND_V1;
+export interface SolanaSccpSourceProfile {
+  readonly network: SolanaSccpSourceNetwork;
+  readonly backend: SolanaSccpProofBackend;
+  readonly genesisHash: string;
+  readonly sourceStateVerifierId: string;
+  readonly sourceTrustAnchorId: string;
+  readonly consensusVerifierId: string;
+  readonly messageInclusionVerifierId: string;
+  readonly finalityPolicyId: string;
+  readonly towerReplayVerifierId: string;
+  readonly fullAccountsdbLatticeVerifierId: string;
+  readonly bankForkChoiceVerifierId: string;
+  readonly transcriptDomain: string;
+  readonly genesisPublicInputDomain: string;
+}
+export const SCCP_SOLANA_SOURCE_PROFILES_V1: Readonly<
+  Record<SolanaSccpSourceNetwork, Readonly<SolanaSccpSourceProfile>>
+>;
 export const SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1: string;
+export const SCCP_SOLANA_TESTNET_ACCOUNTS_DB_VERIFIER_ID_V1: string;
 export const SCCP_SOLANA_UPGRADEABLE_LOADER_ID: string;
 export const SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1: string;
 export const SCCP_SOLANA_MAINNET_TOWER_REPLAY_VERIFIER_ID_V1: string;
 export const SCCP_SOLANA_MAINNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1: string;
 export const SCCP_SOLANA_MAINNET_BANK_FORK_CHOICE_VERIFIER_ID_V1: string;
+export const SCCP_SOLANA_TESTNET_TOWER_REPLAY_VERIFIER_ID_V1: string;
+export const SCCP_SOLANA_TESTNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1: string;
+export const SCCP_SOLANA_TESTNET_BANK_FORK_CHOICE_VERIFIER_ID_V1: string;
 export const SCCP_SOLANA_MAINNET_SLOTS_PER_EPOCH: bigint;
 export const SCCP_SOLANA_TOWER_LOCKOUT_CONFIRMATION_DEPTH: bigint;
 export const SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH: bigint;
@@ -1695,6 +1727,13 @@ export interface SolanaSccpWitnessInput {
   target_domain?: SccpDomainIdInput;
   mainnetGenesisHash?: string;
   mainnet_genesis_hash?: string;
+  solanaNetwork?: SolanaSccpSourceNetwork;
+  solana_network?: SolanaSccpSourceNetwork;
+  solanaGenesisHash?: string;
+  solana_genesis_hash?: string;
+  testnetGenesisHash?: string;
+  testnet_genesis_hash?: string;
+  backend?: SolanaSccpProofBackend;
   finalizedSlot?: string | number | bigint;
   finalized_slot?: string | number | bigint;
   slot?: string | number | bigint;
@@ -1769,7 +1808,10 @@ export interface SolanaSccpWitness {
   version: 1;
   sourceDomain: typeof SCCP_DOMAIN_SOL;
   targetDomain: number;
-  mainnetGenesisHash: string;
+  mainnetGenesisHash?: string;
+  solanaNetwork?: typeof SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1;
+  solanaGenesisHash?: string;
+  backend?: typeof SCCP_SOLANA_TESTNET_RECURSIVE_PROOF_BACKEND_V1;
   finalizedSlot: string;
   parentSlot: string;
   bankSignatureCount: string;
@@ -1927,6 +1969,11 @@ export function solanaSccpOpenedAccountInclusionWitness(
 
 export interface SolanaSccpAccountsLtHashProofRequestInput
   extends SolanaSccpAccountsLtHashOpenedContributionsInput {
+  solanaNetwork?: SolanaSccpSourceNetwork;
+  solana_network?: SolanaSccpSourceNetwork;
+  solanaGenesisHash?: string;
+  solana_genesis_hash?: string;
+  backend?: SolanaSccpProofBackend;
   parentSlot?: string | number | bigint;
   parent_slot?: string | number | bigint;
   bankSignatureCount?: string | number | bigint;
@@ -2571,6 +2618,8 @@ export interface SolanaSccpTowerReplayInput {
 }
 
 export interface SolanaSccpBankForkInput {
+  solanaNetwork?: SolanaSccpSourceNetwork;
+  solana_network?: SolanaSccpSourceNetwork;
   sourceDomain?: SccpDomainIdInput;
   source_domain?: SccpDomainIdInput;
   epoch?: string | number | bigint;
@@ -4222,10 +4271,12 @@ export interface TronSccpRouteCanaryEvidenceInput {
 
 export interface SolanaSccpProofRequest {
   readonly version: 1;
-  readonly backend: typeof SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1;
+  readonly backend: SolanaSccpProofBackend;
   readonly sourceDomain: typeof SCCP_DOMAIN_SOL;
   readonly targetDomain: number;
-  readonly mainnetGenesisHash: string;
+  readonly mainnetGenesisHash?: string;
+  readonly solanaNetwork?: typeof SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1;
+  readonly solanaGenesisHash?: string;
   readonly witnessHash: string;
   readonly proofContextHash: string;
   readonly sourceAdapterDeploymentBindingHash: string;
@@ -4239,7 +4290,9 @@ export interface SolanaSccpProofRequest {
 
 export interface SolanaSccpProofResult {
   readonly version: 1;
-  readonly backend: typeof SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1;
+  readonly backend: SolanaSccpProofBackend;
+  readonly solanaNetwork?: typeof SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1;
+  readonly solanaGenesisHash?: string;
   readonly proofBytes: Uint8Array;
   readonly proofBase64: string;
   readonly publicInputs: Readonly<SolanaSccpProofPublicInputs>;
@@ -7377,7 +7430,11 @@ export interface SolanaSccpProveResult {
   proof?: BinaryLike;
   proofBase64?: string;
   proof_base64?: string;
-  backend?: typeof SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1;
+  backend?: SolanaSccpProofBackend;
+  solanaNetwork?: typeof SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1;
+  solana_network?: typeof SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1;
+  solanaGenesisHash?: string;
+  solana_genesis_hash?: string;
   publicInputs?: SolanaSccpProofPublicInputsInput;
   public_inputs?: SolanaSccpProofPublicInputsInput;
   sourceStateVerifierId?: string;
@@ -8143,6 +8200,12 @@ export function canonicalSolanaSccpBankForkBytes(
   input: SolanaSccpBankForkInput,
 ): Uint8Array;
 export function solanaSccpBankForkHash(input: SolanaSccpBankForkInput): string;
+export function solanaSccpSourceProfile(
+  input?: Record<string, unknown>,
+): Readonly<SolanaSccpSourceProfile>;
+export function solanaSccpSourceProfileFromRecord(
+  input?: Record<string, unknown>,
+): Readonly<SolanaSccpSourceProfile>;
 export function canonicalSolanaSccpAccountsLtHashProofPublicInputsBytes(
   input: SolanaSccpAccountsLtHashProofPublicInputsInput,
 ): Uint8Array;

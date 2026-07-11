@@ -35,6 +35,9 @@ import {
   SCCP_TRON_CONTRACT_CALL_ABI_TUPLE_V1,
   SCCP_SOLANA_BORSH_INSTRUCTION_V1,
   SCCP_SOLANA_MAINNET_GENESIS_HASH,
+  SCCP_SOLANA_TESTNET_GENESIS_HASH,
+  SCCP_SOLANA_MAINNET_SOURCE_NETWORK_V1,
+  SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1,
   SCCP_SOLANA_MAINNET_SLOTS_PER_EPOCH,
   SCCP_SOLANA_TOWER_LOCKOUT_CONFIRMATION_DEPTH,
   SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH,
@@ -44,11 +47,16 @@ import {
   SCCP_SOLANA_SYSVAR_PROGRAM_ID,
   SCCP_SOLANA_STAKE_HISTORY_SYSVAR_ID,
   SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1,
+  SCCP_SOLANA_TESTNET_RECURSIVE_PROOF_BACKEND_V1,
   SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1,
   SCCP_SOLANA_TOWER_REPLAY_OPEN_VERIFY_CIRCUIT_ID_V1,
   SCCP_SOLANA_FULL_ACCOUNTSDB_LATTICE_OPEN_VERIFY_CIRCUIT_ID_V1,
   SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1,
   SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+  SCCP_SOLANA_TESTNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+  SCCP_SOLANA_TESTNET_TOWER_REPLAY_VERIFIER_ID_V1,
+  SCCP_SOLANA_TESTNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1,
+  SCCP_SOLANA_TESTNET_BANK_FORK_CHOICE_VERIFIER_ID_V1,
   SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1,
   SCCP_TON_CONTRACT_PROOF_BACKEND_V1,
   SCCP_TON_MESSAGE_BODY_BOC_V1,
@@ -273,6 +281,8 @@ import {
   solanaSccpStakeHistoryHash,
   solanaSccpTowerLockoutHash,
   solanaSccpTowerReplayHash,
+  solanaSccpSourceProfile,
+  solanaSccpSourceProfileFromRecord,
   solanaSccpAccountsLtHashProofPublicInputsHash,
   solanaSccpAccountsLtHashProofHash,
   solanaSccpFinalityContextHash,
@@ -2822,6 +2832,151 @@ function sampleProductionWitness(overrides = {}) {
   return witness;
 }
 
+test("Solana testnet source profile is distinct and rejects cross-profile replay", () => {
+  const testnetProfile = solanaSccpSourceProfile({
+    solanaNetwork: SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1,
+  });
+  assert.equal(
+    testnetProfile.backend,
+    SCCP_SOLANA_TESTNET_RECURSIVE_PROOF_BACKEND_V1,
+  );
+  assert.equal(testnetProfile.genesisHash, SCCP_SOLANA_TESTNET_GENESIS_HASH);
+  assert.equal(
+    testnetProfile.sourceStateVerifierId,
+    SCCP_SOLANA_TESTNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+  );
+  assert.notEqual(
+    testnetProfile.backend,
+    SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1,
+  );
+  assert.notEqual(testnetProfile.genesisHash, SCCP_SOLANA_MAINNET_GENESIS_HASH);
+  assert.throws(
+    () => solanaSccpSourceProfile({ solanaNetwork: "solana-devnet" }),
+    /solanaNetwork must be solana-mainnet-beta or solana-testnet/,
+  );
+
+  const testnetRequest = buildSolanaSccpProofRequest(
+    sampleProductionWitness({
+      solanaNetwork: SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1,
+      solanaGenesisHash: SCCP_SOLANA_TESTNET_GENESIS_HASH,
+      sourceStateVerifierId:
+        SCCP_SOLANA_TESTNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+    }),
+  );
+  const mainnetRequest = buildSolanaSccpProofRequest(
+    sampleProductionWitness({
+      solanaNetwork: SCCP_SOLANA_MAINNET_SOURCE_NETWORK_V1,
+    }),
+  );
+  assert.equal(
+    testnetRequest.backend,
+    SCCP_SOLANA_TESTNET_RECURSIVE_PROOF_BACKEND_V1,
+  );
+  assert.equal(
+    testnetRequest.solanaNetwork,
+    SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1,
+  );
+  assert.equal(
+    testnetRequest.solanaGenesisHash,
+    SCCP_SOLANA_TESTNET_GENESIS_HASH,
+  );
+  assert.notEqual(testnetRequest.witnessHash, mainnetRequest.witnessHash);
+  assert.notEqual(
+    testnetRequest.publicInputs.accountsLtHashProofPublicInputsHash,
+    mainnetRequest.publicInputs.accountsLtHashProofPublicInputsHash,
+  );
+
+  assert.throws(
+    () =>
+      buildSolanaSccpProofRequest(
+        sampleProductionWitness({
+          solanaNetwork: SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1,
+          solanaGenesisHash: SCCP_SOLANA_MAINNET_GENESIS_HASH,
+          sourceStateVerifierId:
+            SCCP_SOLANA_TESTNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+        }),
+      ),
+    /solanaGenesisHash must match solanaNetwork/,
+  );
+  assert.throws(
+    () =>
+      buildSolanaSccpProofRequest(
+        sampleProductionWitness({
+          solanaNetwork: SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1,
+          solanaGenesisHash: SCCP_SOLANA_TESTNET_GENESIS_HASH,
+          sourceStateVerifierId:
+            SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+        }),
+      ),
+    /sourceStateVerifierId must match Solana AccountsDB verifier profile/,
+  );
+});
+
+test("Solana governed source material requires one exact network profile tuple", () => {
+  const exactTestnet = {
+    sourceDomain: SCCP_DOMAIN_SOL,
+    sourceTrustAnchorId:
+      "sccp:sol:source-trust-anchor:solana-testnet-genesis:v1",
+    consensusVerifierId:
+      "sccp:sol:consensus-verifier:finalized-slot-bankhash-testnet:v1",
+    messageInclusionVerifierId:
+      "sccp:sol:message-inclusion-verifier:transaction-status-root-branch-testnet:v1",
+    sourceStateVerifierId:
+      SCCP_SOLANA_TESTNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+    finalityPolicyId:
+      "sccp:sol:finality-policy:finalized-slot-testnet:v1",
+    sourceTrustAnchorHash: `0x${"41".repeat(32)}`,
+    consensusVerifierHash: `0x${"42".repeat(32)}`,
+    messageInclusionVerifierHash: `0x${"43".repeat(32)}`,
+    sourceStateVerifierHash: `0x${"44".repeat(32)}`,
+    finalityPolicyHash: `0x${"45".repeat(32)}`,
+  };
+  const material = normalizeSccpSourceVerifierMaterial(exactTestnet);
+  assert.equal(
+    solanaSccpSourceProfileFromRecord(material).network,
+    SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1,
+  );
+  assert.equal(
+    material.sourceStateVerifierId,
+    SCCP_SOLANA_TESTNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceVerifierMaterial({
+        ...exactTestnet,
+        consensusVerifierId:
+          "sccp:sol:consensus-verifier:finalized-slot-bankhash-mainnet-beta:v1",
+      }),
+    /consensusVerifierId must match the selected source profile/,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceVerifierMaterial({
+        ...exactTestnet,
+        solanaNetwork: SCCP_SOLANA_MAINNET_SOURCE_NETWORK_V1,
+      }),
+    /must match the selected source profile/,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceVerifierMaterial({
+        ...exactTestnet,
+        sourceTrustAnchorHash:
+          "0xe347ad172f57ea9941878da12d078fe56af7dae7ad5a820a21802e89388b6f7d",
+      }),
+    /sourceTrustAnchorHash must not be the Solana template component hash/,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceVerifierMaterial({
+        ...exactTestnet,
+        sourceStateVerifierHash:
+          "0xdeff79aa347b438c97693d361a5518a1d67291d2a61bd6f8231f6eaf35cfd641",
+      }),
+    /sourceStateVerifierHash must not be the Solana template verifier hash/,
+  );
+});
+
 function sampleSolanaOpenedAccountsLtHashInput(overrides = {}) {
   const voteOpening = {
     address: `0x${"31".repeat(32)}`,
@@ -4285,6 +4440,43 @@ test("builds Solana AccountsLtHash source-state proof requests", () => {
 test("builds Solana full light-client audit role proof requests", () => {
   const input = sampleSolanaFullLightClientAuditProofInput();
   const requests = buildSolanaSccpFullLightClientAuditProofRequests(input);
+  const testnetRequests = buildSolanaSccpFullLightClientAuditProofRequests(
+    sampleSolanaFullLightClientAuditProofInput({
+      solanaNetwork: SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1,
+      solanaGenesisHash: SCCP_SOLANA_TESTNET_GENESIS_HASH,
+      sourceTrustAnchorId:
+        "sccp:sol:source-trust-anchor:solana-testnet-genesis:v1",
+      consensusVerifierId:
+        "sccp:sol:consensus-verifier:finalized-slot-bankhash-testnet:v1",
+      messageInclusionVerifierId:
+        "sccp:sol:message-inclusion-verifier:transaction-status-root-branch-testnet:v1",
+      sourceStateVerifierId:
+        SCCP_SOLANA_TESTNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+      finalityPolicyId:
+        "sccp:sol:finality-policy:finalized-slot-testnet:v1",
+    }),
+  );
+  assert.equal(
+    testnetRequests.towerReplay.verifierId,
+    SCCP_SOLANA_TESTNET_TOWER_REPLAY_VERIFIER_ID_V1,
+  );
+  assert.equal(
+    testnetRequests.fullAccountsdbLattice.verifierId,
+    SCCP_SOLANA_TESTNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1,
+  );
+  assert.equal(
+    testnetRequests.bankForkChoice.verifierId,
+    SCCP_SOLANA_TESTNET_BANK_FORK_CHOICE_VERIFIER_ID_V1,
+  );
+  for (const request of Object.values(testnetRequests)) {
+    assert.equal(
+      wrapSolanaSccpSourceStateVerificationProof(
+        new Uint8Array([1, 2, 3]),
+        request,
+      ).circuitId,
+      request.circuitId,
+    );
+  }
   const finalityContextHash = solanaSccpFinalityContextHash(input);
   const accountsLtHashProofHash = solanaSccpAccountsLtHashProofHash(
     input.accountsLtHashProof,

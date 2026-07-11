@@ -95,6 +95,7 @@ fn root_hint_rejects_stale_root_and_allows_recent_root_to_reach_nullifier_valida
         bridge_proof_max_range_len: defaults::zk::proof::BRIDGE_MAX_RANGE_LEN,
         bridge_proof_max_past_age_blocks: defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
         bridge_proof_max_future_drift_blocks: defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
+        sccp_launch_mode: cfg::SccpLaunchMode::EthereumMainnetLane,
         sccp_source_verifier_materials: Vec::new(),
         sccp_source_adapter_engine_deployments: Vec::new(),
         sccp_destination_rollouts: Vec::new(),

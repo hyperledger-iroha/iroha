@@ -8795,20 +8795,27 @@ pub mod isi {
         Ok(())
     }
 
-    fn configured_sccp_single_lane_launch_policy_v1() -> Option<(u32, &'static str, &'static str)> {
-        match iroha_sccp::sccp_production_policy_v1().launch_mode {
-            iroha_sccp::SccpLaunchModeV1::AllLanesAtOnce => None,
-            iroha_sccp::SccpLaunchModeV1::EthereumMainnetLane => Some((
+    fn configured_sccp_single_lane_launch_policy_v1(
+        zk_config: &iroha_config::parameters::actual::Zk,
+    ) -> Option<(u32, &'static str, &'static str)> {
+        match zk_config.sccp_launch_mode {
+            iroha_config::parameters::actual::SccpLaunchMode::AllLanesAtOnce => None,
+            iroha_config::parameters::actual::SccpLaunchMode::EthereumMainnetLane => Some((
                 iroha_sccp::SCCP_DOMAIN_ETH,
                 "SCCP Ethereum mainnet lane launch policy",
                 "Ethereum mainnet",
             )),
-            iroha_sccp::SccpLaunchModeV1::BscMainnetLane => Some((
+            iroha_config::parameters::actual::SccpLaunchMode::BscMainnetLane => Some((
                 iroha_sccp::SCCP_DOMAIN_BSC,
                 "SCCP BSC mainnet lane launch policy",
                 "BSC mainnet",
             )),
-            iroha_sccp::SccpLaunchModeV1::TonMainnetLane => Some((
+            iroha_config::parameters::actual::SccpLaunchMode::SolanaTestnetLane => Some((
+                iroha_sccp::SCCP_DOMAIN_SOL,
+                "SCCP Solana testnet lane launch policy",
+                "Solana testnet",
+            )),
+            iroha_config::parameters::actual::SccpLaunchMode::TonMainnetLane => Some((
                 iroha_sccp::SCCP_DOMAIN_TON,
                 "SCCP TON mainnet lane launch policy",
                 "TON mainnet",
@@ -8825,7 +8832,7 @@ pub mod isi {
         route_allowlist: &iroha_sccp::SccpRouteAllowlistReadinessV1,
     ) -> Result<(), Error> {
         let Some((launch_domain, launch_policy_label, launch_source_label)) =
-            configured_sccp_single_lane_launch_policy_v1()
+            configured_sccp_single_lane_launch_policy_v1(zk_config)
         else {
             return validate_configured_sccp_all_lanes_launch_ready(zk_config);
         };
@@ -8833,6 +8840,17 @@ pub mod isi {
             return Err(invalid_bridge_proof(format!(
                 "{launch_policy_label} only admits {launch_source_label} source proofs before domain {domain} is enabled"
             )));
+        }
+        if matches!(
+            zk_config.sccp_launch_mode,
+            iroha_config::parameters::actual::SccpLaunchMode::SolanaTestnetLane
+        ) && !iroha_sccp::sccp_solana_source_verifier_material_matches_network_v1(
+            material,
+            iroha_sccp::SccpSolanaSourceNetworkV1::Testnet,
+        ) {
+            return Err(invalid_bridge_proof(
+                "SCCP Solana testnet lane launch policy requires the exact testnet genesis, backend, and verifier profile tuple",
+            ));
         }
 
         let readiness =
@@ -18039,6 +18057,7 @@ pub mod isi {
 
         fn test_configured_sccp_all_lanes_zk_config() -> iroha_config::parameters::actual::Zk {
             let mut zk = crate::state::default_zk_config();
+            zk.sccp_launch_mode = iroha_config::parameters::actual::SccpLaunchMode::AllLanesAtOnce;
             zk.sccp_source_verifier_materials.clear();
             zk.sccp_source_adapter_engine_deployments.clear();
             zk.sccp_destination_rollouts.clear();
@@ -18245,6 +18264,109 @@ pub mod isi {
                 format!("{all_lanes_err:?}").contains("all-lanes launch policy"),
                 "unexpected all-lanes diagnostic error: {all_lanes_err:?}",
             );
+        }
+
+        #[test]
+        fn configured_sccp_solana_testnet_lane_accepts_only_exact_testnet_profile() {
+            let mut zk = crate::state::default_zk_config();
+            zk.sccp_launch_mode =
+                iroha_config::parameters::actual::SccpLaunchMode::SolanaTestnetLane;
+            let domain = iroha_sccp::SCCP_DOMAIN_SOL;
+            let material = iroha_sccp::sccp_solana_testnet_source_verifier_material_with_hashes_and_accounts_db_v1(
+                [0x61; 32],
+                [0x62; 32],
+                [0x63; 32],
+                [0x64; 32],
+                [0x65; 32],
+            )
+            .expect("Solana testnet source material");
+            let deployment =
+                test_sccp_source_adapter_deployment_for_domain(domain, &material, 0x60);
+            let rollout =
+                iroha_sccp::sccp_solana_testnet_destination_rollout_with_live_evidence_v1(
+                    "3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3".to_owned(),
+                    "0xc81178d11a4de525782fe7ac6f5accc2056fa15d1b8c2bfd819eb2ef179c3411".to_owned(),
+                    "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2".to_owned(),
+                    "4321".to_owned(),
+                    "5000".to_owned(),
+                    "5001".to_owned(),
+                    "f0VMRgECAwQF".to_owned(),
+                )
+                .expect("Solana testnet destination rollout");
+            let allowlist = iroha_sccp::sccp_solana_profiled_route_allowlist_for_lane_evidence_v1(
+                iroha_sccp::SccpSolanaSourceNetworkV1::Testnet,
+                &material,
+                &deployment,
+                &rollout,
+            )
+            .expect("Solana testnet route allowlist");
+            let destination_binding_hash: [u8; 32] = hex::decode(
+                rollout
+                    .destination_binding_hash
+                    .as_deref()
+                    .expect("destination binding hash")
+                    .trim_start_matches("0x"),
+            )
+            .expect("decode destination binding hash")
+            .try_into()
+            .expect("destination binding hash length");
+            let allowlist = iroha_sccp::sccp_solana_route_allowlist_with_lane_canary_evidence_v1(
+                allowlist,
+                &rollout,
+                destination_binding_hash,
+                iroha_sccp::sccp_source_verifier_material_hash(&material),
+                iroha_sccp::sccp_source_adapter_engine_deployment_hash(&deployment),
+            )
+            .expect("Solana testnet route canary");
+
+            super::validate_configured_sccp_lane_launch_ready(
+                &zk,
+                domain,
+                &material,
+                &deployment,
+                &rollout,
+                &allowlist,
+            )
+            .expect("exact Solana testnet profile must open independently");
+
+            let mainnet_material = test_sccp_source_verifier_material_for_domain(domain, 0x70);
+            let err = super::validate_configured_sccp_lane_launch_ready(
+                &zk,
+                domain,
+                &mainnet_material,
+                &deployment,
+                &rollout,
+                &allowlist,
+            )
+            .expect_err("Solana mainnet material must not replay into testnet launch mode");
+            assert!(format!("{err:?}").contains("exact testnet genesis"));
+
+            let mut devnet_material = material.clone();
+            devnet_material.source_trust_anchor_id =
+                "sccp:sol:source-trust-anchor:solana-devnet-genesis:v1".to_owned();
+            assert!(
+                super::validate_configured_sccp_lane_launch_ready(
+                    &zk,
+                    domain,
+                    &devnet_material,
+                    &deployment,
+                    &rollout,
+                    &allowlist,
+                )
+                .is_err(),
+                "unknown/devnet profile must fail closed",
+            );
+
+            let err = super::validate_configured_sccp_lane_launch_ready(
+                &zk,
+                iroha_sccp::SCCP_DOMAIN_ETH,
+                &material,
+                &deployment,
+                &rollout,
+                &allowlist,
+            )
+            .expect_err("Solana testnet launch mode must keep other lanes closed");
+            assert!(format!("{err:?}").contains("only admits Solana testnet"));
         }
 
         #[test]

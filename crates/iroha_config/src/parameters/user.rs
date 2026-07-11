@@ -8207,8 +8207,53 @@ mod sccp_route_manifest_user_config_tests {
     }
 }
 
+/// SCCP lane activation policy selected in the user configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::Display)]
+#[strum(serialize_all = "snake_case")]
+pub enum SccpLaunchMode {
+    /// Require every supported counterparty lane to be ready together.
+    AllLanesAtOnce,
+    /// Admit only the Ethereum mainnet lane.
+    EthereumMainnetLane,
+    /// Admit only the BSC mainnet lane.
+    BscMainnetLane,
+    /// Admit only the Solana testnet lane.
+    SolanaTestnetLane,
+    /// Admit only the TON mainnet lane.
+    TonMainnetLane,
+}
+
+impl SccpLaunchMode {
+    fn into_actual(self) -> actual::SccpLaunchMode {
+        match self {
+            Self::AllLanesAtOnce => actual::SccpLaunchMode::AllLanesAtOnce,
+            Self::EthereumMainnetLane => actual::SccpLaunchMode::EthereumMainnetLane,
+            Self::BscMainnetLane => actual::SccpLaunchMode::BscMainnetLane,
+            Self::SolanaTestnetLane => actual::SccpLaunchMode::SolanaTestnetLane,
+            Self::TonMainnetLane => actual::SccpLaunchMode::TonMainnetLane,
+        }
+    }
+}
+
+impl json::JsonSerialize for SccpLaunchMode {
+    fn json_serialize(&self, out: &mut String) {
+        json::write_json_string(&self.to_string(), out);
+    }
+}
+
+impl json::JsonDeserialize for SccpLaunchMode {
+    fn json_deserialize(
+        parser: &mut json::Parser<'_>,
+    ) -> ::core::result::Result<Self, json::Error> {
+        let text = parser.parse_string()?;
+        Self::from_str(&text).map_err(|err| json::Error::InvalidField {
+            field: "zk.sccp_launch_mode".into(),
+            message: err.to_string(),
+        })
+    }
+}
+
 /// Zero-knowledge configuration section.
-/// User-level configuration container for `Zk`.
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Zk {
     #[config(nested)]
@@ -8292,6 +8337,12 @@ pub struct Zk {
         default = "defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS"
     )]
     pub bridge_proof_max_future_drift_blocks: u64,
+    /// Explicit SCCP lane launch policy for this deployment.
+    #[config(
+        env = "ZK_SCCP_LAUNCH_MODE",
+        default = "defaults::zk::SCCP_LAUNCH_MODE.parse().unwrap()"
+    )]
+    pub sccp_launch_mode: SccpLaunchMode,
     /// SCCP source-chain verifier material that can enable non-SORA source lanes.
     #[config(default = "Vec::new()")]
     pub sccp_source_verifier_materials: Vec<SccpSourceVerifierMaterial>,
@@ -8339,6 +8390,7 @@ impl Zk {
             bridge_proof_max_range_len: self.bridge_proof_max_range_len,
             bridge_proof_max_past_age_blocks: self.bridge_proof_max_past_age_blocks,
             bridge_proof_max_future_drift_blocks: self.bridge_proof_max_future_drift_blocks,
+            sccp_launch_mode: self.sccp_launch_mode.into_actual(),
             sccp_source_verifier_materials: self
                 .sccp_source_verifier_materials
                 .into_iter()
@@ -26101,6 +26153,58 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .with_toml_source(TomlSource::inline(table))
             .read_and_complete::<super::Root>()
             .expect("load minimal user config")
+    }
+
+    #[test]
+    fn sccp_launch_mode_defaults_to_ethereum_and_accepts_explicit_solana_testnet() {
+        let default_root = load_root(base_table());
+        assert_eq!(
+            default_root.zk.sccp_launch_mode,
+            actual::SccpLaunchMode::EthereumMainnetLane,
+        );
+
+        let mut table = base_table();
+        let mut zk = Table::new();
+        zk.insert(
+            "sccp_launch_mode".into(),
+            Value::String("solana_testnet_lane".into()),
+        );
+        table.insert("zk".into(), Value::Table(zk));
+        let solana_root = load_root(table);
+        assert_eq!(
+            solana_root.zk.sccp_launch_mode,
+            actual::SccpLaunchMode::SolanaTestnetLane,
+        );
+    }
+
+    #[test]
+    fn sccp_launch_mode_rejects_unknown_network_profiles() {
+        let mut table = base_table();
+        let mut zk = Table::new();
+        zk.insert(
+            "sccp_launch_mode".into(),
+            Value::String("solana_devnet_lane".into()),
+        );
+        table.insert("zk".into(), Value::Table(zk));
+        assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
+    }
+
+    #[test]
+    fn shipped_taira_configs_select_only_solana_testnet_lane() {
+        for source in [
+            include_str!("../../../../configs/soranexus/taira/config.toml"),
+            include_str!("../../../../defaults/kagami/iroha3-taira/config.toml"),
+        ] {
+            let table: Table = toml::from_str(source).expect("parse shipped TAIRA config");
+            assert_eq!(
+                table
+                    .get("zk")
+                    .and_then(Value::as_table)
+                    .and_then(|zk| zk.get("sccp_launch_mode"))
+                    .and_then(Value::as_str),
+                Some("solana_testnet_lane"),
+            );
+        }
     }
 
     fn nexus_table_mut(table: &mut Table) -> &mut Table {

@@ -2,7 +2,9 @@
 // Unit tests for the TAIRA XOR Solana deployment helper's offline manifest
 // validation. These tests do not contact Solana or TAIRA.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
+  link,
   lstat,
   mkdtemp,
   readFile,
@@ -15,11 +17,91 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+  assertSolanaTestnetRpc,
   main,
   normalizeManifest,
+  SOLANA_TESTNET_GENESIS_HASH,
 } from "./sccp_solana_taira_xor_deploy.mjs";
 
 const hex32 = (byte) => `${byte.repeat(32)}`;
+
+const FINALIZED_READBACK_EVIDENCE_SCHEMA =
+  "iroha-demo-sccp-solana-finalized-readback-evidence/v1";
+
+const canonicalSnapshotSha256 = (evidence) =>
+  `0x${createHash("sha256")
+    .update(
+      JSON.stringify({
+        schema: FINALIZED_READBACK_EVIDENCE_SCHEMA,
+        routeId: evidence.routeId,
+        assetKey: evidence.assetKey,
+        solanaNetwork: evidence.solanaNetwork,
+        solanaGenesisHash: evidence.solanaGenesisHash,
+        snapshot: evidence.snapshot,
+      }),
+    )
+    .digest("hex")}`;
+
+const finalizedReadbackRole = ({
+  role,
+  program,
+  programdata,
+  slot,
+  hashByte,
+}) => ({
+  role,
+  program: {
+    address: program,
+    dataSha256: `0x${hex32(hashByte)}`,
+  },
+  programdata: { address: programdata },
+  loaderV3: {
+    deploymentSlot: String(slot),
+    executableBlake2b256: `0x${hex32(hashByte)}`,
+  },
+});
+
+const recomputeCanonicalSnapshotSha256 = (evidence) => {
+  evidence.canonicalSnapshotSha256 = canonicalSnapshotSha256(evidence);
+  return evidence;
+};
+
+test("Solana helper binds operations to the canonical testnet genesis", async () => {
+  const calls = [];
+  const rpcCall = async (url, method) => {
+    calls.push({ url, method });
+    return SOLANA_TESTNET_GENESIS_HASH;
+  };
+  assert.equal(
+    await assertSolanaTestnetRpc("https://api.testnet.solana.com", rpcCall),
+    SOLANA_TESTNET_GENESIS_HASH,
+  );
+  assert.deepEqual(calls, [
+    {
+      url: "https://api.testnet.solana.com",
+      method: "getGenesisHash",
+    },
+  ]);
+});
+
+test("Solana helper rejects wrong-cluster and secret-bearing RPC responses", async () => {
+  await assert.rejects(
+    assertSolanaTestnetRpc(
+      "https://api.testnet.solana.com",
+      async () => "EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
+    ),
+    /not Solana testnet/u,
+  );
+  await assert.rejects(
+    assertSolanaTestnetRpc("https://api.testnet.solana.com", async () => {
+      throw new Error("secret-token-from-rpc");
+    }),
+    (error) => {
+      assert.doesNotMatch(error.message, /secret-token-from-rpc/u);
+      return true;
+    },
+  );
+});
 
 const browserProver = (byte) => ({
   module_url: `https://provers.sora.org/sccp-solana-${byte}.mjs`,
@@ -30,13 +112,50 @@ const browserProver = (byte) => ({
   expected_exports: ["verifySccpProof"],
 });
 
-const validEvidence = () => ({
-  schema: "sccp-solana-taira-xor-program-evidence/v1",
-  programId: "Bridge11111111111111111111111111111111111111",
-  programDataAddress: "ProgramData1111111111111111111111111111111111",
-  programDataSlot: 12345,
-  programAccountDataSha256: hex32("dd"),
-});
+const validEvidence = () => {
+  const roles = {
+    outerVerifier: finalizedReadbackRole({
+      role: "outerVerifier",
+      program: "Verifier1111111111111111111111111111111111111",
+      programdata: "VerifierProgramData111111111111111111111111111111",
+      slot: 12345,
+      hashByte: "11",
+    }),
+    nativeVerifier: finalizedReadbackRole({
+      role: "nativeVerifier",
+      program: "NativeVerifier111111111111111111111111111111111",
+      programdata: "NativeVerifierProgramData1111111111111111111111111",
+      slot: 12346,
+      hashByte: "22",
+    }),
+    destinationBridge: finalizedReadbackRole({
+      role: "destinationBridge",
+      program: "Bridge11111111111111111111111111111111111111",
+      programdata: "BridgeProgramData11111111111111111111111111111111",
+      slot: 12347,
+      hashByte: "33",
+    }),
+    sourceBridge: finalizedReadbackRole({
+      role: "sourceBridge",
+      program: "SourceBridge111111111111111111111111111111111",
+      programdata: "SourceBridgeProgramData11111111111111111111111111",
+      slot: 12348,
+      hashByte: "44",
+    }),
+  };
+  const evidence = {
+    schema: FINALIZED_READBACK_EVIDENCE_SCHEMA,
+    routeId: "taira_sol_xor",
+    assetKey: "xor",
+    solanaNetwork: "testnet",
+    solanaGenesisHash: SOLANA_TESTNET_GENESIS_HASH,
+    snapshot: {
+      consistency: { snapshotContextSlot: 12349 },
+      roles,
+    },
+  };
+  return recomputeCanonicalSnapshotSha256(evidence);
+};
 
 const validTemplate = (overrides = {}) => ({
   production_ready: true,
@@ -44,8 +163,7 @@ const validTemplate = (overrides = {}) => ({
   taira_xor_bridge_address: "Bridge11111111111111111111111111111111111111",
   sccp_solana_source_bridge_address:
     "SourceBridge111111111111111111111111111111111",
-  solana_verifier_program_id:
-    "Verifier1111111111111111111111111111111111111",
+  solana_verifier_program_id: "Verifier1111111111111111111111111111111111111",
   destination_binding_key: "sccp:solana-testnet:taira_sol_xor",
   taira_burn_record_settlement_asset_definition_id: "xor#sora",
   taira_burn_record_contract_artifact_b64: "AQIDBA==",
@@ -100,10 +218,7 @@ const retiredTopLevelAliases = [
   ["sccpSolanaSourceBridgeAddress", "sccp_solana_source_bridge_address"],
   ["solanaSourceBridgeAddress", "sccp_solana_source_bridge_address"],
   ["solanaVerifierProgramId", "solana_verifier_program_id"],
-  [
-    "sccp_solana_destination_verifier_program_id",
-    "solana_verifier_program_id",
-  ],
+  ["sccp_solana_destination_verifier_program_id", "solana_verifier_program_id"],
   ["sccpSolanaDestinationVerifierProgramId", "solana_verifier_program_id"],
 ];
 
@@ -118,10 +233,22 @@ const retiredBrowserProverAliases = [
 ];
 
 test("Solana route-manifest accepts only literal production_ready true", () => {
-  const manifest = normalizeManifest(validTemplate(), validEvidence());
+  const evidence = validEvidence();
+  const manifest = normalizeManifest(validTemplate(), evidence);
   assert.equal(manifest.production_ready, true);
   assert.equal(
     Object.prototype.hasOwnProperty.call(manifest, "productionReady"),
+    false,
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      manifest,
+      "canonical_finalized_readback",
+    ),
+    false,
+  );
+  assert.equal(
+    JSON.stringify(manifest).includes(evidence.canonicalSnapshotSha256),
     false,
   );
 });
@@ -139,7 +266,10 @@ test("Solana route-manifest rejects retired camel productionReady alias", () => 
         error.message,
         /Solana route-manifest template must not use retired productionReady; use production_ready\./u,
       );
-      assert.doesNotMatch(error.message, /secret-token-solana-retired-production-ready/u);
+      assert.doesNotMatch(
+        error.message,
+        /secret-token-solana-retired-production-ready/u,
+      );
       return true;
     },
   );
@@ -174,7 +304,7 @@ test("Solana route-manifest fills only absent canonical bridge address from evid
   assert.equal(
     normalizeManifest(withoutBridgeAddress, validEvidence())
       .taira_xor_bridge_address,
-    validEvidence().programId,
+    validEvidence().snapshot.roles.destinationBridge.program.address,
   );
 
   assert.throws(
@@ -482,33 +612,37 @@ test("Solana route-manifest rejects malformed optional source adapter objects wi
   }
 });
 
-test("Solana route-manifest rejects malformed ProgramData evidence without echoing values", () => {
+test("Solana route-manifest rejects malformed canonical role evidence without echoing values", () => {
   const cases = [
     [
-      {
-        programDataAddress: {
+      (evidence) => {
+        evidence.snapshot.roles.sourceBridge.programdata.address = {
           secret: "secret-token-solana-programdata-address",
-        },
+        };
       },
-      /evidence programDataAddress must be a non-empty string without surrounding whitespace/u,
+      /finalized Solana readback sourceBridge role is invalid/u,
     ],
     [
-      { programDataSlot: "secret-token-solana-programdata-slot" },
-      /evidence programDataSlot must be an integer/u,
+      (evidence) => {
+        evidence.snapshot.roles.sourceBridge.loaderV3.deploymentSlot =
+          "secret-token-solana-programdata-slot";
+      },
+      /finalized Solana readback sourceBridge role is invalid/u,
     ],
     [
-      { programAccountDataSha256: `AA${"0".repeat(62)}` },
-      /evidence programAccountDataSha256 must be a 32-byte lowercase hex value/u,
+      (evidence) => {
+        evidence.snapshot.roles.sourceBridge.program.dataSha256 = `AA${"0".repeat(62)}`;
+      },
+      /finalized Solana readback sourceBridge role is invalid/u,
     ],
   ];
 
-  for (const [evidenceOverrides, expected] of cases) {
+  for (const [mutateEvidence, expected] of cases) {
+    const evidence = validEvidence();
+    mutateEvidence(evidence);
+    recomputeCanonicalSnapshotSha256(evidence);
     assert.throws(
-      () =>
-        normalizeManifest(validTemplate(), {
-          ...validEvidence(),
-          ...evidenceOverrides,
-        }),
+      () => normalizeManifest(validTemplate(), evidence),
       (error) => {
         assert.match(error.message, expected);
         assert.doesNotMatch(error.message, /secret-token-solana-programdata/u);
@@ -516,6 +650,65 @@ test("Solana route-manifest rejects malformed ProgramData evidence without echoi
       },
     );
   }
+});
+
+test("Solana route-manifest rejects legacy and hash-tampered readback evidence", () => {
+  assert.throws(
+    () =>
+      normalizeManifest(validTemplate(), {
+        schema: "sccp-solana-taira-xor-program-evidence/v1",
+      }),
+    /route-manifest requires canonical finalized Solana readback evidence/u,
+  );
+
+  const tampered = validEvidence();
+  tampered.snapshot.roles.sourceBridge.loaderV3.executableBlake2b256 = `0x${hex32("99")}`;
+  assert.throws(
+    () => normalizeManifest(validTemplate(), tampered),
+    /finalized Solana readback snapshot hash is invalid/u,
+  );
+});
+
+test("Solana route-manifest rejects substituted, duplicated, and mismatched roles", () => {
+  const swapped = validEvidence();
+  const destinationBridge = swapped.snapshot.roles.destinationBridge;
+  const sourceBridge = swapped.snapshot.roles.sourceBridge;
+  swapped.snapshot.roles.destinationBridge = {
+    ...sourceBridge,
+    role: "destinationBridge",
+  };
+  swapped.snapshot.roles.sourceBridge = {
+    ...destinationBridge,
+    role: "sourceBridge",
+  };
+  recomputeCanonicalSnapshotSha256(swapped);
+  assert.throws(
+    () => normalizeManifest(validTemplate(), swapped),
+    /destination bridge does not match finalized readback evidence/u,
+  );
+
+  const duplicated = validEvidence();
+  duplicated.snapshot.roles.nativeVerifier = {
+    ...duplicated.snapshot.roles.outerVerifier,
+    role: "nativeVerifier",
+  };
+  recomputeCanonicalSnapshotSha256(duplicated);
+  assert.throws(
+    () => normalizeManifest(validTemplate(), duplicated),
+    /finalized Solana readback program roles are not distinct/u,
+  );
+
+  assert.throws(
+    () =>
+      normalizeManifest(
+        validTemplate({
+          solana_verifier_program_id:
+            "WrongVerifier11111111111111111111111111111111111",
+        }),
+        validEvidence(),
+      ),
+    /outer verifier does not match finalized readback evidence/u,
+  );
 });
 
 test("Solana route-manifest rejects missing, false, and retired production flags", () => {
@@ -607,28 +800,25 @@ test("Solana route-manifest CLI rejects retired productionReady before writing o
     await writeJson(templatePath, template);
     await writeJson(evidencePath, validEvidence());
 
-    await assert.rejects(
-      async () => {
-        try {
-          await main([
-            "route-manifest",
-            "--template",
-            templatePath,
-            "--evidence",
-            evidencePath,
-            "--output",
-            outputPath,
-          ]);
-        } catch (error) {
-          assert.doesNotMatch(
-            error.message,
-            /secret-token-solana-retired-production-ready/u,
-          );
-          throw error;
-        }
-      },
-      /Solana route-manifest template must not use retired productionReady; use production_ready\./u,
-    );
+    await assert.rejects(async () => {
+      try {
+        await main([
+          "route-manifest",
+          "--template",
+          templatePath,
+          "--evidence",
+          evidencePath,
+          "--output",
+          outputPath,
+        ]);
+      } catch (error) {
+        assert.doesNotMatch(
+          error.message,
+          /secret-token-solana-retired-production-ready/u,
+        );
+        throw error;
+      }
+    }, /Solana route-manifest template must not use retired productionReady; use production_ready\./u);
     await assert.rejects(() => stat(outputPath), /ENOENT/u);
   });
 });
@@ -644,28 +834,25 @@ test("Solana route-manifest CLI rejects retired top-level aliases before writing
     );
     await writeJson(evidencePath, validEvidence());
 
-    await assert.rejects(
-      async () => {
-        try {
-          await main([
-            "route-manifest",
-            "--template",
-            templatePath,
-            "--evidence",
-            evidencePath,
-            "--output",
-            outputPath,
-          ]);
-        } catch (error) {
-          assert.doesNotMatch(
-            error.message,
-            /secret-token-solana-retired-route-id/u,
-          );
-          throw error;
-        }
-      },
-      /Solana route-manifest template must not use retired routeId; use route_id\./u,
-    );
+    await assert.rejects(async () => {
+      try {
+        await main([
+          "route-manifest",
+          "--template",
+          templatePath,
+          "--evidence",
+          evidencePath,
+          "--output",
+          outputPath,
+        ]);
+      } catch (error) {
+        assert.doesNotMatch(
+          error.message,
+          /secret-token-solana-retired-route-id/u,
+        );
+        throw error;
+      }
+    }, /Solana route-manifest template must not use retired routeId; use route_id\./u);
     await assert.rejects(() => stat(outputPath), /ENOENT/u);
   });
 });
@@ -705,43 +892,37 @@ test("Solana route-manifest CLI rejects unknown options without echoing names", 
     await writeJson(templatePath, validTemplate());
     await writeJson(evidencePath, validEvidence());
 
-    await assert.rejects(
-      async () => {
-        try {
-          await main([
-            "route-manifest",
-            "--template",
-            templatePath,
-            "--evidence",
-            evidencePath,
-            "--output",
-            outputPath,
-            "--secret-token-solana-route",
-            "value",
-          ]);
-        } catch (error) {
-          assert.doesNotMatch(error.message, /secret-token-solana-route/u);
-          throw error;
-        }
-      },
-      /Unknown option/u,
-    );
+    await assert.rejects(async () => {
+      try {
+        await main([
+          "route-manifest",
+          "--template",
+          templatePath,
+          "--evidence",
+          evidencePath,
+          "--output",
+          outputPath,
+          "--secret-token-solana-route",
+          "value",
+        ]);
+      } catch (error) {
+        assert.doesNotMatch(error.message, /secret-token-solana-route/u);
+        throw error;
+      }
+    }, /Unknown option/u);
     await assert.rejects(() => stat(outputPath), /ENOENT/u);
   });
 });
 
 test("Solana CLI rejects unknown commands without echoing values", async () => {
-  await assert.rejects(
-    async () => {
-      try {
-        await main(["secret-token-solana-command"]);
-      } catch (error) {
-        assert.doesNotMatch(error.message, /secret-token-solana-command/u);
-        throw error;
-      }
-    },
-    /Unknown command\./u,
-  );
+  await assert.rejects(async () => {
+    try {
+      await main(["secret-token-solana-command"]);
+    } catch (error) {
+      assert.doesNotMatch(error.message, /secret-token-solana-command/u);
+      throw error;
+    }
+  }, /Unknown command\./u);
 });
 
 test("Solana route-manifest CLI rejects positional arguments without echoing values", async () => {
@@ -752,26 +933,23 @@ test("Solana route-manifest CLI rejects positional arguments without echoing val
     await writeJson(templatePath, validTemplate());
     await writeJson(evidencePath, validEvidence());
 
-    await assert.rejects(
-      async () => {
-        try {
-          await main([
-            "route-manifest",
-            "--template",
-            templatePath,
-            "secret-token-solana-positional",
-            "--evidence",
-            evidencePath,
-            "--output",
-            outputPath,
-          ]);
-        } catch (error) {
-          assert.doesNotMatch(error.message, /secret-token-solana-positional/u);
-          throw error;
-        }
-      },
-      /Unexpected positional argument\./u,
-    );
+    await assert.rejects(async () => {
+      try {
+        await main([
+          "route-manifest",
+          "--template",
+          templatePath,
+          "secret-token-solana-positional",
+          "--evidence",
+          evidencePath,
+          "--output",
+          outputPath,
+        ]);
+      } catch (error) {
+        assert.doesNotMatch(error.message, /secret-token-solana-positional/u);
+        throw error;
+      }
+    }, /Unexpected positional argument\./u);
     await assert.rejects(() => stat(outputPath), /ENOENT/u);
   });
 });
@@ -817,29 +995,26 @@ test("Solana deploy CLI requires canonical network confirmation before spawning"
 });
 
 test("Solana deploy CLI rejects retired testnet confirmation before spawning", async () => {
-  await assert.rejects(
-    async () => {
-      try {
-        await main([
-          "deploy",
-          "--program-so",
-          "program.so",
-          "--program-id-keypair",
-          "program-keypair.json",
-          "--keypair",
-          "deployer-keypair.json",
-          "--broadcast",
-          "true",
-          "--confirm-testnet",
-          "secret-token-solana-retired-confirmation",
-        ]);
-      } catch (error) {
-        assert.doesNotMatch(error.message, /secret-token-solana-retired/u);
-        throw error;
-      }
-    },
-    /Unknown option/u,
-  );
+  await assert.rejects(async () => {
+    try {
+      await main([
+        "deploy",
+        "--program-so",
+        "program.so",
+        "--program-id-keypair",
+        "program-keypair.json",
+        "--keypair",
+        "deployer-keypair.json",
+        "--broadcast",
+        "true",
+        "--confirm-testnet",
+        "secret-token-solana-retired-confirmation",
+      ]);
+    } catch (error) {
+      assert.doesNotMatch(error.message, /secret-token-solana-retired/u);
+      throw error;
+    }
+  }, /Unknown option/u);
 });
 
 test("Solana evidence CLI rejects bare keypair before spawning", async () => {
@@ -976,6 +1151,50 @@ test("Solana route-manifest CLI rejects output path collisions with inputs", asy
   });
 });
 
+test("Solana route-manifest CLI rejects symlinked and hard-linked evidence files", async () => {
+  await withTempDir(async (dir) => {
+    const templatePath = join(dir, "template.json");
+    const evidenceTargetPath = join(dir, "evidence-target.json");
+    const evidenceSymlinkPath = join(dir, "evidence-symlink.json");
+    const evidenceHardlinkPath = join(dir, "evidence-hardlink.json");
+    const outputPath = join(dir, "manifest.json");
+    await writeJson(templatePath, validTemplate());
+    await writeJson(evidenceTargetPath, validEvidence());
+    await symlink(evidenceTargetPath, evidenceSymlinkPath);
+
+    await assert.rejects(
+      () =>
+        main([
+          "route-manifest",
+          "--template",
+          templatePath,
+          "--evidence",
+          evidenceSymlinkPath,
+          "--output",
+          outputPath,
+        ]),
+      /canonical finalized Solana readback evidence must be a singly-linked non-symlink file/u,
+    );
+    await assert.rejects(() => stat(outputPath), /ENOENT/u);
+
+    await link(evidenceTargetPath, evidenceHardlinkPath);
+    await assert.rejects(
+      () =>
+        main([
+          "route-manifest",
+          "--template",
+          templatePath,
+          "--evidence",
+          evidenceHardlinkPath,
+          "--output",
+          outputPath,
+        ]),
+      /canonical finalized Solana readback evidence must be a singly-linked non-symlink file/u,
+    );
+    await assert.rejects(() => stat(outputPath), /ENOENT/u);
+  });
+});
+
 test("Solana doctor rejects unsafe Solana RPC URLs before network", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => {
@@ -987,8 +1206,7 @@ test("Solana doctor rejects unsafe Solana RPC URLs before network", async () => 
     const cases = [
       {
         value: "http://api.testnet.solana.com",
-        expected:
-          /--solana-rpc-url must use HTTPS unless it is loopback HTTP/u,
+        expected: /--solana-rpc-url must use HTTPS unless it is loopback HTTP/u,
       },
       {
         value: credentialedUrl,
@@ -1013,8 +1231,7 @@ test("Solana doctor rejects unsafe Solana RPC URLs before network", async () => 
       },
       {
         value: "ftp://api.testnet.solana.com",
-        expected:
-          /--solana-rpc-url must use HTTPS unless it is loopback HTTP/u,
+        expected: /--solana-rpc-url must use HTTPS unless it is loopback HTTP/u,
       },
       {
         value: " https://api.testnet.solana.com",
@@ -1051,17 +1268,14 @@ test("Solana doctor rejects unsafe Solana RPC URLs before network", async () => 
     ];
 
     for (const testCase of cases) {
-      await assert.rejects(
-        async () => {
-          try {
-            await main(["doctor", "--solana-rpc-url", testCase.value]);
-          } catch (error) {
-            assert.doesNotMatch(error.message, /secret-token-solana-rpc-url/u);
-            throw error;
-          }
-        },
-        testCase.expected,
-      );
+      await assert.rejects(async () => {
+        try {
+          await main(["doctor", "--solana-rpc-url", testCase.value]);
+        } catch (error) {
+          assert.doesNotMatch(error.message, /secret-token-solana-rpc-url/u);
+          throw error;
+        }
+      }, testCase.expected);
     }
   } finally {
     globalThis.fetch = originalFetch;
@@ -1089,6 +1303,12 @@ test("Solana helper ignores environment URL defaults", async () => {
       return {
         ok: true,
         json: async () => ({ result: "ok" }),
+      };
+    }
+    if (String(options.body ?? "").includes('"method":"getGenesisHash"')) {
+      return {
+        ok: true,
+        json: async () => ({ result: SOLANA_TESTNET_GENESIS_HASH }),
       };
     }
     return {
@@ -1130,6 +1350,7 @@ test("Solana helper ignores environment URL defaults", async () => {
     calls.map((call) => call.url),
     [
       "https://api.testnet.solana.com",
+      "https://api.testnet.solana.com",
       "https://taira.sora.org/openapi.json",
     ],
   );
@@ -1143,25 +1364,22 @@ test("Solana evidence CLI rejects unsafe Solana RPC URLs before spawning", async
   await withTempDir(async (dir) => {
     const outputPath = join(dir, "evidence.json");
 
-    await assert.rejects(
-      async () => {
-        try {
-          await main([
-            "evidence",
-            "--program-id",
-            "Bridge11111111111111111111111111111111111111",
-            "--output",
-            outputPath,
-            "--solana-rpc-url",
-            "https://operator:secret-token-solana-rpc-url@api.testnet.solana.com",
-          ]);
-        } catch (error) {
-          assert.doesNotMatch(error.message, /secret-token-solana-rpc-url/u);
-          throw error;
-        }
-      },
-      /--solana-rpc-url must not include credentials, params, query strings, or fragments/u,
-    );
+    await assert.rejects(async () => {
+      try {
+        await main([
+          "evidence",
+          "--program-id",
+          "Bridge11111111111111111111111111111111111111",
+          "--output",
+          outputPath,
+          "--solana-rpc-url",
+          "https://operator:secret-token-solana-rpc-url@api.testnet.solana.com",
+        ]);
+      } catch (error) {
+        assert.doesNotMatch(error.message, /secret-token-solana-rpc-url/u);
+        throw error;
+      }
+    }, /--solana-rpc-url must not include credentials, params, query strings, or fragments/u);
     await assert.rejects(() => stat(outputPath), /ENOENT/u);
   });
 });
@@ -1284,7 +1502,8 @@ test("Solana propose-route-manifest CLI rejects unsafe Torii URLs before reading
           /--torii-url must not include credentials, params, query strings, or fragments/u,
       },
       {
-        value: "https://taira.sora.org?private_key=secret-token-solana-torii-url",
+        value:
+          "https://taira.sora.org?private_key=secret-token-solana-torii-url",
         expected:
           /--torii-url must not include credentials, params, query strings, or fragments/u,
       },
@@ -1332,28 +1551,22 @@ test("Solana propose-route-manifest CLI rejects unsafe Torii URLs before reading
     ];
 
     for (const testCase of cases) {
-      await assert.rejects(
-        async () => {
-          try {
-            await main([
-              "propose-route-manifest",
-              "--manifest",
-              missingManifestPath,
-              "--torii-url",
-              testCase.value,
-              "--output",
-              outputPath,
-            ]);
-          } catch (error) {
-            assert.doesNotMatch(
-              error.message,
-              /secret-token-solana-torii-url/u,
-            );
-            throw error;
-          }
-        },
-        testCase.expected,
-      );
+      await assert.rejects(async () => {
+        try {
+          await main([
+            "propose-route-manifest",
+            "--manifest",
+            missingManifestPath,
+            "--torii-url",
+            testCase.value,
+            "--output",
+            outputPath,
+          ]);
+        } catch (error) {
+          assert.doesNotMatch(error.message, /secret-token-solana-torii-url/u);
+          throw error;
+        }
+      }, testCase.expected);
       await assert.rejects(() => stat(outputPath), /ENOENT/u);
     }
   });
@@ -1413,7 +1626,8 @@ test("Solana propose-route-manifest CLI replaces output symlinks and skips temp 
         proposals += 1;
         return {
           ok: true,
-          text: async () => JSON.stringify({ proposal_id: `draft-${proposals}` }),
+          text: async () =>
+            JSON.stringify({ proposal_id: `draft-${proposals}` }),
         };
       };
 

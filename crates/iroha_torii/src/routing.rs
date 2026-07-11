@@ -7535,18 +7535,38 @@ fn sccp_counterparty_capabilities(
 
 fn sccp_capabilities_snapshot(state: &CoreState) -> Result<SccpCapabilitiesDto> {
     let zk_config = state.zk_snapshot();
-    let production_policy = iroha_sccp::sccp_production_policy_v1();
-    let launch_ready = match production_policy.launch_mode {
-        iroha_sccp::SccpLaunchModeV1::AllLanesAtOnce => {
+    let mut production_policy = iroha_sccp::sccp_production_policy_v1();
+    production_policy.launch_mode = match zk_config.sccp_launch_mode {
+        iroha_config::parameters::actual::SccpLaunchMode::AllLanesAtOnce => {
+            iroha_sccp::SccpLaunchModeV1::AllLanesAtOnce
+        }
+        iroha_config::parameters::actual::SccpLaunchMode::EthereumMainnetLane => {
+            iroha_sccp::SccpLaunchModeV1::EthereumMainnetLane
+        }
+        iroha_config::parameters::actual::SccpLaunchMode::BscMainnetLane => {
+            iroha_sccp::SccpLaunchModeV1::BscMainnetLane
+        }
+        iroha_config::parameters::actual::SccpLaunchMode::SolanaTestnetLane => {
+            iroha_sccp::SccpLaunchModeV1::SolanaTestnetLane
+        }
+        iroha_config::parameters::actual::SccpLaunchMode::TonMainnetLane => {
+            iroha_sccp::SccpLaunchModeV1::TonMainnetLane
+        }
+    };
+    let launch_ready = match zk_config.sccp_launch_mode {
+        iroha_config::parameters::actual::SccpLaunchMode::AllLanesAtOnce => {
             sccp_configured_all_lanes_launch_ready(&zk_config).is_ok()
         }
-        iroha_sccp::SccpLaunchModeV1::EthereumMainnetLane => {
+        iroha_config::parameters::actual::SccpLaunchMode::EthereumMainnetLane => {
             sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_ETH).is_ok()
         }
-        iroha_sccp::SccpLaunchModeV1::BscMainnetLane => {
+        iroha_config::parameters::actual::SccpLaunchMode::BscMainnetLane => {
             sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_BSC).is_ok()
         }
-        iroha_sccp::SccpLaunchModeV1::TonMainnetLane => {
+        iroha_config::parameters::actual::SccpLaunchMode::SolanaTestnetLane => {
+            sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_SOL).is_ok()
+        }
+        iroha_config::parameters::actual::SccpLaunchMode::TonMainnetLane => {
             sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_TON).is_ok()
         }
     };
@@ -8862,28 +8882,41 @@ fn sccp_configured_launch_ready_for_domain(
             sccp_unsupported_launch_blocker_for_domain(domain),
         ));
     }
-    let (launch_domain, launch_policy_label, launch_source_label) =
-        match iroha_sccp::sccp_production_policy_v1().launch_mode {
-            iroha_sccp::SccpLaunchModeV1::AllLanesAtOnce => {
-                return sccp_configured_all_lanes_launch_ready(zk_config);
-            }
-            iroha_sccp::SccpLaunchModeV1::EthereumMainnetLane => (
-                iroha_sccp::SCCP_DOMAIN_ETH,
-                "SCCP Ethereum mainnet lane launch policy",
-                "Ethereum mainnet",
-            ),
-            iroha_sccp::SccpLaunchModeV1::BscMainnetLane => (
-                iroha_sccp::SCCP_DOMAIN_BSC,
-                "SCCP BSC mainnet lane launch policy",
-                "BSC mainnet",
-            ),
-            iroha_sccp::SccpLaunchModeV1::TonMainnetLane => (
-                iroha_sccp::SCCP_DOMAIN_TON,
-                "SCCP TON mainnet lane launch policy",
-                "TON mainnet",
-            ),
-        };
+    let (launch_domain, launch_policy_label, launch_source_label) = match zk_config.sccp_launch_mode
+    {
+        iroha_config::parameters::actual::SccpLaunchMode::AllLanesAtOnce => {
+            return sccp_configured_all_lanes_launch_ready(zk_config);
+        }
+        iroha_config::parameters::actual::SccpLaunchMode::EthereumMainnetLane => (
+            iroha_sccp::SCCP_DOMAIN_ETH,
+            "SCCP Ethereum mainnet lane launch policy",
+            "Ethereum mainnet",
+        ),
+        iroha_config::parameters::actual::SccpLaunchMode::BscMainnetLane => (
+            iroha_sccp::SCCP_DOMAIN_BSC,
+            "SCCP BSC mainnet lane launch policy",
+            "BSC mainnet",
+        ),
+        iroha_config::parameters::actual::SccpLaunchMode::SolanaTestnetLane => (
+            iroha_sccp::SCCP_DOMAIN_SOL,
+            "SCCP Solana testnet lane launch policy",
+            "Solana testnet",
+        ),
+        iroha_config::parameters::actual::SccpLaunchMode::TonMainnetLane => (
+            iroha_sccp::SCCP_DOMAIN_TON,
+            "SCCP TON mainnet lane launch policy",
+            "TON mainnet",
+        ),
+    };
     if domain != launch_domain {
+        if matches!(
+            zk_config.sccp_launch_mode,
+            iroha_config::parameters::actual::SccpLaunchMode::SolanaTestnetLane
+        ) {
+            return Err(sccp_bad_request(format!(
+                "{launch_policy_label} only admits {launch_source_label} source proofs before domain {domain} is enabled"
+            )));
+        }
         if sccp_configured_source_lane_for_domain(zk_config, domain)?.is_none() {
             return Err(sccp_bad_request(format!(
                 "{launch_policy_label} only admits {launch_source_label} source proofs before domain {domain} is enabled"
@@ -8901,6 +8934,17 @@ fn sccp_configured_launch_ready_for_domain(
             "{launch_policy_label} requires configured production material for domain {domain}"
         ))
     })?;
+    if matches!(
+        zk_config.sccp_launch_mode,
+        iroha_config::parameters::actual::SccpLaunchMode::SolanaTestnetLane
+    ) && !iroha_sccp::sccp_solana_source_verifier_material_matches_network_v1(
+        &lane.material,
+        iroha_sccp::SccpSolanaSourceNetworkV1::Testnet,
+    ) {
+        return Err(sccp_bad_request(
+            "SCCP Solana testnet lane launch policy requires the exact testnet genesis, backend, and verifier profile tuple",
+        ));
+    }
     let route_allowlist = sccp_configured_route_allowlist_for_domain(zk_config, domain)?
         .ok_or_else(|| {
             sccp_bad_request(format!(
@@ -10943,6 +10987,7 @@ mod sccp_message_backend_tests {
         domains: [u32; N],
     ) -> iroha_config::parameters::actual::Zk {
         let mut zk = iroha_core::state::default_zk_config();
+        zk.sccp_launch_mode = iroha_config::parameters::actual::SccpLaunchMode::AllLanesAtOnce;
         zk.sccp_source_verifier_materials.clear();
         zk.sccp_source_adapter_engine_deployments.clear();
         zk.sccp_destination_rollouts.clear();
