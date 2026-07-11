@@ -162,6 +162,7 @@ struct ConsensusHandshakeMeta {
     bls_domain: String,
     wire_proto_versions: Vec<u32>,
     consensus_fingerprint: String,
+    sumeragi_v2: iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
 }
 
 fn parse_handshake_meta_str(raw: &str) -> Result<ConsensusHandshakeMeta, norito::Error> {
@@ -228,26 +229,41 @@ fn build_shared_sorafs_provider_cache(
     }
 
     let Some(admission_cfg) = discovery.admission.as_ref() else {
-        if config.torii.sorafs_gateway.enforce_admission {
-            iroha_logger::warn!(
-                "torii.sorafs.admission_envelopes_dir not configured; shared SoraFS discovery cache disabled"
-            );
-        }
-        return None;
+        panic!(
+            "SoraFS discovery requires sorafs.discovery.admission.envelopes_dir, trusted_council_keys, and signature_threshold"
+        );
     };
 
-    let admission =
-        match iroha_torii::sorafs::AdmissionRegistry::load_from_dir(&admission_cfg.envelopes_dir) {
-            Ok(registry) => Arc::new(registry),
-            Err(err) => {
-                iroha_logger::error!(
-                    ?err,
-                    dir = ?admission_cfg.envelopes_dir,
-                    "failed to load shared SoraFS provider admission registry"
-                );
-                return None;
-            }
-        };
+    let trusted_council_keys = admission_cfg
+        .trusted_council_keys
+        .iter()
+        .map(|key| {
+            let (algorithm, payload) = key
+                .try_to_bytes()
+                .unwrap_or_else(|err| panic!("invalid SoraFS admission council key: {err}"));
+            assert_eq!(
+                algorithm,
+                iroha_crypto::Algorithm::Ed25519,
+                "SoraFS admission council keys must use Ed25519"
+            );
+            <[u8; 32]>::try_from(payload)
+                .unwrap_or_else(|_| panic!("SoraFS admission council keys must be 32 bytes"))
+        })
+        .collect::<Vec<_>>();
+    let policy = sorafs_manifest::ProviderAdmissionCouncilPolicy::new(
+        trusted_council_keys,
+        admission_cfg.signature_threshold.get(),
+    )
+    .unwrap_or_else(|err| panic!("invalid SoraFS admission council policy: {err}"));
+    let admission = Arc::new(
+        iroha_torii::sorafs::AdmissionRegistry::load_from_dir(&admission_cfg.envelopes_dir, policy)
+            .unwrap_or_else(|err| {
+                panic!(
+                    "failed to load shared SoraFS provider admission registry {}: {err}",
+                    admission_cfg.envelopes_dir.display()
+                )
+            }),
+    );
 
     let mut capabilities = Vec::new();
     for name in &discovery.known_capabilities {
@@ -330,7 +346,7 @@ mod handshake_payload_tests {
     #[test]
     fn decode_consensus_meta_rejects_mangled_json() {
         let mangled = Json::from_norito_value_ref(&norito::json::Value::String(
-            r#"{mode"Permissioned",bls_domain"bls-iroha2:permissioned-sumeragi:v1",consensus_fingerprint"0x632eaff6fe3054ca279416357baae5ff7f28144b3bc6a83921f68d466c4ec0ab"}"#.to_string(),
+            r#"{mode"Permissioned",bls_domain"bls-iroha2:permissioned-sumeragi:v2",consensus_fingerprint"0x632eaff6fe3054ca279416357baae5ff7f28144b3bc6a83921f68d466c4ec0ab"}"#.to_string(),
         ))
         .expect("construct mangled payload");
         let err = decode_consensus_handshake_meta(&mangled).expect_err("mangled payload must fail");
@@ -344,7 +360,7 @@ mod handshake_payload_tests {
     fn decode_consensus_meta_rejects_unprefixed_hex_and_uppercase_tokens() {
         let fingerprint = "632eaff6fe3054ca279416357baae5ff7f28144b3bc6a83921f68d466c4ec0ab";
         let raw = format!(
-            "MODE=PERMISSIONED bls_domain=bls-iroha2:permissioned-sumeragi:v1 consensus_fingerprint={fingerprint}"
+            "MODE=PERMISSIONED bls_domain=bls-iroha2:permissioned-sumeragi:v2 consensus_fingerprint={fingerprint}"
         );
         let payload = Json::from(raw.as_str());
         let err =
@@ -1013,6 +1029,10 @@ impl ConsensusIngressLimiter {
                 | BlockMessage::ProposalHint(_)
                 | BlockMessage::Proposal(_)
                 | BlockMessage::LaneBlockProposal(_)
+                | BlockMessage::LaneExecutablePayload(_)
+                | BlockMessage::LaneExecutablePayloadHandoff(_)
+                | BlockMessage::LaneBlockNewViewVote(_)
+                | BlockMessage::LaneBlockNewViewCertificate(_)
                 | BlockMessage::LaneBlockVote(_)
                 | BlockMessage::LaneBlockQc(_)
                 | BlockMessage::BlockCreated(_) => IngressPolicy::critical(),
@@ -1032,6 +1052,21 @@ impl ConsensusIngressLimiter {
                 }
             },
             iroha_core::NetworkMessage::SumeragiControlFlow(_) => IngressPolicy::critical(),
+            iroha_core::NetworkMessage::CertifiedMergeSidecar(message) => match message.as_ref() {
+                iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_) => {
+                    IngressPolicy::limited()
+                }
+                iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Chunk(_) => {
+                    IngressPolicy::bulk()
+                }
+            },
+            iroha_core::NetworkMessage::MergeCandidate(message) => match message.as_ref() {
+                iroha_core::merge_sidecar::MergeCandidateMessage::Advert(_)
+                | iroha_core::merge_sidecar::MergeCandidateMessage::Request(_) => {
+                    IngressPolicy::limited()
+                }
+                iroha_core::merge_sidecar::MergeCandidateMessage::Chunk(_) => IngressPolicy::bulk(),
+            },
             iroha_core::NetworkMessage::NativeAmx(_) => IngressPolicy::critical(),
             iroha_core::NetworkMessage::BlockSync(_) => IngressPolicy::bulk(),
             _ => IngressPolicy::limited(),
@@ -1870,7 +1905,11 @@ impl NetworkRelayShared {
 
         if matches!(
             &msg,
-            SumeragiBlock(_) | SumeragiControlFlow(_) | BlockSync(_)
+            SumeragiBlock(_)
+                | SumeragiControlFlow(_)
+                | CertifiedMergeSidecar(_)
+                | MergeCandidate(_)
+                | BlockSync(_)
         ) {
             let reason = {
                 let mut limiter = self
@@ -1892,6 +1931,25 @@ impl NetworkRelayShared {
                 let (kind, height, view) = match &msg {
                     SumeragiBlock(data) => Self::block_message_meta(data.as_ref().as_ref()),
                     SumeragiControlFlow(data) => Self::control_flow_meta(data.as_ref()),
+                    CertifiedMergeSidecar(data) => match data.as_ref() {
+                        iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_) => {
+                            ("CertifiedMergeSidecarRequest", None, None)
+                        }
+                        iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Chunk(_) => {
+                            ("CertifiedMergeSidecarChunk", None, None)
+                        }
+                    },
+                    MergeCandidate(data) => match data.as_ref() {
+                        iroha_core::merge_sidecar::MergeCandidateMessage::Advert(_) => {
+                            ("MergeCandidateAdvert", None, None)
+                        }
+                        iroha_core::merge_sidecar::MergeCandidateMessage::Request(_) => {
+                            ("MergeCandidateRequest", None, None)
+                        }
+                        iroha_core::merge_sidecar::MergeCandidateMessage::Chunk(_) => {
+                            ("MergeCandidateChunk", None, None)
+                        }
+                    },
                     BlockSync(data) => {
                         let label = match data.as_ref() {
                             iroha_core::block_sync::message::Message::GetBlocksAfter(_) => {
@@ -1981,6 +2039,16 @@ impl NetworkRelayShared {
             }
             MergeCommitteeSignature(signature) => {
                 let _ = self.sumeragi.try_incoming_merge_signature(*signature);
+            }
+            CertifiedMergeSidecar(message) => {
+                let _ = self
+                    .sumeragi
+                    .try_incoming_certified_merge_sidecar(peer.id().clone(), *message);
+            }
+            MergeCandidate(message) => {
+                let _ = self
+                    .sumeragi
+                    .try_incoming_merge_candidate(peer.id().clone(), *message);
             }
             NativeAmx(message) => {
                 let _ = self
@@ -2230,6 +2298,26 @@ impl NetworkRelayShared {
                 "LaneBlockProposal",
                 Some(proposal.descriptor.lane_block_height),
                 Some(proposal.descriptor.lane_block_view),
+            ),
+            LaneExecutablePayload(payload) => (
+                "LaneExecutablePayload",
+                Some(payload.origin_proposal.descriptor.lane_block_height),
+                Some(payload.origin_proposal.descriptor.lane_block_view),
+            ),
+            LaneExecutablePayloadHandoff(handoff) => (
+                "LaneExecutablePayloadHandoff",
+                Some(handoff.origin_proposal.descriptor.lane_block_height),
+                Some(handoff.origin_proposal.descriptor.lane_block_view),
+            ),
+            LaneBlockNewViewVote(vote) => (
+                "LaneBlockNewViewVote",
+                Some(vote.body.lane_block_height),
+                Some(vote.body.target_view),
+            ),
+            LaneBlockNewViewCertificate(certificate) => (
+                "LaneBlockNewViewCertificate",
+                Some(certificate.body.lane_block_height),
+                Some(certificate.body.target_view),
             ),
             LaneBlockVote(vote) => {
                 let label = match vote.body.phase {
@@ -2840,6 +2928,7 @@ mod network_relay_tests {
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
+            lane_incarnation: Hash::new(b"irohad-lane-fixture-incarnation"),
             proposal_height: 5,
             previous_lane_block_height: 4,
             previous_lane_block_descriptor_hash: Some(Hash::prehashed([0x50; 32])),
@@ -2868,12 +2957,11 @@ mod network_relay_tests {
         proposal
     }
 
-    fn sample_lane_block_vote(
-        phase: Phase,
-    ) -> iroha_core::lane_consensus::LaneBlockVoteV1 {
+    fn sample_lane_block_vote(phase: Phase) -> iroha_core::lane_consensus::LaneBlockVoteV1 {
         let proposal = sample_lane_block_proposal();
         iroha_core::lane_consensus::LaneBlockVoteV1 {
             body: proposal.vote_body(phase),
+            payload_availability_vote: None,
             signer: proposal.descriptor.validator_set[0].clone(),
             bls_signature: vec![0xAA],
         }
@@ -2888,13 +2976,12 @@ mod network_relay_tests {
             validator_set: proposal.descriptor.validator_set.clone(),
             signers_bitmap: vec![0b1],
             bls_aggregate_signature: vec![0xBB],
+            payload_availability_qc: None,
         }
     }
 
     fn lane_block_proposal_msg() -> iroha_core::NetworkMessage {
-        sumeragi_msg(BlockMessage::LaneBlockProposal(
-            sample_lane_block_proposal(),
-        ))
+        sumeragi_msg(BlockMessage::LaneBlockProposal(sample_lane_block_proposal()))
     }
 
     fn lane_block_vote_msg(phase: Phase) -> iroha_core::NetworkMessage {
@@ -3871,10 +3958,51 @@ fn apply_state_config_before_kura_replay(
     state.set_pipeline(config.pipeline.clone());
     state.set_zk(config.zk.clone());
     state.set_sumeragi_pacing_governor(config.sumeragi.pacing_governor);
+    let restored_runtime = state
+        .nexus_runtime_restored_from_snapshot()
+        .then(|| state.nexus_snapshot());
+    let nexus = nexus_config_for_startup_replay(config.nexus.clone(), restored_runtime.as_ref());
     state
-        .set_nexus(config.nexus.clone())
+        .set_nexus_from_config(nexus)
         .map_err(|err| Report::new(err).change_context(StartError::InitKura))
-        .map_err(|report| report.attach("failed to apply Nexus lane catalog/lifecycle at startup"))
+        .map_err(|report| {
+            report.attach("failed to apply Nexus lane catalog/lifecycle at startup")
+        })?;
+    if restored_runtime.is_some() {
+        state
+            .restore_kura_lane_segments_from_nexus()
+            .map_err(|err| Report::new(err).change_context(StartError::InitKura))
+            .map_err(|report| {
+                report.attach("failed to restore snapshot Nexus lane storage at startup")
+            })?;
+    }
+    Ok(())
+}
+
+fn nexus_config_for_startup_replay(
+    mut configured: iroha_config::parameters::actual::Nexus,
+    restored: Option<&iroha_config::parameters::actual::Nexus>,
+) -> iroha_config::parameters::actual::Nexus {
+    let Some(restored) = restored else {
+        return configured;
+    };
+    // A snapshot is a committed WSV checkpoint. Preserve its effective lane
+    // topology and autoscale cooldown while refreshing all static policy knobs
+    // from local configuration. Silently replacing either stateful value here
+    // can recreate a retired lane or permit an immediate duplicate transition.
+    configured.lane_catalog = restored.lane_catalog.clone();
+    configured.lane_config = restored.lane_config.clone();
+    configured.autoscale.last_transition_height = restored.autoscale.last_transition_height;
+    configured
+}
+
+/// Return the effective post-replay Nexus configuration used by runtime
+/// admission, routing, and manifest surfaces.
+///
+/// Replay can commit manual or autoscale lane lifecycle transitions, so the
+/// process configuration is no longer authoritative at this boundary.
+fn nexus_for_runtime_surfaces(state: &State) -> iroha_config::parameters::actual::Nexus {
+    state.nexus_snapshot()
 }
 
 fn checkpointed_snapshot_catchup_prune_height(
@@ -4078,6 +4206,114 @@ mod snapshot_read_error_tests {
             None
         );
     }
+
+    #[test]
+    fn startup_nexus_merge_preserves_snapshot_topology_and_cooldown_only() {
+        use std::num::{NonZeroU32, NonZeroU64};
+
+        use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
+        use iroha_data_model::nexus::{LaneCatalog, LaneConfig, LaneId};
+
+        let catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lane namespace"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "snapshot-lane".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("snapshot catalog");
+        let mut restored = iroha_config::parameters::actual::Nexus::default();
+        restored.lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        restored.lane_catalog = catalog.clone();
+        restored.configured_lane_catalog = catalog.clone();
+        restored.autoscale.last_transition_height = 17;
+        restored.autoscale.target_block_ms = NonZeroU64::new(777).expect("nonzero target");
+
+        let mut configured = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            ..Default::default()
+        };
+        configured.autoscale.target_block_ms = NonZeroU64::new(321).expect("nonzero target");
+        let merged = nexus_config_for_startup_replay(configured, Some(&restored));
+
+        assert!(merged.enabled);
+        assert_eq!(merged.lane_catalog, catalog);
+        assert_eq!(merged.lane_config.entries().len(), 2);
+        assert_eq!(merged.autoscale.last_transition_height, 17);
+        assert_eq!(merged.autoscale.target_block_ms.get(), 321);
+        assert_eq!(
+            merged.configured_lane_catalog,
+            iroha_data_model::nexus::LaneCatalog::default(),
+            "snapshot topology must not replace the process-configured baseline"
+        );
+    }
+
+    #[test]
+    fn startup_nexus_merge_uses_config_for_legacy_snapshot() {
+        let mut configured = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            ..Default::default()
+        };
+        configured.autoscale.last_transition_height = 9;
+
+        let merged = nexus_config_for_startup_replay(configured, None);
+
+        assert!(merged.enabled);
+        assert_eq!(
+            merged.lane_catalog,
+            iroha_data_model::nexus::LaneCatalog::default()
+        );
+        assert_eq!(merged.autoscale.last_transition_height, 9);
+    }
+
+    #[test]
+    fn runtime_surfaces_use_post_replay_lane_catalog() {
+        use std::num::NonZeroU32;
+
+        use iroha_data_model::nexus::{LaneCatalog, LaneConfig, LaneId};
+
+        let configured = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            ..Default::default()
+        };
+        let mut replayed = configured.clone();
+        replayed.lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("non-zero lane count"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "replayed-runtime-lane".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("valid replayed lane catalog");
+
+        let mut state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state
+            .set_nexus(replayed)
+            .expect("install replayed Nexus topology");
+
+        let runtime = nexus_for_runtime_surfaces(&state);
+        assert_ne!(runtime.lane_catalog, configured.lane_catalog);
+        assert!(
+            runtime
+                .lane_catalog
+                .lanes()
+                .iter()
+                .any(|lane| lane.id == LaneId::new(1)),
+            "runtime queue and manifest setup must see the replayed lane"
+        );
+    }
 }
 
 impl Iroha {
@@ -4258,10 +4494,11 @@ impl Iroha {
                         &config.nexus.dataspace_catalog,
                     );
                 }
-                State::new(
+                State::new_with_chain(
                     world,
                     Arc::clone(&kura),
                     live_query_store.clone(),
+                    config.common.chain.clone(),
                     #[cfg(feature = "telemetry")]
                     state_telemetry.clone(),
                 )
@@ -4291,10 +4528,11 @@ impl Iroha {
                         &config.nexus.dataspace_catalog,
                     );
                 }
-                State::new(
+                State::new_with_chain(
                     world,
                     Arc::clone(&kura),
                     live_query_store.clone(),
+                    config.common.chain.clone(),
                     #[cfg(feature = "telemetry")]
                     state_telemetry.clone(),
                 )
@@ -4320,9 +4558,10 @@ impl Iroha {
 
         if loaded_state_from_snapshot && block_count.0 > state.committed_height() {
             let latest_checkpoint_height = kura
-                .latest_wsv_checkpoint_height_at_or_before(u64::try_from(block_count.0).map_err(
-                    |err| Report::new(StartError::InitKura).attach(err),
-                )?)
+                .latest_wsv_checkpoint_height_at_or_before(
+                    u64::try_from(block_count.0)
+                        .map_err(|err| Report::new(StartError::InitKura).attach(err))?,
+                )
                 .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
             if let Some(prune_height) = checkpointed_snapshot_catchup_prune_height(
                 state.committed_height(),
@@ -4384,28 +4623,42 @@ impl Iroha {
         let (events_sender, _) = broadcast::channel(config.torii.events_buffer_capacity.get());
         // Register pipeline events sender for ZK lane reporting
         iroha_core::pipeline::zk_lane::register_events_sender(events_sender.clone());
-        let router: Arc<dyn LaneRouter> = if should_use_config_router(&config.nexus) {
+        // Kura replay can advance consensus-owned Nexus topology beyond the
+        // process configuration (manual lifecycle transactions and autoscale
+        // transitions both do so). Seed every admission/manifest surface from
+        // the effective replayed state, otherwise a restarted node briefly
+        // routes with the stale startup catalog and never installs state-side
+        // manifest bindings for restored lanes.
+        let runtime_nexus = nexus_for_runtime_surfaces(&state);
+        let router: Arc<dyn LaneRouter> = if should_use_config_router(&runtime_nexus) {
             Arc::new(ConfigLaneRouter::new(
-                config.nexus.routing_policy.clone(),
-                config.nexus.dataspace_catalog.clone(),
-                config.nexus.lane_catalog.clone(),
+                runtime_nexus.routing_policy.clone(),
+                runtime_nexus.dataspace_catalog.clone(),
+                runtime_nexus.lane_catalog.clone(),
             ))
         } else {
             Arc::new(SingleLaneRouter::new())
         };
-        let queue_limits = iroha_core::queue::QueueLimits::from_nexus(&config.nexus);
-        let lane_catalog = Arc::new(config.nexus.lane_catalog.clone());
-        let dataspace_catalog = Arc::new(config.nexus.dataspace_catalog.clone());
-        let governance_catalog = Arc::new(config.nexus.governance.clone());
-        let registry_cfg = config.nexus.registry.clone();
-        let lane_compliance = if config.nexus.compliance.enabled {
-            let dir = config.nexus.compliance.policy_dir.as_ref().ok_or_else(|| {
-                Report::new(StartError::InitKura)
-                    .attach("lane compliance enabled but no policy_dir configured")
-            })?;
+        let queue_limits = iroha_core::queue::QueueLimits::from_nexus(&runtime_nexus);
+        let lane_catalog = Arc::new(runtime_nexus.lane_catalog.clone());
+        let dataspace_catalog = Arc::new(runtime_nexus.dataspace_catalog.clone());
+        let governance_catalog = Arc::new(runtime_nexus.governance.clone());
+        let registry_cfg = runtime_nexus.registry.clone();
+        let lane_compliance = if runtime_nexus.compliance.enabled {
+            let dir = runtime_nexus
+                .compliance
+                .policy_dir
+                .as_ref()
+                .ok_or_else(|| {
+                    Report::new(StartError::InitKura)
+                        .attach("lane compliance enabled but no policy_dir configured")
+                })?;
             let engine =
-                LaneComplianceEngine::from_directory(dir, config.nexus.compliance.audit_only)
+                LaneComplianceEngine::from_directory(dir, runtime_nexus.compliance.audit_only)
                     .map_err(|err| Report::new(err).change_context(StartError::InitKura))?;
+            engine
+                .validate_active_catalog(lane_catalog.as_ref())
+                .map_err(|err| Report::new(err).change_context(StartError::InitKura))?;
             Some(Arc::new(engine))
         } else {
             None
@@ -4424,14 +4677,16 @@ impl Iroha {
         let mut lane_manifest_task = None;
         #[cfg(not(feature = "telemetry"))]
         let mut lane_manifest_task = None;
-        if config.nexus.enabled {
+        if runtime_nexus.enabled {
             let lane_manifests = Arc::new(LaneManifestRegistry::from_config(
                 lane_catalog.as_ref(),
                 governance_catalog.as_ref(),
                 &registry_cfg,
             ));
-            queue.install_lane_manifests(&lane_manifests);
-            state.install_lane_manifests(&lane_manifests);
+            lane_manifests
+                .validate_active_coverage()
+                .map_err(|err| Report::new(err).change_context(StartError::InitKura))?;
+            queue.install_lane_manifests_with_state(&lane_manifests, &state);
             state
                 .telemetry
                 .set_lane_manifest_registry(Arc::clone(&lane_manifests));
@@ -4462,13 +4717,43 @@ impl Iroha {
                 lane_manifest_task = Some((queue_task, governance_task, registry_cfg_task));
             }
         } else {
-            let empty_registry = Arc::new(LaneManifestRegistry::empty());
-            queue.install_lane_manifests(&empty_registry);
-            state.install_lane_manifests(&empty_registry);
+            let empty_registry = Arc::new(
+                LaneManifestRegistry::empty()
+                    .rebind(lane_catalog.as_ref(), governance_catalog.as_ref()),
+            );
+            queue.install_lane_manifests_with_state(&empty_registry, &state);
             state
                 .telemetry
                 .set_lane_manifest_registry(Arc::clone(&empty_registry));
         }
+        // Independent lane producers transfer FIFO ownership before they
+        // publish any payload bytes. Install and replay that durable ownership
+        // journal before the ordinary queue-plan journal can reinsert pending
+        // transactions, regardless of whether plan journaling is enabled.
+        let lane_reservation_journal_path = config
+            .kura
+            .store_dir
+            .resolve_relative_path()
+            .join("lane_queue_reservations.norito");
+        let lane_reservation_replay = queue
+            .install_lane_reservation_journal(
+                &lane_reservation_journal_path,
+                config.queue.plan_journal_max_bytes,
+            )
+            .map_err(|err| {
+                Report::new(StartError::InitKura).attach(format!(
+                    "failed to open lane queue reservation journal {}: {err}",
+                    lane_reservation_journal_path.display()
+                ))
+            })?;
+        iroha_logger::info!(
+            path = %lane_reservation_journal_path.display(),
+            restored = lane_reservation_replay.restored,
+            awaiting_transaction_replay = lane_reservation_replay.awaiting_transaction_replay,
+            commit_barriers = lane_reservation_replay.commit_barriers,
+            "lane queue reservation journal installed"
+        );
+
         if config.queue.plan_journal_enabled {
             let journal_path = config
                 .kura
@@ -4507,9 +4792,28 @@ impl Iroha {
                 rejected = replay_summary.rejected,
                 "queue plan journal installed"
             );
+        } else {
+            queue
+                .finalize_plan_journal_startup_disabled()
+                .map_err(|err| {
+                    Report::new(StartError::InitKura).attach(format!(
+                        "failed to finalize disabled queue plan journal startup: {err}"
+                    ))
+                })?;
         }
 
-        let config_caps = build_consensus_config_caps(&config.sumeragi)?;
+        let compliance_policy_digest = state
+            .lane_compliance_engine()
+            .map(|engine| engine.consensus_policy_digest());
+        let lane_manifest_policy_digest =
+            Some(state.lane_manifests.read().consensus_policy_digest());
+        let config_caps = build_consensus_config_caps(
+            &config.sumeragi,
+            &state.nexus_snapshot(),
+            compliance_policy_digest,
+            lane_manifest_policy_digest,
+        )?;
+        iroha_core::sumeragi::status::set_consensus_caps(&config_caps);
         let consensus_caps_override =
             stored_genesis_block
                 .as_ref()
@@ -4538,7 +4842,7 @@ impl Iroha {
                 &config,
                 &config_caps,
                 consensus_caps_override.clone(),
-            );
+            )?;
             (mode_tag, bls_domain, caps, confidential_features)
         };
         iroha_logger::info!(
@@ -4548,6 +4852,7 @@ impl Iroha {
             "Consensus handshake caps"
         );
 
+        let mut staged_v2_genesis = None;
         if let Some(genesis_block) = genesis.as_ref() {
             let metadata_genesis = stored_genesis_block.as_ref().unwrap_or(genesis_block);
             if let Err(err) = verify_genesis_metadata(
@@ -4799,6 +5104,34 @@ impl Iroha {
                     "non-empty block store detected; using stored genesis for restart",
                 );
             } else {
+                let (fresh_mode_tag, fresh_bls_domain, fresh_caps) = consensus_caps_from_genesis(
+                    genesis_block,
+                    &config.common.chain,
+                    &config_caps,
+                    &config.sumeragi,
+                )
+                .ok_or_else(|| {
+                    Report::new(StartError::InitKura).attach(
+                        "fresh genesis is missing required signed Sumeragi v2 consensus metadata",
+                    )
+                })?;
+                verify_genesis_metadata(
+                    genesis_block,
+                    &config,
+                    &fresh_caps,
+                    &fresh_mode_tag,
+                    &fresh_bls_domain,
+                    proto,
+                )
+                .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
+                if fresh_caps.consensus_fingerprint != consensus_caps.consensus_fingerprint
+                    || fresh_caps.mode_tag != consensus_caps.mode_tag
+                    || fresh_caps.proto_version != consensus_caps.proto_version
+                {
+                    return Err(Report::new(StartError::InitKura).attach(
+                        "fresh signed genesis consensus metadata differs from the peer handshake opened for bootstrap",
+                    ));
+                }
                 let genesis_account = AccountId::new(effective_genesis_public_key.clone());
                 if let Err(err) = iroha_core::validate_genesis_block(
                     &genesis_block.0,
@@ -4817,50 +5150,22 @@ impl Iroha {
                         .change_context(StartError::InitKura));
                 }
 
-                // Ensure genesis instructions execute successfully before starting consensus.
-                // Use the configured trusted peers as the initial commit topology when the
-                // state hasn't recorded one yet (fresh storage). This ensures the genesis
-                // application seeds the validator roster with the full cluster rather than
-                // a single local peer, which would otherwise isolate the node and stall
-                // consensus.
-                let commit_topology: Vec<_> = {
-                    let peers = state.commit_topology_snapshot();
-                    if peers.is_empty() {
-                        let mut validator_roster =
-                            filter_validators_from_trusted(config.common.trusted_peers.value());
-                        if validator_roster.is_empty() {
-                            validator_roster = config
-                                .common
-                                .trusted_peers
-                                .value()
-                                .clone()
-                                .into_non_empty_vec()
-                                .into_iter()
-                                .collect();
-                        }
-                        let me = config.common.peer.id();
-                        let is_validator = matches!(
-                            config.sumeragi.role,
-                            iroha_config::parameters::actual::NodeRole::Validator
-                        );
-                        if is_validator {
-                            if !validator_roster.iter().any(|p| p == me) {
-                                validator_roster.push(me.clone());
-                            }
-                        } else {
-                            validator_roster.retain(|p| p != me);
-                        }
-                        if validator_roster.is_empty() && is_validator {
-                            validator_roster.push(me.clone());
-                        }
-                        validator_roster
-                    } else {
-                        peers
-                    }
-                };
-                let topology = Topology::new(commit_topology.clone());
+                // Execute genesis in a disposable state overlay. The signed
+                // RegisterPeerWithPop set is the only allowed height-one voting
+                // topology; plain peer registrations are observers.
+                let signed_voters = iroha_core::sumeragi::signed_genesis_voting_peers(
+                    genesis_block,
+                )
+                .map_err(|error| {
+                    Report::new(StartError::InitKura).attach(format!(
+                        "invalid signed Sumeragi v2 genesis roster: {error}"
+                    ))
+                })?;
+                let topology = Topology::new(signed_voters);
                 let time_source = TimeSource::new_system();
                 let mut voting_block: Option<VotingBlock> = None;
+                let committed_height_before_staging = state.committed_height();
+                let block_count_before_staging = block_count;
                 let validation = ValidBlock::validate_keep_voting_block(
                     genesis_block.0.clone(),
                     &topology,
@@ -4873,68 +5178,40 @@ impl Iroha {
                 )
                 .unpack(|_| {});
                 match validation {
-                    Ok((valid_block, mut state_block)) => {
-                        let committed_block = valid_block.commit_unchecked().unpack(|_| {});
-                        let events = state_block
-                            .apply_without_execution(&committed_block, commit_topology.clone());
-                        state_block.commit().map_err(|err| {
-                            Report::new(StartError::InitKura)
-                                .attach(format!("failed to commit injected genesis state: {err}"))
-                        })?;
-                        let params_snapshot = {
-                            let world = state.world_view();
-                            let params = world.parameters();
-                            (
-                                params.block().max_transactions().get(),
-                                params.smart_contract().execution_depth(),
-                                params.executor().execution_depth(),
+                    Ok((_valid_block, state_block)) => {
+                        let (mode, signed_parameters) =
+                            signed_v2_genesis_context_metadata(genesis_block)
+                                .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
+                        staged_v2_genesis = Some(
+                            iroha_core::sumeragi::freeze_staged_genesis_v2(
+                                genesis_block,
+                                &state_block,
+                                mode,
+                                signed_parameters,
                             )
-                        };
-                        iroha_logger::debug!(
-                            height = committed_block.as_ref().header().height().get(),
-                            max_tx = params_snapshot.0,
-                            sc_depth = params_snapshot.1,
-                            exec_depth = params_snapshot.2,
-                            "genesis parameters after commit"
+                            .map_err(|error| {
+                                Report::new(StartError::InitKura).attach(format!(
+                                    "failed to freeze staged Sumeragi v2 genesis: {error}"
+                                ))
+                            })?,
                         );
-                        if matches!(
-                            config.sumeragi.consensus_mode,
-                            iroha_config::parameters::actual::ConsensusMode::Npos
-                        ) {
-                            let (active_bls, active_total, pending, total) =
-                                effective_npos_validator_status_counts(&state);
-                            if active_bls == 0 {
-                                let stake_asset_id = config.nexus.staking.stake_asset_id.as_str();
-                                iroha_logger::error!(
-                                    active_bls,
-                                    active_total,
-                                    pending,
-                                    total,
-                                    stake_asset_id,
-                                    "NPoS genesis did not activate any BLS validators"
-                                );
-                                let err_msg = format!(
-                                    "NPoS genesis did not activate any BLS validators (active_total={active_total}, pending={pending}, total={total}). Ensure genesis either registers stake-elected validators with PoPs and stakes {stake_asset_id} for each topology peer (for example via `kagami localnet` or `kagami genesis sign --topology ... --peer-pop ...`) or provides live BLS peer consensus keys for admin-managed lanes."
-                                );
-                                return Err(Report::new(StartError::InitKura).attach(err_msg));
-                            }
+                        // Dropping StateBlock discards the overlay. Consensus
+                        // must persist a CommitQC decision before applying it.
+                        drop(state_block);
+                        if state.committed_height() != committed_height_before_staging
+                            || block_count.0 != block_count_before_staging.0
+                        {
+                            return Err(Report::new(StartError::InitKura).attach(
+                                "fresh genesis staging mutated committed state before consensus",
+                            ));
                         }
-                        for event in events {
-                            if let Err(err) = events_sender.send(event) {
-                                iroha_logger::debug!(
-                                    ?err,
-                                    "failed to send pipeline event while applying genesis"
-                                );
-                            }
-                        }
-                        kura.store_block(committed_block.clone())
-                            .map_err(|err| Report::new(err).change_context(StartError::InitKura))?;
-                        let genesis_height = committed_block.as_ref().header().height().get();
-                        let height_as_usize = usize::try_from(genesis_height).unwrap_or(usize::MAX);
-                        block_count.0 = block_count.0.max(height_as_usize);
                         iroha_logger::info!(
-                            height = genesis_height,
-                            "Applied genesis block to local storage"
+                            context_id = %staged_v2_genesis
+                                .as_ref()
+                                .expect("just staged")
+                                .context()
+                                .id(),
+                            "Validated and staged genesis without committing state or Kura"
                         );
                     }
                     Err((_failed_block, err)) => {
@@ -5018,7 +5295,12 @@ impl Iroha {
         let oracle_cfg = config.oracle.clone();
         let streaming_cfg = config.streaming.clone();
         let merge_cache_capacity = config.kura.merge_ledger_cache_capacity;
-        state.set_tiered_backend(&tiered_state_cfg);
+        state
+            .set_tiered_backend(&tiered_state_cfg)
+            .map_err(|err| Report::new(err).change_context(StartError::InitKura))
+            .map_err(|report| {
+                report.attach("failed to restore effective Nexus tiered lane geometry")
+            })?;
         state.set_pipeline(pipeline_cfg);
         state.set_sumeragi_parameters(&sumeragi_cfg);
         state.set_sumeragi_pacing_governor(sumeragi_cfg.pacing_governor);
@@ -5401,6 +5683,7 @@ impl Iroha {
             genesis_network: GenesisWithPubKey {
                 genesis: genesis_for_consensus,
                 public_key: effective_genesis_public_key.clone(),
+                v2_bootstrap: staged_v2_genesis,
             },
             block_count,
             block_sync_gossip_limit: usize::try_from(config.block_sync.gossip_size.get())
@@ -5437,7 +5720,11 @@ impl Iroha {
             background_post_tx,
             da_spool_dir: config.torii.da_ingest.manifest_store_dir.clone(),
         }
-        .start(supervisor.shutdown_signal());
+        .start(supervisor.shutdown_signal())
+        .map_err(|error| {
+            Report::new(StartError::InitKura)
+                .attach(format!("failed to initialize Sumeragi consensus: {error}"))
+        })?;
         supervisor.monitor(child);
         log_startup_trace("irohad.sumeragi.started", startup_trace_started_at);
 
@@ -5498,14 +5785,19 @@ impl Iroha {
             supervisor.monitor(snapshot_maker.start(supervisor.shutdown_signal()));
         }
 
-        let sorafs_node = sorafs_node::NodeHandle::new_with_policies(
+        let sorafs_node = sorafs_node::NodeHandle::try_new_with_policies(
             sorafs_node::config::StorageConfig::from(&config.torii.sorafs_storage),
             sorafs_node::config::RepairConfig::from_repair_and_policy(
                 &config.torii.sorafs_repair,
                 &state.gov.sorafs_repair_escalation,
             ),
             sorafs_node::config::GcConfig::from(&config.torii.sorafs_gc),
-        );
+        )
+        .map_err(|err| {
+            Report::new(StartError::StartTorii).attach(format!(
+                "failed to initialise embedded SoraFS runtime: {err}"
+            ))
+        })?;
         let shared_sorafs_cache = build_shared_sorafs_provider_cache(&config);
 
         let chain_id = Arc::new(config.common.chain.clone());
@@ -8746,6 +9038,9 @@ fn parse_confidential_registry_hash(payload: &Json) -> ReportResult<Option<[u8; 
 
 fn build_consensus_config_caps(
     sumeragi: &iroha_config::parameters::actual::Sumeragi,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    compliance_policy_digest: Option<[u8; 32]>,
+    lane_manifest_policy_digest: Option<[u8; 32]>,
 ) -> ReportResult<iroha_p2p::ConsensusConfigCaps, StartError> {
     let collectors_k = u16::try_from(sumeragi.collectors.k).map_err(|_| {
         Report::new(StartError::StartP2p)
@@ -8784,8 +9079,21 @@ fn build_consensus_config_caps(
     })?;
     let rbc_data_shards = sumeragi.rbc.effective_data_shards();
     let rbc_parity_shards = sumeragi.rbc.effective_parity_shards();
+    let nexus_policy_digest =
+        iroha_config::parameters::actual::nexus_consensus_policy_digest_with_runtime_policies(
+            nexus,
+            compliance_policy_digest,
+            lane_manifest_policy_digest,
+        )
+        .map_err(|err| {
+            Report::new(StartError::StartP2p).attach(format!(
+                "failed to construct Nexus consensus-policy digest: {err}"
+            ))
+        })?;
 
     Ok(iroha_p2p::ConsensusConfigCaps {
+        nexus_policy_digest,
+        v2_config_fingerprint: [0; 32],
         collectors_k,
         redundant_send_r: sumeragi.collectors.redundant_send_r,
         da_enabled: sumeragi.da.enabled,
@@ -8848,8 +9156,20 @@ fn consensus_caps_from_genesis(
         })
         .or_else(|| handshake_entries.first())?;
 
-    let (mode_tag, _consensus_params, computed_fingerprint) =
+    let (mode_tag, consensus_params, computed_fingerprint) =
         consensus_entry_caps(chain_id, entry, &params, sumeragi);
+    let mode = match mode_tag.as_str() {
+        iroha_core::sumeragi::consensus::NPOS_TAG => {
+            iroha_data_model::block::consensus_v2::ConsensusMode::Npos
+        }
+        _ => iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+    };
+    let mut config_caps = *config_caps;
+    config_caps.v2_config_fingerprint = sumeragi
+        .v2_config(Duration::from_millis(consensus_params.block_time_ms), mode)
+        .ok()?
+        .fingerprint()
+        .into();
 
     Some((
         mode_tag.clone(),
@@ -8858,9 +9178,63 @@ fn consensus_caps_from_genesis(
             mode_tag,
             proto_version: iroha_core::sumeragi::consensus::PROTO_VERSION,
             consensus_fingerprint: computed_fingerprint,
-            config: *config_caps,
+            config: config_caps,
         },
     ))
+}
+
+fn signed_v2_genesis_context_metadata(
+    genesis: &GenesisBlock,
+) -> Result<
+    (
+        iroha_data_model::block::consensus_v2::ConsensusMode,
+        iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
+    ),
+    String,
+> {
+    let mut matches = Vec::new();
+    for transaction in genesis.0.external_transactions() {
+        let Executable::Instructions(instructions) = transaction.instructions() else {
+            return Err(
+                "Sumeragi v2 genesis metadata must be carried by instruction batches".to_owned(),
+            );
+        };
+        for set_parameter in instructions
+            .iter()
+            .filter_map(|instruction| instruction.as_any().downcast_ref::<SetParameter>())
+        {
+            let Parameter::Custom(custom) = set_parameter.inner() else {
+                continue;
+            };
+            if custom.id() != &consensus_metadata::handshake_meta_id() {
+                continue;
+            }
+            let metadata = decode_consensus_handshake_meta(custom.payload())
+                .map_err(|error| error.to_string())?;
+            if metadata.wire_proto_versions.contains(&u32::from(
+                iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
+            )) {
+                matches.push(metadata);
+            }
+        }
+    }
+    if matches.len() != 1 {
+        return Err(format!(
+            "Sumeragi v2 genesis requires exactly one signed v2 handshake metadata entry, found {}",
+            matches.len()
+        ));
+    }
+    let metadata = matches.pop().expect("length checked");
+    metadata
+        .sumeragi_v2
+        .validate()
+        .map_err(|error| error.to_string())?;
+    let mode = match metadata.mode.as_str() {
+        "Permissioned" => iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+        "Npos" => iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
+        other => return Err(format!("unsupported signed consensus mode `{other}`")),
+    };
+    Ok((mode, metadata.sumeragi_v2))
 }
 
 fn parse_consensus_handshake_fingerprint(raw: &str) -> Option<[u8; 32]> {
@@ -8884,7 +9258,7 @@ fn consensus_entry_caps(
         "Npos" => iroha_core::sumeragi::consensus::NPOS_TAG,
         _ => iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
     };
-    let consensus_params =
+    let mut consensus_params =
         iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
             chain_id,
             &mode_tag,
@@ -8892,6 +9266,7 @@ fn consensus_entry_caps(
             params,
             sumeragi,
         );
+    consensus_params.v2_context = Some(entry.sumeragi_v2);
 
     let fingerprint = iroha_core::sumeragi::consensus::compute_consensus_fingerprint_from_params(
         chain_id,
@@ -8908,9 +9283,9 @@ fn compute_consensus_handshake_caps(
     config: &Config,
     config_caps: &iroha_p2p::ConsensusConfigCaps,
     override_caps: Option<(String, String, iroha_p2p::ConsensusHandshakeCaps)>,
-) -> (String, String, iroha_p2p::ConsensusHandshakeCaps) {
+) -> ReportResult<(String, String, iroha_p2p::ConsensusHandshakeCaps), StartError> {
     if let Some((mode_tag, bls_domain, caps)) = override_caps {
-        return (mode_tag, bls_domain, caps);
+        return Ok((mode_tag, bls_domain, caps));
     }
 
     iroha_core::sumeragi::consensus::compute_consensus_handshake_caps_from_world(
@@ -8920,6 +9295,10 @@ fn compute_consensus_handshake_caps(
         &config.sumeragi,
         config_caps,
     )
+    .map_err(|error| {
+        Report::new(StartError::StartP2p)
+            .attach(format!("invalid shared Sumeragi v2 configuration: {error}"))
+    })
 }
 
 fn npos_validator_status_counts<'a>(
@@ -9108,7 +9487,7 @@ fn verify_genesis_metadata(
     ensure_crypto_snapshot_matches_config(&manifest_crypto, config)
         .map_err(|err| Report::new(MainError::Config).attach(err))?;
 
-    let consensus_params =
+    let mut consensus_params =
         iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
             &config.common.chain,
             mode_tag,
@@ -9116,6 +9495,7 @@ fn verify_genesis_metadata(
             &params,
             &config.sumeragi,
         );
+    consensus_params.v2_context = Some(matched_meta.sumeragi_v2);
     let computed_fp = iroha_core::sumeragi::consensus::compute_consensus_fingerprint_from_params(
         &config.common.chain,
         &consensus_params,
@@ -9940,7 +10320,7 @@ mod tests {
     mod manifest_crypto_checks {
         use super::*;
         use iroha_config::base::toml::TomlSource;
-        use iroha_genesis::{GenesisBuilder, ManifestCrypto};
+        use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, ManifestCrypto};
 
         fn sample_manifest() -> RawGenesisTransaction {
             GenesisBuilder::new_without_executor(ChainId::from("test-chain"), PathBuf::from("."))
@@ -10089,8 +10469,9 @@ mod tests {
             assert_eq!(fp_bytes.len(), 32, "fingerprint must be 32 bytes");
             let mut consensus_fingerprint = [0u8; 32];
             consensus_fingerprint.copy_from_slice(&fp_bytes);
-            let config_caps = build_consensus_config_caps(&config.sumeragi)
-                .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
+            let config_caps =
+                build_consensus_config_caps(&config.sumeragi, &config.nexus, None, None)
+                    .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
             let consensus_caps = iroha_p2p::ConsensusHandshakeCaps {
                 mode_tag: mode_tag.clone(),
                 proto_version: proto,
@@ -10206,6 +10587,100 @@ mod tests {
         }
 
         #[test]
+        fn fresh_v2_genesis_staging_does_not_commit_state_or_kura() {
+            use std::sync::Arc;
+
+            use iroha_core::{block::ValidBlock, kura::Kura, query::store::LiveQueryStore};
+
+            let _registry_guard = instruction_registry_test_guard();
+            iroha_genesis::init_instruction_registry();
+
+            let chain_id = ChainId::from("fresh-v2-genesis-staging-test");
+            let genesis_authority = iroha_crypto::KeyPair::try_from_seed(
+                b"fresh-v2-genesis-authority".to_vec(),
+                Algorithm::Ed25519,
+            )
+            .expect("deterministic genesis authority");
+            let voter_keys = (0_u8..4)
+                .map(|index| {
+                    iroha_crypto::KeyPair::try_from_seed(
+                        vec![0x70 + index; 32],
+                        Algorithm::BlsNormal,
+                    )
+                    .expect("deterministic BLS voter")
+                })
+                .collect::<Vec<_>>();
+            let topology = voter_keys
+                .iter()
+                .map(|key| {
+                    let pop =
+                        iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("BLS PoP");
+                    GenesisTopologyEntry::new(PeerId::new(key.public_key().clone()), pop)
+                })
+                .collect::<Vec<_>>();
+            let genesis = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
+                .set_topology(topology)
+                .build_and_sign(&genesis_authority)
+                .expect("signed genesis");
+
+            let authority_id = AccountId::new(genesis_authority.public_key().clone());
+            let world = World::with(
+                [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&authority_id)],
+                [Account::new(authority_id.clone()).build(&authority_id)],
+                [],
+            );
+            let kura = Kura::blank_kura_for_testing();
+            let state =
+                State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
+            let mut crypto = iroha_config::parameters::actual::Crypto::default();
+            if !crypto.allowed_signing.contains(&Algorithm::BlsNormal) {
+                crypto.allowed_signing.push(Algorithm::BlsNormal);
+            }
+            state.set_crypto(crypto);
+
+            let voters = iroha_core::sumeragi::signed_genesis_voting_peers(&genesis)
+                .expect("signed voting roster");
+            let topology = Topology::new(voters);
+            let before_height = state.committed_height();
+            let before_hashes = state.committed_block_hashes_snapshot();
+            let mut voting_block = None;
+            let (_valid, staged) = ValidBlock::validate_keep_voting_block(
+                genesis.0.clone(),
+                &topology,
+                &chain_id,
+                &authority_id,
+                &TimeSource::new_system(),
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {})
+            .expect("genesis executes in staging overlay");
+            let (mode, signed_parameters) =
+                signed_v2_genesis_context_metadata(&genesis).expect("signed v2 metadata");
+            let bootstrap = iroha_core::sumeragi::freeze_staged_genesis_v2(
+                &genesis,
+                &staged,
+                mode,
+                signed_parameters,
+            )
+            .expect("freeze staged height context");
+            assert_eq!(bootstrap.context().height, 1);
+            assert_eq!(bootstrap.context().roster.len(), voter_keys.len());
+            assert!(
+                bootstrap
+                    .context()
+                    .roster
+                    .iter()
+                    .all(|entry| entry.power == 1)
+            );
+            drop(staged);
+
+            assert_eq!(state.committed_height(), before_height);
+            assert_eq!(state.committed_block_hashes_snapshot(), before_hashes);
+        }
+
+        #[test]
         fn consensus_caps_follow_activation_height() {
             use iroha_core::{kura::Kura, query::store::LiveQueryStore};
 
@@ -10227,15 +10702,26 @@ mod tests {
             let world = state.world_view();
             let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
             let config_caps =
-                build_consensus_config_caps(&config.sumeragi).expect("config caps should build");
+                build_consensus_config_caps(&config.sumeragi, &config.nexus, None, None)
+                    .expect("config caps should build");
             let (mode_tag_perm, bls_perm, caps_perm) =
-                compute_consensus_handshake_caps(&world, height, &config, &config_caps, None);
+                compute_consensus_handshake_caps(&world, height, &config, &config_caps, None)
+                    .expect("valid permissioned v2 handshake config");
             assert_eq!(
                 mode_tag_perm,
                 iroha_core::sumeragi::consensus::PERMISSIONED_TAG
             );
-            assert_eq!(bls_perm, "bls-iroha2:permissioned-sumeragi:v1");
+            assert_eq!(bls_perm, "bls-iroha2:permissioned-sumeragi:v2");
+            assert_eq!(
+                caps_perm.config.nexus_policy_digest, config_caps.nexus_policy_digest,
+                "the Nexus policy digest remains an independent admission gate",
+            );
+            assert_ne!(
+                caps_perm.config.v2_config_fingerprint, [0; 32],
+                "the handshake must replace the pre-world placeholder with the canonical v2 fingerprint",
+            );
             let permissioned_fp = caps_perm.consensus_fingerprint;
+            let permissioned_v2_config_fp = caps_perm.config.v2_config_fingerprint;
 
             // After activation: height at or beyond the cutover switches to the staged NPoS mode.
             let world = World::new();
@@ -10251,9 +10737,18 @@ mod tests {
             let world = state.world_view();
             let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
             let (mode_tag_npos, bls_npos, caps_npos) =
-                compute_consensus_handshake_caps(&world, height, &config, &config_caps, None);
+                compute_consensus_handshake_caps(&world, height, &config, &config_caps, None)
+                    .expect("valid NPoS v2 handshake config");
             assert_eq!(mode_tag_npos, iroha_core::sumeragi::consensus::NPOS_TAG);
-            assert_eq!(bls_npos, "bls-iroha2:npos-sumeragi:v1");
+            assert_eq!(bls_npos, "bls-iroha2:npos-sumeragi:v2");
+            assert_eq!(
+                caps_npos.config.nexus_policy_digest,
+                config_caps.nexus_policy_digest,
+            );
+            assert_ne!(
+                permissioned_v2_config_fp, caps_npos.config.v2_config_fingerprint,
+                "the canonical shared-config fingerprint must bind the active v2 mode",
+            );
             assert_ne!(
                 permissioned_fp, caps_npos.consensus_fingerprint,
                 "mode cutover should change consensus fingerprint"
@@ -10267,8 +10762,8 @@ mod tests {
             config.sumeragi.rbc.data_shards = 4;
             config.sumeragi.rbc.parity_shards = 2;
 
-            let caps =
-                build_consensus_config_caps(&config.sumeragi).expect("config caps should build");
+            let caps = build_consensus_config_caps(&config.sumeragi, &config.nexus, None, None)
+                .expect("config caps should build");
             assert_eq!(
                 caps.rbc_encoding,
                 iroha_data_model::block::consensus::RbcEncoding::Plain
@@ -10295,15 +10790,17 @@ mod tests {
                 .with_consensus_meta();
             let genesis_block = manifest.build_and_sign(&genesis_keys)?;
 
-            let config_caps = build_consensus_config_caps(&config.sumeragi)
-                .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
+            let config_caps =
+                build_consensus_config_caps(&config.sumeragi, &config.nexus, None, None)
+                    .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             let state = State::new_for_testing(World::new(), kura, query);
             let world = state.world_view();
             let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
             let (mode_tag, bls_domain, consensus_caps) =
-                compute_consensus_handshake_caps(&world, height, &config, &config_caps, None);
+                compute_consensus_handshake_caps(&world, height, &config, &config_caps, None)
+                    .expect("valid v2 handshake config");
 
             let proto = iroha_core::sumeragi::consensus::PROTO_VERSION;
             let err = verify_genesis_metadata(
@@ -10355,15 +10852,17 @@ mod tests {
                 norito::json::value::from_value(manifest_value).expect("decode tampered manifest");
             let genesis_block = tampered.build_and_sign(&genesis_keys)?;
 
-            let config_caps = build_consensus_config_caps(&config.sumeragi)
-                .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
+            let config_caps =
+                build_consensus_config_caps(&config.sumeragi, &config.nexus, None, None)
+                    .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             let state = State::new_for_testing(World::new(), kura, query);
             let world = state.world_view();
             let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
             let (mode_tag, bls_domain, consensus_caps) =
-                compute_consensus_handshake_caps(&world, height, &config, &config_caps, None);
+                compute_consensus_handshake_caps(&world, height, &config, &config_caps, None)
+                    .expect("valid v2 handshake config");
 
             // Diverge the runtime chain after computing consensus caps to force a
             // fingerprint mismatch without altering the embedded handshake metadata.

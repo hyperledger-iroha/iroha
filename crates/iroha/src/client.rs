@@ -37,7 +37,10 @@ use iroha_data_model::{
         pin_intent::DaPinIntentWithLocation,
         types::{BlobDigest, ExtraMetadata},
     },
-    nexus::{AssetPermissionManifest, UniversalAccountId},
+    nexus::{
+        AssetPermissionManifest, LaneLifecycleParameterV1, LaneLifecyclePlan,
+        LaneLifecycleStatusV1, UniversalAccountId,
+    },
     sorafs::moderation::{SoraFsModerationBallotCommitV1, SoraFsModerationBallotRevealV1},
 };
 use iroha_logger::prelude::*;
@@ -3715,6 +3718,37 @@ fn decode_status_response(resp: &Response<Vec<u8>>) -> Result<Status> {
     }
 }
 
+/// Decode and validate a `/v1/nexus/lifecycle` status response.
+fn decode_lane_lifecycle_status_response(
+    resp: &Response<Vec<u8>>,
+) -> Result<LaneLifecycleStatusV1> {
+    if resp.status() != StatusCode::OK {
+        return Err(ResponseReport::with_msg(
+            "Unexpected Nexus lane lifecycle status response",
+            resp,
+        )
+        .unwrap_or_else(core::convert::identity)
+        .into());
+    }
+
+    let is_json = resp
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|content_type| content_type.starts_with(APPLICATION_JSON));
+    let status = if is_json {
+        norito::json::from_slice::<LaneLifecycleStatusV1>(resp.body())
+            .wrap_err("failed to decode Nexus lane lifecycle status JSON")?
+    } else {
+        decode_from_bytes::<LaneLifecycleStatusV1>(resp.body())
+            .map_err(|err| eyre!("failed to decode Nexus lane lifecycle status Norito: {err}"))?
+    };
+    status
+        .validate()
+        .wrap_err("invalid Nexus lane lifecycle status")?;
+    Ok(status)
+}
+
 fn decode_parameters_response(
     resp: &Response<Vec<u8>>,
 ) -> Result<iroha_data_model::parameter::Parameters> {
@@ -5596,8 +5630,26 @@ impl Client {
 }
 
 #[cfg(test)]
+fn mk_response(status: StatusCode, body: Vec<u8>, content_type: Option<&str>) -> Response<Vec<u8>> {
+    let mut builder = Response::builder().status(status);
+    if let Some(ct) = content_type {
+        builder = builder.header("content-type", ct);
+    }
+    builder.body(body).unwrap()
+}
+
+#[cfg(test)]
+fn lifecycle_status(enabled: bool) -> LaneLifecycleStatusV1 {
+    let catalog = LaneCatalog::default();
+    let incarnations = std::collections::BTreeMap::from([(
+        LaneId::SINGLE,
+        Hash::new(b"client-lifecycle-status-incarnation"),
+    )]);
+    LaneLifecycleStatusV1::new(enabled, &catalog, &incarnations).expect("valid lifecycle status")
+}
+
+#[cfg(test)]
 mod status_tests {
-    use http::Response as HttpResponse;
     use iroha_telemetry::metrics::{
         BuildStatus, CryptoStatus, GovernanceStatus, Halo2Status, StackStatus,
         SumeragiConsensusStatus,
@@ -5605,18 +5657,6 @@ mod status_tests {
     use norito::json::Value as JsonValue;
 
     use super::*;
-
-    fn mk_response(
-        status: StatusCode,
-        body: Vec<u8>,
-        content_type: Option<&str>,
-    ) -> Response<Vec<u8>> {
-        let mut builder = HttpResponse::builder().status(status);
-        if let Some(ct) = content_type {
-            builder = builder.header("content-type", ct);
-        }
-        builder.body(body).unwrap()
-    }
 
     #[test]
     fn decode_status_prefers_norito_bare() {
@@ -6003,6 +6043,48 @@ mod evidence_response_tests {
             message.contains("failed to decode JSON payload"),
             "unexpected error: {message}"
         );
+    }
+
+    #[test]
+    fn lane_lifecycle_status_decodes_json_and_norito() {
+        let status = lifecycle_status(true);
+        let json = norito::json::to_vec(&status).expect("encode lifecycle status JSON");
+        let response = mk_response(StatusCode::OK, json, Some(APPLICATION_JSON));
+        assert_eq!(
+            Client::decode_lane_lifecycle_status_for_test(&response)
+                .expect("decode lifecycle status JSON"),
+            status
+        );
+
+        let bytes = norito::to_bytes(&status).expect("encode lifecycle status Norito");
+        let response = mk_response(StatusCode::OK, bytes, Some(APPLICATION_NORITO));
+        assert_eq!(
+            Client::decode_lane_lifecycle_status_for_test(&response)
+                .expect("decode lifecycle status Norito"),
+            status
+        );
+    }
+
+    #[test]
+    fn lane_lifecycle_status_rejects_forged_commitment_and_malformed_payload() {
+        let mut status = lifecycle_status(true);
+        status.catalog_hash = Hash::prehashed([0x71; Hash::LENGTH]);
+        let body = norito::json::to_vec(&status).expect("encode forged lifecycle status");
+        let response = mk_response(StatusCode::OK, body, Some(APPLICATION_JSON));
+        let error = Client::decode_lane_lifecycle_status_for_test(&response)
+            .expect_err("forged lifecycle commitment must fail closed");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("catalog hash mismatch"),
+            "unexpected error: {message}"
+        );
+
+        let response = mk_response(
+            StatusCode::OK,
+            br#"{"version":1,"nexus_enabled":true}"#.to_vec(),
+            Some(APPLICATION_JSON),
+        );
+        assert!(Client::decode_lane_lifecycle_status_for_test(&response).is_err());
     }
 }
 
@@ -8358,6 +8440,7 @@ mod evidence_http_tests {
             result_hash: result.hash(),
             result_proof: MerkleProof::from_audit_path(0, Vec::new()),
             result,
+            merge_inclusion: None,
         };
 
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -8573,6 +8656,7 @@ mod evidence_http_tests {
             result_hash: result.hash(),
             result_proof: MerkleProof::from_audit_path(0, Vec::new()),
             result,
+            merge_inclusion: None,
         };
         let status_payload = norito::json!({
             "hash": "deadbeef",
@@ -9139,6 +9223,7 @@ mod evidence_http_tests {
             result_hash: result.hash(),
             result_proof: MerkleProof::from_audit_path(0, Vec::new()),
             result,
+            merge_inclusion: None,
         };
 
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -11729,6 +11814,63 @@ impl Client {
         .headers(self.headers.clone())
     }
 
+    /// Fetch and validate the exact current Nexus lane catalog and incarnation commitments.
+    ///
+    /// # Errors
+    /// Returns an error for non-success responses, malformed JSON/Norito,
+    /// unsupported status versions, non-canonical catalogs, or hash mismatch.
+    pub fn get_lane_lifecycle_status(&self) -> Result<LaneLifecycleStatusV1> {
+        let response = self.send_builder(
+            self.default_request(
+                HttpMethod::GET,
+                join_torii_url(&self.torii_url, torii_uri::NEXUS_LANE_LIFECYCLE),
+            )
+            .header(
+                http::header::ACCEPT,
+                self.wire_format_preference.accept_header(),
+            ),
+        )?;
+        decode_lane_lifecycle_status_response(&response)
+    }
+
+    /// Fetch the current lane catalog and submit a consensus-replayed lifecycle update.
+    ///
+    /// The transaction uses `SetParameter(nexus_lane_lifecycle_v1)` and is signed
+    /// by this client's configured account key. A concurrent catalog change is
+    /// surfaced as the normal blocking transaction rejection; this helper never
+    /// retries against newly fetched catalog or incarnation commitments without
+    /// caller review.
+    ///
+    /// # Errors
+    /// Returns an error when Nexus is disabled, status validation fails, the
+    /// signed transaction is rejected (including stale catalog or incarnation
+    /// commitments), or finality cannot be observed.
+    pub fn submit_lane_lifecycle_blocking(
+        &self,
+        plan: LaneLifecyclePlan,
+    ) -> Result<HashOf<SignedTransaction>> {
+        let status = self.get_lane_lifecycle_status()?;
+        if !status.nexus_enabled {
+            return Err(eyre!(
+                "Nexus lane lifecycle is disabled on the serving node"
+            ));
+        }
+        let catalog = status
+            .validate()
+            .wrap_err("invalid Nexus lane lifecycle status")?;
+        let parameter = LaneLifecycleParameterV1::new(&catalog, &status.incarnations, plan)
+            .wrap_err("failed to bind Nexus lane incarnation commitments")?
+            .into_custom_parameter();
+        self.submit_blocking(SetParameter::new(Parameter::Custom(parameter)))
+    }
+
+    #[cfg(test)]
+    fn decode_lane_lifecycle_status_for_test(
+        response: &Response<Vec<u8>>,
+    ) -> Result<LaneLifecycleStatusV1> {
+        decode_lane_lifecycle_status_response(response)
+    }
+
     /// Fetch the active Torii API version (block header version string).
     ///
     /// # Errors
@@ -13313,6 +13455,11 @@ impl Client {
         proposal: &RepairSlashProposalV1,
     ) -> Result<Response<Vec<u8>>> {
         ensure_canonical_i105_account_id(&proposal.auditor_account, "auditor_account")?;
+        if proposal.approval.is_some() {
+            return Err(eyre!(
+                "repair slash proposals must not embed approval summaries; governance decisions require authenticated stored votes"
+            ));
+        }
         let url = join_torii_url(&self.torii_url, "v1/sorafs/audit/repair/slash");
         let body = norito::json::to_vec(proposal)?;
         self.default_request(HttpMethod::POST, url)
@@ -18060,6 +18207,7 @@ mod tx_hash_tests {
             result_hash: result.hash(),
             result_proof: MerkleProof::from_audit_path(0, Vec::new()),
             result,
+            merge_inclusion: None,
         };
 
         assert!(super::Client::committed_transaction_matches_hash(
@@ -18088,6 +18236,7 @@ mod tx_hash_tests {
             result_hash: time_result.hash(),
             result_proof: MerkleProof::from_audit_path(0, Vec::new()),
             result: time_result,
+            merge_inclusion: None,
         };
 
         assert!(super::Client::committed_transaction_matches_hash(
@@ -19389,7 +19538,7 @@ mod tests {
                 ExtraMetadata, RetentionPolicy, StorageTicketId,
             },
         },
-        nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
+        nexus::{DataSpaceId, LaneCatalog, LaneId, LaneLifecycleStatusV1, LaneRelayEnvelope},
         peer::PeerId,
         query::parameters::Pagination,
         sorafs::{
@@ -19437,6 +19586,16 @@ mod tests {
     const ENCRYPTED_CREDENTIALS: &str = "bWFkX2hhdHRlcjppbG92ZXRlYQ==";
     const TEST_WORKER_I105: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
     const TEST_AUDITOR_I105: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
+
+    fn lifecycle_status_fixture(enabled: bool) -> LaneLifecycleStatusV1 {
+        let catalog = LaneCatalog::default();
+        let incarnations = std::collections::BTreeMap::from([(
+            LaneId::SINGLE,
+            Hash::new(b"client-http-lifecycle-incarnation"),
+        )]);
+        LaneLifecycleStatusV1::new(enabled, &catalog, &incarnations)
+            .expect("valid lifecycle status")
+    }
 
     struct FailingClientRng;
 
@@ -19592,6 +19751,7 @@ mod tests {
             block_height: 12,
             lane_id: LaneId::new(1),
             dataspace_id: DataSpaceId::new(7),
+            lane_incarnation: Hash::new(b"client-lane-payload-incarnation"),
             tx_count: 1,
             total_local_micro: 500_000,
             total_xor_due_micro: 250_000,
@@ -19646,7 +19806,7 @@ mod tests {
         };
         let status = SumeragiStatusWire {
             canonical: SumeragiV1StatusWire::default(),
-            mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
+            mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
             staged_mode_tag: None,
             staged_mode_activation_height: None,
             mode_activation_lag_blocks: None,
@@ -19905,6 +20065,7 @@ mod tests {
         let settlement = LaneBlockCommitment {
             block_height,
             lane_id,
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id,
             tx_count: 1,
             total_local_micro: 10,
@@ -20518,6 +20679,7 @@ mod tests {
         let providers = vec![SorafsGatewayProviderInput {
             name: "provider-1".into(),
             provider_id_hex: hex::encode([0x11u8; 32]),
+            gateway_public_key_hex: hex::encode([0x22u8; 32]),
             base_url: "https://gateway.test".into(),
             stream_token_b64: base64::engine::general_purpose::STANDARD.encode(b"stream-token"),
             privacy_events_url: None,
@@ -20635,6 +20797,7 @@ mod tests {
         let providers = vec![SorafsGatewayProviderInput {
             name: "provider-1".into(),
             provider_id_hex: hex::encode([0x11u8; 32]),
+            gateway_public_key_hex: hex::encode([0x22u8; 32]),
             base_url: "https://gateway.test".into(),
             stream_token_b64: base64::engine::general_purpose::STANDARD.encode(b"stream-token"),
             privacy_events_url: None,
@@ -20722,6 +20885,7 @@ mod tests {
         let providers = vec![SorafsGatewayProviderInput {
             name: "provider-1".into(),
             provider_id_hex: hex::encode([0x11u8; 32]),
+            gateway_public_key_hex: hex::encode([0x22u8; 32]),
             base_url: "https://gateway.test".into(),
             stream_token_b64: base64::engine::general_purpose::STANDARD.encode(b"stream-token"),
             privacy_events_url: None,
@@ -21606,6 +21770,49 @@ mod tests {
             .expect("snapshot captured");
         assert_eq!(snapshot.url.path(), "/v1/nexus/public_lanes/7/validators");
         assert_eq!(snapshot.url.query(), None);
+    }
+
+    #[test]
+    fn get_lane_lifecycle_status_requests_typed_negotiated_snapshot() {
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let client = client_with_base_url(base_url());
+        let expected = lifecycle_status_fixture(true);
+        let body = norito::json::to_string(&expected).expect("lifecycle status JSON");
+        let response = json_response(StatusCode::OK, &body);
+        let snapshot_store = Arc::clone(&snapshots);
+        let actual = with_mock_http(respond_with(&snapshot_store, response), || {
+            client.get_lane_lifecycle_status()
+        })
+        .expect("lifecycle status request succeeds");
+        assert_eq!(actual, expected);
+
+        let snapshot = snapshots
+            .lock()
+            .expect("snapshot lock")
+            .first()
+            .cloned()
+            .expect("snapshot captured");
+        assert_eq!(snapshot.url.path(), torii_uri::NEXUS_LANE_LIFECYCLE);
+        assert!(snapshot.headers.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case("accept")
+                && value == client.wire_format_preference.accept_header()
+        }));
+    }
+
+    #[test]
+    fn submit_lane_lifecycle_rejects_disabled_status_without_posting_transaction() {
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let client = client_with_base_url(base_url());
+        let status = lifecycle_status_fixture(false);
+        let body = norito::json::to_string(&status).expect("lifecycle status JSON");
+        let response = json_response(StatusCode::OK, &body);
+        let snapshot_store = Arc::clone(&snapshots);
+        let error = with_mock_http(respond_with(&snapshot_store, response), || {
+            client.submit_lane_lifecycle_blocking(LaneLifecyclePlan::default())
+        })
+        .expect_err("disabled Nexus must fail before transaction submission");
+        assert!(error.to_string().contains("disabled"));
+        assert_eq!(snapshots.lock().expect("snapshot lock").len(), 1);
     }
 
     #[test]
@@ -23263,7 +23470,7 @@ mod tests {
         let block_hash = block_header.hash();
         SumeragiStatusWire {
             canonical: SumeragiV1StatusWire::default(),
-            mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
+            mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
             staged_mode_tag: None,
             staged_mode_activation_height: None,
             mode_activation_lag_blocks: None,
@@ -23475,6 +23682,7 @@ mod tests {
         let settlement = LaneBlockCommitment {
             block_height: 1,
             lane_id: LaneId::new(0),
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(0),
             tx_count: 0,
             total_local_micro: 0,
@@ -23619,6 +23827,7 @@ mod tests {
         let settlement = LaneBlockCommitment {
             block_height: 12,
             lane_id: LaneId::new(1),
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(7),
             tx_count: 1,
             total_local_micro: 500_000,
@@ -23678,11 +23887,12 @@ mod tests {
             proposal_view: 5,
             lane_id: LaneId::new(1),
             dataspace_id: DataSpaceId::new(7),
+            lane_incarnation: Hash::new(b"client-lane-payload-incarnation"),
             lane_block_height: 3,
             lane_block_view: 2,
             subject_hash,
             qc_mode_tag: relay_envelope
-                .lane_qc_mode_tag("iroha2-consensus::permissioned-sumeragi@v1"),
+                .lane_qc_mode_tag("iroha2-consensus::permissioned-sumeragi@v2"),
             accepted_candidate_indices: vec![0, 2],
             accepted_transaction_hashes: vec![
                 Hash::prehashed([0xBA; Hash::LENGTH]),
@@ -23699,7 +23909,7 @@ mod tests {
         };
         let status = SumeragiStatusWire {
             canonical: SumeragiV1StatusWire::default(),
-            mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
+            mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
             staged_mode_tag: None,
             staged_mode_activation_height: None,
             mode_activation_lag_blocks: None,
@@ -27344,14 +27554,7 @@ mod tests {
             proposed_penalty_nano: 500,
             submitted_at_unix: 1_700_000_004,
             rationale: "sla_missed".to_string(),
-            approval: Some(RepairEscalationApprovalV1 {
-                version: REPAIR_ESCALATION_APPROVAL_VERSION_V1,
-                approve_votes: 2,
-                reject_votes: 1,
-                abstain_votes: 0,
-                approved_at_unix: 1_700_000_104,
-                finalized_at_unix: 1_700_000_204,
-            }),
+            approval: None,
         };
 
         with_mock_http(respond_with(&store, response), || {
@@ -27368,6 +27571,38 @@ mod tests {
             norito::json::from_slice(&snapshot.body).expect("decode request body");
         let expected = norito::json::to_value(&proposal).expect("encode request");
         assert_eq!(body, expected);
+    }
+
+    #[test]
+    fn sorafs_repair_slash_rejects_embedded_approval_before_network_io() {
+        let client = client_with_base_url(base_url());
+        let proposal = RepairSlashProposalV1 {
+            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            ticket_id: RepairTicketId("REP-404-approval".to_string()),
+            provider_id: [0x77; 32],
+            manifest_digest: [0x88; 32],
+            auditor_account: TEST_AUDITOR_I105.to_string(),
+            proposed_penalty_nano: 500,
+            submitted_at_unix: 1_700_000_004,
+            rationale: "untrusted embedded approval".to_string(),
+            approval: Some(RepairEscalationApprovalV1 {
+                version: REPAIR_ESCALATION_APPROVAL_VERSION_V1,
+                approve_votes: 2,
+                reject_votes: 1,
+                abstain_votes: 0,
+                approved_at_unix: 1_700_000_104,
+                finalized_at_unix: 1_700_000_204,
+            }),
+        };
+
+        let error = client
+            .post_sorafs_repair_slash(&proposal)
+            .expect_err("embedded approval must fail before request construction");
+        assert!(
+            error
+                .to_string()
+                .contains("must not embed approval summaries")
+        );
     }
 
     #[test]

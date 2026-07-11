@@ -64,7 +64,7 @@ fn run_capacity_declaration_request(args: impl Iterator<Item = String>) -> Resul
     for arg in args {
         let (key, value) = split_option(&arg)?;
         match key {
-            "--request" => request_path = Some(value.to_owned()),
+            "--request" => set_once(&mut request_path, value.to_owned(), key)?,
             _ => return Err(format!("unknown option `{key}`")),
         }
     }
@@ -106,9 +106,9 @@ fn run_replication_order_request(args: impl Iterator<Item = String>) -> Result<(
     for arg in args {
         let (key, value) = split_option(&arg)?;
         match key {
-            "--request" => request_path = Some(value.to_owned()),
-            "--issued-epoch" => issued_epoch = Some(parse_u64(value, key)?),
-            "--deadline-epoch" => deadline_epoch = Some(parse_u64(value, key)?),
+            "--request" => set_once(&mut request_path, value.to_owned(), key)?,
+            "--issued-epoch" => set_once(&mut issued_epoch, parse_u64(value, key)?, key)?,
+            "--deadline-epoch" => set_once(&mut deadline_epoch, parse_u64(value, key)?, key)?,
             _ => return Err(format!("unknown option `{key}`")),
         }
     }
@@ -145,8 +145,8 @@ fn run_complete_order(args: impl Iterator<Item = String>) -> Result<(), String> 
     for arg in args {
         let (key, value) = split_option(&arg)?;
         match key {
-            "--order-id-hex" => order_id_hex = Some(value.to_owned()),
-            "--completion-epoch" => completion_epoch = Some(parse_u64(value, key)?),
+            "--order-id-hex" => set_once(&mut order_id_hex, value.to_owned(), key)?,
+            "--completion-epoch" => set_once(&mut completion_epoch, parse_u64(value, key)?, key)?,
             _ => return Err(format!("unknown option `{key}`")),
         }
     }
@@ -165,6 +165,15 @@ fn run_complete_order(args: impl Iterator<Item = String>) -> Result<(), String> 
 fn split_option(arg: &str) -> Result<(&str, &str), String> {
     arg.split_once('=')
         .ok_or_else(|| format!("expected `--key=value`, got `{arg}`"))
+}
+
+fn set_once<T>(slot: &mut Option<T>, value: T, key: &str) -> Result<(), String> {
+    if slot.is_some() {
+        Err(format!("duplicate `{key}` option"))
+    } else {
+        *slot = Some(value);
+        Ok(())
+    }
 }
 
 fn read_json_map(path: Option<&str>, label: &str) -> Result<Map, String> {
@@ -192,16 +201,64 @@ fn require_u64(map: &Map, key: &str) -> Result<u64, String> {
 }
 
 fn parse_u64(value: &str, label: &str) -> Result<u64, String> {
+    require_canonical_unsigned_decimal(value, label)?;
     value
         .parse::<u64>()
         .map_err(|err| format!("invalid `{label}` value `{value}`: {err}"))
 }
 
 fn parse_hex_32(value: &str, label: &str) -> Result<[u8; 32], String> {
+    require_lowercase_fixed_hex(value, label, 64)?;
     let decoded = hex::decode(value).map_err(|err| format!("invalid `{label}` hex: {err}"))?;
-    decoded
+    let bytes: [u8; 32] = decoded
         .try_into()
-        .map_err(|_| format!("`{label}` must be exactly 32 bytes (64 hex chars)"))
+        .map_err(|_| format!("`{label}` must be exactly 32 bytes (64 hex chars)"))?;
+    if bytes.iter().all(|byte| *byte == 0) {
+        return Err(format!("`{label}` must not be all zero"));
+    }
+    Ok(bytes)
+}
+
+fn require_canonical_unsigned_decimal(value: &str, label: &str) -> Result<(), String> {
+    if is_canonical_unsigned_decimal(value) {
+        Ok(())
+    } else {
+        Err(format!(
+            "`{label}` value must be a canonical unsigned decimal integer"
+        ))
+    }
+}
+
+fn is_canonical_unsigned_decimal(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.iter().all(u8::is_ascii_digit)
+        && (bytes.len() == 1 || bytes[0] != b'0')
+}
+
+fn require_lowercase_fixed_hex(
+    value: &str,
+    label: &str,
+    expected_len: usize,
+) -> Result<(), String> {
+    if value.len() != expected_len {
+        return Err(format!(
+            "`{label}` must be exactly {} bytes ({} hex chars)",
+            expected_len / 2,
+            expected_len
+        ));
+    }
+    if value
+        .as_bytes()
+        .iter()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "`{label}` must be lowercase fixed-width hex without prefixes or whitespace"
+        ))
+    }
 }
 
 fn metadata_from_request(request: &Map) -> Result<Metadata, String> {
@@ -238,4 +295,67 @@ fn print_instruction_json(instruction: InstructionBox) -> Result<(), String> {
         .map_err(|err| format!("failed to serialize tx-stdin JSON: {err}"))?;
     println!("{rendered}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_u64_rejects_noncanonical_epoch_tokens() {
+        assert_eq!(parse_u64("0", "--issued-epoch").expect("zero"), 0);
+        assert_eq!(parse_u64("580", "--issued-epoch").expect("epoch"), 580);
+
+        for value in [
+            "",
+            "00",
+            "0580",
+            "+580",
+            "580 ",
+            " 580",
+            "18446744073709551616",
+        ] {
+            let err = parse_u64(value, "--issued-epoch").expect_err("invalid epoch must fail");
+            assert!(
+                err.contains("--issued-epoch"),
+                "unexpected error for {value:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_hex_32_rejects_noncanonical_order_ids() {
+        let canonical = "5555555555555555555555555555555555555555555555555555555555555555";
+        assert_eq!(
+            parse_hex_32(canonical, "order_id_hex").expect("canonical order id"),
+            [0x55; 32]
+        );
+
+        for value in [
+            "",
+            "5555",
+            "555555555555555555555555555555555555555555555555555555555555555",
+            "0x5555555555555555555555555555555555555555555555555555555555555555",
+            "555555555555555555555555555555555555555555555555555555555555555G",
+            "555555555555555555555555555555555555555555555555555555555555555A",
+            "555555555555555555555555555555555555555555555555555555555555555 ",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ] {
+            let err = parse_hex_32(value, "order_id_hex").expect_err("invalid order id must fail");
+            assert!(
+                err.contains("order_id_hex"),
+                "unexpected error for {value:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn set_once_rejects_duplicate_options() {
+        let mut slot = None;
+        set_once(&mut slot, 580_u64, "--issued-epoch").expect("first value");
+        let err =
+            set_once(&mut slot, 581_u64, "--issued-epoch").expect_err("duplicate option must fail");
+        assert!(err.contains("duplicate `--issued-epoch` option"));
+        assert_eq!(slot, Some(580));
+    }
 }

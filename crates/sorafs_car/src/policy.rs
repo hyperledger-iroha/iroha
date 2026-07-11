@@ -589,8 +589,8 @@ mod compliance_tests {
         profile: &str,
         max_streams: u16,
     ) -> StreamTokenV1 {
-        StreamTokenV1 {
-            body: StreamTokenBodyV1 {
+        StreamTokenV1::sign(
+            StreamTokenBodyV1 {
                 token_id: "01J9TK3GR0XM6YQF7WQXA9Z2SF".to_string(),
                 manifest_cid: hex::decode(manifest_cid_hex).expect("cid hex"),
                 provider_id: {
@@ -606,8 +606,9 @@ mod compliance_tests {
                 requests_per_minute: 120,
                 token_pk_version: 1,
             },
-            signature: vec![0; 64],
-        }
+            &SigningKey::from_bytes(&[0x42; 32]),
+        )
+        .expect("sign stream token")
     }
 
     fn encode_token_b64(token: &StreamTokenV1) -> String {
@@ -747,6 +748,11 @@ mod compliance_tests {
         let provider = GatewayProviderInput {
             name: "alpha".to_string(),
             provider_id_hex: provider_id.clone(),
+            gateway_public_key_hex: hex::encode(
+                SigningKey::from_bytes(&[0x42; 32])
+                    .verifying_key()
+                    .to_bytes(),
+            ),
             base_url: "https://gateway.example/".to_string(),
             stream_token_b64,
             privacy_events_url: None,

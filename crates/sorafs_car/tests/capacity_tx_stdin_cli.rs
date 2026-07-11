@@ -107,11 +107,113 @@ fn tx_stdin_builder_emits_completion_instruction() {
     assert_eq!(completion.order_id.as_bytes(), &[0x55; 32]);
 }
 
+#[test]
+fn tx_stdin_builder_rejects_noncanonical_epoch_flags() {
+    for (args, expected) in [
+        (
+            vec![
+                "replication-order-request",
+                "--request=unused.json",
+                "--issued-epoch=0580",
+                "--deadline-epoch=2580",
+            ],
+            "--issued-epoch",
+        ),
+        (
+            vec![
+                "replication-order-request",
+                "--request=unused.json",
+                "--issued-epoch=580",
+                "--deadline-epoch=+2580",
+            ],
+            "--deadline-epoch",
+        ),
+        (
+            vec![
+                "complete-order",
+                "--order-id-hex=5555555555555555555555555555555555555555555555555555555555555555",
+                "--completion-epoch=0777",
+            ],
+            "--completion-epoch",
+        ),
+    ] {
+        let stderr = run_builder_failure(args.into_iter().map(str::to_owned));
+        assert!(
+            stderr.contains(expected) && stderr.contains("canonical unsigned"),
+            "stderr should reject {expected} canonically, got: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn tx_stdin_builder_rejects_noncanonical_order_id_hex() {
+    for value in [
+        "5555",
+        "0x5555555555555555555555555555555555555555555555555555555555555555",
+        "555555555555555555555555555555555555555555555555555555555555555A",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+    ] {
+        let stderr = run_builder_failure([
+            "complete-order".to_owned(),
+            format!("--order-id-hex={value}"),
+            "--completion-epoch=777".to_owned(),
+        ]);
+        assert!(
+            stderr.contains("order_id_hex"),
+            "stderr should name rejected order_id_hex {value}, got: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn tx_stdin_builder_rejects_duplicate_options() {
+    for (args, expected) in [
+        (
+            vec![
+                "capacity-declaration-request",
+                "--request=one.json",
+                "--request=two.json",
+            ],
+            "--request",
+        ),
+        (
+            vec![
+                "replication-order-request",
+                "--request=unused.json",
+                "--issued-epoch=580",
+                "--issued-epoch=581",
+            ],
+            "--issued-epoch",
+        ),
+        (
+            vec![
+                "complete-order",
+                "--order-id-hex=5555555555555555555555555555555555555555555555555555555555555555",
+                "--order-id-hex=6666666666666666666666666666666666666666666666666666666666666666",
+            ],
+            "--order-id-hex",
+        ),
+    ] {
+        let stderr = run_builder_failure(args.into_iter().map(str::to_owned));
+        assert!(
+            stderr.contains("duplicate") && stderr.contains(expected),
+            "stderr should reject duplicate {expected}, got: {stderr}"
+        );
+    }
+}
+
 fn run_builder(args: impl IntoIterator<Item = String>) -> Value {
     let mut cmd = cargo_bin_cmd!("sorafs_tx_stdin_builder");
     cmd.args(args);
     let output = cmd.assert().success().get_output().stdout.clone();
     json::from_slice(&output).expect("parse tx stdin json")
+}
+
+fn run_builder_failure(args: impl IntoIterator<Item = String>) -> String {
+    let mut cmd = cargo_bin_cmd!("sorafs_tx_stdin_builder");
+    cmd.args(args);
+    let output = cmd.assert().failure().get_output().stderr.clone();
+    String::from_utf8(output).expect("stderr should be utf8")
 }
 
 fn decode_single_instruction(payload: Value) -> InstructionBox {

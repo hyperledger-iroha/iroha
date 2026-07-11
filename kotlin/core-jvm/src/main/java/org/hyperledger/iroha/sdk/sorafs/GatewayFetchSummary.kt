@@ -79,9 +79,12 @@ class GatewayFetchSummary private constructor(
                 )
             }
             return GatewayFetchSummary(
-                manifestIdHex = SorafsInputValidator.normalizeHexBytes(
+                manifestIdHex = SorafsInputValidator.requireCanonicalHexBytes(
                     requireString(root, "manifest_id_hex"), "manifest_id_hex", 32),
-                chunkerHandle = requireString(root, "chunker_handle"),
+                chunkerHandle = SorafsInputValidator.requireCanonicalChunkerHandle(
+                    requireString(root, "chunker_handle"),
+                    "chunker_handle",
+                ),
                 clientId = optionalString(root, "client_id"),
                 chunkCount = requireLong(root, "chunk_count"),
                 contentLength = requireLong(root, "content_length"),

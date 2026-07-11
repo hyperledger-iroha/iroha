@@ -19,7 +19,10 @@ use iroha_data_model_derive::model;
 use iroha_primitives::{const_vec::ConstVec, json::Json, time::TimeSource};
 use iroha_schema::IntoSchema;
 use iroha_version::Version;
-use norito::codec::{Decode, Encode};
+use norito::{
+    codec::{Decode, Encode},
+    core::DecodeFromSlice,
+};
 use thiserror::Error;
 
 pub use self::model::*;
@@ -1397,11 +1400,15 @@ impl TransactionBuilder {
         if used != bytes.len() {
             return Err(norito::core::Error::LengthMismatch);
         }
-        Ok(Self {
+        let builder = Self {
             payload,
             attachments: None,
             multisig_signatures: None,
-        })
+        };
+        if builder.encode_payload() != bytes {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        Ok(builder)
     }
 
     /// Return the canonical prehash signed by transaction signatures.
@@ -1723,6 +1730,14 @@ mod tests {
         with_trailing.push(0);
         assert!(TransactionBuilder::decode_payload(&with_trailing).is_err());
         assert!(TransactionBuilder::decode_payload(&[]).is_err());
+
+        let canonical = builder.encode_payload();
+        assert!(canonical[0] < 0x80, "fixture starts with a compact field length");
+        let mut overlong = Vec::with_capacity(canonical.len() + 1);
+        overlong.push(canonical[0] | 0x80);
+        overlong.push(0);
+        overlong.extend_from_slice(&canonical[1..]);
+        assert!(TransactionBuilder::decode_payload(&overlong).is_err());
     }
 
     #[test]

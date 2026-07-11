@@ -8,6 +8,10 @@
 #![allow(unexpected_cfgs)]
 
 #[cfg(feature = "local-quic-proxy")]
+use std::net::IpAddr;
+#[cfg(all(feature = "local-quic-proxy", unix))]
+use std::os::unix::fs::MetadataExt;
+#[cfg(feature = "local-quic-proxy")]
 use std::path::{Component, Path, PathBuf};
 use std::{net::SocketAddr, str::FromStr, sync::Arc};
 #[cfg(feature = "local-quic-proxy")]
@@ -43,11 +47,18 @@ use tokio::{
     fs,
     io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf},
     net::TcpStream,
-    sync::{Mutex, watch},
+    sync::{Mutex, Semaphore, watch},
     task::JoinHandle,
+    time::{Duration, timeout},
 };
+#[cfg(feature = "local-quic-proxy")]
+use url::{Host, Url};
 
 use crate::soranet::{GuardCacheKey, GuardCacheKeyError};
+#[cfg(feature = "local-quic-proxy")]
+use crate::{
+    OutboundNetworkPolicy, is_public_ip, resolve_and_validate_host, validate_public_dns_name,
+};
 
 #[cfg(feature = "local-quic-proxy")]
 const PROXY_HANDSHAKE_VERSION: u8 = 1;
@@ -68,7 +79,56 @@ const PROXY_CACHE_TAG_SALT_LEN: usize = 16;
 #[cfg(feature = "local-quic-proxy")]
 const PROXY_STREAM_VERSION: u8 = 1;
 #[cfg(feature = "local-quic-proxy")]
-const PROXY_MAX_FRAME_BYTES: usize = 1024 * 1024;
+const PROXY_MAX_FRAME_BYTES: usize = 64 * 1024;
+#[cfg(feature = "local-quic-proxy")]
+const PROXY_MAX_CONTROL_FIELD_BYTES: usize = 1024;
+#[cfg(feature = "local-quic-proxy")]
+const PROXY_MAX_CONNECTIONS: usize = 128;
+#[cfg(feature = "local-quic-proxy")]
+const PROXY_MAX_STREAMS_PER_CONNECTION: u32 = 256;
+#[cfg(feature = "local-quic-proxy")]
+const PROXY_MAX_LOCAL_FILE_BYTES: u64 = 1024 * 1024 * 1024;
+#[cfg(feature = "local-quic-proxy")]
+const PROXY_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(feature = "local-quic-proxy")]
+const PROXY_CONTROL_FRAME_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(feature = "local-quic-proxy")]
+const PROXY_TRANSFER_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+#[cfg(all(
+    feature = "local-quic-proxy",
+    any(target_os = "macos", target_os = "ios")
+))]
+const O_NOFOLLOW_FLAG: i32 = 0x2000_0000;
+#[cfg(all(
+    feature = "local-quic-proxy",
+    any(target_os = "linux", target_os = "android")
+))]
+const O_NOFOLLOW_FLAG: i32 = 0x0002_0000;
+#[cfg(all(
+    feature = "local-quic-proxy",
+    any(
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "dragonfly"
+    )
+))]
+const O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
+#[cfg(all(
+    feature = "local-quic-proxy",
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "dragonfly"
+    ))
+))]
+compile_error!("local-quic-proxy requires a defined no-follow open flag on this Unix target");
 #[cfg(feature = "local-quic-proxy")]
 const STREAM_ACK_OK: u8 = 0;
 #[cfg(feature = "local-quic-proxy")]
@@ -287,20 +347,35 @@ struct ProxyBridgeConfig {
 
 #[cfg(feature = "local-quic-proxy")]
 impl ProxyBridgeConfig {
-    fn from_config(config: &LocalQuicProxyConfig) -> Self {
+    fn from_config(config: &LocalQuicProxyConfig) -> Result<Self, ProxyError> {
         let norito = config
             .norito_bridge
             .as_ref()
-            .and_then(ProxyNoritoBridge::from_config);
+            .map(ProxyNoritoBridge::from_config)
+            .transpose()
+            .map_err(|reason| ProxyError::BridgeConfig {
+                service: "norito",
+                reason,
+            })?;
         let car = config
             .car_bridge
             .as_ref()
-            .and_then(ProxyCarBridge::from_config);
+            .map(ProxyCarBridge::from_config)
+            .transpose()
+            .map_err(|reason| ProxyError::BridgeConfig {
+                service: "car",
+                reason,
+            })?;
         let kaigi = config
             .kaigi_bridge
             .as_ref()
-            .and_then(ProxyKaigiBridge::from_config);
-        Self { norito, car, kaigi }
+            .map(ProxyKaigiBridge::from_config)
+            .transpose()
+            .map_err(|reason| ProxyError::BridgeConfig {
+                service: "kaigi",
+                reason,
+            })?;
+        Ok(Self { norito, car, kaigi })
     }
 
     fn norito(&self) -> Option<&ProxyNoritoBridge> {
@@ -325,17 +400,18 @@ struct ProxyNoritoBridge {
 
 #[cfg(feature = "local-quic-proxy")]
 impl ProxyNoritoBridge {
-    fn from_config(cfg: &ProxyNoritoBridgeConfig) -> Option<Self> {
+    fn from_config(cfg: &ProxyNoritoBridgeConfig) -> Result<Self, String> {
         let spool_dir = cfg.spool_dir.trim();
         if spool_dir.is_empty() {
-            return None;
+            return Err("spool directory must not be empty".into());
         }
         let extension = cfg
             .extension
-            .as_ref()
-            .and_then(|ext| sanitize_extension(ext));
-        Some(Self {
-            spool_dir: PathBuf::from(spool_dir),
+            .as_deref()
+            .map(sanitize_extension)
+            .transpose()?;
+        Ok(Self {
+            spool_dir: canonical_bridge_root(Path::new(spool_dir))?,
             extension,
         })
     }
@@ -362,17 +438,18 @@ struct ProxyCarBridge {
 
 #[cfg(feature = "local-quic-proxy")]
 impl ProxyCarBridge {
-    fn from_config(cfg: &ProxyCarBridgeConfig) -> Option<Self> {
+    fn from_config(cfg: &ProxyCarBridgeConfig) -> Result<Self, String> {
         let cache_dir = cfg.cache_dir.trim();
         if cache_dir.is_empty() {
-            return None;
+            return Err("cache directory must not be empty".into());
         }
         let extension = cfg
             .extension
-            .as_ref()
-            .and_then(|ext| sanitize_extension(ext));
-        Some(Self {
-            cache_dir: PathBuf::from(cache_dir),
+            .as_deref()
+            .map(sanitize_extension)
+            .transpose()?;
+        Ok(Self {
+            cache_dir: canonical_bridge_root(Path::new(cache_dir))?,
             extension,
             allow_zst: cfg.allow_zst,
         })
@@ -405,31 +482,22 @@ struct ProxyKaigiBridge {
 
 #[cfg(feature = "local-quic-proxy")]
 impl ProxyKaigiBridge {
-    fn from_config(cfg: &ProxyKaigiBridgeConfig) -> Option<Self> {
+    fn from_config(cfg: &ProxyKaigiBridgeConfig) -> Result<Self, String> {
         let spool_dir = cfg.spool_dir.trim();
         if spool_dir.is_empty() {
-            return None;
+            return Err("spool directory must not be empty".into());
         }
         let extension = cfg
             .extension
-            .as_ref()
-            .and_then(|ext| sanitize_extension(ext));
+            .as_deref()
+            .map(sanitize_extension)
+            .transpose()?;
         let room_policy = match cfg.room_policy.as_deref() {
-            Some(label) => match ProxyKaigiRoomPolicy::from_str(label) {
-                Ok(policy) => policy,
-                Err(err) => {
-                    warn!(
-                        target: "soranet.proxy",
-                        %err,
-                        "ignoring kaigi bridge configuration due to invalid room policy"
-                    );
-                    return None;
-                }
-            },
+            Some(label) => ProxyKaigiRoomPolicy::from_str(label)?,
             None => ProxyKaigiRoomPolicy::Public,
         };
-        Some(Self {
-            spool_dir: PathBuf::from(spool_dir),
+        Ok(Self {
+            spool_dir: canonical_bridge_root(Path::new(spool_dir))?,
             extension,
             room_policy,
         })
@@ -453,13 +521,28 @@ impl ProxyKaigiBridge {
 }
 
 #[cfg(feature = "local-quic-proxy")]
-fn sanitize_extension(ext: &str) -> Option<String> {
+fn sanitize_extension(ext: &str) -> Result<String, String> {
     let trimmed = ext.trim().trim_start_matches('.');
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_ascii_lowercase())
+    if trimmed.is_empty()
+        || trimmed.len() > 16
+        || !trimmed
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err("extension must contain 1-16 ASCII alphanumeric or hyphen bytes".into());
     }
+    Ok(trimmed.to_ascii_lowercase())
+}
+
+#[cfg(feature = "local-quic-proxy")]
+fn canonical_bridge_root(path: &Path) -> Result<PathBuf, String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("bridge root is unavailable: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("bridge root must be a non-symlink directory".into());
+    }
+    std::fs::canonicalize(path)
+        .map_err(|error| format!("failed to canonicalize bridge root: {error}"))
 }
 
 #[cfg(feature = "local-quic-proxy")]
@@ -532,6 +615,18 @@ impl LocalQuicProxyConfig {
             None => Ok(None),
         }
     }
+
+    #[cfg(feature = "local-quic-proxy")]
+    fn validated_stream_limit(&self) -> Result<u32, ProxyError> {
+        let limit = self.max_streams_per_circuit.unwrap_or(64);
+        if limit == 0 || limit > PROXY_MAX_STREAMS_PER_CONNECTION {
+            return Err(ProxyError::StreamLimit {
+                requested: limit,
+                maximum: PROXY_MAX_STREAMS_PER_CONNECTION,
+            });
+        }
+        Ok(limit)
+    }
 }
 
 /// Errors surfaced while starting or running the proxy.
@@ -570,6 +665,22 @@ pub enum ProxyError {
     /// Application stream handling failed.
     #[error("application stream error: {0}")]
     Stream(String),
+    /// A bridge root, extension, or policy was unsafe.
+    #[error("invalid {service} bridge configuration: {reason}")]
+    BridgeConfig {
+        /// Bridge service whose configuration failed.
+        service: &'static str,
+        /// Stable operator-facing failure reason.
+        reason: String,
+    },
+    /// Per-connection stream concurrency exceeded the hard resource envelope.
+    #[error("max_streams_per_circuit {requested} exceeds permitted range 1..={maximum}")]
+    StreamLimit {
+        /// Configured stream limit.
+        requested: u32,
+        /// Hard maximum supported by the proxy.
+        maximum: u32,
+    },
     /// Random bytes required for proxy session material could not be generated.
     #[error("proxy random bytes failed while {operation}: {message}")]
     RandomBytes {
@@ -1269,6 +1380,8 @@ pub fn spawn_local_quic_proxy(
 ) -> Result<LocalQuicProxyHandle, ProxyError> {
     let bind_addr = config.parsed_bind_addr()?;
     let guard_cache_key = config.guard_cache_key()?;
+    let stream_limit = config.validated_stream_limit()?;
+    let bridge_config = Arc::new(ProxyBridgeConfig::from_config(&config)?);
 
     let sans = vec!["localhost".to_string(), bind_addr.ip().to_string()];
     let rcgen::CertifiedKey { cert, signing_key } =
@@ -1283,12 +1396,16 @@ pub fn spawn_local_quic_proxy(
     .with_no_client_auth()
     .with_single_cert(vec![cert_der.clone()], private_key)
     .map_err(|err| ProxyError::QuinnConfig(err.to_string()))?;
-    tls_config.max_early_data_size = u32::MAX;
+    // Application streams are not replay-safe, so 0-RTT is disabled unconditionally.
+    tls_config.max_early_data_size = 0;
     tls_config.alpn_protocols = vec![PROXY_ALPN_LABEL.as_bytes().to_vec()];
     let crypto = QuinnRustlsServerConfig::try_from(Arc::new(tls_config))
         .map_err(|err| ProxyError::QuinnConfig(err.to_string()))?;
     let mut server_config = ServerConfig::with_crypto(Arc::new(crypto));
-    server_config.transport = Arc::new(quinn::TransportConfig::default());
+    let mut transport_config = quinn::TransportConfig::default();
+    transport_config.max_concurrent_bidi_streams(VarInt::from_u32(stream_limit));
+    transport_config.max_concurrent_uni_streams(VarInt::from_u32(0));
+    server_config.transport = Arc::new(transport_config);
 
     let endpoint = Endpoint::server(server_config, bind_addr)
         .map_err(|err| ProxyError::QuinnEndpoint(err.to_string()))?;
@@ -1310,7 +1427,6 @@ pub fn spawn_local_quic_proxy(
         .clone()
         .unwrap_or_else(|| "proxy".to_string());
 
-    let bridge_config = Arc::new(ProxyBridgeConfig::from_config(&config));
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let join_handle = tokio::spawn({
         let guard_cache_key = guard_cache_key.clone();
@@ -1322,6 +1438,7 @@ pub fn spawn_local_quic_proxy(
             config.proxy_mode.clone(),
             guard_cache_key,
             bridge_config,
+            Arc::new(Semaphore::new(PROXY_MAX_CONNECTIONS)),
             shutdown_rx,
         )
     });
@@ -1358,6 +1475,7 @@ async fn run_accept_loop(
     mode: ProxyMode,
     guard_cache_key: Option<GuardCacheKey>,
     bridge_config: Arc<ProxyBridgeConfig>,
+    connection_permits: Arc<Semaphore>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
     loop {
@@ -1376,6 +1494,15 @@ async fn run_accept_loop(
             break;
         };
 
+        let permit = match Arc::clone(&connection_permits).try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                incoming.refuse();
+                record_transport_event(&telemetry_label, "connection_reject", "capacity");
+                continue;
+            }
+        };
+
         match incoming.accept() {
             Ok(connecting) => {
                 let manifest_template = manifest_template.clone();
@@ -1384,6 +1511,7 @@ async fn run_accept_loop(
                 let label = telemetry_label.clone();
                 let bridge_config = bridge_config.clone();
                 tokio::spawn(async move {
+                    let _permit = permit;
                     match connecting.await {
                         Ok(new_conn) => {
                             record_transport_event(&label, "connection_open", "accepted");
@@ -1425,13 +1553,15 @@ async fn handle_connection(
     bridge_config: Arc<ProxyBridgeConfig>,
     telemetry_label: &str,
 ) -> Result<(), ProxyError> {
-    let (mut send_stream, mut recv_stream) = connection
-        .accept_bi()
-        .await
-        .map_err(|err| ProxyError::Handshake(err.to_string()))?;
+    let (mut send_stream, mut recv_stream) =
+        timeout(PROXY_CONTROL_FRAME_TIMEOUT, connection.accept_bi())
+            .await
+            .map_err(|_| ProxyError::Handshake("handshake stream timed out".into()))?
+            .map_err(|err| ProxyError::Handshake(err.to_string()))?;
 
-    let handshake_bytes = read_frame(&mut recv_stream)
+    let handshake_bytes = timeout(PROXY_CONTROL_FRAME_TIMEOUT, read_frame(&mut recv_stream))
         .await
+        .map_err(|_| ProxyError::Handshake("handshake frame timed out".into()))?
         .map_err(|err| ProxyError::Handshake(err.to_string()))?;
     let handshake: ProxyHandshakeV1 = decode_from_bytes(&handshake_bytes)
         .map_err(|err| ProxyError::Handshake(err.to_string()))?;
@@ -1449,8 +1579,25 @@ async fn handle_connection(
         let _ = send_stream.finish();
         let _ = recv_stream.stop(VarInt::from_u32(0));
         record_transport_event(telemetry_label, "handshake_reject", "unsupported_version");
-        // Keep the connection alive until the peer receives the rejection ack and closes.
-        let _ = connection.closed().await;
+        return Ok(());
+    }
+    if [handshake.client.as_deref(), handshake.user_agent.as_deref()]
+        .into_iter()
+        .flatten()
+        .any(|value| !valid_control_field(value))
+    {
+        let ack = ProxyHandshakeAckV1 {
+            version: PROXY_HANDSHAKE_VERSION,
+            accepted: false,
+            message: Some("invalid handshake field".to_string()),
+            manifest: None,
+        };
+        write_frame(&mut send_stream, &ack)
+            .await
+            .map_err(ProxyError::Handshake)?;
+        let _ = send_stream.finish();
+        let _ = recv_stream.stop(VarInt::from_u32(0));
+        record_transport_event(telemetry_label, "handshake_reject", "invalid_field");
         return Ok(());
     }
 
@@ -1577,8 +1724,9 @@ async fn handle_application_stream(
     session: Arc<ProxySession>,
 ) -> Result<(), ProxyError> {
     let telemetry_label = session.telemetry_label.as_str();
-    let frame_bytes = read_frame(&mut recv_stream)
+    let frame_bytes = timeout(PROXY_CONTROL_FRAME_TIMEOUT, read_frame(&mut recv_stream))
         .await
+        .map_err(|_| ProxyError::Stream("stream-open frame timed out".into()))?
         .map_err(|err| ProxyError::Stream(err.to_string()))?;
     let open_frame: ProxyStreamOpenV1 =
         decode_from_bytes(&frame_bytes).map_err(|err| ProxyError::Stream(err.to_string()))?;
@@ -1598,6 +1746,33 @@ async fn handle_application_stream(
         let _ = send_stream.finish();
         let _ = recv_stream.stop(VarInt::from_u32(0));
         return Ok(());
+    }
+
+    if !valid_control_field(&open_frame.service)
+        || [
+            open_frame.authority.as_deref(),
+            open_frame.target.as_deref(),
+            open_frame.route_policy_id.as_deref(),
+            open_frame.exit_country.as_deref(),
+            open_frame.client_id.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|value| !valid_control_field(value))
+    {
+        record_transport_event(telemetry_label, "stream_reject", "invalid_field");
+        return send_failure_ack(
+            send_stream,
+            recv_stream,
+            ProxyStreamAckV1 {
+                version: PROXY_STREAM_VERSION,
+                code: STREAM_ACK_BAD_REQUEST,
+                accepted: false,
+                message: Some("stream field is oversized or contains control characters".into()),
+                cache_tag_hex: None,
+            },
+        )
+        .await;
     }
 
     let service = ProxyStreamService::from_label(&open_frame.service);
@@ -1651,6 +1826,11 @@ async fn handle_application_stream(
         }
         ProxyStreamService::Unknown => unreachable!("unknown service handled earlier"),
     }
+}
+
+#[cfg(feature = "local-quic-proxy")]
+fn valid_control_field(value: &str) -> bool {
+    value.len() <= PROXY_MAX_CONTROL_FIELD_BYTES && !value.chars().any(char::is_control)
 }
 
 #[cfg(feature = "local-quic-proxy")]
@@ -1712,15 +1892,57 @@ async fn handle_tcp_stream(
         .await;
     };
 
-    let mut tcp_stream = match TcpStream::connect(&authority).await {
-        Ok(stream) => stream,
-        Err(err) => {
+    let (host, port) = match parse_public_tcp_authority(&authority) {
+        Ok(target) => target,
+        Err(reason) => {
+            record_transport_event(telemetry_label, "stream_reject", "tcp_invalid_authority");
+            return send_failure_ack(
+                send_stream,
+                recv_stream,
+                ProxyStreamAckV1 {
+                    version: PROXY_STREAM_VERSION,
+                    code: STREAM_ACK_BAD_REQUEST,
+                    accepted: false,
+                    message: Some(format!("TCP authority rejected: {reason}")),
+                    cache_tag_hex: None,
+                },
+            )
+            .await;
+        }
+    };
+    let addresses =
+        match resolve_and_validate_host(&host, port, OutboundNetworkPolicy::PRODUCTION).await {
+            Ok(addresses) => addresses,
+            Err(error) => {
+                record_transport_event(telemetry_label, "stream_reject", "tcp_dns_rejected");
+                return send_failure_ack(
+                    send_stream,
+                    recv_stream,
+                    ProxyStreamAckV1 {
+                        version: PROXY_STREAM_VERSION,
+                        code: STREAM_ACK_BAD_REQUEST,
+                        accepted: false,
+                        message: Some(format!("TCP authority rejected: {error}")),
+                        cache_tag_hex: None,
+                    },
+                )
+                .await;
+            }
+        };
+
+    let mut tcp_stream = match timeout(
+        PROXY_CONNECT_TIMEOUT,
+        TcpStream::connect(addresses.as_slice()),
+    )
+    .await
+    {
+        Ok(Ok(stream)) => stream,
+        Ok(Err(err)) => {
             record_transport_event(telemetry_label, "stream_reject", "tcp_connect_failed");
             warn!(
                 target: "soranet.proxy",
                 ?err,
                 label = telemetry_label,
-                %authority,
                 "failed to connect tcp authority"
             );
             return send_failure_ack(
@@ -1730,7 +1952,22 @@ async fn handle_tcp_stream(
                     version: PROXY_STREAM_VERSION,
                     code: STREAM_ACK_INTERNAL_ERROR,
                     accepted: false,
-                    message: Some(format!("failed to connect `{authority}`: {err}")),
+                    message: Some("failed to connect TCP authority".into()),
+                    cache_tag_hex: None,
+                },
+            )
+            .await;
+        }
+        Err(_) => {
+            record_transport_event(telemetry_label, "stream_reject", "tcp_connect_timeout");
+            return send_failure_ack(
+                send_stream,
+                recv_stream,
+                ProxyStreamAckV1 {
+                    version: PROXY_STREAM_VERSION,
+                    code: STREAM_ACK_INTERNAL_ERROR,
+                    accepted: false,
+                    message: Some("TCP authority connection timed out".into()),
                     cache_tag_hex: None,
                 },
             )
@@ -1751,28 +1988,331 @@ async fn handle_tcp_stream(
         .map_err(|err| ProxyError::Stream(err.to_string()))?;
 
     let mut quic_stream = QuicBidirectionalStream::new(send_stream, recv_stream);
-    match tokio::io::copy_bidirectional(&mut quic_stream, &mut tcp_stream).await {
-        Ok((client_bytes, remote_bytes)) => {
+    match timeout(
+        PROXY_TRANSFER_TIMEOUT,
+        tokio::io::copy_bidirectional(&mut quic_stream, &mut tcp_stream),
+    )
+    .await
+    {
+        Ok(Ok((client_bytes, remote_bytes))) => {
             record_transport_event(telemetry_label, "stream_complete", "tcp_ok");
             info!(
                 target: "soranet.proxy",
                 label = telemetry_label,
-                %authority,
                 client_bytes,
                 remote_bytes,
                 "proxied tcp stream"
             );
         }
-        Err(err) => {
+        Ok(Err(err)) => {
             record_transport_event(telemetry_label, "stream_error", "tcp_proxy_failed");
             quic_stream.shutdown().await;
             let _ = tcp_stream.shutdown().await;
             return Err(ProxyError::Stream(err.to_string()));
         }
+        Err(_) => {
+            record_transport_event(telemetry_label, "stream_error", "tcp_transfer_timeout");
+            quic_stream.shutdown().await;
+            let _ = tcp_stream.shutdown().await;
+            return Err(ProxyError::Stream("TCP transfer timed out".into()));
+        }
     }
 
     quic_stream.shutdown().await;
     let _ = tcp_stream.shutdown().await;
+    Ok(())
+}
+
+#[cfg(feature = "local-quic-proxy")]
+fn parse_public_tcp_authority(authority: &str) -> Result<(String, u16), String> {
+    if authority.is_empty()
+        || authority.len() > PROXY_MAX_CONTROL_FIELD_BYTES
+        || authority.chars().any(char::is_control)
+    {
+        return Err("authority is empty, oversized, or contains control characters".into());
+    }
+    let url = Url::parse(&format!("tcp://{authority}"))
+        .map_err(|_| "authority must be a canonical host:port pair".to_string())?;
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.path() != "/"
+    {
+        return Err("credentials, paths, queries, and fragments are not permitted".into());
+    }
+    let host = match url
+        .host()
+        .ok_or_else(|| "authority host is missing".to_string())?
+    {
+        Host::Ipv4(ip) => {
+            let ip = IpAddr::V4(ip);
+            if !is_public_ip(ip) {
+                return Err("authority IP is not publicly routable".into());
+            }
+            ip.to_string()
+        }
+        Host::Ipv6(ip) => {
+            let ip = IpAddr::V6(ip);
+            if !is_public_ip(ip) {
+                return Err("authority IP is not publicly routable".into());
+            }
+            ip.to_string()
+        }
+        Host::Domain(host) => {
+            validate_public_dns_name(host).map_err(|error| error.to_string())?;
+            host.to_ascii_lowercase()
+        }
+    };
+    let port = url
+        .port()
+        .filter(|port| *port != 0)
+        .ok_or_else(|| "authority must include a non-zero port".to_string())?;
+    Ok((host, port))
+}
+
+#[cfg(feature = "local-quic-proxy")]
+#[derive(Debug, Error)]
+enum BridgeFileError {
+    #[error("payload was not found")]
+    NotFound,
+    #[error("payload path is unsafe or is not a regular file")]
+    Unsafe,
+    #[error("payload length {length} exceeds hard limit {maximum}")]
+    TooLarge { length: u64, maximum: u64 },
+    #[error("payload changed while it was being streamed")]
+    Changed,
+    #[error("payload was truncated while it was being streamed")]
+    Truncated,
+    #[error("payload I/O failed")]
+    Io,
+    #[error("payload streaming timed out")]
+    Timeout,
+}
+
+#[cfg(feature = "local-quic-proxy")]
+impl BridgeFileError {
+    fn ack_code(&self) -> u8 {
+        match self {
+            Self::NotFound | Self::Unsafe | Self::TooLarge { .. } => STREAM_ACK_BAD_REQUEST,
+            Self::Changed | Self::Truncated | Self::Io | Self::Timeout => STREAM_ACK_INTERNAL_ERROR,
+        }
+    }
+
+    fn reason(&self) -> &'static str {
+        match self {
+            Self::NotFound => "not_found",
+            Self::Unsafe => "unsafe_file",
+            Self::TooLarge { .. } => "file_too_large",
+            Self::Changed => "file_changed",
+            Self::Truncated => "file_truncated",
+            Self::Io => "file_io",
+            Self::Timeout => "file_timeout",
+        }
+    }
+}
+
+#[cfg(all(feature = "local-quic-proxy", unix))]
+#[derive(Clone, Copy)]
+struct BridgeFileIdentity {
+    device: u64,
+    inode: u64,
+    length: u64,
+    modified_secs: i64,
+    modified_nanos: i64,
+    changed_secs: i64,
+    changed_nanos: i64,
+}
+
+#[cfg(all(feature = "local-quic-proxy", unix))]
+impl BridgeFileIdentity {
+    fn from_metadata(metadata: &std::fs::Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            length: metadata.len(),
+            modified_secs: metadata.mtime(),
+            modified_nanos: metadata.mtime_nsec(),
+            changed_secs: metadata.ctime(),
+            changed_nanos: metadata.ctime_nsec(),
+        }
+    }
+}
+
+#[cfg(all(feature = "local-quic-proxy", not(unix)))]
+#[derive(Clone)]
+struct BridgeFileIdentity {
+    length: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+#[cfg(all(feature = "local-quic-proxy", not(unix)))]
+impl BridgeFileIdentity {
+    fn from_metadata(metadata: &std::fs::Metadata) -> Self {
+        Self {
+            length: metadata.len(),
+            modified: metadata.modified().ok(),
+        }
+    }
+}
+
+#[cfg(feature = "local-quic-proxy")]
+impl PartialEq for BridgeFileIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        #[cfg(unix)]
+        {
+            self.device == other.device
+                && self.inode == other.inode
+                && self.length == other.length
+                && self.modified_secs == other.modified_secs
+                && self.modified_nanos == other.modified_nanos
+                && self.changed_secs == other.changed_secs
+                && self.changed_nanos == other.changed_nanos
+        }
+        #[cfg(not(unix))]
+        {
+            self.length == other.length && self.modified == other.modified
+        }
+    }
+}
+
+#[cfg(feature = "local-quic-proxy")]
+struct OpenBridgeFile {
+    file: fs::File,
+    path: PathBuf,
+    length: u64,
+    identity: BridgeFileIdentity,
+}
+
+#[cfg(feature = "local-quic-proxy")]
+async fn ensure_no_symlink_components(root: &Path, path: &Path) -> Result<(), BridgeFileError> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| BridgeFileError::Unsafe)?;
+    let mut current = root.to_path_buf();
+    let components = relative.components().collect::<Vec<_>>();
+    if components.is_empty() {
+        return Err(BridgeFileError::Unsafe);
+    }
+    for (index, component) in components.iter().enumerate() {
+        let Component::Normal(segment) = component else {
+            return Err(BridgeFileError::Unsafe);
+        };
+        current.push(segment);
+        let metadata = fs::symlink_metadata(&current).await.map_err(|error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                BridgeFileError::NotFound
+            } else {
+                BridgeFileError::Io
+            }
+        })?;
+        if metadata.file_type().is_symlink() || (index + 1 < components.len() && !metadata.is_dir())
+        {
+            return Err(BridgeFileError::Unsafe);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "local-quic-proxy")]
+async fn open_bridge_file(
+    root: &Path,
+    path: PathBuf,
+    maximum: u64,
+) -> Result<OpenBridgeFile, BridgeFileError> {
+    ensure_no_symlink_components(root, &path).await?;
+    let parent = path.parent().ok_or(BridgeFileError::Unsafe)?;
+    let canonical_parent = fs::canonicalize(parent)
+        .await
+        .map_err(|_| BridgeFileError::Unsafe)?;
+    if !canonical_parent.starts_with(root) {
+        return Err(BridgeFileError::Unsafe);
+    }
+    let before = fs::symlink_metadata(&path).await.map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            BridgeFileError::NotFound
+        } else {
+            BridgeFileError::Io
+        }
+    })?;
+    if before.file_type().is_symlink() || !before.is_file() {
+        return Err(BridgeFileError::Unsafe);
+    }
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(O_NOFOLLOW_FLAG);
+    let file = options.open(&path).await.map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            BridgeFileError::NotFound
+        } else {
+            BridgeFileError::Unsafe
+        }
+    })?;
+    let opened = file.metadata().await.map_err(|_| BridgeFileError::Io)?;
+    let after = fs::symlink_metadata(&path)
+        .await
+        .map_err(|_| BridgeFileError::Changed)?;
+    if !opened.is_file()
+        || before.file_type().is_symlink()
+        || after.file_type().is_symlink()
+        || BridgeFileIdentity::from_metadata(&before) != BridgeFileIdentity::from_metadata(&opened)
+        || BridgeFileIdentity::from_metadata(&opened) != BridgeFileIdentity::from_metadata(&after)
+    {
+        return Err(BridgeFileError::Changed);
+    }
+    if opened.len() > maximum {
+        return Err(BridgeFileError::TooLarge {
+            length: opened.len(),
+            maximum,
+        });
+    }
+    Ok(OpenBridgeFile {
+        file,
+        path,
+        length: opened.len(),
+        identity: BridgeFileIdentity::from_metadata(&opened),
+    })
+}
+
+#[cfg(feature = "local-quic-proxy")]
+async fn stream_bridge_file_exact(
+    opened: &mut OpenBridgeFile,
+    send_stream: &mut quinn::SendStream,
+) -> Result<u64, BridgeFileError> {
+    let mut limited = (&mut opened.file).take(opened.length);
+    let bytes = timeout(
+        PROXY_TRANSFER_TIMEOUT,
+        tokio::io::copy(&mut limited, send_stream),
+    )
+    .await
+    .map_err(|_| BridgeFileError::Timeout)?
+    .map_err(|_| BridgeFileError::Io)?;
+    if bytes != opened.length {
+        return Err(BridgeFileError::Truncated);
+    }
+    send_stream.flush().await.map_err(|_| BridgeFileError::Io)?;
+    verify_bridge_file_unchanged(opened).await?;
+    Ok(bytes)
+}
+
+#[cfg(feature = "local-quic-proxy")]
+async fn verify_bridge_file_unchanged(opened: &OpenBridgeFile) -> Result<(), BridgeFileError> {
+    let opened_after = opened
+        .file
+        .metadata()
+        .await
+        .map_err(|_| BridgeFileError::Changed)?;
+    let path_after = fs::symlink_metadata(&opened.path)
+        .await
+        .map_err(|_| BridgeFileError::Changed)?;
+    if path_after.file_type().is_symlink()
+        || BridgeFileIdentity::from_metadata(&opened_after) != opened.identity
+        || BridgeFileIdentity::from_metadata(&path_after) != opened.identity
+    {
+        return Err(BridgeFileError::Changed);
+    }
     Ok(())
 }
 
@@ -1835,80 +2375,25 @@ async fn handle_norito_stream(
         }
     };
 
-    let mut file = match fs::File::open(&path).await {
+    let mut file = match open_bridge_file(&bridge.spool_dir, path, PROXY_MAX_LOCAL_FILE_BYTES).await
+    {
         Ok(file) => file,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            record_transport_event(telemetry_label, "stream_reject", "norito_not_found");
+        Err(error) => {
+            record_transport_event(telemetry_label, "stream_reject", error.reason());
             return send_failure_ack(
                 send_stream,
                 recv_stream,
                 ProxyStreamAckV1 {
                     version: PROXY_STREAM_VERSION,
-                    code: STREAM_ACK_BAD_REQUEST,
+                    code: error.ack_code(),
                     accepted: false,
-                    message: Some(format!("norito payload `{}` not found", path.display())),
-                    cache_tag_hex: None,
-                },
-            )
-            .await;
-        }
-        Err(err) => {
-            record_transport_event(telemetry_label, "stream_reject", "norito_open_failed");
-            return send_failure_ack(
-                send_stream,
-                recv_stream,
-                ProxyStreamAckV1 {
-                    version: PROXY_STREAM_VERSION,
-                    code: STREAM_ACK_INTERNAL_ERROR,
-                    accepted: false,
-                    message: Some(format!(
-                        "failed to open norito payload `{}`: {err}",
-                        path.display()
-                    )),
+                    message: Some(format!("norito payload rejected: {error}")),
                     cache_tag_hex: None,
                 },
             )
             .await;
         }
     };
-
-    let metadata = match file.metadata().await {
-        Ok(meta) => meta,
-        Err(err) => {
-            record_transport_event(telemetry_label, "stream_reject", "norito_metadata_failed");
-            return send_failure_ack(
-                send_stream,
-                recv_stream,
-                ProxyStreamAckV1 {
-                    version: PROXY_STREAM_VERSION,
-                    code: STREAM_ACK_INTERNAL_ERROR,
-                    accepted: false,
-                    message: Some(format!(
-                        "failed to fetch norito metadata `{}`: {err}",
-                        path.display()
-                    )),
-                    cache_tag_hex: None,
-                },
-            )
-            .await;
-        }
-    };
-
-    if !metadata.is_file() {
-        record_transport_event(telemetry_label, "stream_reject", "norito_not_file");
-        return send_failure_ack(
-            send_stream,
-            recv_stream,
-            ProxyStreamAckV1 {
-                version: PROXY_STREAM_VERSION,
-                code: STREAM_ACK_BAD_REQUEST,
-                accepted: false,
-                message: Some(format!("norito target `{}` is not a file", path.display())),
-                cache_tag_hex: None,
-            },
-        )
-        .await;
-    }
 
     let cache_tag = session.cache_tag_for(ProxyStreamService::Norito, &open_frame);
     let ack = ProxyStreamAckV1 {
@@ -1922,13 +2407,12 @@ async fn handle_norito_stream(
         .await
         .map_err(|err| ProxyError::Stream(err.to_string()))?;
 
-    match tokio::io::copy(&mut file, &mut send_stream).await {
+    match stream_bridge_file_exact(&mut file, &mut send_stream).await {
         Ok(bytes) => {
             record_transport_event(telemetry_label, "stream_complete", "norito_ok");
             info!(
                 target: "soranet.proxy",
                 label = telemetry_label,
-                target = %path.display(),
                 bytes,
                 "streamed norito payload"
             );
@@ -1936,11 +2420,11 @@ async fn handle_norito_stream(
             let _ = recv_stream.stop(VarInt::from_u32(0));
             Ok(())
         }
-        Err(err) => {
-            record_transport_event(telemetry_label, "stream_error", "norito_stream_failed");
+        Err(error) => {
+            record_transport_event(telemetry_label, "stream_error", error.reason());
             let _ = send_stream.finish();
             let _ = recv_stream.stop(VarInt::from_u32(0));
-            Err(ProxyError::Stream(err.to_string()))
+            Err(ProxyError::Stream(error.to_string()))
         }
     }
 }
@@ -2004,45 +2488,25 @@ async fn handle_kaigi_stream(
         }
     };
 
-    let mut file = match fs::File::open(&path).await {
+    let mut file = match open_bridge_file(&bridge.spool_dir, path, PROXY_MAX_LOCAL_FILE_BYTES).await
+    {
         Ok(file) => file,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            record_transport_event(telemetry_label, "stream_reject", "kaigi_not_found");
+        Err(error) => {
+            record_transport_event(telemetry_label, "stream_reject", error.reason());
             return send_failure_ack(
                 send_stream,
                 recv_stream,
                 ProxyStreamAckV1 {
                     version: PROXY_STREAM_VERSION,
-                    code: STREAM_ACK_BAD_REQUEST,
+                    code: error.ack_code(),
                     accepted: false,
-                    message: Some(format!("kaigi payload `{}` not found", path.display())),
-                    cache_tag_hex: None,
-                },
-            )
-            .await;
-        }
-        Err(err) => {
-            record_transport_event(telemetry_label, "stream_reject", "kaigi_open_failed");
-            return send_failure_ack(
-                send_stream,
-                recv_stream,
-                ProxyStreamAckV1 {
-                    version: PROXY_STREAM_VERSION,
-                    code: STREAM_ACK_INTERNAL_ERROR,
-                    accepted: false,
-                    message: Some(format!("failed to open kaigi payload: {err}")),
+                    message: Some(format!("kaigi payload rejected: {error}")),
                     cache_tag_hex: None,
                 },
             )
             .await;
         }
     };
-
-    let mut payload = Vec::new();
-    file.read_to_end(&mut payload).await.map_err(|err| {
-        record_transport_event(telemetry_label, "stream_reject", "kaigi_read_failed");
-        ProxyError::Stream(err.to_string())
-    })?;
 
     let room_policy = bridge.room_policy().as_label().to_string();
     let cache_tag = session.cache_tag_for(ProxyStreamService::Kaigi, &open_frame);
@@ -2056,10 +2520,9 @@ async fn handle_kaigi_stream(
     write_frame(&mut send_stream, &ack)
         .await
         .map_err(ProxyError::Stream)?;
-    send_stream
-        .write_all(&payload)
+    stream_bridge_file_exact(&mut file, &mut send_stream)
         .await
-        .map_err(|err| ProxyError::Stream(err.to_string()))?;
+        .map_err(|error| ProxyError::Stream(error.to_string()))?;
     send_stream
         .finish()
         .map_err(|err| ProxyError::Stream(err.to_string()))?;
@@ -2130,80 +2593,25 @@ async fn handle_car_stream(
         }
     };
 
-    let mut file = match fs::File::open(&path).await {
+    let mut file = match open_bridge_file(&bridge.cache_dir, path, PROXY_MAX_LOCAL_FILE_BYTES).await
+    {
         Ok(file) => file,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            record_transport_event(telemetry_label, "stream_reject", "car_not_found");
+        Err(error) => {
+            record_transport_event(telemetry_label, "stream_reject", error.reason());
             return send_failure_ack(
                 send_stream,
                 recv_stream,
                 ProxyStreamAckV1 {
                     version: PROXY_STREAM_VERSION,
-                    code: STREAM_ACK_BAD_REQUEST,
+                    code: error.ack_code(),
                     accepted: false,
-                    message: Some(format!("car archive `{}` not found", path.display())),
-                    cache_tag_hex: None,
-                },
-            )
-            .await;
-        }
-        Err(err) => {
-            record_transport_event(telemetry_label, "stream_reject", "car_open_failed");
-            return send_failure_ack(
-                send_stream,
-                recv_stream,
-                ProxyStreamAckV1 {
-                    version: PROXY_STREAM_VERSION,
-                    code: STREAM_ACK_INTERNAL_ERROR,
-                    accepted: false,
-                    message: Some(format!(
-                        "failed to open car archive `{}`: {err}",
-                        path.display()
-                    )),
+                    message: Some(format!("car payload rejected: {error}")),
                     cache_tag_hex: None,
                 },
             )
             .await;
         }
     };
-
-    let metadata = match file.metadata().await {
-        Ok(meta) => meta,
-        Err(err) => {
-            record_transport_event(telemetry_label, "stream_reject", "car_metadata_failed");
-            return send_failure_ack(
-                send_stream,
-                recv_stream,
-                ProxyStreamAckV1 {
-                    version: PROXY_STREAM_VERSION,
-                    code: STREAM_ACK_INTERNAL_ERROR,
-                    accepted: false,
-                    message: Some(format!(
-                        "failed to fetch car metadata `{}`: {err}",
-                        path.display()
-                    )),
-                    cache_tag_hex: None,
-                },
-            )
-            .await;
-        }
-    };
-
-    if !metadata.is_file() {
-        record_transport_event(telemetry_label, "stream_reject", "car_not_file");
-        return send_failure_ack(
-            send_stream,
-            recv_stream,
-            ProxyStreamAckV1 {
-                version: PROXY_STREAM_VERSION,
-                code: STREAM_ACK_BAD_REQUEST,
-                accepted: false,
-                message: Some(format!("car target `{}` is not a file", path.display())),
-                cache_tag_hex: None,
-            },
-        )
-        .await;
-    }
 
     let cache_tag = session.cache_tag_for(ProxyStreamService::Car, &open_frame);
     let ack = ProxyStreamAckV1 {
@@ -2217,13 +2625,12 @@ async fn handle_car_stream(
         .await
         .map_err(|err| ProxyError::Stream(err.to_string()))?;
 
-    match tokio::io::copy(&mut file, &mut send_stream).await {
+    match stream_bridge_file_exact(&mut file, &mut send_stream).await {
         Ok(bytes) => {
             record_transport_event(telemetry_label, "stream_complete", "car_ok");
             info!(
                 target: "soranet.proxy",
                 label = telemetry_label,
-                target = %path.display(),
                 bytes,
                 "streamed car archive"
             );
@@ -2231,11 +2638,11 @@ async fn handle_car_stream(
             let _ = recv_stream.stop(VarInt::from_u32(0));
             Ok(())
         }
-        Err(err) => {
-            record_transport_event(telemetry_label, "stream_error", "car_stream_failed");
+        Err(error) => {
+            record_transport_event(telemetry_label, "stream_error", error.reason());
             let _ = send_stream.finish();
             let _ = recv_stream.stop(VarInt::from_u32(0));
-            Err(ProxyError::Stream(err.to_string()))
+            Err(ProxyError::Stream(error.to_string()))
         }
     }
 }
@@ -2378,7 +2785,6 @@ mod tests {
     use tempfile::TempDir;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
         task::JoinHandle,
     };
 
@@ -2415,6 +2821,130 @@ mod tests {
         fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
             Err(FailingProxyRngError)
         }
+    }
+
+    #[test]
+    fn tcp_authority_policy_rejects_ssrf_targets() {
+        for authority in [
+            "127.0.0.1:443",
+            "10.0.0.1:443",
+            "169.254.169.254:80",
+            "[::1]:443",
+            "[fe80::1]:443",
+            "localhost:443",
+            "relay.local:443",
+            "user:secret@relay.example.org:443",
+            "relay.example.org:443/path",
+            "relay.example.org:443?query=1",
+            "relay.example.org",
+            "relay.example.org:0",
+        ] {
+            assert!(
+                parse_public_tcp_authority(authority).is_err(),
+                "unsafe authority was accepted: {authority}"
+            );
+        }
+
+        assert_eq!(
+            parse_public_tcp_authority("93.184.216.34:443").expect("public IPv4 authority"),
+            ("93.184.216.34".into(), 443)
+        );
+        assert_eq!(
+            parse_public_tcp_authority("relay.example.org:443").expect("public DNS authority"),
+            ("relay.example.org".into(), 443)
+        );
+    }
+
+    #[test]
+    fn proxy_rejects_unbounded_stream_configuration() {
+        let zero = LocalQuicProxyConfig {
+            max_streams_per_circuit: Some(0),
+            ..LocalQuicProxyConfig::default()
+        };
+        assert!(matches!(
+            zero.validated_stream_limit(),
+            Err(ProxyError::StreamLimit { .. })
+        ));
+
+        let excessive = LocalQuicProxyConfig {
+            max_streams_per_circuit: Some(PROXY_MAX_STREAMS_PER_CONNECTION + 1),
+            ..LocalQuicProxyConfig::default()
+        };
+        assert!(matches!(
+            excessive.validated_stream_limit(),
+            Err(ProxyError::StreamLimit { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn bridge_file_open_is_bounded_and_detects_mutation() {
+        let root = TempDir::new().expect("tempdir");
+        let path = root.path().join("payload.norito");
+        tokio::fs::write(&path, b"payload")
+            .await
+            .expect("write payload");
+
+        assert!(matches!(
+            open_bridge_file(root.path(), path.clone(), 3).await,
+            Err(BridgeFileError::TooLarge { .. })
+        ));
+
+        let opened = open_bridge_file(root.path(), path.clone(), 64)
+            .await
+            .expect("open regular payload");
+        tokio::fs::write(&path, b"short")
+            .await
+            .expect("truncate payload");
+        assert!(matches!(
+            verify_bridge_file_unchanged(&opened).await,
+            Err(BridgeFileError::Changed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn bridge_file_open_detects_replacement() {
+        let root = TempDir::new().expect("tempdir");
+        let path = root.path().join("payload.car");
+        let replacement = root.path().join("replacement.car");
+        tokio::fs::write(&path, b"original")
+            .await
+            .expect("write payload");
+        let opened = open_bridge_file(root.path(), path.clone(), 64)
+            .await
+            .expect("open regular payload");
+        tokio::fs::write(&replacement, b"replaced")
+            .await
+            .expect("write replacement");
+        tokio::fs::rename(&replacement, &path)
+            .await
+            .expect("replace payload");
+        assert!(matches!(
+            verify_bridge_file_unchanged(&opened).await,
+            Err(BridgeFileError::Changed)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bridge_file_open_rejects_symlinks_and_symlink_roots() {
+        use std::os::unix::fs::symlink;
+
+        let root = TempDir::new().expect("tempdir");
+        let real = root.path().join("real.norito");
+        let link = root.path().join("link.norito");
+        tokio::fs::write(&real, b"payload")
+            .await
+            .expect("write payload");
+        symlink(&real, &link).expect("create payload symlink");
+        assert!(matches!(
+            open_bridge_file(root.path(), link, 64).await,
+            Err(BridgeFileError::Unsafe)
+        ));
+
+        let root_link = root.path().with_extension("link");
+        symlink(root.path(), &root_link).expect("create root symlink");
+        assert!(canonical_bridge_root(&root_link).is_err());
+        std::fs::remove_file(root_link).expect("remove root symlink");
     }
 
     impl TryCryptoRng for FailingProxyRng {}
@@ -3042,24 +3572,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn tcp_stream_bridge_transfers_payload() {
-        let listener = match TcpListener::bind("127.0.0.1:0").await {
-            Ok(listener) => listener,
-            Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
-                eprintln!("skipping proxy TCP bridge test (loopback denied): {err}");
-                return;
-            }
-            Err(err) => panic!("bind backend listener: {err}"),
-        };
-        let backend_addr = listener.local_addr().expect("backend addr");
-        let backend_task = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.expect("accept backend");
-            let mut buf = [0u8; 4];
-            socket.read_exact(&mut buf).await.expect("read request");
-            assert_eq!(&buf, b"ping");
-            socket.write_all(b"pong").await.expect("write response");
-        });
-
+    async fn tcp_stream_bridge_rejects_loopback_ssrf() {
         let config = LocalQuicProxyConfig {
             bind_addr: "127.0.0.1:0".into(),
             proxy_mode: ProxyMode::Bridge,
@@ -3068,7 +3581,6 @@ mod tests {
             ..LocalQuicProxyConfig::default()
         };
         let Some(proxy) = spawn_proxy_or_skip(config) else {
-            backend_task.abort();
             return;
         };
         let proxy_addr = proxy.local_addr();
@@ -3080,36 +3592,23 @@ mod tests {
         let open_frame = ProxyStreamOpenV1 {
             version: PROXY_STREAM_VERSION,
             service: "tcp".into(),
-            authority: Some(backend_addr.to_string()),
+            authority: Some("127.0.0.1:8080".into()),
             target: None,
             route_policy_id: None,
             exit_country: None,
             client_id: Some("browser".into()),
         };
-        let (mut stream_send, mut stream_recv, stream_ack) =
+        let (stream_send, mut stream_recv, stream_ack) =
             open_proxy_stream(&connection, &open_frame).await;
-        assert!(stream_ack.accepted);
-        assert_eq!(stream_ack.code, STREAM_ACK_OK);
-        let cache_tag = stream_ack
-            .cache_tag_hex
-            .as_ref()
-            .expect("tcp ack should include cache tag");
-        assert_eq!(cache_tag.len(), 32);
-
-        stream_send.write_all(b"ping").await.expect("write payload");
-        stream_send.flush().await.expect("flush payload");
-        let mut response = [0u8; 4];
-        stream_recv
-            .read_exact(&mut response)
-            .await
-            .expect("read response");
-        assert_eq!(&response, b"pong");
-        stream_send.finish().expect("finish stream send");
+        assert!(!stream_ack.accepted);
+        assert_eq!(stream_ack.code, STREAM_ACK_BAD_REQUEST);
+        assert!(stream_ack.cache_tag_hex.is_none());
+        let _ = stream_send.finish();
+        let _ = stream_recv.stop(VarInt::from_u32(0));
 
         connection.close(VarInt::from_u32(0), b"done");
         endpoint.wait_idle().await;
         proxy.shutdown().await;
-        backend_task.await.expect("backend task");
     }
 
     async fn connect_proxy_client(proxy_addr: SocketAddr) -> (Endpoint, quinn::Connection) {

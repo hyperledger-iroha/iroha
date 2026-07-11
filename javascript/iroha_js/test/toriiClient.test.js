@@ -5634,12 +5634,14 @@ test("fetchDaPayloadViaGateway fetches manifest bundle and invokes gateway", asy
     {
       name: "alpha",
       providerIdHex: "bb".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
       baseUrl: "https://gateway.test/",
       streamTokenB64: "dG9rZW4=",
     },
     {
       name: "beta",
       providerIdHex: "cc".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
       baseUrl: "https://gateway-two.test/",
       streamTokenB64: "dG9rZW4y",
     },
@@ -5661,6 +5663,7 @@ test("fetchDaPayloadViaGateway fetches manifest bundle and invokes gateway", asy
   assert.equal(handleArg, chunkerHandle);
   assert.ok(planJsonArg.includes('"chunk_index":0'));
   assert.equal(providerArg.length, 2);
+  assert.equal(providerArg[0].gatewayPublicKeyHex, "dd".repeat(32));
 });
 
 test("fetchDaPayloadViaGateway validates signal option", async () => {
@@ -5687,14 +5690,16 @@ test("fetchDaPayloadViaGateway validates signal option", async () => {
     {
       name: "alpha",
       providerIdHex: "11".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
       baseUrl: "https://gateway.test",
-      streamTokenB64: bufferToBase64Url(Buffer.from("token")),
+      streamTokenB64: Buffer.from("token").toString("base64"),
     },
     {
       name: "beta",
       providerIdHex: "22".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
       baseUrl: "https://gateway-two.test",
-      streamTokenB64: bufferToBase64Url(Buffer.from("token-2")),
+      streamTokenB64: Buffer.from("token-2").toString("base64"),
     },
   ];
   const client = new ToriiClient(BASE_URL, {
@@ -5754,12 +5759,14 @@ test("fetchDaPayloadViaGateway rejects invalid stream tokens", async () => {
           {
             name: "alpha",
             providerIdHex: "11".repeat(32),
+            gatewayPublicKeyHex: "dd".repeat(32),
             baseUrl: "https://gateway.one",
             streamTokenB64: "not-base64!!",
           },
           {
             name: "beta",
             providerIdHex: "22".repeat(32),
+            gatewayPublicKeyHex: "dd".repeat(32),
             baseUrl: "https://gateway.two",
             streamTokenB64: "dG9rZW4y",
           },
@@ -5786,9 +5793,10 @@ test("fetchDaPayloadViaGateway uses custom hooks", async (t) => {
   const providers = [
     {
       name: "alpha",
-      providerIdHex: `0x${"ee".repeat(32)}`,
+      providerIdHex: "ee".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
       baseUrl: "https://gateway.test",
-      streamTokenB64: bufferToBase64Url(Buffer.from("token")),
+      streamTokenB64: Buffer.from("token").toString("base64"),
     },
   ];
   const gatewayMock = t.mock.fn(() => ({
@@ -5897,12 +5905,14 @@ test("fetchDaPayloadViaGateway reuses provided manifest bundle", async (t) => {
       {
         name: "beta",
         providerIdHex: "22".repeat(32),
+        gatewayPublicKeyHex: "dd".repeat(32),
         baseUrl: "https://gateway.example/",
         streamTokenB64: "c3R1Yg==",
       },
       {
         name: "gamma",
         providerIdHex: "33".repeat(32),
+        gatewayPublicKeyHex: "dd".repeat(32),
         baseUrl: "https://gateway-two.example/",
         streamTokenB64: "c3R1Yi0y",
       },
@@ -5934,12 +5944,14 @@ test("fetchDaPayloadViaGateway accepts providers alias", async (t) => {
     {
       name: "gamma",
       providerIdHex: "98".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
       baseUrl: "https://gateway.test",
       streamTokenB64: Buffer.from("token").toString("base64"),
     },
     {
       name: "delta",
       providerIdHex: "97".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
       baseUrl: "https://gateway-two.test",
       streamTokenB64: Buffer.from("token-2").toString("base64"),
     },
@@ -6065,12 +6077,14 @@ test("fetchDaPayloadViaGateway attaches proof summary when requested", async (t)
       {
         name: "alpha",
         providerIdHex: "bb".repeat(32),
+        gatewayPublicKeyHex: "dd".repeat(32),
         baseUrl: "https://gateway.test/",
         streamTokenB64: "dG9rZW4=",
       },
       {
         name: "beta",
         providerIdHex: "bc".repeat(32),
+        gatewayPublicKeyHex: "dd".repeat(32),
         baseUrl: "https://gateway-two.test/",
         streamTokenB64: "dG9rZW4y",
       },
@@ -6112,6 +6126,7 @@ test("fetchDaPayloadViaGateway rejects invalid manifest_b64 for proof summary", 
           {
             name: "alpha",
             providerIdHex: "bb".repeat(32),
+            gatewayPublicKeyHex: "dd".repeat(32),
             baseUrl: "https://gateway.test/",
             streamTokenB64: "dG9rZW4=",
           },
@@ -6413,12 +6428,14 @@ test("proveDaAvailabilityToDir persists CLI artefacts", async () => {
         {
           name: "alpha",
           providerIdHex: "bb".repeat(32),
+          gatewayPublicKeyHex: "dd".repeat(32),
           baseUrl: "https://gateway.test/",
           streamTokenB64: Buffer.from("token").toString("base64"),
         },
         {
           name: "beta",
           providerIdHex: "bc".repeat(32),
+          gatewayPublicKeyHex: "dd".repeat(32),
           baseUrl: "https://gateway-two.test/",
           streamTokenB64: Buffer.from("token-2").toString("base64"),
         },
@@ -10696,8 +10713,8 @@ test("getSumeragiStatusTyped normalizes governance seals", async () => {
     return createResponse({
       status: 200,
       jsonData: {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v1",
-        staged_mode_tag: "iroha2-consensus::npos-sumeragi@v1",
+        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
+        staged_mode_tag: "iroha2-consensus::npos-sumeragi@v2",
         staged_mode_activation_height: "10",
         mode_activation_lag_blocks: 2,
         consensus_caps: {
@@ -10792,8 +10809,8 @@ test("getSumeragiStatusTyped normalizes governance seals", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const payload = await client.getSumeragiStatusTyped();
-  assert.equal(payload.mode_tag, "iroha2-consensus::permissioned-sumeragi@v1");
-  assert.equal(payload.staged_mode_tag, "iroha2-consensus::npos-sumeragi@v1");
+  assert.equal(payload.mode_tag, "iroha2-consensus::permissioned-sumeragi@v2");
+  assert.equal(payload.staged_mode_tag, "iroha2-consensus::npos-sumeragi@v2");
   assert.equal(payload.staged_mode_activation_height, 10);
   assert.equal(payload.mode_activation_lag_blocks, 2);
   assert.ok(payload.consensus_caps);
@@ -10887,7 +10904,7 @@ test("getSumeragiStatusTyped parses settlement and relay envelopes", async () =>
     createResponse({
       status: 200,
       jsonData: {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v1",
+        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
         lane_settlement_commitments: [
           {
             block_height: "21",
@@ -10972,7 +10989,7 @@ test("getSumeragiStatusTyped rejects invalid relay settlement hash", async () =>
     createResponse({
       status: 200,
       jsonData: {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v1",
+        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
         lane_relay_envelopes: [
           {
             lane_id: 1,
@@ -11006,7 +11023,7 @@ test("getSumeragiStatusTyped rejects invalid relay fastpq_proof digest", async (
     createResponse({
       status: 200,
       jsonData: {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v1",
+        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
         lane_relay_envelopes: [
           {
             lane_id: 1,
@@ -11187,7 +11204,7 @@ test("getSumeragiCommitQc fetches commit QC record", async () => {
           height: "12",
           view: "3",
           epoch: "4",
-          mode_tag: "iroha2-consensus::permissioned-sumeragi@v1",
+          mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
           validator_set_hash: "dd".repeat(32),
           validator_set_hash_version: 1,
           validator_set: ["alice@test", "bob@test"],

@@ -34,6 +34,7 @@ use iroha_data_model::{
             LaneBlockProposalV1, LaneBlockQcV1, SumeragiLaneBlockSessionStatus,
             SumeragiLanePayloadOwnership, SumeragiMembershipStatus, ValidatorIndex,
         },
+        consensus_v2::SumeragiV2Status,
     },
     consensus::{ConsensusKeyRecord, Qc, ValidatorElectionOutcome, ValidatorSetCheckpoint},
     da::commitment::DaCommitmentBundle,
@@ -301,6 +302,38 @@ static LOCKED_QC_VIEW: AtomicU64 = AtomicU64::new(0);
 static HIGHEST_QC_HASH: OnceLock<Mutex<Option<UntypedHash>>> = OnceLock::new();
 static LOCKED_QC_HASH: OnceLock<Mutex<Option<UntypedHash>>> = OnceLock::new();
 static CANONICAL_PENDING_FINALITY_HASH: OnceLock<Mutex<Option<UntypedHash>>> = OnceLock::new();
+static SUMERAGI_V2_STATUS: OnceLock<Mutex<Option<SumeragiV2Status>>> = OnceLock::new();
+
+/// Publish the exact protocol-v2 reducer snapshot served by Torii.
+///
+/// The production adapter calls this only after serializing a reducer
+/// transition. Keeping the value separate from the legacy diagnostic atomics
+/// prevents removed RBC/recovery fields from leaking into the v2 status API.
+pub fn set_v2_status(status: SumeragiV2Status) {
+    let slot = SUMERAGI_V2_STATUS.get_or_init(|| Mutex::new(None));
+    *slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(status);
+}
+
+/// Return the latest protocol-v2 reducer snapshot, if v2 has started.
+#[must_use]
+pub fn v2_status() -> Option<SumeragiV2Status> {
+    SUMERAGI_V2_STATUS.get().and_then(|slot| {
+        slot.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    })
+}
+
+/// Clear protocol-v2 status during shutdown and isolated tests.
+pub fn clear_v2_status() {
+    if let Some(slot) = SUMERAGI_V2_STATUS.get() {
+        *slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+}
 
 static RBC_ABORT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static RBC_ABORT_LAST_HEIGHT: AtomicU64 = AtomicU64::new(0);
@@ -2923,6 +2956,8 @@ pub enum ConsensusMessageKind {
     RbcDeliver,
     /// Fetch-pending-block requests (`FetchPendingBlock`).
     FetchPendingBlock,
+    /// Explicitly versioned global Sumeragi v2 messages.
+    V2,
     /// Consensus control-flow evidence.
     Evidence,
 }
@@ -2955,6 +2990,7 @@ impl ConsensusMessageKind {
             ConsensusMessageKind::RbcReady => "rbc_ready",
             ConsensusMessageKind::RbcDeliver => "rbc_deliver",
             ConsensusMessageKind::FetchPendingBlock => "fetch_pending_block",
+            ConsensusMessageKind::V2 => "sumeragi_v2",
             ConsensusMessageKind::Evidence => "evidence",
         }
     }
@@ -9230,6 +9266,9 @@ mod tests {
             proposal_view,
             lane_id,
             dataspace_id,
+            lane_incarnation: UntypedHash::new(
+                format!("status-test-lane-incarnation-{seed}").as_bytes(),
+            ),
             lane_block_height,
             lane_block_view,
             subject_hash: UntypedHash::new(format!("status-test-subject-{seed}").as_bytes()),
@@ -9273,6 +9312,9 @@ mod tests {
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id: LaneId::new(u32::from(seed)),
             dataspace_id: DataSpaceId::new(u64::from(seed) + 100),
+            lane_incarnation: UntypedHash::new(
+                format!("status-test-lane-incarnation-{seed}").as_bytes(),
+            ),
             proposal_height: 1,
             previous_lane_block_height: 0,
             previous_lane_block_descriptor_hash: None,
@@ -9309,6 +9351,7 @@ mod tests {
             validator_set: proposal.descriptor.validator_set.clone(),
             signers_bitmap: vec![0b0000_0001],
             bls_aggregate_signature: vec![seed.max(1)],
+            payload_availability_qc: None,
         };
         let commit_qc = LaneBlockQcV1 {
             body: proposal.vote_body(CertPhase::Commit),
@@ -9317,6 +9360,7 @@ mod tests {
             validator_set: proposal.descriptor.validator_set.clone(),
             signers_bitmap: vec![0b0000_0001],
             bls_aggregate_signature: vec![seed.max(1)],
+            payload_availability_qc: None,
         };
         let session = crate::lane_consensus::CommittedLaneBlockSession {
             proposal,
@@ -9566,6 +9610,8 @@ mod tests {
         let membership_hash = [0x44; 32];
         let prf_seed = [0x55; 32];
         let caps = iroha_p2p::ConsensusConfigCaps {
+            nexus_policy_digest: [0xA5; 32],
+            v2_config_fingerprint: [0xA5; 32],
             collectors_k: 3,
             redundant_send_r: 2,
             da_enabled: true,
@@ -13435,6 +13481,7 @@ mod tests {
         LaneBlockCommitment {
             block_height,
             lane_id: LaneId::new(lane_id),
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(dataspace_id),
             tx_count: 1,
             total_local_micro: 10,

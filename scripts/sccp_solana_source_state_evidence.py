@@ -317,12 +317,15 @@ def _optional_expected_record_hash(
 def parse_solana_network(value: str) -> str:
     """Parse a supported Solana source-network profile."""
 
-    if type(value) is not str or value != value.strip():
+    if (
+        type(value) is not str
+        or value != value.strip()
+        or value != value.lower()
+    ):
         raise argparse.ArgumentTypeError(
             "solana network must be mainnet-beta or testnet"
         )
-    normalized = value.lower()
-    profile = SOLANA_SOURCE_NETWORK_ALIASES.get(normalized)
+    profile = SOLANA_SOURCE_NETWORK_ALIASES.get(value)
     if profile is None:
         raise argparse.ArgumentTypeError(
             "solana network must be mainnet-beta or testnet"
@@ -333,7 +336,9 @@ def parse_solana_network(value: str) -> str:
 def _solana_profile_for_network(network: object) -> dict[str, object]:
     if type(network) is not str:
         raise ValueError("solana_network must be a supported Solana profile")
-    profile_key = SOLANA_SOURCE_NETWORK_ALIASES.get(network.lower())
+    if network != network.strip() or network != network.lower():
+        raise ValueError("solana_network must be mainnet-beta or testnet")
+    profile_key = SOLANA_SOURCE_NETWORK_ALIASES.get(network)
     if profile_key is None:
         raise ValueError("solana_network must be mainnet-beta or testnet")
     return SOLANA_SOURCE_NETWORK_PROFILES[profile_key]
@@ -1451,6 +1456,9 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 
 def _decoded_public_blocker_text(value: str) -> str:
+    # Source-inventory marker: lane public blocker decode helpers use exact strings.
+    if type(value) is not str:
+        return ""
     decoded = value
     for _decode_pass in range(max(1, len(value))):
         next_decoded = unquote(html_unescape(decoded))
@@ -1461,6 +1469,8 @@ def _decoded_public_blocker_text(value: str) -> str:
 
 
 def _decoded_cli_error_text_issue(value: str) -> bool:
+    if type(value) is not str:
+        return True
     decoded = _decoded_public_blocker_text(value)
     if any(ord(character) < 0x20 or ord(character) == 0x7F for character in decoded):
         return True
@@ -1472,7 +1482,10 @@ def _decoded_cli_error_text_issue(value: str) -> bool:
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     if isinstance(exc, (OSError, SystemExit)):
         return fallback
-    text = str(exc)
+    try:
+        text = str(exc)
+    except Exception:
+        return fallback
     if not text:
         return fallback
     if not text.isascii():

@@ -94,6 +94,9 @@ BN254_SCALAR_FIELD_BITS = tuple(
 
 
 def _strip_0x(value: str) -> str:
+    # Source-inventory marker: EVM live strip-0x helper uses exact strings.
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError("0x text must be an exact string")
     return value[2:] if value.lower().startswith("0x") else value
 
 
@@ -102,6 +105,9 @@ def _hex(raw: bytes) -> str:
 
 
 def _selector(signature: str) -> str:
+    # Source-inventory marker: EVM live function selector helper uses exact strings.
+    if type(signature) is not str:
+        raise TypeError("EVM function selector signature must be an exact string")
     return "0x" + evidence._keccak_256(signature.encode("utf-8"))[:4].hex()
 
 
@@ -316,6 +322,9 @@ def _default_network_id_for_domain(domain: int) -> bytes:
 def _json_object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     decoded: dict[str, Any] = {}
     for key, value in pairs:
+        # Source-inventory marker: live JSON duplicate-key helpers use exact strings.
+        if type(key) is not str:
+            raise ValueError("JSON-RPC returned duplicate JSON keys")
         if key in decoded:
             raise ValueError("JSON-RPC returned duplicate JSON keys")
         decoded[key] = value
@@ -347,6 +356,9 @@ def _normalize_evm_rpc_url(rpc_url: str) -> str:
 
 
 def _evm_rpc_host_is_loopback(host: str) -> bool:
+    # Source-inventory marker: runtime URL host classifiers use exact strings.
+    if type(host) is not str:
+        return False
     normalized = host.strip("[]").lower()
     try:
         return ipaddress.ip_address(normalized).is_loopback
@@ -355,6 +367,8 @@ def _evm_rpc_host_is_loopback(host: str) -> bool:
 
 
 def _evm_rpc_host_is_non_public_dns(host: str) -> bool:
+    if type(host) is not str:
+        return True
     normalized = host.strip("[]").lower()
     try:
         ipaddress.ip_address(normalized)
@@ -426,7 +440,9 @@ def _json_rpc(
         raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from None
     if type(decoded) is not dict:
         raise RuntimeError(f"JSON-RPC {method} returned a non-object response")
-    if decoded.get("jsonrpc") != "2.0":
+    protocol_version = decoded.get("jsonrpc")
+    # Source-inventory marker: EVM live JSON-RPC protocol version uses exact strings.
+    if type(protocol_version) is not str or protocol_version != "2.0":
         raise RuntimeError(f"JSON-RPC {method} returned an invalid protocol version")
     response_id = decoded.get("id")
     if type(response_id) is not int or response_id != 1:
@@ -1463,7 +1479,9 @@ def _collect_route_canary_transaction_evidence(
     )
     if receipt_tx_hash != transaction_hash:
         raise RuntimeError("route-canary receipt transactionHash does not match request")
-    if receipt.get("status") != "0x1":
+    receipt_status = receipt.get("status")
+    # Source-inventory marker: EVM live route-canary receipt status uses exact strings.
+    if type(receipt_status) is not str or receipt_status != "0x1":
         raise RuntimeError("route-canary transaction receipt status must be 0x1")
     receipt_block = _route_canary_receipt_block_summary(
         rpc_url,
@@ -2114,7 +2132,16 @@ def _validate_destination_summary(summary: dict[str, Any]) -> None:
     if type(domain) is not int or domain not in EXPECTED_RPC_CHAIN_IDS:
         raise ValueError("destination domain must be an EVM-family SCCP lane")
     expected_chain = evidence.DOMAIN_PROFILES[domain]["chain"]
-    if _summary_get_exact_key(destination, "chain") != expected_chain:
+    try:
+        chain = _summary_exact_string(
+            destination,
+            "chain",
+            label="destination chain",
+        )
+    except ValueError:
+        raise ValueError("destination chain metadata must match domain") from None
+    # Source-inventory marker: EVM live destination chain uses exact strings.
+    if chain != expected_chain:
         raise ValueError("destination chain metadata must match domain")
     rpc_chain_id = _summary_exact_u32(
         destination,
@@ -2280,11 +2307,22 @@ def _route_canary_transaction_verified(summary: dict[str, Any]) -> bool:
     transaction = _summary_get_exact_key(summary, "route_canary_transaction")
     if type(route_canary) is not dict or type(transaction) is not dict:
         return False
+    evidence_source = _summary_get_exact_key(route_canary, "evidence_source")
+    route_canary_hash = _summary_get_exact_key(route_canary, "evidence_hash")
+    transaction_hash = _summary_get_exact_key(
+        transaction,
+        "route_canary_evidence_hash",
+    )
+    if (
+        type(evidence_source) is not str
+        or type(route_canary_hash) is not str
+        or type(transaction_hash) is not str
+    ):
+        return False
+    # Source-inventory marker: EVM live route-canary verifier uses exact strings.
     return (
-        _summary_get_exact_key(route_canary, "evidence_source")
-        == "evm_message_proof_accepted_transaction"
-        and _summary_get_exact_key(route_canary, "evidence_hash")
-        == _summary_get_exact_key(transaction, "route_canary_evidence_hash")
+        evidence_source == "evm_message_proof_accepted_transaction"
+        and route_canary_hash == transaction_hash
         and _summary_get_exact_key(transaction, "event_matches") is True
         and _summary_get_exact_key(transaction, "call_matches") is True
         and _summary_get_exact_key(transaction, "message_proof_used") is True
@@ -2332,12 +2370,14 @@ def _full_toml_prerequisites(summary: dict[str, Any]) -> list[str]:
     if type(destination) is not dict:
         return ["destination bridge evidence"]
     destination_domain = _summary_get_exact_key(destination, "domain")
-    if (
-        type(destination_domain) is int
-        and destination_domain == evidence.SCCP_DOMAIN_ETH
-        and _summary_get_exact_key(summary, "block_tag") != "finalized"
-    ):
-        missing.append("--block-tag finalized")
+    if type(destination_domain) is int and destination_domain == evidence.SCCP_DOMAIN_ETH:
+        try:
+            block_tag = _summary_block_tag(summary)
+        except ValueError:
+            block_tag = None
+        # Source-inventory marker: EVM live full-TOML block tag uses exact strings.
+        if block_tag != "finalized":
+            missing.append("--block-tag finalized")
     if _summary_get_exact_key(destination, "expected_rpc_chain_id_matches") is not True:
         missing.append("--expected-rpc-chain-id")
     if _summary_get_exact_key(destination, "expected_network_id_matches") is not True:
@@ -3073,6 +3113,9 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 
 def _decoded_public_blocker_text(value: str) -> str:
+    # Source-inventory marker: lane public blocker decode helpers use exact strings.
+    if type(value) is not str:
+        return ""
     decoded = value
     for _decode_pass in range(max(1, len(value))):
         next_decoded = unquote(html_unescape(decoded))
@@ -3083,6 +3126,8 @@ def _decoded_public_blocker_text(value: str) -> str:
 
 
 def _decoded_cli_error_text_issue(value: str) -> bool:
+    if type(value) is not str:
+        return True
     decoded = _decoded_public_blocker_text(value)
     if any(ord(character) < 0x20 or ord(character) == 0x7F for character in decoded):
         return True
@@ -3094,7 +3139,10 @@ def _decoded_cli_error_text_issue(value: str) -> bool:
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     if isinstance(exc, (OSError, SystemExit)):
         return fallback
-    text = str(exc)
+    try:
+        text = str(exc)
+    except Exception:
+        return fallback
     if not text:
         return fallback
     if not text.isascii():

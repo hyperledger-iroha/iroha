@@ -3,7 +3,7 @@
 //! The binary serves a single manifest from the local SoraFS storage backend,
 //! exposing the trustless CAR/proof endpoints against live pinned data.
 
-use std::{net::SocketAddr, path::PathBuf};
+use std::{fs, io::Read as _, net::SocketAddr, path::PathBuf};
 
 use clap::Parser;
 use eyre::{Result, WrapErr};
@@ -12,6 +12,8 @@ use sorafs_node::{
     gateway::{self, GatewayDataset, GatewayState},
 };
 use tokio::signal;
+
+const MAX_APPROVED_MANIFEST_ENVELOPE_FILE_BYTES: u64 = 16 * 1024;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -37,6 +39,13 @@ struct Args {
     #[arg(long, value_name = "PATH")]
     signing_key: PathBuf,
 
+    /// File containing the exact canonical base64 manifest/GAR envelope approved by the operator.
+    ///
+    /// This is a distinct operator trust decision; it is not a substitute for a
+    /// `ProviderAdmissionEnvelopeV1` council policy.
+    #[arg(long, value_name = "PATH")]
+    approved_manifest_envelope: PathBuf,
+
     /// Storage data directory containing pinned manifests/chunks.
     #[arg(long, default_value = "./sorafs_storage")]
     data_dir: PathBuf,
@@ -45,8 +54,18 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    if args.provider_id.len() != 64
+        || !args
+            .provider_id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(eyre::eyre!(
+            "provider id must be canonical 32-byte lowercase hex"
+        ));
+    }
     let provider_id_bytes =
-        hex::decode(args.provider_id.trim()).wrap_err("provider id must be hex-encoded")?;
+        hex::decode(&args.provider_id).wrap_err("provider id must be hex-encoded")?;
     let provider_id: [u8; 32] = provider_id_bytes
         .as_slice()
         .try_into()
@@ -56,10 +75,56 @@ async fn main() -> Result<()> {
         .data_dir(args.data_dir.clone())
         .stream_token_signing_key_path(Some(args.signing_key.clone()))
         .build();
-    let node = sorafs_node::NodeHandle::new(config);
+    let node = sorafs_node::NodeHandle::try_new(config).wrap_err_with(|| {
+        format!(
+            "failed to initialise SoraFS runtime from {}",
+            args.data_dir.display()
+        )
+    })?;
     let dataset =
         GatewayDataset::load_from_storage_with_provider(&node, &args.manifest_digest, provider_id)?;
-    let state = GatewayState::new(dataset);
+    let envelope_metadata = fs::metadata(&args.approved_manifest_envelope).wrap_err_with(|| {
+        format!(
+            "failed to inspect approved manifest envelope at {}",
+            args.approved_manifest_envelope.display()
+        )
+    })?;
+    if !envelope_metadata.is_file()
+        || envelope_metadata.len() == 0
+        || envelope_metadata.len() > MAX_APPROVED_MANIFEST_ENVELOPE_FILE_BYTES
+    {
+        return Err(eyre::eyre!(
+            "approved manifest envelope must be a non-empty regular file no larger than {MAX_APPROVED_MANIFEST_ENVELOPE_FILE_BYTES} bytes"
+        ));
+    }
+    let mut approved_manifest_envelope_bytes = Vec::new();
+    fs::File::open(&args.approved_manifest_envelope)
+        .wrap_err_with(|| {
+            format!(
+                "failed to read approved manifest envelope from {}",
+                args.approved_manifest_envelope.display()
+            )
+        })?
+        .take(MAX_APPROVED_MANIFEST_ENVELOPE_FILE_BYTES + 1)
+        .read_to_end(&mut approved_manifest_envelope_bytes)
+        .wrap_err("failed to read the bounded approved manifest envelope")?;
+    if approved_manifest_envelope_bytes.len()
+        > usize::try_from(MAX_APPROVED_MANIFEST_ENVELOPE_FILE_BYTES)
+            .expect("manifest envelope file limit fits usize")
+    {
+        return Err(eyre::eyre!(
+            "approved manifest envelope changed while being read or exceeds its size limit"
+        ));
+    }
+    let approved_manifest_envelope = String::from_utf8(approved_manifest_envelope_bytes)
+        .wrap_err("approved manifest envelope must be UTF-8")?;
+    if approved_manifest_envelope != approved_manifest_envelope.trim() {
+        return Err(eyre::eyre!(
+            "approved manifest envelope file must contain exactly one canonical base64 value without surrounding whitespace"
+        ));
+    }
+    let state = GatewayState::new(dataset, approved_manifest_envelope)
+        .wrap_err("gateway startup approval or token policy is invalid")?;
     let router = gateway::router(state);
 
     let listener = tokio::net::TcpListener::bind(args.bind).await?;

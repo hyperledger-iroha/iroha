@@ -10798,6 +10798,31 @@ export function buildGrantAccountPermissionInstruction(options = {}) {
 }
 
 /**
+ * Build a `SetKeyValue::Account` instruction payload.
+ *
+ * This is an on-ledger account metadata mutation. It is useful when a signed
+ * instruction batch needs a protocol-visible, deterministic identity marker.
+ *
+ * @param {{ accountId: string, key: string, value: any }} options
+ * @returns {{SetKeyValue: {Account: {object: string, key: string, value: any}}}}
+ */
+export function buildSetAccountKeyValueInstruction(options = {}) {
+  const source = assertPlainObject(options, "setAccountKeyValue");
+  return {
+    SetKeyValue: {
+      Account: {
+        object: normalizeAccountId(
+          source.accountId,
+          "setAccountKeyValue.accountId",
+        ),
+        key: assertString(source.key, "setAccountKeyValue.key"),
+        value: normalizeJsonValue(source.value, "setAccountKeyValue.value"),
+      },
+    },
+  };
+}
+
+/**
  * Build a `SetAssetDefinitionAlias` instruction payload.
  * @param {{ assetDefinitionId?: string, asset_definition_id?: string, alias?: string | null, leaseExpiryMs?: number|string|bigint|null, lease_expiry_ms?: number|string|bigint|null }} options
  * @returns {{SetAssetDefinitionAlias: {asset_definition_id: string, alias: string | null, lease_expiry_ms: number | null}}}

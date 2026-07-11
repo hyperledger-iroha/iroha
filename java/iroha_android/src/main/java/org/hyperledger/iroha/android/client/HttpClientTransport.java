@@ -89,20 +89,12 @@ public final class HttpClientTransport implements IrohaClient {
 
   private final HttpTransportExecutor executor;
   private final ClientConfig config;
-  private final SorafsGatewayClient sorafsGatewayClient;
+  private volatile SorafsGatewayClient sorafsGatewayClient;
   private final AtomicBoolean deviceProfileEmitted = new AtomicBoolean(false);
 
   public HttpClientTransport(final HttpTransportExecutor executor, final ClientConfig config) {
     this.executor = Objects.requireNonNull(executor, "executor");
     this.config = Objects.requireNonNull(config, "config");
-    this.sorafsGatewayClient =
-        SorafsGatewayClient.builder()
-            .setExecutor(this.executor)
-            .setBaseUri(config.sorafsGatewayUri())
-            .setTimeout(config.requestTimeout())
-            .setDefaultHeaders(config.defaultHeaders())
-            .setObservers(config.observers())
-            .build();
   }
 
   @Override
@@ -348,18 +340,28 @@ public final class HttpClientTransport implements IrohaClient {
 
   /** Returns the SoraFS gateway client wired to this transport's configuration. */
   public SorafsGatewayClient sorafsGatewayClient() {
-    return sorafsGatewayClient;
+    SorafsGatewayClient client = sorafsGatewayClient;
+    if (client == null) {
+      synchronized (this) {
+        client = sorafsGatewayClient;
+        if (client == null) {
+          client = newSorafsGatewayClient(config.sorafsGatewayUri());
+          sorafsGatewayClient = client;
+        }
+      }
+    }
+    return client;
   }
 
   /** Post a gateway fetch request and return the raw response. */
   public CompletableFuture<ClientResponse> sorafsGatewayFetch(final GatewayFetchRequest request) {
-    return sorafsGatewayClient.fetch(request);
+    return sorafsGatewayClient().fetch(request);
   }
 
   /** Post a gateway fetch request and parse the response summary. */
   public CompletableFuture<GatewayFetchSummary> sorafsGatewayFetchSummary(
       final GatewayFetchRequest request) {
-    return sorafsGatewayClient.fetchSummary(request);
+    return sorafsGatewayClient().fetchSummary(request);
   }
 
   /** Fetches `/v1/accounts/{uaid}/portfolio`. */

@@ -198,6 +198,7 @@ fn sample_commitments() -> Vec<CommitmentFixture> {
             payload: LaneBlockCommitment {
                 block_height: 8_642,
                 lane_id: LaneId::new(1),
+                lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
                 dataspace_id: DataSpaceId::new(7),
                 tx_count: 2,
                 total_local_micro: 7_500_000,
@@ -236,6 +237,7 @@ fn sample_commitments() -> Vec<CommitmentFixture> {
             payload: LaneBlockCommitment {
                 block_height: 91_234,
                 lane_id: LaneId::new(12),
+                lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
                 dataspace_id: DataSpaceId::new(24),
                 tx_count: 3,
                 total_local_micro: 9_300_000,

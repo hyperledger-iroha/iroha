@@ -137,7 +137,7 @@ Cuando necesites llegar a un gateway Torii en vivo en lugar de archivos locales,
 los flags `--provider=/path` por las nuevas opciones orientadas a HTTP:
 
 ```
-sorafs-fetch   --plan=chunk_fetch_specs.json   --gateway-provider=name=gw-a,provider-id=<hex>,base-url=https://gw-a.example/,stream-token=<base64>   --gateway-manifest-id=<manifest_id_hex>   --gateway-chunker-handle=sorafs.sf1@1.0.0   --gateway-client-id=ci-orchestrator   --json-out=gateway_fetch_report.json
+sorafs-fetch   --plan=chunk_fetch_specs.json   --gateway-provider=name=gw-a,provider-id=<hex>,gateway-key=<ed25519-public-key-hex>,base-url=https://gw-a.example/,stream-token=<base64>   --gateway-manifest-id=<manifest_id_hex>   --gateway-chunker-handle=sorafs.sf1@1.0.0   --gateway-client-id=ci-orchestrator   --json-out=gateway_fetch_report.json
 ```
 
 La CLI valida el stream token, impone la alineación de chunker/perfil y registra los

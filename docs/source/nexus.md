@@ -348,10 +348,45 @@ Configuration and Determinism
 
 ### Runtime Lane Lifecycle Control
 
-- **Admin endpoint:** `POST /v1/nexus/lifecycle` (Torii) accepts a Norito/JSON body with `additions` (full `LaneConfig` objects) and `retire` (lane ids) to add or remove lanes without restart. Requests are gated on `nexus.enabled=true` and reuse the same Nexus configuration/state view as the queue.
-- **Behaviour:** On success the node applies the lifecycle plan to WSV/Kura metadata, rebuilds queue routing/limits/manifests, and responds with `ok: true`, the configured lane namespace size in both `configured_lane_count` and legacy `lane_count`, plus `active_lane_count`/`active_lane_ids` and `autoscale_capacity_lane_count`/`autoscale_capacity_lane_ids` for lanes currently eligible for routing and autoscale capacity. Plans that fail validation (unknown retire ids, repeated retire ids, duplicate addition aliases/ids, Nexus disabled) return `400 Bad Request` with a `lane_lifecycle_error`.
-- **Safety:** The handler serializes catalog updates with the dedicated state writer lock and advances the state-view generation so readers retry cleanly; callers should still serialize lifecycle updates externally to avoid conflicting plans.
-- **Propagation:** Queue routing/limits and lane manifests are rebuilt from the updated catalog, and consensus/DA/RBC workers read the refreshed lane config via state snapshots so scheduling and validator selection shift without restart (in-flight work completes under the previous config).
+- **Consensus lifecycle transaction:** add, replace, or retire manual lanes by
+  submitting a signed transaction containing `SetParameter` with the custom
+  parameter id `nexus_lane_lifecycle_v1`. Construct the versioned payload with
+  `LaneLifecycleParameterV1::new(&current_catalog, &active_incarnations, plan)`;
+  it commits to the exact catalog and active lane incarnations reviewed by the
+  signer and is rejected if topology changed or an identically configured lane
+  was replaced before execution. The transaction authority must hold
+  `CanSetParameters`.
+  Lifecycle effects publish only with the committed block, replay identically
+  on every peer, reconcile lane storage before state publication, and refresh
+  queue routing after publication. A block accepts at most one lifecycle
+  transition. The former `POST /v1/nexus/lifecycle` node-local mutation route
+  is retained only to return `403 local_lane_lifecycle_disabled`; it never
+  mutates state. Submit the signed transaction through the normal transaction
+  endpoint instead.
+- **Status discovery:** `GET /v1/nexus/lifecycle` is a read-only, access-policy
+  checked endpoint that negotiates JSON or native Norito. Its versioned response
+  contains `nexus_enabled`, the exact canonical `lane_count`/`lanes`, and the
+  domain-separated `catalog_hash`, plus the exact active lane-incarnation entries
+  and their `incarnation_root`. Clients validate both commitments before signing,
+  so a delayed request cannot replay after a lane is retired and recreated with
+  identical metadata. The Rust client exposes `get_lane_lifecycle_status` and
+  `submit_lane_lifecycle_blocking`; Python and Mochi follow the same fetch-once,
+  sign, submit, and wait sequence. They intentionally surface stale concurrent
+  updates instead of silently refetching and signing a topology the operator did
+  not review.
+- **Behaviour:** Normal transaction validation rejects malformed or unsupported
+  payload versions, stale catalog commitments, empty or structurally invalid
+  plans, reserved autoscale-lane mutations, unknown dataspaces, and authorities
+  without `CanSetParameters`. A rejected transaction leaves both the block
+  overlay and committed topology unchanged.
+- **Safety:** Commit revalidates the signed plan against committed state under
+  the lifecycle lock before publishing storage or topology. Retirement and
+  replacement fail closed while a lane has unmerged relay progress, an
+  unapplied certified lane block, or an unrepaired direct-application marker.
+- **Propagation:** Queue routing, per-lane limits, and manifests are rebuilt
+  from the committed catalog. Consensus, DA, and RBC workers consume the same
+  refreshed state snapshot, while snapshots and startup replay restore the
+  effective catalog and lane storage geometry after restart.
 - **Storage cleanup:** Kura and tiered WSV geometry are reconciled (create/retire/relabel), DA shard cursor mappings are synced/persisted, and retired lanes are pruned from lane relay caches plus DA commitment/confidential-compute/pin-intent stores.
 
 Migration Path (Iroha 2 → Iroha 3)

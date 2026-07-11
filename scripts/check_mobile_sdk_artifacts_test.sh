@@ -107,6 +107,7 @@ PLIST
   cat >"$root/dist/NoritoBridge.artifacts.json" <<JSON
 {
   "version": "1.0.0",
+  "privacy_production_enabled": false,
   "hashes": {
     "ios-arm64": "$hash_a",
     "ios-arm64_x86_64-simulator": "$hash_b",
@@ -161,6 +162,41 @@ fixture="$TMP_DIR/valid"
 make_fixture "$fixture"
 run_expect_pass "$fixture"
 
+enabled_privacy="$TMP_DIR/enabled-privacy"
+make_fixture "$enabled_privacy"
+sed -i.bak 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
+  "$enabled_privacy/dist/NoritoBridge.artifacts.json"
+rm -f "$enabled_privacy/dist/NoritoBridge.artifacts.json.bak"
+touch "$enabled_privacy/dist/NoritoBridge.xcframework/.privacy-production-enabled"
+run_expect_pass "$enabled_privacy"
+
+enabled_without_marker="$TMP_DIR/enabled-without-marker"
+make_fixture "$enabled_without_marker"
+sed -i.bak 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
+  "$enabled_without_marker/dist/NoritoBridge.artifacts.json"
+rm -f "$enabled_without_marker/dist/NoritoBridge.artifacts.json.bak"
+run_expect_fail "$enabled_without_marker" "missing privacy-production-enabled XCFramework marker"
+
+default_with_marker="$TMP_DIR/default-with-marker"
+make_fixture "$default_with_marker"
+touch "$default_with_marker/dist/NoritoBridge.xcframework/.privacy-production-enabled"
+run_expect_fail "$default_with_marker" "default privacy artifact must not carry the privacy-production-enabled XCFramework marker"
+
+invalid_privacy_state="$TMP_DIR/invalid-privacy-state"
+make_fixture "$invalid_privacy_state"
+sed -i.bak 's/"privacy_production_enabled": false/"privacy_production_enabled": "false"/' \
+  "$invalid_privacy_state/dist/NoritoBridge.artifacts.json"
+rm -f "$invalid_privacy_state/dist/NoritoBridge.artifacts.json.bak"
+run_expect_fail "$invalid_privacy_state" "must contain exactly one boolean privacy_production_enabled field"
+
+duplicate_mixed_privacy_state="$TMP_DIR/duplicate-mixed-privacy-state"
+make_fixture "$duplicate_mixed_privacy_state"
+sed -i.bak '/"privacy_production_enabled": false/a\
+  "privacy_production_enabled": "false",' \
+  "$duplicate_mixed_privacy_state/dist/NoritoBridge.artifacts.json"
+rm -f "$duplicate_mixed_privacy_state/dist/NoritoBridge.artifacts.json.bak"
+run_expect_fail "$duplicate_mixed_privacy_state" "must contain exactly one boolean privacy_production_enabled field"
+
 apple_only_without_android="$TMP_DIR/apple-only-without-android"
 make_fixture "$apple_only_without_android"
 rm -rf "$apple_only_without_android/kotlin"
@@ -186,6 +222,7 @@ make_fixture "$missing_hash"
 cat >"$missing_hash/dist/NoritoBridge.artifacts.json" <<'JSON'
 {
   "version": "1.0.0",
+  "privacy_production_enabled": false,
   "hashes": {
     "ios-arm64": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "macos-arm64": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"

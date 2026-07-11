@@ -36,6 +36,8 @@ known_capabilities = ["torii_gateway", "chunk_range_fetch"]
 
 [sorafs.discovery.admission]
 envelopes_dir = "defaults/nexus/sorafs_admission"
+trusted_council_keys = ["ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56"]
+signature_threshold = 1
 
 [sorafs.repair]
 enabled = false

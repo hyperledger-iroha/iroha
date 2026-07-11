@@ -114,6 +114,7 @@ impl Command {
             Self::Kagemusha(
                 KagemushaCommand::LineageKeyArtifacts(_)
                     | KagemushaCommand::RecursiveCompactKeyArtifacts(_)
+                    | KagemushaCommand::ConfidentialTransferV2VerifierRecord(_)
                     | KagemushaCommand::LineageRecord(_)
             )
         )
@@ -1111,6 +1112,8 @@ pub enum KagemushaCommand {
     LineageKeyArtifacts(KagemushaLineageKeyArtifactsArgs),
     /// Generate ABI-7 recursive compact verifier/proving key artifacts
     RecursiveCompactKeyArtifacts(KagemushaRecursiveCompactKeyArtifactsArgs),
+    /// Export the canonical confidential-transfer-v2 verifier record governed by ABI-7
+    ConfidentialTransferV2VerifierRecord(KagemushaConfidentialTransferV2VerifierRecordArgs),
     /// Build a Reserved-lineage verifier record from an existing verifier key file
     LineageRecord(KagemushaLineageRecordArgs),
 }
@@ -1120,6 +1123,7 @@ impl Run for KagemushaCommand {
         match self {
             KagemushaCommand::LineageKeyArtifacts(args) => args.run(context),
             KagemushaCommand::RecursiveCompactKeyArtifacts(args) => args.run(context),
+            KagemushaCommand::ConfidentialTransferV2VerifierRecord(args) => args.run(context),
             KagemushaCommand::LineageRecord(args) => args.run(context),
         }
     }
@@ -1197,6 +1201,9 @@ pub struct KagemushaRecursiveCompactKeyArtifactsArgs {
     /// Output path for Norito `KagemushaRecursiveCompactVerifierKeysV1`
     #[arg(long, value_name = "PATH", required = true)]
     verifier_keys_out: Option<std::path::PathBuf>,
+    /// Output path for the canonical confidential-transfer-v2 Norito `VerifyingKeyRecord`
+    #[arg(long, value_name = "PATH", required = true)]
+    confidential_transfer_v2_verifier_record_out: std::path::PathBuf,
     /// Optional output path for a Norito `VerifyingKeyRecord`
     #[arg(long, value_name = "PATH")]
     record_out: Option<std::path::PathBuf>,
@@ -1228,6 +1235,13 @@ pub struct KagemushaLineageRecordArgs {
     /// Governance version to embed in the record
     #[arg(long, default_value_t = 1)]
     record_version: u32,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct KagemushaConfidentialTransferV2VerifierRecordArgs {
+    /// Output path for the canonical Norito `VerifyingKeyRecord`
+    #[arg(long, value_name = "PATH")]
+    out: std::path::PathBuf,
 }
 
 fn kagemusha_lineage_vk_record_from_bytes(
@@ -1379,6 +1393,33 @@ impl Run for KagemushaLineageRecordArgs {
     }
 }
 
+impl Run for KagemushaConfidentialTransferV2VerifierRecordArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        const GOVERNANCE_VERSION: u32 = 3;
+
+        let record = iroha_core::zk::confidential_v2::confidential_transfer_v2_vk_record(
+            iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
+            GOVERNANCE_VERSION,
+        )
+        .map_err(|err| {
+            eyre::eyre!("failed to build canonical confidential-transfer-v2 verifier record: {err}")
+        })?;
+        write_kagemusha_norito_artifact_file(&self.out, &record)
+            .wrap_err_with(|| format!("failed to write {}", self.out.display()))?;
+        let summary = compact_key_output_summary_from_file(&self.out)
+            .wrap_err_with(|| format!("failed to summarize {}", self.out.display()))?;
+        context.println(format!(
+            "Wrote canonical ABI-7 confidential-transfer-v2 verifier record namespace={} version={} to {} (record={} bytes sha256={})",
+            record.namespace,
+            record.version,
+            self.out.display(),
+            summary.len,
+            summary.sha256,
+        ))?;
+        Ok(())
+    }
+}
+
 impl Run for KagemushaRecursiveCompactKeyArtifactsArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match (&self.key_artifacts_out, &self.verifier_keys_out) {
@@ -1389,6 +1430,24 @@ impl Run for KagemushaRecursiveCompactKeyArtifactsArgs {
                 ));
             }
         }
+
+        let transfer_record = iroha_core::zk::confidential_v2::confidential_transfer_v2_vk_record(
+            iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
+            3,
+        )
+        .map_err(|err| {
+            eyre::eyre!("failed to build canonical confidential-transfer-v2 verifier record: {err}")
+        })?;
+        write_kagemusha_norito_artifact_file(
+            &self.confidential_transfer_v2_verifier_record_out,
+            &transfer_record,
+        )
+        .wrap_err_with(|| {
+            format!(
+                "failed to write {}",
+                self.confidential_transfer_v2_verifier_record_out.display()
+            )
+        })?;
 
         let vk_box = if let Some(path) = &self.vk_in {
             eprintln!(
@@ -2795,12 +2854,22 @@ mod tests {
                 synthetic_proving_key_bytes: None,
                 key_artifacts_out: Some("recursive-compact-key-artifacts.norito".into()),
                 verifier_keys_out: Some("recursive-compact-verifier-keys.norito".into()),
+                confidential_transfer_v2_verifier_record_out:
+                    "confidential-transfer-v2-verifier-record.norito".into(),
                 record_out: Some("recursive-compact.record.norito".into()),
                 record_namespace: "offline_kagemusha".to_owned(),
                 record_version: 1,
             },
         ));
         assert!(compact_artifacts.allows_fallback_config());
+
+        let confidential_transfer_record =
+            Command::Kagemusha(KagemushaCommand::ConfidentialTransferV2VerifierRecord(
+                KagemushaConfidentialTransferV2VerifierRecordArgs {
+                    out: "confidential-transfer-v2-verifier-record.norito".into(),
+                },
+            ));
+        assert!(confidential_transfer_record.allows_fallback_config());
 
         let lineage_record = Command::Kagemusha(KagemushaCommand::LineageRecord(
             KagemushaLineageRecordArgs {
@@ -2951,6 +3020,8 @@ mod tests {
                 synthetic_proving_key_bytes: None,
                 key_artifacts_out,
                 verifier_keys_out,
+                confidential_transfer_v2_verifier_record_out:
+                    "confidential-transfer-v2-verifier-record.norito".into(),
                 record_out: None,
                 record_namespace: "offline_kagemusha".to_owned(),
                 record_version: 1,
@@ -2977,6 +3048,8 @@ mod tests {
             synthetic_proving_key_bytes: None,
             key_artifacts_out: None,
             verifier_keys_out: None,
+            confidential_transfer_v2_verifier_record_out:
+                "confidential-transfer-v2-verifier-record.norito".into(),
             record_out: Some("recursive-compact-len4.record.norito".into()),
             record_namespace: "offline_kagemusha".to_owned(),
             record_version: 1,
@@ -3004,6 +3077,9 @@ mod tests {
         let verifier_keys_out = temp
             .path()
             .join("out/recursive-compact-verifier-keys.norito");
+        let transfer_verifier_record_out = temp
+            .path()
+            .join("out/confidential-transfer-v2-verifier-record.norito");
         std::fs::create_dir_all(vk_in.parent().expect("vk input parent")).expect("vk input dir");
         std::fs::write(
             &vk_in,
@@ -3019,6 +3095,7 @@ mod tests {
             synthetic_proving_key_bytes: Some(4096),
             key_artifacts_out: Some(key_artifacts_out.clone()),
             verifier_keys_out: Some(verifier_keys_out.clone()),
+            confidential_transfer_v2_verifier_record_out: transfer_verifier_record_out.clone(),
             record_out: None,
             record_namespace: "offline_kagemusha".to_owned(),
             record_version: 1,
@@ -3048,6 +3125,18 @@ mod tests {
         verifier_keys
             .validate_public_binding()
             .expect("synthetic verifier keys validate public binding");
+        let transfer_record_bytes = std::fs::read(&transfer_verifier_record_out)
+            .expect("read confidential transfer v2 verifier record");
+        let transfer_record: iroha::data_model::proof::VerifyingKeyRecord =
+            norito::decode_from_bytes(&transfer_record_bytes)
+                .expect("decode confidential transfer v2 verifier record");
+        let expected_transfer_record =
+            iroha_core::zk::confidential_v2::confidential_transfer_v2_vk_record(
+                iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
+                3,
+            )
+            .expect("canonical confidential transfer v2 verifier record");
+        assert_eq!(transfer_record, expected_transfer_record);
         assert!(std::fs::metadata(pk_out).expect("pk output metadata").len() > 40);
         assert!(
             context.lines.iter().any(|line| {
@@ -3057,6 +3146,34 @@ mod tests {
             "missing synthetic generation summary: {:?}",
             context.lines
         );
+    }
+
+    #[test]
+    fn confidential_transfer_v2_verifier_record_export_is_canonical() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let out = temp
+            .path()
+            .join("confidential-transfer-v2-verifier-record.norito");
+        let mut context = TestContext::new();
+
+        KagemushaConfidentialTransferV2VerifierRecordArgs { out: out.clone() }
+            .run(&mut context)
+            .expect("canonical verifier record export");
+
+        let bytes = std::fs::read(&out).expect("read canonical verifier record");
+        let actual: iroha::data_model::proof::VerifyingKeyRecord =
+            norito::decode_from_bytes(&bytes).expect("decode canonical verifier record");
+        let expected = iroha_core::zk::confidential_v2::confidential_transfer_v2_vk_record(
+            iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
+            3,
+        )
+        .expect("canonical confidential transfer v2 verifier record");
+        assert_eq!(actual, expected);
+        assert!(context.lines.iter().any(|line| {
+            line.contains("Wrote canonical ABI-7 confidential-transfer-v2 verifier record")
+                && line.contains("namespace=offline_kagemusha")
+                && line.contains("version=3")
+        }));
     }
 
     fn append_test_tlv(buf: &mut Vec<u8>, tag: &[u8; 4], payload: &[u8]) {
@@ -3767,6 +3884,85 @@ mod tests {
         }
     }
 
+    fn sample_vk_submission(namespace: Option<&str>) -> VkSubmissionJson {
+        let key_pair = checked_zk_ed25519_key_fixture();
+        VkSubmissionJson {
+            authority: iroha::data_model::account::AccountId::new(key_pair.public_key().clone()),
+            private_key: iroha_crypto::ExposedPrivateKey(key_pair.private_key().clone()),
+            backend: "halo2/ipa".to_owned(),
+            name: "vk_namespace_test".to_owned(),
+            version: 1,
+            circuit_id: "namespace-test-v1".to_owned(),
+            public_inputs_schema_hash_hex: "11".repeat(32),
+            curve: Some("pallas".to_owned()),
+            gas_schedule_id: Some("zk-gas-v1".to_owned()),
+            vk_len: Some(32),
+            max_proof_bytes: Some(4096),
+            metadata_uri_cid: None,
+            vk_bytes_cid: None,
+            activation_height: None,
+            withdraw_height: None,
+            commitment_hex: Some("22".repeat(32)),
+            vk_bytes: None,
+            status: Some(iroha::data_model::confidential::ConfidentialStatus::Active),
+            namespace: namespace.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn vk_submission_namespace_explicit_and_defaults() {
+        let encoded = norito::json::to_value(&sample_vk_submission(Some("offline_kagemusha")))
+            .expect("serialize VK submission fixture");
+
+        let explicit: VkSubmissionJson =
+            norito::json::from_value(encoded.clone()).expect("deserialize explicit namespace");
+        assert_eq!(
+            build_vk_record(&explicit)
+                .expect("build explicit namespace record")
+                .namespace,
+            "offline_kagemusha"
+        );
+
+        let mut omitted = encoded.clone();
+        omitted
+            .as_object_mut()
+            .expect("VK submission JSON object")
+            .remove("namespace");
+        let omitted: VkSubmissionJson =
+            norito::json::from_value(omitted).expect("deserialize omitted namespace");
+        assert_eq!(
+            build_vk_record(&omitted)
+                .expect("build default namespace record")
+                .namespace,
+            DEFAULT_VK_NAMESPACE
+        );
+
+        let mut null = encoded;
+        null.as_object_mut()
+            .expect("VK submission JSON object")
+            .insert("namespace".to_owned(), norito::json::Value::Null);
+        let null: VkSubmissionJson =
+            norito::json::from_value(null).expect("deserialize null namespace");
+        assert_eq!(
+            build_vk_record(&null)
+                .expect("build null-defaulted namespace record")
+                .namespace,
+            DEFAULT_VK_NAMESPACE
+        );
+    }
+
+    #[test]
+    fn vk_submission_namespace_rejects_blank_or_untrimmed_values() {
+        for namespace in ["", " \t ", " offline_kagemusha", "offline_kagemusha "] {
+            let err = build_vk_record(&sample_vk_submission(Some(namespace)))
+                .expect_err("blank or untrimmed namespace must be rejected");
+            assert!(
+                err.to_string().contains("namespace must not"),
+                "unexpected error for {namespace:?}: {err}"
+            );
+        }
+    }
+
     fn sample_prepared_vk_submission(
         key_pair: &iroha_crypto::KeyPair,
         name: &str,
@@ -3970,12 +4166,15 @@ impl Run for VkCommand {
 
 #[derive(clap::Args, Debug)]
 pub struct VkRegisterArgs {
-    /// Path to a JSON DTO file for register (authority, `private_key`, backend, name, version, optional `vk_bytes` (base64) or `commitment_hex`)
+    /// Path to a JSON DTO file for register (authority, `private_key`, backend, name, version,
+    /// optional `vk_bytes` (base64) or `commitment_hex`). Optional `namespace` defaults to `core`
+    /// and must be non-empty without leading or trailing whitespace.
     #[arg(long, value_name = "PATH")]
     json: std::path::PathBuf,
 }
 
 #[derive(Debug, Clone, norito::json::JsonDeserialize)]
+#[cfg_attr(test, derive(norito::json::JsonSerialize))]
 struct VkSubmissionJson {
     authority: iroha::data_model::account::AccountId,
     private_key: iroha::data_model::prelude::ExposedPrivateKey,
@@ -4006,6 +4205,8 @@ struct VkSubmissionJson {
     vk_bytes: Option<String>,
     #[norito(default)]
     status: Option<iroha::data_model::confidential::ConfidentialStatus>,
+    #[norito(default)]
+    namespace: Option<String>,
 }
 
 struct PreparedVkSubmission {
@@ -4070,6 +4271,21 @@ fn parse_commitment_hex(value: &str) -> Result<[u8; 32]> {
 
 fn vk_backend_tag_from_label(label: &str) -> iroha::data_model::zk::BackendTag {
     iroha::data_model::zk::BackendTag::from_catalog_label(label)
+}
+
+const DEFAULT_VK_NAMESPACE: &str = "core";
+
+fn resolve_vk_namespace(namespace: Option<&str>) -> Result<String> {
+    let Some(namespace) = namespace else {
+        return Ok(DEFAULT_VK_NAMESPACE.to_owned());
+    };
+    if namespace.trim().is_empty() {
+        eyre::bail!("namespace must not be empty or whitespace-only");
+    }
+    if namespace.trim() != namespace {
+        eyre::bail!("namespace must not contain leading or trailing whitespace");
+    }
+    Ok(namespace.to_owned())
 }
 
 fn build_vk_record(
@@ -4151,7 +4367,7 @@ fn build_vk_record(
         payload.version,
         payload.circuit_id.clone(),
         None,
-        "core",
+        resolve_vk_namespace(payload.namespace.as_deref())?,
         backend_tag,
         payload.curve.clone().unwrap_or_else(|| "unknown".into()),
         schema_hash,
@@ -4205,7 +4421,9 @@ impl Run for VkRegisterArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct VkUpdateArgs {
-    /// Path to a JSON DTO file for update (authority, `private_key`, backend, name, version, optional `vk_bytes` or `commitment_hex`)
+    /// Path to a JSON DTO file for update (authority, `private_key`, backend, name, version,
+    /// optional `vk_bytes` or `commitment_hex`). Optional `namespace` defaults to `core` and must
+    /// be non-empty without leading or trailing whitespace.
     #[arg(long, value_name = "PATH")]
     json: std::path::PathBuf,
 }

@@ -282,7 +282,9 @@ public final class HttpClientTransportHarnessTests {
             .setName("alpha")
             .setProviderIdHex(
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-            .setBaseUrl("https://provider.example")
+            .setGatewayPublicKeyHex(
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+            .setBaseUrl("https://provider.example/")
             .setStreamTokenBase64("c3RyZWFtLXRva2Vu")
             .build();
     return GatewayFetchRequest.builder()

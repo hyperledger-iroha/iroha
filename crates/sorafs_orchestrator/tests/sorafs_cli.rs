@@ -60,6 +60,22 @@ fn sorafs_cli_cmd() -> AssertCommand {
     cargo_bin_cmd!("sorafs_cli")
 }
 
+fn assert_insecure_gateway_rejected(assert: assert_cmd::assert::Assert, output_paths: &[&Path]) {
+    let assert = assert.failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(
+        stderr.contains("URL must use HTTPS") || stderr.contains("globally routable"),
+        "expected fail-closed gateway URL error, got: {stderr}"
+    );
+    for path in output_paths {
+        assert!(
+            !path.exists(),
+            "gateway URL validation must fail before writing {}",
+            path.display()
+        );
+    }
+}
+
 struct CanonicalTempDir {
     _inner: TempDir,
     path: PathBuf,
@@ -152,11 +168,12 @@ fn make_stream_token_b64(
     provider_id_hex: &str,
     profile: &str,
     max_streams: u16,
-) -> String {
+) -> (String, String) {
     let mut provider_id = [0u8; 32];
     provider_id.copy_from_slice(&hex_decode(provider_id_hex).expect("decode provider identifier"));
-    let token = StreamTokenV1 {
-        body: StreamTokenBodyV1 {
+    let signing_key = SigningKey::from_bytes(&[0x42; 32]);
+    let token = StreamTokenV1::sign(
+        StreamTokenBodyV1 {
             token_id: "01J9TK3GR0XM6YQF7WQXA9Z2SF".to_string(),
             manifest_cid: hex_decode(manifest_id_hex).expect("decode manifest id"),
             provider_id,
@@ -168,10 +185,14 @@ fn make_stream_token_b64(
             requests_per_minute: 120,
             token_pk_version: 1,
         },
-        signature: vec![0; 64],
-    };
+        &signing_key,
+    )
+    .expect("sign stream token fixture");
     let bytes = to_bytes(&token).expect("encode stream token");
-    BASE64_STANDARD.encode(bytes)
+    (
+        BASE64_STANDARD.encode(bytes),
+        hex_encode(signing_key.verifying_key().to_bytes()),
+    )
 }
 
 fn council_signed_governance_proofs() -> GovernanceProofs {
@@ -545,7 +566,7 @@ fn por_report_outputs_markdown() {
         successes: 94,
         failures: 2,
         forced: 0,
-        success_rate: 0.979,
+        success_rate_bps: 9_791,
         first_failure_at: Some(1_700_000_300),
         last_success_latency_ms_p95: Some(1_850),
         repair_dispatched: true,
@@ -572,8 +593,8 @@ fn por_report_outputs_markdown() {
         forced_challenges: 2,
         repairs_enqueued: 4,
         repairs_completed: 3,
-        mean_latency_ms: Some(820.0),
-        p95_latency_ms: Some(1_980.0),
+        mean_latency_ms: Some(820),
+        p95_latency_ms: Some(1_980),
         slashing_events: vec![slashing_event],
         providers_missing_vrf: vec![[0x77; 32]],
         top_offenders: vec![provider_summary],
@@ -2207,7 +2228,7 @@ fn manifest_submit_transaction_fallback_surfaces_rejection() {
 }
 
 #[test]
-fn fetch_command_streams_payload_via_gateway() {
+fn fetch_command_rejects_insecure_local_gateway_without_output() {
     let tempdir = tempdir().expect("tempdir");
     let payload: Vec<u8> = (0..2048)
         .map(|idx| (idx as u8).wrapping_mul(19) ^ 0xA5)
@@ -2291,10 +2312,12 @@ fn fetch_command_streams_payload_via_gateway() {
     let stream_token = StreamTokenV1::sign(token_body, &signing).expect("sign stream token");
     let stream_token_bytes = to_bytes(&stream_token).expect("stream token bytes");
     let stream_token_b64 = BASE64_STANDARD.encode(stream_token_bytes);
+    let gateway_public_key_hex = hex_encode(signing.verifying_key().to_bytes());
 
+    let base_url = server.base_url();
     let provider_arg = format!(
-        "name=alpha,provider-id={provider_id_hex},base-url={},stream-token={stream_token_b64}",
-        server.base_url()
+        "name=alpha,provider-id={provider_id_hex},gateway-key={gateway_public_key_hex},base-url={},stream-token={stream_token_b64}",
+        base_url
     );
 
     let output_path = tempdir.path().join("payload.out");
@@ -2312,8 +2335,12 @@ fn fetch_command_streams_payload_via_gateway() {
         .arg(format!("--provider={provider_arg}"))
         .arg(format!("--output={}", output_path.display()))
         .arg(format!("--json-out={}", json_path.display()))
-        .assert()
-        .success();
+        .assert();
+    if base_url.starts_with("http://") {
+        assert_insecure_gateway_rejected(assert, &[&output_path, &json_path]);
+        return;
+    }
+    let assert = assert.success();
 
     for mock in mocks {
         mock.assert();
@@ -5672,7 +5699,7 @@ fn proof_stream_potr_without_deadline_errors() -> Result<(), Box<dyn std::error:
 }
 
 #[test]
-fn fetch_command_streams_gateway_payload() {
+fn fetch_command_gateway_path_rejects_insecure_local_url() {
     let tempdir = tempdir().expect("tempdir");
     let payload: Vec<u8> = (0..4096).map(|idx| (idx % 251) as u8).collect();
     let plan = CarBuildPlan::single_file(&payload).expect("plan");
@@ -5745,7 +5772,7 @@ fn fetch_command_streams_gateway_payload() {
     }
 
     let provider_id_hex = "ab".repeat(32);
-    let stream_token_b64 =
+    let (stream_token_b64, gateway_public_key_hex) =
         make_stream_token_b64(&manifest_id_hex, &provider_id_hex, "sorafs.sf1@1.0.0", 4);
     let output_path = tempdir.path().join("assembled.bin");
     let summary_path = tempdir.path().join("fetch_summary.json");
@@ -5756,14 +5783,18 @@ fn fetch_command_streams_gateway_payload() {
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--manifest-id={manifest_id_hex}"))
         .arg(format!(
-            "--provider=name=alpha,provider-id={provider_id_hex},base-url={base_url},stream-token={stream_token_b64}"
+            "--provider=name=alpha,provider-id={provider_id_hex},gateway-key={gateway_public_key_hex},base-url={base_url},stream-token={stream_token_b64}"
         ))
         .arg(format!("--output={}", output_path.display()))
         .arg(format!("--json-out={}", summary_path.display()))
         .arg("--max-peers=1")
         .arg("--retry-budget=4")
-        .assert()
-        .success();
+        .assert();
+    if base_url.starts_with("http://") {
+        assert_insecure_gateway_rejected(assert, &[&output_path, &summary_path]);
+        return;
+    }
+    let assert = assert.success();
 
     let stdout =
         String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8 summary");
@@ -5807,7 +5838,7 @@ fn fetch_command_streams_gateway_payload() {
 }
 
 #[test]
-fn fetch_command_respects_direct_transports() {
+fn fetch_command_direct_policy_does_not_bypass_gateway_url_security() {
     let tempdir = tempdir().expect("tempdir");
     let payload: Vec<u8> = (0..2048).map(|idx| (idx % 199) as u8).collect();
     let plan = CarBuildPlan::single_file(&payload).expect("plan");
@@ -5880,26 +5911,30 @@ fn fetch_command_respects_direct_transports() {
     }
 
     let provider_id_hex = "12".repeat(32);
-    let stream_token_b64 =
+    let (stream_token_b64, gateway_public_key_hex) =
         make_stream_token_b64(&manifest_id_hex, &provider_id_hex, "sorafs.sf1@1.0.0", 2);
     let summary_path = tempdir.path().join("direct_fetch_summary.json");
     let output_path = tempdir.path().join("direct_payload.bin");
+    let base_url = server.url("/");
 
     let assert = sorafs_cli_cmd()
         .arg("fetch")
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--manifest-id={manifest_id_hex}"))
         .arg(format!(
-            "--provider=name=gw-direct,provider-id={provider_id_hex},base-url={},stream-token={stream_token_b64}",
-            server.url("/")
+            "--provider=name=gw-direct,provider-id={provider_id_hex},gateway-key={gateway_public_key_hex},base-url={base_url},stream-token={stream_token_b64}",
         ))
         .arg("--transport-policy=direct-only")
         .arg("--max-peers=1")
         .arg("--retry-budget=3")
         .arg(format!("--json-out={}", summary_path.display()))
         .arg(format!("--output={}", output_path.display()))
-        .assert()
-        .success();
+        .assert();
+    if base_url.starts_with("http://") {
+        assert_insecure_gateway_rejected(assert, &[&output_path, &summary_path]);
+        return;
+    }
+    let assert = assert.success();
 
     let stdout_summary: Value = norito::json::from_slice(assert.get_output().stdout.as_slice())
         .expect("stdout summary json");
@@ -5939,7 +5974,7 @@ fn fetch_command_respects_direct_transports() {
 }
 
 #[test]
-fn fetch_command_applies_policy_override() {
+fn fetch_command_policy_override_does_not_bypass_gateway_url_security() {
     let tempdir = tempdir().expect("tempdir");
     let payload: Vec<u8> = (0..1024).map(|idx| (idx % 157) as u8).collect();
     let plan = CarBuildPlan::single_file(&payload).expect("plan");
@@ -6008,24 +6043,28 @@ fn fetch_command_applies_policy_override() {
     }
 
     let provider_id_hex = "ca".repeat(32);
-    let stream_token_b64 =
+    let (stream_token_b64, gateway_public_key_hex) =
         make_stream_token_b64(&manifest_id_hex, &provider_id_hex, "sorafs.sf1@1.0.0", 2);
     let output_path = tempdir.path().join("override.bin");
     let summary_path = tempdir.path().join("override_summary.json");
     let base_url = server.url("/");
 
-    sorafs_cli_cmd()
+    let assert = sorafs_cli_cmd()
         .arg("fetch")
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--manifest-id={manifest_id_hex}"))
         .arg(format!(
-            "--provider=name=alpha,provider-id={provider_id_hex},base-url={base_url},stream-token={stream_token_b64}"
+            "--provider=name=alpha,provider-id={provider_id_hex},gateway-key={gateway_public_key_hex},base-url={base_url},stream-token={stream_token_b64}"
         ))
         .arg(format!("--output={}", output_path.display()))
         .arg(format!("--json-out={}", summary_path.display()))
         .arg("--anonymity-policy-override=anon-guard-pq")
-        .assert()
-        .success();
+        .assert();
+    if base_url.starts_with("http://") {
+        assert_insecure_gateway_rejected(assert, &[&output_path, &summary_path]);
+        return;
+    }
+    assert.success();
 
     let summary_bytes = fs::read(&summary_path).expect("read override summary");
     let summary: Value = from_slice(&summary_bytes).expect("parse override summary");
@@ -6036,7 +6075,7 @@ fn fetch_command_applies_policy_override() {
 }
 
 #[test]
-fn fetch_command_uses_orchestrator_config_json() {
+fn fetch_command_config_does_not_bypass_gateway_url_security() {
     let tempdir = tempdir().expect("tempdir");
     let payload: Vec<u8> = (0..1024).map(|idx| (idx % 151) as u8).collect();
     let plan = CarBuildPlan::single_file(&payload).expect("plan");
@@ -6107,7 +6146,7 @@ fn fetch_command_uses_orchestrator_config_json() {
         });
     }
     let provider_id_hex = "34".repeat(32);
-    let stream_token_b64 =
+    let (stream_token_b64, gateway_public_key_hex) =
         make_stream_token_b64(&manifest_id_hex, &provider_id_hex, "sorafs.sf1@1.0.0", 3);
     let summary_path = tempdir.path().join("policy_fetch_summary.json");
     let output_path = tempdir.path().join("policy_payload.bin");
@@ -6143,6 +6182,7 @@ fn fetch_command_uses_orchestrator_config_json() {
     let rendered = norito::json::to_string_pretty(&Value::Object(root))
         .expect("render orchestrator config json");
     fs::write(&policy_path, rendered.as_bytes()).expect("write orchestrator config json");
+    let base_url = server.url("/");
 
     let assert = sorafs_cli_cmd()
         .arg("fetch")
@@ -6150,14 +6190,17 @@ fn fetch_command_uses_orchestrator_config_json() {
         .arg(format!("--manifest-id={manifest_id_hex}"))
         .arg(format!("--manifest-report={}", manifest_report_path.display()))
         .arg(format!(
-            "--provider=name=policy-gw,provider-id={provider_id_hex},base-url={},stream-token={stream_token_b64}",
-            server.url("/")
+            "--provider=name=policy-gw,provider-id={provider_id_hex},gateway-key={gateway_public_key_hex},base-url={base_url},stream-token={stream_token_b64}",
         ))
         .arg(format!("--orchestrator-config={}", policy_path.display()))
         .arg(format!("--json-out={}", summary_path.display()))
         .arg(format!("--output={}", output_path.display()))
-        .assert()
-        .success();
+        .assert();
+    if base_url.starts_with("http://") {
+        assert_insecure_gateway_rejected(assert, &[&output_path, &summary_path, &scoreboard_path]);
+        return;
+    }
+    let assert = assert.success();
 
     let summary_value: Value =
         norito::json::from_slice(assert.get_output().stdout.as_slice()).expect("stdout summary");
@@ -6197,7 +6240,7 @@ fn fetch_command_uses_orchestrator_config_json() {
 }
 
 #[test]
-fn fetch_command_persists_scoreboard_via_flag() {
+fn fetch_command_scoreboard_flag_does_not_bypass_gateway_url_security() {
     let tempdir = tempdir().expect("tempdir");
     let payload: Vec<u8> = (0..2048).map(|idx| (idx % 179) as u8).collect();
     let plan = CarBuildPlan::single_file(&payload).expect("plan");
@@ -6265,7 +6308,7 @@ fn fetch_command_persists_scoreboard_via_flag() {
         });
     }
     let provider_id_hex = "56".repeat(32);
-    let stream_token_b64 =
+    let (stream_token_b64, gateway_public_key_hex) =
         make_stream_token_b64(&manifest_id_hex, &provider_id_hex, chunk_profile_handle, 2);
 
     let summary_path = tempdir.path().join("flag_summary.json");
@@ -6273,14 +6316,14 @@ fn fetch_command_persists_scoreboard_via_flag() {
     let scoreboard_path = tempdir
         .path()
         .join("scoreboards/flag_fetch_scoreboard.json");
+    let base_url = server.url("/");
 
-    sorafs_cli_cmd()
+    let assert = sorafs_cli_cmd()
         .arg("fetch")
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--manifest-id={manifest_id_hex}"))
         .arg(format!(
-            "--provider=name=flag-gw,provider-id={provider_id_hex},base-url={},stream-token={stream_token_b64}",
-            server.url("/")
+            "--provider=name=flag-gw,provider-id={provider_id_hex},gateway-key={gateway_public_key_hex},base-url={base_url},stream-token={stream_token_b64}",
         ))
         .arg(format!(
             "--manifest-report={}",
@@ -6290,8 +6333,12 @@ fn fetch_command_persists_scoreboard_via_flag() {
         .arg(format!("--output={}", output_path.display()))
         .arg(format!("--scoreboard-out={}", scoreboard_path.display()))
         .arg("--scoreboard-now=1700000000")
-        .assert()
-        .success();
+        .assert();
+    if base_url.starts_with("http://") {
+        assert_insecure_gateway_rejected(assert, &[&output_path, &summary_path, &scoreboard_path]);
+        return;
+    }
+    assert.success();
 
     let scoreboard_bytes = fs::read(&scoreboard_path).expect("read scoreboard file");
     let scoreboard_value: Value =
@@ -6316,7 +6363,7 @@ fn fetch_command_persists_scoreboard_via_flag() {
 
 #[cfg(not(feature = "local-quic-proxy"))]
 #[test]
-fn fetch_command_rejects_local_proxy_manifest_without_runtime_feature() {
+fn fetch_command_rejects_insecure_gateway_before_proxy_startup_without_runtime_feature() {
     let tempdir = tempdir().expect("tempdir");
     let payload: Vec<u8> = (0..64).map(|idx| idx as u8).collect();
     let plan = CarBuildPlan::single_file(&payload).expect("plan");
@@ -6327,7 +6374,7 @@ fn fetch_command_rejects_local_proxy_manifest_without_runtime_feature() {
 
     let manifest_id_hex = hex_encode(blake3_hash(&payload).as_bytes());
     let provider_id_hex = "cd".repeat(32);
-    let stream_token_b64 =
+    let (stream_token_b64, gateway_public_key_hex) =
         make_stream_token_b64(&manifest_id_hex, &provider_id_hex, "sorafs.sf1@1.0.0", 2);
     let policy_path = tempdir.path().join("proxy_config.json");
     let manifest_out_path = tempdir.path().join("proxy_manifest.json");
@@ -6350,7 +6397,7 @@ fn fetch_command_rejects_local_proxy_manifest_without_runtime_feature() {
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--manifest-id={manifest_id_hex}"))
         .arg(format!(
-            "--provider=name=proxy-gw,provider-id={provider_id_hex},base-url=http://127.0.0.1:9/,stream-token={stream_token_b64}",
+            "--provider=name=proxy-gw,provider-id={provider_id_hex},gateway-key={gateway_public_key_hex},base-url=http://127.0.0.1:9/,stream-token={stream_token_b64}",
         ))
         .arg(format!("--orchestrator-config={}", policy_path.display()))
         .arg(format!(
@@ -6362,12 +6409,12 @@ fn fetch_command_rejects_local_proxy_manifest_without_runtime_feature() {
 
     assert!(
         !output.status.success(),
-        "command should fail when proxy runtime support is not compiled in"
+        "command should fail before starting the proxy"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("requires local QUIC proxy runtime support"),
-        "stderr should mention missing proxy runtime feature: {stderr}"
+        stderr.contains("URL must use HTTPS") || stderr.contains("globally routable"),
+        "stderr should report the unsafe gateway boundary: {stderr}"
     );
     assert!(
         !manifest_out_path.exists(),
@@ -6377,7 +6424,7 @@ fn fetch_command_rejects_local_proxy_manifest_without_runtime_feature() {
 
 #[cfg(feature = "local-quic-proxy")]
 #[test]
-fn fetch_command_writes_local_proxy_manifest() {
+fn fetch_command_proxy_does_not_bypass_gateway_url_security() {
     let tempdir = tempdir().expect("tempdir");
     let payload: Vec<u8> = (0..512).map(|idx| (idx % 97) as u8).collect();
     let plan = CarBuildPlan::single_file(&payload).expect("plan");
@@ -6444,7 +6491,7 @@ fn fetch_command_writes_local_proxy_manifest() {
     }
 
     let provider_id_hex = "ab".repeat(32);
-    let stream_token_b64 =
+    let (stream_token_b64, gateway_public_key_hex) =
         make_stream_token_b64(&manifest_id_hex, &provider_id_hex, "sorafs.sf1@1.0.0", 2);
     let summary_path = tempdir.path().join("proxy_fetch_summary.json");
     let manifest_out_path = tempdir.path().join("proxy_manifest.json");
@@ -6477,15 +6524,15 @@ fn fetch_command_writes_local_proxy_manifest() {
     let rendered =
         norito::json::to_string_pretty(&Value::Object(root)).expect("render orchestrator config");
     fs::write(&policy_path, rendered.as_bytes()).expect("write orchestrator config");
+    let base_url = server.url("/");
 
-    sorafs_cli_cmd()
+    let assert = sorafs_cli_cmd()
         .arg("fetch")
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--manifest-id={manifest_id_hex}"))
         .arg(format!("--manifest-report={}", manifest_report_path.display()))
         .arg(format!(
-            "--provider=name=proxy-gw,provider-id={provider_id_hex},base-url={},stream-token={stream_token_b64}",
-            server.url("/")
+            "--provider=name=proxy-gw,provider-id={provider_id_hex},gateway-key={gateway_public_key_hex},base-url={base_url},stream-token={stream_token_b64}",
         ))
         .arg(format!("--orchestrator-config={}", policy_path.display()))
         .arg(format!("--json-out={}", summary_path.display()))
@@ -6493,8 +6540,12 @@ fn fetch_command_writes_local_proxy_manifest() {
             "--local-proxy-manifest-out={}",
             manifest_out_path.display()
         ))
-        .assert()
-        .success();
+        .assert();
+    if base_url.starts_with("http://") {
+        assert_insecure_gateway_rejected(assert, &[&summary_path, &manifest_out_path]);
+        return;
+    }
+    assert.success();
 
     let summary_bytes = fs::read(&summary_path).expect("read summary json");
     let summary_value: Value =
@@ -6568,7 +6619,7 @@ fn fetch_command_writes_local_proxy_manifest() {
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--manifest-id={manifest_id_hex}"))
         .arg(format!(
-            "--provider=name=proxy-gw,provider-id={provider_id_hex},base-url={},stream-token={stream_token_b64}",
+            "--provider=name=proxy-gw,provider-id={provider_id_hex},gateway-key={gateway_public_key_hex},base-url={},stream-token={stream_token_b64}",
             server.url("/")
         ))
         .arg(format!("--orchestrator-config={}", policy_path.display()))
@@ -6676,4 +6727,123 @@ fn sorafs_cli_taikai_bundle_generates_artifacts() {
             .map(|s| s.starts_with('b')),
         Some(true)
     );
+}
+
+#[test]
+fn sorafs_cli_taikai_bundle_rejects_noncanonical_operator_inputs() {
+    let cases = vec![
+        (
+            "--segment-sequence",
+            "07".to_string(),
+            "canonical unsigned decimal integer",
+        ),
+        (
+            "--segment-start-pts",
+            "700000 ".to_string(),
+            "canonical unsigned decimal integer",
+        ),
+        (
+            "--wallclock-unix-ms",
+            "+1702561000000".to_string(),
+            "canonical unsigned decimal integer",
+        ),
+        (
+            "--live-edge-drift-ms",
+            "+17".to_string(),
+            "canonical signed decimal integer",
+        ),
+        (
+            "--live-edge-drift-ms",
+            "-017".to_string(),
+            "canonical signed decimal integer",
+        ),
+        ("--track-kind", "Video".to_string(), "canonical lowercase"),
+        (
+            "--manifest-hash",
+            format!("0x{}", "33".repeat(32)),
+            "hex prefix",
+        ),
+        ("--manifest-hash", "00".repeat(32), "all zero"),
+        (
+            "--storage-ticket",
+            format!("{}4A", "44".repeat(31)),
+            "lowercase hex",
+        ),
+        ("--bitrate-kbps", "0".to_string(), "greater than zero"),
+        ("--segment-duration", "0".to_string(), "greater than zero"),
+    ];
+
+    for (flag, value, expected) in cases {
+        let dir = tempdir().expect("tempdir");
+        let payload_path = dir.path().join("segment_bundle.bin");
+        fs::write(&payload_path, b"bundle-me").expect("write payload");
+        let car_path = dir.path().join("segment_bundle.car");
+        let envelope_path = dir.path().join("segment_bundle.to");
+        let indexes_path = dir.path().join("segment_bundle.index.json");
+        let ingest_path = dir.path().join("segment_bundle.ingest.json");
+        let summary_path = dir.path().join("segment_bundle.summary.json");
+
+        let mut args = vec![
+            "taikai".to_string(),
+            "bundle".to_string(),
+            format!("--payload={}", payload_path.display()),
+            format!("--car-out={}", car_path.display()),
+            format!("--envelope-out={}", envelope_path.display()),
+            format!("--indexes-out={}", indexes_path.display()),
+            format!("--ingest-metadata-out={}", ingest_path.display()),
+            format!("--summary-out={}", summary_path.display()),
+            "--event-id=demo-event".to_string(),
+            "--stream-id=stage-b".to_string(),
+            "--rendition-id=720p".to_string(),
+            "--track-kind=video".to_string(),
+            "--codec=avc-high".to_string(),
+            "--bitrate-kbps=4500".to_string(),
+            "--resolution=1280x720".to_string(),
+            "--segment-sequence=7".to_string(),
+            "--segment-start-pts=700000".to_string(),
+            "--segment-duration=1000000".to_string(),
+            "--wallclock-unix-ms=1702561000000".to_string(),
+            format!("--manifest-hash={}", "33".repeat(32)),
+            format!("--storage-ticket={}", "44".repeat(32)),
+            "--ingest-latency-ms=42".to_string(),
+            "--live-edge-drift-ms=-17".to_string(),
+            "--ingest-node-id=node-a".to_string(),
+        ];
+        let replacement = format!("{flag}={value}");
+        let mut replaced = false;
+        for arg in &mut args {
+            if arg.starts_with(&format!("{flag}=")) {
+                *arg = replacement.clone();
+                replaced = true;
+            }
+        }
+        assert!(replaced, "test case flag {flag} must replace a base arg");
+
+        let output = sorafs_cli_cmd()
+            .args(args)
+            .output()
+            .expect("run taikai bundle");
+        assert!(
+            !output.status.success(),
+            "{flag}={value:?} unexpectedly succeeded"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(expected),
+            "{flag}={value:?} stderr should contain {expected:?}, got: {stderr}"
+        );
+        for path in [
+            &car_path,
+            &envelope_path,
+            &indexes_path,
+            &ingest_path,
+            &summary_path,
+        ] {
+            assert!(
+                !path.exists(),
+                "{flag}={value:?} must fail before writing {}",
+                path.display()
+            );
+        }
+    }
 }

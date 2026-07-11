@@ -68,7 +68,7 @@ cargo test -p sorafs_car --features cli fetch_command_respects_direct_transports
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
-  --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
+  --provider name=gw-regulated,provider-id=001122...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64
 ```
 
 - Скрипт нь CLI туг болон түлхүүр=утга тохиргооны файлуудыг хоёуланг нь хүндэтгэдэг (`docs/examples/sorafs_direct_mode_smoke.conf`-г үзнэ үү). Ажиллуулахын өмнө манифест тойм болон үйлчилгээ үзүүлэгчийн сурталчилгааны оруулгуудыг үйлдвэрлэлийн утгуудаар дүүргэ.

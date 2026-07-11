@@ -9,7 +9,9 @@ import java.util.Objects;
  *
  * <p>The builder exposes the subset of orchestrator configuration that Android clients commonly
  * tweak (telemetry labels, provider limits, retry budgets, transport/anonymity policy). The helper
- * serialises to a map matching the Norito JSON structure consumed by the Rust orchestrator.
+ * serialises to a map matching the Norito JSON structure consumed by the Rust orchestrator. Use
+ * {@code null} to omit an optional string; present strings must already be canonical and are never
+ * trimmed or case-folded.
  */
 public final class GatewayFetchOptions {
   private final String manifestEnvelopeBase64;
@@ -147,37 +149,38 @@ public final class GatewayFetchOptions {
     private WriteModeHint writeModeHint = WriteModeHint.READ_ONLY;
 
     public Builder setManifestEnvelopeBase64(final String manifestEnvelopeBase64) {
-      if (manifestEnvelopeBase64 == null || manifestEnvelopeBase64.trim().isEmpty()) {
-        this.manifestEnvelopeBase64 = null;
-      } else {
-        this.manifestEnvelopeBase64 =
-            SorafsInputValidator.normalizeBase64MaybeUrl(
-                manifestEnvelopeBase64, "manifestEnvelopeBase64");
-      }
+      this.manifestEnvelopeBase64 =
+          manifestEnvelopeBase64 == null
+              ? null
+              : SorafsInputValidator.requireCanonicalBase64(
+                  manifestEnvelopeBase64, "manifestEnvelopeBase64");
       return this;
     }
 
     public Builder setManifestCidHex(final String manifestCidHex) {
-      if (manifestCidHex == null || manifestCidHex.trim().isEmpty()) {
-        this.manifestCidHex = null;
-      } else {
-        this.manifestCidHex = SorafsInputValidator.normalizeHex(manifestCidHex, "manifestCidHex");
-      }
+      this.manifestCidHex =
+          manifestCidHex == null
+              ? null
+              : SorafsInputValidator.requireCanonicalHexBytes(
+                  manifestCidHex, "manifestCidHex", 32);
       return this;
     }
 
     public Builder setClientId(final String clientId) {
-      this.clientId = emptyToNull(clientId);
+      this.clientId = exactOptional(clientId, "clientId");
       return this;
     }
 
     public Builder setTelemetryRegion(final String telemetryRegion) {
-      this.telemetryRegion = emptyToNull(telemetryRegion);
+      this.telemetryRegion = exactOptional(telemetryRegion, "telemetryRegion");
       return this;
     }
 
     public Builder setRolloutPhase(final String rolloutPhase) {
-      this.rolloutPhase = emptyToNull(rolloutPhase);
+      this.rolloutPhase =
+          rolloutPhase == null
+              ? null
+              : SorafsInputValidator.requireCanonicalRolloutPhase(rolloutPhase, "rolloutPhase");
       return this;
     }
 
@@ -216,12 +219,8 @@ public final class GatewayFetchOptions {
       return new GatewayFetchOptions(this);
     }
 
-    private static String emptyToNull(final String value) {
-      if (value == null) {
-        return null;
-      }
-      final String trimmed = value.trim();
-      return trimmed.isEmpty() ? null : trimmed;
+    private static String exactOptional(final String value, final String field) {
+      return value == null ? null : SorafsInputValidator.requireExactNonEmpty(value, field);
     }
   }
 }

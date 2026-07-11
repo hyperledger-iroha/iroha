@@ -1148,10 +1148,16 @@ _SIBLING_MODULES: dict[str, Any] = {}
 
 
 def _strip_0x(value: str) -> str:
+    # Source-inventory marker: all-lanes strip-0x helper uses exact strings.
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError("0x text must be an exact string")
     return value[2:] if value.lower().startswith("0x") else value
 
 
 def _canonical_hex_text(value: str) -> str | None:
+    # Source-inventory marker: all-lanes canonical hex helper uses exact strings.
+    if type(value) is not str:
+        return None
     if value.startswith("0X"):
         return None
     if not value.startswith("0x"):
@@ -1316,6 +1322,9 @@ def _is_nonempty_string(value: Any) -> bool:
 
 
 def _decode_canonical_base64(value: str, *, label: str) -> bytes:
+    # Source-inventory marker: all-lanes canonical base64 helper uses exact strings.
+    if type(value) is not str:
+        raise ValueError(f"{label} must be base64") from None
     try:
         raw = base64.b64decode(value, validate=True)
     except (
@@ -1417,6 +1426,9 @@ PUBLIC_SENSITIVE_MARKER_CONFUSABLES = str.maketrans(
 
 
 def _decoded_public_blocker_text(value: str) -> str:
+    # Source-inventory marker: all-lanes public blocker decode helpers use exact strings.
+    if type(value) is not str:
+        return ""
     decoded = value
     for _decode_pass in range(max(1, len(value))):
         next_decoded = unquote(html_unescape(decoded))
@@ -1427,12 +1439,16 @@ def _decoded_public_blocker_text(value: str) -> str:
 
 
 def _decoded_sensitive_public_marker_text(value: str) -> str:
+    if type(value) is not str:
+        return ""
     return _decoded_public_blocker_text(value).translate(
         PUBLIC_SENSITIVE_MARKER_CONFUSABLES
     ).casefold()
 
 
 def _decoded_public_blocker_text_issue(value: str) -> str | None:
+    if type(value) is not str:
+        return "non-string value"
     decoded = _decoded_public_blocker_text(value)
     if any(ord(character) < 0x20 or ord(character) == 0x7F for character in decoded):
         return "contains control character"
@@ -1444,6 +1460,8 @@ def _decoded_public_blocker_text_issue(value: str) -> str | None:
 
 
 def _decoded_public_nested_value_issue(value: str) -> str | None:
+    if type(value) is not str:
+        return "non-string value"
     decoded = _decoded_public_blocker_text(value)
     if any(ord(character) < 0x20 or ord(character) == 0x7F for character in decoded):
         return "contains control character"
@@ -1455,6 +1473,8 @@ def _decoded_public_nested_value_issue(value: str) -> str | None:
 
 
 def _canonical_public_blocker_key(value: str) -> str:
+    if type(value) is not str:
+        return ""
     return _decoded_public_blocker_text(value).casefold()
 
 
@@ -2049,6 +2069,9 @@ SENSITIVE_MINIMAL_TOML_KEY_MARKERS = (
 
 
 def _minimal_toml_duplicate_key_detail(key: str) -> str:
+    # Source-inventory marker: all-lanes minimal TOML diagnostic helpers use exact strings.
+    if type(key) is not str:
+        return "duplicate key with malformed name"
     lowered = key.lower()
     if any(marker in lowered for marker in SENSITIVE_MINIMAL_TOML_KEY_MARKERS):
         return "duplicate key with sensitive name"
@@ -2063,6 +2086,8 @@ def _minimal_toml_duplicate_key_detail(key: str) -> str:
 
 
 def _toml_unsupported_section_detail(name: str) -> str:
+    if type(name) is not str:
+        return "unsupported zk section with malformed name"
     lowered = name.lower()
     if any(marker in lowered for marker in SENSITIVE_MINIMAL_TOML_KEY_MARKERS):
         return "unsupported zk section with sensitive name"
@@ -2077,6 +2102,8 @@ def _toml_unsupported_section_detail(name: str) -> str:
 
 
 def _evidence_unsupported_section_detail(name: str) -> str:
+    if type(name) is not str:
+        return "unsupported evidence section with malformed name"
     lowered = name.lower()
     if any(marker in lowered for marker in SENSITIVE_MINIMAL_TOML_KEY_MARKERS):
         return "unsupported evidence section with sensitive name"
@@ -2311,7 +2338,17 @@ def _reject_evidence_input_symlink_path(path: Path) -> None:
         raise ValueError("evidence input must not be a symlink")
 
 
+EVIDENCE_INPUT_PATH_TYPE = type(Path())
+
+
+def _require_evidence_input_path(path: object) -> Path:
+    if type(path) is not EVIDENCE_INPUT_PATH_TYPE:
+        raise OSError("evidence input cannot be read")
+    return path
+
+
 def _load_evidence_text(path: Path) -> str:
+    path = _require_evidence_input_path(path)
     try:
         _reject_evidence_input_symlink_path(path)
     except (OSError, ValueError):
@@ -2328,7 +2365,8 @@ def load_evidence_bundle(paths: list[Path]) -> dict[str, list[dict[str, Any]]]:
     """Load and merge SCCP evidence TOML snippets."""
 
     merged: dict[str, list[dict[str, Any]]] = {name: [] for name in SECTION_NAMES}
-    for path in paths:
+    for raw_path in paths:
+        path = _require_evidence_input_path(raw_path)
         label = str(path)
         text = _load_evidence_text(path)
         destination_metadata = _destination_rollout_comment_metadata(text, label=label)
@@ -2796,7 +2834,8 @@ def _check_evm_live_source_bridge_evidence(
         record,
         "_comment_evm_source_deployment_receipt_status",
     )
-    if receipt_status != "0x1":
+    # Source-inventory marker: all-lanes EVM source deployment receipt status uses exact strings.
+    if type(receipt_status) is not str or receipt_status != "0x1":
         errors.append("EVM source deployment receipt status metadata must be 0x1")
     receipt_contract = _public_mapping_get_string_key(
         record,
@@ -7074,8 +7113,9 @@ def _check_route_canary_evidence(
         "route_canary_status",
         "_comment_route_canary_status",
     )
-    canary["status"] = status
-    if status != "passed":
+    # Source-inventory marker: all-lanes route canary status uses exact strings.
+    canary["status"] = status if type(status) is str else None
+    if type(status) is not str or status != "passed":
         errors.append("route canary status metadata must be passed")
 
     evidence_hash = _hex_bytes(
@@ -9310,7 +9350,10 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     if isinstance(exc, (OSError, SystemExit)):
         return fallback
-    text = str(exc)
+    try:
+        text = str(exc)
+    except Exception:
+        return fallback
     if not text:
         return fallback
     if not text.isascii():

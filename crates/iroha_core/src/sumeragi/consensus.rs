@@ -25,12 +25,25 @@ pub use iroha_data_model::block::consensus::{
     BlockSubject, CertPhase, Certificate, ConsensusBlockHeader, ConsensusGenesisParams, Evidence,
     EvidenceKind, EvidencePayload, ExecKv, ExecWitness, ExecWitnessMsg, Height,
     LaneBlockDescriptorV1, LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1,
-    LaneBlockVoteBodyV1, NPOS_TAG, NposGenesisParams, PERMISSIONED_TAG, PROTO_VERSION,
-    PayloadRequest, PayloadResponse, Proposal, Qc, QcAggregate, QcRef, QcVote, QuorumPolicy,
-    RbcChunk, RbcChunkRequest, RbcDeliver, RbcInit, RbcInitRequest, RbcReady, RbcReadySignature,
-    Reconfig, RoundId, ValidatorIndex, ValidatorSetId, View, VrfCommit, VrfReveal,
-    default_chain_order_hash,
+    LaneBlockVoteBodyV1, NposGenesisParams, PayloadRequest, PayloadResponse, Proposal, Qc,
+    QcAggregate, QcRef, QcVote, QuorumPolicy, RbcChunk, RbcChunkRequest, RbcDeliver, RbcInit,
+    RbcInitRequest, RbcReady, RbcReadySignature, Reconfig, RoundId, ValidatorIndex, ValidatorSetId,
+    View, VrfCommit, VrfReveal, default_chain_order_hash,
 };
+use norito::codec::Encode;
+
+/// Live consensus protocol revision. Legacy v1 types above are archival only.
+pub const PROTO_VERSION: u32 = iroha_data_model::block::consensus_v2::PROTOCOL_VERSION as u32;
+/// Permissioned Sumeragi v2 handshake and signing-domain tag.
+pub const PERMISSIONED_TAG: &str = iroha_data_model::block::consensus_v2::PERMISSIONED_TAG;
+/// NPoS Sumeragi v2 handshake and signing-domain tag.
+pub const NPOS_TAG: &str = iroha_data_model::block::consensus_v2::NPOS_TAG;
+/// Legacy v1 protocol revision retained for archival validation tools.
+pub const LEGACY_PROTO_VERSION: u32 = iroha_data_model::block::consensus::PROTO_VERSION;
+/// Legacy permissioned tag retained for archival validation tools.
+pub const LEGACY_PERMISSIONED_TAG: &str = iroha_data_model::block::consensus::PERMISSIONED_TAG;
+/// Legacy NPoS tag retained for archival validation tools.
+pub const LEGACY_NPOS_TAG: &str = iroha_data_model::block::consensus::NPOS_TAG;
 
 /// Commit-certificate phase (prepare/commit/new-view).
 pub type Phase = CertPhase;
@@ -178,20 +191,38 @@ pub fn compute_consensus_fingerprint(
     out
 }
 
-/// Deterministic computation of the consensus fingerprint from canonical params.
+/// Compute the live v2 handshake fingerprint from only frozen protocol inputs.
 ///
-/// Layout in the preimage:
-/// `MODE_TAG || PROTO_VERSION || chain_id || Norito(ConsensusGenesisParams)`
-///
-/// This replaces the interim JSON used during scaffolding. The previous helper
-/// remains for transition, but call sites should migrate to this function.
+/// The projection deliberately omits v1 collectors, phase-specific and
+/// adaptive timeouts, the global-RBC switch, and any local fallback. Mode,
+/// cadence, the single round timeout, block bound, signed DA/Nexus context,
+/// and the genesis-selected NPoS election inputs are canonical Norito fields.
+/// Mutable shared adapter settings are committed separately by
+/// [`SumeragiConfig::v2_config`].
 pub fn compute_consensus_fingerprint_from_params(
     chain_id: &ChainId,
     params: &ConsensusGenesisParams,
     mode_tag: &str,
 ) -> [u8; 32] {
+    let mode = if mode_tag == NPOS_TAG {
+        iroha_data_model::block::consensus_v2::ConsensusMode::Npos
+    } else {
+        iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned
+    };
+    iroha_data_model::block::consensus_v2::fingerprint::compute(chain_id, mode, params)
+}
+
+/// Compute the retired full-parameter fingerprint for decode/archive tooling.
+///
+/// This preserves the former preimage exactly. Live v2 peer admission must use
+/// [`compute_consensus_fingerprint_from_params`] instead.
+pub fn compute_legacy_consensus_fingerprint_from_params(
+    chain_id: &ChainId,
+    params: &ConsensusGenesisParams,
+    mode_tag: &str,
+) -> [u8; 32] {
     use iroha_crypto::blake2::{Blake2b512, Digest as _};
-    use norito::codec::Encode as _;
+
     let mut hasher = Blake2b512::new();
     iroha_crypto::blake2::digest::Update::update(&mut hasher, mode_tag.as_bytes());
     iroha_crypto::blake2::digest::Update::update(&mut hasher, &PROTO_VERSION.to_be_bytes());
@@ -199,27 +230,27 @@ pub fn compute_consensus_fingerprint_from_params(
         &mut hasher,
         chain_id.clone().into_inner().as_bytes(),
     );
-    let bytes = params.encode();
-    iroha_crypto::blake2::digest::Update::update(&mut hasher, &bytes);
+    iroha_crypto::blake2::digest::Update::update(&mut hasher, &params.encode());
     let digest = iroha_crypto::blake2::Digest::finalize(hasher);
     let mut out = [0u8; 32];
     out.copy_from_slice(&digest[..32]);
     out
 }
 
-fn npos_timeout_base_for_handshake_fingerprint_ms(
+fn npos_timeout_base_for_legacy_params_ms(
     sumeragi: &iroha_data_model::parameter::system::SumeragiParameters,
 ) -> u64 {
-    // Handshake fingerprinting must remain stable across restarts and must not depend on
-    // adaptive runtime pacing, which can legitimately drift during congestion recovery.
+    // These phase values remain in the decode/archive carrier only. The live
+    // v2 fingerprint projection deliberately discards them.
     let min_finality_ms = sumeragi.min_finality_ms().max(1);
     sumeragi.block_time_ms().max(1).max(min_finality_ms)
 }
 
-/// Build the canonical consensus-genesis parameter payload used for handshake fingerprints.
+/// Build the compatibility carrier for consensus-genesis parameters.
 ///
-/// This pure helper is shared by runtime handshakes, genesis metadata generation, and startup
-/// validation so all three paths hash the same field set.
+/// Runtime handshakes, genesis metadata generation, and startup validation all
+/// pass this carrier through the canonical v2 fingerprint projection. Retired
+/// fields remain populated only so archival v1 structures keep decoding.
 pub fn consensus_genesis_params_from_parameters(
     chain_id: &ChainId,
     mode_tag: &str,
@@ -237,7 +268,7 @@ pub fn consensus_genesis_params_from_parameters(
         .and_then(SumeragiNposParameters::from_custom_parameter);
 
     let (npos_params, epoch_length_blocks) = if use_npos {
-        let timeout_base_ms = npos_timeout_base_for_handshake_fingerprint_ms(sumeragi);
+        let timeout_base_ms = npos_timeout_base_for_legacy_params_ms(sumeragi);
         let npos_timeouts = sumeragi_config
             .npos
             .timeouts_overrides
@@ -326,6 +357,13 @@ pub fn consensus_genesis_params_from_parameters(
         epoch_length_blocks,
         bls_domain: bls_domain.into(),
         npos: npos_params,
+        protocol_version: sumeragi_config.protocol_version,
+        round_timeout_ms: u64::try_from(sumeragi_config.round_timeout.as_millis())
+            .expect("Sumeragi round timeout exceeds supported millisecond range"),
+        // Only a signed genesis metadata entry may populate this. Callers which
+        // verify a genesis attach the decoded value before fingerprinting;
+        // runtime config is deliberately not a source for height contexts.
+        v2_context: None,
     }
 }
 
@@ -338,21 +376,26 @@ pub fn compute_consensus_handshake_caps_from_world(
     common_config: &CommonConfig,
     sumeragi_config: &SumeragiConfig,
     config_caps: &iroha_p2p::ConsensusConfigCaps,
-) -> (String, String, iroha_p2p::ConsensusHandshakeCaps) {
+) -> Result<
+    (String, String, iroha_p2p::ConsensusHandshakeCaps),
+    iroha_config::parameters::actual::SumeragiV2ConfigError,
+> {
     let s_params = world.parameters();
     let effective_mode = crate::sumeragi::effective_consensus_mode_for_height_from_world(
         world,
         height,
         sumeragi_config.consensus_mode,
     );
-    let (mode_tag, bls_domain) = match effective_mode {
+    let (mode_tag, bls_domain, v2_mode) = match effective_mode {
         ConsensusMode::Permissioned => (
             PERMISSIONED_TAG.to_string(),
-            "bls-iroha2:permissioned-sumeragi:v1".to_string(),
+            iroha_data_model::block::consensus_v2::PERMISSIONED_BLS_DOMAIN.to_string(),
+            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
         ),
         ConsensusMode::Npos => (
             NPOS_TAG.to_string(),
-            "bls-iroha2:npos-sumeragi:v1".to_string(),
+            iroha_data_model::block::consensus_v2::NPOS_BLS_DOMAIN.to_string(),
+            iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
         ),
     };
     let canon = consensus_genesis_params_from_parameters(
@@ -364,17 +407,25 @@ pub fn compute_consensus_handshake_caps_from_world(
     );
     let fingerprint =
         compute_consensus_fingerprint_from_params(&common_config.chain, &canon, &mode_tag);
+    let mut config_caps = *config_caps;
+    config_caps.v2_config_fingerprint = sumeragi_config
+        .v2_config(
+            Duration::from_millis(s_params.sumeragi().block_time_ms()),
+            v2_mode,
+        )?
+        .fingerprint()
+        .into();
 
-    (
+    Ok((
         mode_tag.clone(),
         bls_domain,
         iroha_p2p::ConsensusHandshakeCaps {
             mode_tag,
             proto_version: PROTO_VERSION,
             consensus_fingerprint: fingerprint,
-            config: *config_caps,
+            config: config_caps,
         },
-    )
+    ))
 }
 
 /// Derive consensus handshake capabilities (mode tag, BLS domain, fingerprint) from the current
@@ -384,7 +435,10 @@ pub fn compute_consensus_handshake_caps_from_view(
     common_config: &CommonConfig,
     sumeragi_config: &SumeragiConfig,
     config_caps: &iroha_p2p::ConsensusConfigCaps,
-) -> (String, String, iroha_p2p::ConsensusHandshakeCaps) {
+) -> Result<
+    (String, String, iroha_p2p::ConsensusHandshakeCaps),
+    iroha_config::parameters::actual::SumeragiV2ConfigError,
+> {
     let height = u64::try_from(view.height()).unwrap_or(u64::MAX);
     compute_consensus_handshake_caps_from_world(
         view.world(),
@@ -1106,8 +1160,13 @@ mod tests {
             block_max_transactions: 1024,
             da_enabled: false,
             epoch_length_blocks: 0,
-            bls_domain: "bls-iroha2:permissioned-sumeragi:v1".to_string(),
+            bls_domain: "bls-iroha2:permissioned-sumeragi:v2".to_string(),
             npos: None,
+            protocol_version: PROTO_VERSION,
+            round_timeout_ms: 10_000,
+            v2_context: Some(
+                iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+            ),
         };
         let npos_params = ConsensusGenesisParams {
             block_time_ms: 1000,
@@ -1119,7 +1178,7 @@ mod tests {
             block_max_transactions: 1024,
             da_enabled: true,
             epoch_length_blocks: 10,
-            bls_domain: "bls-iroha2:npos-sumeragi:v1".to_string(),
+            bls_domain: "bls-iroha2:npos-sumeragi:v2".to_string(),
             npos: Some(NposGenesisParams {
                 block_time_ms: 1000,
                 timeout_propose_ms: 300,
@@ -1144,6 +1203,11 @@ mod tests {
                 activation_lag_blocks: 1,
                 slashing_delay_blocks: 9,
             }),
+            protocol_version: PROTO_VERSION,
+            round_timeout_ms: 10_000,
+            v2_context: Some(
+                iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+            ),
         };
 
         let fp_permissioned = compute_consensus_fingerprint_from_params(
@@ -1209,7 +1273,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_fingerprint_changes_on_param_diff() {
+    fn canonical_v2_fingerprint_ignores_retired_v1_fields() {
         let chain = ChainId::from("iroha:test:fpcanon");
         let mut p = ConsensusGenesisParams {
             block_time_ms: 2000,
@@ -1221,17 +1285,80 @@ mod tests {
             block_max_transactions: 1024,
             da_enabled: false,
             epoch_length_blocks: 0,
-            bls_domain: "bls-iroha2:permissioned-sumeragi:v1".to_string(),
+            bls_domain: "bls-iroha2:permissioned-sumeragi:v2".to_string(),
             npos: None,
+            protocol_version: PROTO_VERSION,
+            round_timeout_ms: 10_000,
+            v2_context: Some(
+                iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+            ),
         };
         let a = compute_consensus_fingerprint_from_params(&chain, &p, PERMISSIONED_TAG);
-        p.collectors_k = 2; // change a single field
+        p.commit_time_ms += 1;
+        p.min_finality_ms += 1;
+        p.max_clock_drift_ms += 1;
+        p.collectors_k = 2;
+        p.redundant_send_r = 2;
+        p.da_enabled = true;
+        p.bls_domain = "retired-arbitrary-domain".to_owned();
         let b = compute_consensus_fingerprint_from_params(&chain, &p, PERMISSIONED_TAG);
-        assert_ne!(a, b);
+        assert_eq!(a, b);
+
+        let legacy = compute_legacy_consensus_fingerprint_from_params(&chain, &p, PERMISSIONED_TAG);
+        let mut original = p;
+        original.collectors_k = 1;
+        assert_ne!(
+            legacy,
+            compute_legacy_consensus_fingerprint_from_params(&chain, &original, PERMISSIONED_TAG,),
+            "archive-only full projection must retain the old field set",
+        );
     }
 
     #[test]
-    fn canonical_fingerprint_changes_on_npos_param_diff() {
+    fn canonical_fingerprint_binds_v2_protocol_and_round_timeout() {
+        let chain = ChainId::from("iroha:test:fpcanon-v2-timeout");
+        let params = ConsensusGenesisParams {
+            block_time_ms: 1_000,
+            commit_time_ms: 1_000,
+            min_finality_ms: 1_000,
+            max_clock_drift_ms: 1_000,
+            collectors_k: 1,
+            redundant_send_r: 1,
+            block_max_transactions: 1_024,
+            da_enabled: true,
+            epoch_length_blocks: 0,
+            bls_domain: iroha_data_model::block::consensus_v2::PERMISSIONED_BLS_DOMAIN.to_owned(),
+            npos: None,
+            protocol_version: PROTO_VERSION,
+            round_timeout_ms: 10_000,
+            v2_context: Some(
+                iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+            ),
+        };
+        let baseline = compute_consensus_fingerprint_from_params(&chain, &params, PERMISSIONED_TAG);
+        let changed_timeout = compute_consensus_fingerprint_from_params(
+            &chain,
+            &ConsensusGenesisParams {
+                round_timeout_ms: 10_001,
+                ..params.clone()
+            },
+            PERMISSIONED_TAG,
+        );
+        let changed_protocol = compute_consensus_fingerprint_from_params(
+            &chain,
+            &ConsensusGenesisParams {
+                protocol_version: PROTO_VERSION.saturating_add(1),
+                ..params
+            },
+            PERMISSIONED_TAG,
+        );
+
+        assert_ne!(baseline, changed_timeout);
+        assert_ne!(baseline, changed_protocol);
+    }
+
+    #[test]
+    fn canonical_v2_npos_fingerprint_ignores_phase_timeouts_but_binds_election_seed() {
         let chain = ChainId::from("iroha:test:fpcanon-npos");
         let mut p = ConsensusGenesisParams {
             block_time_ms: 2000,
@@ -1243,7 +1370,7 @@ mod tests {
             block_max_transactions: 1024,
             da_enabled: true,
             epoch_length_blocks: 3600,
-            bls_domain: "bls-iroha2:npos-sumeragi:v1".to_string(),
+            bls_domain: "bls-iroha2:npos-sumeragi:v2".to_string(),
             npos: Some(NposGenesisParams {
                 block_time_ms: 1_000,
                 timeout_propose_ms: 250,
@@ -1268,13 +1395,30 @@ mod tests {
                 activation_lag_blocks: 1,
                 slashing_delay_blocks: 9,
             }),
+            protocol_version: PROTO_VERSION,
+            round_timeout_ms: 10_000,
+            v2_context: Some(
+                iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+            ),
         };
         let a = compute_consensus_fingerprint_from_params(&chain, &p, NPOS_TAG);
-        if let Some(npos) = p.npos.as_mut() {
-            npos.timeout_commit_ms += 1;
-        }
-        let b = compute_consensus_fingerprint_from_params(&chain, &p, NPOS_TAG);
-        assert_ne!(a, b);
+        let npos = p.npos.as_mut().expect("NPoS parameters");
+        npos.block_time_ms += 1;
+        npos.timeout_propose_ms += 1;
+        npos.timeout_prevote_ms += 1;
+        npos.timeout_precommit_ms += 1;
+        npos.timeout_commit_ms += 1;
+        npos.timeout_da_ms += 1;
+        npos.timeout_aggregator_ms += 1;
+        npos.k_aggregators += 1;
+        npos.redundant_send_r += 1;
+        let retired_fields_changed =
+            compute_consensus_fingerprint_from_params(&chain, &p, NPOS_TAG);
+        assert_eq!(a, retired_fields_changed);
+
+        p.npos.as_mut().expect("NPoS parameters").epoch_seed[0] = 1;
+        let election_seed_changed = compute_consensus_fingerprint_from_params(&chain, &p, NPOS_TAG);
+        assert_ne!(a, election_seed_changed);
     }
 
     #[test]
@@ -1290,13 +1434,19 @@ mod tests {
             block_max_transactions: 1024,
             da_enabled: false,
             epoch_length_blocks: 0,
-            bls_domain: "bls-iroha2:permissioned-sumeragi:v1".to_string(),
+            bls_domain: "bls-iroha2:permissioned-sumeragi:v2".to_string(),
             npos: None,
+            protocol_version: PROTO_VERSION,
+            round_timeout_ms: 10_000,
+            v2_context: Some(
+                iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+            ),
         };
-        let p2 = ConsensusGenesisParams {
-            collectors_k: 2,
-            ..p1.clone()
-        };
+        let mut p2 = p1.clone();
+        p2.v2_context
+            .as_mut()
+            .expect("signed v2 context")
+            .nexus_amx_context_hash[0] ^= 1;
         let f1 = compute_consensus_fingerprint_from_params(&chain, &p1, PERMISSIONED_TAG);
         let f2 = compute_consensus_fingerprint_from_params(&chain, &p2, PERMISSIONED_TAG);
         let gate = HandshakeGate::local(chain.clone(), f1, PERMISSIONED_TAG);
@@ -1304,9 +1454,32 @@ mod tests {
             gate.validate_peer(&chain, PERMISSIONED_TAG, PROTO_VERSION, &f1)
                 .is_ok()
         );
+
+        let retired_only = ConsensusGenesisParams {
+            commit_time_ms: p1.commit_time_ms + 1,
+            min_finality_ms: p1.min_finality_ms + 1,
+            collectors_k: p1.collectors_k + 1,
+            redundant_send_r: p1.redundant_send_r + 1,
+            da_enabled: !p1.da_enabled,
+            ..p1.clone()
+        };
+        let retired_only_fingerprint =
+            compute_consensus_fingerprint_from_params(&chain, &retired_only, PERMISSIONED_TAG);
+        assert_eq!(f1, retired_only_fingerprint);
+        assert!(
+            gate.validate_peer(
+                &chain,
+                PERMISSIONED_TAG,
+                PROTO_VERSION,
+                &retired_only_fingerprint,
+            )
+            .is_ok(),
+            "retired fields must not partition live v2 admission",
+        );
+
         let err = gate
             .validate_peer(&chain, PERMISSIONED_TAG, PROTO_VERSION, &f2)
-            .expect_err("fingerprint mismatch must be rejected");
+            .expect_err("signed Nexus/AMX context mismatch must be rejected");
         let expected_hex = hex::encode(f1);
         let got_hex = hex::encode(f2);
         assert_eq!(

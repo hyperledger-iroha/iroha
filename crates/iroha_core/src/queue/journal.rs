@@ -278,6 +278,23 @@ impl QueuePlanJournal {
         self.file.try_clone()
     }
 
+    /// Force both journal contents/file metadata and its directory entry to stable storage.
+    ///
+    /// Lane reservation commit barriers may only be forgotten after an exact pending-plan
+    /// tombstone crosses this stronger power-loss boundary.
+    ///
+    /// # Errors
+    /// Returns file or parent-directory synchronization errors.
+    pub fn sync_all_with_parent(&self) -> io::Result<()> {
+        self.file.sync_all()?;
+        let parent = self
+            .path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        File::open(parent)?.sync_all()
+    }
+
     /// Replay live records from disk.
     ///
     /// # Errors
@@ -704,6 +721,31 @@ mod tests {
 
         let journal = QueuePlanJournal::open(&path, 1024 * 1024, true).expect("reopen journal");
         assert_eq!(journal.replay().expect("replay"), vec![record]);
+    }
+
+    #[test]
+    fn journal_sync_all_with_parent_persists_exact_tombstone_boundary() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("queue-plan-sync-all.norito");
+        let record = record("sync-all-parent");
+        {
+            let mut journal =
+                QueuePlanJournal::open(&path, 1024 * 1024, false).expect("open journal");
+            let _ = journal
+                .put_deferred_flush(record.clone())
+                .expect("append record");
+            let _ = journal
+                .remove_many_deferred_flush([(
+                    record.signed_transaction_hash,
+                    record.plan_digest(),
+                )])
+                .expect("append exact tombstone");
+            journal
+                .sync_all_with_parent()
+                .expect("sync file metadata and parent entry");
+        }
+        let journal = QueuePlanJournal::open(&path, 1024 * 1024, true).expect("reopen journal");
+        assert!(journal.replay().expect("replay").is_empty());
     }
 
     #[test]

@@ -175,6 +175,7 @@ public final class DefaultOkHttpWiringTests {
           GatewayProvider.builder()
               .setName("alpha")
               .setProviderIdHex("aa".repeat(32))
+              .setGatewayPublicKeyHex("bb".repeat(32))
               .setBaseUrl("https://providers.example")
               .setStreamTokenBase64(Base64.getEncoder().encodeToString("token".getBytes(StandardCharsets.UTF_8)))
               .build();
@@ -187,20 +188,17 @@ public final class DefaultOkHttpWiringTests {
 
       final SorafsGatewayClient client =
           SorafsGatewayClient.builder()
-              .setBaseUri(new URI(server.url("/").toString()))
+              .setBaseUri(new URI("https://gateway.example/"))
               .build();
 
-      final ClientResponse response = client.fetch(request).get(2, TimeUnit.SECONDS);
-      assertEquals(200, response.statusCode());
       assertTrue(extractExecutor(client) instanceof OkHttpTransportExecutor);
-
-      final RecordedRequest recorded = server.takeRequest(1, TimeUnit.SECONDS);
-      assertNotNull("request not received", recorded);
-      assertEquals("/v1/sorafs/gateway/fetch", recorded.getPath());
-      assertEquals("POST", recorded.getMethod());
-      final String body = recorded.getBody().readString(StandardCharsets.UTF_8);
-      assertTrue(body.contains("\"manifest_id_hex\":\"" + "deadbeef".repeat(8) + "\""));
-      assertEquals("application/json", recorded.getHeader("Content-Type"));
+      org.junit.Assert.assertThrows(
+          IllegalArgumentException.class,
+          () ->
+              SorafsGatewayClient.builder()
+                  .setBaseUri(new URI(server.url("/").toString()))
+                  .build());
+      assertEquals(0, server.getRequestCount());
     }
   }
 

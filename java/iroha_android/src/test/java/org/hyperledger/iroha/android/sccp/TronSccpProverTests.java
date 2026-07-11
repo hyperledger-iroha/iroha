@@ -1595,7 +1595,7 @@ public final class TronSccpProverTests {
     writeTestNoritoField(encoder, child -> child.writeUInt(0, 64));
     writeTestNoritoField(
         encoder,
-        child -> writeTestNoritoString(child, "iroha2-consensus::permissioned-sumeragi@v1"));
+        child -> writeTestNoritoString(child, "iroha2-consensus::permissioned-sumeragi@v2"));
     writeTestNoritoField(
         encoder, child -> child.writeBytes(hexBytes(stripHex(value.finalityBlockHash))));
     writeTestNoritoField(encoder, child -> child.writeBytes(new byte[32]));

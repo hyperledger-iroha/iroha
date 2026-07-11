@@ -65,7 +65,7 @@ CLI のカバレッジだけでは環境固有のリグレッション (例: gat
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
-  --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
+  --provider name=gw-regulated,provider-id=001122...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64
 ```
 
 - スクリプトは CLI フラグと key=value 設定ファイルの両方を尊重します (`docs/examples/sorafs_direct_mode_smoke.conf` を参照)。実行前に manifest digest とプロバイダ advert エントリを本番値で埋めてください。

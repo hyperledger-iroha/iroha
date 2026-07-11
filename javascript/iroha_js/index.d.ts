@@ -12302,6 +12302,11 @@ export function signOrderbookPayload(
   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
 ): Buffer;
 
+export function deriveOrderbookOrderId(
+  ownerAccount: SorafsOrderbookBytesInput,
+  nonce: SorafsOrderbookIntegerInput,
+): Buffer;
+
 export function buildSignedOrderbookOrderRequest(
   fields: SorafsSignedOrderbookOrderRequestFields,
   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
@@ -12356,6 +12361,8 @@ export function appendSumeragiTelemetrySnapshot(
 export interface SorafsGatewayProviderSpec {
   name: string;
   providerIdHex: string;
+  /** Canonical lowercase Ed25519 public key used to verify the provider stream token. */
+  gatewayPublicKeyHex: string;
   baseUrl: string;
   streamTokenB64: string;
   privacyEventsUrl?: string;
@@ -20610,6 +20617,16 @@ export function hashSignedTransaction(
   options?: { encoding?: BufferEncoding | "buffer" },
 ): string | Buffer;
 
+export function hashSignedTransactionPayload(
+  signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
+  options?: { encoding?: BufferEncoding | "buffer" },
+): string | Buffer;
+
+export function hashInstructionBatch(
+  instructions: Array<object | string>,
+  options?: { encoding?: BufferEncoding | "buffer" },
+): string | Buffer;
+
 export function resignSignedTransaction(
   signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
@@ -21281,6 +21298,20 @@ export function buildGrantAccountPermissionInstruction(options: {
   name?: string;
   payload?: JsonValue;
 }): object;
+
+export function buildSetAccountKeyValueInstruction(options: {
+  accountId: string;
+  key: string;
+  value: JsonValue;
+}): {
+  SetKeyValue: {
+    Account: {
+      object: string;
+      key: string;
+      value: JsonValue;
+    };
+  };
+};
 
 export function buildSetAssetDefinitionAliasInstruction(options: {
   assetDefinitionId?: string;

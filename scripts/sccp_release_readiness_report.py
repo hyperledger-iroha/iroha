@@ -600,7 +600,24 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return payload
 
 
+NATIVE_PATH_TYPE = type(Path())
+
+
+def _require_native_path(
+    path: object,
+    *,
+    json_read_error: str | None = None,
+    value_error: str = "release artifact path must be a regular file",
+) -> Path:
+    if type(path) is not NATIVE_PATH_TYPE:
+        if json_read_error is not None:
+            raise OSError(json_read_error)
+        raise ValueError(value_error)
+    return path
+
+
 def _load_json_without_duplicate_keys(path: Path) -> Any:
+    path = _require_native_path(path, json_read_error="JSON path cannot be read")
     try:
         _reject_release_artifact_symlink_path(path)
     except (OSError, ValueError):
@@ -3316,6 +3333,14 @@ def _readiness_output_path_error(path_text: object) -> str | None:
 
 
 def _same_resolved_path(left: Path, right: Path) -> bool:
+    left = _require_native_path(
+        left,
+        value_error="readiness report path must be a native path",
+    )
+    right = _require_native_path(
+        right,
+        value_error="readiness report path must be a native path",
+    )
     return left.resolve() == right.resolve()
 
 
@@ -3336,7 +3361,15 @@ def _readiness_output_collision_error(
     native_evm_prover_bundle: Path | None,
     phases: Iterable[str],
 ) -> str | None:
+    output_path = _require_native_path(
+        output_path,
+        value_error="readiness report output path must be a native path",
+    )
     for input_path in toml_paths:
+        input_path = _require_native_path(
+            input_path,
+            value_error="readiness report input evidence path must be a native path",
+        )
         if _same_resolved_path(output_path, input_path):
             return "readiness report output path must not be the same path as input evidence"
 
@@ -3350,6 +3383,12 @@ def _readiness_output_collision_error(
             return "readiness report output path must not be the same path as phase evidence"
 
     if phase_evidence_dir is not None:
+        phase_evidence_dir = _require_native_path(
+            phase_evidence_dir,
+            value_error=(
+                "readiness report phase evidence directory path must be a native path"
+            ),
+        )
         for phase in phases:
             for candidate in _phase_log_candidates_from_dir(
                 phase_evidence_dir,
@@ -3358,11 +3397,15 @@ def _readiness_output_collision_error(
                 if candidate.is_file() and _same_resolved_path(output_path, candidate):
                     return "readiness report output path must not be the same path as phase evidence"
 
-    if native_evm_prover_bundle is not None and _same_resolved_path(
-        output_path,
-        native_evm_prover_bundle,
-    ):
-        return "readiness report output path must not be the same path as native EVM prover bundle"
+    if native_evm_prover_bundle is not None:
+        native_evm_prover_bundle = _require_native_path(
+            native_evm_prover_bundle,
+            value_error=(
+                "readiness report native EVM prover bundle path must be a native path"
+            ),
+        )
+        if _same_resolved_path(output_path, native_evm_prover_bundle):
+            return "readiness report output path must not be the same path as native EVM prover bundle"
 
     return None
 
@@ -3391,6 +3434,9 @@ def _phase_evidence_source_label(name: str) -> str:
 
 
 def _path_control_character(path: str) -> str | None:
+    # Source-inventory marker: release path text helpers use exact strings.
+    if type(path) is not str:
+        return "non-string path"
     for character in path:
         if ord(character) < 0x20 or ord(character) == 0x7F:
             return repr(character)
@@ -3401,6 +3447,8 @@ MARKDOWN_UNSAFE_PATH_CHARACTERS = frozenset("|`<>")
 
 
 def _path_markdown_unsafe_character(path: str) -> str | None:
+    if type(path) is not str:
+        return "non-string path"
     for character in path:
         if character in MARKDOWN_UNSAFE_PATH_CHARACTERS:
             return repr(character)
@@ -3408,6 +3456,8 @@ def _path_markdown_unsafe_character(path: str) -> str | None:
 
 
 def _path_percent_encoded_traversal(path: str) -> str | None:
+    if type(path) is not str:
+        return "non-string path"
     decoded = path
     seen = {decoded}
     for _ in range(32):
@@ -3436,6 +3486,7 @@ def _reject_release_artifact_symlink_path(path: Path) -> None:
 
 
 def _artifact(path: Path) -> dict[str, Any]:
+    path = _require_native_path(path)
     _reject_release_artifact_symlink_path(path)
     if not path.is_file():
         raise ValueError("release artifact path must be a regular file")
@@ -7598,7 +7649,7 @@ def _parse_phase_evidence(
         if dir_error is not None:
             raise argparse.ArgumentTypeError(dir_error)
         for phase in phases:
-            if phase_status.get(phase) == "passed":
+            if _corridor_phase_status_is_exact_passed(phase_status.get(phase)):
                 assign(
                     phase,
                     _artifact(_phase_log_from_dir(phase_evidence_dir, phase)),
@@ -7908,6 +7959,9 @@ def _native_evm_validation_blockers(value: Any, label: str) -> list[str]:
 
 
 def _decoded_public_blocker_text(value: str) -> str:
+    # Source-inventory marker: readiness report public blocker decode helpers use exact strings.
+    if type(value) is not str:
+        return ""
     decoded = value
     for _decode_pass in range(max(1, len(value))):
         next_decoded = unquote(html_unescape(decoded))
@@ -7918,12 +7972,16 @@ def _decoded_public_blocker_text(value: str) -> str:
 
 
 def _decoded_sensitive_public_marker_text(value: str) -> str:
+    if type(value) is not str:
+        return ""
     return _decoded_public_blocker_text(value).translate(
         PUBLIC_SENSITIVE_MARKER_CONFUSABLES
     ).casefold()
 
 
 def _decoded_public_blocker_text_issue(value: str) -> str | None:
+    if type(value) is not str:
+        return "non-string value"
     decoded = _decoded_public_blocker_text(value)
     if _path_control_character(decoded) is not None:
         return "control character"
@@ -7935,6 +7993,8 @@ def _decoded_public_blocker_text_issue(value: str) -> str | None:
 
 
 def _canonical_public_blocker_key(value: str) -> str:
+    if type(value) is not str:
+        return ""
     return _decoded_public_blocker_text(value).casefold()
 
 
@@ -8110,13 +8170,22 @@ def _active_launch_evm_live_metadata_blockers(
         blockers.append(
             f"{lane_label}: {ACTIVE_LAUNCH_DISPLAY} destination live eth_chainId must be {expected_chain_id_label}"
         )
-    if _public_mapping_get_string_key(evm_live_metadata, "source_block_tag") != "finalized":
+    source_block_tag = _public_mapping_get_string_key(
+        evm_live_metadata,
+        "source_block_tag",
+    )
+    # Source-inventory marker: active EVM live block tags require exact copied strings.
+    if type(source_block_tag) is not str or source_block_tag != "finalized":
         blockers.append(
             f"{lane_label}: {ACTIVE_LAUNCH_DISPLAY} source live block tag must be finalized"
         )
+    destination_block_tag = _public_mapping_get_string_key(
+        evm_live_metadata,
+        "destination_block_tag",
+    )
     if (
-        _public_mapping_get_string_key(evm_live_metadata, "destination_block_tag")
-        != "finalized"
+        type(destination_block_tag) is not str
+        or destination_block_tag != "finalized"
     ):
         blockers.append(
             f"{lane_label}: {ACTIVE_LAUNCH_DISPLAY} destination live block tag must be finalized"
@@ -8874,10 +8943,8 @@ def _active_launch_required_record_metadata_blockers(
     if not lane:
         return [f"{lane_label}: missing launch lane evidence"]
     blockers: list[str] = []
-    if (
-        type(_public_mapping_get_string_key(lane, "domain")) is not int
-        or _public_mapping_get_string_key(lane, "domain") != ACTIVE_LAUNCH_DOMAIN
-    ):
+    lane_domain = _public_mapping_get_string_key(lane, "domain")
+    if type(lane_domain) is not int or lane_domain != ACTIVE_LAUNCH_DOMAIN:
         blockers.append(
             f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} launch lane domain must be {_sccp_domain_constant_label(ACTIVE_LAUNCH_DOMAIN)}"
         )
@@ -9312,11 +9379,14 @@ def _submission_surfaces(phase_status: dict[str, str]) -> list[dict[str, Any]]:
             for sdk, symbols in surface["sdk_helper_symbols_by_sdk"].items()
         }
         required_phases = list(surface["required_phases"])
-        blockers = [
-            f"{phase} is {phase_status.get(phase, 'missing')}"
-            for phase in required_phases
-            if phase_status.get(phase) != "passed"
-        ]
+        blockers: list[str] = []
+        for phase in required_phases:
+            status = phase_status.get(phase, "missing")
+            if _corridor_phase_status_is_exact_passed(status):
+                continue
+            blockers.append(
+                f"{phase} is {_corridor_phase_status_public_text(status)}"
+            )
         surface["sdk_helper_symbols"] = helper_symbols
         surface["sdk_helper_symbols_by_sdk"] = helper_symbols_by_sdk
         surface["sdk_helpers"] = ", ".join(helper_symbols)
@@ -10223,17 +10293,21 @@ def _build_report(
         release_checklist
     )
     failed_phases = [
-        phase for phase, status in phase_status.items() if status != "passed"
+        phase
+        for phase, status in phase_status.items()
+        if not _corridor_phase_status_is_exact_passed(status)
     ]
     missing_phase_evidence = [
         phase
         for phase, status in phase_status.items()
-        if require_phase_evidence and status == "passed" and phase not in phase_artifacts
+        if require_phase_evidence
+        and _corridor_phase_status_is_exact_passed(status)
+        and phase not in phase_artifacts
     ]
     invalid_phase_evidence: dict[str, list[str]] = {
         phase: errors
         for phase, artifact in phase_artifacts.items()
-        if phase_status.get(phase) == "passed"
+        if _corridor_phase_status_is_exact_passed(phase_status.get(phase))
         for errors in [_phase_transcript_errors(phase, artifact)]
         if errors
     }
@@ -10479,6 +10553,7 @@ def _lane_readiness_markdown_cells(
         return "-", "-", "blocked", _record_flags({}), [
             "lane summary must be an object"
         ]
+    # Source-inventory marker: readiness Markdown lane row cells use exact copied lane keys.
     lane = _public_mapping_string_view(lane)
 
     domain = lane.get("domain")
@@ -11148,6 +11223,7 @@ def _native_evm_sdk_artifacts_cell(value: Any) -> str:
 
 
 def _native_evm_bundle_status_cell(native_bundle: dict[str, Any]) -> str:
+    # Source-inventory marker: readiness Markdown native-prover row cells use exact copied bundle keys.
     native_bundle = _public_mapping_string_view(native_bundle)
     status = native_bundle.get("validation_status")
     return (
@@ -11392,6 +11468,7 @@ def _user_prover_surface_markdown_rows(value: Any) -> list[list[str]]:
 def _markdown_artifact_path_cell(artifact: Any, *, field_label: str) -> str:
     if type(artifact) is not dict:
         return f"`<invalid {field_label}>`"
+    # Source-inventory marker: readiness Markdown artifact path cells use exact copied artifact keys.
     artifact_path = _public_mapping_get_string_key(artifact, "path")
     if _native_evm_markdown_path_is_safe(artifact_path):
         return f"`{artifact_path}`"
@@ -11400,6 +11477,7 @@ def _markdown_artifact_path_cell(artifact: Any, *, field_label: str) -> str:
 
 def _markdown_artifact_bytes_cell(artifact: Any) -> str:
     if type(artifact) is dict:
+        # Source-inventory marker: readiness Markdown artifact byte cells use exact copied artifact keys.
         artifact_bytes = _public_mapping_get_string_key(artifact, "bytes")
     else:
         artifact_bytes = None
@@ -11415,6 +11493,7 @@ def _markdown_artifact_hash_cell(artifact: Any, *, field_label: str) -> str:
     )
     if type(artifact) is not dict:
         return f"`<invalid {invalid_label}>`"
+    # Source-inventory marker: readiness Markdown artifact hash cells use exact copied artifact keys.
     artifact_hash = _public_mapping_get_string_key(artifact, "sha256")
     if _is_nonzero_canonical_sha256_text(artifact_hash):
         return f"`{artifact_hash}`"
@@ -11465,6 +11544,21 @@ def _corridor_phase_key_blocker(label: str, phase: Any) -> str | None:
     return None
 
 
+def _corridor_phase_status_is_exact_passed(status: Any) -> bool:
+    # Source-inventory marker: readiness public corridor phase status comparisons use exact copied strings.
+    return type(status) is str and status == "passed"
+
+
+def _corridor_phase_status_is_public(status: Any) -> bool:
+    return type(status) is str and status in CORRIDOR_PUBLIC_PHASE_STATUSES
+
+
+def _corridor_phase_status_public_text(status: Any) -> str:
+    if _corridor_phase_status_is_public(status):
+        return status
+    return "invalid"
+
+
 def _corridor_phase_cell(phase: Any) -> str:
     if _corridor_phase_key_blocker("readiness report corridor phases", phase) is None:
         return f"`{phase}`"
@@ -11472,9 +11566,11 @@ def _corridor_phase_cell(phase: Any) -> str:
 
 
 def _corridor_phase_status_cell(phase_status: Any) -> str:
+    # Source-inventory marker: readiness corridor Markdown status cells require exact phase status strings.
     return (
         phase_status
-        if phase_status in {"passed", "failed", "skipped", "missing"}
+        if type(phase_status) is str
+        and phase_status in {"passed", "failed", "skipped", "missing"}
         else "`<invalid status>`"
     )
 
@@ -11507,7 +11603,8 @@ def _corridor_markdown_rows(corridor: Any) -> list[list[str]]:
                 "-",
             ]
         ]
-    phases = corridor.get("phases")
+    # Source-inventory marker: readiness corridor Markdown root cells use exact copied corridor keys.
+    phases = _public_mapping_get_string_key(corridor, "phases")
     if type(phases) is not dict:
         return [
             [
@@ -11517,13 +11614,17 @@ def _corridor_markdown_rows(corridor: Any) -> list[list[str]]:
                 "-",
             ]
         ]
-    evidence_artifacts = corridor.get("evidence_artifacts")
+    evidence_artifacts = _public_mapping_get_string_key(corridor, "evidence_artifacts")
     if type(evidence_artifacts) is not dict:
         evidence_artifacts = {}
     rows: list[list[str]] = []
     for phase, phase_status in phases.items():
         # Source-inventory marker: readiness corridor Markdown artifact lookup uses exact public phase keys.
-        artifact = _public_mapping_get_string_key(evidence_artifacts, phase)
+        artifact = (
+            _public_mapping_get_string_key(evidence_artifacts, phase)
+            if type(phase) is str
+            else None
+        )
         rows.append(
             [
                 _corridor_phase_cell(phase),
@@ -12015,7 +12116,10 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
         or getattr(exc, "filename2", None) is not None
     ):
         return fallback
-    text = str(exc)
+    try:
+        text = str(exc)
+    except Exception:
+        return fallback
     if not text:
         return fallback
     if not text.isascii():
@@ -12377,7 +12481,9 @@ def _corridor_uses_shared_full_run_artifact(
     passed_phases = [
         phase
         for phase in known_phases
-        if _public_mapping_get_string_key(phases, phase) == "passed"
+        if _corridor_phase_status_is_exact_passed(
+            _public_mapping_get_string_key(phases, phase)
+        )
     ]
     if not passed_phases:
         return False
@@ -12539,12 +12645,14 @@ def _public_corridor_errors(value: Any) -> list[str]:
                 )
                 continue
             status = _public_mapping_get_string_key(phases, phase)
-            if status not in CORRIDOR_PUBLIC_PHASE_STATUSES:
+            if not _corridor_phase_status_is_public(status):
                 errors.append(
                     "readiness report corridor phase "
                     f"{phase} status must be passed, failed, skipped, or missing"
                 )
-            elif production_ready is True and status != "passed":
+            elif production_ready is True and not _corridor_phase_status_is_exact_passed(
+                status
+            ):
                 errors.append(
                     f"readiness report corridor phase {phase} must be passed "
                     "when production_ready is true"
@@ -12602,7 +12710,9 @@ def _public_corridor_errors(value: Any) -> list[str]:
     ):
         for phase in known_phases:
             if (
-                _public_mapping_get_string_key(phases, phase) == "passed"
+                _corridor_phase_status_is_exact_passed(
+                    _public_mapping_get_string_key(phases, phase)
+                )
                 and not _public_mapping_has_string_key(evidence_artifacts, phase)
             ):
                 errors.append(
@@ -12617,7 +12727,9 @@ def _public_corridor_errors(value: Any) -> list[str]:
         and known_phases
         and all(
             _public_mapping_has_string_key(phases, phase)
-            and _public_mapping_get_string_key(phases, phase) == "passed"
+            and _corridor_phase_status_is_exact_passed(
+                _public_mapping_get_string_key(phases, phase)
+            )
             for phase in known_phases
         )
         and (
@@ -13094,7 +13206,9 @@ def _redacted_public_native_evm_prover_bundle(value: dict[str, Any]) -> dict[str
     """Return a copied native-prover summary safe for public JSON rendering."""
 
     redacted = dict(value)
-    blocked = _public_mapping_get_string_key(redacted, "validation_status") == "blocked"
+    validation_status = _public_mapping_get_string_key(redacted, "validation_status")
+    # Source-inventory marker: readiness native EVM redaction status uses exact copied strings.
+    blocked = type(validation_status) is str and validation_status == "blocked"
     if blocked:
         audit_hashes = _public_mapping_get_string_key(redacted, "audit_hashes")
         if type(audit_hashes) is dict:

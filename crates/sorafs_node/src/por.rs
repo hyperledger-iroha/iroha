@@ -6,6 +6,7 @@ use std::{
 };
 
 use iroha_data_model::metadata::Metadata;
+use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use norito::json::Value as JsonValue;
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -28,9 +29,10 @@ const SAMPLE_MULTIPLIER_METADATA_KEY: &str = "profile.sample_multiplier";
 const SAMPLE_MULTIPLIER_DEFAULT_KEY: &str = "default";
 const DEFAULT_SAMPLE_MULTIPLIER: u16 = 1;
 const MAX_SAMPLE_MULTIPLIER: u16 = 4;
+const DEFAULT_TRACKER_ENTRY_LIMIT: usize = 65_536;
 
 /// Randomness bundle sourced for a PoR epoch.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PorRandomness {
     /// Epoch identifier (`floor(unix_time / 3600)`).
     pub epoch_id: u64,
@@ -43,16 +45,33 @@ pub struct PorRandomness {
     /// drand randomness payload (32 bytes).
     pub drand_randomness: [u8; 32],
     /// drand BLS signature covering the randomness.
-    pub drand_signature: Vec<u8>,
+    pub drand_signature: [u8; iroha_crypto::drand::DRAND_SIGNATURE_BYTES],
 }
 
 /// Provider VRF output/proof for a manifest/epoch pair.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ManifestVrfBundle {
+    /// Governance-controlled provider identifier bound into the proof.
+    pub provider_id: [u8; 32],
+    /// Manifest digest bound into the proof.
+    pub manifest_digest: [u8; 32],
+    /// PoR epoch identifier bound into the proof.
+    pub epoch_id: u64,
+    /// Drand round bound into the proof.
+    pub drand_round: u64,
     /// VRF output bytes.
     pub output: [u8; 32],
-    /// Proof bytes attesting to the VRF output.
-    pub proof: Vec<u8>,
+    /// Variant-tagged, fixed-size proof attesting to the VRF output.
+    pub proof: iroha_crypto::vrf::VrfProof,
+}
+
+/// Lookup key for a provider/manifest VRF submission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ManifestVrfKey {
+    /// Governance-controlled provider identifier.
+    pub provider_id: [u8; 32],
+    /// Manifest digest.
+    pub manifest_digest: [u8; 32],
 }
 
 /// Planned PoR challenge alongside sampling metadata.
@@ -76,12 +95,18 @@ pub enum PorChallengePlannerError {
     /// Storage backend has no PoR leaves for the manifest.
     #[error("manifest does not expose any PoR leaves")]
     EmptyMerkleTree,
-    /// drand signature missing from randomness bundle.
-    #[error("drand signature must be provided")]
-    MissingDrandSignature,
     /// drand signature is an inert placeholder.
     #[error("drand signature must not be all zero")]
     InvalidDrandSignature,
+    /// A VRF is required before the configured forced-challenge deadline.
+    #[error("provider VRF is not yet available for manifest {manifest_hex}")]
+    MissingVrfBeforeDeadline {
+        /// Manifest digest rendered as canonical lowercase hex.
+        manifest_hex: String,
+    },
+    /// A verified VRF bundle was not bound to the planned challenge inputs.
+    #[error("provider VRF bundle binding does not match the planned challenge")]
+    VrfBindingMismatch,
     /// Sample count exceeded the supported `u16` range.
     #[error("sample count {0} exceeds u16::MAX")]
     SampleCountOverflow(usize),
@@ -399,10 +424,8 @@ pub fn build_por_challenge_for_manifest(
     randomness: &PorRandomness,
     vrf: Option<&ManifestVrfBundle>,
     policy: &PorSamplePolicy,
+    allow_forced: bool,
 ) -> Result<PlannedChallenge, PorChallengePlannerError> {
-    if randomness.drand_signature.is_empty() {
-        return Err(PorChallengePlannerError::MissingDrandSignature);
-    }
     if randomness.drand_signature.iter().all(|byte| *byte == 0) {
         return Err(PorChallengePlannerError::InvalidDrandSignature);
     }
@@ -414,12 +437,25 @@ pub fn build_por_challenge_for_manifest(
 
     let multiplier = policy.multiplier_for(chunk_profile);
     let plan = determine_sample_plan(manifest.content_length(), multiplier);
+    let manifest_digest = *manifest.manifest_digest();
     let (vrf_output, vrf_proof, forced) = match vrf {
-        Some(bundle) => (Some(bundle.output), Some(bundle.proof.clone()), false),
-        None => (None, None, true),
+        Some(bundle)
+            if bundle.provider_id == provider_id
+                && bundle.manifest_digest == manifest_digest
+                && bundle.epoch_id == randomness.epoch_id
+                && bundle.drand_round == randomness.drand_round =>
+        {
+            (Some(bundle.output), Some(bundle.proof), false)
+        }
+        Some(_) => return Err(PorChallengePlannerError::VrfBindingMismatch),
+        None if allow_forced => (None, None, true),
+        None => {
+            return Err(PorChallengePlannerError::MissingVrfBeforeDeadline {
+                manifest_hex: hex::encode(manifest_digest),
+            });
+        }
     };
 
-    let manifest_digest = *manifest.manifest_digest();
     let seed = derive_challenge_seed(
         &randomness.drand_randomness,
         vrf_output.as_ref(),
@@ -450,7 +486,7 @@ pub fn build_por_challenge_for_manifest(
         epoch_id: randomness.epoch_id,
         drand_round: randomness.drand_round,
         drand_randomness: randomness.drand_randomness,
-        drand_signature: randomness.drand_signature.clone(),
+        drand_signature: randomness.drand_signature,
         vrf_output,
         vrf_proof,
         forced,
@@ -480,31 +516,85 @@ pub struct PorVerdictStats {
     pub failed_samples: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct ChallengeState {
     challenge: PorChallengeV1,
     proof_digest: Option<[u8; 32]>,
+    proof_submitted_at: Option<u64>,
+}
+
+#[derive(Debug)]
+struct PorTrackerState {
+    pending: HashMap<[u8; 32], ChallengeState>,
+    finalized: HashMap<[u8; 32], PorChallengeV1>,
+    entry_limit: usize,
+}
+
+impl Default for PorTrackerState {
+    fn default() -> Self {
+        Self {
+            pending: HashMap::new(),
+            finalized: HashMap::new(),
+            entry_limit: DEFAULT_TRACKER_ENTRY_LIMIT,
+        }
+    }
+}
+
+/// Canonical durable snapshot of PoR challenge replay-protection state.
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+pub(crate) struct PorTrackerCheckpointV1 {
+    pending: Vec<ChallengeState>,
+    finalized: Vec<PorChallengeV1>,
 }
 
 /// Tracks the lifecycle of PoR challenges, proofs, and verdicts.
 #[derive(Debug, Default, Clone)]
 pub struct PorTracker {
-    inner: Arc<RwLock<HashMap<[u8; 32], ChallengeState>>>,
+    inner: Arc<RwLock<PorTrackerState>>,
 }
 
 impl PorTracker {
+    /// Construct a tracker with a hard ceiling for pending and finalized entries.
+    #[must_use]
+    pub(crate) fn with_entry_limit(entry_limit: usize) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(PorTrackerState {
+                entry_limit: entry_limit.max(1),
+                ..PorTrackerState::default()
+            })),
+        }
+    }
+
     /// Register a new PoR challenge.
-    pub fn record_challenge(&self, challenge: &PorChallengeV1) -> Result<(), PorTrackerError> {
+    pub(crate) fn record_challenge(
+        &self,
+        challenge: &PorChallengeV1,
+    ) -> Result<(), PorTrackerError> {
         challenge
             .validate()
             .map_err(PorTrackerError::ChallengeInvalid)?;
-        let mut map = self.inner.write().expect("por tracker poisoned");
-        let entry = map.entry(challenge.challenge_id);
+        let mut state = self.inner.write().expect("por tracker poisoned");
+        if let Some(finalized) = state.finalized.get(&challenge.challenge_id) {
+            return if finalized == challenge {
+                Ok(())
+            } else {
+                Err(PorTrackerError::ChallengeConflict)
+            };
+        }
+        if !state.pending.contains_key(&challenge.challenge_id)
+            && state.pending.len() >= state.entry_limit
+        {
+            return Err(PorTrackerError::PendingRetentionExhausted {
+                limit: state.entry_limit,
+            });
+        }
+        let entry = state.pending.entry(challenge.challenge_id);
         match entry {
             std::collections::hash_map::Entry::Vacant(vacant) => {
                 vacant.insert(ChallengeState {
                     challenge: challenge.clone(),
                     proof_digest: None,
+                    proof_submitted_at: None,
                 });
                 Ok(())
             }
@@ -519,11 +609,19 @@ impl PorTracker {
         }
     }
 
-    /// Register a PoR proof response.
-    pub fn record_proof(&self, proof: &PorProofV1) -> Result<(), PorTrackerError> {
+    /// Register a PoR proof response authenticated by provider admission.
+    pub(crate) fn record_proof(
+        &self,
+        proof: &PorProofV1,
+        admitted_provider_key: &[u8],
+    ) -> Result<(), PorTrackerError> {
         proof.validate().map_err(PorTrackerError::ProofInvalid)?;
-        let mut map = self.inner.write().expect("por tracker poisoned");
-        let state = map
+        proof
+            .verify_signature_for_provider(admitted_provider_key)
+            .map_err(PorTrackerError::ProofSignatureInvalid)?;
+        let mut tracker = self.inner.write().expect("por tracker poisoned");
+        let state = tracker
+            .pending
             .get_mut(&proof.challenge_id)
             .ok_or(PorTrackerError::UnknownChallenge)?;
         ensure_match(
@@ -539,56 +637,195 @@ impl PorTracker {
         if proof.samples.len() != usize::from(state.challenge.sample_count) {
             return Err(PorTrackerError::SampleCountMismatch {
                 expected: state.challenge.sample_count,
-                actual: proof.samples.len() as u16,
+                actual: u16::try_from(proof.samples.len()).unwrap_or(u16::MAX),
+            });
+        }
+        if !proof
+            .samples
+            .iter()
+            .map(|sample| sample.sample_index)
+            .eq(state.challenge.sample_indices.iter().copied())
+        {
+            return Err(PorTrackerError::SampleIndicesMismatch);
+        }
+        if proof.submitted_at < state.challenge.issued_at
+            || proof.submitted_at > state.challenge.deadline_at
+        {
+            return Err(PorTrackerError::ProofOutsideChallengeWindow {
+                submitted_at: proof.submitted_at,
+                issued_at: state.challenge.issued_at,
+                deadline_at: state.challenge.deadline_at,
             });
         }
         if state.proof_digest.is_some() {
             return Err(PorTrackerError::DuplicateProof);
         }
         state.proof_digest = Some(proof.proof_digest());
+        state.proof_submitted_at = Some(proof.submitted_at);
         Ok(())
     }
 
     /// Finalise a challenge using an audit verdict.
-    pub fn record_verdict(
+    #[cfg(test)]
+    pub(crate) fn record_verdict(
         &self,
         verdict: &AuditVerdictV1,
+        trusted_auditor_keys: &[Vec<u8>],
+        auditor_threshold: usize,
     ) -> Result<PorVerdictStats, PorTrackerError> {
+        self.record_verdict_with(verdict, trusted_auditor_keys, auditor_threshold, |_| Ok(()))
+            .map(|(stats, ())| stats)
+    }
+
+    /// Finalise a challenge only after `before_commit` succeeds.
+    ///
+    /// The tracker write lock remains held while the callback runs. This makes
+    /// the in-memory state transition atomic with a fallible durable side
+    /// effect such as repair-history persistence: callback failures leave the
+    /// challenge and proof available for a safe retry.
+    pub(crate) fn record_verdict_with<T>(
+        &self,
+        verdict: &AuditVerdictV1,
+        trusted_auditor_keys: &[Vec<u8>],
+        auditor_threshold: usize,
+        before_commit: impl FnOnce(PorVerdictStats) -> Result<T, RepairStoreError>,
+    ) -> Result<(PorVerdictStats, T), PorTrackerError> {
         verdict
             .validate()
             .map_err(PorTrackerError::VerdictInvalid)?;
-        let mut map = self.inner.write().expect("por tracker poisoned");
-        let state = map
-            .remove(&verdict.challenge_id)
+        verdict
+            .verify_signatures_with_policy(trusted_auditor_keys, auditor_threshold)
+            .map_err(PorTrackerError::VerdictSignatureInvalid)?;
+        let mut tracker = self.inner.write().expect("por tracker poisoned");
+        let state = tracker
+            .pending
+            .get(&verdict.challenge_id)
             .ok_or(PorTrackerError::UnknownChallenge)?;
-        ensure_match(
-            verdict.manifest_digest,
-            state.challenge.manifest_digest,
-            PorTrackerError::MismatchManifest,
-        )?;
-        ensure_match(
-            verdict.provider_id,
-            state.challenge.provider_id,
-            PorTrackerError::MismatchProvider,
-        )?;
-        if let Some(ref expected_digest) = state.proof_digest
-            && let Some(ref verdict_digest) = verdict.proof_digest
-            && verdict_digest != expected_digest
-        {
-            return Err(PorTrackerError::ProofDigestMismatch);
+        let stats = validate_verdict_transition(state, verdict)?;
+        if tracker.finalized.len() >= tracker.entry_limit {
+            return Err(PorTrackerError::FinalizedRetentionExhausted {
+                limit: tracker.entry_limit,
+            });
         }
-        let samples = u64::from(state.challenge.sample_count);
-        let stats = match verdict.outcome {
-            AuditOutcomeV1::Success | AuditOutcomeV1::Repaired => PorVerdictStats {
-                success_samples: samples,
-                failed_samples: 0,
-            },
-            AuditOutcomeV1::Failed => PorVerdictStats {
-                success_samples: 0,
-                failed_samples: samples,
-            },
-        };
-        Ok(stats)
+        let callback_value = before_commit(stats)?;
+        let finalized = tracker
+            .pending
+            .remove(&verdict.challenge_id)
+            .expect("validated PoR challenge must remain while write lock is held");
+        tracker
+            .finalized
+            .insert(verdict.challenge_id, finalized.challenge);
+        Ok((stats, callback_value))
+    }
+
+    /// Export pending and finalized challenge state in deterministic order.
+    pub(crate) fn checkpoint(&self) -> PorTrackerCheckpointV1 {
+        let tracker = self.inner.read().expect("por tracker poisoned");
+        let mut pending = tracker.pending.values().cloned().collect::<Vec<_>>();
+        pending.sort_by_key(|state| state.challenge.challenge_id);
+        let mut finalized = tracker.finalized.values().cloned().collect::<Vec<_>>();
+        finalized.sort_by_key(|challenge| challenge.challenge_id);
+        PorTrackerCheckpointV1 { pending, finalized }
+    }
+
+    /// Restore a validated deterministic tracker checkpoint.
+    pub(crate) fn restore_checkpoint(
+        &self,
+        checkpoint: PorTrackerCheckpointV1,
+    ) -> Result<(), PorTrackerError> {
+        let mut tracker = self.inner.write().expect("por tracker poisoned");
+        if checkpoint.pending.len() > tracker.entry_limit {
+            return Err(PorTrackerError::PendingRetentionExhausted {
+                limit: tracker.entry_limit,
+            });
+        }
+        if checkpoint.finalized.len() > tracker.entry_limit {
+            return Err(PorTrackerError::FinalizedRetentionExhausted {
+                limit: tracker.entry_limit,
+            });
+        }
+        let mut pending = HashMap::with_capacity(checkpoint.pending.len());
+        let mut previous_pending_id = None;
+        for state in checkpoint.pending {
+            state
+                .challenge
+                .validate()
+                .map_err(PorTrackerError::ChallengeInvalid)?;
+            if state.proof_digest.is_some() != state.proof_submitted_at.is_some() {
+                return Err(PorTrackerError::InvalidCheckpoint(
+                    "proof digest and submission timestamp must either both be present or both be absent"
+                        .to_owned(),
+                ));
+            }
+            if let Some(submitted_at) = state.proof_submitted_at
+                && (submitted_at < state.challenge.issued_at
+                    || submitted_at > state.challenge.deadline_at)
+            {
+                return Err(PorTrackerError::InvalidCheckpoint(
+                    "proof submission timestamp falls outside its challenge window".to_owned(),
+                ));
+            }
+            let challenge_id = state.challenge.challenge_id;
+            if previous_pending_id.is_some_and(|previous| previous >= challenge_id) {
+                return Err(PorTrackerError::InvalidCheckpoint(
+                    "pending challenges must be strictly ordered by challenge id".to_owned(),
+                ));
+            }
+            previous_pending_id = Some(challenge_id);
+            if pending.insert(challenge_id, state).is_some() {
+                return Err(PorTrackerError::InvalidCheckpoint(
+                    "duplicate pending challenge id".to_owned(),
+                ));
+            }
+        }
+        let mut finalized = HashMap::with_capacity(checkpoint.finalized.len());
+        let mut previous_finalized_id = None;
+        for challenge in checkpoint.finalized {
+            challenge
+                .validate()
+                .map_err(PorTrackerError::ChallengeInvalid)?;
+            let challenge_id = challenge.challenge_id;
+            if previous_finalized_id.is_some_and(|previous| previous >= challenge_id) {
+                return Err(PorTrackerError::InvalidCheckpoint(
+                    "finalized challenges must be strictly ordered by challenge id".to_owned(),
+                ));
+            }
+            previous_finalized_id = Some(challenge_id);
+            if finalized.insert(challenge_id, challenge).is_some() {
+                return Err(PorTrackerError::InvalidCheckpoint(
+                    "duplicate finalized challenge id".to_owned(),
+                ));
+            }
+        }
+        if pending.keys().any(|id| finalized.contains_key(id)) {
+            return Err(PorTrackerError::InvalidCheckpoint(
+                "challenge id appears in both pending and finalized state".to_owned(),
+            ));
+        }
+        tracker.pending = pending;
+        tracker.finalized = finalized;
+        Ok(())
+    }
+
+    /// Return whether a challenge remains pending in the tracker.
+    #[cfg(test)]
+    fn contains_challenge(&self, challenge_id: &[u8; 32]) -> bool {
+        self.inner
+            .read()
+            .expect("por tracker poisoned")
+            .pending
+            .contains_key(challenge_id)
+    }
+
+    /// Return the proof digest recorded for a pending challenge.
+    #[cfg(test)]
+    fn proof_digest(&self, challenge_id: &[u8; 32]) -> Option<[u8; 32]> {
+        self.inner
+            .read()
+            .expect("por tracker poisoned")
+            .pending
+            .get(challenge_id)
+            .and_then(|state| state.proof_digest)
     }
 
     /// Return backlog entries for all manifest/provider pairs tracked by the node.
@@ -609,9 +846,9 @@ impl PorTracker {
     {
         use std::collections::hash_map::Entry;
 
-        let map = self.inner.read().expect("por tracker poisoned");
+        let tracker = self.inner.read().expect("por tracker poisoned");
         let mut grouped: HashMap<([u8; 32], [u8; 32]), PorBacklogEntry> = HashMap::new();
-        for state in map.values() {
+        for state in tracker.pending.values() {
             if !predicate(state) {
                 continue;
             }
@@ -645,6 +882,64 @@ impl PorTracker {
     }
 }
 
+fn validate_verdict_transition(
+    state: &ChallengeState,
+    verdict: &AuditVerdictV1,
+) -> Result<PorVerdictStats, PorTrackerError> {
+    ensure_match(
+        verdict.manifest_digest,
+        state.challenge.manifest_digest,
+        PorTrackerError::MismatchManifest,
+    )?;
+    ensure_match(
+        verdict.provider_id,
+        state.challenge.provider_id,
+        PorTrackerError::MismatchProvider,
+    )?;
+    if verdict.decided_at < state.challenge.issued_at {
+        return Err(PorTrackerError::VerdictBeforeChallenge {
+            decided_at: verdict.decided_at,
+            issued_at: state.challenge.issued_at,
+        });
+    }
+    match (state.proof_digest, verdict.proof_digest) {
+        (Some(expected), Some(actual)) if expected != actual => {
+            return Err(PorTrackerError::ProofDigestMismatch);
+        }
+        (Some(_), None) => return Err(PorTrackerError::MissingVerdictProofDigest),
+        (None, Some(_)) => return Err(PorTrackerError::UnexpectedVerdictProofDigest),
+        (None, None)
+            if matches!(
+                verdict.outcome,
+                AuditOutcomeV1::Success | AuditOutcomeV1::Repaired
+            ) =>
+        {
+            return Err(PorTrackerError::MissingProofForSuccessfulVerdict);
+        }
+        _ => {}
+    }
+    if let Some(submitted_at) = state.proof_submitted_at
+        && verdict.decided_at < submitted_at
+    {
+        return Err(PorTrackerError::VerdictBeforeProof {
+            decided_at: verdict.decided_at,
+            submitted_at,
+        });
+    }
+
+    let samples = u64::from(state.challenge.sample_count);
+    Ok(match verdict.outcome {
+        AuditOutcomeV1::Success | AuditOutcomeV1::Repaired => PorVerdictStats {
+            success_samples: samples,
+            failed_samples: 0,
+        },
+        AuditOutcomeV1::Failed => PorVerdictStats {
+            success_samples: 0,
+            failed_samples: samples,
+        },
+    })
+}
+
 fn ensure_match<T: Eq>(left: T, right: T, err: PorTrackerError) -> Result<(), PorTrackerError> {
     if left == right { Ok(()) } else { Err(err) }
 }
@@ -658,12 +953,36 @@ pub enum PorTrackerError {
     /// Proof payload failed structural validation.
     #[error("proof invalid: {0}")]
     ProofInvalid(#[from] PorProofValidationError),
+    /// Proof signature is invalid or is not bound to the admitted provider.
+    #[error("invalid or unauthorised proof signature: {0}")]
+    ProofSignatureInvalid(#[source] sorafs_manifest::por::PorSignatureVerificationError),
     /// Audit verdict failed validation.
     #[error("verdict invalid: {0}")]
     VerdictInvalid(#[source] sorafs_manifest::por::AuditVerdictValidationError),
+    /// Verdict signatures do not satisfy the trusted-auditor policy.
+    #[error("invalid or unauthorised verdict signatures: {0}")]
+    VerdictSignatureInvalid(#[source] sorafs_manifest::por::PorSignatureVerificationError),
     /// Challenge already recorded with differing payload.
     #[error("challenge with identical id already exists")]
     ChallengeConflict,
+    /// Pending challenge retention reached its configured hard ceiling.
+    #[error("pending PoR challenge retention exhausted (limit {limit})")]
+    PendingRetentionExhausted {
+        /// Configured entry ceiling.
+        limit: usize,
+    },
+    /// Finalized challenge replay retention reached its configured hard ceiling.
+    #[error("finalized PoR challenge retention exhausted (limit {limit})")]
+    FinalizedRetentionExhausted {
+        /// Configured entry ceiling.
+        limit: usize,
+    },
+    /// Durable tracker checkpoint is malformed or internally inconsistent.
+    #[error("invalid PoR tracker checkpoint: {0}")]
+    InvalidCheckpoint(String),
+    /// Durable auxiliary runtime checkpoint could not be committed.
+    #[error("PoR runtime checkpoint failed: {0}")]
+    RuntimeCheckpoint(String),
     /// Challenge id is unknown to the tracker.
     #[error("unknown challenge id")]
     UnknownChallenge,
@@ -681,12 +1000,52 @@ pub enum PorTrackerError {
         /// Actual sample count present in the proof payload.
         actual: u16,
     },
+    /// Proof sample indices do not exactly cover the challenged indices.
+    #[error("proof sample indices do not match the recorded challenge")]
+    SampleIndicesMismatch,
+    /// Provider timestamp falls outside the challenge response window.
+    #[error(
+        "proof submitted_at {submitted_at} is outside challenge window {issued_at}..={deadline_at}"
+    )]
+    ProofOutsideChallengeWindow {
+        /// Provider-supplied proof timestamp.
+        submitted_at: u64,
+        /// Challenge issue timestamp.
+        issued_at: u64,
+        /// Inclusive challenge deadline.
+        deadline_at: u64,
+    },
     /// Proof already recorded for the challenge.
     #[error("proof already recorded for this challenge")]
     DuplicateProof,
     /// Verdict proof digest does not match the previously recorded proof.
     #[error("proof digest reported by verdict does not match recorded proof")]
     ProofDigestMismatch,
+    /// A proof exists, so the verdict must bind its digest.
+    #[error("verdict must include the recorded proof digest")]
+    MissingVerdictProofDigest,
+    /// Verdict claims a proof digest when no proof was recorded.
+    #[error("verdict includes a proof digest but no proof was recorded")]
+    UnexpectedVerdictProofDigest,
+    /// Successful or repaired verdicts cannot be issued without a proof.
+    #[error("successful or repaired verdict requires a recorded proof")]
+    MissingProofForSuccessfulVerdict,
+    /// Verdict predates the challenge.
+    #[error("verdict decided_at {decided_at} predates challenge issued_at {issued_at}")]
+    VerdictBeforeChallenge {
+        /// Verdict decision timestamp.
+        decided_at: u64,
+        /// Challenge issue timestamp.
+        issued_at: u64,
+    },
+    /// Verdict predates the proof it adjudicates.
+    #[error("verdict decided_at {decided_at} predates proof submitted_at {submitted_at}")]
+    VerdictBeforeProof {
+        /// Verdict decision timestamp.
+        decided_at: u64,
+        /// Proof submission timestamp.
+        submitted_at: u64,
+    },
     /// Repair store failed while recording PoR failure history.
     #[error(transparent)]
     RepairStore(#[from] RepairStoreError),
@@ -695,12 +1054,28 @@ pub enum PorTrackerError {
 #[cfg(test)]
 /// Utilities used only in tests to build attested POR inputs.
 pub mod test_support {
+    use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
     use sorafs_manifest::{
         por::{AUDIT_VERDICT_VERSION_V1, POR_CHALLENGE_VERSION_V1, POR_PROOF_VERSION_V1},
         provider_advert::{AdvertSignature, SignatureAlgorithm},
     };
 
     use super::*;
+
+    fn signing_key(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive deterministic Ed25519 test key")
+    }
+
+    fn sign_payload(signature: &mut AdvertSignature, key_pair: &KeyPair, payload: &[u8]) {
+        let (algorithm, public_key) = key_pair.public_key().to_bytes();
+        assert_eq!(algorithm, Algorithm::Ed25519);
+        signature.public_key = public_key.to_vec();
+        signature.signature = IrohaSignature::try_new(key_pair.private_key(), payload)
+            .expect("sign deterministic PoR test payload")
+            .payload()
+            .to_vec();
+    }
 
     /// Deterministic PoR challenge used across unit tests.
     pub fn sample_challenge() -> PorChallengeV1 {
@@ -726,9 +1101,9 @@ pub mod test_support {
             epoch_id,
             drand_round,
             drand_randomness,
-            drand_signature: vec![0x61; 96],
+            drand_signature: [0x61; 48],
             vrf_output: Some(vrf_output),
-            vrf_proof: Some(vec![0x71; 80]),
+            vrf_proof: Some(iroha_crypto::vrf::VrfProof::SigInG1([0x71; 48])),
             forced: false,
             chunking_profile: "sorafs.sf1@1.0.0".to_string(),
             seed,
@@ -742,7 +1117,7 @@ pub mod test_support {
 
     /// Deterministic PoR proof matching [`sample_challenge`].
     pub fn sample_proof(challenge: &PorChallengeV1) -> PorProofV1 {
-        PorProofV1 {
+        let mut proof = PorProofV1 {
             version: POR_PROOF_VERSION_V1,
             challenge_id: challenge.challenge_id,
             manifest_digest: challenge.manifest_digest,
@@ -766,16 +1141,27 @@ pub mod test_support {
             auth_path: vec![[9; 32], [10; 32]],
             signature: AdvertSignature {
                 algorithm: SignatureAlgorithm::Ed25519,
-                public_key: vec![11; 32],
-                signature: vec![12; 64],
+                public_key: Vec::new(),
+                signature: Vec::new(),
             },
             submitted_at: 1_700_000_100,
-        }
+        };
+        resign_sample_proof(&mut proof);
+        proof
+    }
+
+    /// Re-sign a mutated proof with the deterministic admitted provider key.
+    pub fn resign_sample_proof(proof: &mut PorProofV1) {
+        let key_pair = signing_key(0x11);
+        let payload = proof
+            .signature_payload_bytes()
+            .expect("encode proof signature payload");
+        sign_payload(&mut proof.signature, &key_pair, &payload);
     }
 
     /// Deterministic verdict helper stitched to [`sample_challenge`].
     pub fn sample_verdict(challenge: &PorChallengeV1, digest: [u8; 32]) -> AuditVerdictV1 {
-        AuditVerdictV1 {
+        let mut verdict = AuditVerdictV1 {
             version: AUDIT_VERDICT_VERSION_V1,
             manifest_digest: challenge.manifest_digest,
             provider_id: challenge.provider_id,
@@ -786,11 +1172,32 @@ pub mod test_support {
             decided_at: 1_700_000_300,
             auditor_signatures: vec![AdvertSignature {
                 algorithm: SignatureAlgorithm::Ed25519,
-                public_key: vec![13; 32],
-                signature: vec![14; 64],
+                public_key: Vec::new(),
+                signature: Vec::new(),
             }],
             metadata: Vec::new(),
-        }
+        };
+        resign_sample_verdict(&mut verdict);
+        verdict
+    }
+
+    /// Re-sign a mutated verdict with the deterministic trusted auditor key.
+    pub fn resign_sample_verdict(verdict: &mut AuditVerdictV1) {
+        let key_pair = signing_key(0x13);
+        let payload = verdict
+            .signature_payload_bytes()
+            .expect("encode verdict signature payload");
+        sign_payload(&mut verdict.auditor_signatures[0], &key_pair, &payload);
+    }
+
+    /// Admitted provider key for [`sample_proof`].
+    pub fn sample_provider_key() -> Vec<u8> {
+        signing_key(0x11).public_key().to_bytes().1.to_vec()
+    }
+
+    /// Trusted auditor set for [`sample_verdict`].
+    pub fn sample_auditor_keys() -> Vec<Vec<u8>> {
+        vec![signing_key(0x13).public_key().to_bytes().1.to_vec()]
     }
 }
 
@@ -798,17 +1205,37 @@ pub mod test_support {
 mod tests {
     use std::{convert::TryFrom, str::FromStr};
 
+    use super::*;
+    use crate::por::test_support::{
+        resign_sample_proof, resign_sample_verdict, sample_auditor_keys, sample_challenge,
+        sample_proof, sample_provider_key, sample_verdict,
+    };
     use iroha_data_model::{metadata::Metadata, name::Name};
     use sorafs_car::{PorChunkTree, PorLeaf, PorMerkleTree, PorSegment};
-    use sorafs_manifest::{
-        por::AUDIT_VERDICT_VERSION_V1,
-        provider_advert::{AdvertSignature, SignatureAlgorithm},
-    };
-
-    use super::*;
-    use crate::por::test_support::{sample_challenge, sample_proof, sample_verdict};
 
     const LARGE_LEAF_LEN: u32 = 64 * 1024;
+
+    fn next_challenge(base: &PorChallengeV1, delta: u64) -> PorChallengeV1 {
+        let mut challenge = base.clone();
+        challenge.epoch_id = challenge.epoch_id.saturating_add(delta);
+        challenge.drand_round = challenge.drand_round.saturating_add(delta);
+        challenge.issued_at = challenge.issued_at.saturating_add(delta);
+        challenge.deadline_at = challenge.deadline_at.saturating_add(delta);
+        challenge.seed = derive_challenge_seed(
+            &challenge.drand_randomness,
+            challenge.vrf_output.as_ref(),
+            &challenge.manifest_digest,
+            challenge.epoch_id,
+        );
+        challenge.challenge_id = derive_challenge_id(
+            &challenge.seed,
+            &challenge.manifest_digest,
+            &challenge.provider_id,
+            challenge.epoch_id,
+            challenge.drand_round,
+        );
+        challenge
+    }
 
     fn build_mock_tree(small_count: usize, large_count: usize) -> PorMerkleTree {
         let mut segments = Vec::with_capacity(small_count + large_count);
@@ -961,9 +1388,13 @@ mod tests {
         tracker.record_challenge(&challenge).unwrap();
         let proof = sample_proof(&challenge);
         let digest = proof.proof_digest();
-        tracker.record_proof(&proof).unwrap();
+        tracker
+            .record_proof(&proof, &sample_provider_key())
+            .unwrap();
         let verdict = sample_verdict(&challenge, digest);
-        let stats = tracker.record_verdict(&verdict).unwrap();
+        let stats = tracker
+            .record_verdict(&verdict, &sample_auditor_keys(), 1)
+            .unwrap();
         assert_eq!(
             stats,
             PorVerdictStats {
@@ -974,29 +1405,131 @@ mod tests {
     }
 
     #[test]
+    fn tracker_accepts_exact_finalized_replay_and_rejects_conflict() {
+        let tracker = PorTracker::default();
+        let challenge = sample_challenge();
+        let proof = sample_proof(&challenge);
+        let verdict = sample_verdict(&challenge, proof.proof_digest());
+        tracker.record_challenge(&challenge).unwrap();
+        tracker
+            .record_proof(&proof, &sample_provider_key())
+            .unwrap();
+        tracker
+            .record_verdict(&verdict, &sample_auditor_keys(), 1)
+            .unwrap();
+
+        tracker
+            .record_challenge(&challenge)
+            .expect("exact finalized replay is idempotent");
+        let mut conflicting = challenge.clone();
+        conflicting.deadline_at = conflicting.deadline_at.saturating_add(1);
+        assert!(matches!(
+            tracker.record_challenge(&conflicting),
+            Err(PorTrackerError::ChallengeConflict)
+        ));
+        assert!(tracker.backlog_entries().is_empty());
+    }
+
+    #[test]
+    fn tracker_refuses_pending_and_finalized_retention_exhaustion() {
+        let tracker = PorTracker::with_entry_limit(1);
+        let first = sample_challenge();
+        let second = next_challenge(&first, 1);
+        tracker.record_challenge(&first).unwrap();
+        assert!(matches!(
+            tracker.record_challenge(&second),
+            Err(PorTrackerError::PendingRetentionExhausted { limit: 1 })
+        ));
+
+        let proof = sample_proof(&first);
+        tracker
+            .record_proof(&proof, &sample_provider_key())
+            .unwrap();
+        tracker
+            .record_verdict(
+                &sample_verdict(&first, proof.proof_digest()),
+                &sample_auditor_keys(),
+                1,
+            )
+            .unwrap();
+        tracker.record_challenge(&second).unwrap();
+        let proof = sample_proof(&second);
+        tracker
+            .record_proof(&proof, &sample_provider_key())
+            .unwrap();
+        assert!(matches!(
+            tracker.record_verdict(
+                &sample_verdict(&second, proof.proof_digest()),
+                &sample_auditor_keys(),
+                1,
+            ),
+            Err(PorTrackerError::FinalizedRetentionExhausted { limit: 1 })
+        ));
+        assert!(tracker.contains_challenge(&second.challenge_id));
+    }
+
+    #[test]
+    fn tracker_checkpoint_preserves_pending_proofs_and_finalized_payloads() {
+        let source = PorTracker::with_entry_limit(4);
+        let finalized = sample_challenge();
+        let finalized_proof = sample_proof(&finalized);
+        source.record_challenge(&finalized).unwrap();
+        source
+            .record_proof(&finalized_proof, &sample_provider_key())
+            .unwrap();
+        source
+            .record_verdict(
+                &sample_verdict(&finalized, finalized_proof.proof_digest()),
+                &sample_auditor_keys(),
+                1,
+            )
+            .unwrap();
+        let pending = next_challenge(&finalized, 1);
+        let pending_proof = sample_proof(&pending);
+        source.record_challenge(&pending).unwrap();
+        source
+            .record_proof(&pending_proof, &sample_provider_key())
+            .unwrap();
+
+        let checkpoint = source.checkpoint();
+        let encoded = norito::to_bytes(&checkpoint).unwrap();
+        let checkpoint = norito::decode_from_bytes(&encoded).unwrap();
+        let restored = PorTracker::with_entry_limit(4);
+        restored.restore_checkpoint(checkpoint).unwrap();
+        restored
+            .record_challenge(&finalized)
+            .expect("restored finalized challenge is exactly idempotent");
+        let mut conflicting = finalized.clone();
+        conflicting.deadline_at = conflicting.deadline_at.saturating_add(1);
+        assert!(matches!(
+            restored.record_challenge(&conflicting),
+            Err(PorTrackerError::ChallengeConflict)
+        ));
+        restored
+            .record_verdict(
+                &sample_verdict(&pending, pending_proof.proof_digest()),
+                &sample_auditor_keys(),
+                1,
+            )
+            .unwrap();
+    }
+
+    #[test]
     fn tracker_handles_failure_verdict() {
         let tracker = PorTracker::default();
         let mut challenge = sample_challenge();
         challenge.sample_count = 1;
         challenge.sample_indices = vec![0];
         tracker.record_challenge(&challenge).unwrap();
-        let verdict = AuditVerdictV1 {
-            version: AUDIT_VERDICT_VERSION_V1,
-            manifest_digest: challenge.manifest_digest,
-            provider_id: challenge.provider_id,
-            challenge_id: challenge.challenge_id,
-            proof_digest: None,
-            outcome: AuditOutcomeV1::Failed,
-            failure_reason: Some("timeout".to_string()),
-            decided_at: 1_700_000_400,
-            auditor_signatures: vec![AdvertSignature {
-                algorithm: SignatureAlgorithm::Ed25519,
-                public_key: vec![21; 32],
-                signature: vec![22; 64],
-            }],
-            metadata: Vec::new(),
-        };
-        let stats = tracker.record_verdict(&verdict).unwrap();
+        let mut verdict = sample_verdict(&challenge, [1; 32]);
+        verdict.proof_digest = None;
+        verdict.outcome = AuditOutcomeV1::Failed;
+        verdict.failure_reason = Some("timeout".to_string());
+        verdict.decided_at = 1_700_000_400;
+        resign_sample_verdict(&mut verdict);
+        let stats = tracker
+            .record_verdict(&verdict, &sample_auditor_keys(), 1)
+            .unwrap();
         assert_eq!(
             stats,
             PorVerdictStats {
@@ -1013,7 +1546,189 @@ mod tests {
         tracker.record_challenge(&challenge).unwrap();
         let mut proof = sample_proof(&challenge);
         proof.manifest_digest = [99; 32];
-        let err = tracker.record_proof(&proof).unwrap_err();
-        matches!(err, PorTrackerError::MismatchManifest);
+        resign_sample_proof(&mut proof);
+        let err = tracker
+            .record_proof(&proof, &sample_provider_key())
+            .unwrap_err();
+        assert!(matches!(err, PorTrackerError::MismatchManifest));
+        assert_eq!(tracker.proof_digest(&challenge.challenge_id), None);
+
+        tracker
+            .record_proof(&sample_proof(&challenge), &sample_provider_key())
+            .expect("mismatched proof must not consume the challenge");
+    }
+
+    #[test]
+    fn tracker_rejects_wrong_sample_coverage_and_late_or_predated_proofs() {
+        let challenge = sample_challenge();
+        for mutation in 0..3 {
+            let tracker = PorTracker::default();
+            tracker.record_challenge(&challenge).unwrap();
+            let mut proof = sample_proof(&challenge);
+            match mutation {
+                0 => proof.samples.swap(0, 1),
+                1 => proof.submitted_at = challenge.issued_at - 1,
+                2 => proof.submitted_at = challenge.deadline_at + 1,
+                _ => unreachable!(),
+            }
+            resign_sample_proof(&mut proof);
+
+            let error = tracker
+                .record_proof(&proof, &sample_provider_key())
+                .expect_err("adversarial proof must fail");
+            assert!(
+                matches!(
+                    (mutation, &error),
+                    (0, PorTrackerError::SampleIndicesMismatch)
+                        | (1 | 2, PorTrackerError::ProofOutsideChallengeWindow { .. })
+                ),
+                "unexpected mutation result {mutation}: {error:?}"
+            );
+            assert_eq!(tracker.proof_digest(&challenge.challenge_id), None);
+        }
+    }
+
+    #[test]
+    fn tracker_rejects_cross_bound_verdict_without_consuming_challenge() {
+        let tracker = PorTracker::default();
+        let challenge = sample_challenge();
+        let proof = sample_proof(&challenge);
+        tracker.record_challenge(&challenge).unwrap();
+        tracker
+            .record_proof(&proof, &sample_provider_key())
+            .unwrap();
+        let valid = sample_verdict(&challenge, proof.proof_digest());
+
+        for mutation in 0..5 {
+            let mut forged = valid.clone();
+            match mutation {
+                0 => forged.provider_id[0] ^= 1,
+                1 => forged.manifest_digest[0] ^= 1,
+                2 => forged.proof_digest = Some([0xEE; 32]),
+                3 => forged.proof_digest = None,
+                4 => forged.decided_at = proof.submitted_at - 1,
+                _ => unreachable!(),
+            }
+            resign_sample_verdict(&mut forged);
+            assert!(
+                tracker
+                    .record_verdict(&forged, &sample_auditor_keys(), 1)
+                    .is_err()
+            );
+            assert!(
+                tracker.contains_challenge(&challenge.challenge_id),
+                "mutation {mutation} must not consume challenge state"
+            );
+            assert_eq!(
+                tracker.proof_digest(&challenge.challenge_id),
+                Some(proof.proof_digest())
+            );
+        }
+
+        tracker
+            .record_verdict(&valid, &sample_auditor_keys(), 1)
+            .expect("valid verdict remains retryable after forged attempts");
+        assert!(!tracker.contains_challenge(&challenge.challenge_id));
+    }
+
+    #[test]
+    fn tracker_enforces_provider_admission_and_auditor_threshold_at_commit_boundary() {
+        let tracker = PorTracker::default();
+        let challenge = sample_challenge();
+        let proof = sample_proof(&challenge);
+        tracker.record_challenge(&challenge).unwrap();
+
+        assert!(matches!(
+            tracker.record_proof(&proof, &[0xFE; 32]),
+            Err(PorTrackerError::ProofSignatureInvalid(
+                sorafs_manifest::por::PorSignatureVerificationError::ProviderSignerMismatch
+            ))
+        ));
+        assert_eq!(tracker.proof_digest(&challenge.challenge_id), None);
+        tracker
+            .record_proof(&proof, &sample_provider_key())
+            .expect("admitted provider proof");
+
+        let verdict = sample_verdict(&challenge, proof.proof_digest());
+        assert!(matches!(
+            tracker.record_verdict(&verdict, &[vec![0xFD; 32]], 1),
+            Err(PorTrackerError::VerdictSignatureInvalid(
+                sorafs_manifest::por::PorSignatureVerificationError::UntrustedAuditorSigner
+            ))
+        ));
+        let mut two_auditors = sample_auditor_keys();
+        two_auditors.push(vec![0xFC; 32]);
+        assert!(matches!(
+            tracker.record_verdict(&verdict, &two_auditors, 2),
+            Err(PorTrackerError::VerdictSignatureInvalid(
+                sorafs_manifest::por::PorSignatureVerificationError::InsufficientTrustedAuditorSignatures {
+                    actual: 1,
+                    required: 2,
+                }
+            ))
+        ));
+        assert!(tracker.contains_challenge(&challenge.challenge_id));
+        tracker
+            .record_verdict(&verdict, &sample_auditor_keys(), 1)
+            .expect("trusted auditor threshold");
+    }
+
+    #[test]
+    fn tracker_requires_proof_for_success_but_allows_failure_without_one() {
+        let challenge = sample_challenge();
+        let tracker = PorTracker::default();
+        tracker.record_challenge(&challenge).unwrap();
+        let success = sample_verdict(&challenge, [0x55; 32]);
+        assert!(matches!(
+            tracker.record_verdict(&success, &sample_auditor_keys(), 1),
+            Err(PorTrackerError::UnexpectedVerdictProofDigest)
+        ));
+        assert!(tracker.contains_challenge(&challenge.challenge_id));
+
+        let mut success_without_digest = success.clone();
+        success_without_digest.proof_digest = None;
+        resign_sample_verdict(&mut success_without_digest);
+        assert!(matches!(
+            tracker.record_verdict(&success_without_digest, &sample_auditor_keys(), 1),
+            Err(PorTrackerError::MissingProofForSuccessfulVerdict)
+        ));
+
+        let mut failure = success_without_digest;
+        failure.outcome = AuditOutcomeV1::Failed;
+        failure.failure_reason = Some("provider missed deadline".to_owned());
+        resign_sample_verdict(&mut failure);
+        tracker
+            .record_verdict(&failure, &sample_auditor_keys(), 1)
+            .expect("failure without proof is a valid terminal transition");
+    }
+
+    #[test]
+    fn tracker_callback_failure_is_atomic_and_retryable() {
+        let tracker = PorTracker::default();
+        let challenge = sample_challenge();
+        let proof = sample_proof(&challenge);
+        tracker.record_challenge(&challenge).unwrap();
+        tracker
+            .record_proof(&proof, &sample_provider_key())
+            .unwrap();
+        let verdict = sample_verdict(&challenge, proof.proof_digest());
+
+        let error = tracker
+            .record_verdict_with(&verdict, &sample_auditor_keys(), 1, |_| {
+                Err::<(), _>(RepairStoreError::Other(
+                    "injected durable-store failure".to_owned(),
+                ))
+            })
+            .expect_err("injected callback failure must abort transition");
+        assert!(matches!(error, PorTrackerError::RepairStore(_)));
+        assert!(tracker.contains_challenge(&challenge.challenge_id));
+        assert_eq!(
+            tracker.proof_digest(&challenge.challenge_id),
+            Some(proof.proof_digest())
+        );
+
+        tracker
+            .record_verdict(&verdict, &sample_auditor_keys(), 1)
+            .expect("verdict must succeed after durable store recovers");
     }
 }

@@ -1163,6 +1163,12 @@ pub mod sorafs {
         pub const MAX_PINS: usize = 10_000;
         /// Background Proof-of-Retrievability sampling cadence (seconds).
         pub const POR_SAMPLE_INTERVAL_SECS: u64 = 600;
+        /// Maximum replay events retained for each embedded runtime event stream.
+        pub const RUNTIME_EVENT_HISTORY_LIMIT: usize = 4_096;
+        /// Maximum entries retained in each auxiliary runtime state index.
+        pub const RUNTIME_STATE_ENTRY_LIMIT: usize = 65_536;
+        /// Maximum encoded size accepted for one auxiliary runtime checkpoint.
+        pub const RUNTIME_CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
         /// Default telemetry alias advertised by the node.
         pub fn alias() -> Option<String> {
             None
@@ -1306,18 +1312,47 @@ pub mod sorafs {
         use std::path::PathBuf;
 
         /// Enable the PoR coordinator runtime.
+        ///
         pub const ENABLED: bool = false;
         /// Length of a PoR epoch (seconds).
         pub const EPOCH_INTERVAL_SECS: u64 = 60 * 60;
         /// Response window allowed for proofs (seconds).
         pub const RESPONSE_WINDOW_SECS: u64 = 15 * 60;
+        /// Minimum number of trusted operator/auditor signatures on a verdict.
+        pub const AUDITOR_SIGNATURE_THRESHOLD: u16 = 1;
+        /// Required strict-majority drand endpoint agreement.
+        pub const DRAND_QUORUM: u16 = 2;
+        /// Maximum configured drand endpoint count.
+        pub const DRAND_MAX_ENDPOINTS: usize = 8;
+        /// Drand connection timeout in milliseconds.
+        pub const DRAND_CONNECT_TIMEOUT_MS: u64 = 3_000;
+        /// Drand request timeout in milliseconds.
+        pub const DRAND_REQUEST_TIMEOUT_MS: u64 = 5_000;
+        /// Maximum accepted drand response body size.
+        pub const DRAND_MAX_BODY_BYTES: usize = 4 * 1024;
+        /// Maximum age of a verified drand beacon.
+        pub const DRAND_MAX_BEACON_AGE_SECS: u64 = 30;
+        /// Maximum tolerated local-clock future skew.
+        pub const DRAND_MAX_FUTURE_SKEW_SECS: u64 = 3;
+        /// Deadline within an epoch for authenticated provider VRF submissions.
+        pub const VRF_SUBMISSION_DEADLINE_SECS: u64 = 5 * 60;
+        /// Maximum durable VRF submission count.
+        pub const VRF_MAX_ENTRIES: usize = 65_536;
+        /// Number of epochs for which accepted VRFs/replay state remain live.
+        pub const VRF_RETENTION_EPOCHS: u64 = 7 * 24;
+        /// Maximum accepted clock skew for signed VRF submissions.
+        pub const VRF_MAX_CLOCK_SKEW_SECS: u64 = 60;
         /// Default filesystem directory used to persist governance DAG payloads.
         pub fn governance_dir() -> PathBuf {
             PathBuf::from("./storage/sorafs/governance")
         }
-        /// Optional deterministic randomness seed (hex). `None` falls back to runtime derivation.
-        pub fn randomness_seed_hex() -> Option<String> {
-            None
+        /// Durable verified drand high-water state path.
+        pub fn drand_state_path() -> PathBuf {
+            governance_dir().join("drand-high-water.to")
+        }
+        /// Durable authenticated provider VRF state path.
+        pub fn vrf_state_path() -> PathBuf {
+            governance_dir().join("provider-vrf-state.to")
         }
     }
 
@@ -1335,6 +1370,25 @@ pub mod sorafs {
         pub const PATH_GATEWAY_REDIRECT: bool = true;
         /// Limit canonical redirects to browser HTML navigations.
         pub const REDIRECT_HTML_ONLY: bool = true;
+
+        /// Static-site host binding file defaults.
+        pub mod site_bindings {
+            use std::{num::NonZeroUsize, path::PathBuf};
+
+            use iroha_config_base::util::Bytes;
+            use nonzero_ext::nonzero;
+
+            /// Optional JSON binding document loaded and validated when Torii starts.
+            #[must_use]
+            pub fn path() -> Option<PathBuf> {
+                None
+            }
+
+            /// Maximum encoded binding-document size accepted at startup.
+            pub const MAX_BYTES: Bytes<u64> = Bytes(1024 * 1024);
+            /// Maximum number of named host bindings accepted at startup.
+            pub const MAX_SITES: NonZeroUsize = nonzero!(1024usize);
+        }
 
         /// Rate-limiting defaults applied to gateway clients.
         pub mod rate_limit {
@@ -2145,6 +2199,12 @@ pub mod torii {
     }
     /// SoraFS discovery disabled by default (iroha2 builds).
     pub const SORAFS_DISCOVERY_ENABLED: bool = false;
+    /// Maximum number of admitted provider replay high-water marks persisted by Torii.
+    pub const SORAFS_DISCOVERY_REPLAY_MAX_ENTRIES: NonZeroUsize = nonzero!(65_536usize);
+    /// Default path for the durable SoraFS provider advert replay checkpoint.
+    pub fn sorafs_discovery_replay_checkpoint_path() -> PathBuf {
+        PathBuf::from("sorafs_discovery/provider_advert_replay.to")
+    }
     /// Maximum SoraFS capacity declarations per provider per hour.
     pub const SORAFS_QUOTA_DECLARATION_MAX_EVENTS: Option<u32> = Some(4);
     /// Rolling window (seconds) for SoraFS capacity declarations.
@@ -2338,9 +2398,9 @@ pub mod nexus {
     pub mod autoscale {
         /// Whether consensus-driven lane autoscaling is enabled.
         pub const ENABLED: bool = false;
-        /// Minimum active lane count.
+        /// Inclusive lower lane-id bound reserved for autoscale-managed elastic lanes.
         pub const MIN_LANES: u32 = 1;
-        /// Maximum active lane count.
+        /// Exclusive upper lane-id bound reserved for autoscale-managed elastic lanes.
         pub const MAX_LANES: u32 = 8;
         /// Target block interval used by the autoscaler (milliseconds).
         pub const TARGET_BLOCK_MS: u64 = 1_000;
@@ -2935,11 +2995,21 @@ pub mod sumeragi {
     use iroha_crypto::Algorithm;
     use nonzero_ext::nonzero;
 
-    /// Number of collectors to use (K). Default is 1; small topologies still widen via
-    /// `collector_fanout_floor()` when quorum-sized collector sets are required.
+    /// Consensus wire/state-machine protocol version required by this release.
+    pub const PROTOCOL_VERSION: u32 = 2;
+    /// Absolute Sumeragi v2 round deadline in milliseconds.
+    pub const ROUND_TIMEOUT_MS: u64 = 10_000;
+    /// Derive the critical-message retransmission interval as `round_timeout / 5`.
+    pub const RETRANSMIT_DIVISOR: u32 = 5;
+    /// Smallest serialized reducer FIFO that leaves distinct normal, progress,
+    /// and completion regions under the v2 reserve ratios.
+    pub const V2_MIN_RUNTIME_COMMAND_CAPACITY: usize = 8;
+    /// Aggregate ready-body byte budget as a multiple of the per-body bound.
+    pub const V2_READY_BODY_BYTE_MULTIPLIER: u64 = 2;
+
+    /// Legacy collector count retained while the v1 actor is removed; v2 ignores it.
     pub const COLLECTORS_K: usize = 1;
-    /// Redundant send fanout (r): how many distinct collectors a validator sends to over time.
-    /// Default targets 2f+1 for a 4-peer topology (r=3).
+    /// Legacy collector fanout retained for archival/status scaffolding; v2 ignores it.
     pub const COLLECTORS_REDUNDANT_SEND_R: u8 = 3;
     /// Extra topology fanout alongside collector routing (0 = disabled).
     pub const COLLECTORS_PARALLEL_TOPOLOGY_FANOUT: usize = 1;
@@ -2947,8 +3017,10 @@ pub mod sumeragi {
     pub const FANOUT_LARGE_SET_THRESHOLD: u32 = 256;
     /// Number of finalized blocks to inspect when scoring validator activity.
     pub const FANOUT_ACTIVITY_LOOKBACK_BLOCKS: u32 = 128;
-    /// Optional cap on transactions per block (None = unlimited).
-    pub const BLOCK_MAX_TRANSACTIONS: Option<NonZeroUsize> = None;
+    /// Required v2 cap on transactions per block.
+    pub const V2_BLOCK_MAX_TRANSACTIONS: NonZeroUsize = nonzero!(512_usize);
+    /// Legacy optional view of [`V2_BLOCK_MAX_TRANSACTIONS`].
+    pub const BLOCK_MAX_TRANSACTIONS: Option<NonZeroUsize> = Some(V2_BLOCK_MAX_TRANSACTIONS);
     /// Optional cap on VM-heavy transactions per block (None = unlimited).
     pub const BLOCK_MAX_IVM_TRANSACTIONS: Option<NonZeroUsize> = None;
     /// Commit-time threshold (ms) for applying fast-finality proposal caps.
@@ -2957,8 +3029,10 @@ pub mod sumeragi {
     pub const FAST_FINALITY_MAX_TRANSACTIONS: Option<NonZeroUsize> = None;
     /// Optional cap on block gas limit when commit time is <= fast-finality threshold.
     pub const FAST_FINALITY_GAS_LIMIT_PER_BLOCK: Option<NonZeroU64> = None;
-    /// Optional cap on payload bytes per block when RBC is disabled (None = unlimited).
-    pub const BLOCK_MAX_PAYLOAD_BYTES: Option<NonZeroUsize> = None;
+    /// Required v2 canonical body bound.
+    pub const V2_BLOCK_MAX_PAYLOAD_BYTES: NonZeroUsize = nonzero!(16_usize * 1024 * 1024);
+    /// Legacy optional view of [`V2_BLOCK_MAX_PAYLOAD_BYTES`].
+    pub const BLOCK_MAX_PAYLOAD_BYTES: Option<NonZeroUsize> = Some(V2_BLOCK_MAX_PAYLOAD_BYTES);
     /// Multiplier applied to the proposal queue scan budget (relative to max tx per block).
     pub const PROPOSAL_QUEUE_SCAN_MULTIPLIER: NonZeroUsize = nonzero!(4_usize);
     /// Maximum DA commitments (blobs) permitted in a single block.
@@ -3021,8 +3095,8 @@ pub mod sumeragi {
     pub const RECOVERY_EXACT_BODY_FETCH_RETRY_FLOOR_MS: u64 = 25;
     /// Default runtime consensus mode: "permissioned".
     pub const CONSENSUS_MODE: &str = "permissioned";
-    /// Default: allow runtime consensus mode flips driven by on-chain parameters.
-    pub const MODE_FLIP_ENABLED: bool = true;
+    /// Runtime mode changes are disabled; mode is fixed by the finalized height context.
+    pub const MODE_FLIP_ENABLED: bool = false;
     /// Default: data availability (RBC + availability QC gating) disabled.
     pub const DA_ENABLED: bool = true;
     /// Multiplier for DA commit-quorum timeout.
@@ -3164,8 +3238,8 @@ pub mod sumeragi {
     pub const VRF_COMMIT_DEADLINE_OFFSET: u64 = 100;
     /// Default VRF reveal deadline offset from epoch start (blocks).
     pub const VRF_REVEAL_DEADLINE_OFFSET: u64 = 140;
-    /// Use stake snapshot provider for epoch validator roster (NPoS). Default: false.
-    pub const USE_STAKE_SNAPSHOT_ROSTER: bool = false;
+    /// Use the finalized stake snapshot for the epoch validator roster (mandatory in v2 NPoS).
+    pub const USE_STAKE_SNAPSHOT_ROSTER: bool = true;
     /// Default proof policy: off (no additional validity gating beyond consensus).
     pub const PROOF_POLICY: &str = "off";
     /// Default zk parent-proving depth (0 disables zk finality gate).
@@ -3185,7 +3259,7 @@ pub mod sumeragi {
     /// Cooldown (ms) before adaptive mitigation may re-apply or reset after a trigger.
     pub const ADAPTIVE_COOLDOWN_MS: u64 = 5_000;
     /// Enable volatile Sumeragi resilience tuning by default.
-    pub const RESILIENCE_ENABLED: bool = true;
+    pub const RESILIENCE_ENABLED: bool = false;
     /// Maximum collector redundancy used while resilience mitigation is active.
     pub const RESILIENCE_MAX_REDUNDANT_SEND_R: u8 = 13;
     /// Maximum extra topology fan-out used while resilience mitigation is active.

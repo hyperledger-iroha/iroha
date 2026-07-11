@@ -4,7 +4,7 @@ use base64::Engine as _;
 use iroha_core::zk::confidential_v2;
 
 fn print_record(kind: &str, version: u32) -> Result<(), String> {
-    let (name, record) = match kind {
+    let (name, mut record) = match kind {
         "transfer" => (
             "vk_transfer",
             confidential_v2::confidential_transfer_v2_vk_record("vk_transfer", version)?,
@@ -23,10 +23,15 @@ fn print_record(kind: &str, version: u32) -> Result<(), String> {
             );
         }
     };
+    if kind == "unshield-v3" {
+        record.namespace = iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE.to_owned();
+    }
     let key = record
         .key
         .as_ref()
         .ok_or_else(|| "confidential v2 record did not include vk bytes".to_owned())?;
+    let record_norito = norito::to_bytes(&record)
+        .map_err(|err| format!("failed to encode verifier record as Norito: {err}"))?;
     println!(
         concat!(
             "{{\n",
@@ -39,7 +44,8 @@ fn print_record(kind: &str, version: u32) -> Result<(), String> {
             "  \"gas_schedule_id\": \"{}\",\n",
             "  \"vk_len\": {},\n",
             "  \"max_proof_bytes\": {},\n",
-            "  \"vk_bytes\": \"{}\"\n",
+            "  \"vk_bytes\": \"{}\",\n",
+            "  \"record_norito_base64\": \"{}\"\n",
             "}}"
         ),
         name,
@@ -51,6 +57,7 @@ fn print_record(kind: &str, version: u32) -> Result<(), String> {
         record.vk_len,
         record.max_proof_bytes,
         base64::engine::general_purpose::STANDARD.encode(&key.bytes),
+        base64::engine::general_purpose::STANDARD.encode(record_norito),
     );
     Ok(())
 }

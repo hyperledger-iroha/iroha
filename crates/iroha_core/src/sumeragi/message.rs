@@ -3,7 +3,10 @@ use std::{io::Write, sync::Arc};
 
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
-    block::{BlockHeader, BlockSignature, SignedBlock, consensus::SumeragiMembershipStatus},
+    block::{
+        BlockHeader, BlockSignature, SignedBlock, consensus::SumeragiMembershipStatus,
+        consensus_v2::ConsensusMessageV2,
+    },
     peer::PeerId,
 };
 use iroha_logger::prelude::*;
@@ -65,6 +68,18 @@ pub enum BlockMessage {
     Proposal(#[skip_try_from] super::consensus::Proposal),
     /// Standalone lane-local block proposal.
     LaneBlockProposal(#[skip_try_from] super::consensus::LaneBlockProposalV1),
+    /// Producer-authenticated executable payload for a standalone lane block.
+    LaneExecutablePayload(#[skip_try_from] crate::lane_consensus::LaneExecutablePayloadV1),
+    /// Global-proposer handoff of exact payload bytes to the selected lane committee.
+    LaneExecutablePayloadHandoff(
+        #[skip_try_from] crate::lane_consensus::LaneExecutablePayloadHandoffV1,
+    ),
+    /// Individual lane-committee vote authorizing the next lane-local view.
+    LaneBlockNewViewVote(#[skip_try_from] crate::lane_consensus::LaneBlockNewViewVoteV1),
+    /// Aggregate lane-committee certificate authorizing the next lane-local view.
+    LaneBlockNewViewCertificate(
+        #[skip_try_from] crate::lane_consensus::LaneBlockNewViewCertificateV1,
+    ),
     /// Commit vote (Prepare/Commit/NewView) carrying a BLS signature.
     QcVote(#[skip_try_from] super::consensus::QcVote),
     /// Commit certificate (Prepare/Commit/NewView) aggregating BLS signatures.
@@ -73,6 +88,12 @@ pub enum BlockMessage {
     LaneBlockVote(#[skip_try_from] crate::lane_consensus::LaneBlockVoteV1),
     /// Standalone lane-local block QC aggregating lane-validator BLS signatures.
     LaneBlockQc(#[skip_try_from] super::consensus::LaneBlockQcV1),
+    /// Explicitly versioned global Sumeragi v2 message.
+    ///
+    /// This variant is appended so legacy v1 discriminants remain stable for
+    /// archival decoding. Live protocol-v2 consensus rejects the legacy global
+    /// Proposal/QC/RBC variants above.
+    V2(#[skip_try_from] ConsensusMessageV2),
 }
 
 impl BlockMessage {
@@ -1118,6 +1139,7 @@ mod tests {
         let mut descriptor = consensus::LaneBlockDescriptorV1 {
             lane_id: LaneId::new(u32::from(seed % 11) + 1),
             dataspace_id: DataSpaceId::new(u64::from(seed % 13) + 1),
+            lane_incarnation: Hash::new(format!("message-lane-incarnation-{seed}").as_bytes()),
             proposal_height: u64::from(seed).saturating_add(1),
             previous_lane_block_height: 0,
             previous_lane_block_descriptor_hash: None,
@@ -1151,6 +1173,7 @@ mod tests {
             .expect("sign lane-block fixture vote");
         let vote = crate::lane_consensus::LaneBlockVoteV1 {
             body: body.clone(),
+            payload_availability_vote: None,
             signer: validator,
             bls_signature: signature.payload().to_vec(),
         };
@@ -1161,6 +1184,7 @@ mod tests {
             validator_set,
             signers_bitmap: vec![1],
             bls_aggregate_signature: vote.bls_signature.clone(),
+            payload_availability_qc: None,
         };
         (proposal, vote, qc)
     }

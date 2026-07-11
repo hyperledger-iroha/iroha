@@ -25,8 +25,9 @@ use iroha_data_model::{
         pipeline::PipelineEventBox,
         stream::EventMessage,
     },
-    isi::SetKeyValue,
-    nexus::LaneLifecyclePlan,
+    isi::{SetKeyValue, SetParameter},
+    nexus::{LaneLifecycleParameterV1, LaneLifecyclePlan, LaneLifecycleStatusV1},
+    parameter::Parameter,
     prelude::{ChainId, DomainId},
     query::{QueryOutput, SignedQuery},
     transaction::{SignedTransaction, TransactionBuilder},
@@ -58,7 +59,7 @@ use tokio_tungstenite::{
 };
 use url::Url;
 
-use crate::compose::SigningAuthority;
+use crate::compose::{InstructionPermission, SigningAuthority};
 
 const NORITO_MIME_TYPE: &str = "application/x-norito";
 
@@ -587,6 +588,42 @@ impl LocalMcpProbeResult {
 }
 
 const SMOKE_TTL: Duration = Duration::from_secs(30);
+
+fn build_lane_lifecycle_transaction(
+    chain_id: &str,
+    signer: &SigningAuthority,
+    status: &LaneLifecycleStatusV1,
+    plan: LaneLifecyclePlan,
+) -> ToriiResult<SignedTransaction> {
+    if !signer.allows_permission(InstructionPermission::SetParameters) {
+        return Err(ToriiError::Decode(format!(
+            "signer `{}` is not configured with CanSetParameters",
+            signer.label()
+        )));
+    }
+    if !status.nexus_enabled {
+        return Err(ToriiError::Decode(
+            "Nexus lane lifecycle is disabled on the serving node".to_owned(),
+        ));
+    }
+    let catalog = status
+        .validate()
+        .map_err(|err| ToriiError::Decode(format!("invalid lane lifecycle status: {err}")))?;
+    let custom = LaneLifecycleParameterV1::new(&catalog, &status.incarnations, plan)
+        .map_err(|err| ToriiError::Decode(format!("invalid lane incarnation binding: {err}")))?
+        .into_custom_parameter();
+    let mut builder = TransactionBuilder::new(
+        ChainId::from(chain_id.to_owned()),
+        signer.account_id().clone(),
+    )
+    .with_instructions([SetParameter::new(Parameter::Custom(custom))]);
+    builder.set_ttl(SMOKE_TTL);
+    builder
+        .try_sign(signer.key_pair().private_key())
+        .map_err(|err| {
+            ToriiError::Decode(format!("failed to sign lane lifecycle transaction: {err}"))
+        })
+}
 
 fn build_readiness_smoke_transaction(
     chain_id: &str,
@@ -2441,7 +2478,7 @@ impl ToriiClient {
         self.http_endpoint("configuration")
     }
 
-    /// URL of the `/v1/nexus/lifecycle` endpoint.
+    /// URL of the read-only `/v1/nexus/lifecycle` status endpoint.
     pub fn nexus_lifecycle_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint("v1/nexus/lifecycle")
     }
@@ -2779,35 +2816,88 @@ impl ToriiClient {
         LocalMcpProbeResult::from_documents(&capabilities, &initialize, &tools)
     }
 
-    /// Apply a Nexus lane lifecycle plan via Torii.
-    pub async fn apply_lane_lifecycle(&self, plan: &LaneLifecyclePlan) -> ToriiResult<json::Value> {
+    /// Fetch and validate the exact current Nexus lane catalog commitment.
+    pub async fn fetch_lane_lifecycle_status(&self) -> ToriiResult<LaneLifecycleStatusV1> {
         let url = self.nexus_lifecycle_endpoint()?;
-        let payload = json::to_vec(plan).map_err(|err| ToriiError::Decode(err.to_string()))?;
         let response = self
             .http
-            .post(url)
-            .header("Content-Type", "application/json")
-            .body(payload)
+            .get(url)
+            .header(reqwest::header::ACCEPT, NORITO_MIME_TYPE)
             .send()
             .await?;
-
-        if response.status().is_success() {
-            let bytes = response.bytes().await?;
-            if bytes.is_empty() {
-                return Ok(json::Value::Object(json::Map::new()));
-            }
-            return json::from_slice_value(bytes.as_ref())
-                .map_err(|err| ToriiError::Decode(err.to_string()));
+        if !response.status().is_success() {
+            let status = response.status();
+            let reject_code = reject_code_from_headers(response.headers());
+            let body = response.bytes().await?;
+            let message = error_message_from_body(body.as_ref());
+            return Err(ToriiError::UnexpectedStatus {
+                status,
+                reject_code,
+                message,
+            });
         }
-        let status = response.status();
-        let reject_code = reject_code_from_headers(response.headers());
         let body = response.bytes().await?;
-        let message = error_message_from_body(body.as_ref());
-        Err(ToriiError::UnexpectedStatus {
-            status,
-            reject_code,
-            message,
-        })
+        let status: LaneLifecycleStatusV1 = decode_norito_with_alignment(body.as_ref())?;
+        status
+            .validate()
+            .map_err(|err| ToriiError::Decode(format!("invalid lane lifecycle status: {err}")))?;
+        Ok(status)
+    }
+
+    /// Submit and wait for a consensus-replayed Nexus lane lifecycle transaction.
+    ///
+    /// The status commitment is fetched once. A stale catalog or missing
+    /// `CanSetParameters` permission is surfaced as a transaction rejection and
+    /// is never silently retried against a different topology.
+    pub async fn apply_lane_lifecycle(
+        &self,
+        chain_id: &str,
+        signer: &SigningAuthority,
+        plan: LaneLifecyclePlan,
+    ) -> ToriiResult<SmokeCommitSnapshot> {
+        let status = self.fetch_lane_lifecycle_status().await?;
+        if !status.nexus_enabled {
+            return Err(ToriiError::Decode(
+                "Nexus lane lifecycle is disabled on the serving node".to_owned(),
+            ));
+        }
+        let current_catalog = status
+            .validate()
+            .map_err(|err| ToriiError::Decode(format!("invalid lane lifecycle status: {err}")))?;
+        let expected_catalog = current_catalog
+            .apply_lifecycle(&plan)
+            .map_err(|err| ToriiError::Decode(format!("invalid lane lifecycle plan: {err}")))?;
+        let previous_incarnation_root = status.incarnation_root;
+        let transaction = build_lane_lifecycle_transaction(chain_id, signer, &status, plan)?;
+        let options = SmokeCommitOptions::default();
+        let committed = self
+            .submit_and_wait_for_commit(&transaction, options)
+            .await?;
+
+        // Block persistence precedes WSV publication. Do not report success to
+        // storage-reset callers until the committed catalog and its fresh
+        // incarnation root are visible through the state-generation snapshot.
+        let deadline = tokio::time::Instant::now() + options.timeout;
+        loop {
+            let observed = self.fetch_lane_lifecycle_status().await?;
+            let observed_catalog = observed.validate().map_err(|err| {
+                ToriiError::Decode(format!("invalid post-commit lifecycle status: {err}"))
+            })?;
+            if observed_catalog == expected_catalog
+                && observed.incarnation_root != previous_incarnation_root
+            {
+                return Ok(committed);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(ToriiError::Timeout {
+                    context: format!(
+                        "lane lifecycle apply {} (committed at block {})",
+                        committed.tx_hash, committed.block_height
+                    ),
+                });
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
     }
 
     /// Fetch the exposed metrics payload as plain text (Prometheus format).
@@ -5077,7 +5167,7 @@ mod tests {
             time::{TimeEvent, TimeInterval},
         },
         isi::InstructionBox,
-        nexus::LaneLifecyclePlan,
+        nexus::{LaneCatalog, LaneLifecyclePlan, LaneLifecycleStatusV1},
         peer::PeerId,
         query::{
             QueryOutput, QueryOutputBatchBoxTuple, QueryRequest, executor::FindExecutorDataModel,
@@ -5126,6 +5216,16 @@ mod tests {
                 );
                 None
             })
+    }
+
+    fn lifecycle_status(enabled: bool) -> LaneLifecycleStatusV1 {
+        let catalog = LaneCatalog::default();
+        let incarnations = std::collections::BTreeMap::from([(
+            iroha_data_model::nexus::LaneId::SINGLE,
+            Hash::new(b"mochi-lifecycle-status-incarnation"),
+        )]);
+        LaneLifecycleStatusV1::new(enabled, &catalog, &incarnations)
+            .expect("valid lifecycle status")
     }
 
     fn spawn_status_stub(
@@ -6202,7 +6302,7 @@ mod tests {
         };
 
         SumeragiStatusWire {
-            mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
+            mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
             staged_mode_tag: None,
             staged_mode_activation_height: None,
             mode_activation_lag_blocks: None,
@@ -8077,44 +8177,44 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn apply_lane_lifecycle_returns_json() {
+    async fn fetch_lane_lifecycle_status_returns_valid_norito() {
         let Some(server) = try_start_mock_server() else {
             return;
         };
+        let expected = lifecycle_status(true);
+        let body = norito::to_bytes(&expected).expect("encode lifecycle status");
         let mock = server.mock(|when, then| {
-            when.method(POST)
+            when.method(GET)
                 .path("/v1/nexus/lifecycle")
-                .header("content-type", "application/json");
+                .header("accept", NORITO_MIME_TYPE);
             then.status(200)
-                .header("content-type", "application/json")
-                .body(r#"{"ok":true}"#);
+                .header("content-type", NORITO_MIME_TYPE)
+                .body(body);
         });
 
         let client = ToriiClient::new(server.url("/")).expect("client");
-        let plan = LaneLifecyclePlan::default();
-        let value = client
-            .apply_lane_lifecycle(&plan)
+        let actual = client
+            .fetch_lane_lifecycle_status()
             .await
-            .expect("lifecycle response");
+            .expect("lifecycle status");
 
         mock.assert();
-        assert_eq!(value["ok"].as_bool(), Some(true));
+        assert_eq!(actual, expected);
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn apply_lane_lifecycle_reports_unexpected_status() {
+    async fn fetch_lane_lifecycle_status_reports_unexpected_status() {
         let Some(server) = try_start_mock_server() else {
             return;
         };
         let mock = server.mock(|when, then| {
-            when.method(POST).path("/v1/nexus/lifecycle");
+            when.method(GET).path("/v1/nexus/lifecycle");
             then.status(503);
         });
 
         let client = ToriiClient::new(server.url("/")).expect("client");
-        let plan = LaneLifecyclePlan::default();
         let err = client
-            .apply_lane_lifecycle(&plan)
+            .fetch_lane_lifecycle_status()
             .await
             .expect_err("non-success response should error");
 
@@ -8125,6 +8225,74 @@ mod tests {
             }
             other => panic!("expected UnexpectedStatus, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn lane_lifecycle_transaction_binds_status_and_requires_permission() {
+        let status = lifecycle_status(true);
+        let alice = crate::compose::development_signing_authorities()
+            .iter()
+            .find(|signer| signer.allows_permission(InstructionPermission::SetParameters))
+            .expect("development CanSetParameters signer");
+        let transaction = build_lane_lifecycle_transaction(
+            "mochi-test",
+            alice,
+            &status,
+            LaneLifecyclePlan {
+                additions: Vec::new(),
+                retire: vec![iroha_data_model::nexus::LaneId::SINGLE],
+            },
+        )
+        .expect("build signed lifecycle transaction");
+        transaction
+            .verify_signature()
+            .expect("lifecycle signature verifies");
+        let iroha_data_model::transaction::Executable::Instructions(instructions) =
+            transaction.instructions()
+        else {
+            panic!("expected instruction executable");
+        };
+        let set_parameter = instructions[0]
+            .as_any()
+            .downcast_ref::<SetParameter>()
+            .expect("SetParameter instruction");
+        let Parameter::Custom(custom) = set_parameter.inner() else {
+            panic!("expected custom lifecycle parameter");
+        };
+        let payload = LaneLifecycleParameterV1::from_custom_parameter(custom)
+            .expect("decode lifecycle parameter")
+            .expect("matching lifecycle parameter");
+        assert_eq!(payload.expected_catalog_hash, status.catalog_hash);
+
+        let bob = crate::compose::development_signing_authorities()
+            .iter()
+            .find(|signer| !signer.allows_permission(InstructionPermission::SetParameters))
+            .expect("restricted development signer");
+        let error = build_lane_lifecycle_transaction(
+            "mochi-test",
+            bob,
+            &status,
+            LaneLifecyclePlan::default(),
+        )
+        .expect_err("signer without CanSetParameters must be rejected locally");
+        assert!(error.to_string().contains("CanSetParameters"));
+    }
+
+    #[test]
+    fn lane_lifecycle_transaction_rejects_forged_status_hash() {
+        let mut status = lifecycle_status(true);
+        status.catalog_hash = Hash::prehashed([0xCC; Hash::LENGTH]);
+        let signer = crate::compose::development_signing_authorities()
+            .first()
+            .expect("development signer");
+        let error = build_lane_lifecycle_transaction(
+            "mochi-test",
+            signer,
+            &status,
+            LaneLifecyclePlan::default(),
+        )
+        .expect_err("forged status hash must fail closed");
+        assert!(error.to_string().contains("catalog hash mismatch"));
     }
 
     #[tokio::test(flavor = "current_thread")]

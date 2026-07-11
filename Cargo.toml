@@ -19,6 +19,7 @@ docker_bins = ["iroha", "irohad", "iroha3", "iroha3d", "iroha2", "iroha2d", "kag
 
 [workspace.dependencies]
 iroha_core = { path = "crates/iroha_core" }
+iroha_sumeragi_core = { path = "crates/iroha_sumeragi_core" }
 
 iroha_torii = { path = "crates/iroha_torii", default-features = false, features = ["app_api", "transparent_api", "ws_integration_tests", "connect", "circuit-params", "zk-halo2", "zk-halo2-ipa", "zk-stark", "ipa-commitment"] }
 iroha_torii_shared = { path = "crates/iroha_torii_shared" }
@@ -202,6 +203,7 @@ rust.unknown_lints = "warn"
 rust.single_use_lifetimes = "warn"
 rust.unsafe_op_in_unsafe_fn = "deny"
 rust.unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(verus_only)',
     # Tracked upstream issue: https://github.com/hyperledger-iroha/iroha/issues/3102
     'cfg(feature, values("adaptive-telemetry"))',
     'cfg(feature, values("adaptive-telemetry-log"))',

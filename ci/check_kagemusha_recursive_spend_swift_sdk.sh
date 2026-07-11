@@ -4,6 +4,13 @@ set -euo pipefail
 ROOT_DIR="${KAGEMUSHA_RECURSIVE_SPEND_SWIFT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 SWIFTC_BIN="${KAGEMUSHA_RECURSIVE_SPEND_SWIFTC_BIN:-swiftc}"
 SWIFT_BIN="${KAGEMUSHA_RECURSIVE_SPEND_SWIFT_BIN:-swift}"
+SWIFT_TEST_ARGS=()
+if [[ -n "${KAGEMUSHA_RECURSIVE_SPEND_SWIFT_SCRATCH_PATH:-}" ]]; then
+  SWIFT_TEST_ARGS+=(
+    --scratch-path
+    "${KAGEMUSHA_RECURSIVE_SPEND_SWIFT_SCRATCH_PATH}"
+  )
+fi
 
 cd "${ROOT_DIR}"
 "${SWIFTC_BIN}" --version
@@ -14,6 +21,7 @@ cd "${ROOT_DIR}"
   IrohaSwift/Sources/IrohaSwift/CanonicalRequest.swift \
   IrohaSwift/Sources/IrohaSwift/Crypto.swift \
   IrohaSwift/Sources/IrohaSwift/NativeBridge.swift \
+  IrohaSwift/Sources/IrohaSwift/Norito.swift \
   IrohaSwift/Sources/IrohaSwift/ConnectAsyncSequence.swift \
   IrohaSwift/Sources/IrohaSwift/ConnectClient.swift \
   IrohaSwift/Sources/IrohaSwift/ConnectCodec.swift \
@@ -32,6 +40,7 @@ cd "${ROOT_DIR}"
   IrohaSwift/Sources/IrohaSwift/ConnectSession.swift \
   IrohaSwift/Sources/IrohaSwift/NexusAppClient.swift \
   IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift \
+  IrohaSwift/Sources/IrohaSwift/PrivacyConfidentialWitness.swift \
   IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift \
   IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteProver.swift \
   IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteV2Prover.swift \
@@ -77,6 +86,7 @@ cd "${ROOT_DIR}"
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/ConnectAsyncSequenceTests.swift \
@@ -102,6 +112,10 @@ cd "${ROOT_DIR}"
   IrohaSwift/Tests/IrohaSwiftTests/NexusAppClientTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/PrivacyConfidentialWitnessTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/ConfidentialUnshieldRedeemNativeTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKConfidentialUnshieldWorkflowTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/NoritoTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/ToriiCanonicalRequestTests.swift \
@@ -125,15 +139,40 @@ cd "${ROOT_DIR}"
 
 (
   cd IrohaSwift
-  "${SWIFT_BIN}" test --filter ToriiClientTests/testGetOfflineReadiness
+  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter ToriiClientTests/testGetOfflineReadiness
 )
 
 (
   cd IrohaSwift
-  "${SWIFT_BIN}" test --filter 'ToriiClientTests/testCanonicalQuerySelectorsRejectSurroundingWhitespace|ToriiClientTests/testAccountAssetQueryHelpersRejectSurroundingWhitespace|ToriiClientTests/testGetAssetsEncodesScopeSelectorFilter|ToriiClientTests/testGetAssetsRejectsPaddedScopeBeforeNetwork|ToriiClientTests/testGetUaidPortfolioRejectsPaddedLiteralBeforeNetwork'
+  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter 'ToriiClientTests/testCanonicalQuerySelectorsRejectSurroundingWhitespace|ToriiClientTests/testAccountAssetQueryHelpersRejectSurroundingWhitespace|ToriiClientTests/testGetAssetsEncodesScopeSelectorFilter|ToriiClientTests/testGetAssetsRejectsPaddedScopeBeforeNetwork|ToriiClientTests/testGetUaidPortfolioRejectsPaddedLiteralBeforeNetwork'
 )
 
 (
   cd IrohaSwift
-  "${SWIFT_BIN}" test --filter OfflineNoteRedeemPlannerTests
+  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter OfflineNoteRedeemPlannerTests
+)
+
+(
+  cd IrohaSwift
+  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter PrivacyConfidentialWitnessTests
+)
+
+(
+  cd IrohaSwift
+  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter KagemushaTopUpParityTests
+)
+
+(
+  cd IrohaSwift
+  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter IrohaSDKConfidentialUnshieldWorkflowTests
+)
+
+(
+  cd IrohaSwift
+  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter 'ToriiClientTests/testGetVerifyingKeyAsync|ToriiClientTests/testVerifyingKeyDetailConvertsExactNoritoRecordForKagemusha|ToriiClientTests/testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64'
+)
+
+(
+  cd IrohaSwift
+  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter NoritoTests
 )

@@ -16,17 +16,18 @@ use sorafs_manifest::{
     ENDPOINT_ATTESTATION_VERSION_V1, EndpointAdmissionV1, EndpointAttestationKind,
     EndpointAttestationV1, EndpointKind, PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
     PROVIDER_ADMISSION_PROPOSAL_VERSION_V1, PROVIDER_ADMISSION_RENEWAL_VERSION_V1,
-    PROVIDER_ADMISSION_REVOCATION_VERSION_V1, ProviderAdmissionEnvelopeV1,
-    ProviderAdmissionProposalV1, ProviderAdmissionRenewalV1, ProviderAdmissionRevocationV1,
-    ProviderAdvertBodyV1, ProviderAdvertV1, StakePointer, StreamBudgetV1, TransportHintV1,
-    TransportProtocol, compute_advert_body_digest, compute_envelope_digest,
-    compute_proposal_digest, provider_advert::ProviderCapabilitySoranetPqV1,
-    verify_advert_against_record, verify_revocation_signatures,
+    PROVIDER_ADMISSION_REVOCATION_VERSION_V1, ProviderAdmissionCouncilPolicy,
+    ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1, ProviderAdmissionRenewalV1,
+    ProviderAdmissionRevocationV1, ProviderAdvertBodyV1, ProviderAdvertV1, ProviderVrfPublicKeyV1,
+    StakePointer, StreamBudgetV1, TransportHintV1, TransportProtocol, compute_advert_body_digest,
+    compute_envelope_authorization_digest, compute_envelope_digest, compute_proposal_digest,
+    provider_advert::ProviderCapabilitySoranetPqV1, verify_advert_against_record,
+    verify_revocation_signatures_untrusted_signers,
 };
 
 use super::{
-    chunker_registry, parse_hex_array, parse_hex_vec, parse_u16, parse_u64, read_file_bytes,
-    write_binary, write_json,
+    chunker_registry, parse_hex_array, parse_hex_vec, parse_profile_handle, parse_u16, parse_u64,
+    read_file_bytes, write_binary, write_json,
 };
 
 const PROPOSAL_VERSION: u8 = PROVIDER_ADMISSION_PROPOSAL_VERSION_V1;
@@ -68,12 +69,15 @@ fn run_proposal(args: Vec<String>) -> Result<(), String> {
             .ok_or_else(|| format!("expected key=value option, got: {arg}"))?;
         match key {
             "--provider-id" => opts.provider_id = Some(parse_hex_array(value)?),
-            "--chunker-profile" => opts.profile_handle = Some(value.trim().to_string()),
+            "--chunker-profile" => {
+                opts.profile_handle = Some(parse_profile_handle(value, "--chunker-profile")?)
+            }
             "--stake-pool-id" => opts.stake_pool_id = Some(parse_hex_array(value)?),
             "--stake-amount" => opts.stake_amount = Some(parse_u128(value)?),
             "--advert-key" => opts.advert_key = Some(parse_hex_array(value)?),
+            "--por-vrf-key" => opts.por_vrf_key = Some(parse_provider_vrf_key(value)?),
             "--jurisdiction" | "--jurisdiction-code" => {
-                opts.jurisdiction = Some(value.trim().to_ascii_uppercase())
+                opts.jurisdiction = Some(parse_jurisdiction_code(value)?)
             }
             "--contact-uri" => opts.contact_uri = Some(value.to_string()),
             "--capability" => opts.capabilities.push(parse_capability(value)?),
@@ -150,6 +154,9 @@ fn run_proposal(args: Vec<String>) -> Result<(), String> {
     let advert_key = opts
         .advert_key
         .ok_or_else(|| "missing option --advert-key".to_string())?;
+    let por_vrf_key = opts
+        .por_vrf_key
+        .ok_or_else(|| "missing option --por-vrf-key".to_string())?;
     let jurisdiction = opts
         .jurisdiction
         .ok_or_else(|| "missing option --jurisdiction".to_string())?;
@@ -197,6 +204,7 @@ fn run_proposal(args: Vec<String>) -> Result<(), String> {
         capabilities: opts.capabilities,
         endpoints,
         advert_key,
+        por_vrf_key,
         jurisdiction_code: jurisdiction,
         contact_uri: opts.contact_uri,
         stream_budget: opts.stream_budget,
@@ -347,11 +355,25 @@ fn run_sign(args: Vec<String>) -> Result<(), String> {
     let retention_epoch =
         retention_epoch.ok_or_else(|| "missing option --retention-epoch".to_string())?;
 
+    let mut envelope = ProviderAdmissionEnvelopeV1 {
+        version: ENVELOPE_VERSION,
+        proposal,
+        proposal_digest,
+        advert_body: advert_body.clone(),
+        advert_body_digest: advert_digest,
+        issued_at,
+        retention_epoch,
+        council_signatures: Vec::new(),
+        notes,
+    };
+    let authorization_digest = compute_envelope_authorization_digest(&envelope)
+        .map_err(|err| format!("failed to compute envelope authorization digest: {err}"))?;
+
     for key_bytes in secret_keys {
         let signing_key = signing_key_from_bytes(&key_bytes)
             .map_err(|err| format!("invalid council secret key: {err}"))?;
         let signer = signing_key.verifying_key().to_bytes();
-        let signature = signing_key.sign(&proposal_digest).to_bytes();
+        let signature = signing_key.sign(&authorization_digest).to_bytes();
         signatures.push(CouncilSignature {
             signer,
             signature: signature.to_vec(),
@@ -361,19 +383,10 @@ fn run_sign(args: Vec<String>) -> Result<(), String> {
     if signatures.is_empty() {
         return Err("at least one --council-signature is required".into());
     }
+    signatures.sort_unstable_by_key(|signature| signature.signer);
+    envelope.council_signatures = signatures.clone();
 
-    let envelope = ProviderAdmissionEnvelopeV1 {
-        version: ENVELOPE_VERSION,
-        proposal,
-        proposal_digest,
-        advert_body: advert_body.clone(),
-        advert_body_digest: advert_digest,
-        issued_at,
-        retention_epoch,
-        council_signatures: signatures.clone(),
-        notes,
-    };
-    let record = AdmissionRecord::new(envelope.clone())
+    let record = AdmissionRecord::new_untrusted_signers(envelope.clone())
         .map_err(|err| format!("envelope validation failed: {err}"))?;
     verify_advert_against_record(&advert, &record)
         .map_err(|err| format!("advert validation failed: {err}"))?;
@@ -400,7 +413,7 @@ fn run_sign(args: Vec<String>) -> Result<(), String> {
         "council_signature_count".into(),
         Value::from(signatures.len() as u64),
     );
-    map.insert("signatures_verified".into(), Value::from(true));
+    map.insert("signatures_integrity_verified".into(), Value::from(true));
     map.insert(
         "proposal_input".into(),
         Value::from(proposal_path.display().to_string()),
@@ -440,10 +453,30 @@ fn run_verify(args: Vec<String>) -> Result<(), String> {
             "--proposal" => opts.proposal_path = Some(PathBuf::from(value)),
             "--advert" => opts.advert_path = Some(PathBuf::from(value)),
             "--advert-body" => opts.advert_body_path = Some(PathBuf::from(value)),
+            "--trusted-council-key" => {
+                opts.trusted_council_keys
+                    .push(parse_trusted_council_key(value)?);
+            }
+            "--signature-threshold" => {
+                opts.signature_threshold = Some(
+                    value
+                        .parse::<usize>()
+                        .map_err(|err| format!("invalid --signature-threshold: {err}"))?,
+                );
+            }
             "--json-out" => opts.json_out = Some(PathBuf::from(value)),
             other => return Err(format!("unknown option: {other}")),
         }
     }
+
+    let signature_threshold = opts
+        .signature_threshold
+        .ok_or_else(|| "missing option --signature-threshold".to_string())?;
+    let policy = ProviderAdmissionCouncilPolicy::new(
+        opts.trusted_council_keys.iter().copied(),
+        signature_threshold,
+    )
+    .map_err(|err| format!("invalid provider admission council policy: {err}"))?;
 
     let envelope_path = opts
         .envelope_path
@@ -451,7 +484,7 @@ fn run_verify(args: Vec<String>) -> Result<(), String> {
     let envelope_bytes = read_file_bytes_path(&envelope_path)?;
     let envelope: ProviderAdmissionEnvelopeV1 = decode_from_bytes(&envelope_bytes)
         .map_err(|err| format!("failed to decode envelope: {err}"))?;
-    let record = AdmissionRecord::new(envelope.clone())
+    let record = AdmissionRecord::new(envelope.clone(), &policy)
         .map_err(|err| format!("envelope validation failed: {err}"))?;
 
     let mut proposal_match = None;
@@ -484,7 +517,7 @@ fn run_verify(args: Vec<String>) -> Result<(), String> {
         advert_body_match = Some(true);
     }
 
-    let signatures_verified = true;
+    let trusted_signatures_verified = true;
 
     let mut map = Map::new();
     map.insert("version".into(), Value::from(ENVELOPE_VERSION));
@@ -501,8 +534,8 @@ fn run_verify(args: Vec<String>) -> Result<(), String> {
         Value::from(envelope.council_signatures.len() as u64),
     );
     map.insert(
-        "signatures_verified".into(),
-        Value::from(signatures_verified),
+        "trusted_signatures_verified".into(),
+        Value::from(trusted_signatures_verified),
     );
     if let Some(matched) = proposal_match {
         map.insert("proposal_match".into(), Value::from(matched));
@@ -558,7 +591,7 @@ fn run_renewal(args: Vec<String>) -> Result<(), String> {
     let previous_bytes = read_file_bytes_path(&previous_path)?;
     let previous_envelope: ProviderAdmissionEnvelopeV1 = decode_from_bytes(&previous_bytes)
         .map_err(|err| format!("failed to decode previous envelope: {err}"))?;
-    let previous_record = AdmissionRecord::new(previous_envelope)
+    let previous_record = AdmissionRecord::new_untrusted_signers(previous_envelope)
         .map_err(|err| format!("previous envelope validation failed: {err}"))?;
 
     let envelope_bytes = read_file_bytes_path(&envelope_path)?;
@@ -577,7 +610,7 @@ fn run_renewal(args: Vec<String>) -> Result<(), String> {
     };
 
     previous_record
-        .apply_renewal(&renewal)
+        .apply_renewal_untrusted_signers(&renewal)
         .map_err(|err| format!("renewal validation failed: {err}"))?;
 
     let renewal_bytes =
@@ -693,7 +726,7 @@ fn run_revoke(args: Vec<String>) -> Result<(), String> {
     let envelope_bytes = read_file_bytes_path(&envelope_path)?;
     let envelope: ProviderAdmissionEnvelopeV1 = decode_from_bytes(&envelope_bytes)
         .map_err(|err| format!("failed to decode envelope: {err}"))?;
-    let record = AdmissionRecord::new(envelope)
+    let record = AdmissionRecord::new_untrusted_signers(envelope)
         .map_err(|err| format!("envelope validation failed: {err}"))?;
 
     let revoked_at = revoked_at.unwrap_or_else(now_secs);
@@ -728,10 +761,10 @@ fn run_revoke(args: Vec<String>) -> Result<(), String> {
 
     revocation.council_signatures = signatures.clone();
 
-    verify_revocation_signatures(&revocation)
+    verify_revocation_signatures_untrusted_signers(&revocation)
         .map_err(|err| format!("revocation validation failed: {err}"))?;
     record
-        .verify_revocation(&revocation)
+        .verify_revocation_untrusted_signers(&revocation)
         .map_err(|err| format!("revocation does not match envelope: {err}"))?;
 
     let revocation_bytes =
@@ -778,7 +811,8 @@ fn run_revoke(args: Vec<String>) -> Result<(), String> {
 fn proposal_usage() -> &'static str {
     "usage: sorafs_manifest_stub provider-admission proposal --provider-id=<hex32> \
         --chunker-profile=<handle> --stake-pool-id=<hex32> --stake-amount=<amount> \
-        --advert-key=<hex32> --jurisdiction-code=<ISO3166-1> --endpoint=<kind:host> \
+        --advert-key=<hex32> --por-vrf-key=<normal:hex48|small:hex96> \
+        --jurisdiction-code=<ISO3166-1> --endpoint=<kind:host> \
         [--endpoint-attestation-kind=<kind>] \
         --endpoint-attestation-attested-at=<secs> --endpoint-attestation-expires-at=<secs> \
         --endpoint-attestation-leaf=<path> [--endpoint-attestation-intermediate=<path>]... \
@@ -795,7 +829,8 @@ fn sign_usage() -> &'static str {
 }
 
 fn verify_usage() -> &'static str {
-    "usage: sorafs_manifest_stub provider-admission verify --envelope=<path> [--proposal=<path>] \
+    "usage: sorafs_manifest_stub provider-admission verify --envelope=<path> \
+        --trusted-council-key=<hex32>... --signature-threshold=<count> [--proposal=<path>] \
         [--advert=<path>] [--advert-body=<path>] [--json-out=<path>]"
 }
 
@@ -819,6 +854,7 @@ struct ProposalOptions {
     stake_pool_id: Option<[u8; 32]>,
     stake_amount: Option<u128>,
     advert_key: Option<[u8; 32]>,
+    por_vrf_key: Option<ProviderVrfPublicKeyV1>,
     jurisdiction: Option<String>,
     contact_uri: Option<String>,
     capabilities: Vec<CapabilityTlv>,
@@ -850,6 +886,8 @@ struct VerifyOptions {
     proposal_path: Option<PathBuf>,
     advert_path: Option<PathBuf>,
     advert_body_path: Option<PathBuf>,
+    trusted_council_keys: Vec<[u8; 32]>,
+    signature_threshold: Option<usize>,
     json_out: Option<PathBuf>,
 }
 
@@ -954,11 +992,39 @@ fn current_endpoint<'a>(
         .ok_or_else(|| format!("{flag} requires at least one preceding --endpoint"))
 }
 
+fn parse_provider_vrf_key(value: &str) -> Result<ProviderVrfPublicKeyV1, String> {
+    require_no_ascii_whitespace(value, "provider VRF key")?;
+    let (variant, encoded) = value.split_once(':').ok_or_else(|| {
+        "provider VRF key must be `normal:<hex48>` or `small:<hex96>`".to_string()
+    })?;
+    let bytes = parse_hex_vec(encoded)?;
+    let key = match variant {
+        "normal" => {
+            ProviderVrfPublicKeyV1::BlsNormal(bytes.try_into().map_err(|bytes: Vec<u8>| {
+                format!("normal VRF key must be 48 bytes, found {}", bytes.len())
+            })?)
+        }
+        "small" => {
+            ProviderVrfPublicKeyV1::BlsSmall(bytes.try_into().map_err(|bytes: Vec<u8>| {
+                format!("small VRF key must be 96 bytes, found {}", bytes.len())
+            })?)
+        }
+        _ => return Err("provider VRF key variant must be `normal` or `small`".to_string()),
+    };
+    key.validate()
+        .map_err(|err| format!("invalid provider VRF key: {err}"))?;
+    Ok(key)
+}
+
 fn parse_capability(value: &str) -> Result<CapabilityTlv, String> {
     let (head, payload) = value
         .split_once(':')
         .map_or((value, None), |(h, rest)| (h, Some(rest)));
-    let cap_type = match head.trim().to_ascii_lowercase().as_str() {
+    if head.is_empty() {
+        return Err("capability type must not be empty".to_string());
+    }
+    require_no_ascii_whitespace(head, "capability type")?;
+    let cap_type = match head.to_ascii_lowercase().as_str() {
         "torii" | "torii-gateway" => CapabilityType::ToriiGateway,
         "quic" | "quic-noise" => CapabilityType::QuicNoise,
         "soranet" | "soranet-pq" | "soranet_pq" | "soranet-hybrid-pq" => {
@@ -974,13 +1040,14 @@ fn parse_capability(value: &str) -> Result<CapabilityTlv, String> {
     };
     let payload_bytes = match (cap_type, payload) {
         (CapabilityType::ChunkRangeFetch, Some(rest)) => {
-            let value_raw = parse_u64(rest.trim())?;
+            require_capability_payload(rest)?;
+            let value_raw = parse_u64(rest)?;
             let value: u16 = value_raw
                 .try_into()
                 .map_err(|_| "range payload must fit in u16")?;
             value.to_le_bytes().to_vec()
         }
-        (CapabilityType::SoraNetHybridPq, Some(rest)) => parse_soranet_pq(rest.trim())?
+        (CapabilityType::SoraNetHybridPq, Some(rest)) => parse_soranet_pq(rest)?
             .to_bytes()
             .map_err(|err| format!("invalid soranet-pq capability: {err}"))?,
         (CapabilityType::SoraNetHybridPq, None) => ProviderCapabilitySoranetPqV1 {
@@ -990,7 +1057,10 @@ fn parse_capability(value: &str) -> Result<CapabilityTlv, String> {
         }
         .to_bytes()
         .map_err(|err| format!("invalid soranet-pq capability: {err}"))?,
-        (_, Some(rest)) => parse_hex_vec(rest.trim())?,
+        (_, Some(rest)) => {
+            require_capability_payload(rest)?;
+            parse_hex_vec(rest)?
+        }
         _ => Vec::new(),
     };
     Ok(CapabilityTlv {
@@ -1000,17 +1070,23 @@ fn parse_capability(value: &str) -> Result<CapabilityTlv, String> {
 }
 
 fn parse_soranet_pq(value: &str) -> Result<ProviderCapabilitySoranetPqV1, String> {
+    if value.is_empty() {
+        return Err(
+            "soranet-pq capability payload must not be empty; omit the payload for the default guard level"
+                .to_string(),
+        );
+    }
     let mut supports_guard = false;
     let mut supports_majority = false;
     let mut supports_strict = false;
     let mut specified = false;
     for raw in value.split(|c| [',', '+', '|'].contains(&c)) {
-        let token = raw.trim();
-        if token.is_empty() {
-            continue;
+        if raw.is_empty() {
+            return Err("soranet-pq capability must not contain empty levels".to_string());
         }
+        require_no_ascii_whitespace(raw, "soranet-pq capability level")?;
         specified = true;
-        match token.to_ascii_lowercase().as_str() {
+        match raw.to_ascii_lowercase().as_str() {
             "guard" | "stage-a" | "stagea" => supports_guard = true,
             "majority" | "stage-b" | "stageb" => {
                 supports_guard = true;
@@ -1064,24 +1140,23 @@ fn parse_stream_budget(value: &str) -> Result<StreamBudgetV1, String> {
     let mut max_bytes_per_sec = None;
     let mut burst_bytes = None;
     for part in value.split(',') {
-        let trimmed = part.trim();
-        if trimmed.is_empty() {
-            continue;
+        if part.is_empty() {
+            return Err("stream-budget must not contain empty entries".to_string());
         }
-        let (key, raw) = trimmed
+        require_no_ascii_whitespace(part, "stream-budget entry")?;
+        let (key, raw) = part
             .split_once('=')
-            .ok_or_else(|| format!("stream-budget requires key=value entries, got: {trimmed}"))?;
-        let key_lower = key.trim().to_ascii_lowercase();
-        let raw_trimmed = raw.trim();
+            .ok_or_else(|| format!("stream-budget requires key=value entries, got: {part}"))?;
+        let key_lower = key.to_ascii_lowercase();
         match key_lower.as_str() {
             "max_in_flight" | "max-in-flight" | "inflight" => {
-                max_in_flight = Some(parse_u16(raw_trimmed)?);
+                max_in_flight = Some(parse_u16(raw)?);
             }
             "max_bytes_per_sec" | "max-bytes-per-sec" | "max_rate" | "max-rate" => {
-                max_bytes_per_sec = Some(parse_u64(raw_trimmed)?);
+                max_bytes_per_sec = Some(parse_u64(raw)?);
             }
             "burst" | "burst_bytes" | "burst-bytes" => {
-                burst_bytes = Some(parse_u64(raw_trimmed)?);
+                burst_bytes = Some(parse_u64(raw)?);
             }
             other => {
                 return Err(format!(
@@ -1107,8 +1182,10 @@ fn parse_transport_hint(value: &str) -> Result<TransportHintV1, String> {
     let (protocol_str, priority_str) = value
         .split_once(':')
         .ok_or_else(|| "transport-hint requires protocol:priority".to_string())?;
-    let protocol = parse_transport_protocol(protocol_str.trim())?;
-    let priority = parse_u8(priority_str.trim())?;
+    require_no_ascii_whitespace(protocol_str, "transport-hint protocol")?;
+    require_no_ascii_whitespace(priority_str, "transport-hint priority")?;
+    let protocol = parse_transport_protocol(protocol_str)?;
+    let priority = parse_u8(priority_str)?;
     let hint = TransportHintV1 { protocol, priority };
     hint.validate()
         .map_err(|err| format!("invalid transport hint: {err}"))?;
@@ -1132,10 +1209,35 @@ fn parse_transport_protocol(value: &str) -> Result<TransportProtocol, String> {
 }
 
 fn parse_u8(value: &str) -> Result<u8, String> {
-    if let Some(stripped) = value.strip_prefix("0x") {
-        u8::from_str_radix(stripped, 16).map_err(|err| err.to_string())
+    let parsed = parse_u16(value)?;
+    u8::try_from(parsed).map_err(|_| format!("u8 value out of range: {parsed}"))
+}
+
+fn parse_jurisdiction_code(value: &str) -> Result<String, String> {
+    if value.is_empty() {
+        return Err("jurisdiction code must not be empty".to_string());
+    }
+    require_no_ascii_whitespace(value, "jurisdiction code")?;
+    if value.len() != 2 || !value.chars().all(|c| c.is_ascii_uppercase()) {
+        return Err(
+            "jurisdiction code must be a canonical ISO-3166 alpha-2 uppercase token".to_string(),
+        );
+    }
+    Ok(value.to_string())
+}
+
+fn require_capability_payload(value: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err("capability payload must not be empty".to_string());
+    }
+    require_no_ascii_whitespace(value, "capability payload")
+}
+
+fn require_no_ascii_whitespace(value: &str, label: &str) -> Result<(), String> {
+    if value.as_bytes().iter().any(u8::is_ascii_whitespace) {
+        Err(format!("{label} must not contain ASCII whitespace"))
     } else {
-        value.parse::<u8>().map_err(|err| err.to_string())
+        Ok(())
     }
 }
 
@@ -1149,6 +1251,13 @@ fn parse_attestation_kind(value: &str) -> Result<EndpointAttestationKind, String
 
 fn parse_signature(value: &str) -> Result<CouncilSignature, String> {
     super::parse_signature_hex(value)
+}
+
+fn parse_trusted_council_key(value: &str) -> Result<[u8; 32], String> {
+    let bytes = parse_hex_vec(value)?;
+    bytes.try_into().map_err(|bytes: Vec<u8>| {
+        format!("trusted council key must be 32 bytes, got {}", bytes.len())
+    })
 }
 
 fn parse_signature_file_entry(
@@ -1206,6 +1315,106 @@ mod tests {
         match signing_key_from_bytes(&[0u8; 32]) {
             Err(err) => assert!(err.contains("all zero"), "unexpected error: {err}"),
             Ok(_) => panic!("all-zero council signing seed must fail"),
+        }
+    }
+
+    #[test]
+    fn proposal_structured_tokens_reject_whitespace_and_noncanonical_forms() {
+        assert_eq!(parse_jurisdiction_code("US").expect("jurisdiction"), "US");
+        assert_eq!(parse_u8("0xff").expect("hex priority"), 255);
+        assert_eq!(parse_u8("7").expect("decimal priority"), 7);
+
+        for value in ["", "us", " USA", "U S", "USA"] {
+            let err = parse_jurisdiction_code(value).expect_err("invalid jurisdiction must fail");
+            assert!(
+                err.contains("empty")
+                    || err.contains("ASCII whitespace")
+                    || err.contains("uppercase"),
+                "unexpected jurisdiction error for {value:?}: {err}"
+            );
+        }
+
+        for value in ["01", "0X1", "0x01", "256"] {
+            let err = parse_u8(value).expect_err("invalid priority must fail");
+            assert!(
+                err.contains("canonical unsigned") || err.contains("out of range"),
+                "unexpected priority error for {value:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_capability_rejects_noncanonical_payloads() {
+        let range = parse_capability("range:64").expect("range capability");
+        assert_eq!(range.cap_type, CapabilityType::ChunkRangeFetch);
+        assert_eq!(range.payload, 64_u16.to_le_bytes());
+
+        let pq = parse_capability("soranet:guard+strict").expect("soranet capability");
+        assert_eq!(pq.cap_type, CapabilityType::SoraNetHybridPq);
+
+        for value in [
+            " range:64",
+            "range: 64",
+            "range:064",
+            "range:",
+            "soranet:",
+            "soranet:guard, strict",
+            "soranet:guard,,strict",
+            "torii: 0a",
+        ] {
+            let err = parse_capability(value).expect_err("invalid capability must fail");
+            assert!(
+                err.contains("empty")
+                    || err.contains("ASCII whitespace")
+                    || err.contains("canonical unsigned"),
+                "unexpected capability error for {value:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_stream_budget_rejects_ambiguous_entries() {
+        let budget = parse_stream_budget("max_in_flight=2,max_bytes_per_sec=1024,burst=512")
+            .expect("stream budget");
+        assert_eq!(budget.max_in_flight, 2);
+        assert_eq!(budget.max_bytes_per_sec, 1024);
+        assert_eq!(budget.burst_bytes, Some(512));
+
+        for value in [
+            "max_in_flight=2,,max_bytes_per_sec=1024",
+            "max_in_flight =2,max_bytes_per_sec=1024",
+            "max_in_flight= 2,max_bytes_per_sec=1024",
+            "max_in_flight=02,max_bytes_per_sec=1024",
+            "max_in_flight=2,max_bytes_per_sec=0x010",
+        ] {
+            let err = parse_stream_budget(value).expect_err("invalid stream budget must fail");
+            assert!(
+                err.contains("empty")
+                    || err.contains("ASCII whitespace")
+                    || err.contains("canonical unsigned"),
+                "unexpected stream budget error for {value:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_transport_hint_rejects_noncanonical_priority() {
+        let hint = parse_transport_hint("torii:1").expect("transport hint");
+        assert_eq!(hint.protocol, TransportProtocol::ToriiHttpRange);
+        assert_eq!(hint.priority, 1);
+
+        for value in [
+            " torii:1",
+            "torii: 1",
+            "torii:01",
+            "torii:0X1",
+            "torii:0x01",
+        ] {
+            let err = parse_transport_hint(value).expect_err("invalid transport hint must fail");
+            assert!(
+                err.contains("ASCII whitespace") || err.contains("canonical unsigned"),
+                "unexpected transport hint error for {value:?}: {err}"
+            );
         }
     }
 }

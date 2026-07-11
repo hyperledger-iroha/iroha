@@ -184,6 +184,98 @@ fn sorafs_node_cli_ingest_por_flow() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn cli_reports_corrupt_checkpoint_without_panicking() -> Result<(), Box<dyn std::error::Error>> {
+    if !ingest_tests_enabled() {
+        eprintln!("skipping corrupt checkpoint check (SORAFS_NODE_SKIP_INGEST_TESTS=1)");
+        return Ok(());
+    }
+
+    let temp_dir = TempDir::new()?;
+    let storage_dir = temp_dir.path().canonicalize()?.join("storage");
+    let orderbook_dir = storage_dir.join("orderbook");
+    fs::create_dir_all(&orderbook_dir)?;
+    fs::write(
+        orderbook_dir.join("runtime-snapshot.to"),
+        b"not a canonical Norito checkpoint",
+    )?;
+
+    let base = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .ok_or("failed to resolve workspace root")?
+        .join("fixtures/sorafs_manifest/por");
+    let mut cmd = cargo_bin_cmd!("sorafs-node");
+    let assert = cmd
+        .arg("ingest")
+        .arg("por")
+        .arg(format!("--data-dir={}", storage_dir.display()))
+        .arg(format!(
+            "--challenge={}",
+            base.join("challenge_v1.to").display()
+        ))
+        .arg(format!("--proof={}", base.join("proof_v1.to").display()))
+        .assert()
+        .failure();
+    let stderr = String::from_utf8(assert.get_output().stderr.clone())?;
+    assert!(
+        stderr.contains(&format!(
+            "failed to initialise SoraFS runtime from {}",
+            storage_dir.display()
+        )),
+        "unexpected stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("panicked at"),
+        "unexpected panic: {stderr}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn gateway_reports_corrupt_checkpoint() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = TempDir::new()?;
+    let storage_dir = temp_dir.path().canonicalize()?.join("storage");
+    let orderbook_dir = storage_dir.join("orderbook");
+    fs::create_dir_all(&orderbook_dir)?;
+    fs::write(
+        orderbook_dir.join("runtime-snapshot.to"),
+        b"not a canonical Norito checkpoint",
+    )?;
+
+    let signing_key = temp_dir.path().join("signing.key");
+    let approved_envelope = temp_dir.path().join("approved-envelope.txt");
+    let mut cmd = cargo_bin_cmd!("sorafs_gateway");
+    let assert = cmd
+        .arg("--manifest-digest")
+        .arg("00".repeat(32))
+        .arg("--provider-id")
+        .arg("00".repeat(32))
+        .arg("--signing-key")
+        .arg(signing_key)
+        .arg("--approved-manifest-envelope")
+        .arg(approved_envelope)
+        .arg("--data-dir")
+        .arg(&storage_dir)
+        .assert()
+        .failure();
+    let stderr = String::from_utf8(assert.get_output().stderr.clone())?;
+    assert!(
+        stderr.contains(&format!(
+            "failed to initialise SoraFS runtime from {}",
+            storage_dir.display()
+        )),
+        "unexpected stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("panicked at"),
+        "unexpected panic: {stderr}"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn sorafs_node_cli_ingest_por_replays_proof() -> Result<(), Box<dyn std::error::Error>> {
     if !ingest_tests_enabled() {
         eprintln!("skipping PoR replay (SORAFS_NODE_SKIP_INGEST_TESTS=1)");
@@ -296,9 +388,9 @@ fn fixture_challenge() -> PorChallengeV1 {
         epoch_id,
         drand_round,
         drand_randomness,
-        drand_signature: vec![0x61; 96],
+        drand_signature: [0x61; 48],
         vrf_output: Some(vrf_output),
-        vrf_proof: Some(vec![0x71; 80]),
+        vrf_proof: Some(iroha_crypto::vrf::VrfProof::SigInG1([0x71; 48])),
         forced: false,
         chunking_profile: "sorafs.sf1@1.0.0".to_string(),
         seed,

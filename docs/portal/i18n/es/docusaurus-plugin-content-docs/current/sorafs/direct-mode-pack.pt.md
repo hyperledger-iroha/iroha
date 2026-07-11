@@ -64,7 +64,7 @@ Ejemplo de uso:
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
-  --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
+  --provider name=gw-regulated,provider-id=001122...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64
 ```- El script respectivo a las banderas de CLI y archivos de configuración clave=valor (veja `docs/examples/sorafs_direct_mode_smoke.conf`). Preencha o digest do manifest e as entradas de advert de provedor com valores de producao antes de rodar.
 - `--policy` tiene como padrao `docs/examples/sorafs_direct_mode_policy.json`, pero cualquier JSON de orquestador producido por `sorafs_orchestrator::bindings::config_to_json` puede ser fornecido. O CLI aceita a politica via `--orchestrator-config=PATH`, habilitando ejecuta reproducciones sin ajustar flags manualmente.
 - Cuando `sorafs_cli` no está en `PATH`, el ayudante compila a partir de la caja `sorafs_orchestrator` (liberación de perfil) para que el ejercicio de fumar o la plomería de modo directo enviado.

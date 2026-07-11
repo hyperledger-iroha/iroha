@@ -352,7 +352,7 @@ The primary CLI now exposes the orchestrator facade directly:
 sorafs_cli fetch \
   --plan artifacts/payload_plan.json \
   --manifest-id 7bb2…9d31 \
-  --provider name=alpha,provider-id=9f5c…73aa,base-url=https://gw-alpha.example.org/,stream-token="$(cat alpha.token)" \
+  --provider name=alpha,provider-id=9f5c…73aa,gateway-key="$(cat alpha.gateway-key.hex)",base-url=https://gw-alpha.example.org/,stream-token="$(cat alpha.token)" \
   --output artifacts/payload.bin \
   --json-out artifacts/fetch_summary.json \
   --local-proxy-manifest-out artifacts/proxy_manifest.json \
@@ -365,8 +365,11 @@ sorafs_cli fetch \
 ```
 
 Input flags mirror the developer tool: every `--provider` entry supplies a
-manifest-scoped stream token, the Torii base URL, and the canonical provider
-identifier. The command derives a scoreboard from the token metadata, applies
+manifest-scoped stream token, the trusted 32-byte Ed25519 gateway public key as
+64 hex characters, the Torii base URL, and the canonical provider identifier.
+The key is mandatory and verifies the token before any request is sent; do not
+copy it from the same unauthenticated token response. The command derives a
+scoreboard from the token metadata, applies
 the optional `--max-peers` cap, and threads the retry policy through the
 orchestrator. A machine-readable summary is emitted to stdout (and, when
 `--json-out` is provided, to disk) containing:
@@ -486,7 +489,7 @@ iroha app sorafs moderation honey-audit \
   --honey 35c60c0f4cf6a1116fd17c2a930f37390f34030e7c5f23d77ecbb543c1a2d9ba \
   --expected-cache-version cache-v7 \
   --moderation-key-b64 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
-  --provider name=alpha,provider-id=AAAA...,base-url=https://gateway.example/,stream-token=BASE64 \
+  --provider name=alpha,provider-id=AAAA...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gateway.example/,stream-token=BASE64 \
   --json-out artifacts/sorafs_gateway/honey_audit.json \
   --markdown-out artifacts/sorafs_gateway/honey_audit.md
 ```
@@ -684,10 +687,12 @@ The CLI reads a council-signed `ChallengeAuthTokenV1`, confirms the target
 manifest/provider pair is permitted, and submits the legacy Norito
 `ManualPorChallengeV1` request shape to `POST /v1/sorafs/por/trigger`. Torii now
 deliberately retires that route with a fail-closed `410 Gone` JSON response
-containing `route_state = "retired"`; live challenge admission must use governed
-`PorChallengeV1` submission through `/v1/sorafs/capacity/por-challenge` or the
-scheduler runtime. Responses are surfaced verbatim so auditors capture the
-retirement state or any future governance error codes.
+containing `route_state = "retired"`; externally supplied challenges are also
+retired. The verified coordinator scheduler is reserved as the only future
+challenge authority, and Torii currently fails PoR automation startup closed
+until authenticated external drand/VRF feeds are configured. Responses are
+surfaced verbatim so auditors capture the retirement state or any future
+governance error codes.
 
 ### Export GovernanceLog verdicts
 

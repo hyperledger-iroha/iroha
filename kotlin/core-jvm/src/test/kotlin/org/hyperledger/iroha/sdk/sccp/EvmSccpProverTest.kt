@@ -55,7 +55,7 @@ class EvmSccpProverTest {
         )
         assertEquals("0x" + "56".repeat(32), request.statementHash)
         assertEquals("0x" + "78".repeat(32), request.destinationBindingHash)
-        assertEquals("0x60cb739b78c37151c150d3e911f2d61e7a68b09a8353409608d2a918ef299ad6", request.requestHash)
+        assertEquals("0x7c28c709bf9bd94151ab6212b8cb6bd20ee2c4f5a07247497f2a7350ff4aa3cf", request.requestHash)
 
         val destinationBinding = sampleDestinationBinding()
         val boundRequest = SccpEvm.buildProofRequest(
@@ -5443,7 +5443,7 @@ class EvmSccpProverTest {
         writeTestNoritoField(encoder) { it.writeUInt(0, 64) }
         writeTestNoritoField(encoder) { it.writeUInt(0, 64) }
         writeTestNoritoField(encoder) {
-            writeTestNoritoString(it, "iroha2-consensus::permissioned-sumeragi@v1")
+            writeTestNoritoString(it, "iroha2-consensus::permissioned-sumeragi@v2")
         }
         writeTestNoritoField(encoder) { it.writeBytes(hexBytes(value.finalityBlockHash.removePrefix("0x"))) }
         writeTestNoritoField(encoder) { it.writeBytes(ByteArray(32)) }

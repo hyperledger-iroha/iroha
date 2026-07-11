@@ -6209,6 +6209,7 @@ mod tests {
         let settlement = iroha_data_model::block::consensus::LaneBlockCommitment {
             block_height: 2,
             lane_id: iroha_data_model::nexus::LaneId::new(0),
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 1,
             total_local_micro: 0,

@@ -2,8 +2,14 @@
 
 use std::collections::HashMap;
 
-use iroha_data_model::{metadata::Metadata, sorafs::capacity::CapacityDeclarationRecord};
-use norito::decode_from_bytes;
+use iroha_data_model::{
+    metadata::Metadata,
+    sorafs::capacity::{CapacityDeclarationRecord, ProviderId},
+};
+use norito::{
+    decode_from_bytes,
+    derive::{NoritoDeserialize, NoritoSerialize},
+};
 use sorafs_manifest::capacity::{
     CapacityDeclarationV1, ChunkerCommitmentV1, LaneCommitmentV1, ReplicationAssignmentV1,
     ReplicationOrderSlaV1, ReplicationOrderV1,
@@ -11,22 +17,37 @@ use sorafs_manifest::capacity::{
 use thiserror::Error;
 
 /// Manages the active capacity declaration and replication scheduling state for a provider.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct CapacityManager {
     state: std::sync::RwLock<CapacityState>,
+    entry_limit: usize,
+}
+
+impl Default for CapacityManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CapacityManager {
     /// Construct a new capacity manager with no active declaration.
     #[must_use]
     pub fn new() -> Self {
+        Self::with_entry_limit(65_536)
+    }
+
+    /// Construct a capacity manager with a ceiling for declaration indexes and outstanding
+    /// replication orders.
+    #[must_use]
+    pub fn with_entry_limit(entry_limit: usize) -> Self {
         Self {
             state: std::sync::RwLock::new(CapacityState::default()),
+            entry_limit: entry_limit.max(1),
         }
     }
 
     /// Record a capacity declaration captured from the registry.
-    pub fn record_declaration(
+    pub(crate) fn record_declaration(
         &self,
         record: &CapacityDeclarationRecord,
     ) -> Result<(), CapacityError> {
@@ -45,8 +66,31 @@ impl CapacityManager {
                 record: record.committed_capacity_gib,
             });
         }
+        for (resource, count) in [
+            ("chunker_commitments", declaration.chunker_commitments.len()),
+            ("lane_commitments", declaration.lane_commitments.len()),
+        ] {
+            if count > self.entry_limit {
+                return Err(CapacityError::ResourceExhausted {
+                    resource,
+                    limit: self.entry_limit,
+                });
+            }
+        }
 
-        let mut state = self.state.write().expect("capacity state poisoned");
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| CapacityError::StateLockPoisoned)?;
+        if let Some(active) = &state.active
+            && !active.outstanding_orders.is_empty()
+        {
+            return Err(
+                CapacityError::DeclarationReplacementWhileOrdersOutstanding {
+                    count: active.outstanding_orders.len(),
+                },
+            );
+        }
         state.active = Some(ActiveCapacity::new(record, declaration));
         Ok(())
     }
@@ -58,12 +102,36 @@ impl CapacityManager {
         state.snapshot()
     }
 
+    /// Reconstruct the active registry record for restart-time telemetry seeding.
+    pub(crate) fn active_declaration_record(
+        &self,
+    ) -> Result<Option<CapacityDeclarationRecord>, CapacityError> {
+        let state = self
+            .state
+            .read()
+            .map_err(|_| CapacityError::StateLockPoisoned)?;
+        Ok(state.active.as_ref().map(|active| {
+            CapacityDeclarationRecord::new(
+                ProviderId::new(active.provider_id),
+                active.declaration_payload.clone(),
+                active.committed_total_gib,
+                active.declaration_window.registered_epoch,
+                active.declaration_window.valid_from_epoch,
+                active.declaration_window.valid_until_epoch,
+                active.metadata.clone(),
+            )
+        }))
+    }
+
     /// Schedule the assignments from a replication order if it targets the active provider.
-    pub fn schedule_order(
+    pub(crate) fn schedule_order(
         &self,
         order: &ReplicationOrderV1,
     ) -> Result<Option<ReplicationPlan>, CapacityError> {
-        let mut state = self.state.write().expect("capacity state poisoned");
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| CapacityError::StateLockPoisoned)?;
         let Some(active) = &mut state.active else {
             return Err(CapacityError::NoActiveDeclaration);
         };
@@ -78,25 +146,114 @@ impl CapacityManager {
 
         active.ensure_chunker_supported(order)?;
         active.ensure_order_unique(order)?;
-        active.reserve_capacity(order, assignment)?;
+        if active.outstanding_orders.len() >= self.entry_limit {
+            return Err(CapacityError::ResourceExhausted {
+                resource: "outstanding_orders",
+                limit: self.entry_limit,
+            });
+        }
+        let mut candidate = active.clone();
+        candidate.reserve_capacity(order, assignment)?;
+        let plan = candidate.record_order(order, assignment);
+        *active = candidate;
 
-        Ok(Some(active.record_order(order, assignment)))
+        Ok(Some(plan))
     }
 
     /// Release the reservation for a completed replication order.
-    pub fn complete_order(&self, order_id: [u8; 32]) -> Result<ReplicationRelease, CapacityError> {
-        let mut state = self.state.write().expect("capacity state poisoned");
+    pub(crate) fn complete_order(
+        &self,
+        order_id: [u8; 32],
+    ) -> Result<ReplicationRelease, CapacityError> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| CapacityError::StateLockPoisoned)?;
         let active = state
             .active
             .as_mut()
             .ok_or(CapacityError::NoActiveDeclaration)?;
-        active.complete_order(order_id)
+        let mut candidate = active.clone();
+        let release = candidate.complete_order(order_id)?;
+        *active = candidate;
+        Ok(release)
+    }
+
+    /// Export the active declaration and every outstanding capacity reservation.
+    pub(crate) fn checkpoint(&self) -> Result<CapacityRuntimeCheckpointV1, CapacityError> {
+        let state = self
+            .state
+            .read()
+            .map_err(|_| CapacityError::StateLockPoisoned)?;
+        Ok(CapacityRuntimeCheckpointV1 {
+            active: state.active.as_ref().map(ActiveCapacity::checkpoint),
+        })
+    }
+
+    /// Restore an authoritative capacity checkpoint after recomputing all allocation totals.
+    pub(crate) fn restore_checkpoint(
+        &self,
+        checkpoint: CapacityRuntimeCheckpointV1,
+    ) -> Result<(), CapacityError> {
+        let active = checkpoint
+            .active
+            .map(|active| ActiveCapacity::restore_checkpoint(active, self.entry_limit))
+            .transpose()?;
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| CapacityError::StateLockPoisoned)?;
+        state.active = active;
+        Ok(())
     }
 }
 
 #[derive(Debug, Default)]
 struct CapacityState {
     active: Option<ActiveCapacity>,
+}
+
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+struct CapacityChunkerCheckpointV1 {
+    handle: String,
+    committed: u64,
+    allocated: u64,
+}
+
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+struct CapacityLaneCheckpointV1 {
+    lane_id: String,
+    max: u64,
+    allocated: u64,
+}
+
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+struct CapacityOrderCheckpointV1 {
+    order_id: [u8; 32],
+    slice_gib: u64,
+    chunker_handle: String,
+    lane: Option<String>,
+    issued_at: u64,
+    deadline_at: u64,
+}
+
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+struct ActiveCapacityCheckpointV1 {
+    declaration_payload: Vec<u8>,
+    provider_id: [u8; 32],
+    committed_total_gib: u64,
+    chunkers: Vec<CapacityChunkerCheckpointV1>,
+    lanes: Vec<CapacityLaneCheckpointV1>,
+    allocated_total_gib: u64,
+    outstanding_orders: Vec<CapacityOrderCheckpointV1>,
+    metadata: Metadata,
+    declaration_window: DeclarationWindow,
+}
+
+/// Canonical restart snapshot for capacity declarations and outstanding reservations.
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+pub(crate) struct CapacityRuntimeCheckpointV1 {
+    active: Option<ActiveCapacityCheckpointV1>,
 }
 
 impl CapacityState {
@@ -110,6 +267,7 @@ impl CapacityState {
 
 #[derive(Debug, Clone)]
 struct ActiveCapacity {
+    declaration_payload: Vec<u8>,
     provider_id: [u8; 32],
     committed_total_gib: u64,
     chunkers: HashMap<String, ChunkerAllocation>,
@@ -139,6 +297,7 @@ impl ActiveCapacity {
             .collect::<HashMap<_, _>>();
 
         Self {
+            declaration_payload: record.declaration.clone(),
             provider_id: declaration.provider_id,
             committed_total_gib: declaration.committed_capacity_gib,
             chunkers,
@@ -152,6 +311,263 @@ impl ActiveCapacity {
                 valid_until_epoch: record.valid_until_epoch,
             },
         }
+    }
+
+    fn checkpoint(&self) -> ActiveCapacityCheckpointV1 {
+        let mut chunkers = self
+            .chunkers
+            .iter()
+            .map(|(handle, allocation)| CapacityChunkerCheckpointV1 {
+                handle: handle.clone(),
+                committed: allocation.committed,
+                allocated: allocation.allocated,
+            })
+            .collect::<Vec<_>>();
+        chunkers.sort_by(|left, right| left.handle.cmp(&right.handle));
+        let mut lanes = self
+            .lanes
+            .iter()
+            .map(|(lane_id, allocation)| CapacityLaneCheckpointV1 {
+                lane_id: lane_id.clone(),
+                max: allocation.max,
+                allocated: allocation.allocated,
+            })
+            .collect::<Vec<_>>();
+        lanes.sort_by(|left, right| left.lane_id.cmp(&right.lane_id));
+        let mut outstanding_orders = self
+            .outstanding_orders
+            .iter()
+            .map(|(order_id, allocation)| CapacityOrderCheckpointV1 {
+                order_id: *order_id,
+                slice_gib: allocation.slice_gib,
+                chunker_handle: allocation.chunker_handle.clone(),
+                lane: allocation.lane.clone(),
+                issued_at: allocation.issued_at,
+                deadline_at: allocation.deadline_at,
+            })
+            .collect::<Vec<_>>();
+        outstanding_orders.sort_by_key(|order| order.order_id);
+        ActiveCapacityCheckpointV1 {
+            declaration_payload: self.declaration_payload.clone(),
+            provider_id: self.provider_id,
+            committed_total_gib: self.committed_total_gib,
+            chunkers,
+            lanes,
+            allocated_total_gib: self.allocated_total_gib,
+            outstanding_orders,
+            metadata: self.metadata.clone(),
+            declaration_window: self.declaration_window,
+        }
+    }
+
+    fn restore_checkpoint(
+        checkpoint: ActiveCapacityCheckpointV1,
+        entry_limit: usize,
+    ) -> Result<Self, CapacityError> {
+        for (resource, count) in [
+            ("chunker_commitments", checkpoint.chunkers.len()),
+            ("lane_commitments", checkpoint.lanes.len()),
+            ("outstanding_orders", checkpoint.outstanding_orders.len()),
+        ] {
+            if count > entry_limit {
+                return Err(CapacityError::InvalidCheckpoint(format!(
+                    "{resource} count {count} exceeds configured limit {entry_limit}"
+                )));
+            }
+        }
+        if checkpoint.committed_total_gib == 0
+            || checkpoint.declaration_window.valid_from_epoch
+                > checkpoint.declaration_window.valid_until_epoch
+        {
+            return Err(CapacityError::InvalidCheckpoint(
+                "capacity declaration totals or validity window are invalid".to_owned(),
+            ));
+        }
+        let declaration: CapacityDeclarationV1 = decode_from_bytes(&checkpoint.declaration_payload)
+            .map_err(|err| {
+                CapacityError::InvalidCheckpoint(format!(
+                    "capacity declaration payload cannot be decoded: {err}"
+                ))
+            })?;
+        declaration.validate().map_err(|err| {
+            CapacityError::InvalidCheckpoint(format!(
+                "capacity declaration payload is invalid: {err}"
+            ))
+        })?;
+        if declaration.provider_id != checkpoint.provider_id
+            || declaration.committed_capacity_gib != checkpoint.committed_total_gib
+            || declaration.valid_from != checkpoint.declaration_window.valid_from_epoch
+            || declaration.valid_until != checkpoint.declaration_window.valid_until_epoch
+        {
+            return Err(CapacityError::InvalidCheckpoint(
+                "capacity declaration payload disagrees with checkpoint summary".to_owned(),
+            ));
+        }
+
+        let mut chunkers = HashMap::with_capacity(checkpoint.chunkers.len());
+        let mut previous_chunker: Option<&str> = None;
+        let mut committed_by_chunkers = 0u64;
+        for chunker in &checkpoint.chunkers {
+            if chunker.handle.trim().is_empty()
+                || previous_chunker.is_some_and(|previous| previous >= chunker.handle.as_str())
+                || chunker.allocated > chunker.committed
+            {
+                return Err(CapacityError::InvalidCheckpoint(
+                    "capacity chunker index is invalid or non-canonical".to_owned(),
+                ));
+            }
+            previous_chunker = Some(&chunker.handle);
+            committed_by_chunkers = committed_by_chunkers
+                .checked_add(chunker.committed)
+                .ok_or_else(|| {
+                    CapacityError::InvalidCheckpoint(
+                        "chunker committed capacity overflow".to_owned(),
+                    )
+                })?;
+            chunkers.insert(
+                chunker.handle.clone(),
+                ChunkerAllocation {
+                    committed: chunker.committed,
+                    allocated: chunker.allocated,
+                },
+            );
+        }
+        if chunkers.is_empty() || committed_by_chunkers != checkpoint.committed_total_gib {
+            return Err(CapacityError::InvalidCheckpoint(
+                "chunker commitments do not sum to total committed capacity".to_owned(),
+            ));
+        }
+        if declaration.chunker_commitments.len() != chunkers.len()
+            || declaration.chunker_commitments.iter().any(|commitment| {
+                chunkers
+                    .get(&commitment.profile_id)
+                    .is_none_or(|allocation| allocation.committed != commitment.committed_gib)
+            })
+        {
+            return Err(CapacityError::InvalidCheckpoint(
+                "capacity declaration chunkers disagree with checkpoint allocations".to_owned(),
+            ));
+        }
+
+        let mut lanes = HashMap::with_capacity(checkpoint.lanes.len());
+        let mut previous_lane: Option<&str> = None;
+        for lane in &checkpoint.lanes {
+            if lane.lane_id.trim().is_empty()
+                || previous_lane.is_some_and(|previous| previous >= lane.lane_id.as_str())
+                || lane.allocated > lane.max
+            {
+                return Err(CapacityError::InvalidCheckpoint(
+                    "capacity lane index is invalid or non-canonical".to_owned(),
+                ));
+            }
+            previous_lane = Some(&lane.lane_id);
+            lanes.insert(
+                lane.lane_id.clone(),
+                LaneAllocation {
+                    max: lane.max,
+                    allocated: lane.allocated,
+                },
+            );
+        }
+        if declaration.lane_commitments.len() != lanes.len()
+            || declaration.lane_commitments.iter().any(|commitment| {
+                lanes
+                    .get(&commitment.lane_id)
+                    .is_none_or(|allocation| allocation.max != commitment.max_gib)
+            })
+        {
+            return Err(CapacityError::InvalidCheckpoint(
+                "capacity declaration lanes disagree with checkpoint allocations".to_owned(),
+            ));
+        }
+
+        let mut outstanding_orders = HashMap::with_capacity(checkpoint.outstanding_orders.len());
+        let mut previous_order = None;
+        let mut allocated_total_gib = 0u64;
+        let mut allocated_by_chunker = HashMap::<String, u64>::new();
+        let mut allocated_by_lane = HashMap::<String, u64>::new();
+        for order in checkpoint.outstanding_orders {
+            if order.slice_gib == 0
+                || previous_order.is_some_and(|previous| previous >= order.order_id)
+                || !chunkers.contains_key(&order.chunker_handle)
+                || order
+                    .lane
+                    .as_ref()
+                    .is_some_and(|lane| !lanes.contains_key(lane))
+            {
+                return Err(CapacityError::InvalidCheckpoint(
+                    "outstanding capacity order is invalid or non-canonical".to_owned(),
+                ));
+            }
+            previous_order = Some(order.order_id);
+            allocated_total_gib = allocated_total_gib
+                .checked_add(order.slice_gib)
+                .ok_or_else(|| {
+                    CapacityError::InvalidCheckpoint(
+                        "outstanding capacity allocation overflow".to_owned(),
+                    )
+                })?;
+            let chunker_total = allocated_by_chunker
+                .entry(order.chunker_handle.clone())
+                .or_default();
+            *chunker_total = chunker_total.checked_add(order.slice_gib).ok_or_else(|| {
+                CapacityError::InvalidCheckpoint("chunker capacity allocation overflow".to_owned())
+            })?;
+            if let Some(lane) = &order.lane {
+                let lane_total = allocated_by_lane.entry(lane.clone()).or_default();
+                *lane_total = lane_total.checked_add(order.slice_gib).ok_or_else(|| {
+                    CapacityError::InvalidCheckpoint("lane capacity allocation overflow".to_owned())
+                })?;
+            }
+            outstanding_orders.insert(
+                order.order_id,
+                OrderAllocation {
+                    slice_gib: order.slice_gib,
+                    chunker_handle: order.chunker_handle,
+                    lane: order.lane,
+                    issued_at: order.issued_at,
+                    deadline_at: order.deadline_at,
+                },
+            );
+        }
+        if allocated_total_gib != checkpoint.allocated_total_gib
+            || allocated_total_gib > checkpoint.committed_total_gib
+        {
+            return Err(CapacityError::InvalidCheckpoint(
+                "total capacity allocation disagrees with outstanding orders".to_owned(),
+            ));
+        }
+        for (handle, allocation) in &chunkers {
+            if allocation.allocated
+                != allocated_by_chunker
+                    .get(handle)
+                    .copied()
+                    .unwrap_or_default()
+            {
+                return Err(CapacityError::InvalidCheckpoint(format!(
+                    "chunker `{handle}` allocation disagrees with outstanding orders"
+                )));
+            }
+        }
+        for (lane_id, allocation) in &lanes {
+            if allocation.allocated != allocated_by_lane.get(lane_id).copied().unwrap_or_default() {
+                return Err(CapacityError::InvalidCheckpoint(format!(
+                    "lane `{lane_id}` allocation disagrees with outstanding orders"
+                )));
+            }
+        }
+
+        Ok(Self {
+            declaration_payload: checkpoint.declaration_payload,
+            provider_id: checkpoint.provider_id,
+            committed_total_gib: checkpoint.committed_total_gib,
+            chunkers,
+            lanes,
+            allocated_total_gib,
+            outstanding_orders,
+            metadata: checkpoint.metadata,
+            declaration_window: checkpoint.declaration_window,
+        })
     }
 
     fn ensure_chunker_supported(&self, order: &ReplicationOrderV1) -> Result<(), CapacityError> {
@@ -254,6 +670,7 @@ impl ActiveCapacity {
                 slice_gib,
                 chunker_handle: order.chunking_profile.clone(),
                 lane: assignment.lane.clone(),
+                issued_at: order.issued_at,
                 deadline_at: order.deadline_at,
             },
         );
@@ -310,7 +727,7 @@ impl ActiveCapacity {
     }
 
     fn snapshot(&self) -> CapacityUsageSnapshot {
-        let chunkers = self
+        let mut chunkers = self
             .chunkers
             .iter()
             .map(|(handle, allocation)| ChunkerUsage {
@@ -320,8 +737,9 @@ impl ActiveCapacity {
                 available_gib: allocation.available(),
             })
             .collect::<Vec<_>>();
+        chunkers.sort_by(|left, right| left.handle.cmp(&right.handle));
 
-        let lanes = self
+        let mut lanes = self
             .lanes
             .iter()
             .map(|(lane, allocation)| LaneUsage {
@@ -331,8 +749,9 @@ impl ActiveCapacity {
                 available_gib: allocation.available(),
             })
             .collect::<Vec<_>>();
+        lanes.sort_by(|left, right| left.lane_id.cmp(&right.lane_id));
 
-        let outstanding_orders = self
+        let mut outstanding_orders = self
             .outstanding_orders
             .iter()
             .map(|(order_id, allocation)| OutstandingOrder {
@@ -340,9 +759,11 @@ impl ActiveCapacity {
                 slice_gib: allocation.slice_gib,
                 chunker_handle: allocation.chunker_handle.clone(),
                 lane: allocation.lane.clone(),
+                issued_at: allocation.issued_at,
                 deadline_at: allocation.deadline_at,
             })
             .collect::<Vec<_>>();
+        outstanding_orders.sort_by_key(|order| order.order_id);
 
         CapacityUsageSnapshot {
             provider_id: Some(self.provider_id),
@@ -447,6 +868,7 @@ struct OrderAllocation {
     slice_gib: u64,
     chunker_handle: String,
     lane: Option<String>,
+    issued_at: u64,
     deadline_at: u64,
 }
 
@@ -510,6 +932,8 @@ pub struct OutstandingOrder {
     pub chunker_handle: String,
     /// Optional lane identifier associated with the order.
     pub lane: Option<String>,
+    /// Timestamp when governance issued the order.
+    pub issued_at: u64,
     /// Deadline (seconds) when ingestion must be complete.
     pub deadline_at: u64,
 }
@@ -567,7 +991,7 @@ pub struct ReplicationRelease {
 }
 
 /// Declaration record window used to expose registry metadata.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct DeclarationWindow {
     /// Epoch (inclusive) when the declaration was registered.
     pub registered_epoch: u64,
@@ -580,6 +1004,20 @@ pub struct DeclarationWindow {
 /// Errors raised while managing capacity declarations or scheduling replication orders.
 #[derive(Debug, Error)]
 pub enum CapacityError {
+    /// A configured authoritative-state ceiling was reached.
+    #[error("capacity resource `{resource}` exhausted (limit {limit})")]
+    ResourceExhausted {
+        /// Bounded resource label.
+        resource: &'static str,
+        /// Configured entry ceiling.
+        limit: usize,
+    },
+    /// Replacing a declaration would discard live reservations.
+    #[error("cannot replace capacity declaration while {count} orders remain outstanding")]
+    DeclarationReplacementWhileOrdersOutstanding {
+        /// Outstanding reservation count.
+        count: usize,
+    },
     /// Failure decoding the canonical Norito payload for the declaration.
     #[error("failed to decode capacity declaration payload: {0}")]
     DecodeDeclaration(norito::core::Error),
@@ -659,6 +1097,15 @@ pub enum CapacityError {
     /// Internal allocation tracking underflowed while releasing capacity.
     #[error("capacity allocation underflowed internal counters")]
     AllocationUnderflow,
+    /// A durable checkpoint failed structural or accounting validation.
+    #[error("invalid capacity runtime checkpoint: {0}")]
+    InvalidCheckpoint(String),
+    /// A durable checkpoint could not be committed.
+    #[error("capacity runtime checkpoint failed: {0}")]
+    Checkpoint(String),
+    /// The in-memory capacity state lock was poisoned.
+    #[error("capacity state lock poisoned")]
+    StateLockPoisoned,
 }
 
 #[cfg(test)]
@@ -848,6 +1295,111 @@ mod tests {
         assert!(matches!(
             err,
             CapacityError::OrderNotScheduled { order_id } if order_id == [0xAB; 32]
+        ));
+    }
+
+    #[test]
+    fn failed_lane_reservation_is_transactional() {
+        let (manager, record) = make_record_and_manager();
+        manager
+            .record_declaration(&record)
+            .expect("record declaration");
+        let mut order = make_order(100);
+        order.assignments[0].lane = Some("missing".to_owned());
+        assert!(matches!(
+            manager
+                .schedule_order(&order)
+                .expect_err("unknown lane must fail"),
+            CapacityError::UnknownLane { .. }
+        ));
+        let snapshot = manager.usage_snapshot();
+        assert_eq!(snapshot.allocated_total_gib, 0);
+        assert_eq!(snapshot.chunkers[0].allocated_gib, 0);
+        assert_eq!(snapshot.lanes[0].allocated_gib, 0);
+        assert!(snapshot.outstanding_orders.is_empty());
+    }
+
+    #[test]
+    fn configured_limit_refuses_excess_orders_and_live_declaration_replacement() {
+        let (_, record) = make_record_and_manager();
+        let manager = CapacityManager::with_entry_limit(1);
+        manager
+            .record_declaration(&record)
+            .expect("record declaration");
+        let first = make_order(100);
+        manager
+            .schedule_order(&first)
+            .expect("schedule first order")
+            .expect("targeted plan");
+
+        let mut second = make_order(100);
+        second.order_id = [0x34; 32];
+        assert!(matches!(
+            manager
+                .schedule_order(&second)
+                .expect_err("second order must be refused"),
+            CapacityError::ResourceExhausted {
+                resource: "outstanding_orders",
+                limit: 1
+            }
+        ));
+        assert!(matches!(
+            manager
+                .record_declaration(&record)
+                .expect_err("live reservations must block declaration replacement"),
+            CapacityError::DeclarationReplacementWhileOrdersOutstanding { count: 1 }
+        ));
+        assert_eq!(manager.usage_snapshot().allocated_total_gib, 100);
+    }
+
+    #[test]
+    fn checkpoint_roundtrip_preserves_orders_and_rejects_forged_accounting() {
+        let (manager, record) = make_record_and_manager();
+        manager
+            .record_declaration(&record)
+            .expect("record declaration");
+        manager
+            .schedule_order(&make_order(100))
+            .expect("schedule order")
+            .expect("targeted plan");
+        let checkpoint = manager.checkpoint().expect("checkpoint");
+        let expected = norito::to_bytes(&checkpoint).expect("encode checkpoint");
+
+        let restored = CapacityManager::with_entry_limit(8);
+        restored
+            .restore_checkpoint(checkpoint.clone())
+            .expect("restore checkpoint");
+        assert_eq!(
+            norito::to_bytes(&restored.checkpoint().expect("restored checkpoint"))
+                .expect("encode restored checkpoint"),
+            expected
+        );
+        assert_eq!(restored.usage_snapshot().allocated_total_gib, 100);
+
+        let mut forged_total = checkpoint.clone();
+        forged_total
+            .active
+            .as_mut()
+            .expect("active checkpoint")
+            .allocated_total_gib = 99;
+        assert!(matches!(
+            CapacityManager::with_entry_limit(8)
+                .restore_checkpoint(forged_total)
+                .expect_err("forged total must fail"),
+            CapacityError::InvalidCheckpoint(_)
+        ));
+
+        let mut corrupt_declaration = checkpoint;
+        corrupt_declaration
+            .active
+            .as_mut()
+            .expect("active checkpoint")
+            .declaration_payload = b"not-norito".to_vec();
+        assert!(matches!(
+            CapacityManager::with_entry_limit(8)
+                .restore_checkpoint(corrupt_declaration)
+                .expect_err("corrupt declaration must fail"),
+            CapacityError::InvalidCheckpoint(_)
         ));
     }
 }

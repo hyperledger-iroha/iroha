@@ -256,6 +256,7 @@ final class ToriiDaClientTests: XCTestCase {
         try SorafsGatewayProvider(
             name: "p1",
             providerIdHex: String(repeating: "a", count: 64),
+            gatewayPublicKeyHex: String(repeating: "ab", count: 32),
             baseURL: URL(string: "https://p1.example.com")!,
             streamTokenB64: Data([0x01, 0x02]).base64EncodedString()
         )

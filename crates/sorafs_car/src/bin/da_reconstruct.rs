@@ -3,7 +3,7 @@
 use std::{
     fs::{self, File},
     io::{self, BufWriter, Read, Write},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use clap::Parser;
@@ -18,6 +18,7 @@ use norito::{
 use std::os::unix::fs::OpenOptionsExt;
 
 const DEFAULT_CHUNK_TEMPLATE: &str = "chunk_{index:05}.bin";
+const MAX_CHUNK_TEMPLATE_WIDTH: usize = 20;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -116,6 +117,7 @@ fn reconstruct_payload(
     if manifest.chunks.is_empty() {
         return Err(eyre!("manifest does not contain any chunk commitments"));
     }
+    render_chunk_template(chunk_template, 0)?;
     let mut ordered_chunks = manifest.chunks.iter().collect::<Vec<_>>();
     ordered_chunks.sort_by_key(|chunk| chunk.index);
 
@@ -239,20 +241,50 @@ fn decode_manifest_bytes(raw: &[u8]) -> Result<Vec<u8>> {
     let Ok(text) = std::str::from_utf8(raw) else {
         return Ok(raw.to_vec());
     };
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
+    if text.is_empty() {
         return Err(eyre!("manifest file is empty"));
     }
-    let mut body = trimmed.strip_prefix("0x").unwrap_or(trimmed).to_owned();
-    body.retain(|c| !c.is_whitespace());
-    if body.is_empty() {
-        return Err(eyre!("manifest hex payload is empty"));
+
+    let compact = text
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .collect::<String>();
+    if compact.is_empty() {
+        return Err(eyre!("manifest file is empty"));
     }
-    if body.chars().all(|c| c.is_ascii_hexdigit()) && body.len() % 2 == 0 {
-        let bytes = hex::decode(body).wrap_err("failed to decode manifest hex payload")?;
-        return Ok(bytes);
+    let compact_without_prefix = compact
+        .strip_prefix("0x")
+        .or_else(|| compact.strip_prefix("0X"))
+        .unwrap_or(compact.as_str());
+    let looks_like_hex = !compact_without_prefix.is_empty()
+        && compact_without_prefix
+            .chars()
+            .all(|c| c.is_ascii_hexdigit());
+
+    if !looks_like_hex {
+        return Ok(raw.to_vec());
     }
-    Ok(raw.to_vec())
+    if compact != text {
+        return Err(eyre!(
+            "manifest hex payload must be canonical lowercase hex without whitespace"
+        ));
+    }
+    if text.starts_with("0x") || text.starts_with("0X") {
+        return Err(eyre!("manifest hex payload must not use a 0x prefix"));
+    }
+    if !text
+        .chars()
+        .all(|c| c.is_ascii_digit() || matches!(c, 'a'..='f'))
+    {
+        return Err(eyre!("manifest hex payload must use lowercase hex"));
+    }
+    if text.len() % 2 != 0 {
+        return Err(eyre!(
+            "manifest hex payload must contain an even number of digits"
+        ));
+    }
+
+    hex::decode(text).wrap_err("failed to decode manifest hex payload")
 }
 
 fn render_chunk_template(template: &str, index: usize) -> Result<String> {
@@ -269,12 +301,7 @@ fn render_chunk_template(template: &str, index: usize) -> Result<String> {
                 .find('}')
                 .ok_or_else(|| eyre!("chunk template missing closing `}}`"))?;
             let spec = &rest[..end];
-            if !spec.is_empty() {
-                width = Some(
-                    spec.parse::<usize>()
-                        .map_err(|err| eyre!("invalid width `{spec}`: {err}"))?,
-                );
-            }
+            width = Some(parse_chunk_template_width(spec)?);
             cursor = &rest[end..];
         }
         if !cursor.starts_with('}') {
@@ -298,7 +325,65 @@ fn render_chunk_template(template: &str, index: usize) -> Result<String> {
             "chunk template `{template}` must contain `{{index}}` placeholder"
         ));
     }
+    validate_chunk_file_name(&output)?;
     Ok(output)
+}
+
+fn parse_chunk_template_width(spec: &str) -> Result<usize> {
+    if spec.is_empty() {
+        return Err(eyre!("chunk template width must not be empty"));
+    }
+    if spec.as_bytes().iter().any(u8::is_ascii_whitespace) {
+        return Err(eyre!("chunk template width must not contain whitespace"));
+    }
+
+    let digits = spec.strip_prefix('0').unwrap_or(spec);
+    if digits.is_empty() {
+        return Err(eyre!("chunk template width must be greater than zero"));
+    }
+    if digits.starts_with('0') {
+        return Err(eyre!(
+            "chunk template width must use at most one zero-padding marker"
+        ));
+    }
+    if !digits.chars().all(|c| c.is_ascii_digit()) {
+        return Err(eyre!(
+            "chunk template width must be canonical decimal digits"
+        ));
+    }
+    let width = digits
+        .parse::<usize>()
+        .map_err(|err| eyre!("invalid chunk template width `{spec}`: {err}"))?;
+    if width == 0 || width > MAX_CHUNK_TEMPLATE_WIDTH {
+        return Err(eyre!(
+            "chunk template width {width} is out of range 1..={MAX_CHUNK_TEMPLATE_WIDTH}"
+        ));
+    }
+    Ok(width)
+}
+
+fn validate_chunk_file_name(file_name: &str) -> Result<()> {
+    if file_name.is_empty() {
+        return Err(eyre!("rendered chunk filename must not be empty"));
+    }
+    if file_name.chars().any(char::is_control) {
+        return Err(eyre!(
+            "rendered chunk filename must not contain control characters"
+        ));
+    }
+    if file_name.contains('/') || file_name.contains('\\') {
+        return Err(eyre!(
+            "rendered chunk filename `{file_name}` must be a single path component"
+        ));
+    }
+
+    let mut components = Path::new(file_name).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(_)), None) => Ok(()),
+        _ => Err(eyre!(
+            "rendered chunk filename `{file_name}` must be a regular filename"
+        )),
+    }
 }
 
 fn write_summary_json(
@@ -510,6 +595,10 @@ mod tests {
             "chunk_007.bin"
         );
         assert_eq!(
+            render_chunk_template("chunk_{index:3}.bin", 7).expect("render"),
+            "chunk_007.bin"
+        );
+        assert_eq!(
             render_chunk_template("prefix_{index}_suffix", 42).expect("render"),
             "prefix_42_suffix"
         );
@@ -517,7 +606,33 @@ mod tests {
     }
 
     #[test]
-    fn decode_manifest_allows_hex_payloads() {
+    fn render_chunk_template_rejects_unsafe_or_noncanonical_forms() {
+        for template in [
+            "chunk_{index:}.bin",
+            "chunk_{index:0005}.bin",
+            "chunk_{index:21}.bin",
+            "chunk_{index:+5}.bin",
+            "chunk_{index: 5}.bin",
+            "../chunk_{index}.bin",
+            "/tmp/chunk_{index}.bin",
+            "nested/chunk_{index}.bin",
+            "nested\\chunk_{index}.bin",
+            "chunk_{index}\n.bin",
+        ] {
+            let err = render_chunk_template(template, 1).expect_err("invalid template must fail");
+            let message = err.to_string();
+            assert!(
+                message.contains("width")
+                    || message.contains("single path component")
+                    || message.contains("regular filename")
+                    || message.contains("control characters"),
+                "unexpected error for {template:?}: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn decode_manifest_accepts_canonical_hex_payloads() {
         let (manifest, _) = sample_manifest();
         let bytes = to_bytes(&manifest).expect("encode manifest");
         let encoded = hex::encode(&bytes);
@@ -526,6 +641,22 @@ mod tests {
 
         let parsed: DaManifestV1 = decode_from_bytes(&decoded).expect("decode manifest");
         assert_eq!(parsed.chunks.len(), manifest.chunks.len());
+    }
+
+    #[test]
+    fn decode_manifest_rejects_noncanonical_hex_payloads() {
+        for payload in ["", "0x4e52", "4E52", "4e52\n", "4e 52", "4e5"] {
+            let err = decode_manifest_bytes(payload.as_bytes()).expect_err("invalid hex must fail");
+            let message = err.to_string();
+            assert!(
+                message.contains("empty")
+                    || message.contains("0x prefix")
+                    || message.contains("lowercase")
+                    || message.contains("whitespace")
+                    || message.contains("even number"),
+                "unexpected error for {payload:?}: {message}"
+            );
+        }
     }
 
     #[test]
@@ -724,7 +855,7 @@ mod tests {
             manifest.lane_id,
             manifest.epoch,
             42,
-            manifest.client_blob_id.clone(),
+            manifest.client_blob_id,
             manifest_digest,
             DaProofScheme::KzgBls12_381,
             chunk_root_hash,

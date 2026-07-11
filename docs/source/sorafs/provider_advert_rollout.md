@@ -74,7 +74,8 @@ The following metrics are already exposed via `iroha_telemetry`:
 
 - `torii_sorafs_admission_total{result,reason}` — counts accepted, rejected,
   and warning outcomes. Reasons include `admission_missing`, `unknown_capabilities`,
-  `stale`, and `policy_violation`.
+  `stale`, `future_issued`, `non_monotonic_issued_at`, `replay_checkpoint`, and
+  `policy_violation`.
 
 Grafana export: [`docs/source/grafana_sorafs_admission.json`](../grafana_sorafs_admission.json).
 Import the file into the shared dashboards repository (`observability/dashboards`)
@@ -172,6 +173,16 @@ Run `scripts/check_prometheus_rules.sh dashboards/alerts/sorafs_provider_admissi
 - Unknown capability TLVs without `allow_unknown_capabilities=true` → reject with
   `reason="unknown_capabilities"`.
 - `signature_strict=false` → reject (reserved for isolated diagnostics).
+- Signature failure after changing timestamps, policy flags, algorithm, public
+  key, or body → reject; all are bound by the domain-separated envelope signature.
+- `issued_at` later than the receiving node's current time → reject with
+  `reason="future_issued"`.
+- Older or conflicting same-timestamp replacement → reject with
+  `reason="non_monotonic_issued_at"` and retain the current cache record.
+- Durable replay checkpoint write/load failure → fail closed with
+  `reason="replay_checkpoint"`; preserve the current cache on write failure and
+  disable discovery on startup corruption. Investigate filesystem integrity and
+  restore the last known-good checkpoint rather than deleting it.
 - Expired `refresh_deadline` → reject.
 
 ## Communication & Incident Handling

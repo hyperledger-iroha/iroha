@@ -7,7 +7,7 @@
 # user-local `validator_secrets.local.toml` rendered through
 # `python3 scripts/render_taira_validator_bundle.py --roster ... --secrets ... --output-dir ...`.
 
-chain = "809574f5-fee7-5e69-bfcf-52451e42d50f"
+chain = "fc56984b-2be7-431d-840e-21514d1883f0"
 chain_discriminant = 369
 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
 private_key = "REPLACE_WITH_VALIDATOR_PRIVATE_KEY"
@@ -18,6 +18,11 @@ trusted_peers = [
 trusted_peers_pop = [
   { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" },
 ]
+
+[sumeragi]
+protocol_version = 2
+round_timeout_ms = 10000
+role = "validator"
 
 [ivm.banner]
 show = true
@@ -99,6 +104,8 @@ known_capabilities = ["torii_gateway", "chunk_range_fetch"]
 
 [sorafs.discovery.admission]
 envelopes_dir = "configs/soranexus/taira/sorafs_admission"
+trusted_council_keys = ["REPLACE_WITH_TAIRA_SORAFS_COUNCIL_PUBLIC_KEY"]
+signature_threshold = "REPLACE_WITH_TAIRA_SORAFS_COUNCIL_SIGNATURE_THRESHOLD"
 
 [sorafs.discovery.publish]
 gateway_base_url = "https://taira.sora.org"
@@ -166,8 +173,7 @@ max_bytes_per_minute = 104857600
 
 [sumeragi.block]
 max_transactions = 96
-max_ivm_transactions = 32
-fast_finality_max_transactions = 16
+max_payload_bytes = 16777216
 proposal_queue_scan_multiplier = 4
 
 [sumeragi.da]
@@ -241,6 +247,7 @@ poll_interval_ms = 10000
 
 [nexus.autoscale]
 enabled = true
+# Legacy names: this half-open lane-id range reserves lane 4 for deterministic creation.
 min_lanes = 4
 max_lanes = 5
 target_block_ms = 1000

@@ -63,7 +63,7 @@ cargo test -p sorafs_car --features cli fetch_command_respects_direct_transports
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
-  --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
+  --provider name=gw-regulated,provider-id=001122...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64
 ```- يقوم البرنامج النصي بتشغيل أعلام CLI ومفتاح = ملفات تكوين القيمة (sm.`docs/examples/sorafs_direct_mode_smoke.conf`). قبل تقديم ملخص البيان وتسجيل الإعلان، يتم تقديم المزيد من المعلومات.
 - `--policy` في الغراب `docs/examples/sorafs_direct_mode_policy.json`، ولكن يمكن أن يسبق أي أوركسترا JSON، المهندس المعماري `sorafs_orchestrator::bindings::config_to_json`. يبدأ CLI السياسة من خلال `--orchestrator-config=PATH`، ويتيح حرية الملاحة بدون أعلام قريبة.
 - إذا كان `sorafs_cli` موجودًا في `PATH`، فسوف ينضم إليه من كريت `sorafs_orchestrator` (ملف تعريف الإصدار)، من أجل دخان الدخان تم التحقق من نظام إعادة التوزيع بشكل كامل.

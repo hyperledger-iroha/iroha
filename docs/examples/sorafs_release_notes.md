@@ -53,6 +53,15 @@
   (from `manifest.sign.summary.json`).
 
 ## Notes for Operators
+- Every HTTP gateway provider descriptor now requires
+  `gateway-key=<32-byte Ed25519 public key hex>`. Distribute that pin through
+  authenticated provider inventory and rotate it together with a newly issued
+  token; never trust a key learned only from the token response.
+- Stream-token signatures are domain separated over
+  `b"sorafs.stream-token.signature.v1\0" || canonical_norito_body`. Legacy
+  body-only signatures are rejected. Gateway client origins must use public
+  HTTPS port 443 at `/`; redirects, local/private/reserved addresses,
+  credentials, queries, fragments, and non-root paths are rejected.
 - The Torii gateway now enforces the `X-Sora-Chunk-Range` capability header. Update
   allowlists so clients presenting the new stream token scopes are admitted; older tokens
   without the range claim will be throttled.

@@ -458,8 +458,8 @@ mod tests {
 
     use super::{super::EventFilter, *};
     use crate::{
-        ValidationFail, merge::MergeQuorumCertificate,
-        transaction::error::TransactionRejectionReason::*,
+        ValidationFail, block::consensus::LaneBlockCommitment, merge::MergeQuorumCertificate,
+        peer::PeerId, transaction::error::TransactionRejectionReason::*,
     };
 
     impl BlockHeader {
@@ -484,20 +484,60 @@ mod tests {
         }
     }
     fn sample_pipeline_events() -> Vec<PipelineEventBox> {
+        let lane_incarnation = Hash::new(b"pipeline-event-lane-incarnation");
+        let settlement_commitment = LaneBlockCommitment {
+            block_height: 9,
+            lane_id: LaneId::SINGLE,
+            lane_incarnation,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            tx_count: 0,
+            total_local_micro: 0,
+            total_xor_due_micro: 0,
+            total_xor_after_haircut_micro: 0,
+            total_xor_variance_micro: 0,
+            swap_metadata: None,
+            receipts: Vec::new(),
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
+        };
         let merge_entry = MergeLedgerEntry {
             epoch_id: 42,
+            lane_catalog_hash: Hash::new(b"pipeline-event-catalog"),
+            active_lanes: vec![crate::merge::MergeLaneBinding {
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+                lane_config_hash: Hash::new(b"pipeline-event-lane-config"),
+                incarnation: lane_incarnation,
+                activation_height: 0,
+            }],
+            incarnation_root: Hash::new(b"pipeline-event-incarnation-root"),
+            activation_root: Hash::new(b"pipeline-event-activation-root"),
             lane_snapshots: vec![crate::merge::MergeLaneSnapshot {
                 lane_id: LaneId::SINGLE,
+                lane_incarnation,
+                incarnation_activation_height: 0,
+                proposal_height: 9,
                 dataspace_id: DataSpaceId::UNIVERSAL,
                 lane_block_height: 9,
                 tip_hash: HashOf::from_untyped_unchecked(Hash::prehashed([3_u8; Hash::LENGTH])),
                 merge_hint_root: Hash::new(b"hint"),
+                settlement_hash: HashOf::new(&settlement_commitment),
+                settlement_commitment,
+                relay_envelope: None,
             }],
+            execution_batch: None,
             global_state_root: Hash::new(b"global"),
             merge_qc: MergeQuorumCertificate::new(
                 7,
                 42,
+                43,
+                HashOf::from_untyped_unchecked(Hash::new(b"carrier-parent")),
+                Hash::new(b"chain"),
+                1,
+                HashOf::new(&Vec::<PeerId>::new()),
+                Vec::new(),
                 vec![0x01],
+                Vec::new(),
                 vec![0xAA],
                 Hash::new(b"digest"),
             ),

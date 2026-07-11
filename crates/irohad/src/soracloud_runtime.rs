@@ -13986,7 +13986,9 @@ mod tests {
 
     use eyre::Result;
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
-    use iroha_crypto::{Algorithm, PrivateKey, PublicKey, Signature};
+    use iroha_crypto::{
+        Algorithm, BlsNormal, KeyGenOption, KeyPair, PrivateKey, PublicKey, Signature,
+    };
     use iroha_data_model::asset::AssetDefinitionId;
     use iroha_data_model::{
         Level,
@@ -14032,9 +14034,10 @@ mod tests {
         EndpointAttestationV1, EndpointMetadata, EndpointMetadataKey, ManifestBuilder,
         PROVIDER_ADMISSION_ENVELOPE_VERSION_V1, PROVIDER_ADMISSION_PROPOSAL_VERSION_V1,
         PROVIDER_ADVERT_VERSION_V1, PathDiversityPolicy, PinPolicy as ManifestPinPolicy,
-        ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1, ProviderAdvertBodyV1,
-        ProviderAdvertV1, ProviderCapabilityRangeV1, QosHints, RendezvousTopic, SignatureAlgorithm,
-        StakePointer, StreamBudgetV1, TransportHintV1, compute_advert_body_digest,
+        ProviderAdmissionCouncilPolicy, ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1,
+        ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1, ProviderVrfPublicKeyV1,
+        QosHints, RendezvousTopic, SignatureAlgorithm, StakePointer, StreamBudgetV1,
+        TransportHintV1, compute_advert_body_digest, compute_envelope_authorization_digest,
         compute_proposal_digest,
     };
 
@@ -15426,8 +15429,7 @@ mod tests {
             stream_budget: stream_budget.clone(),
             transport_hints: transport_hints.clone(),
         };
-        let body_bytes = norito::to_bytes(&body)?;
-        let advert = ProviderAdvertV1 {
+        let mut advert = ProviderAdvertV1 {
             version: PROVIDER_ADVERT_VERSION_V1,
             issued_at,
             expires_at,
@@ -15435,14 +15437,25 @@ mod tests {
             signature: sorafs_manifest::AdvertSignature {
                 algorithm: SignatureAlgorithm::Ed25519,
                 public_key: advert_public_payload.to_vec(),
-                signature: Signature::try_new(&advert_key, &body_bytes)
-                    .wrap_err("sign Soracloud provider advert fixture")?
-                    .payload()
-                    .to_vec(),
+                signature: vec![0; 64],
             },
             signature_strict: true,
             allow_unknown_capabilities: false,
         };
+        let advert_signature_payload = advert
+            .signature_payload_bytes()
+            .wrap_err("encode Soracloud provider advert signature envelope")?;
+        advert.signature.signature = Signature::try_new(&advert_key, &advert_signature_payload)
+            .wrap_err("sign Soracloud provider advert fixture")?
+            .payload()
+            .to_vec();
+        advert
+            .verify_signature()
+            .wrap_err("verify Soracloud provider advert fixture signature")?;
+        let (vrf_public, vrf_private) =
+            BlsNormal::keypair(KeyGenOption::UseSeed(provider_id.to_vec()))
+                .wrap_err("derive Soracloud provider VRF fixture key")?;
+        let vrf_pair: KeyPair = (vrf_public, vrf_private).into();
         let proposal = ProviderAdmissionProposalV1 {
             version: PROVIDER_ADMISSION_PROPOSAL_VERSION_V1,
             provider_id,
@@ -15464,13 +15477,21 @@ mod tests {
                 },
             }],
             advert_key: advert_public_payload,
+            por_vrf_key: ProviderVrfPublicKeyV1::BlsNormal(
+                vrf_pair
+                    .public_key()
+                    .to_bytes()
+                    .1
+                    .try_into()
+                    .expect("Normal BLS public key is 48 bytes"),
+            ),
             jurisdiction_code: "US".to_owned(),
             contact_uri: Some("mailto:ops@example.test".to_owned()),
             stream_budget,
             transport_hints,
         };
         let proposal_digest = compute_proposal_digest(&proposal)?;
-        let envelope = ProviderAdmissionEnvelopeV1 {
+        let mut envelope = ProviderAdmissionEnvelopeV1 {
             version: PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
             proposal,
             proposal_digest,
@@ -15478,16 +15499,19 @@ mod tests {
             advert_body_digest: compute_advert_body_digest(&body)?,
             issued_at,
             retention_epoch: expires_at + 600,
-            council_signatures: vec![CouncilSignature {
-                signer: council_public_payload,
-                signature: Signature::try_new(&council_key, &proposal_digest)
-                    .wrap_err("sign Soracloud provider admission fixture")?
-                    .payload()
-                    .to_vec(),
-            }],
+            council_signatures: Vec::new(),
             notes: None,
         };
-        let admission = AdmissionRegistry::from_envelopes([envelope])?;
+        let authorization_digest = compute_envelope_authorization_digest(&envelope)?;
+        envelope.council_signatures.push(CouncilSignature {
+            signer: council_public_payload,
+            signature: Signature::try_new(&council_key, &authorization_digest)
+                .wrap_err("sign Soracloud provider admission fixture")?
+                .payload()
+                .to_vec(),
+        });
+        let policy = ProviderAdmissionCouncilPolicy::new([council_public_payload], 1)?;
+        let admission = AdmissionRegistry::from_envelopes(policy, [envelope])?;
         let mut cache = ProviderAdvertCache::new(
             vec![
                 CapabilityType::ToriiGateway,
@@ -16466,7 +16490,12 @@ mod tests {
                 .local_inrou_host_capability_refresh_candidate(&view)
                 .is_none()
         );
-        assert!(manager.pending_inrou_host_capability_advert.lock().is_none());
+        assert!(
+            manager
+                .pending_inrou_host_capability_advert
+                .lock()
+                .is_none()
+        );
         Ok(())
     }
 
@@ -16499,8 +16528,8 @@ mod tests {
             "/tmp/test-soracloud-runtime-host-refresh-pending-duplicate",
         ));
         config.inrou.proxy_only = true;
-        config = config
-            .with_local_host_identity(ALICE_ID.clone(), "12D3KooWRuntimeHostRefreshPending");
+        config =
+            config.with_local_host_identity(ALICE_ID.clone(), "12D3KooWRuntimeHostRefreshPending");
         let state = test_state().expect("test state");
         let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
         let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state))
@@ -16554,9 +16583,8 @@ mod tests {
         pending_capability.heartbeat_expires_at_ms =
             now_ms.saturating_add(inrou_host_heartbeat_refresh_margin_ms(&config));
         *manager.pending_inrou_host_capability_advert.lock() = Some(pending_capability);
-        *manager.last_inrou_host_advert_attempt_ms.lock() = Some(
-            now_ms.saturating_sub(INROU_HOST_ADVERT_ATTEMPT_COOLDOWN_MS + 1),
-        );
+        *manager.last_inrou_host_advert_attempt_ms.lock() =
+            Some(now_ms.saturating_sub(INROU_HOST_ADVERT_ATTEMPT_COOLDOWN_MS + 1));
         let candidate = manager
             .build_local_inrou_host_capability_record(now_ms)
             .expect("host identity configured");

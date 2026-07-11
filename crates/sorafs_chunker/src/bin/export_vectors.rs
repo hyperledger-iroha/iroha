@@ -69,19 +69,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn parse_cli() -> Result<CliOptions, CliError> {
+    parse_cli_from(env::args().skip(1))
+}
+
+fn parse_cli_from<I>(args: I) -> Result<CliOptions, CliError>
+where
+    I: IntoIterator<Item = String>,
+{
     let mut options = CliOptions::default();
-    let mut args = env::args().skip(1);
+    let mut args = args.into_iter();
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-h" | "--help" => return Err(CliError::Help),
             value if value.starts_with("--signing-key=") => {
                 let cleaned = clean_hex(&value["--signing-key=".len()..], "--signing-key")?;
+                validate_signing_key_hex(&cleaned)?;
                 set_option(&mut options.signing_key_hex, cleaned, "--signing-key")?;
             }
             "--signing-key" => {
                 let raw = take_value(&mut args, "--signing-key")?;
                 let cleaned = clean_hex(&raw, "--signing-key")?;
+                validate_signing_key_hex(&cleaned)?;
                 set_option(&mut options.signing_key_hex, cleaned, "--signing-key")?;
             }
             value if value.starts_with("--signer=") => {
@@ -136,24 +145,50 @@ fn set_option<T>(slot: &mut Option<T>, value: T, flag: &str) -> Result<(), CliEr
 }
 
 fn clean_hex(value: &str, flag: &str) -> Result<String, CliError> {
-    let trimmed = value.trim();
-    let trimmed = trimmed.strip_prefix("0x").unwrap_or(trimmed);
-    if trimmed.is_empty() {
+    if value.is_empty() {
         return Err(CliError::Message(format!(
             "{flag} requires a non-empty hex value"
         )));
     }
-    if !trimmed.len().is_multiple_of(2) {
+    if value.as_bytes().iter().any(u8::is_ascii_whitespace) {
+        return Err(CliError::Message(format!(
+            "{flag} must not contain ASCII whitespace"
+        )));
+    }
+    if value.starts_with("0x") || value.starts_with("0X") {
+        return Err(CliError::Message(format!(
+            "{flag} must be raw lowercase hex without a 0x prefix"
+        )));
+    }
+    if !value.len().is_multiple_of(2) {
         return Err(CliError::Message(format!(
             "{flag} value must contain an even number of hex digits"
         )));
     }
-    if !trimmed.chars().all(|ch| ch.is_ascii_hexdigit()) {
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
         return Err(CliError::Message(format!(
-            "{flag} value must be hex-encoded"
+            "{flag} value must be lowercase hex-encoded"
         )));
     }
-    Ok(trimmed.to_ascii_lowercase())
+    Ok(value.to_owned())
+}
+
+fn validate_signing_key_hex(cleaned: &str) -> Result<(), CliError> {
+    if cleaned.len() != 64 && cleaned.len() != 128 {
+        return Err(CliError::Message(
+            "--signing-key must be a 32- or 64-byte hex string (64 or 128 hex characters)"
+                .to_owned(),
+        ));
+    }
+    if cleaned.as_bytes().iter().all(|byte| *byte == b'0') {
+        return Err(CliError::Message(
+            "--signing-key material must not be all zero".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_signer_len(cleaned: &str) -> Result<(), CliError> {
@@ -655,10 +690,8 @@ fn verify_signatures(
             .and_then(Value::as_str)
             .ok_or_else(|| "signature entry missing signature".to_owned())?;
 
-        let signer_bytes =
-            hex::decode(signer_hex).map_err(|err| format!("failed to decode signer hex: {err}"))?;
-        let signature_bytes = hex::decode(signature_hex)
-            .map_err(|err| format!("failed to decode signature hex: {err}"))?;
+        let signer_bytes = decode_canonical_hex_exact(signer_hex, "signer", 32)?;
+        let signature_bytes = decode_canonical_hex_exact(signature_hex, "signature", 64)?;
 
         let public_key = PublicKey::from_bytes(Algorithm::Ed25519, &signer_bytes)
             .map_err(|err| format!("invalid signer public key: {err}"))?;
@@ -677,6 +710,39 @@ fn verify_signatures(
             .map_err(|err| format!("signature verification failed: {err}"))?;
     }
     Ok(())
+}
+
+fn decode_canonical_hex_exact(
+    value: &str,
+    field: &str,
+    expected_len: usize,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    if value.as_bytes().iter().any(u8::is_ascii_whitespace) {
+        return Err(format!("{field} hex must not contain ASCII whitespace").into());
+    }
+    if value.starts_with("0x") || value.starts_with("0X") {
+        return Err(format!("{field} hex must not include a 0x prefix").into());
+    }
+    let expected_digits = expected_len
+        .checked_mul(2)
+        .ok_or_else(|| format!("{field} expected length overflow"))?;
+    if value.len() != expected_digits {
+        return Err(
+            format!("{field} hex must be {expected_digits} lowercase hex characters").into(),
+        );
+    }
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(format!("{field} hex must be lowercase hex").into());
+    }
+    let decoded =
+        hex::decode(value).map_err(|err| format!("failed to decode {field} hex: {err}"))?;
+    if decoded.iter().all(|byte| *byte == 0) {
+        return Err(format!("{field} material must not be all zero").into());
+    }
+    Ok(decoded)
 }
 
 fn write_fuzz_corpora(
@@ -965,6 +1031,14 @@ mod tests {
         to_hex(public_bytes)
     }
 
+    fn expect_cli_message(result: Result<CliOptions, CliError>) -> String {
+        match result {
+            Err(CliError::Message(message)) => message,
+            Err(CliError::Help) => panic!("expected CLI validation error, got help"),
+            Ok(_) => panic!("expected CLI validation error, got parsed options"),
+        }
+    }
+
     fn read_signers(path: &Path) -> Vec<String> {
         let bytes = fs::read(path).expect("read manifest signatures");
         let value: Value = json::from_slice(&bytes).expect("parse manifest signatures json");
@@ -982,6 +1056,84 @@ mod tests {
                     .to_owned()
             })
             .collect()
+    }
+
+    #[test]
+    fn parse_cli_rejects_noncanonical_signing_material() {
+        for (value, expected) in [
+            ("", "non-empty"),
+            (
+                " 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+                "whitespace",
+            ),
+            (
+                "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f ",
+                "whitespace",
+            ),
+            (
+                "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+                "0x prefix",
+            ),
+            (
+                "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F",
+                "lowercase",
+            ),
+            ("00", "32- or 64-byte"),
+            (
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                "all zero",
+            ),
+        ] {
+            let err = expect_cli_message(parse_cli_from([format!("--signing-key={value}")]));
+            assert!(
+                err.contains(expected),
+                "unexpected error for {value:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_cli_accepts_canonical_signing_material_and_signer() {
+        let signer = derive_public_hex(SIGNING_KEY_1);
+        let options = parse_cli_from([
+            format!("--signing-key={SIGNING_KEY_1}"),
+            format!("--signer={signer}"),
+            "--signature-out=fixtures/sorafs_chunker/manifest_signatures.json".to_owned(),
+        ])
+        .unwrap_or_else(|_| panic!("canonical CLI inputs must parse"));
+
+        assert_eq!(options.signing_key_hex.as_deref(), Some(SIGNING_KEY_1));
+        assert_eq!(options.signer_hex.as_deref(), Some(signer.as_str()));
+        assert!(options.signature_out.is_some());
+    }
+
+    #[test]
+    fn parse_cli_rejects_noncanonical_signer_material() {
+        for (value, expected) in [
+            ("", "non-empty"),
+            (
+                " 03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+                "whitespace",
+            ),
+            (
+                "0x03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+                "0x prefix",
+            ),
+            (
+                "03A107BFF3CE10BE1D70DD18E74BC09967E4D6309BA50D5F1DDC8664125531B8",
+                "lowercase",
+            ),
+            ("03a107", "32-byte"),
+        ] {
+            let err = expect_cli_message(parse_cli_from([
+                format!("--signing-key={SIGNING_KEY_1}"),
+                format!("--signer={value}"),
+            ]));
+            assert!(
+                err.contains(expected),
+                "unexpected signer error for {value:?}: {err}"
+            );
+        }
     }
 
     #[test]
@@ -1120,6 +1272,66 @@ mod tests {
         };
         write_manifest_signatures(&dir, &vectors, manifest_digest, &second_cli)
             .expect("appending second signature must succeed");
+
+        fs::remove_dir_all(&dir).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn existing_manifest_signatures_reject_noncanonical_hex_fields() {
+        let dir = temp_dir();
+        let vectors = FixtureProfile::SF1_V1.generate_vectors();
+        prepare_fixture_files(&dir, &vectors);
+        let manifest_digest = write_manifest(&dir, &vectors).expect("write manifest");
+        let signature_path = dir.join("manifest_signatures.json");
+
+        let signer_cli = CliOptions {
+            signature_out: Some(signature_path.clone()),
+            signing_key_hex: Some(SIGNING_KEY_1.to_owned()),
+            ..CliOptions::default()
+        };
+        write_manifest_signatures(&dir, &vectors, manifest_digest, &signer_cli)
+            .expect("signing should succeed");
+
+        let baseline: Value =
+            json::from_slice(&fs::read(&signature_path).expect("read signatures"))
+                .expect("signature json parses");
+        for (field, value, expected) in [
+            (
+                "signer",
+                format!("0x{}", derive_public_hex(SIGNING_KEY_1)),
+                "0x prefix",
+            ),
+            (
+                "signer",
+                derive_public_hex(SIGNING_KEY_1).to_ascii_uppercase(),
+                "lowercase",
+            ),
+            ("signer", "00".repeat(32), "all zero"),
+            ("signature", "00".repeat(64), "all zero"),
+            ("signature", "ab".repeat(63), "128 lowercase hex characters"),
+        ] {
+            let mut tampered = baseline.clone();
+            let first = tampered
+                .get_mut("signatures")
+                .and_then(Value::as_array_mut)
+                .and_then(|signatures| signatures.first_mut())
+                .and_then(Value::as_object_mut)
+                .expect("signature entry");
+            first.insert(field.to_owned(), Value::from(value));
+            let bytes = json::to_vec_pretty(&tampered).expect("serialize signature json");
+            fs::write(&signature_path, bytes).expect("write tampered signatures");
+
+            let verify_cli = CliOptions {
+                signature_out: Some(signature_path.clone()),
+                ..CliOptions::default()
+            };
+            let err = write_manifest_signatures(&dir, &vectors, manifest_digest, &verify_cli)
+                .expect_err("noncanonical signature field must fail verification");
+            assert!(
+                err.to_string().contains(expected),
+                "unexpected error for {field}: {err}"
+            );
+        }
 
         fs::remove_dir_all(&dir).expect("cleanup temp dir");
     }

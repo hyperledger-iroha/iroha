@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_ai_prescreen_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 9a1fa874ef600e346ac8085728dde9aafe9db6e9e1e22f73fcbf1779d5679fc6
+source_hash: 6b49966e7623c6a40d192cf88cec4b619da9c4a0506c3c6de29758e9932b0d55
 source_last_modified: "2026-07-06T20:15:01.175288+00:00"
 translation_last_reviewed: 2026-07-05
 source_mtime: "2026-07-06T20:15:01.175288+00:00"
@@ -615,7 +615,7 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   moderation honey-audit \
   --manifest-id=<hex32> \
   --honey=<digest_hex> \
-  --provider name=<alias>,provider-id=<hex32>,base-url=<url>,stream-token=<base64>
+  --provider name=<alias>,provider-id=<hex32>,gateway-key=<ed25519-public-key-hex>,base-url=https://gateway.example/,stream-token=<base64>
 
 iroha sorafs moderation quarantine list --limit 25
 

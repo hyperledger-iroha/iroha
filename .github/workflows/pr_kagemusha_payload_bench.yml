@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/pr_kagemusha_payload_bench.yml"
+      - ".github/workflows/mobile_sdk_artifacts.yml"
       - "Cargo.toml"
       - "ci/check_connect_norito_bridge_header.sh"
       - "ci/check_no_tracked_python_bytecode.sh"
@@ -14,12 +15,16 @@ on:
       - "ci/check_kagemusha_recursive_spend_python_sdk.sh"
       - "ci/check_kagemusha_recursive_spend_jvm_sdk.sh"
       - "ci/check_kagemusha_recursive_spend_swift_sdk.sh"
+      - "ci/check_swift_confidential_unshield_redeem_e2e.sh"
       - "ci/check_kagemusha_recursive_spend_csharp_sdk.sh"
       - "ci/check_kagemusha_recursive_spend_js_sdk.sh"
       - "ci/check_kagemusha_recursive_spend_payload_bench.sh"
       - "scripts/check_android_device_lab_slot.py"
       - "scripts/sign_android_device_lab_evidence.py"
       - "scripts/kagemusha_android_device_lab_slot.py"
+      - "scripts/build_norito_xcframework.sh"
+      - "scripts/check_mobile_sdk_artifacts.sh"
+      - "scripts/check_mobile_sdk_artifacts_test.sh"
       - "scripts/kagemusha_pull_android_device_lab_raw_slot.py"
       - "scripts/kagemusha_android_attestation_report.py"
       - "scripts/android_keystore_attestation.sh"
@@ -62,13 +67,19 @@ on:
       - "crates/iroha_data_model/src/offline/**"
       - "crates/iroha_cli/src/zk.rs"
       - "crates/iroha_core/src/zk.rs"
+      - "crates/iroha_core/Cargo.toml"
       - "crates/iroha_core/src/smartcontracts/isi/offline.rs"
+      - "crates/iroha_core/examples/confidential_v2_vk_json.rs"
+      - "crates/iroha_core/tests/swift_confidential_unshield_redeem.rs"
       - "crates/iroha_torii/Cargo.toml"
       - "crates/iroha_torii/src/lib.rs"
       - "crates/iroha_torii/src/openapi.rs"
+      - "crates/iroha_torii/src/routing.rs"
       - "crates/iroha_torii/src/offline_issuer.rs"
       - "crates/iroha_torii/src/offline_v2_issuer.rs"
       - "crates/iroha_torii/tests/grouped/nexus_sorafs.rs"
+      - "crates/iroha_torii/tests/grouped/zk.rs"
+      - "crates/iroha_torii/tests/zk_vk_get_integration.rs"
       - "crates/iroha_torii/tests/offline_readiness_smoke.rs"
       - "crates/iroha_torii/tests/offline_v2_readiness_smoke.rs"
       - "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs"
@@ -82,6 +93,7 @@ on:
       - "IrohaSwift/Sources/IrohaSwift/Crypto.swift"
       - "IrohaSwift/Sources/IrohaSwift/AssetDefinitionAddress.swift"
       - "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
+      - "IrohaSwift/Sources/IrohaSwift/Norito.swift"
       - "IrohaSwift/Sources/IrohaSwift/ConnectAsyncSequence.swift"
       - "IrohaSwift/Sources/IrohaSwift/ConnectClient.swift"
       - "IrohaSwift/Sources/IrohaSwift/ConnectCodec.swift"
@@ -100,6 +112,7 @@ on:
       - "IrohaSwift/Sources/IrohaSwift/ConnectSession.swift"
       - "IrohaSwift/Sources/IrohaSwift/NexusAppClient.swift"
       - "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift"
+      - "IrohaSwift/Sources/IrohaSwift/PrivacyConfidentialWitness.swift"
       - "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift"
       - "IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteProver.swift"
       - "IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteV2Prover.swift"
@@ -144,6 +157,7 @@ on:
       - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift"
       - "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKSigningAlgorithmTests.swift"
@@ -172,6 +186,10 @@ on:
       - "IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/PrivacyConfidentialWitnessTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/ConfidentialUnshieldRedeemNativeTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKConfidentialUnshieldWorkflowTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/NoritoTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/ToriiCanonicalRequestTests.swift"
@@ -825,7 +843,10 @@ on:
       - "python/iroha_torii_client/__init__.py"
       - "python/iroha_torii_client/client.py"
       - "python/iroha_torii_client/tests/test_client.py"
+      - "docs/portal/static/openapi/manifest.json"
       - "docs/portal/static/openapi/torii.json"
+      - "docs/portal/static/openapi/versions.json"
+      - "docs/portal/static/openapi/versions/current/manifest.json"
       - "docs/portal/static/openapi/versions/current/torii.json"
       - "docs/source/offline_kagemusha.md"
       - "docs/source/offline_note_v2_attestation.md"
@@ -873,13 +894,29 @@ jobs:
           cargo test -p connect_norito_bridge kagemusha_recursive_compact_ffi_rejects_windowed_records_before_unavailable --lib -- --test-threads=1
           RUST_MIN_STACK=67108864 CARGO_PROFILE_TEST_OPT_LEVEL=3 CARGO_PROFILE_TEST_DEBUG=0 cargo test -p connect_norito_bridge kagemusha_recursive_compact_ffi_fails_closed_and_rejects_adversarial_inputs --lib -- --test-threads=1
 
-  kagemusha_swift_sdk_parse:
-    runs-on: macos-latest
-    timeout-minutes: 10
+  kagemusha_unshield_redeem_rust_tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - name: Kagemusha recursive spend Swift SDK parse
-        run: ci/check_kagemusha_recursive_spend_swift_sdk.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+      - name: Confidential-unshield redeem Torii and resolver tests
+        run: |
+          cargo test -p iroha_torii --features app_api --test torii_zk zk_vk_get_returns_record_with_key -- --nocapture
+          cargo test -p iroha_core kagemusha_recursive_redeem_resolver_enforces_unshield_verifier_lifecycle_at_block_height --lib -- --nocapture
+
+  kagemusha_swift_sdk_parse:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+      - name: Swift confidential-unshield redeem SDK and native interoperability
+        run: ci/check_swift_confidential_unshield_redeem_e2e.sh
 
   kagemusha_csharp_sdk_tests:
     runs-on: ${{ matrix.os }}
@@ -948,7 +985,7 @@ jobs:
         run: ci/check_kagemusha_recursive_spend_python_sdk.sh
 
   kagemusha_payload_bench:
-    needs: [kagemusha_native_bridge_tests, kagemusha_swift_sdk_parse, kagemusha_csharp_sdk_tests, kagemusha_javascript_sdk_tests, kagemusha_jvm_sdk_tests, kagemusha_python_sdk_tests]
+    needs: [kagemusha_native_bridge_tests, kagemusha_unshield_redeem_rust_tests, kagemusha_swift_sdk_parse, kagemusha_csharp_sdk_tests, kagemusha_javascript_sdk_tests, kagemusha_jvm_sdk_tests, kagemusha_python_sdk_tests]
     runs-on: ubuntu-latest
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08

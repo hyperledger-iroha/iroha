@@ -7,7 +7,7 @@ use std::{
     convert::TryInto,
     fs,
     net::SocketAddr,
-    num::NonZeroU64,
+    num::{NonZeroU64, NonZeroUsize},
     path::PathBuf,
     str::FromStr,
     sync::Arc,
@@ -40,7 +40,7 @@ use iroha_core::{
     state::{State, StateReadOnly, WorldReadOnly},
     tx::AcceptedTransaction,
 };
-use iroha_crypto::{KeyPair, PrivateKey, Signature};
+use iroha_crypto::{Algorithm, BlsNormal, KeyGenOption, KeyPair, PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
     ChainId, IntoKeyValue, Registrable,
     block::BlockHeader,
@@ -65,6 +65,7 @@ use iroha_torii::{
         api::StorageStateResponseDto,
         discovery::{
             AdvertError, AdvertIngest, AdvertIngestResult, AdvertWarning, ProviderAdvertCache,
+            ReplayCheckpointError,
         },
         unix_now_secs,
     },
@@ -82,10 +83,11 @@ use sorafs_manifest::{
     EndpointAdmissionV1, EndpointAttestationKind, EndpointAttestationV1, EndpointKind,
     EndpointMetadata, EndpointMetadataKey, GovernanceProofs, MANIFEST_DAG_CODEC, ManifestBuilder,
     ManifestV1, PROVIDER_ADVERT_VERSION_V1, PathDiversityPolicy, PinPolicy, ProfileId,
-    ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1, ProviderAdvertBodyV1,
-    ProviderAdvertV1, ProviderCapabilityRangeV1, QosHints, RendezvousTopic, SignatureAlgorithm,
-    StakePointer, StorageClass as ManifestStorageClass, StreamBudgetV1, TransportHintV1,
-    TransportProtocol, compute_advert_body_digest, compute_proposal_digest,
+    ProviderAdmissionCouncilPolicy, ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1,
+    ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1, QosHints, RendezvousTopic,
+    SignatureAlgorithm, StakePointer, StorageClass as ManifestStorageClass, StreamBudgetV1,
+    TransportHintV1, TransportProtocol, compute_advert_body_digest,
+    compute_envelope_authorization_digest, compute_proposal_digest,
     pin_registry::{
         AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
     },
@@ -450,7 +452,7 @@ fn provider_cache_warns_when_chunk_range_missing() {
 }
 
 #[test]
-fn provider_cache_warns_when_signature_not_strict() {
+fn provider_cache_rejects_relaxed_signature_policy_even_when_signed() {
     let signing_key = SigningKey::from_bytes(&[0x91; 32]);
     let modern_fixture = make_signed_advert(
         &signing_key,
@@ -476,13 +478,15 @@ fn provider_cache_warns_when_signature_not_strict() {
 
     let mut advert = modern_fixture.advert.clone();
     advert.signature_strict = false;
-    let result = cache
+    resign_advert(&mut advert, &signing_key);
+    let err = cache
         .ingest(advert, ISSUED_AT + 25)
-        .expect("advert should be accepted with signature warning");
+        .expect_err("Torii must reject a remotely relaxed signature policy");
     assert!(
-        result.warnings.contains(&AdvertWarning::SignatureNotStrict),
-        "ingestion must warn about signature_not_strict"
+        matches!(err, AdvertError::SignaturePolicyDisabled),
+        "expected mandatory signature policy failure, got: {err:?}"
     );
+    assert!(cache.is_empty(), "rejected advert must not be cached");
 }
 
 #[test]
@@ -501,15 +505,14 @@ fn provider_cache_rejects_soranet_transport_without_capability() {
         ],
         false,
     );
-    let registry = AdmissionRegistry::from_envelopes([fixture.envelope.clone()])
-        .expect("soranet admission envelope valid");
+    let registry = admission_registry_from_fixtures(std::slice::from_ref(&fixture));
     let mut cache = ProviderAdvertCache::new(
         [
             CapabilityType::ToriiGateway,
             CapabilityType::ChunkRangeFetch,
             CapabilityType::SoraNetHybridPq,
         ],
-        Arc::new(registry),
+        registry,
     );
 
     let mut advert = fixture.advert.clone();
@@ -613,6 +616,13 @@ fn provider_cache_rejects_invalid_signature_when_strict() {
         ],
         registry,
     );
+    cache
+        .ingest(fixture.advert.clone(), ISSUED_AT + 31)
+        .expect("valid current advert must be cached");
+    let current_fingerprint = *cache
+        .record_by_provider(&fixture.advert.body.provider_id)
+        .expect("current advert cached")
+        .fingerprint();
 
     let mut advert = fixture.advert.clone();
     advert
@@ -627,6 +637,13 @@ fn provider_cache_rejects_invalid_signature_when_strict() {
     assert!(
         matches!(err, AdvertError::Signature(_)),
         "expected signature failure, got: {err:?}"
+    );
+    assert_eq!(
+        cache
+            .record_by_provider(&fixture.advert.body.provider_id)
+            .expect("invalid replacement preserves current advert")
+            .fingerprint(),
+        &current_fingerprint
     );
 }
 
@@ -668,7 +685,7 @@ fn provider_cache_rejects_all_zero_signature_material_when_strict() {
 }
 
 #[test]
-fn provider_cache_warns_about_invalid_signature_when_bypassed() {
+fn provider_cache_rejects_invalid_signature_with_relaxed_flag() {
     let signing_key = SigningKey::from_bytes(&[0x93; 32]);
     let fixture = make_signed_advert(
         &signing_key,
@@ -691,26 +708,31 @@ fn provider_cache_warns_about_invalid_signature_when_bypassed() {
         ],
         registry,
     );
+    cache
+        .ingest(fixture.advert.clone(), ISSUED_AT + 31)
+        .expect("valid current advert must be cached");
+    let current_fingerprint = *cache
+        .record_by_provider(&fixture.advert.body.provider_id)
+        .expect("current advert cached")
+        .fingerprint();
 
     let mut advert = fixture.advert.clone();
     advert.signature_strict = false;
     if let Some(first) = advert.signature.signature.first_mut() {
         *first ^= 0xAB;
     }
-    let result = cache
+    let err = cache
         .ingest(advert.clone(), ISSUED_AT + 32)
-        .expect("non-strict advert should be accepted with warning");
+        .expect_err("a relaxed remote flag must never bypass signature verification");
     assert!(
-        result.warnings.contains(&AdvertWarning::SignatureInvalid),
-        "ingestion must warn about signature_invalid when verification fails"
+        matches!(err, AdvertError::Signature(_)),
+        "expected signature verification failure, got: {err:?}"
     );
-    let record = cache
+    let stored = cache
         .record_by_provider(&advert.body.provider_id)
-        .expect("record stored after bypass");
-    assert!(
-        record.warnings().contains(&AdvertWarning::SignatureInvalid),
-        "cache record must retain signature_invalid warning"
-    );
+        .expect("invalid replacement must preserve current advert");
+    assert_eq!(stored.fingerprint(), &current_fingerprint);
+    assert_eq!(stored.advert(), &fixture.advert);
 }
 
 #[test]
@@ -803,6 +825,358 @@ fn torii_mesh_rejects_stale_and_duplicate_adverts() {
         1,
         "duplicate advert must not increment store count"
     );
+}
+
+#[test]
+fn provider_cache_rejects_non_monotonic_replacements_without_losing_current_record() {
+    let signing_key = SigningKey::from_bytes(&[0x95; 32]);
+    let fixture = make_signed_advert(
+        &signing_key,
+        [0xA2; 32],
+        [0xB3; 32],
+        vec![CapabilityTlv {
+            cap_type: CapabilityType::ToriiGateway,
+            payload: Vec::new(),
+        }],
+        false,
+    );
+    let registry = admission_registry_from_fixtures(std::slice::from_ref(&fixture));
+    let mut cache = ProviderAdvertCache::new([CapabilityType::ToriiGateway], registry);
+
+    cache
+        .ingest(fixture.advert.clone(), ISSUED_AT + 1)
+        .expect("initial advert stored");
+
+    let mut current = fixture.advert.clone();
+    current.issued_at += 60;
+    current.expires_at += 60;
+    resign_advert(&mut current, &signing_key);
+    assert!(matches!(
+        cache
+            .ingest(current.clone(), current.issued_at)
+            .expect("newer advert replaces initial record")
+            .outcome,
+        AdvertIngest::Replaced { .. }
+    ));
+    let current_fingerprint = *cache
+        .record_by_provider(&current.body.provider_id)
+        .expect("newer record cached")
+        .fingerprint();
+
+    let err = cache
+        .ingest(fixture.advert.clone(), current.issued_at + 1)
+        .expect_err("older signed advert replay must be rejected");
+    assert!(matches!(
+        err,
+        AdvertError::NonMonotonicIssuedAt {
+            current_issued_at,
+            incoming_issued_at,
+            ..
+        } if current_issued_at == current.issued_at
+            && incoming_issued_at == fixture.advert.issued_at
+    ));
+
+    let mut conflicting = current.clone();
+    conflicting.expires_at += 1;
+    resign_advert(&mut conflicting, &signing_key);
+    let err = cache
+        .ingest(conflicting, current.issued_at + 1)
+        .expect_err("same issued_at with different content must be rejected");
+    assert!(matches!(
+        err,
+        AdvertError::NonMonotonicIssuedAt {
+            current_issued_at,
+            incoming_issued_at,
+            ..
+        } if current_issued_at == current.issued_at
+            && incoming_issued_at == current.issued_at
+    ));
+
+    let stored = cache
+        .record_by_provider(&current.body.provider_id)
+        .expect("current record preserved after rejected replacements");
+    assert_eq!(stored.fingerprint(), &current_fingerprint);
+    assert_eq!(stored.advert(), &current);
+    assert_eq!(cache.len(), 1);
+}
+
+#[test]
+fn provider_cache_retains_replay_high_water_after_short_lived_record_is_pruned() {
+    let signing_key = SigningKey::from_bytes(&[0x97; 32]);
+    let fixture = make_signed_advert(
+        &signing_key,
+        [0xA4; 32],
+        [0xB5; 32],
+        vec![CapabilityTlv {
+            cap_type: CapabilityType::ToriiGateway,
+            payload: Vec::new(),
+        }],
+        false,
+    );
+    let registry = admission_registry_from_fixtures(std::slice::from_ref(&fixture));
+    let mut cache = ProviderAdvertCache::new([CapabilityType::ToriiGateway], registry);
+    cache
+        .ingest(fixture.advert.clone(), ISSUED_AT + 1)
+        .expect("initial long-lived advert stored");
+
+    let mut short_lived = fixture.advert.clone();
+    short_lived.issued_at += 60;
+    short_lived.expires_at = short_lived.issued_at + 1;
+    resign_advert(&mut short_lived, &signing_key);
+    cache
+        .ingest(short_lived.clone(), short_lived.issued_at)
+        .expect("newer short-lived advert replaces the initial record");
+
+    let after_short_expiry = short_lived.expires_at + 1;
+    assert_eq!(cache.prune_stale(after_short_expiry), 1);
+    assert!(cache.is_empty());
+    assert!(after_short_expiry < fixture.advert.expires_at);
+
+    let err = cache
+        .ingest(fixture.advert.clone(), after_short_expiry)
+        .expect_err("pruning must not permit replay of an older still-valid advert");
+    assert!(matches!(
+        err,
+        AdvertError::NonMonotonicIssuedAt {
+            current_issued_at,
+            incoming_issued_at,
+            ..
+        } if current_issued_at == short_lived.issued_at
+            && incoming_issued_at == fixture.advert.issued_at
+    ));
+    assert!(cache.is_empty(), "replayed advert must not be restored");
+}
+
+#[test]
+fn provider_cache_persists_replay_high_water_across_restart() {
+    let signing_key = SigningKey::from_bytes(&[0x98; 32]);
+    let fixture = make_signed_advert(
+        &signing_key,
+        [0xA5; 32],
+        [0xB6; 32],
+        vec![CapabilityTlv {
+            cap_type: CapabilityType::ToriiGateway,
+            payload: Vec::new(),
+        }],
+        false,
+    );
+    let registry = admission_registry_from_fixtures(std::slice::from_ref(&fixture));
+    let temp = tempdir().expect("temporary replay checkpoint directory");
+    let checkpoint = temp.path().join("provider-advert-replay.to");
+    let capacity = NonZeroUsize::new(8).unwrap();
+
+    let mut latest = fixture.advert.clone();
+    latest.issued_at += 60;
+    latest.expires_at += 60;
+    resign_advert(&mut latest, &signing_key);
+    {
+        let mut cache = ProviderAdvertCache::new_persistent(
+            [CapabilityType::ToriiGateway],
+            registry.clone(),
+            checkpoint.clone(),
+            capacity,
+        )
+        .expect("initialize persistent cache");
+        cache
+            .ingest(fixture.advert.clone(), ISSUED_AT + 1)
+            .expect("store initial advert");
+        cache
+            .ingest(latest.clone(), latest.issued_at)
+            .expect("store newer advert and durable high-water mark");
+    }
+
+    let mut restarted = ProviderAdvertCache::new_persistent(
+        [CapabilityType::ToriiGateway],
+        registry.clone(),
+        checkpoint.clone(),
+        capacity,
+    )
+    .expect("reload canonical replay checkpoint");
+    assert!(
+        restarted.is_empty(),
+        "adverts themselves are not checkpointed"
+    );
+    let err = restarted
+        .ingest(fixture.advert.clone(), latest.issued_at + 1)
+        .expect_err("restart must not reopen an older advert replay window");
+    assert!(matches!(
+        err,
+        AdvertError::NonMonotonicIssuedAt {
+            current_issued_at,
+            incoming_issued_at,
+            ..
+        } if current_issued_at == latest.issued_at
+            && incoming_issued_at == fixture.advert.issued_at
+    ));
+    assert!(
+        restarted.is_empty(),
+        "replayed advert must not mutate cache"
+    );
+
+    assert!(matches!(
+        restarted
+            .ingest(latest.clone(), latest.issued_at + 1)
+            .expect("exact durable high-water advert may restore the live cache")
+            .outcome,
+        AdvertIngest::Stored { .. }
+    ));
+    drop(restarted);
+
+    let mut restarted_again = ProviderAdvertCache::new_persistent(
+        [CapabilityType::ToriiGateway],
+        registry,
+        checkpoint,
+        capacity,
+    )
+    .expect("reload checkpoint after exact restoration");
+    let mut conflicting = latest.clone();
+    conflicting.expires_at += 1;
+    resign_advert(&mut conflicting, &signing_key);
+    let err = restarted_again
+        .ingest(conflicting, latest.issued_at + 1)
+        .expect_err("same timestamp with different signed content must remain rejected");
+    assert!(matches!(err, AdvertError::NonMonotonicIssuedAt { .. }));
+    assert!(restarted_again.is_empty());
+}
+
+#[test]
+fn provider_cache_corrupt_replay_checkpoint_fails_closed_on_restart() {
+    let signing_key = SigningKey::from_bytes(&[0x99; 32]);
+    let fixture = make_signed_advert(
+        &signing_key,
+        [0xA6; 32],
+        [0xB7; 32],
+        vec![CapabilityTlv {
+            cap_type: CapabilityType::ToriiGateway,
+            payload: Vec::new(),
+        }],
+        false,
+    );
+    let registry = admission_registry_from_fixtures(std::slice::from_ref(&fixture));
+    let temp = tempdir().expect("temporary replay checkpoint directory");
+    let checkpoint = temp.path().join("provider-advert-replay.to");
+    let capacity = NonZeroUsize::new(8).unwrap();
+    let mut cache = ProviderAdvertCache::new_persistent(
+        [CapabilityType::ToriiGateway],
+        registry.clone(),
+        checkpoint.clone(),
+        capacity,
+    )
+    .expect("initialize persistent cache");
+    cache
+        .ingest(fixture.advert, ISSUED_AT + 1)
+        .expect("write valid checkpoint");
+    drop(cache);
+
+    let mut bytes = fs::read(&checkpoint).expect("read checkpoint");
+    let last = bytes.last_mut().expect("checkpoint is non-empty");
+    *last ^= 0x80;
+    fs::write(&checkpoint, bytes).expect("corrupt checkpoint in place");
+
+    let err = ProviderAdvertCache::new_persistent(
+        [CapabilityType::ToriiGateway],
+        registry,
+        checkpoint,
+        capacity,
+    )
+    .expect_err("corrupt checkpoint must disable cache initialization");
+    assert!(matches!(err, ReplayCheckpointError::Codec(_)));
+}
+
+#[test]
+fn provider_cache_checkpoint_failure_rolls_back_memory_state() {
+    let signing_key = SigningKey::from_bytes(&[0x9A; 32]);
+    let fixture = make_signed_advert(
+        &signing_key,
+        [0xA7; 32],
+        [0xB8; 32],
+        vec![CapabilityTlv {
+            cap_type: CapabilityType::ToriiGateway,
+            payload: Vec::new(),
+        }],
+        false,
+    );
+    let registry = admission_registry_from_fixtures(std::slice::from_ref(&fixture));
+    let temp = tempdir().expect("temporary replay checkpoint directory");
+    let checkpoint = temp.path().join("provider-advert-replay.to");
+    let capacity = NonZeroUsize::new(8).unwrap();
+    let mut cache = ProviderAdvertCache::new_persistent(
+        [CapabilityType::ToriiGateway],
+        registry,
+        checkpoint.clone(),
+        capacity,
+    )
+    .expect("initialize persistent cache");
+
+    fs::create_dir(&checkpoint).expect("replace absent checkpoint with a directory");
+    let err = cache
+        .ingest(fixture.advert.clone(), ISSUED_AT + 1)
+        .expect_err("non-file checkpoint target must reject admission");
+    assert!(matches!(err, AdvertError::ReplayCheckpoint(_)));
+    assert!(cache.is_empty(), "failed persistence must not store advert");
+
+    fs::remove_dir(&checkpoint).expect("remove blocking checkpoint directory");
+    assert!(matches!(
+        cache
+            .ingest(fixture.advert, ISSUED_AT + 1)
+            .expect("retry succeeds only if high-water insertion was rolled back")
+            .outcome,
+        AdvertIngest::Stored { .. }
+    ));
+}
+
+#[test]
+fn provider_cache_rejects_tampered_expiry_and_future_issue_without_mutation() {
+    let signing_key = SigningKey::from_bytes(&[0x96; 32]);
+    let fixture = make_signed_advert(
+        &signing_key,
+        [0xA3; 32],
+        [0xB4; 32],
+        vec![CapabilityTlv {
+            cap_type: CapabilityType::ToriiGateway,
+            payload: Vec::new(),
+        }],
+        false,
+    );
+    let registry = admission_registry_from_fixtures(std::slice::from_ref(&fixture));
+    let mut cache = ProviderAdvertCache::new([CapabilityType::ToriiGateway], registry);
+    cache
+        .ingest(fixture.advert.clone(), ISSUED_AT + 1)
+        .expect("initial advert stored");
+    let fingerprint = *cache
+        .record_by_provider(&fixture.advert.body.provider_id)
+        .expect("record cached")
+        .fingerprint();
+
+    let mut extended = fixture.advert.clone();
+    extended.expires_at += 60;
+    let err = cache
+        .ingest(extended, ISSUED_AT + 2)
+        .expect_err("copied signature must not authorize an extended expiry");
+    assert!(matches!(err, AdvertError::Signature(_)));
+
+    let now = ISSUED_AT + 30;
+    let mut future = fixture.advert.clone();
+    future.issued_at = now + 1;
+    future.expires_at += 31;
+    resign_advert(&mut future, &signing_key);
+    let err = cache
+        .ingest(future, now)
+        .expect_err("future-issued advert must be rejected");
+    assert!(matches!(
+        err,
+        AdvertError::Validation(AdvertValidationError::IssuedInFuture {
+            now: observed_now,
+            issued_at,
+        }) if observed_now == now && issued_at == now + 1
+    ));
+
+    let stored = cache
+        .record_by_provider(&fixture.advert.body.provider_id)
+        .expect("existing record preserved after rejected replacements");
+    assert_eq!(stored.fingerprint(), &fingerprint);
+    assert_eq!(stored.advert(), &fixture.advert);
+    assert_eq!(cache.len(), 1);
 }
 
 #[test]
@@ -1049,9 +1423,7 @@ fn make_signed_advert(
     body.validate().expect("test advert body must validate");
     let body_clone = body.clone();
 
-    let body_bytes = norito::to_bytes(&body).expect("serialize body for signing");
-    let signature = signing_key.sign(&body_bytes);
-    let advert = ProviderAdvertV1 {
+    let mut advert = ProviderAdvertV1 {
         version: PROVIDER_ADVERT_VERSION_V1,
         issued_at: ISSUED_AT,
         expires_at: ISSUED_AT
@@ -1061,11 +1433,15 @@ fn make_signed_advert(
         signature: sorafs_manifest::AdvertSignature {
             algorithm: SignatureAlgorithm::Ed25519,
             public_key: signing_key.verifying_key().to_bytes().to_vec(),
-            signature: signature.to_bytes().to_vec(),
+            signature: vec![0; 64],
         },
         signature_strict: true,
         allow_unknown_capabilities,
     };
+    let signature_payload = advert
+        .signature_payload_bytes()
+        .expect("serialize advert envelope for signing");
+    advert.signature.signature = signing_key.sign(&signature_payload).to_bytes().to_vec();
 
     let attestation = EndpointAttestationV1 {
         version: ENDPOINT_ATTESTATION_VERSION_V1,
@@ -1077,6 +1453,9 @@ fn make_signed_advert(
         alpn_ids: vec!["h2".to_owned()],
         report: Vec::new(),
     };
+    let (vrf_public, vrf_private) = BlsNormal::keypair(KeyGenOption::UseSeed(provider_id.to_vec()))
+        .expect("derive provider VRF fixture key");
+    let vrf_pair: KeyPair = (vrf_public, vrf_private).into();
 
     let proposal = ProviderAdmissionProposalV1 {
         version: sorafs_manifest::PROVIDER_ADMISSION_PROPOSAL_VERSION_V1,
@@ -1094,6 +1473,14 @@ fn make_signed_advert(
             attestation,
         }],
         advert_key: signing_key.verifying_key().to_bytes(),
+        por_vrf_key: sorafs_manifest::ProviderVrfPublicKeyV1::BlsNormal(
+            vrf_pair
+                .public_key()
+                .to_bytes()
+                .1
+                .try_into()
+                .expect("Normal BLS public key is 48 bytes"),
+        ),
         jurisdiction_code: "US".to_owned(),
         contact_uri: Some("mailto:ops@example.com".to_owned()),
         stream_budget,
@@ -1106,8 +1493,7 @@ fn make_signed_advert(
         compute_advert_body_digest(&body_clone).expect("compute advert body digest");
 
     let council_key = SigningKey::from_bytes(&[0x42; 32]);
-    let council_signature = council_key.sign(&proposal_digest);
-    let envelope = ProviderAdmissionEnvelopeV1 {
+    let mut envelope = ProviderAdmissionEnvelopeV1 {
         version: sorafs_manifest::PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
         proposal,
         proposal_digest,
@@ -1115,19 +1501,49 @@ fn make_signed_advert(
         advert_body_digest,
         issued_at: ISSUED_AT,
         retention_epoch: ISSUED_AT + TTL_SECS + 3_600,
-        council_signatures: vec![CouncilSignature {
-            signer: council_key.verifying_key().to_bytes(),
-            signature: council_signature.to_bytes().to_vec(),
-        }],
+        council_signatures: Vec::new(),
         notes: None,
     };
+    let authorization_digest = compute_envelope_authorization_digest(&envelope)
+        .expect("compute envelope authorization digest for fixture");
+    let council_signature = council_key.sign(&authorization_digest);
+    envelope.council_signatures.push(CouncilSignature {
+        signer: council_key.verifying_key().to_bytes(),
+        signature: council_signature.to_bytes().to_vec(),
+    });
 
     ProviderFixture { advert, envelope }
+}
+
+fn resign_advert(advert: &mut ProviderAdvertV1, signing_key: &SigningKey) {
+    advert.signature.algorithm = SignatureAlgorithm::Ed25519;
+    advert.signature.public_key = signing_key.verifying_key().to_bytes().to_vec();
+    advert.signature.signature = vec![0; 64];
+    let payload = advert
+        .signature_payload_bytes()
+        .expect("serialize provider advert signature envelope");
+    advert.signature.signature = signing_key.sign(&payload).to_bytes().to_vec();
 }
 
 fn fixtures_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/sorafs_manifest/provider_admission")
+}
+
+fn test_admission_config(envelopes_dir: PathBuf) -> SorafsAdmission {
+    let council_keys = [0x42, 0x45]
+        .into_iter()
+        .map(|seed| {
+            let signing_key = SigningKey::from_bytes(&[seed; 32]);
+            PublicKey::from_bytes(Algorithm::Ed25519, signing_key.verifying_key().as_bytes())
+                .expect("valid test council key")
+        })
+        .collect();
+    SorafsAdmission {
+        envelopes_dir,
+        trusted_council_keys: council_keys,
+        signature_threshold: NonZeroUsize::new(1).expect("non-zero test threshold"),
+    }
 }
 
 fn fixture_from_disk(advert_name: &str, envelope_name: &str) -> ProviderFixture {
@@ -1157,7 +1573,18 @@ fn admission_registry_from_fixtures(fixtures: &[ProviderFixture]) -> Arc<Admissi
         .iter()
         .map(|fixture| fixture.envelope.clone())
         .collect::<Vec<_>>();
-    let registry = AdmissionRegistry::from_envelopes(envelopes)
+    let trusted_signers = envelopes
+        .iter()
+        .flat_map(|envelope| {
+            envelope
+                .council_signatures
+                .iter()
+                .map(|signature| signature.signer)
+        })
+        .collect::<HashSet<_>>();
+    let policy = ProviderAdmissionCouncilPolicy::new(trusted_signers, 1)
+        .expect("fixture council policy must be valid");
+    let registry = AdmissionRegistry::from_envelopes(policy, envelopes)
         .expect("fixture admission registry must be valid");
     Arc::new(registry)
 }
@@ -1172,9 +1599,15 @@ struct ToriiHarness {
     queue: Arc<CoreQueue>,
     chain_id: Arc<ChainId>,
     alias_policy: actual_cfg::SorafsAliasCachePolicy,
+    // Keeps Torii persistence (including the exclusive advert replay lock)
+    // isolated for the lifetime of each parallel test harness.
+    _torii_data_dir: TempDir,
 }
 
 fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
+    let torii_data_dir = tempdir().expect("temporary Torii data directory");
+    let mut cfg = cfg.clone();
+    cfg.torii.data_dir = torii_data_dir.path().join("torii");
     let (kiso, kiso_child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -1220,6 +1653,7 @@ fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
         queue,
         chain_id: chain_id_arc,
         alias_policy,
+        _torii_data_dir: torii_data_dir,
     }
 }
 
@@ -1915,13 +2349,34 @@ async fn sorafs_routes_disabled_when_cache_off() {
 }
 
 #[tokio::test]
+#[should_panic(expected = "SoraFS discovery/admission enforcement requires")]
+async fn sorafs_discovery_startup_rejects_missing_admission_policy() {
+    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    cfg.torii.sorafs_discovery.discovery_enabled = true;
+    cfg.torii.sorafs_discovery.admission = None;
+
+    let _ = build_torii_harness(&cfg);
+}
+
+#[tokio::test]
+#[should_panic(expected = "invalid SoraFS provider admission council policy")]
+async fn sorafs_discovery_startup_rejects_empty_trust_set() {
+    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    let temp = tempdir().expect("temp dir");
+    cfg.torii.sorafs_discovery.discovery_enabled = true;
+    let mut admission = test_admission_config(temp.path().to_path_buf());
+    admission.trusted_council_keys.clear();
+    cfg.torii.sorafs_discovery.admission = Some(admission);
+
+    let _ = build_torii_harness(&cfg);
+}
+
+#[tokio::test]
 async fn sorafs_routes_enabled_with_admission_dir() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let temp = tempdir().expect("temp dir");
     cfg.torii.sorafs_discovery.discovery_enabled = true;
-    cfg.torii.sorafs_discovery.admission = Some(SorafsAdmission {
-        envelopes_dir: temp.path().to_path_buf(),
-    });
+    cfg.torii.sorafs_discovery.admission = Some(test_admission_config(temp.path().to_path_buf()));
 
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
@@ -2954,9 +3409,8 @@ async fn sorafs_pin_manifest_returns_ok_with_fresh_alias_cache_headers() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
     let admission_dir = tempdir().expect("admission dir");
-    cfg.torii.sorafs_discovery.admission = Some(SorafsAdmission {
-        envelopes_dir: admission_dir.path().to_path_buf(),
-    });
+    cfg.torii.sorafs_discovery.admission =
+        Some(test_admission_config(admission_dir.path().to_path_buf()));
     cfg.torii.sorafs_storage.enabled = true;
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
@@ -3127,9 +3581,8 @@ async fn sorafs_pin_manifest_reports_refresh_window_alias_headers() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
     let admission_dir = tempdir().expect("admission dir");
-    cfg.torii.sorafs_discovery.admission = Some(SorafsAdmission {
-        envelopes_dir: admission_dir.path().to_path_buf(),
-    });
+    cfg.torii.sorafs_discovery.admission =
+        Some(test_admission_config(admission_dir.path().to_path_buf()));
     cfg.torii.sorafs_storage.enabled = true;
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
@@ -3262,9 +3715,8 @@ async fn sorafs_pin_manifest_returns_service_unavailable_for_stale_alias() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
     let admission_dir = tempdir().expect("admission dir");
-    cfg.torii.sorafs_discovery.admission = Some(SorafsAdmission {
-        envelopes_dir: admission_dir.path().to_path_buf(),
-    });
+    cfg.torii.sorafs_discovery.admission =
+        Some(test_admission_config(admission_dir.path().to_path_buf()));
     cfg.torii.sorafs_storage.enabled = true;
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
@@ -3397,9 +3849,8 @@ async fn sorafs_pin_manifest_returns_precondition_failed_for_expired_alias() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
     let admission_dir = tempdir().expect("admission dir");
-    cfg.torii.sorafs_discovery.admission = Some(SorafsAdmission {
-        envelopes_dir: admission_dir.path().to_path_buf(),
-    });
+    cfg.torii.sorafs_discovery.admission =
+        Some(test_admission_config(admission_dir.path().to_path_buf()));
     cfg.torii.sorafs_storage.enabled = true;
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
@@ -3507,9 +3958,8 @@ async fn sorafs_pin_manifest_returns_gone_for_revoked_alias() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
     let admission_dir = tempdir().expect("admission dir");
-    cfg.torii.sorafs_discovery.admission = Some(SorafsAdmission {
-        envelopes_dir: admission_dir.path().to_path_buf(),
-    });
+    cfg.torii.sorafs_discovery.admission =
+        Some(test_admission_config(admission_dir.path().to_path_buf()));
     cfg.torii.sorafs_storage.enabled = true;
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
@@ -3609,9 +4059,8 @@ async fn sorafs_alias_listing_reports_successor_refusal() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
     let admission_dir = tempdir().expect("admission dir");
-    cfg.torii.sorafs_discovery.admission = Some(SorafsAdmission {
-        envelopes_dir: admission_dir.path().to_path_buf(),
-    });
+    cfg.torii.sorafs_discovery.admission =
+        Some(test_admission_config(admission_dir.path().to_path_buf()));
     cfg.torii.sorafs_storage.enabled = true;
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
@@ -3772,9 +4221,8 @@ async fn sorafs_alias_listing_reports_governance_revocation() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
     let admission_dir = tempdir().expect("admission dir");
-    cfg.torii.sorafs_discovery.admission = Some(SorafsAdmission {
-        envelopes_dir: admission_dir.path().to_path_buf(),
-    });
+    cfg.torii.sorafs_discovery.admission =
+        Some(test_admission_config(admission_dir.path().to_path_buf()));
     cfg.torii.sorafs_storage.enabled = true;
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;

@@ -63,7 +63,7 @@ Exemple d'utilisation :
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
-  --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
+  --provider name=gw-regulated,provider-id=001122...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64
 ```- Le script apparaît et le bouton CLI, et le fichier de configuration clé=valeur (par exemple `docs/examples/sorafs_direct_mode_smoke.conf`). Avant de publier le résumé du manifeste et de publier une annonce, le fournisseur a produit des informations.
 - `--policy` lors de la suppression du code `docs/examples/sorafs_direct_mode_policy.json`, vous pouvez précéder l'opérateur JSON du générateur `sorafs_orchestrator::bindings::config_to_json`. CLI est responsable de la politique concernant `--orchestrator-config=PATH`, qui s'occupe des problèmes liés aux drapeaux locaux.
 - Si `sorafs_cli` n'est pas dans `PATH`, il s'agit d'un programme de fumée approuvé par `sorafs_orchestrator` (profil de version). поставляемую схему прямого режима.

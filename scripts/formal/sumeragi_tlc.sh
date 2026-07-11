@@ -5287,6 +5287,28 @@ case "$mode" in
     cfg_file="$spec_dir/SumeragiAutoscaleTransitionGate_bug_${cfg_bug_name}.cfg"
     expect_failure=1
     ;;
+  merge-execution-order-fast)
+    module="SumeragiMergeExecutionOrder"
+    cfg_file="$spec_dir/SumeragiMergeExecutionOrder_fast.cfg"
+    ;;
+  merge-execution-order-bug-*)
+    bug_name="${mode#merge-execution-order-bug-}"
+    cfg_bug_name="${bug_name//-/_}"
+    module="SumeragiMergeExecutionOrder"
+    cfg_file="$spec_dir/SumeragiMergeExecutionOrder_bug_${cfg_bug_name}.cfg"
+    expect_failure=1
+    ;;
+  merge-carrier-safety-fast)
+    module="SumeragiMergeCarrierSafety"
+    cfg_file="$spec_dir/SumeragiMergeCarrierSafety_fast.cfg"
+    ;;
+  merge-carrier-safety-bug-*)
+    bug_name="${mode#merge-carrier-safety-bug-}"
+    cfg_bug_name="${bug_name//-/_}"
+    module="SumeragiMergeCarrierSafety"
+    cfg_file="$spec_dir/SumeragiMergeCarrierSafety_bug_${cfg_bug_name}.cfg"
+    expect_failure=1
+    ;;
   commit-quorum-signers-fast)
     module="SumeragiCommitQuorumSignersGate"
     cfg_file="$spec_dir/SumeragiCommitQuorumSignersGate_fast.cfg"

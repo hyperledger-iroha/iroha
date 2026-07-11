@@ -26,8 +26,14 @@ fn main() {
         block_max_transactions: 10,
         da_enabled: false,
         epoch_length_blocks: 0,
-        bls_domain: "bls-iroha2:permissioned-sumeragi:v1".to_string(),
+        bls_domain: "bls-iroha2:permissioned-sumeragi:v2".to_string(),
         npos: None,
+        protocol_version: 2,
+        round_timeout_ms: 10_000,
+        v2_context: Some(
+            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
+            ),
+        ),
     };
     let default_like = ConsensusGenesisParams {
         block_time_ms: default_params.sumeragi().block_time_ms(),
@@ -39,8 +45,14 @@ fn main() {
         block_max_transactions: default_params.block().max_transactions().get(),
         da_enabled: default_params.sumeragi().da_enabled(),
         epoch_length_blocks: 0,
-        bls_domain: "bls-iroha2:permissioned-sumeragi:v1".to_string(),
+        bls_domain: "bls-iroha2:permissioned-sumeragi:v2".to_string(),
         npos: None,
+        protocol_version: 2,
+        round_timeout_ms: 10_000,
+        v2_context: Some(
+            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
+            ),
+        ),
     };
 
     let scenarios = [

@@ -3395,6 +3395,8 @@ mod handle_update_tests {
             proto_version: 1,
             consensus_fingerprint: [0u8; 32],
             config: crate::ConsensusConfigCaps {
+                nexus_policy_digest: [0u8; 32],
+                v2_config_fingerprint: [0u8; 32],
                 collectors_k: 0,
                 redundant_send_r: 0,
                 da_enabled: false,

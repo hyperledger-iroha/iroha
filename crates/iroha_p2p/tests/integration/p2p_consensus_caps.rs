@@ -39,6 +39,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Dummy {
 
 fn sample_consensus_config_caps() -> ConsensusConfigCaps {
     ConsensusConfigCaps {
+        nexus_policy_digest: [0xA5; 32],
+        v2_config_fingerprint: [0xC3; 32],
         collectors_k: 1,
         redundant_send_r: iroha_config::parameters::defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
         da_enabled: true,
@@ -52,6 +54,22 @@ fn sample_consensus_config_caps() -> ConsensusConfigCaps {
         rbc_store_max_bytes: 536_870_912,
         rbc_store_soft_bytes: 402_653_184,
     }
+}
+
+#[test]
+fn consensus_config_caps_wire_roundtrip_preserves_admission_digests() {
+    let expected = sample_consensus_config_caps();
+    let encoded = expected.encode();
+    let mut cursor = encoded.as_slice();
+    let decoded = ConsensusConfigCaps::decode(&mut cursor).expect("decode consensus config caps");
+
+    assert!(
+        cursor.is_empty(),
+        "decoder must consume the complete caps wire payload"
+    );
+    assert_eq!(decoded, expected);
+    assert_eq!(decoded.nexus_policy_digest, [0xA5; 32]);
+    assert_eq!(decoded.v2_config_fingerprint, [0xC3; 32]);
 }
 
 fn cfg(addr: iroha_primitives::addr::SocketAddr) -> Config {
@@ -195,8 +213,8 @@ async fn consensus_caps_match_connects() {
     let config_caps = sample_consensus_config_caps();
 
     let caps = ConsensusHandshakeCaps {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
-        proto_version: 1,
+        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
+        proto_version: 2,
         consensus_fingerprint: [1u8; 32],
         config: config_caps.clone(),
     };
@@ -250,14 +268,14 @@ async fn consensus_caps_mismatch_rejected() {
     let config_caps = sample_consensus_config_caps();
 
     let caps_ok = ConsensusHandshakeCaps {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
-        proto_version: 1,
+        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
+        proto_version: 2,
         consensus_fingerprint: [2u8; 32],
         config: config_caps.clone(),
     };
     let caps_bad = ConsensusHandshakeCaps {
-        mode_tag: "iroha2-consensus::npos-sumeragi@v1".to_string(), // mismatch
-        proto_version: 1,
+        mode_tag: "iroha2-consensus::npos-sumeragi@v2".to_string(), // mismatch
+        proto_version: 2,
         consensus_fingerprint: [2u8; 32],
         config: config_caps,
     };
@@ -312,17 +330,17 @@ async fn consensus_config_caps_mismatch_rejected() {
 
     let config_caps = sample_consensus_config_caps();
     let mut mismatched = config_caps.clone();
-    mismatched.collectors_k = 2;
+    mismatched.v2_config_fingerprint = [0xD4; 32];
 
     let caps_ok = ConsensusHandshakeCaps {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
-        proto_version: 1,
+        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
+        proto_version: 2,
         consensus_fingerprint: [3u8; 32],
         config: config_caps,
     };
     let caps_bad = ConsensusHandshakeCaps {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
-        proto_version: 1,
+        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
+        proto_version: 2,
         consensus_fingerprint: [3u8; 32],
         config: mismatched,
     };

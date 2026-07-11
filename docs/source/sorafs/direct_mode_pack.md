@@ -102,12 +102,14 @@ Example usage:
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
-  --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
+  --provider name=gw-regulated,provider-id=001122...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64
 ```
 
 - The script respects both CLI flags and key=value config files (see
   `docs/examples/sorafs_direct_mode_smoke.conf`). Populate the manifest digest
-  and provider advert entries with production values before running.
+  and provider advert entries with production values before running. Obtain
+  each `gateway-key` through the authenticated provider inventory; never trust
+  a public key delivered only alongside the token it is meant to verify.
 - `--policy` defaults to `docs/examples/sorafs_direct_mode_policy.json`, but any
   orchestrator JSON produced by `sorafs_orchestrator::bindings::config_to_json`
   can be supplied. The CLI now accepts the policy via

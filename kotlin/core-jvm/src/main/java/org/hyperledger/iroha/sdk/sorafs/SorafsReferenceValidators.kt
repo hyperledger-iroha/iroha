@@ -76,11 +76,14 @@ enum class SorafsOrderbookCancelReason(@JvmField val bridgeCode: Int) {
 class SorafsReferenceValidators private constructor() {
     companion object {
         private const val LIBRARY_NAME = "connect_norito_bridge"
-        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 12
+        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 16
         private val nativeAvailable: Boolean = loadLibrary()
 
         @JvmStatic
         fun isNativeAvailable(): Boolean = nativeAvailable
+
+        internal fun isBridgeAbiSupported(version: Int): Boolean =
+            version >= REQUIRED_BRIDGE_ABI_VERSION
 
         @JvmStatic
         @JvmOverloads
@@ -171,6 +174,53 @@ class SorafsReferenceValidators private constructor() {
             }
         }
 
+        /** Derive the canonical V1 order id from owner-account bytes and nonce. */
+        @JvmStatic
+        fun deriveOrderbookOrderId(ownerAccount: ByteArray, nonce: Long): ByteArray {
+            val ownerBytes = requireNonEmptyBytes(ownerAccount, "ownerAccount")
+            requirePositive(nonce, "nonce")
+            requireNative()
+            val orderId = requireBytesOutput(
+                nativeDeriveOrderbookOrderId(ownerBytes, nonce),
+                "SoraFS orderbook order id derivation",
+            )
+            check(orderId.size == 32) {
+                "SoraFS orderbook order id derivation returned a non-32-byte identifier"
+            }
+            return orderId
+        }
+
+        /** Build and sign an order request with its canonical derived order id. */
+        @JvmStatic
+        @JvmOverloads
+        fun buildSignedOrderbookOrderRequest(
+            side: SorafsOrderbookSide,
+            tier: SorafsOrderbookTier,
+            pricePerGibMicroXor: String,
+            quantityGib: Long,
+            ownerAccount: ByteArray,
+            expiryUnix: Long,
+            nonce: Long,
+            makerFeeBps: Int,
+            takerFeeBps: Int,
+            privateKey: ByteArray,
+            remainingGib: Long = quantityGib,
+        ): ByteArray =
+            buildSignedOrderbookOrderRequest(
+                deriveOrderbookOrderId(ownerAccount, nonce),
+                side,
+                tier,
+                pricePerGibMicroXor,
+                quantityGib,
+                ownerAccount,
+                expiryUnix,
+                nonce,
+                makerFeeBps,
+                takerFeeBps,
+                privateKey,
+                remainingGib,
+            )
+
         @JvmStatic
         @JvmOverloads
         fun buildSignedOrderbookOrderRequest(
@@ -194,6 +244,10 @@ class SorafsReferenceValidators private constructor() {
             requirePositive(remainingGib, "remainingGib")
             requirePositive(expiryUnix, "expiryUnix")
             requirePositive(nonce, "nonce")
+            val canonicalOrderId = deriveOrderbookOrderId(ownerBytes, nonce)
+            require(orderIdBytes.contentEquals(canonicalOrderId)) {
+                "orderId must equal the canonical owner-and-nonce derivation"
+            }
             val makerFee = requireFeeBps(makerFeeBps, "makerFeeBps")
             val takerFee = requireFeeBps(takerFeeBps, "takerFeeBps")
             val key = requirePrivateKey(privateKey)
@@ -490,7 +544,7 @@ class SorafsReferenceValidators private constructor() {
         private fun loadLibrary(): Boolean =
             try {
                 System.loadLibrary(LIBRARY_NAME)
-                nativeBridgeAbiVersion() >= REQUIRED_BRIDGE_ABI_VERSION
+                isBridgeAbiSupported(nativeBridgeAbiVersion())
             } catch (_: UnsatisfiedLinkError) {
                 false
             } catch (_: SecurityException) {
@@ -529,6 +583,12 @@ class SorafsReferenceValidators private constructor() {
             kind: Int,
             payload: ByteArray,
             privateKey: ByteArray,
+        ): ByteArray?
+
+        @JvmStatic
+        private external fun nativeDeriveOrderbookOrderId(
+            ownerAccount: ByteArray,
+            nonce: Long,
         ): ByteArray?
 
         @JvmStatic

@@ -64,7 +64,7 @@ cargo test -p sorafs_car --features cli fetch_command_respects_direct_transports
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
-  --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
+  --provider name=gw-regulated,provider-id=001122...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64
 ```- يحتوي البرنامج النصي على علامات CLI كملفات تكوين المفتاح = القيمة (استشارة `docs/examples/sorafs_direct_mode_smoke.conf`). قم بملء ملخص البيان وإدخالات إعلانات المورّد بقيم الإنتاج قبل التنفيذ.
 - `--policy` معيب هو `docs/examples/sorafs_direct_mode_policy.json`، لكن يمكن تلخيص أي JSON من المُنشئ المنتج بواسطة `sorafs_orchestrator::bindings::config_to_json`. يقبل CLI السياسة عبر `--orchestrator-config=PATH`، ويتمكن من تنفيذ عمليات إعادة الإنتاج بدون ضبط الأعلام يدويًا.
 - عندما لا يكون `sorafs_cli` موجودًا في `PATH`، يتم تجميع المساعد من الصندوق `sorafs_orchestrator` (إصدار الملف) حتى تقوم اختبارات الرطوبة بتشغيل السباكة بطريقة مباشرة يتم إرسالها.

@@ -633,7 +633,7 @@ def _expected_chain_label(domain: int) -> str | None:
 
 
 def _bsc_profile_for_chain(chain: Any) -> dict[str, Any]:
-    if chain == "bsc-testnet":
+    if type(chain) is str and chain == "bsc-testnet":
         return BSC_CHAIN_PROFILES["bsc-testnet"]
     return BSC_CHAIN_PROFILES["bsc"]
 
@@ -651,7 +651,9 @@ def _route_allowlist_chain_and_id(
     if type(domain) is not int:
         return None
     if domain == SCCP_DOMAIN_BSC:
-        selected_chain = "bsc-testnet" if chain == "bsc-testnet" else "bsc"
+        selected_chain = (
+            "bsc-testnet" if type(chain) is str and chain == "bsc-testnet" else "bsc"
+        )
         return (
             selected_chain,
             str(BSC_CHAIN_PROFILES[selected_chain]["route_allowlist_id"]),
@@ -2720,15 +2722,20 @@ ETHEREUM_RECEIPT_RPC_DUPLICATE_JSON_MARKERS = (
         (
             "_json_object_without_duplicate_keys",
             "JSON-RPC returned duplicate JSON keys",
+            "live JSON duplicate-key helpers use exact strings",
             "JSON-RPC {method} failed with HTTP {exc.code}",
             "JSON-RPC {method} request failed",
             "JSON-RPC {method} returned invalid JSON",
             "JSON-RPC {method} returned error response",
+            "EVM receipt-proof JSON-RPC protocol version uses exact strings",
+            "EVM receipt-proof source-event log data uses exact strings",
+            "EVM receipt-proof receipt status uses exact strings",
             "import ipaddress",
             "import urllib.parse",
             "def _normalize_evm_rpc_url(",
             "def _evm_rpc_host_is_loopback(",
             "def _evm_rpc_host_is_non_public_dns(",
+            "runtime URL host classifiers use exact strings",
             "--rpc-url must use HTTPS unless it is loopback HTTP",
             "--rpc-url HTTPS host must use public DNS",
             "object_pairs_hook=_json_object_without_duplicate_keys",
@@ -2742,10 +2749,15 @@ ETHEREUM_RECEIPT_RPC_DUPLICATE_JSON_MARKERS = (
             "test_collect_receipt_proof_rejects_duplicate_json_rpc_result_keys",
             "test_collect_receipt_proof_rejects_duplicate_json_receipt_fields",
             "test_receipt_json_rpc_rejects_envelope_drift",
+            "hostile receipt JSON-RPC protocol version was accepted",
+            "test_collect_receipt_proof_rejects_hostile_receipt_status_without_hooks",
+            "test_source_event_digest_rejects_hostile_log_data_without_hooks",
+            "hostile source-event log data was accepted",
             "test_receipt_json_rpc_redacts_invalid_json_parser_details",
             "test_receipt_json_rpc_url_rejects_hidden_request_state",
             "malformed receipt RPC URL reached the opener",
             "https://bad_host.rpc.example",
+            "HostileReceiptRpcHost",
             "domain must be eth or bsc",
             "response id",
             "protocol version",
@@ -4586,6 +4598,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "SCCP_DOMAIN_ETH ({SCCP_DOMAIN_ETH})",
             "SCCP_DOMAIN_SORA ({SCCP_DOMAIN_SORA})",
             "ETH source-adapter verifier profile",
+            "ETH source bridge block tag selector uses exact strings",
             "raise TypeError(\"unsupported TOML string value\")",
             "type(value) is str",
             "elif type(value) is str:",
@@ -4620,6 +4633,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "test_eth_source_evidence_rejects_wrong_lane_domains_with_named_constants",
             "test_eth_source_bridge_rejects_hostile_expected_record_hashes_without_hooks",
             "def test_eth_source_exact_string_parsers_reject_subclasses_without_hooks",
+            "def test_eth_source_block_tag_rejects_string_subclasses_without_hooks",
             "HostileEthSourceString",
             "secret-token ETH source string was stripped",
             "def test_eth_source_bridge_fixed_bytes_reject_subclasses_without_hooks",
@@ -4658,6 +4672,8 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "source_domain = SCCP_DOMAIN_BSC",
             "target_domain = SCCP_DOMAIN_SORA",
             "BSC source-adapter verifier profile",
+            "BSC source bridge block tag selector uses exact strings",
+            "BSC source gate profile chain uses exact strings",
             "raise TypeError(\"unsupported TOML string value\")",
             "type(value) is str",
             "elif type(value) is str:",
@@ -4679,6 +4695,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "test_bsc_source_evidence_rejects_boolean_target_domain",
             "test_bsc_toml_rendering_rejects_reused_role_hashes",
             "test_bsc_source_record_hashes_match_rust_vectors",
+            "test_bsc_source_gate_rejects_hostile_profile_chain_without_hooks",
             "test_bsc_direct_record_hashes_reject_cross_role_template_component_hashes",
             "test_bsc_cli_json_summary_and_toml_output",
             "test_bsc_cli_rejects_expected_record_hash_mismatch",
@@ -4691,6 +4708,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "test_bsc_source_evidence_rejects_wrong_lane_domains_with_named_constants",
             "test_bsc_source_bridge_rejects_hostile_expected_record_hashes_without_hooks",
             "def test_bsc_source_exact_string_parsers_reject_subclasses_without_hooks",
+            "def test_bsc_source_block_tag_rejects_string_subclasses_without_hooks",
             "HostileBscSourceString",
             "secret-token BSC source string was stripped",
             "def test_bsc_source_bridge_fixed_bytes_reject_subclasses_without_hooks",
@@ -4704,6 +4722,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "BSC TOML accepted reused source-adapter role hashes",
             "BSC material hash accepted reused role hashes",
             "BSC deployment hash accepted reused role hashes",
+            "BSC source gate accepted hostile profile chain",
             "noncanonical BSC adapter vk hash was accepted",
             "mismatched BSC adapter verifier vk hash was accepted",
             '("11" * 20, "canonical lowercase 0x hex")',
@@ -4723,6 +4742,8 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "{label} must be canonical lowercase 0x hex",
             "{label} must use lowercase 0x prefix",
             "{label} must use lowercase hex",
+            "or value != value.lower()",
+            "SOLANA_SOURCE_NETWORK_ALIASES.get(value)",
             "def _require_nonzero_fixed_bytes(",
             "def _optional_expected_record_hash(",
             "def _require_source_role_hash_separation(",
@@ -4756,6 +4777,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "test_solana_cli_rejects_full_light_client_audit_hash_mismatch",
             "test_solana_cli_rejects_expected_record_hash_mismatch",
             "test_solana_cli_rejects_non_production_lane",
+            "test_solana_network_parser_rejects_noncanonical_case",
             "test_solana_direct_record_hashes_reject_reused_role_hashes",
             "test_direct_record_hashes_reject_zero_component_hashes",
             "test_solana_source_deployment_hash_rejects_noncanonical_adapter_vk_hash",
@@ -4803,6 +4825,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "type(verifier_program_bytes_base64) is not str",
             "def _reject_program_bytes_file_symlink_path(",
             "def _read_program_bytes_file(",
+            "program bytes file helpers use native paths",
             "def _optional_expected_destination_binding_hash(",
             'if not path.is_file():\n        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             'raise ValueError(f"{label} metadata must be an exact string") from None',
@@ -4830,6 +4853,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             '("33" * 32, "canonical lowercase 0x hex")',
             '(b"\\x7fELFsol".hex(), "canonical lowercase 0x hex")',
             "def test_solana_program_bytes_file_rejects_unreadable_file_shapes",
+            "program bytes file native path helpers reject path-like inputs",
             "def test_solana_destination_rejects_hostile_expected_binding_hash_without_hooks",
             "def test_solana_destination_rejects_non_string_programdata_address_without_stringifying",
             "HostileSolanaDestinationString",
@@ -4919,6 +4943,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
         "scripts/sccp_ton_live_evidence.py",
         (
             "TON accountStates returned duplicate JSON keys",
+            "live JSON duplicate-key helpers use exact strings",
             "TON accountStates returned invalid JSON",
             "TON accountStates failed with HTTP {exc.code}",
             "TON accountStates request failed",
@@ -4929,6 +4954,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "import ipaddress",
             "def _api_host_is_loopback(",
             "def _api_host_is_non_public_dns(",
+            "runtime URL host classifiers use exact strings",
             "--api-url must use HTTPS unless it is loopback HTTP",
             "--api-url HTTPS host must use public DNS",
             "def _exact_live_string(",
@@ -4941,6 +4967,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "label=\"route canary evidence hash\"",
             "def _reject_runtime_file_symlink_path(",
             "def _read_runtime_text_file(",
+            "live runtime text file helpers use native paths",
             "if not path.is_file():\n        raise ValueError(error_message) from None",
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, binascii.Error, ValueError):",
@@ -4962,11 +4989,14 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             "TON destination fixed hex nonzero must be a boolean",
             "TON destination fixed bytes nonzero must be a boolean",
+            "TON destination fixed-hex strip helper uses exact strings",
+            "TON destination workchain parser uses exact strings",
             "type(value) is not str",
             'f"{label} must be base64 or base64url"',
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             "def _reject_code_boc_file_symlink_path(",
             "def _read_code_boc_file(",
+            "code BoC file helpers use native paths",
             'if not path.is_file():\n        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             'raise ValueError("account_status must be active") from None',
             "def _require_last_transaction_lt_text(",
@@ -4990,6 +5020,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "test_ton_hex_parser_rejects_zero_and_wrong_width",
             "test_ton_code_boc_inline_parsers_reject_padded_values",
             "test_ton_raw_address_parser_rejects_zero_malformed_and_noncanonical",
+            "test_ton_destination_scalar_helpers_reject_string_subclasses_without_hooks",
             "test_ton_last_transaction_lt_requires_canonical_ascii_decimal",
             "test_ton_destination_binding_hash_matches_rust_vector",
             "test_ton_code_boc_root_hash_matches_sdk_vectors",
@@ -5055,6 +5086,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "TON destination base64 ArgumentTypeError detail leaked",
             "assert exc.__suppress_context__ is True",
             "def test_ton_code_boc_file_rejects_unreadable_file_shapes",
+            "code BoC file native path helpers reject path-like inputs",
         ),
     ),
     (
@@ -5092,6 +5124,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "assert exc.__cause__ is None",
             "assert exc.__suppress_context__ is True",
             "def test_ton_live_api_key_file_rejects_unreadable_file_shapes",
+            "live runtime text file native path helpers reject path-like inputs",
             "secret-token",
             'assert "secret-token" not in rendered',
             "assert forbidden_detail not in rendered",
@@ -5101,10 +5134,12 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
         "scripts/sccp_tron_source_bridge_evidence.py",
         (
             "{label} must be canonical lowercase 0x hex",
+            "TRON source strip-0x helper uses exact strings",
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             "def _reject_runtime_bytecode_file_symlink_path(",
             "def _read_runtime_bytecode_file_text(",
+            "runtime bytecode file helpers use native paths",
             'if not path.is_file():\n        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             "def _require_fixed_bytes(",
             "def _optional_expected_record_hash(",
@@ -5227,6 +5262,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "bare inline runtime bytecode was accepted",
             "bare runtime bytecode file was accepted",
             "def test_tron_runtime_bytecode_file_rejects_unreadable_file_shapes",
+            "runtime bytecode file native path helpers reject path-like inputs",
             "def test_tron_source_bridge_toml_renderer_rejects_string_subclasses_without_hooks",
             "secret-token TRON source TOML string was stringified",
         ),
@@ -5235,12 +5271,14 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
         "scripts/sccp_tron_live_evidence.py",
         (
             "TRON API {endpoint} returned duplicate JSON keys",
+            "live JSON duplicate-key helpers use exact strings",
             "TRON API {endpoint} failed with HTTP {exc.code}",
             "TRON API {endpoint} request failed",
             "TRON API {endpoint} returned error response",
             "TRON destination verifier runtime bytecode metadata is invalid",
             "def _reject_runtime_file_symlink_path(",
             "def _read_runtime_text_file(",
+            "live runtime text file helpers use native paths",
             "if not path.is_file():\n        raise ValueError(error_message) from None",
             'raise ValueError(f"{label} must be ASCII") from None',
             'error_message="--tron-pro-api-key-file cannot be read",',
@@ -5260,6 +5298,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "TRON live exact hex32 nonzero must be a boolean",
             "TRON live hex32 nonzero must be a boolean",
             "TRON live optional hex nonzero must be a boolean",
+            "TRON live strip-0x helper uses exact strings",
             "type(include_contract_metadata) is not bool",
             "include_contract_metadata must be a boolean",
             "type(allow_expected_mismatch) is not bool",
@@ -5285,6 +5324,13 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "def _parse_summary_hex32(",
             "def _parse_summary_tron_address(",
             "def _parse_summary_tron_payload_hex(",
+            "TRON live transaction parser uses exact strings",
+            "TRON live source-event trigger request uses exact strings",
+            "TRON live source-event trigger request uses exact integers",
+            "TRON live source-event transaction verifier uses exact strings",
+            "TRON live source-event transaction verifier uses exact integers",
+            "TRON live route-canary verifier uses exact strings",
+            "TRON live route-canary verifier uses exact integers",
             "source_bridge_payload = _parse_summary_tron_address(",
             "source_owner_payload = _parse_summary_tron_address(",
             "source bridge owner address metadata does not match base58 owner",
@@ -5352,6 +5398,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "def test_tron_runtime_hex32_list_arg_rejects_scalar_without_stringifying",
             "def test_tron_runtime_repeated_args_reject_scalar_without_stringifying",
             "def test_tron_live_runtime_files_reject_unreadable_file_shapes",
+            "live runtime text file native path helpers reject path-like inputs",
             "def test_tron_live_hex_nonzero_controls_reject_non_booleans",
             "malformed TRON live hex nonzero control accepted",
             "malformed TRON live exact-hex nonzero control accepted",
@@ -5360,6 +5407,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "malformed TRON live optional-hex nonzero control accepted",
             "def test_tron_live_exact_string_parsers_reject_string_subclasses_without_hooks",
             "HostileTronLiveString",
+            "0x text must be an exact string",
             "secret-token TRON live exact string was stripped",
             "def test_tron_live_decimal_parsers_reject_string_subclasses_without_hooks",
             "HostileDecimalText",
@@ -5381,6 +5429,9 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "def test_live_evidence_redacts_source_event_topic_parser_failures",
             "def test_live_evidence_redacts_route_canary_topic_parser_failures",
             "def test_live_evidence_source_event_replay_args_reject_non_string_copied_metadata_without_stringifying",
+            "def test_live_evidence_source_event_trigger_request_rejects_subclasses_without_hooks",
+            "def test_live_evidence_source_event_transaction_verifier_rejects_subclasses_without_hooks",
+            "def test_live_evidence_source_event_transaction_parser_rejects_string_subclasses_without_hooks",
             "def test_live_evidence_source_event_collection_rejects_non_string_source_bridge_metadata_without_stringifying",
             "source-event collection accepted hostile",
             "def test_live_evidence_rejects_hostile_endpoint_metadata_without_stringifying",
@@ -5390,6 +5441,9 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "def test_live_evidence_full_toml_rejects_non_string_base_metadata_without_stringifying",
             "def test_live_evidence_full_toml_annotation_rejects_non_string_metadata_without_stringifying",
             "def test_live_evidence_full_toml_rejects_non_string_route_canary_metadata_without_stringifying",
+            "def test_live_evidence_route_canary_verifier_rejects_string_subclasses_without_hooks",
+            "def test_live_evidence_route_canary_verifier_rejects_integer_subclasses_without_hooks",
+            "def test_live_evidence_route_canary_transaction_parser_rejects_string_subclasses_without_hooks",
             "def test_live_evidence_torii_destination_query_rejects_non_string_metadata_without_stringifying",
             "def test_live_evidence_route_canary_collection_rejects_non_string_destination_metadata_without_stringifying",
             "def test_live_evidence_route_canary_collection_rejects_non_string_transaction_hash_fields_without_stringifying",
@@ -5491,6 +5545,9 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "raise ValueError(f\"{label}:{line_number}: {detail}\") from None",
             "except (\n        argparse.ArgumentTypeError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n        binascii.Error,\n    ):",
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
+            "all-lanes strip-0x helper uses exact strings",
+            "all-lanes canonical hex helper uses exact strings",
+            "all-lanes canonical base64 helper uses exact strings",
             "SENSITIVE_MINIMAL_TOML_KEY_MARKERS = (",
             "mnemonic",
             '"credential",',
@@ -5504,6 +5561,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             '"signing-key",',
             '"signing_key",',
             "def _minimal_toml_duplicate_key_detail(",
+            "all-lanes minimal TOML diagnostic helpers use exact strings",
             "duplicate key with sensitive name",
             "duplicate key with malformed name",
             "def _toml_unsupported_section_detail(",
@@ -5580,6 +5638,9 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "for _comment_source_verifier_material_hash",
             "def test_all_lanes_minimal_toml_parser_redacts_json_exception_causes",
             "def test_all_lanes_minimal_toml_rejects_array_subclasses_without_hooks",
+            "def test_all_lanes_minimal_toml_diagnostic_helpers_reject_string_subclasses_without_hooks",
+            "def test_all_lanes_strip_0x_rejects_string_subclasses_without_hooks",
+            "def test_all_lanes_canonical_text_helpers_reject_string_subclasses_without_hooks",
             "def test_all_lanes_minimal_toml_parser_redacts_sensitive_duplicate_keys",
             "def test_all_lanes_minimal_toml_sensitive_helpers_cover_marker_families",
             "def test_all_lanes_minimal_toml_parser_redacts_unsupported_section_names",
@@ -6187,6 +6248,15 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
         ),
     ),
     (
+        "scripts/sccp_verify_release_bundle.py",
+        (
+            "def _decode_solana_base58(",
+            "strict verifier Solana base58 decoder uses exact strings",
+            "def _solana_pubkey_field_errors(",
+            "must be a non-zero canonical base58 Solana address",
+        ),
+    ),
+    (
         "scripts/sccp_release_readiness_report.py",
         (
             "def _sccp_source_material_role_validation_gate_inventory_errors(",
@@ -6205,6 +6275,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
             "def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory",
+            "def test_release_bundle_verifier_solana_base58_decoder_rejects_string_subclasses_without_hooks",
         ),
     ),
 )
@@ -6370,6 +6441,11 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             "deployment receipt block hash does not match the finalized execution block",
             "def _summary_block_tag(",
             "def _require_exact_literal(",
+            "EVM source-live deployment receipt RPC status uses exact strings",
+            "EVM source-live copied chain metadata uses exact strings",
+            "EVM source-live copied block tag metadata uses exact strings",
+            "EVM source-live copied receipt status metadata uses exact strings",
+            "EVM source-live JSON-RPC protocol version uses exact strings",
             "source block tag metadata is invalid",
             'label="source deployment receipt status"',
             "source bridge runtime bytecode hash must match bridge_code_hash",
@@ -6392,6 +6468,7 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             "label=\"expected source bridge code hash\"",
             "label=\"deployment receipt finalized block hash\"",
             "JSON-RPC returned duplicate JSON keys",
+            "live JSON duplicate-key helpers use exact strings",
             "JSON-RPC {method} failed with HTTP {exc.code}",
             "JSON-RPC {method} request failed",
             "JSON-RPC {method} returned invalid JSON",
@@ -6401,6 +6478,7 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             "def _normalize_evm_rpc_url(",
             "def _evm_rpc_host_is_loopback(",
             "def _evm_rpc_host_is_non_public_dns(",
+            "runtime URL host classifiers use exact strings",
             "--rpc-url must use HTTPS unless it is loopback HTTP",
             "--rpc-url HTTPS host must use public DNS",
             "EVM source bridge runtime bytecode metadata is invalid",
@@ -6414,11 +6492,14 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             "test_evm_source_json_rpc_response_size_is_bounded",
             "test_evm_source_json_rpc_http_error_detail_is_bounded",
             "test_evm_source_json_rpc_rejects_duplicate_json_keys",
+            "test_evm_source_json_object_rejects_key_subclasses_without_hooks",
             "test_evm_source_json_rpc_rejects_envelope_drift",
+            "hostile EVM source JSON-RPC protocol was accepted",
             "test_evm_source_live_numeric_parsers_require_canonical_decimal",
             "test_evm_source_live_evidence_collects_source_records_and_toml",
             "test_bsc_source_live_evidence_uses_canonical_bsc_profile",
             "test_evm_source_live_rejects_noncanonical_expected_rpc_chain_id_before_rpc",
+            "HostileSourceRpcHost",
             "test_evm_source_live_toml_requires_deployment_receipt_evidence",
             "test_evm_source_live_rejects_receipt_transaction_hash_drift",
             "test_evm_source_live_rejects_missing_or_zero_receipt_block_number",
@@ -6430,6 +6511,7 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             "test_evm_source_live_redacts_receipt_block_hash_metadata_reparse_failures",
             "test_evm_source_live_rejects_deployment_transaction_readback_drift",
             "test_evm_source_live_rejects_missing_or_drifted_receipt_contract_address",
+            "test_evm_source_live_rejects_hostile_receipt_status_without_hooks",
             "test_evm_source_live_rejects_receipt_block_hash_drift",
             "test_evm_source_live_rejects_receipt_block_number_drift",
             "test_evm_source_live_rejects_unfinalized_deployment_receipt_block",
@@ -6464,6 +6546,7 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             "test_evm_source_live_finalized_receipt_summary_rejects_non_exact_receipt_metadata_without_coercion",
             "test_evm_source_live_toml_revalidates_imported_summary_metadata",
             "test_evm_source_live_rejects_non_string_copied_metadata_without_stringifying",
+            "test_evm_source_live_direct_summary_string_comparisons_use_exact_strings",
             "test_evm_source_live_offline_args_reject_non_string_runtime_metadata_without_stringifying",
             "test_evm_source_live_offline_args_reject_hostile_domain_without_stringifying",
             "EVM source offline args accepted hostile domain",
@@ -6620,6 +6703,7 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "PUBLIC_SUMMARY_FIELDS = (",
             "def _public_summary(",
             "JSON-RPC returned duplicate JSON keys",
+            "live JSON duplicate-key helpers use exact strings",
             "JSON-RPC {method} failed with HTTP {exc.code}",
             "JSON-RPC {method} request failed",
             "JSON-RPC {method} returned invalid JSON",
@@ -6629,16 +6713,24 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "def _normalize_evm_rpc_url(",
             "def _evm_rpc_host_is_loopback(",
             "def _evm_rpc_host_is_non_public_dns(",
+            "runtime URL host classifiers use exact strings",
             "--rpc-url must use HTTPS unless it is loopback HTTP",
             "--rpc-url HTTPS host must use public DNS",
             "EVM bridge runtime bytecode metadata is invalid",
             "EVM verifier runtime bytecode metadata is invalid",
+            "EVM live strip-0x helper uses exact strings",
+            "EVM live function selector helper uses exact strings",
+            "EVM live destination chain uses exact strings",
+            "EVM live full-TOML block tag uses exact strings",
+            "EVM live JSON-RPC protocol version uses exact strings",
             "def _optional_namespace_bytes32_arg(",
             "def _optional_namespace_u32_arg(",
             "def _optional_namespace_positive_u64_arg(",
             "def _validate_copied_route_summary_metadata(",
             "label=\"source verifier material hash\"",
             "label=\"route canary evidence hash\"",
+            "EVM live route-canary receipt status uses exact strings",
+            "EVM live route-canary verifier uses exact strings",
             "def _summary_exact_u32(",
             "def _summary_exact_positive_u64(",
             'label="route-canary receipt block number"',
@@ -6659,7 +6751,9 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "test_evm_json_rpc_response_size_is_bounded",
             "test_evm_json_rpc_http_error_detail_is_bounded",
             "test_evm_json_rpc_rejects_duplicate_json_keys",
+            "test_evm_json_object_rejects_key_subclasses_without_hooks",
             "test_evm_json_rpc_rejects_envelope_drift",
+            "hostile JSON-RPC protocol version was accepted",
             "test_live_evm_evidence_collects_destination_and_offline_toml",
             "test_live_evm_evidence_rejects_aliased_verifier_and_bridge",
             "test_live_evm_diagnostic_offline_args_do_not_self_pin_binding",
@@ -6667,6 +6761,7 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "test_live_evm_diagnostic_offline_args_withhold_route_until_binding_pin",
             "test_live_evm_evidence_rejects_missing_route_source_hashes_and_drift",
             "test_live_evm_evidence_rejects_rpc_chain_id_drift",
+            "HostileEvmRpcHost",
             "test_live_evm_evidence_rejects_noncanonical_expected_rpc_chain_id",
             "test_live_evm_expected_rpc_chain_id_parser_requires_canonical_decimal",
             "test_live_evm_full_toml_requires_expected_bridge_code_hash",
@@ -6688,6 +6783,8 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "test_live_evm_torii_query_rejects_non_string_copied_destination_metadata",
             "test_evm_live_cli_parsers_reject_non_string_values_without_stringification",
             "test_evm_live_exact_string_parsers_reject_string_subclasses_without_hooks",
+            "0x text must be an exact string",
+            "EVM function selector signature must be an exact string",
             "test_evm_live_namespace_args_reject_non_bytes_without_stringifying",
             "test_evm_live_collect_rejects_non_bytes_namespace_args_before_rpc",
             "test_evm_live_container_and_bytes_boundaries_reject_subclasses_without_hooks",
@@ -6724,6 +6821,9 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "test_live_evm_route_allowlist_rejects_non_boolean_canary_gate",
             "non-boolean EVM route canary inclusion gate was accepted",
             "test_live_evm_route_canary_rejects_unverified_transaction_metadata",
+            "test_live_evm_route_canary_receipt_status_uses_exact_strings",
+            "test_live_evm_route_canary_transaction_verification_requires_exact_strings",
+            "test_live_evm_destination_chain_and_full_toml_block_tag_use_exact_strings",
             "test_live_evm_bsc_default_latest_route_canary_renders_full_toml",
             "finality_policy",
             "route_canary_call_data_mutator",
@@ -6792,6 +6892,8 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "bridge runtime bytecode metadata is inconsistent",
             "verifier runtime bytecode metadata is inconsistent",
             "EVM destination runtime bytecode readiness must be a boolean",
+            "EVM destination decimal parsers use exact strings",
+            "EVM destination boolean parser uses exact strings",
             "def _require_exact_u64(",
             'raise ValueError(f"{label} must be an exact u64") from None',
             "def _optional_expected_destination_binding_hash(",
@@ -6824,6 +6926,7 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "test_evm_cli_derives_bridge_code_hash_from_runtime_bytecode",
             "def test_evm_toml_runtime_bytecode_reparse_redacts_parser_detail",
             "def test_evm_destination_exact_runtime_strings_reject_string_subclasses_without_hooks",
+            "def test_evm_destination_scalar_literal_parsers_reject_string_subclasses_without_hooks",
             "def test_evm_destination_byte_helpers_reject_subclasses_without_hooks",
             "HostileEvmDestinationString",
             "HostileEvmDestinationBytes",
@@ -7084,6 +7187,7 @@ ETHEREUM_EVM_BLOCK_TAG_METADATA_MARKERS = (
             '"_comment_tron_source_bridge_address",',
             "EVM source live RPC chain-id must be canonical for {profile.chain}",
             "EVM live RPC chain-id must be canonical for {profile.chain}",
+            "all-lanes EVM source deployment receipt status uses exact strings",
             "Ethereum source live block-tag metadata must be finalized",
             "Ethereum destination live block-tag metadata must be finalized",
             "BSC source live block-tag metadata must be latest",
@@ -9722,7 +9826,10 @@ ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS = (
             "secret-token TON live comment was stringified",
             "def test_all_lanes_rejects_hostile_evm_route_canary_scalars_without_stringifying",
             "def test_all_lanes_rejects_hostile_tron_route_canary_scalars_without_stringifying",
+            "all-lanes route canary status uses exact strings",
             "def test_all_lanes_route_canary_common_metadata_uses_exact_keys",
+            "def test_all_lanes_route_canary_status_rejects_string_subclasses_without_hooks",
+            "HostileAllLanesMatchingText(\"passed\")",
             "def test_all_lanes_evm_route_canary_metadata_uses_exact_keys",
             "def test_all_lanes_tron_route_canary_metadata_uses_exact_keys",
             "def test_all_lanes_ton_route_canary_metadata_uses_exact_keys",
@@ -9844,7 +9951,11 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
         "scripts/sccp_all_lanes_evidence.py",
         (
             "def _reject_evidence_input_symlink_path(",
+            "EVIDENCE_INPUT_PATH_TYPE = type(Path())",
+            "def _require_evidence_input_path(path: object) -> Path:",
+            "if type(path) is not EVIDENCE_INPUT_PATH_TYPE:",
             "def _load_evidence_text(",
+            "path = _require_evidence_input_path(path)",
             'raise OSError("evidence input cannot be read") from None',
             'if not path.is_file():\n        raise OSError("evidence input cannot be read")',
             "def _evidence_bundle_root_errors(records: Any)",
@@ -9861,6 +9972,7 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "unsupported zk section with malformed name",
             "type(record) is dict for record in records",
             "def _evidence_unsupported_section_detail(",
+            "all-lanes minimal TOML diagnostic helpers use exact strings",
             "unsupported evidence section",
             "unsupported evidence section with sensitive name",
             "unsupported evidence section with malformed name",
@@ -9932,6 +10044,9 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "route|operator-material-field",
             "def test_all_lanes_load_evidence_rejects_unreadable_file_shapes",
             "secret-token-evidence-parent-link",
+            "def test_all_lanes_load_evidence_rejects_pathlike_subclasses_without_hooks",
+            "secret-token all-lanes evidence path was stringified",
+            "secret-token all-lanes evidence path-like was coerced",
             "def test_all_lanes_load_evidence_rejects_container_subclasses_without_leaking",
             "HostileAllLanesReportSection({\"zk\": {}})",
             "HostileAllLanesFieldName(\"sccp_source_verifier_materials\")",
@@ -9945,6 +10060,7 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "evidence bundle root must be an object",
             "assert \"evidence section name must be a string\" in summary[\"blockers\"]",
             "assert \"evidence section name must be a string: 1\" not in summary[\"blockers\"]",
+            "def test_all_lanes_minimal_toml_diagnostic_helpers_reject_string_subclasses_without_hooks",
             "def test_all_lanes_rejects_hostile_evm_live_metadata_comments_without_stringifying",
             "secret-token EVM live metadata was stringified",
             "def test_all_lanes_accepts_direct_evm_destination_toml_with_audited_metadata",
@@ -9962,6 +10078,8 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "EVM source live RPC chain-id metadata is required",
             "def test_all_lanes_evm_source_live_metadata_uses_exact_keys",
             "material[HostileAllLanesFieldName(field)] = material.pop(field)",
+            "def test_all_lanes_evm_source_receipt_status_rejects_string_subclasses_without_hooks",
+            "HostileAllLanesMatchingText(\"0x1\")",
             "def test_all_lanes_rejects_ethereum_nonfinalized_evm_live_metadata",
             "Ethereum source live block-tag metadata must be finalized",
             "def test_all_lanes_rejects_ethereum_evm_live_rpc_chain_id_drift",
@@ -10437,6 +10555,7 @@ ALL_LANES_GOVERNED_BLOCKER_SCHEMA_MARKERS = (
             "signing-key",
             "signing_key",
             "def _decoded_public_blocker_text(",
+            "all-lanes public blocker decode helpers use exact strings",
             "html_unescape",
             "unquote",
             "PUBLIC_SENSITIVE_MARKER_CONFUSABLES",
@@ -10519,6 +10638,7 @@ ALL_LANES_GOVERNED_BLOCKER_SCHEMA_MARKERS = (
             "safe%E2%80%AEpublic-value",
             "safe%7Cpublic-value",
             "safe%3Cpublic-value%3E",
+            "def test_all_lanes_public_blocker_decode_helpers_reject_string_subclasses_without_hooks",
             "def test_all_lanes_cli_error_detail_rejects_decoded_unsafe_messages",
         ),
     ),
@@ -11763,6 +11883,7 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def _active_launch_evm_live_metadata_blockers(",
             'evm_live_metadata = _public_mapping_get_string_key(lane, "evm_live_metadata")',
             "if type(evm_live_metadata) is not dict:",
+            "active EVM live block tags require exact copied strings",
             "source live eth_chainId must be",
             "destination live eth_chainId must be",
             "active {ACTIVE_LAUNCH_DISPLAY} live metadata summary is malformed",
@@ -11915,6 +12036,7 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def _active_launch_evm_live_metadata_blockers(",
             'evm_live_metadata = _public_mapping_get_string_key(lane, "evm_live_metadata")',
             "if type(evm_live_metadata) is not dict:",
+            "active EVM live block tags require exact copied strings",
             "active {ACTIVE_LAUNCH_DISPLAY} live metadata summary is malformed",
             "active source-record hash summary is malformed",
             "def _active_launch_source_record_hash_role_blockers(",
@@ -12066,6 +12188,8 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             '"release_checklist" not in payload',
             "def test_active_launch_evm_live_metadata_requires_canonical_decimal_chain_id",
             "def test_active_launch_evm_live_metadata_rejects_container_subclasses_without_hooks",
+            "def test_active_launch_evm_live_metadata_rejects_block_tag_subclasses_without_hooks",
+            "active EVM live block-tag exactness rejects copied",
             "def test_release_readiness_active_launch_outer_summary_uses_exact_keys",
             "noncanonical_chain_ids = (",
             '"\\uff11",',
@@ -12301,6 +12425,8 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "all-lanes summary release_checklist ready must match item readiness",
             "def test_release_bundle_active_evm_metadata_rejects_noncanonical_chain_id",
             "def test_release_bundle_active_evm_metadata_rejects_container_subclasses_without_hooks",
+            "def test_release_bundle_active_evm_metadata_rejects_block_tag_subclasses_without_hooks",
+            "active EVM live block-tag exactness rejects copied",
             "def test_release_bundle_verifier_active_launch_outer_summary_uses_exact_keys",
             "noncanonical_chain_ids = (",
             '"\\uff11",',
@@ -12905,12 +13031,15 @@ SCCP_UNREADY_TRANSPARENT_PROOF_CONFIG_MARKERS = (
             "SCCP_UNREADY_SOURCE_PROOF_BYPASS_CALL_SITE_MARKER = (",
             "SCCP_UNREADY_SOURCE_PROOF_EXPECTED_BYPASS_CALL_SITES = 4",
             "def _sccp_unready_source_proof_bypass_call_site_errors(",
+            "source-proof bypass call-site source path must be an exact string or native path",
             "call_site_count != SCCP_UNREADY_SOURCE_PROOF_EXPECTED_BYPASS_CALL_SITES",
             "SCCP_UNREADY_TRANSPARENT_PROOF_FORBIDDEN_BYPASS_GATES = (",
             "def _sccp_unready_widened_bypass_gate_errors(",
+            "bypass-gate source path must be an exact string or native path",
             "SCCP_UNREADY_TORII_ROUTE_BYPASS_CALL_SITE_MARKER = (",
             "SCCP_UNREADY_TORII_ROUTE_EXPECTED_BYPASS_CALL_SITES = 6",
             "def _sccp_unready_torii_route_bypass_call_site_errors(",
+            "Torii route bypass call-site source path must be an exact string or native path",
             "call_site_count != SCCP_UNREADY_TORII_ROUTE_EXPECTED_BYPASS_CALL_SITES",
             "expected exactly ",
             "def _sccp_cargo_dependency_window_lines(",
@@ -12921,6 +13050,7 @@ SCCP_UNREADY_TRANSPARENT_PROOF_CONFIG_MARKERS = (
             "section_identifier == \"features\"",
             "if \"dependencies\" not in section_identifier:",
             "def _sccp_unready_transparent_proof_test_fixture_feature_errors(",
+            "Cargo manifest path must be an exact string or native path",
             "testfixtures\" in window_identifier",
             "through Cargo feature alias outside approved dev-dependencies",
             "line_identifier_text = _source_identifier_scan_text(",
@@ -12956,12 +13086,16 @@ SCCP_UNREADY_TRANSPARENT_PROOF_CONFIG_MARKERS = (
             "full_source_decoded_text",
             "full_source_identifier_text",
             "def _sccp_unready_transparent_proof_release_command_feature_errors(",
+            "release command source path must be an exact string or native path",
             "_sccp_unready_source_proof_bypass_call_site_errors(inventory)",
             "_sccp_unready_widened_bypass_gate_errors(inventory)",
             "_sccp_unready_torii_route_bypass_call_site_errors(inventory)",
             "for forbidden_env in SCCP_UNREADY_TRANSPARENT_PROOF_FORBIDDEN_ENV:",
+            "forbidden environment source path must be an exact string or native path",
+            "forbidden config source path must be an exact string or native path",
             "forbidden_identifier in source_identifier_texts",
             "for forbidden_surface in SCCP_DIAGNOSTIC_TRANSPARENT_PROOF_FORBIDDEN_SURFACE:",
+            "forbidden diagnostic surface source path must be an exact string or native path",
             "enables iroha_sccp test-fixtures outside approved dev-dependencies",
             "enables test-fixtures for the release/corridor rust-sccp command",
         ),
@@ -14912,17 +15046,25 @@ SCCP_PHASE_EVIDENCE_SOURCE_MARKERS = (
             "def _phase_evidence_source_label(",
             "--phase-evidence {name}=<path>",
             "def _phase_log_from_dir(",
+            "release bundle phase evidence directory must be a native path",
             "checked standard phase log layouts",
             "unknown SCCP corridor phase",
             "phase evidence must use NAME=PATH syntax",
             "def _parse_phase_evidence_arg(raw: object",
             "if type(raw) is not str or \"=\" not in raw:",
             "phase evidence path must not be empty",
+            "def _relative_to_bundle(",
+            "release bundle relative path root must be a native path",
+            "release bundle relative path target must be a native path",
             "def _relative_phase_evidence_arg(",
             "release bundle phase evidence assignment must be an exact string",
             "release bundle phase evidence assignment must use NAME=PATH syntax",
+            "release bundle phase evidence root must be a native path",
             "_relative_phase_evidence_arg(output_dir, raw)",
             "_relative_phase_evidence_arg(preflight_dir, raw)",
+            "def _absolute_from_cwd(",
+            "release bundle path must be a native path",
+            "release bundle cwd must be a native path",
             "def _phase_evidence_path_error(",
             "def _phase_evidence_path_error(path_text: object",
             "def _public_text_contains_sensitive_marker(",
@@ -15050,8 +15192,17 @@ SCCP_PHASE_EVIDENCE_SOURCE_MARKERS = (
             "test_release_bundle_suppresses_unknown_phase_evidence_name_before_copy",
             "test_release_bundle_phase_path_helpers_reject_string_subclasses_without_hooks",
             "test_release_bundle_report_builders_reject_phase_assignment_subclasses_without_hooks",
+            "test_release_bundle_relative_path_helpers_reject_pathlike_subclasses_without_hooks",
             "secret-token bundle path strip hook",
             "secret-token bundle assignment split hook",
+            "secret-token bundle native path was stringified",
+            "secret-token bundle path-like was coerced",
+            "release bundle phase evidence directory must be a native path",
+            "release bundle relative path root must be a native path",
+            "release bundle relative path target must be a native path",
+            "release bundle phase evidence root must be a native path",
+            "release bundle path must be a native path",
+            "release bundle cwd must be a native path",
             "def repeated_percent_token(",
             "repeated_percent_token('2e')",
             "already set by --phase-evidence-dir",
@@ -16757,6 +16908,10 @@ SCCP_RELEASE_BUNDLE_SOURCE_COPY_MARKERS = (
             "contains control character",
             '_reject_path_control_characters(path, "release bundle source path")',
             "def _copy_file(",
+            "release bundle source path must be a native path",
+            "release bundle destination path must be a native path",
+            "release bundle output directory must be a native path",
+            "release bundle evidence input path must be a native path",
             "_reject_symlink_sources([source])",
             "def _reject_symlink_sources(",
             "release bundle source path must not be a symlink",
@@ -16794,6 +16949,14 @@ SCCP_RELEASE_BUNDLE_SOURCE_COPY_MARKERS = (
             "secret-token-evidence-directory",
             "test_release_bundle_copy_file_revalidates_regular_source_before_copy",
             "copyfile should not run for non-regular source",
+            "test_release_bundle_source_copy_rejects_pathlike_subclasses_without_hooks",
+            "secret-token source-copy path was stringified",
+            "secret-token source-copy path-like was coerced",
+            "secret-token output path was coerced",
+            "release bundle source path must be a native path",
+            "release bundle destination path must be a native path",
+            "release bundle output directory must be a native path",
+            "release bundle evidence input path must be a native path",
             "test_release_bundle_rejects_control_character_evidence_input_before_copy",
             "secret-token-complete",
             "test_release_bundle_rejects_markdown_unsafe_evidence_input_before_copy",
@@ -17277,6 +17440,7 @@ SCCP_RELEASE_BUNDLE_OUTPUT_PATH_MARKERS = (
             "def _sccp_release_bundle_output_path_gate_inventory_errors(",
             '"release_bundle_output_path_gate"',
             "SCCP release bundle output-path source inventory",
+            "def _require_native_path(",
             "def _readiness_output_path_error(",
             "def _readiness_output_path_error(path_text: object",
             "readiness report output path must be an exact string",
@@ -17289,6 +17453,11 @@ SCCP_RELEASE_BUNDLE_OUTPUT_PATH_MARKERS = (
             "def _readiness_output_collision_error(",
             "phase_evidence: Iterable[object]",
             "readiness report phase evidence assignment must be an exact string",
+            "readiness report path must be a native path",
+            "readiness report output path must be a native path",
+            "readiness report input evidence path must be a native path",
+            "readiness report phase evidence directory path must be a native path",
+            "readiness report native EVM prover bundle path must be a native path",
             "readiness report output path must not be the same path as input evidence",
             "readiness report output path must not be the same path as phase evidence",
             "readiness report output path must not be the same path as native EVM prover bundle",
@@ -17312,6 +17481,8 @@ SCCP_RELEASE_BUNDLE_OUTPUT_PATH_MARKERS = (
             "release bundle output directory path contains Markdown-unsafe character",
             "release bundle output directory path contains sensitive name",
             "release bundle output directory path contains percent-encoded traversal segment",
+            "def _prepare_output_dir(",
+            "release bundle output directory must be a native path",
             "def _reject_symlinked_existing_output_path(",
             "def _reject_existing_output_non_directory(",
             "release bundle output directory must be a directory",
@@ -17335,6 +17506,10 @@ SCCP_RELEASE_BUNDLE_OUTPUT_PATH_MARKERS = (
             "test_release_bundle_rejects_existing_output_without_force_before_create",
             "existing-bundle",
             "output directory already exists",
+            "test_release_bundle_output_path_rejects_pathlike_subclasses_without_hooks",
+            "secret-token bundle output path was stringified",
+            "secret-token bundle output path-like was coerced",
+            "release bundle output directory must be a native path",
             "test_release_bundle_force_rejects_existing_output_file_before_delete",
             "sentinel:release-bundle-output-file",
             "release bundle output directory must be a directory",
@@ -17369,6 +17544,13 @@ SCCP_RELEASE_BUNDLE_OUTPUT_PATH_MARKERS = (
             "test_release_readiness_report_rejects_malformed_output_paths_before_build",
             "test_release_readiness_output_collision_rejects_phase_assignment_subclasses_without_hooks",
             "secret-token output collision contains hook",
+            "test_release_readiness_output_collision_rejects_pathlike_subclasses_without_hooks",
+            "secret-token readiness path was stringified",
+            "secret-token readiness path-like was coerced",
+            "readiness report output path must be a native path",
+            "readiness report input evidence path must be a native path",
+            "readiness report phase evidence directory path must be a native path",
+            "readiness report native EVM prover bundle path must be a native path",
             "test_release_readiness_report_rejects_output_input_collisions_before_build",
             "sentinel:readiness-input-evidence",
             "sentinel:readiness-phase-evidence",
@@ -17397,10 +17579,13 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "MARKDOWN_UNSAFE_PATH_CHARACTERS",
             "def _path_markdown_unsafe_character(",
             "def _path_percent_encoded_traversal(",
+            "release path text helpers use exact strings",
             "def _public_text_contains_sensitive_marker(",
             "type(value) is not str or not value",
             "type(artifact_path) is not str or not artifact_path",
             "normalized_value = _decoded_sensitive_public_marker_text(value)",
+            "NATIVE_PATH_TYPE = type(Path())",
+            "def _require_native_path(",
             "def _reject_release_artifact_symlink_path(",
             "first_symlinked_existing_path_component",
             "release artifact path must not be a symlink",
@@ -17433,9 +17618,12 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "MARKDOWN_UNSAFE_PATH_CHARACTERS",
             "def _path_markdown_unsafe_character(",
             "def _path_percent_encoded_traversal(",
+            "release path text helpers use exact strings",
             "def _public_text_contains_sensitive_marker(",
             "type(value) is not str or not value",
             "normalized_value = _decoded_sensitive_public_marker_text(value)",
+            "NATIVE_PATH_TYPE = type(Path())",
+            "def _require_native_path(",
             "def _reject_release_artifact_symlink_path(",
             "first_symlinked_existing_path_component",
             "release artifact path must not be a symlink",
@@ -17465,9 +17653,12 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "def _path_markdown_unsafe_character(",
             "def _path_percent_encoded_traversal(",
             "def _path_contains_sensitive_marker(",
+            "release path text helpers use exact strings",
             "def _public_text_contains_sensitive_marker(",
             "type(value) is not str or not value",
             "normalized_value = _decoded_sensitive_public_marker_text(value)",
+            "NATIVE_PATH_TYPE = type(Path())",
+            "def _require_native_path(",
             "def _reject_release_artifact_symlink_path(",
             "first_symlinked_existing_path_component",
             "release artifact path must not be a symlink",
@@ -17534,6 +17725,7 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "test_release_bundle_rejects_markdown_unsafe_artifact_paths",
             "test_release_bundle_rejects_non_ascii_or_sensitive_artifact_paths",
             "test_release_bundle_path_helpers_reject_decoded_sensitive_marker_families",
+            "test_release_bundle_path_text_helpers_reject_string_subclasses_without_hooks",
             "operator/secret%20key.log",
             "operator/private&#45;key.log",
             "operator/client&#32;secret.log",
@@ -17543,6 +17735,9 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "test_release_bundle_rejects_symlinked_artifact_path_without_path_leak",
             "test_release_bundle_rejects_symlinked_artifact_ancestor_without_read",
             "test_release_bundle_rejects_directory_artifact_path_without_read",
+            "test_release_bundle_artifact_helpers_reject_pathlike_subclasses_without_hooks",
+            "secret-token bundle artifact path was stringified",
+            "secret-token bundle artifact path-like was coerced",
             "test_release_bundle_verifier_rejects_directory_artifact_helper_without_read",
             "test_release_bundle_verifier_rejects_symlinked_artifact_helper_ancestor",
             "test_release_bundle_rejects_percent_encoded_artifact_traversal_paths",
@@ -17603,6 +17798,7 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "test_release_readiness_rejects_markdown_unsafe_artifact_paths",
             "test_release_readiness_rejects_non_ascii_or_sensitive_artifact_paths",
             "test_release_readiness_path_helpers_reject_decoded_sensitive_marker_families",
+            "test_release_readiness_path_text_helpers_reject_string_subclasses_without_hooks",
             "secret%20key",
             "private&#45;key",
             "client&#32;secret",
@@ -17611,6 +17807,9 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "test_release_readiness_rejects_padded_artifact_paths",
             "test_release_readiness_rejects_uri_or_drive_artifact_paths",
             "test_release_readiness_report_rejects_directory_phase_evidence",
+            "test_release_readiness_artifact_helper_rejects_pathlike_subclasses_without_hooks",
+            "secret-token readiness artifact path was stringified",
+            "secret-token readiness artifact path-like was coerced",
             "test_release_readiness_rejects_percent_encoded_artifact_traversal_paths",
             "operator-drive:C.toml",
             "secret-token-complete",
@@ -17811,6 +18010,8 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "class DuplicateJsonKeyError",
             "def _reject_duplicate_json_keys(",
             "object_pairs_hook=_reject_duplicate_json_keys",
+            "NATIVE_PATH_TYPE = type(Path())",
+            "def _require_native_path(",
             "raise OSError(\"JSON path cannot be read\") from None",
             "if not path.is_file():\n        raise OSError(\"JSON path cannot be read\")",
             "def _public_json_root_file_errors(",
@@ -17850,6 +18051,10 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "_canonical_json_file_errors(\"all-lanes summary\", summary_path, summary)",
             "source inventory is not UTF-8 text",
             "source inventory cannot be read",
+            "def _source_inventory_path(",
+            "path must be an exact string or native path",
+            "<invalid inventory path>",
+            "source path must be a native path",
             "source is not UTF-8 text",
             "source cannot be read",
             "SDK test inventory is not UTF-8 text",
@@ -17919,6 +18124,8 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
         (
             "READINESS_REPORT_PUBLIC_FIELDS = (",
             "INPUT_ARTIFACT_PUBLIC_FIELDS = frozenset",
+            "NATIVE_PATH_TYPE = type(Path())",
+            "def _require_native_path(",
             "def _load_json_without_duplicate_keys(",
             "raise OSError(\"JSON path cannot be read\") from None",
             "if not path.is_file():\n        raise OSError(\"JSON path cannot be read\")",
@@ -17942,6 +18149,7 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "CORRIDOR_PUBLIC_FIELDS = frozenset",
             "CORRIDOR_PUBLIC_PHASE_STATUSES = frozenset",
             "def _public_corridor_errors(",
+            "readiness public corridor phase status comparisons use exact copied strings",
             "def _corridor_phase_key_blocker(",
             "type(phase) is not str or not phase",
             "readiness report corridor missing field",
@@ -17968,6 +18176,7 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "if type(sdk_artifacts) is list:",
             "if type(row) is dict:",
             "if blocked and type(copied.get(\"implementation_artifact\")) is not dict:",
+            "readiness native EVM redaction status uses exact copied strings",
             "type(native_bundle) is not dict",
             "def _public_embedded_evidence_errors(",
             "readiness report evidence must be a canonical public all-lanes summary",
@@ -18059,6 +18268,8 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
         "scripts/sccp_release_bundle.py",
         (
             "def _load_json_without_duplicate_keys(",
+            "NATIVE_PATH_TYPE = type(Path())",
+            "def _require_native_path(",
             "raise OSError(\"JSON path cannot be read\") from None",
             "if not path.is_file():\n        raise OSError(\"JSON path cannot be read\")",
             "READINESS_REPORT_ROOT_FIELDS",
@@ -18108,6 +18319,12 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "strict verifier summary verified must be boolean",
             "strict verifier summary manifest_sha256 must be a canonical SHA-256 hex string",
             "strict verifier summary manifest_sha256 must be a non-zero canonical SHA-256 hex string",
+            "def _write_json(",
+            "release bundle JSON output path must be a native path",
+            "def _bundle_artifacts(",
+            "release bundle output directory must be a native path",
+            "def _verify_generated_bundle(",
+            "generated SCCP release bundle path must be a native path",
         ),
     ),
     (
@@ -18185,6 +18402,9 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             'HostileVerifierFieldName("schema")',
             'HostileVerifierFieldName("cross_sdk_fixture_parity")',
             "test_release_bundle_verifier_rejects_noncanonical_json_serialization",
+            "test_release_bundle_json_loader_rejects_pathlike_subclasses_without_hooks",
+            "secret-token bundle JSON path was stringified",
+            "secret-token bundle JSON path-like was coerced",
             "test_release_bundle_verifier_rejects_duplicate_json_keys",
             "test_release_bundle_verifier_rejects_report_summary_duplicate_json_keys",
             "test_release_bundle_verifier_rejects_malformed_public_json_duplicate_keys",
@@ -18243,6 +18463,11 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             'HostileVerifierFieldName("verified")',
             "test_generated_bundle_self_verifier_rejects_malformed_summaries",
             "test_generated_bundle_self_verifier_rejects_summary_container_subclasses_without_leaking",
+            "test_generated_bundle_path_helpers_reject_pathlike_subclasses_without_hooks",
+            "secret-token generated bundle path was stringified",
+            "secret-token generated bundle path-like was coerced",
+            "generated SCCP release bundle path must be a native path",
+            "release bundle JSON output path must be a native path",
             "test_release_bundle_verifier_cli_suppresses_malformed_summary_roots",
             "test_release_bundle_verifier_cli_exit_compares_verified_exactly",
             "test_release_bundle_verifier_cli_suppresses_malformed_summary_errors",
@@ -18263,6 +18488,18 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "test_release_bundle_verifier_rejects_missing_report_summary_json_without_path_leak",
             "test_release_bundle_json_loader_rejects_unreadable_file_shapes",
             "secret-token-json-parent-link",
+            "test_release_bundle_json_loader_rejects_pathlike_subclasses_without_hooks",
+            "secret-token bundle JSON path was stringified",
+            "secret-token bundle JSON path-like was coerced",
+            "test_release_bundle_verifier_source_inventory_rejects_pathlike_subclasses_without_hooks",
+            "secret-token inventory path was stringified",
+            "secret-token inventory path-like was coerced",
+            "source inventory path must be an exact string or native path",
+            "test_release_bundle_verifier_inventory_adjuncts_reject_pathlike_subclasses_without_hooks",
+            "secret-token inventory adjunct path was stringified",
+            "secret-token inventory adjunct path-like was coerced",
+            "source path must be a native path",
+            "forbidden diagnostic surface source path must be an exact string or native path",
             "test_release_bundle_verifier_json_loader_rejects_unreadable_file_shapes",
             "secret-token-verifier-json-parent-link",
             "test_release_bundle_verifier_rejects_symlinked_report_summary_json_without_read",
@@ -18283,6 +18520,9 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "test_release_readiness_report_blocks_missing_release_public_json_root_schema_gate",
             "def test_release_readiness_json_loader_rejects_unreadable_file_shapes",
             "secret-token-readiness-json-parent-link",
+            "def test_release_readiness_json_loader_rejects_pathlike_subclasses_without_hooks",
+            "secret-token readiness JSON path was stringified",
+            "secret-token readiness JSON path-like was coerced",
             "test_release_readiness_public_payload_redacts_hostile_mapping_keys",
             "class HostilePublicKey",
             "class HostileReportFieldName",
@@ -18325,6 +18565,8 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "def test_release_readiness_report_cli_rejects_malformed_corridor_without_leaking",
             "readiness report corridor blockers must be empty when production_ready is true",
             "def test_release_readiness_corridor_phase_keys_reject_string_subclasses_without_hooks",
+            "def test_release_readiness_corridor_phase_statuses_use_exact_strings",
+            "def test_release_readiness_native_evm_redaction_status_uses_exact_strings",
             "def test_release_readiness_report_cli_rejects_duplicate_corridor_evidence_artifacts_without_leaking",
             "readiness report corridor evidence_artifacts contains duplicate path #1",
             "def test_release_readiness_report_cli_rejects_ready_release_checklist_blockers_without_leaking",
@@ -18557,6 +18799,8 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "route_canary_evidence_hash optional canonical validation must run before non-active lane return",
             "cryptographic_evidence enforce_evm_live_tags must be a boolean",
             "type(row_get(field)) is str and bool(row_get(field))",
+            'type(chain) is str and chain == "bsc-testnet"',
+            "BSC testnet profile labels require exact",
             "domain must be an integer",
             "chain must be a non-empty ",
             "type(chain) is str",
@@ -18797,6 +19041,8 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "must be BSC chain id",
             "must be empty for non-EVM lanes",
             "type(row_get(field)) is str and bool(row_get(field))",
+            'type(chain) is str and chain == "bsc-testnet"',
+            "bundle BSC testnet profile labels require exact",
             'row_get("route_canary_evidence_hash")',
             'transaction_owner = row_get("route_canary_transaction_owner_address")',
             'receipt_block_number = row_get("route_canary_receipt_block_number")',
@@ -18992,6 +19238,8 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "test_release_bundle_verifier_rejects_crypto_evidence_root_drift",
             "test_release_bundle_verifier_accepts_bsc_testnet_crypto_profile",
             "test_release_bundle_bsc_testnet_no_gate_profile_is_exact_and_empty",
+            "test_release_bundle_rejects_hostile_bsc_testnet_profile_without_hooks",
+            "BSC testnet public profile selectors reject string",
             "malformed_chains: tuple[Any, ...] = (",
             "bsc_route_canary_semantic_cases = (",
             "route_canary_message_proof_used must be true for message-proof route canary evidence",
@@ -19211,6 +19459,7 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
         "scripts/sccp_verify_release_bundle.py",
         (
             "def _expected_submission_surfaces(report:",
+            "expected submission surfaces use exact copied corridor phase keys",
             "def _expected_submission_surface_required_phases(",
             "USER_PROVER_REQUIRED_LANE_BACKENDS",
             "USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK",
@@ -19435,6 +19684,7 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "test_release_bundle_rejects_copied_submission_surface_extra_helpers_before_render",
             "test_release_bundle_verifier_submission_helper_lanes_match_supported_scope",
             "test_release_bundle_verifier_required_helper_inventory_matches_report",
+            "test_release_bundle_verifier_expected_submission_surfaces_use_exact_phase_keys",
             "test_release_bundle_verifier_expected_submission_surfaces_are_independent",
             "test_release_bundle_verifier_helper_inventory_is_independent",
             "test_release_bundle_verifier_rejects_submission_surface_drift",
@@ -19843,6 +20093,7 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "def _release_report_artifact_integrity_bundle_errors(",
             "release report artifact integrity containers must reject subclasses",
             "release report artifact integrity uses exact copied report keys",
+            "bundled corridor phase status comparisons use exact copied strings",
             "type(payload) is not dict",
             'corridor = report_get("corridor")',
             "phase_artifacts = _public_mapping_get_string_key(",
@@ -19901,6 +20152,7 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "strict manifest artifact order uses exact copied report keys",
             "strict referenced report artifacts use exact copied report keys",
             "strict corridor phase validation uses exact copied corridor keys",
+            "strict corridor phase status comparisons use exact copied strings",
             "strict verifier artifact checks use exact copied corridor keys",
             '_public_mapping_get_string_key(native_bundle, "artifact")',
             '_public_mapping_get_string_key(row, "implementation_artifact")',
@@ -19956,6 +20208,8 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "def test_release_bundle_verifier_rejects_non_directory_bundle_root",
             "def test_release_bundle_verifier_rejects_missing_manifest_without_path_leak",
             "def test_release_bundle_verifier_rejects_duplicate_manifest_artifact_paths",
+            "def test_release_bundle_corridor_phase_statuses_use_exact_strings",
+            "def test_release_bundle_verifier_corridor_phase_statuses_use_exact_strings",
             "def test_release_bundle_verifier_numbers_repeated_duplicate_manifest_artifacts",
             "duplicate-artifact-a.txt",
             "def test_release_bundle_verifier_rejects_unmanifested_artifact",
@@ -20035,6 +20289,7 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "with no surrounding whitespace",
             "must not contain duplicate strings",
             "def _decoded_public_blocker_text(",
+            "release verifier public blocker decode helpers use exact strings",
             "html_unescape",
             "unquote",
             "for _decode_pass in range(max(1, len(value))):",
@@ -20087,6 +20342,7 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
         "scripts/sccp_release_readiness_report.py",
         (
             "def _decoded_public_blocker_text(",
+            "readiness report public blocker decode helpers use exact strings",
             "html_unescape",
             "unquote",
             "for _decode_pass in range(max(1, len(value))):",
@@ -20153,6 +20409,7 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "readiness report native_evm_prover_bundle validation_blockers must be non-empty when validation_status is blocked",
             "readiness report user_prover_submission_surfaces[0] validation_blockers must be non-empty when validation_status is blocked",
             "def test_release_readiness_public_blocker_helpers_reject_decoded_unsafe_text",
+            "def test_release_readiness_public_blocker_decode_helpers_reject_string_subclasses_without_hooks",
             "def test_release_readiness_public_sensitive_markers_reject_encoded_confusables",
             "_public_text_contains_sensitive_marker(hostile_sensitive)",
             "def test_release_readiness_public_blocker_keys_casefold_decoded_text",
@@ -20173,6 +20430,7 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "with no surrounding whitespace",
             "must not contain duplicate strings",
             "def _decoded_public_blocker_text(",
+            "release bundle public blocker decode helpers use exact strings",
             "html_unescape",
             "unquote",
             "for _decode_pass in range(max(1, len(value))):",
@@ -20274,6 +20532,7 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "def test_release_bundle_public_blocker_helpers_reject_decoded_unsafe_text",
             "def test_release_bundle_public_blocker_keys_casefold_decoded_text",
             "def test_release_bundle_public_blocker_helpers_reject_list_subclasses_without_leaking",
+            "def test_release_bundle_public_blocker_decode_helpers_reject_string_subclasses_without_hooks",
             "def test_release_bundle_public_integer_helpers_reject_list_subclasses_without_leaking",
             "api key strasse",
             "def test_release_bundle_public_sensitive_markers_reject_encoded_confusables",
@@ -20396,6 +20655,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def _solana_pubkey_field_errors(",
             "if type(value) is not str:",
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
+            "empty-or-nonzero fixed hex fields require exact empty strings",
         ),
     ),
     (
@@ -20426,6 +20686,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "TON route canary verifier identity is invalid",
             "TRON route canary verifier address metadata is invalid",
             "def _cli_error_detail(",
+            "except Exception:\n        return fallback",
             "if not text.isascii():",
             "normalized_text = _decoded_public_blocker_text(text).casefold()",
             (
@@ -20446,6 +20707,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         (
             "JSON-RPC returned duplicate JSON keys",
             "JSON-RPC {method} returned duplicate JSON keys",
+            "live JSON duplicate-key helpers use exact strings",
             "JSON-RPC {method} returned invalid JSON",
             "JSON-RPC {method} failed with HTTP {exc.code}",
             "JSON-RPC {method} request failed",
@@ -20455,6 +20717,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def _normalize_solana_rpc_url(",
             "def _rpc_host_is_loopback(",
             "def _rpc_host_is_non_public_dns(",
+            "runtime URL host classifiers use exact strings",
             "--rpc-url must use HTTPS unless it is loopback HTTP",
             "--rpc-url HTTPS host must use public DNS",
             'raise RuntimeError(f"{label} account data is invalid base64") from None',
@@ -20470,6 +20733,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def _exact_live_string(",
             "def _destination_args_from_validated_live(",
             "def _offline_args_from_summary(",
+            "Solana live copied owner metadata uses exact strings",
+            "Solana live summary commitment flag uses validated exact strings",
+            "Solana live TOML commitment gate uses exact strings",
+            "Solana live JSON-RPC protocol version uses exact strings",
             "live_programdata_slot = _live_positive_u64(",
             "program_account_data_len = _live_positive_u64(",
             "type(value) is str",
@@ -20491,6 +20758,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def _cli_error_detail(",
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
+            "lane public blocker decode helpers use exact strings",
             "if _decoded_cli_error_text_issue(text):",
             "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
@@ -20502,6 +20770,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "scripts/sccp_ton_live_evidence.py",
         (
             "TON accountStates returned duplicate JSON keys",
+            "live JSON duplicate-key helpers use exact strings",
             "TON accountStates returned invalid JSON",
             "TON live verifier address metadata is invalid",
             "TON live account address metadata is invalid",
@@ -20509,10 +20778,12 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "import ipaddress",
             "def _api_host_is_loopback(",
             "def _api_host_is_non_public_dns(",
+            "runtime URL host classifiers use exact strings",
             "--api-url must use HTTPS unless it is loopback HTTP",
             "--api-url HTTPS host must use public DNS",
             "def _reject_runtime_file_symlink_path(",
             "def _read_runtime_text_file(",
+            "live runtime text file helpers use native paths",
             "if not path.is_file():\n        raise ValueError(error_message) from None",
             'error_message="--api-key-file cannot be read",',
             "TON accountStates account address must be a canonical raw address",
@@ -20523,6 +20794,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def _exact_live_string(",
             "def _destination_args_from_validated_live(",
             "def _offline_args_from_summary(",
+            "TON live copied account status uses exact strings",
             "account_state_hash = _hex(",
             "last_transaction_lt = _positive_decimal(",
             "label=\"verifier_contract_address\"",
@@ -20540,6 +20812,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def _cli_error_detail(",
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
+            "lane public blocker decode helpers use exact strings",
             "if _decoded_cli_error_text_issue(text):",
             "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
@@ -20555,6 +20828,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             'raise ValueError(f"{label} must be ASCII") from None',
             "def _reject_runtime_file_symlink_path(",
             "def _read_runtime_text_file(",
+            "live runtime text file helpers use native paths",
             "if not path.is_file():\n        raise ValueError(error_message) from None",
             'error_message="--tron-pro-api-key-file cannot be read",',
             'error_message="--witness-schedule-payload-file cannot be read",',
@@ -20614,6 +20888,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "TRON API {endpoint} failed with HTTP {exc.code}",
             "TRON API {endpoint} request failed",
             "TRON API {endpoint} returned duplicate JSON keys",
+            "live JSON duplicate-key helpers use exact strings",
             "TRON API {endpoint} returned invalid JSON",
             "TRON API {endpoint} returned error response",
             "import ipaddress",
@@ -20621,6 +20896,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def _normalize_tron_node_url(",
             "def _tron_node_host_is_loopback(",
             "def _tron_node_host_is_non_public_dns(",
+            "runtime URL host classifiers use exact strings",
             "--tron-node-url must use HTTPS unless it is loopback HTTP",
             "--tron-node-url HTTPS host must use public DNS",
             "witness schedule payload is invalid",
@@ -20632,6 +20908,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def _cli_error_detail(",
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
+            "lane public blocker decode helpers use exact strings",
             "if _decoded_cli_error_text_issue(text):",
             "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
@@ -20653,10 +20930,12 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             "def _reject_runtime_bytecode_file_symlink_path(",
             "def _read_runtime_bytecode_file_text(",
+            "runtime bytecode file helpers use native paths",
             'if not path.is_file():\n        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             "def _cli_error_detail(",
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
+            "lane public blocker decode helpers use exact strings",
             "if _decoded_cli_error_text_issue(text):",
             "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
@@ -20678,11 +20957,13 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             "def _reject_runtime_bytecode_file_symlink_path(",
             "def _read_runtime_bytecode_file_text(",
+            "runtime bytecode file helpers use native paths",
             'if not path.is_file():\n        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             "BSC network must be mainnet or testnet",
             "def _cli_error_detail(",
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
+            "lane public blocker decode helpers use exact strings",
             "if _decoded_cli_error_text_issue(text):",
             "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
@@ -20714,6 +20995,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             "def _reject_runtime_bytecode_file_symlink_path(",
             "def _read_runtime_bytecode_file_text(",
+            "runtime bytecode file helpers use native paths",
             'if not path.is_file():\n        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             'raise argparse.ArgumentTypeError("domain must be eth or bsc") from None',
             "BSC network must be mainnet or testnet",
@@ -20723,6 +21005,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def _cli_error_detail(",
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
+            "lane public blocker decode helpers use exact strings",
             "if _decoded_cli_error_text_issue(text):",
             "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
@@ -20751,6 +21034,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "if isinstance(exc, (OSError, SystemExit)):",
             "    except (\n        argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ) as exc:",
             "JSON-RPC {method} returned duplicate JSON keys",
+            "live JSON duplicate-key helpers use exact strings",
             "JSON-RPC {method} failed with HTTP {exc.code}",
             "JSON-RPC {method} request failed",
             "JSON-RPC {method} returned invalid JSON",
@@ -20760,11 +21044,13 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def _normalize_evm_rpc_url(",
             "def _evm_rpc_host_is_loopback(",
             "def _evm_rpc_host_is_non_public_dns(",
+            "runtime URL host classifiers use exact strings",
             "--rpc-url must use HTTPS unless it is loopback HTTP",
             "--rpc-url HTTPS host must use public DNS",
             "def _cli_error_detail(",
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
+            "lane public blocker decode helpers use exact strings",
             "if _decoded_cli_error_text_issue(text):",
             "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "SCCP EVM receipt proof evidence collection failed",
@@ -20802,17 +21088,20 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             "    except (\n        argparse.ArgumentTypeError,\n        AttributeError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
             "JSON-RPC {method} returned duplicate JSON keys",
+            "live JSON duplicate-key helpers use exact strings",
             "JSON-RPC {method} returned invalid JSON",
             "import ipaddress",
             "import urllib.parse",
             "def _normalize_evm_rpc_url(",
             "def _evm_rpc_host_is_loopback(",
             "def _evm_rpc_host_is_non_public_dns(",
+            "runtime URL host classifiers use exact strings",
             "--rpc-url must use HTTPS unless it is loopback HTTP",
             "--rpc-url HTTPS host must use public DNS",
             "def _cli_error_detail(",
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
+            "lane public blocker decode helpers use exact strings",
             "if _decoded_cli_error_text_issue(text):",
             "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
@@ -20839,17 +21128,20 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "label=\"source verifier material hash\"",
             "label=\"route canary evidence hash\"",
             "JSON-RPC {method} returned duplicate JSON keys",
+            "live JSON duplicate-key helpers use exact strings",
             "JSON-RPC {method} returned invalid JSON",
             "import ipaddress",
             "import urllib.parse",
             "def _normalize_evm_rpc_url(",
             "def _evm_rpc_host_is_loopback(",
             "def _evm_rpc_host_is_non_public_dns(",
+            "runtime URL host classifiers use exact strings",
             "--rpc-url must use HTTPS unless it is loopback HTTP",
             "--rpc-url HTTPS host must use public DNS",
             "def _cli_error_detail(",
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
+            "lane public blocker decode helpers use exact strings",
             "if _decoded_cli_error_text_issue(text):",
             "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
@@ -20873,6 +21165,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "type(verifier_program_bytes_base64) is not str",
             "def _reject_program_bytes_file_symlink_path(",
             "def _read_program_bytes_file(",
+            "program bytes file helpers use native paths",
             'if not path.is_file():\n        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             'raise ValueError(f"{label} metadata must be an exact string") from None',
@@ -20883,6 +21176,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def _cli_error_detail(",
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
+            "lane public blocker decode helpers use exact strings",
             "if _decoded_cli_error_text_issue(text):",
             "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
@@ -20902,6 +21196,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def _cli_error_detail(",
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
+            "lane public blocker decode helpers use exact strings",
             "if _decoded_cli_error_text_issue(text):",
             "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
@@ -20918,6 +21213,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             "def _reject_code_boc_file_symlink_path(",
             "def _read_code_boc_file(",
+            "code BoC file helpers use native paths",
             'if not path.is_file():\n        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             'raise ValueError("account_status must be active") from None',
             "def _require_last_transaction_lt_text(",
@@ -20934,6 +21230,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def _cli_error_detail(",
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
+            "lane public blocker decode helpers use exact strings",
             "if _decoded_cli_error_text_issue(text):",
             "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
@@ -20952,6 +21249,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def _cli_error_detail(",
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
+            "lane public blocker decode helpers use exact strings",
             "if _decoded_cli_error_text_issue(text):",
             "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
@@ -20963,6 +21261,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "scripts/sccp_tron_source_bridge_evidence.py",
         (
             "type(value) is not str",
+            "TRON source strip-0x helper uses exact strings",
             "def _runtime_summary_text(",
             "source bridge runtime bytecode metadata is inconsistent",
             "destination verifier runtime bytecode metadata is inconsistent",
@@ -20979,6 +21278,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def _cli_error_detail(",
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
+            "lane public blocker decode helpers use exact strings",
             "if _decoded_cli_error_text_issue(text):",
             "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
@@ -20992,6 +21292,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def _cli_redacted_placeholder_end(",
             "def _cli_error_safety_scan_text(",
             "def _cli_error_detail(",
+            "except Exception:\n        return fallback",
             "if isinstance(exc, SystemExit):",
             "type(exc.code) is int",
             "if not text.isascii():",
@@ -21045,6 +21346,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def _cli_redacted_placeholder_end(",
             "def _cli_error_safety_scan_text(",
             "def _cli_error_detail(",
+            "except Exception:\n        return fallback",
             "if isinstance(exc, SystemExit):",
             "if not text.isascii():",
             "markdown_scan_text = _cli_error_safety_scan_text(text)",
@@ -21090,6 +21392,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "test_release_bundle_verifier_rejects_extra_dotnet_setup_command",
             "def test_release_bundle_verifier_rejects_padded_public_scalar_strings",
             "def test_release_bundle_verifier_rejects_hostile_public_scalar_strings",
+            "def test_release_bundle_verifier_empty_or_nonzero_fixed_hex_rejects_string_subclasses_without_hooks",
             "def test_release_bundle_verifier_native_evm_helpers_reject_string_subclasses",
             'checklist["items"][0]["title"] = " All required lane records "',
             'lane["chain"] = " eth "',
@@ -21139,6 +21442,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_release_bundle_cli_redacts_top_level_exception_details",
             "def test_release_bundle_cli_error_detail_rejects_decoded_unsafe_messages",
             "def test_release_bundle_cli_error_detail_treats_system_exit_as_opaque",
+            "def test_release_bundle_cli_error_detail_redacts_unstringifiable_exceptions",
+            "secret-token bundle CLI exception was stringified",
             "for exception_type in (\n        bundle.argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
             "operator bearer value",
             "operator passphrase value",
@@ -21222,6 +21527,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_all_lanes_cli_redacts_top_level_exception_details",
             "def test_all_lanes_cli_error_detail_rejects_decoded_unsafe_messages",
             "def test_all_lanes_cli_error_detail_treats_system_exit_as_opaque",
+            "def test_all_lanes_cli_error_detail_redacts_unstringifiable_exceptions",
+            "secret-token all-lanes CLI exception was stringified",
             "top_level_exception_types = (",
             "module.argparse.ArgumentTypeError,",
             "operator secret%2dtoken value",
@@ -21294,7 +21601,11 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_lane_cli_error_detail_redacts_decoded_sensitive_messages",
             "def test_lane_cli_error_detail_redacts_decoded_unsafe_messages",
             "def test_lane_cli_error_detail_treats_system_exit_as_opaque",
+            "def test_lane_cli_error_detail_redacts_unstringifiable_exceptions",
+            "secret-token lane CLI exception was stringified",
             "def test_lane_cli_error_detail_normalizes_decoded_text_with_casefold",
+            "def test_lane_public_blocker_decode_helpers_reject_string_subclasses_without_hooks",
+            "HostileLanePublicBlockerText",
             "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "normalized_text = _decoded_public_blocker_text(text).lower()",
             "safe helper SystemExit detail",
@@ -21313,9 +21624,12 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_solana_json_rpc_url_rejects_hidden_request_state",
             "malformed Solana RPC URL reached the opener",
             "https://bad_host.solana.example.invalid",
+            "HostileSolanaRpcHost",
             "def test_solana_json_rpc_redacts_invalid_json_parser_details",
             "def test_solana_json_rpc_rejects_duplicate_json_keys",
+            "def test_solana_json_object_rejects_key_subclasses_without_hooks",
             "def test_solana_json_rpc_rejects_envelope_drift",
+            "hostile Solana JSON-RPC protocol version was accepted",
             "def test_live_solana_direct_api_rejects_forged_live_metadata",
             "def test_live_solana_summary_requires_boolean_destination_readiness",
             "def test_live_solana_evidence_redacts_imported_parser_failures",
@@ -21330,6 +21644,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "route canary evidence hash must be an exact non-empty string",
             "def test_live_solana_evidence_rejects_hostile_commitment_before_rpc",
             "def test_live_solana_evidence_rejects_hostile_imported_commitment_without_hooks",
+            "def test_live_solana_owner_and_toml_commitment_checks_use_exact_strings",
             "def test_live_solana_summary_rejects_hostile_expected_pins_without_hooks",
             "def test_live_solana_account_data_redacts_base64_parser_causes",
             "def test_live_solana_metadata_base64_redacts_parser_causes",
@@ -21406,8 +21721,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "http://toncenter.example",
             "https://toncenter.local",
             "exact http(s) URL",
+            "HostileTonApiHost",
             "def test_live_ton_account_states_redacts_invalid_json_parser_details",
             "def test_live_ton_account_states_json_rejects_duplicate_keys",
+            "def test_live_ton_json_object_rejects_key_subclasses_without_hooks",
             "def test_live_ton_account_states_rejects_unsuccessful_ok_flag",
             "def test_live_ton_account_states_rejects_ambiguous_account_container",
             "def test_live_ton_hash_decoder_redacts_base64_parser_causes",
@@ -21430,6 +21747,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "for exception_type in (\n        module.argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
             "SCCP TON live evidence collection failed",
             "TON accountStates returned duplicate JSON keys",
+            "live JSON duplicate-key helpers use exact strings",
             "def test_live_ton_account_states_redacts_transport_and_error_response_details",
             "secret-token provider URL leaked from transport",
             "secret-bearing TON transport error was accepted",
@@ -21438,6 +21756,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_live_ton_evidence_rejects_code_hash_drift",
             "def test_live_ton_evidence_rejects_code_boc_hash_drift",
             "def test_live_ton_direct_api_rejects_forged_live_metadata",
+            "def test_live_ton_summary_rejects_hostile_account_status_without_hooks",
             "def test_live_ton_summary_requires_boolean_destination_readiness",
             "def test_live_ton_evidence_rejects_malformed_remote_hash_text",
             "def test_live_ton_last_transaction_lt_rejects_boolean_json_value",
@@ -21508,6 +21827,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "HostileTronLiveDict",
             "HostileTronLiveList",
             "HostileTronLiveInt",
+            "0x text must be an exact string",
             "secret-token TRON live exact string was stripped",
             "secret-token TRON live bytes coerced",
             "secret-token TRON live dict get",
@@ -21527,9 +21847,11 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "source-event calldata rendered in full TOML mode",
             "def test_tron_api_http_error_detail_is_bounded",
             "def test_tron_api_rejects_duplicate_json_keys",
+            "def test_tron_json_object_rejects_key_subclasses_without_hooks",
             "def test_tron_node_url_rejects_hidden_request_state",
             "malformed TRON node URL reached the opener",
             "https://bad_host.tron.example",
+            "HostileTronNodeHost",
             "def test_tron_api_redacts_transport_and_error_response_details",
             "secret-token provider URL leaked from transport",
             "secret-bearing TRON transport error was accepted",
@@ -21545,6 +21867,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "TRON duplicate JSON context leaked",
             "def test_tron_runtime_input_parsers_redact_exception_causes",
             "def test_tron_live_runtime_files_reject_unreadable_file_shapes",
+            "live runtime text file native path helpers reject path-like inputs",
             "def test_live_evidence_redacts_constant_failure_result_message",
             "def test_live_evidence_redacts_constant_result_word_parser_cause",
             "def test_live_evidence_redacts_generated_full_toml_parser_exception_cause",
@@ -21634,6 +21957,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "ETH source hex ArgumentTypeError detail leaked",
             "secret-token-eth-source-file-path.hex",
             "def test_eth_runtime_bytecode_file_rejects_unreadable_file_shapes",
+            "runtime bytecode file native path helpers reject path-like inputs",
             "def test_eth_source_evidence_rejects_boolean_source_domain",
             "boolean ETH source domain reached vk hash derivation",
             "def test_eth_source_rejects_non_integer_deployment_block_numbers_without_stringifying",
@@ -21663,6 +21987,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token-bsc-source-file-path.hex",
             "secret-token-bsc-source-network",
             "def test_bsc_runtime_bytecode_file_rejects_unreadable_file_shapes",
+            "runtime bytecode file native path helpers reject path-like inputs",
             "def test_bsc_source_evidence_rejects_boolean_source_domain",
             "boolean BSC source domain reached vk hash derivation",
             "def test_bsc_source_rejects_non_integer_deployment_block_numbers_without_stringifying",
@@ -21711,6 +22036,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "EVM destination hex ArgumentTypeError detail leaked",
             "secret-token-evm-destination-file-path.hex",
             "def test_evm_runtime_bytecode_file_rejects_unreadable_file_shapes",
+            "runtime bytecode file native path helpers reject path-like inputs",
             "def test_evm_destination_domain_wrappers_redact_nested_causes",
             "def test_evm_destination_cli_redacts_top_level_exception_details",
             "for exception_type in (\n        module.argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
@@ -21750,6 +22076,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "SCCP EVM receipt proof evidence collection failed",
             "JSON-RPC eth_chainId returned duplicate JSON keys",
             "JSON-RPC eth_getTransactionReceipt returned duplicate JSON keys",
+            "def test_receipt_json_object_rejects_key_subclasses_without_hooks",
             "def test_receipt_json_rpc_redacts_invalid_json_parser_details",
             "def test_receipt_json_rpc_url_rejects_hidden_request_state",
             "malformed receipt RPC URL reached the opener",
@@ -21774,6 +22101,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "for exception_type in (\n        module.argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
             "SCCP EVM source live evidence collection failed",
             "JSON-RPC eth_chainId returned duplicate JSON keys",
+            "def test_evm_source_json_object_rejects_key_subclasses_without_hooks",
             "source bridge address metadata is invalid",
             "bridge address metadata is invalid",
             "test_evm_source_json_rpc_redacts_invalid_json_parser_details",
@@ -21834,6 +22162,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "for exception_type in (\n        module.argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
             "SCCP EVM live evidence collection failed",
             "JSON-RPC eth_chainId returned duplicate JSON keys",
+            "def test_evm_json_object_rejects_key_subclasses_without_hooks",
             "bridge address metadata is invalid",
             "test_evm_json_rpc_redacts_invalid_json_parser_details",
             "test_evm_json_rpc_url_rejects_hidden_request_state",
@@ -21906,6 +22235,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_solana_destination_file_parser_redacts_file_read_causes",
             "secret-token-private-verifier.so",
             "def test_solana_program_bytes_file_rejects_unreadable_file_shapes",
+            "program bytes file native path helpers reject path-like inputs",
             "def test_solana_destination_redacts_verifier_program_parser_failures",
             "verifier_program_id metadata is invalid",
             "secret-token {label} parser detail",
@@ -21996,6 +22326,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token-ton-destination-toml-lt",
             "helper_failures = (",
             "def test_ton_code_boc_file_rejects_unreadable_file_shapes",
+            "code BoC file native path helpers reject path-like inputs",
             "TON account status helper detail leaked",
             "TON last-transaction helper detail leaked",
             "TON TOML LT helper detail leaked",
@@ -22053,6 +22384,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token TRON decimal text was compared",
             "HostileTronSourceString",
             "def test_tron_source_exact_string_parsers_reject_string_subclasses_without_hooks",
+            "0x text must be an exact string",
             "def test_tron_source_bridge_byte_helpers_reject_subclasses_without_hooks",
             "HostileTronSourceBytes",
             "HostileTronSourceBytearray",
@@ -22138,6 +22470,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_release_readiness_report_cli_redacts_top_level_exception_details",
             "def test_release_readiness_cli_error_detail_rejects_decoded_unsafe_messages",
             "def test_release_readiness_cli_error_detail_treats_system_exit_as_opaque",
+            "def test_release_readiness_cli_error_detail_redacts_unstringifiable_exceptions",
+            "secret-token readiness CLI exception was stringified",
             "for exception_type in (\n        report.argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
             "operator bearer value",
             "operator passphrase value",
@@ -22451,12 +22785,18 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "def _readiness_status_markdown_label(",
             "type(report) is not dict",
             "def _input_artifact_markdown_rows(",
+            "readiness Markdown artifact path cells use exact copied artifact keys",
+            "readiness Markdown artifact byte cells use exact copied artifact keys",
+            "readiness Markdown artifact hash cells use exact copied artifact keys",
             "def _corridor_markdown_rows(",
+            "readiness corridor Markdown root cells use exact copied corridor keys",
+            "readiness corridor Markdown status cells require exact phase status strings",
             "def _cryptographic_evidence_markdown_rows(",
             "def _user_prover_surface_markdown_rows(",
             "def _lane_readiness_markdown_rows(",
             "def _release_checklist_markdown_rows(",
             "def _lane_readiness_markdown_cells(",
+            "readiness Markdown lane row cells use exact copied lane keys",
             "def _cryptographic_evidence_markdown_row_cells(",
             "def _public_crypto_text_is_safe(",
             "def _user_prover_surface_markdown_row_cells(",
@@ -22465,6 +22805,7 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "readiness Markdown user-prover validation cells use exact copied row keys",
             "readiness Markdown user-prover row cells use exact copied row keys",
             "def _native_evm_bundle_markdown_row_cells(",
+            "readiness Markdown native-prover row cells use exact copied bundle keys",
             "def _source_inventory_markdown_rows(",
             "readiness Markdown source-inventory status cells use exact copied row keys",
             "readiness Markdown source-inventory blocker cells use exact copied row keys",
@@ -22629,8 +22970,15 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "readiness Markdown invariant artifact keys must be exact",
             "type(artifact_path) is not str or not artifact_path",
             "def _readiness_input_artifact_markdown_rows(",
+            "strict readiness Markdown artifact path cells use exact copied artifact keys",
+            "strict readiness Markdown artifact byte cells use exact copied artifact keys",
+            "strict readiness Markdown artifact hash cells use exact copied artifact keys",
             "def _readiness_corridor_markdown_rows(",
+            "strict readiness corridor Markdown root cells use exact copied corridor keys",
             "def _readiness_corridor_phase_markdown_row_cells(",
+            "strict readiness corridor Markdown status cells require exact phase status strings",
+            "strict readiness Markdown corridor invariant root uses exact copied corridor keys",
+            "strict readiness Markdown corridor invariant phase artifacts use exact copied phase keys",
             "def _readiness_cryptographic_evidence_markdown_rows(",
             "def _readiness_user_prover_surface_markdown_rows(",
             "def _readiness_lane_markdown_rows(",
@@ -22642,6 +22990,8 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "strict readiness Markdown user-prover validation cells use exact copied row keys",
             "strict readiness Markdown user-prover row cells use exact copied row keys",
             "strict readiness Markdown user-prover invariant rows use exact copied row keys",
+            "strict readiness Markdown lane row cells use exact copied lane keys",
+            "strict readiness Markdown lane invariant rows use exact copied lane keys",
             "input_artifact_cells = [",
             "input_artifact_row = (",
             "input artifact row for {artifact_path}",
@@ -22683,6 +23033,9 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "native EVM prover validation_status",
             "def _readiness_native_evm_bundle_row_cells(",
             "native_cells = _readiness_native_evm_bundle_row_cells(native_bundle)",
+            "strict readiness Markdown native-prover row cells use exact copied bundle keys",
+            "strict readiness Markdown native-prover invariant root uses exact copied bundle keys",
+            "strict readiness Markdown native-prover invariant status uses exact copied strings",
             "readiness Markdown native artifact invariants use exact public artifact hash keys",
             "native_artifact_row_prefix = (",
             "native EVM prover artifact/hash row",
@@ -22834,6 +23187,7 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "def test_release_bundle_verifier_markdown_string_list_helpers_reject_list_subclasses_without_leaking",
             "def test_release_bundle_verifier_markdown_release_checklist_containers_reject_subclasses_without_leaking",
             "def test_release_bundle_verifier_markdown_table_containers_reject_subclasses_without_leaking",
+            "def test_release_bundle_verifier_corridor_markdown_helpers_use_exact_root_keys",
             "def test_release_bundle_verifier_markdown_native_source_containers_reject_subclasses_without_leaking",
             "def test_release_bundle_verifier_markdown_lane_containers_reject_subclasses_without_leaking",
             "def test_release_bundle_rejects_markdown_drift_before_write",
@@ -22857,6 +23211,7 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "def test_release_bundle_verifier_markdown_invariants_require_corridor_phase_status",
             "def test_release_bundle_verifier_markdown_invariants_require_corridor_artifact_row",
             "def test_release_bundle_verifier_readiness_markdown_invariants_reject_input_corridor_subclasses_without_leaking",
+            "def test_release_bundle_verifier_readiness_markdown_invariants_use_exact_corridor_keys",
             'HostileVerifierFieldName("bytes")',
             'HostileVerifierFieldName("sha256")',
             "def test_release_bundle_verifier_markdown_invariants_require_checklist_status",
@@ -22873,6 +23228,7 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "def test_release_bundle_verifier_rejects_markdown_crypto_evidence_omission",
             "def test_release_bundle_verifier_readiness_markdown_invariants_reject_crypto_subclasses_without_leaking",
             "def test_release_bundle_verifier_readiness_markdown_redacts_malformed_checklist_artifact",
+            "def test_release_bundle_verifier_input_artifact_markdown_helpers_use_exact_keys",
             "def test_release_bundle_verifier_readiness_markdown_rejects_malformed_crypto_rows",
             "def test_release_bundle_verifier_readiness_markdown_redacts_malformed_crypto_artifact",
             "operator review source",
@@ -22881,6 +23237,8 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "def test_release_bundle_verifier_readiness_markdown_rejects_malformed_lane_rows",
             "def test_release_bundle_verifier_readiness_markdown_redacts_malformed_lane_artifact",
             "def test_release_bundle_verifier_readiness_markdown_invariants_reject_lane_subclasses_without_leaking",
+            "def test_release_bundle_verifier_lane_markdown_helpers_use_exact_row_keys",
+            "def test_release_bundle_verifier_lane_markdown_invariants_use_exact_row_keys",
             "def test_release_bundle_verifier_readiness_markdown_rejects_malformed_user_prover_rows",
             "def test_release_bundle_verifier_readiness_markdown_redacts_malformed_user_prover_artifact",
             "def test_release_bundle_verifier_readiness_markdown_invariants_reject_user_prover_subclasses_without_leaking",
@@ -22888,6 +23246,9 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "def test_release_bundle_verifier_readiness_markdown_rejects_malformed_native_prover_bundle",
             "def test_release_bundle_verifier_readiness_markdown_redacts_malformed_native_prover_artifact",
             "def test_release_bundle_verifier_readiness_markdown_invariants_reject_native_bundle_subclasses_without_leaking",
+            "def test_release_bundle_verifier_native_evm_markdown_cells_ignore_hostile_aliases",
+            "def test_release_bundle_verifier_native_markdown_invariants_use_exact_bundle_keys",
+            "strict readiness Markdown native-prover invariant status uses exact copied strings",
             "native artifact hash alias must not require readiness Markdown rows",
             "def test_release_bundle_verifier_readiness_markdown_rejects_malformed_source_inventory_rows",
             "def test_release_bundle_verifier_readiness_markdown_redacts_malformed_source_inventory_artifact",
@@ -22944,8 +23305,11 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "def test_release_readiness_markdown_string_list_helpers_reject_list_subclasses_without_leaking",
             "def test_release_readiness_markdown_release_checklist_containers_reject_subclasses_without_leaking",
             "def test_release_readiness_markdown_table_containers_reject_subclasses_without_leaking",
+            "def test_release_readiness_corridor_markdown_helpers_use_exact_root_keys",
             "def test_release_readiness_markdown_native_source_containers_reject_subclasses_without_leaking",
+            "def test_release_readiness_input_artifact_markdown_helpers_use_exact_keys",
             "def test_release_readiness_markdown_lane_containers_reject_subclasses_without_leaking",
+            "def test_release_readiness_lane_markdown_helpers_use_exact_row_keys",
             "def test_release_readiness_report_markdown_rejects_malformed_checklist_rows",
             "def test_release_readiness_report_markdown_rejects_malformed_input_and_corridor_rows",
             "def test_release_readiness_report_markdown_rejects_malformed_collection_roots",
@@ -22957,6 +23321,7 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "def test_release_readiness_report_markdown_rejects_malformed_user_prover_rows",
             "def test_release_readiness_user_prover_markdown_helpers_use_exact_row_keys",
             "def test_release_readiness_report_markdown_rejects_malformed_native_prover_bundle",
+            "def test_release_readiness_native_evm_markdown_cells_ignore_hostile_aliases",
             "def test_release_readiness_report_markdown_rejects_malformed_source_inventory_rows",
         ),
     ),
@@ -24378,7 +24743,11 @@ def _source_adapter_gate_audit_keys_for_domain_chain(
 ) -> set[str] | None:
     if type(domain) is not int:
         return None
-    if domain == SCCP_DOMAIN_BSC and chain == "bsc-testnet":
+    if (
+        domain == SCCP_DOMAIN_BSC
+        and type(chain) is str
+        and chain == "bsc-testnet"
+    ):
         return None
     return ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN.get(domain)
 
@@ -24402,7 +24771,11 @@ def _source_adapter_gate_hash_key_for_domain_chain(
 ) -> str | None:
     if type(domain) is not int:
         return None
-    if domain == SCCP_DOMAIN_BSC and chain == "bsc-testnet":
+    if (
+        domain == SCCP_DOMAIN_BSC
+        and type(chain) is str
+        and chain == "bsc-testnet"
+    ):
         return None
     return ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN.get(domain)
 
@@ -25732,7 +26105,23 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return payload
 
 
+NATIVE_PATH_TYPE = type(Path())
+
+
+def _require_native_path(
+    path: object,
+    *,
+    json_read_error: str | None = None,
+) -> Path:
+    if type(path) is not NATIVE_PATH_TYPE:
+        if json_read_error is not None:
+            raise OSError(json_read_error)
+        raise ValueError("release artifact path must be a regular file")
+    return path
+
+
 def _load_json(path: Path) -> Any:
+    path = _require_native_path(path, json_read_error="JSON path cannot be read")
     try:
         _reject_release_artifact_symlink_path(path)
     except (OSError, ValueError):
@@ -25746,6 +26135,10 @@ def _load_json(path: Path) -> Any:
 
 
 def _public_json_root_file_errors(label: str, path: Path) -> list[str]:
+    try:
+        path = _require_native_path(path, json_read_error=f"cannot load {label} JSON")
+    except OSError:
+        return [f"cannot load {label} JSON"]
     try:
         _reject_release_artifact_symlink_path(path)
     except (OSError, ValueError):
@@ -25773,6 +26166,10 @@ def _load_public_json_root(label: str, path: Path) -> tuple[Any, list[str]]:
 
 def _public_text_root_file_errors(path: Path, load_error: str) -> list[str]:
     try:
+        path = _require_native_path(path, json_read_error=load_error)
+    except OSError:
+        return [load_error]
+    try:
         _reject_release_artifact_symlink_path(path)
     except (OSError, ValueError):
         return [load_error]
@@ -25799,6 +26196,9 @@ def _load_public_text_root(
 
 
 def _path_control_character(path: str) -> str | None:
+    # Source-inventory marker: release path text helpers use exact strings.
+    if type(path) is not str:
+        return "non-string path"
     for character in path:
         if ord(character) < 0x20 or ord(character) == 0x7F:
             return repr(character)
@@ -25809,6 +26209,8 @@ MARKDOWN_UNSAFE_PATH_CHARACTERS = frozenset("|`<>")
 
 
 def _path_markdown_unsafe_character(path: str) -> str | None:
+    if type(path) is not str:
+        return "non-string path"
     for character in path:
         if character in MARKDOWN_UNSAFE_PATH_CHARACTERS:
             return repr(character)
@@ -25816,6 +26218,8 @@ def _path_markdown_unsafe_character(path: str) -> str | None:
 
 
 def _path_percent_encoded_traversal(path: str) -> str | None:
+    if type(path) is not str:
+        return "non-string path"
     decoded = path
     seen = {decoded}
     for _ in range(32):
@@ -25839,6 +26243,8 @@ def _path_percent_encoded_traversal(path: str) -> str | None:
 
 
 def _path_contains_sensitive_marker(path: str) -> bool:
+    if type(path) is not str:
+        return True
     return _public_text_contains_sensitive_marker(path)
 
 
@@ -25868,6 +26274,7 @@ def _reject_release_artifact_symlink_path(path: Path) -> None:
 
 
 def _artifact(path: Path) -> dict[str, Any]:
+    path = _require_native_path(path)
     _reject_release_artifact_symlink_path(path)
     if not path.is_file():
         raise ValueError("release artifact path must be a regular file")
@@ -26848,11 +27255,14 @@ def _sdk_test_inventory_errors(
 
     errors: list[str] = []
     for raw_path, markers in inventory:
-        path = Path(raw_path)
-        display_path = str(path)
-        if not path.is_absolute():
-            display_path = path.as_posix()
-            path = ROOT / path
+        path, display_path, path_error = _source_inventory_path(
+            raw_path,
+            label=label,
+            kind="SDK test inventory",
+        )
+        if path_error is not None:
+            errors.append(path_error)
+            continue
         try:
             source = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
@@ -26873,6 +27283,31 @@ def _sdk_test_inventory_errors(
     return errors
 
 
+def _source_inventory_path(
+    raw_path: str | Path,
+    *,
+    label: str,
+    kind: str,
+) -> tuple[Path | None, str | None, str | None]:
+    """Return a checked inventory source path and display label."""
+
+    if type(raw_path) is str:
+        path = Path(raw_path)
+    elif type(raw_path) is NATIVE_PATH_TYPE:
+        path = raw_path
+    else:
+        return (
+            None,
+            None,
+            f"{label} {kind} path must be an exact string or native path",
+        )
+    display_path = str(path)
+    if not path.is_absolute():
+        display_path = path.as_posix()
+        path = ROOT / path
+    return path, display_path, None
+
+
 def _source_marker_inventory_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...],
     *,
@@ -26882,11 +27317,14 @@ def _source_marker_inventory_errors(
 
     errors: list[str] = []
     for raw_path, markers in inventory:
-        path = Path(raw_path)
-        display_path = str(path)
-        if not path.is_absolute():
-            display_path = path.as_posix()
-            path = ROOT / path
+        path, display_path, path_error = _source_inventory_path(
+            raw_path,
+            label=label,
+            kind="source inventory",
+        )
+        if path_error is not None:
+            errors.append(path_error)
+            continue
         try:
             source = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
@@ -26909,7 +27347,12 @@ def _source_marker_inventory_errors(
 def _source_inventory_relative_path(raw_path: str | Path) -> str:
     """Return a stable repository-relative inventory path when possible."""
 
-    path = Path(raw_path)
+    if type(raw_path) is str:
+        path = Path(raw_path)
+    elif type(raw_path) is NATIVE_PATH_TYPE:
+        path = raw_path
+    else:
+        return "<invalid inventory path>"
     if path.is_absolute():
         try:
             return path.relative_to(ROOT).as_posix()
@@ -26979,6 +27422,8 @@ def _source_region(
 ) -> tuple[str | None, list[str]]:
     """Return the source region delimited by two stable markers."""
 
+    if type(path) is not NATIVE_PATH_TYPE:
+        return None, [f"{label} source path must be a native path"]
     try:
         source = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
@@ -27006,10 +27451,16 @@ def _ethereum_data_collection_no_proxy_inventory_errors(
         regions = ETHEREUM_DATA_COLLECTION_REGIONS
     errors: list[str] = []
     for sdk, (raw_path, start_marker, end_marker, required_markers) in regions.items():
-        path = Path(raw_path)
-        display_path = path.as_posix()
-        if not path.is_absolute():
-            path = ROOT / path
+        path, display_path, path_error = _source_inventory_path(
+            raw_path,
+            label=f"Ethereum mainnet {sdk} data collection",
+            kind="source",
+        )
+        if path_error is not None:
+            errors.append(path_error)
+            continue
+        assert path is not None
+        assert display_path is not None
         region, region_errors = _source_region(
             path,
             start_marker=start_marker,
@@ -27486,11 +27937,15 @@ def _ethereum_launch_policy_documentation_inventory_errors(
     label = "Ethereum mainnet launch-policy documentation"
     errors = _source_marker_inventory_errors(inventory, label=label)
     for raw_path, _markers in inventory:
-        path = Path(raw_path)
-        display_path = str(path)
-        if not path.is_absolute():
-            display_path = path.as_posix()
-            path = ROOT / path
+        path, display_path, path_error = _source_inventory_path(
+            raw_path,
+            label=label,
+            kind="source inventory",
+        )
+        if path_error is not None:
+            continue
+        assert path is not None
+        assert display_path is not None
         try:
             source = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
@@ -27516,11 +27971,15 @@ def _sccp_public_discovery_documentation_inventory_errors(
     label = "SCCP public discovery documentation"
     errors = _source_marker_inventory_errors(inventory, label=label)
     for raw_path, _markers in inventory:
-        path = Path(raw_path)
-        display_path = str(path)
-        if not path.is_absolute():
-            display_path = path.as_posix()
-            path = ROOT / path
+        path, display_path, path_error = _source_inventory_path(
+            raw_path,
+            label=label,
+            kind="source inventory",
+        )
+        if path_error is not None:
+            continue
+        assert path is not None
+        assert display_path is not None
         try:
             source = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
@@ -27572,11 +28031,15 @@ def _sccp_retired_network_surface_guard_inventory_errors(
     label = "SCCP retired network-surface guard"
     errors = _source_marker_inventory_errors(inventory, label=label)
     for raw_path, _markers in inventory:
-        path = Path(raw_path)
-        display_path = str(path)
-        if not path.is_absolute():
-            display_path = path.as_posix()
-            path = ROOT / path
+        path, display_path, path_error = _source_inventory_path(
+            raw_path,
+            label=label,
+            kind="source inventory",
+        )
+        if path_error is not None:
+            continue
+        assert path is not None
+        assert display_path is not None
         try:
             source = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
@@ -27663,11 +28126,11 @@ def _source_escape_decoded_text(value: str) -> str:
 
 def _sccp_unready_transparent_proof_cargo_manifest_paths(
     cargo_manifest_paths: tuple[str | Path, ...] | None,
-) -> tuple[Path, ...]:
+) -> tuple[str | Path, ...]:
     """Return Cargo manifests inspected for SCCP test-fixture feature leakage."""
 
     if cargo_manifest_paths is not None:
-        return tuple(Path(path) for path in cargo_manifest_paths)
+        return cargo_manifest_paths
 
     paths: list[Path] = []
     seen: set[Path] = set()
@@ -27844,13 +28307,17 @@ def _sccp_unready_transparent_proof_test_fixture_feature_errors(
     for raw_path in _sccp_unready_transparent_proof_cargo_manifest_paths(
         cargo_manifest_paths
     ):
-        path = Path(raw_path)
-        if not path.is_absolute():
-            path = ROOT / path
-        try:
-            display_path = path.relative_to(ROOT).as_posix()
-        except ValueError:
-            display_path = str(path)
+        path, display_path, path_error = _source_inventory_path(
+            raw_path,
+            label="SCCP unready transparent-proof removed-surface source inventory",
+            kind="Cargo manifest",
+        )
+        if path_error is not None:
+            errors.append(path_error)
+            continue
+        assert path is not None
+        assert display_path is not None
+        inventory_path_key = _source_inventory_relative_path(path)
         try:
             source = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
@@ -27927,7 +28394,7 @@ def _sccp_unready_transparent_proof_test_fixture_feature_errors(
                 and "testfixtures" in line_identifier_text
             ):
                 if (
-                    display_path,
+                    inventory_path_key,
                     current_section,
                     stripped_line,
                 ) in SCCP_UNREADY_TRANSPARENT_PROOF_ALLOWED_TEST_FIXTURE_CARGO_DEPENDENCIES:
@@ -28678,11 +29145,16 @@ def _sccp_unready_transparent_proof_release_command_feature_errors(
 
     errors: list[str] = []
     for raw_path in release_command_paths:
-        path = Path(raw_path)
-        display_path = str(path)
-        if not path.is_absolute():
-            display_path = path.as_posix()
-            path = ROOT / path
+        path, display_path, path_error = _source_inventory_path(
+            raw_path,
+            label="SCCP unready transparent-proof removed-surface source inventory",
+            kind="release command source",
+        )
+        if path_error is not None:
+            errors.append(path_error)
+            continue
+        assert path is not None
+        assert display_path is not None
         try:
             source = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
@@ -28831,11 +29303,16 @@ def _sccp_unready_source_proof_bypass_call_site_errors(
             not in required_markers
         ):
             continue
-        path = Path(raw_path)
-        display_path = str(path)
-        if not path.is_absolute():
-            display_path = path.as_posix()
-            path = ROOT / path
+        path, display_path, path_error = _source_inventory_path(
+            raw_path,
+            label="SCCP unready transparent-proof removed-surface source inventory",
+            kind="source-proof bypass call-site source",
+        )
+        if path_error is not None:
+            errors.append(path_error)
+            continue
+        assert path is not None
+        assert display_path is not None
         try:
             source = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
@@ -28879,11 +29356,16 @@ def _sccp_unready_widened_bypass_gate_errors(
             not in required_markers
         ):
             continue
-        path = Path(raw_path)
-        display_path = str(path)
-        if not path.is_absolute():
-            display_path = path.as_posix()
-            path = ROOT / path
+        path, display_path, path_error = _source_inventory_path(
+            raw_path,
+            label="SCCP unready transparent-proof removed-surface source inventory",
+            kind="bypass-gate source",
+        )
+        if path_error is not None:
+            errors.append(path_error)
+            continue
+        assert path is not None
+        assert display_path is not None
         try:
             source = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
@@ -28966,11 +29448,16 @@ def _sccp_unready_torii_route_bypass_call_site_errors(
             not in required_markers
         ):
             continue
-        path = Path(raw_path)
-        display_path = str(path)
-        if not path.is_absolute():
-            display_path = path.as_posix()
-            path = ROOT / path
+        path, display_path, path_error = _source_inventory_path(
+            raw_path,
+            label="SCCP unready transparent-proof removed-surface source inventory",
+            kind="Torii route bypass call-site source",
+        )
+        if path_error is not None:
+            errors.append(path_error)
+            continue
+        assert path is not None
+        assert display_path is not None
         try:
             source = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
@@ -29063,11 +29550,16 @@ def _sccp_unready_transparent_proof_config_inventory_errors(
     errors.extend(_sccp_unready_widened_bypass_gate_errors(inventory))
     errors.extend(_sccp_unready_torii_route_bypass_call_site_errors(inventory))
     for raw_path in forbidden_paths:
-        path = Path(raw_path)
-        display_path = str(path)
-        if not path.is_absolute():
-            display_path = path.as_posix()
-            path = ROOT / path
+        path, display_path, path_error = _source_inventory_path(
+            raw_path,
+            label="SCCP unready transparent-proof removed-surface source inventory",
+            kind="forbidden environment source",
+        )
+        if path_error is not None:
+            errors.append(path_error)
+            continue
+        assert path is not None
+        assert display_path is not None
         try:
             source = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
@@ -29108,11 +29600,16 @@ def _sccp_unready_transparent_proof_config_inventory_errors(
                     f"{forbidden_env}"
                 )
     for raw_path in forbidden_config_paths:
-        path = Path(raw_path)
-        display_path = str(path)
-        if not path.is_absolute():
-            display_path = path.as_posix()
-            path = ROOT / path
+        path, display_path, path_error = _source_inventory_path(
+            raw_path,
+            label="SCCP unready transparent-proof removed-surface source inventory",
+            kind="forbidden config source",
+        )
+        if path_error is not None:
+            errors.append(path_error)
+            continue
+        assert path is not None
+        assert display_path is not None
         try:
             source = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
@@ -29141,11 +29638,16 @@ def _sccp_unready_transparent_proof_config_inventory_errors(
                     f"{forbidden_config}"
                 )
     for raw_path in forbidden_surface_paths:
-        path = Path(raw_path)
-        display_path = str(path)
-        if not path.is_absolute():
-            display_path = path.as_posix()
-            path = ROOT / path
+        path, display_path, path_error = _source_inventory_path(
+            raw_path,
+            label="SCCP unready transparent-proof removed-surface source inventory",
+            kind="forbidden diagnostic surface source",
+        )
+        if path_error is not None:
+            errors.append(path_error)
+            continue
+        assert path is not None
+        assert display_path is not None
         try:
             source = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
@@ -31955,6 +32457,9 @@ def _active_launch_lane(evidence: Any) -> dict[str, Any] | None:
 
 
 def _decoded_public_blocker_text(value: str) -> str:
+    # Source-inventory marker: release verifier public blocker decode helpers use exact strings.
+    if type(value) is not str:
+        return ""
     decoded = value
     for _decode_pass in range(max(1, len(value))):
         next_decoded = unquote(html_unescape(decoded))
@@ -32009,12 +32514,16 @@ PUBLIC_SENSITIVE_MARKER_CONFUSABLES = str.maketrans(
 
 
 def _decoded_sensitive_public_marker_text(value: str) -> str:
+    if type(value) is not str:
+        return ""
     return _decoded_public_blocker_text(value).translate(
         PUBLIC_SENSITIVE_MARKER_CONFUSABLES
     ).casefold()
 
 
 def _decoded_public_blocker_text_issue(value: str) -> str | None:
+    if type(value) is not str:
+        return "non-string value"
     decoded = _decoded_public_blocker_text(value)
     if _path_control_character(decoded) is not None:
         return "control character"
@@ -32026,6 +32535,8 @@ def _decoded_public_blocker_text_issue(value: str) -> str | None:
 
 
 def _canonical_public_blocker_key(value: str) -> str:
+    if type(value) is not str:
+        return ""
     return _decoded_public_blocker_text(value).casefold()
 
 
@@ -32418,13 +32929,22 @@ def _active_launch_evm_live_metadata_blockers(
         blockers.append(
             f"{lane_label}: {ACTIVE_LAUNCH_DISPLAY} destination live eth_chainId must be {expected_chain_id_label}"
         )
-    if _public_mapping_get_string_key(evm_live_metadata, "source_block_tag") != "finalized":
+    source_block_tag = _public_mapping_get_string_key(
+        evm_live_metadata,
+        "source_block_tag",
+    )
+    # Source-inventory marker: active EVM live block tags require exact copied strings.
+    if type(source_block_tag) is not str or source_block_tag != "finalized":
         blockers.append(
             f"{lane_label}: {ACTIVE_LAUNCH_DISPLAY} source live block tag must be finalized"
         )
+    destination_block_tag = _public_mapping_get_string_key(
+        evm_live_metadata,
+        "destination_block_tag",
+    )
     if (
-        _public_mapping_get_string_key(evm_live_metadata, "destination_block_tag")
-        != "finalized"
+        type(destination_block_tag) is not str
+        or destination_block_tag != "finalized"
     ):
         blockers.append(
             f"{lane_label}: {ACTIVE_LAUNCH_DISPLAY} destination live block tag must be finalized"
@@ -33193,10 +33713,8 @@ def _active_launch_required_record_metadata_blockers(
     if not lane:
         return [f"{lane_label}: missing launch lane evidence"]
     blockers: list[str] = []
-    if (
-        type(_public_mapping_get_string_key(lane, "domain")) is not int
-        or _public_mapping_get_string_key(lane, "domain") != ACTIVE_LAUNCH_DOMAIN
-    ):
+    lane_domain = _public_mapping_get_string_key(lane, "domain")
+    if type(lane_domain) is not int or lane_domain != ACTIVE_LAUNCH_DOMAIN:
         blockers.append(
             f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} launch lane domain must be {_sccp_domain_constant_label(ACTIVE_LAUNCH_DOMAIN)}"
         )
@@ -34679,6 +35197,17 @@ def _corridor_phase_key_blocker(label: str, phase: Any) -> str | None:
     ):
         return f"{label} contains malformed phase"
     return None
+
+
+def _corridor_phase_status_is_exact_passed(status: Any) -> bool:
+    # Source-inventory marker: strict corridor phase status comparisons use exact copied strings.
+    return type(status) is str and status == "passed"
+
+
+def _corridor_phase_status_public_text(status: Any) -> str:
+    if type(status) is str and status in {"blocked", "failed", "skipped", "missing"}:
+        return status
+    return "invalid"
 
 
 def _corridor_phase_key_numbering_key(error: str, label: str) -> str | None:
@@ -36539,6 +37068,7 @@ def _readiness_markdown_lane_row_cells(
         return "-", "-", "blocked", _readiness_markdown_record_flags({}), [
             "lane summary must be an object"
         ]
+    # Source-inventory marker: strict readiness Markdown lane row cells use exact copied lane keys.
     lane = _public_mapping_string_view(lane)
 
     domain = lane.get("domain")
@@ -37106,6 +37636,7 @@ def _readiness_native_evm_sdk_artifacts_cell(value: Any) -> str:
 
 
 def _readiness_native_evm_bundle_status_cell(native_bundle: dict[str, Any]) -> str:
+    # Source-inventory marker: strict readiness Markdown native-prover row cells use exact copied bundle keys.
     native_bundle = _public_mapping_string_view(native_bundle)
     status = native_bundle.get("validation_status")
     return (
@@ -37363,6 +37894,7 @@ def _readiness_user_prover_surface_markdown_rows(value: Any) -> list[list[str]]:
 def _readiness_artifact_path_cell(artifact: Any, *, field_label: str) -> str:
     if type(artifact) is not dict:
         return f"`<invalid {field_label}>`"
+    # Source-inventory marker: strict readiness Markdown artifact path cells use exact copied artifact keys.
     artifact_path = _public_mapping_get_string_key(artifact, "path")
     if _readiness_native_evm_markdown_path_is_safe(artifact_path):
         return f"`{artifact_path}`"
@@ -37371,6 +37903,7 @@ def _readiness_artifact_path_cell(artifact: Any, *, field_label: str) -> str:
 
 def _readiness_artifact_bytes_cell(artifact: Any) -> str:
     if type(artifact) is dict:
+        # Source-inventory marker: strict readiness Markdown artifact byte cells use exact copied artifact keys.
         artifact_bytes = _public_mapping_get_string_key(artifact, "bytes")
     else:
         artifact_bytes = None
@@ -37386,6 +37919,7 @@ def _readiness_artifact_hash_cell(artifact: Any, *, field_label: str) -> str:
     )
     if type(artifact) is not dict:
         return f"`<invalid {invalid_label}>`"
+    # Source-inventory marker: strict readiness Markdown artifact hash cells use exact copied artifact keys.
     artifact_hash = _public_mapping_get_string_key(artifact, "sha256")
     if _is_nonzero_canonical_sha256_text(artifact_hash):
         return f"`{artifact_hash}`"
@@ -37420,9 +37954,11 @@ def _readiness_corridor_phase_cell(phase: Any) -> str:
 
 
 def _readiness_corridor_status_cell(phase_status: Any) -> str:
+    # Source-inventory marker: strict readiness corridor Markdown status cells require exact phase status strings.
     return (
         phase_status
-        if phase_status in {"passed", "failed", "skipped", "missing"}
+        if type(phase_status) is str
+        and phase_status in {"passed", "failed", "skipped", "missing"}
         else "`<invalid status>`"
     )
 
@@ -37468,7 +38004,8 @@ def _readiness_corridor_markdown_rows(corridor: Any) -> list[list[str]]:
                 "-",
             ]
         ]
-    phases = corridor.get("phases")
+    # Source-inventory marker: strict readiness corridor Markdown root cells use exact copied corridor keys.
+    phases = _public_mapping_get_string_key(corridor, "phases")
     if type(phases) is not dict:
         return [
             [
@@ -37478,14 +38015,18 @@ def _readiness_corridor_markdown_rows(corridor: Any) -> list[list[str]]:
                 "-",
             ]
         ]
-    evidence_artifacts = corridor.get("evidence_artifacts")
+    evidence_artifacts = _public_mapping_get_string_key(corridor, "evidence_artifacts")
     if type(evidence_artifacts) is not dict:
         evidence_artifacts = {}
     return [
         _readiness_corridor_phase_markdown_row_cells(
             phase,
             phase_status,
-            _public_mapping_get_string_key(evidence_artifacts, phase),
+            (
+                _public_mapping_get_string_key(evidence_artifacts, phase)
+                if type(phase) is str
+                else None
+            ),
         )
         for phase, phase_status in phases.items()
     ]
@@ -38853,8 +39394,13 @@ def _readiness_markdown_invariant_errors(
             )
         )
     else:
-        phases = corridor.get("phases")
-        phase_artifacts = corridor.get("evidence_artifacts")
+        # Source-inventory marker: strict readiness Markdown corridor invariant root uses exact copied corridor keys.
+        corridor = _public_mapping_string_view(corridor)
+        phases = _public_mapping_get_string_key(corridor, "phases")
+        phase_artifacts = _public_mapping_get_string_key(
+            corridor,
+            "evidence_artifacts",
+        )
         if type(phases) is not dict:
             corridor_row = "| `<invalid phase>` | `<invalid status>` | - | - |"
             errors.extend(
@@ -38926,12 +39472,14 @@ def _readiness_markdown_invariant_errors(
                     is not None
                 ):
                     continue
-                if phase not in phases:
+                # Source-inventory marker: strict readiness Markdown corridor invariant phase artifacts use exact copied phase keys.
+                if not _public_mapping_has_string_key(phases, phase):
                     continue
+                phase_status = _public_mapping_get_string_key(phases, phase)
                 if type(artifact) is not dict:
                     corridor_cells = _readiness_corridor_phase_markdown_row_cells(
                         phase,
-                        phases[phase],
+                        phase_status,
                         artifact,
                     )
                     phase_artifact_row = "| " + " | ".join(corridor_cells) + " |"
@@ -38970,7 +39518,7 @@ def _readiness_markdown_invariant_errors(
                 if _is_canonical_sha256_text(artifact_hash):
                     corridor_cells = _readiness_corridor_phase_markdown_row_cells(
                         phase,
-                        phases[phase],
+                        phase_status,
                         artifact,
                     )
                     phase_artifact_row = "| " + " | ".join(corridor_cells) + " |"
@@ -39470,9 +40018,12 @@ def _readiness_markdown_invariant_errors(
             )
         )
     else:
+        # Source-inventory marker: strict readiness Markdown native-prover invariant root uses exact copied bundle keys.
+        native_bundle = _public_mapping_string_view(native_bundle)
         native_cells = _readiness_native_evm_bundle_row_cells(native_bundle)
         native_status = native_bundle.get("validation_status")
-        if native_status in {"passed", "blocked"}:
+        # Source-inventory marker: strict readiness Markdown native-prover invariant status uses exact copied strings.
+        if type(native_status) is str and native_status in {"passed", "blocked"}:
             required_cell = native_cells[0]
             errors.extend(
                 _markdown_missing_value_errors(
@@ -39736,6 +40287,8 @@ def _readiness_markdown_invariant_errors(
                 )
             )
             continue
+        # Source-inventory marker: strict readiness Markdown lane invariant rows use exact copied lane keys.
+        lane = _public_mapping_string_view(lane)
         domain = _public_mapping_get_string_key(lane, "domain")
         if type(domain) is not int:
             continue
@@ -39959,7 +40512,9 @@ def _expected_manifest_artifact_order(report: dict[str, Any]) -> list[str]:
         )
         if type(phases) is dict and type(phase_artifacts) is dict:
             for phase in CORRIDOR_PHASES:
-                if _public_mapping_get_string_key(phases, phase) != "passed":
+                if not _corridor_phase_status_is_exact_passed(
+                    _public_mapping_get_string_key(phases, phase)
+                ):
                     continue
                 artifact = _public_mapping_get_string_key(phase_artifacts, phase)
                 if type(artifact) is not dict:
@@ -39978,7 +40533,8 @@ def _expected_submission_surfaces(report: dict[str, Any]) -> list[dict[str, Any]
     if type(corridor) is dict:
         phase_status_value = _public_mapping_get_string_key(corridor, "phases")
         if type(phase_status_value) is dict:
-            phase_status = phase_status_value
+            # Source-inventory marker: expected submission surfaces use exact copied corridor phase keys.
+            phase_status = _public_mapping_string_view(phase_status_value)
 
     surfaces: list[dict[str, Any]] = []
     for lanes, proof_backend in USER_PROVER_REQUIRED_LANE_BACKENDS.items():
@@ -39991,11 +40547,14 @@ def _expected_submission_surfaces(report: dict[str, Any]) -> list[dict[str, Any]
             lanes,
             proof_backend,
         )
-        blockers = [
-            f"{phase} is {phase_status.get(phase, 'missing')}"
-            for phase in required_phases
-            if phase_status.get(phase) != "passed"
-        ]
+        phase_blockers: list[str] = []
+        for phase in required_phases:
+            status = phase_status.get(phase, "missing")
+            if _corridor_phase_status_is_exact_passed(status):
+                continue
+            phase_blockers.append(
+                f"{phase} is {_corridor_phase_status_public_text(status)}"
+            )
         surfaces.append(
             {
                 "lanes": lanes,
@@ -40009,8 +40568,8 @@ def _expected_submission_surfaces(report: dict[str, Any]) -> list[dict[str, Any]
                     lanes
                 ],
                 "required_phases": required_phases,
-                "validation_status": "passed" if not blockers else "blocked",
-                "validation_blockers": blockers,
+                "validation_status": "passed" if not phase_blockers else "blocked",
+                "validation_blockers": phase_blockers,
             }
         )
     return surfaces
@@ -40056,7 +40615,7 @@ def _corridor_phase_errors(corridor: dict[str, Any]) -> list[str]:
             errors.append(f"readiness report corridor missing phase status: {phase}")
             continue
         status = phase_statuses[phase]
-        if status != "passed":
+        if not _corridor_phase_status_is_exact_passed(status):
             errors.append(
                 f"readiness report corridor phase {phase} status must be passed"
             )
@@ -40675,8 +41234,13 @@ def _cryptographic_evidence_row_schema_errors(
                     SCCP_DOMAIN_BSC,
                     row_get("chain"),
                 )
+                chain = row_get("chain")
+                # Source-inventory marker: BSC testnet profile labels require exact
+                # public chain strings before equality checks.
                 expected_chain = (
-                    "bsc-testnet" if row_get("chain") == "bsc-testnet" else "bsc"
+                    "bsc-testnet"
+                    if type(chain) is str and chain == "bsc-testnet"
+                    else "bsc"
                 )
                 errors.append(
                     "readiness report cryptographic evidence row "
@@ -42301,10 +42865,11 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
     validation_status_blocked = (
         type(validation_status) is str and validation_status == "blocked"
     )
-    if "validation_status" in row and (
-        type(validation_status) is not str
-        or validation_status not in {"passed", "blocked"}
-    ):
+    validation_status_valid = (
+        type(validation_status) is str
+        and validation_status in {"passed", "blocked"}
+    )
+    if "validation_status" in row and not validation_status_valid:
         errors.append(
             "readiness report user prover submission surface row "
             "validation_status must be passed or blocked"
@@ -42652,7 +43217,9 @@ def _empty_or_nonzero_fixed_hex_field_errors(
 ) -> list[str]:
     if not _public_mapping_has_string_key(payload, field):
         return []
-    if _public_mapping_get_string_key(payload, field) == "":
+    value = _public_mapping_get_string_key(payload, field)
+    # Source-inventory marker: empty-or-nonzero fixed hex fields require exact empty strings.
+    if type(value) is str and value == "":
         return []
     errors = _nonzero_fixed_hex_field_errors(
         label,
@@ -42999,6 +43566,9 @@ def _solana_pubkey_field_errors(
 
 
 def _decode_solana_base58(value: str) -> bytes:
+    # Source-inventory marker: strict verifier Solana base58 decoder uses exact strings.
+    if type(value) is not str:
+        raise ValueError("not canonical base58")
     if value != value.strip() or not value:
         raise ValueError("not canonical base58")
     numeric = 0
@@ -45023,7 +45593,7 @@ def _referenced_report_artifact_paths(report: dict[str, Any]) -> set[str]:
             is not None
         ):
             continue
-        if status != "passed":
+        if not _corridor_phase_status_is_exact_passed(status):
             continue
         artifact = _public_mapping_get_string_key(phase_artifacts, phase)
         if type(artifact) is not dict:
@@ -45712,7 +46282,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
                     is not None
                 ):
                     continue
-                if status != "passed":
+                if not _corridor_phase_status_is_exact_passed(status):
                     continue
                 _check_report_artifact(
                     errors,

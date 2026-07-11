@@ -130,6 +130,7 @@ iroha_data_model = { workspace = true, default-features = false, features = ["tr
 iroha_macro = { workspace = true }
 iroha_p2p = { workspace = true }
 iroha_logger = { workspace = true }
+iroha_sumeragi_core = { workspace = true }
 iroha_crypto = { workspace = true }
 iroha_version = { workspace = true }
 iroha_config = { workspace = true }
@@ -267,6 +268,10 @@ skip_optional_dependencies = true
 name = "kaigi_privacy"
 path = "tests/kaigi_privacy.rs"
 required-features = ["zk-tests"]
+
+[[test]]
+name = "swift_confidential_unshield_redeem"
+path = "tests/swift_confidential_unshield_redeem.rs"
 
 # Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
 

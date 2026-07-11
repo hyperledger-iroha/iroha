@@ -99,7 +99,8 @@ use iroha_data_model::{
         Instruction as InstructionTrait, InstructionBox, JoinKaigi, LeaveKaigi, Mint, MintBox,
         RecordKaigiUsage, Register, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
         RemoveKeyValue, ReportKaigiRelayHealth, SetAssetDefinitionAlias, SetKaigiRelayManifest,
-        SetKeyValue, SetParameter, Transfer, TransferBox, Unregister, UnregisterBox,
+        SetKeyValue, SetKeyValueBox, SetParameter, Transfer, TransferBox, Unregister,
+        UnregisterBox,
         bridge::{RemoveSccpRouteManifest, UpsertSccpRouteManifest},
         governance::{
             CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
@@ -236,6 +237,7 @@ use sorafs_manifest::{
     build_signed_orderbook_order_request_bytes_ed25519_v1,
     build_signed_orderbook_settlement_receipt_bytes_ed25519_v1,
     capacity::ReplicationOrderV1,
+    derive_orderbook_order_id_v1,
     pin_registry::{
         AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
     },
@@ -2093,6 +2095,7 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
     let settlement = LaneBlockCommitment {
         block_height: 1,
         lane_id,
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
         tx_count: 1,
         total_local_micro: 10,
@@ -5107,6 +5110,8 @@ pub struct JsGatewayProviderSpec {
     pub name: String,
     /// Provider identifier rendered as 32-byte hexadecimal.
     pub provider_id_hex: String,
+    /// Ed25519 key that verifies the provider's stream token, as 32-byte hex.
+    pub gateway_public_key_hex: String,
     /// Base URL for the Torii gateway.
     pub base_url: String,
     /// Stream token presented when fetching chunks.
@@ -5745,6 +5750,16 @@ fn build_gateway_provider_input(
             "provider '{name}' has invalid providerIdHex; expected 32-byte hex"
         )));
     }
+    let gateway_public_key = spec.gateway_public_key_hex.trim().to_ascii_lowercase();
+    if gateway_public_key.len() != 64
+        || !gateway_public_key
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err(invalid_arg(format!(
+            "provider '{name}' has invalid gatewayPublicKeyHex; expected 32-byte hex"
+        )));
+    }
     let base_url = spec.base_url.trim();
     if base_url.is_empty() {
         return Err(invalid_arg(format!(
@@ -5766,6 +5781,7 @@ fn build_gateway_provider_input(
     Ok(GatewayProviderInput {
         name,
         provider_id_hex: provider_id,
+        gateway_public_key_hex: gateway_public_key,
         base_url: base_url.to_string(),
         stream_token_b64: stream_token.to_string(),
         privacy_events_url: privacy_url,
@@ -7434,8 +7450,32 @@ pub fn sorafs_build_signed_orderbook_order_request(
     private_key: Uint8Array,
 ) -> napi::Result<Buffer> {
     let quantity_gib = parse_sorafs_decimal_u64(&quantity_gib, "quantity_gib")?;
+    let owner_account = owner_account.as_ref().to_vec();
+    if owner_account.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "owner_account must not be empty",
+        ));
+    }
+    let nonce = parse_sorafs_decimal_u64(&nonce, "nonce")?;
+    if nonce == 0 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "nonce must be positive",
+        ));
+    }
+    let supplied_order_id = parse_sorafs_fixed32(&order_id, "order_id")?;
+    let expected_order_id = derive_orderbook_order_id_v1(&owner_account, nonce);
+    if supplied_order_id != expected_order_id {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "order_id must equal the canonical owner-and-nonce derivation {}",
+                hex::encode(expected_order_id)
+            ),
+        ));
+    }
     let fields = OrderbookOrderRequestFieldsV1 {
-        order_id: parse_sorafs_fixed32(&order_id, "order_id")?,
         side: parse_sorafs_orderbook_side(&side)?,
         tier: parse_sorafs_orderbook_tier(&tier)?,
         price_per_gib_micro_xor: parse_sorafs_decimal_u128(
@@ -7447,15 +7487,40 @@ pub fn sorafs_build_signed_orderbook_order_request(
             Some(value) => parse_sorafs_decimal_u64(&value, "remaining_gib")?,
             None => quantity_gib,
         },
-        owner_account: owner_account.as_ref().to_vec(),
+        owner_account,
         expiry_unix: parse_sorafs_decimal_u64(&expiry_unix, "expiry_unix")?,
-        nonce: parse_sorafs_decimal_u64(&nonce, "nonce")?,
+        nonce,
         maker_fee_bps: parse_sorafs_fee_bps(maker_fee_bps, "maker_fee_bps")?,
         taker_fee_bps: parse_sorafs_fee_bps(taker_fee_bps, "taker_fee_bps")?,
     };
     build_signed_orderbook_order_request_bytes_ed25519_v1(fields, private_key.as_ref())
         .map(Buffer::from)
         .map_err(norito_to_napi)
+}
+
+/// Derive the canonical V1 SoraFS orderbook order id from owner bytes and nonce.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
+pub fn sorafs_derive_orderbook_order_id(
+    owner_account: Uint8Array,
+    nonce: String,
+) -> napi::Result<Buffer> {
+    if owner_account.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "owner_account must not be empty",
+        ));
+    }
+    let nonce = parse_sorafs_decimal_u64(&nonce, "nonce")?;
+    if nonce == 0 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "nonce must be positive",
+        ));
+    }
+    Ok(Buffer::from(
+        derive_orderbook_order_id_v1(owner_account.as_ref(), nonce).to_vec(),
+    ))
 }
 
 /// Build and sign a canonical `SoraFS` orderbook cancellation from fields.
@@ -9163,6 +9228,48 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     SetKeyValue::rwa(rwa, key, value),
                 )));
             }
+            if let Some(json::Value::Object(mut variants)) = map.remove("SetKeyValue") {
+                if let Some(json::Value::Object(mut fields)) = variants.remove("Account") {
+                    let account = parse_account_id_value(
+                        required_value(&mut fields, "object", "SetKeyValue.Account")?,
+                        "SetKeyValue.Account.object",
+                    )?;
+                    let key: Name = json::from_value(required_value(
+                        &mut fields,
+                        "key",
+                        "SetKeyValue.Account",
+                    )?)
+                    .map_err(norito_to_napi)?;
+                    let value: Json = json::from_value(required_value(
+                        &mut fields,
+                        "value",
+                        "SetKeyValue.Account",
+                    )?)
+                    .map_err(norito_to_napi)?;
+                    if !fields.is_empty() {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "SetKeyValue.Account contains unsupported fields: {}",
+                                fields.keys().cloned().collect::<Vec<_>>().join(", ")
+                            ),
+                        ));
+                    }
+                    if !variants.is_empty() {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            "SetKeyValue must contain exactly one variant",
+                        ));
+                    }
+                    return Ok(InstructionBox::from(SetKeyValue::account(
+                        account, key, value,
+                    )));
+                }
+                return Err(napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "SetKeyValue currently supports the Account variant",
+                ));
+            }
             if let Some(json::Value::Object(mut fields)) = map.remove("RemoveRwaKeyValue") {
                 let rwa = parse_rwa_id_value(
                     required_value(&mut fields, "rwa", "RemoveRwaKeyValue")?,
@@ -10165,6 +10272,29 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             grant_map.insert("Permission".to_owned(), json::Value::Object(fields));
             let mut outer = json::Map::new();
             outer.insert("Grant".to_owned(), json::Value::Object(grant_map));
+            return Ok(json::Value::Object(outer));
+        }
+    }
+
+    if let Some(set_key_value) = instruction_ref.as_any().downcast_ref::<SetKeyValueBox>() {
+        if let SetKeyValueBox::Account(set) = set_key_value {
+            let mut fields = json::Map::new();
+            fields.insert(
+                "object".to_owned(),
+                json::Value::String(account_id_to_canonical_i105(set.object())?),
+            );
+            fields.insert(
+                "key".to_owned(),
+                json::to_value(set.key()).map_err(norito_to_napi)?,
+            );
+            fields.insert(
+                "value".to_owned(),
+                json::to_value(set.value()).map_err(norito_to_napi)?,
+            );
+            let mut variants = json::Map::new();
+            variants.insert("Account".to_owned(), json::Value::Object(fields));
+            let mut outer = json::Map::new();
+            outer.insert("SetKeyValue".to_owned(), json::Value::Object(variants));
             return Ok(json::Value::Object(outer));
         }
     }
@@ -11283,6 +11413,25 @@ fn assemble_transaction(
 pub fn hash_signed_transaction(bytes: Uint8Array) -> napi::Result<Buffer> {
     let tx = decode_signed_transaction(bytes.as_ref())?;
     let hash = tx.hash();
+    Ok(Buffer::from(hash.as_ref().to_vec()))
+}
+
+/// Compute the detached-signature preimage used by Torii for a signed
+/// transaction scaffold: `HashOf::new(tx.payload())`.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // N-API typed arrays require ownership at the boundary
+pub fn hash_signed_transaction_payload(bytes: Uint8Array) -> napi::Result<Buffer> {
+    let tx = decode_signed_transaction(bytes.as_ref())?;
+    let hash = iroha_crypto::HashOf::new(tx.payload());
+    Ok(Buffer::from(hash.as_ref().to_vec()))
+}
+
+/// Compute the canonical identity of an authorized instruction batch. Torii
+/// uses this hash as both the multisig `instructions_hash` and `proposal_id`.
+#[napi]
+pub fn hash_instruction_batch(instructions_json: Vec<String>) -> napi::Result<Buffer> {
+    let instructions = parse_instruction_payloads(instructions_json)?;
+    let hash = iroha_crypto::HashOf::new(&instructions);
     Ok(Buffer::from(hash.as_ref().to_vec()))
 }
 
@@ -14577,9 +14726,7 @@ fn require_matching_i105_discriminant(
     if actual != expected {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
-            format!(
-                "{label} uses chain discriminant {actual}, expected {expected} from authority"
-            ),
+            format!("{label} uses chain discriminant {actual}, expected {expected} from authority"),
         ));
     }
     Ok(())
@@ -14619,15 +14766,12 @@ pub fn build_transfer_asset_payload(
         &destination_account_id,
         "destination account",
     )?;
-    let source_account_literal = source_asset_holding_id
-        .split('#')
-        .nth(1)
-        .ok_or_else(|| {
-            napi::Error::new(
-                napi::Status::InvalidArg,
-                "source asset holding id must include an I105 owner account",
-            )
-        })?;
+    let source_account_literal = source_asset_holding_id.split('#').nth(1).ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            "source asset holding id must include an I105 owner account",
+        )
+    })?;
     require_matching_i105_discriminant(
         authority_discriminant,
         source_account_literal,
@@ -14648,7 +14792,11 @@ pub fn build_transfer_asset_payload(
             "transparent browser transfer requires a single-key authority",
         )
     })?;
-    if authority_signatory.try_algorithm().map_err(norito_to_napi)? != Algorithm::Ed25519 {
+    if authority_signatory
+        .try_algorithm()
+        .map_err(norito_to_napi)?
+        != Algorithm::Ed25519
+    {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
             "transparent browser transfer supports only Ed25519 authorities",
@@ -14673,7 +14821,7 @@ pub fn build_transfer_asset_payload(
             format!("invalid transfer quantity: {err}"),
         )
     })?;
-    if quantity <= Numeric::ZERO {
+    if quantity <= Numeric::zero() {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
             "transfer quantity must be greater than zero",
@@ -14726,12 +14874,13 @@ pub fn finalize_signed_transaction(
             "payloadBytes must contain 1..=1048576 bytes",
         ));
     }
-    let builder = TransactionBuilder::decode_payload(input.payload_bytes.as_ref()).map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid canonical transaction payload: {err}"),
-        )
-    })?;
+    let builder =
+        TransactionBuilder::decode_payload(input.payload_bytes.as_ref()).map_err(|err| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("invalid canonical transaction payload: {err}"),
+            )
+        })?;
     let payload_hash = builder.payload_hash_bytes();
     if let Some(expected) = input.payload_hash_hex {
         let normalized = expected.strip_prefix("0x").unwrap_or(&expected);
@@ -14750,8 +14899,8 @@ pub fn finalize_signed_transaction(
     }
     let public_key = PublicKey::from_bytes(Algorithm::Ed25519, input.public_key.as_ref())
         .map_err(norito_to_napi)?;
-    let signature = iroha_crypto::ed25519_parse_signature(input.signature.as_ref())
-        .map_err(norito_to_napi)?;
+    let signature =
+        iroha_crypto::ed25519_parse_signature(input.signature.as_ref()).map_err(norito_to_napi)?;
     let tx = builder.build_with_signature(signature);
     if tx.authority().try_signatory() != Some(&public_key) {
         return Err(napi::Error::new(
@@ -23068,8 +23217,8 @@ mod tests {
         let mut provider_id = [0u8; 32];
         provider_id
             .copy_from_slice(&hex::decode(provider_id_hex).expect("decode provider identifier"));
-        let token = StreamTokenV1 {
-            body: StreamTokenBodyV1 {
+        let token = StreamTokenV1::sign_with_seed(
+            StreamTokenBodyV1 {
                 token_id: "01TESTTOKEN0000000000000000".to_string(),
                 manifest_cid: hex::decode(manifest_id_hex).expect("decode manifest id"),
                 provider_id,
@@ -23081,8 +23230,9 @@ mod tests {
                 requests_per_minute: 120,
                 token_pk_version: 1,
             },
-            signature: vec![0; 64],
-        };
+            [0x42; 32],
+        )
+        .expect("sign stream token");
         let bytes = norito::to_bytes(&token).expect("encode stream token");
         BASE64.encode(bytes)
     }
@@ -23820,6 +23970,8 @@ mod tests {
             vec![JsGatewayProviderSpec {
                 name: "alpha".to_string(),
                 provider_id_hex: provider_id_hex.clone(),
+                gateway_public_key_hex:
+                    "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12".to_owned(),
                 base_url: "https://stub".into(),
                 stream_token_b64,
                 privacy_events_url: None,
@@ -26017,6 +26169,24 @@ mod tests {
     }
 
     #[test]
+    fn instruction_batch_hash_binds_every_authorized_instruction() {
+        let first = hash_instruction_batch(vec![
+            "{\"Mint\":{\"TriggerRepetitions\":{\"object\":1,\"destination\":\"demo::trigger\"}}}"
+                .to_owned(),
+        ])
+        .expect("hash first instruction batch");
+        let second = hash_instruction_batch(vec![
+            "{\"Mint\":{\"TriggerRepetitions\":{\"object\":2,\"destination\":\"demo::trigger\"}}}"
+                .to_owned(),
+        ])
+        .expect("hash second instruction batch");
+
+        assert_eq!(first.len(), 32);
+        assert_eq!(second.len(), 32);
+        assert_ne!(first.as_ref(), second.as_ref());
+    }
+
+    #[test]
     fn build_time_trigger_action_encodes_expected_schedule() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority_id = AccountId::new(keypair.public_key().clone());
@@ -26084,6 +26254,19 @@ mod tests {
             da_manifest_chunker_handle(Buffer::from(fixture.manifest_bytes.clone()).into())
                 .expect("chunker handle");
         assert_eq!(handle, "sorafs.sf1@1.0.0");
+    }
+
+    #[test]
+    fn local_fetch_integrity_error_maps_to_invalid_argument() {
+        let error = map_local_fetch_error(LocalFetchError::IntegrityVerificationDisabled(
+            "verify_digests",
+        ));
+
+        assert_eq!(error.status, napi::Status::InvalidArg);
+        assert_eq!(
+            error.reason,
+            "verify_digests must remain enabled for first-release SoraFS fetch integrity"
+        );
     }
 
     #[test]

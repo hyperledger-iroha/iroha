@@ -97,8 +97,8 @@ fn run() -> Result<(), String> {
                 opts.chunker_profile_id = Some(id);
             }
             "--chunker-profile" => {
-                let handle = value.trim();
-                let descriptor = chunker_registry::lookup_by_handle(handle).ok_or_else(|| {
+                let handle = parse_profile_handle(value, "--chunker-profile")?;
+                let descriptor = chunker_registry::lookup_by_handle(&handle).ok_or_else(|| {
                     format!(
                         "unknown chunker profile handle: {handle}. expected namespace.name@semver"
                     )
@@ -175,14 +175,11 @@ fn run() -> Result<(), String> {
             "--por-proof-out" => opts.por_proof_out = Some(PathBuf::from(value)),
             "--por-proof-verify" => opts.por_proof_verify = Some(PathBuf::from(value)),
             "--por-sample" => {
-                let count = value
-                    .parse::<usize>()
-                    .map_err(|err| format!("invalid --por-sample count: {err}"))?;
+                let count = parse_nonzero_usize_decimal(value, "--por-sample")?;
                 opts.por_sample_count = Some(count);
             }
             "--por-sample-seed" => {
-                let seed = parse_u64(value)
-                    .map_err(|err| format!("invalid --por-sample-seed value: {err}"))?;
+                let seed = parse_u64(value)?;
                 opts.por_sample_seed = Some(seed);
             }
             "--por-sample-out" => opts.por_sample_out = Some(PathBuf::from(value)),
@@ -1354,33 +1351,94 @@ fn parse_hex_array(value: &str) -> Result<[u8; 32], String> {
 
 fn parse_u64(value: &str) -> Result<u64, String> {
     if let Some(stripped) = value.strip_prefix("0x") {
+        require_canonical_hex_unsigned(stripped, "u64")?;
         u64::from_str_radix(stripped, 16).map_err(|err| err.to_string())
     } else {
+        require_canonical_unsigned_decimal(value, "u64")?;
         value.parse::<u64>().map_err(|err| err.to_string())
     }
 }
 
 fn parse_u32(value: &str) -> Result<u32, String> {
     if let Some(stripped) = value.strip_prefix("0x") {
+        require_canonical_hex_unsigned(stripped, "u32")?;
         u32::from_str_radix(stripped, 16).map_err(|err| err.to_string())
     } else {
+        require_canonical_unsigned_decimal(value, "u32")?;
         value.parse::<u32>().map_err(|err| err.to_string())
     }
 }
 
 fn parse_u16(value: &str) -> Result<u16, String> {
     if let Some(stripped) = value.strip_prefix("0x") {
+        require_canonical_hex_unsigned(stripped, "u16")?;
         u16::from_str_radix(stripped, 16).map_err(|err| err.to_string())
     } else {
+        require_canonical_unsigned_decimal(value, "u16")?;
         value.parse::<u16>().map_err(|err| err.to_string())
     }
 }
 
 fn parse_u128(value: &str) -> Result<u128, String> {
     if let Some(stripped) = value.strip_prefix("0x") {
+        require_canonical_hex_unsigned(stripped, "u128")?;
         u128::from_str_radix(stripped, 16).map_err(|err| err.to_string())
     } else {
+        require_canonical_unsigned_decimal(value, "u128")?;
         value.parse::<u128>().map_err(|err| err.to_string())
+    }
+}
+
+fn parse_nonzero_usize_decimal(value: &str, label: &str) -> Result<usize, String> {
+    require_canonical_unsigned_decimal(value, label)?;
+    let parsed = value
+        .parse::<usize>()
+        .map_err(|err| format!("{label} value out of range: {err}"))?;
+    if parsed == 0 {
+        return Err(format!("{label} must be greater than zero"));
+    }
+    Ok(parsed)
+}
+
+fn parse_profile_handle(value: &str, label: &str) -> Result<String, String> {
+    if value.is_empty() {
+        return Err(format!("{label} must not be empty"));
+    }
+    if value != value.trim() {
+        return Err(format!(
+            "{label} must not contain leading or trailing whitespace"
+        ));
+    }
+    Ok(value.to_string())
+}
+
+fn require_canonical_unsigned_decimal(value: &str, label: &str) -> Result<(), String> {
+    let bytes = value.as_bytes();
+    if !bytes.is_empty()
+        && bytes.iter().all(u8::is_ascii_digit)
+        && (bytes.len() == 1 || bytes[0] != b'0')
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "{label} value must be a canonical unsigned decimal integer or lowercase 0x-prefixed hex"
+        ))
+    }
+}
+
+fn require_canonical_hex_unsigned(value: &str, label: &str) -> Result<(), String> {
+    let bytes = value.as_bytes();
+    if !bytes.is_empty()
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+        && (bytes.len() == 1 || bytes[0] != b'0')
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "{label} value must be a canonical unsigned decimal integer or lowercase 0x-prefixed hex"
+        ))
     }
 }
 
@@ -1931,6 +1989,71 @@ mod tests {
         assert!(text.contains("sorafs_manifest_stub <path|->"));
         assert!(text.contains("sorafs_manifest_stub --list-chunker-profiles"));
         assert!(!text.contains("sorafs-manifest-stub"));
+    }
+
+    #[test]
+    fn numeric_parsers_reject_noncanonical_unsigned_tokens() {
+        assert_eq!(parse_u64("0").expect("u64 zero"), 0);
+        assert_eq!(parse_u64("42").expect("u64 decimal"), 42);
+        assert_eq!(parse_u64("0x0").expect("u64 hex zero"), 0);
+        assert_eq!(parse_u64("0xff").expect("u64 hex"), 255);
+        assert_eq!(parse_u32("1").expect("u32"), 1);
+        assert_eq!(parse_u16("3").expect("u16"), 3);
+        assert_eq!(
+            parse_u128("340282366920938463463374607431768211455").expect("u128"),
+            u128::MAX
+        );
+
+        for value in [
+            "", "00", "01", "+1", " 1", "1 ", "0Xff", "0x", "0x01", "0xFF",
+        ] {
+            let err = parse_u64(value).expect_err("noncanonical u64 token must fail");
+            assert!(
+                err.contains("canonical unsigned"),
+                "unexpected u64 error for {value:?}: {err}"
+            );
+        }
+
+        let overflow = parse_u16("65536").expect_err("u16 overflow must fail");
+        assert!(
+            overflow.contains("too large") || overflow.contains("out of range"),
+            "unexpected overflow error: {overflow}"
+        );
+    }
+
+    #[test]
+    fn por_sample_count_rejects_zero_and_noncanonical_tokens() {
+        assert_eq!(
+            parse_nonzero_usize_decimal("3", "--por-sample").expect("sample count"),
+            3
+        );
+
+        for value in ["", "0", "03", "+3", " 3", "3 ", "0x3"] {
+            let err = parse_nonzero_usize_decimal(value, "--por-sample")
+                .expect_err("invalid sample count must fail");
+            assert!(
+                err.contains("greater than zero") || err.contains("canonical unsigned"),
+                "unexpected sample count error for {value:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_profile_handle_rejects_empty_and_padded_handles() {
+        assert_eq!(
+            parse_profile_handle("sorafs.sf1@1.0.0", "--chunker-profile")
+                .expect("canonical handle"),
+            "sorafs.sf1@1.0.0"
+        );
+
+        for value in ["", " sorafs.sf1@1.0.0", "sorafs.sf1@1.0.0 "] {
+            let err = parse_profile_handle(value, "--chunker-profile")
+                .expect_err("invalid profile handle must fail");
+            assert!(
+                err.contains("empty") || err.contains("whitespace"),
+                "unexpected profile handle error for {value:?}: {err}"
+            );
+        }
     }
 
     #[test]

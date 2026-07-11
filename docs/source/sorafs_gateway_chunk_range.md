@@ -55,55 +55,95 @@ Logs:
 
 ## Token Signing & Rotation
 
-- **Key storage.** Gateways write the Ed25519 signing secret to
-  `sorafs_gateway_secrets/token_signing_sk` (read-only for the gateway process). A corresponding public key record is published in the admission manifest under `gateway.token_signing_pk`.
-- **Distribution.** Providers and orchestrators load the public key during bootstrap and cache it for signature verification; manifests include a `token_pk_version` so hot swaps are coordinated.
-- **Rotation cadence.** Keys rotate quarterly. Rotation is driven by the `SF-6b-ROTATE-KEYS` runbook:
-  1. Generate new keypair on the gateway host (`sorafs-gateway key rotate --kind token-signing`).
-  2. Update the admission manifest and publish to Pin Registry.
-  3. Notify orchestrators via telemetry topic `sorafs.gateway.token_pk_update`.
-  4. Keep the previous key available for 24 h to honour in-flight tokens.
-- **Audit trail.** Gateways emit `sorafs_gateway_token_key_rotation_total` and record the new key fingerprint in `ops/sorafs_gateway_tokens.md`.
+- **Key storage.** Torii loads a 32-byte Ed25519 seed from
+  `sorafs.storage.stream_tokens.signing_key_path`. The file is runtime secret
+  material and must be readable only by the gateway service account. All-zero
+  seeds are rejected.
+- **Distribution.** Orchestrators receive the corresponding 32-byte public key
+  through authenticated provider deployment inventory and pass its 64-character
+  hex encoding as `gateway-key`. The issuance response also reports
+  `X-SoraFS-Verifying-Key`, but a key delivered beside the token it verifies is
+  not a trust anchor; compare that header with the approved inventory value.
+- **Pinning.** Each provider descriptor pins exactly one key. The client rejects
+  malformed/weak Ed25519 keys and verifies the token before making an HTTP
+  request. It never falls back to a key embedded in an untrusted response.
+- **Rotation.** Generate a new key, increment `key_version`, publish the new
+  public key through the authenticated inventory, and atomically deploy a new
+  `gateway-key` plus a token signed by that key. For overlap, use separately
+  named old/new provider descriptors; remove the old descriptor by its final
+  token expiry. There is no implicit multi-key acceptance window.
+- **Audit trail.** Record old/new public-key fingerprints, key versions,
+  activation and final-expiry times, approver identity, and negative-test
+  evidence showing that old-key and cross-key tokens fail after cutover.
 
 ## Canonical Token Schema
 
-- **Field set.** Tokens are serialized as Norito JSON with the following fields:
-  - `token_id` (ULID string)
-  - `manifest_cid`
-  - `provider_id`
-  - `profile_handle`
-  - `max_streams`
-  - `ttl_epoch`
-  - `rate_limit_bytes`
-  - `issued_at`
-  - `requests_per_minute`
-  - `signature` (Ed25519 hex)
-- **Normalization rules.** Fields are sorted alphabetically before signing to ensure canonical serialization. Numeric values are represented as integers; time values use Unix epoch seconds.
+- **Wire format.** `StreamTokenV1` is canonical Norito binary transported as
+  standard padded base64. It contains a `body: StreamTokenBodyV1` and a 64-byte
+  Ed25519 `signature`; JSON returned by the issuance endpoint is only a
+  diagnostic projection plus the canonical `encoded` token.
+- **Field set.** The signed body contains `token_id`, `manifest_cid`,
+  `provider_id`, `profile_handle`, `max_streams`, `ttl_epoch`,
+  `rate_limit_bytes`, `issued_at`, `requests_per_minute`, and
+  `token_pk_version`.
+- **Signature input.** Sign exactly
+  `b"sorafs.stream-token.signature.v1\0" || norito::to_bytes(body)`. The NUL is
+  part of the domain separator. Signing the body bytes alone, signing a JSON
+  projection, adding a length prefix, or using another SoraFS signature domain
+  produces an invalid token.
+- **Strict validation.** Clients reject non-Norito or oversized tokens,
+  malformed/weak keys and signatures, body-only legacy signatures,
+  `issued_at > ttl_epoch`, expired tokens, issuance more than 60 seconds in the
+  future, empty/oversized identifiers and CIDs, zero stream capacity, and any
+  provider/profile/manifest binding mismatch.
 - **Scoreboard alignment.** Orchestrator scoreboard ingests the above fields directly, mapping `max_streams`, `ttl_epoch`, and `rate_limit_bytes` into availability and penalty factors. Additional scoreboard signals (e.g., token health) derive from issuance telemetry using `token_id`.
-- **Validation helpers.** Shared Rust crate `sorafs_token_schema` will expose `Token::sign` / `Token::verify` and schema validation to minimize duplication across gateway and orchestrator binaries.
+- **Validation helpers.** Use `sorafs_manifest::{StreamTokenBodyV1,
+  StreamTokenV1}` for signing and verification. Do not implement a second token
+  codec or signature preimage in clients.
 
 ## Secure Token Issuance API
 
-- **Authentication.** `/token` requires mutual TLS. Clients must present certificates signed by the admission CA; the gateway validates the certificate subject against the admission manifest.
+- **Authentication.** The canonical route is
+  `POST /v1/sorafs/storage/token`. The handler requires
+  `X-SoraFS-Client` and `X-SoraFS-Nonce`, but those headers are not client
+  authentication. Expose the route only behind the deployment's authenticated
+  Torii perimeter and rate limits; never make an unrestricted public token
+  minting endpoint.
 - **Request flow.**
-  1. Client submits `POST /token` with headers `X-SoraFS-Client`, `X-SoraFS-Nonce`, and a signed admission manifest envelope in the body.
-  2. Gateway authenticates the client, validates the manifest, and applies per-client rate limits using `X-SoraFS-Client`.
-  3. Gateway mints a token, signs it using the Ed25519 key, and returns JSON:
+  1. Client submits the two required headers and JSON containing
+     `manifest_id_hex`, `provider_id_hex`, and any approved TTL, stream,
+     byte-rate, or issuance-quota overrides.
+  2. Gateway resolves the manifest from local storage and applies its configured
+     per-client issuance quota using `X-SoraFS-Client`.
+  3. Gateway mints and domain-separates a token, then returns JSON containing
+     `token.body`, `token.signature_hex`, `token.encoded`, and
+     `token_base64`. The last two values are the canonical header token.
 
      ```json
      {
-       "token": { /* canonical fields */ },
-       "signature": "hex",
-       "expires_at": 1738368000
+       "token": {
+         "body": { "token_pk_version": 4 },
+         "signature_hex": "...",
+         "encoded": "..."
+       },
+       "token_base64": "..."
      }
      ```
 
-  4. Response headers include `X-SoraFS-Token-Id`, `X-SoraFS-Client-Quota-Remaining`, and the echoed `X-SoraFS-Nonce`. `X-SoraFS-Client-Quota-Remaining` reports how many issuance requests remain in the current 60 s window; when the quota is unbounded the header is set to `unlimited`. Once the budget is exhausted the gateway returns `429` together with `Retry-After` indicating when the next token request is permitted.
+  4. Response headers include `X-SoraFS-Token-Id`,
+     `X-SoraFS-Verifying-Key`, `X-SoraFS-Client-Quota-Remaining`, and the echoed
+     nonce/client identifiers. `Cache-Control: no-store` is mandatory.
+     `X-SoraFS-Client-Quota-Remaining` reports the remaining 60-second issuance
+     allowance or `unlimited`; exhaustion returns `429` plus `Retry-After`.
 - **Telemetry.** Gateway records issuance metrics:
   - `sorafs_gateway_token_issuance_total{client,result}`
   - `sorafs_gateway_token_issuance_latency_ms_bucket`
   - `sorafs_gateway_token_denials_total{reason}`
-- **Abuse protection.** Clients exceeding their `requests_per_minute` budget receive `429 stream_token_rate_limited`. Nonce replays are rejected with `409` and emitted via audit logs.
+- **Abuse protection.** Treat the returned base64 token as a bearer credential.
+  Do not log provider descriptors without redacting `stream-token`. Clients
+  exceeding their issuance budget receive `429`; nonce uniqueness must be
+  enforced by the authenticated perimeter until the route has a durable replay
+  ledger.
 
 ## Documentation & Rollout
 

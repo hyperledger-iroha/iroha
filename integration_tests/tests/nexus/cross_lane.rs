@@ -148,6 +148,7 @@ fn lane_relay_envelope_must_have_consistent_qc() -> Result<()> {
     let settlement = LaneBlockCommitment {
         block_height: height.get(),
         lane_id,
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
         tx_count: 1,
         total_local_micro: 10,
@@ -226,6 +227,7 @@ fn cross_lane_builder_rejects_settlement_height_mismatch_at_construction() -> Re
     let settlement = LaneBlockCommitment {
         block_height: 9,
         lane_id,
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
         tx_count: 1,
         total_local_micro: 50,
@@ -256,6 +258,7 @@ fn cross_lane_builder_rejects_da_hash_mismatch_at_construction() -> Result<()> {
     let settlement = LaneBlockCommitment {
         block_height: 11,
         lane_id,
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
         tx_count: 2,
         total_local_micro: 60,
@@ -299,6 +302,7 @@ fn duplicate_lane_relay_envelopes_are_rejected() -> Result<()> {
     let settlement = LaneBlockCommitment {
         block_height: 12,
         lane_id,
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
         tx_count: 0,
         total_local_micro: 0,
@@ -353,6 +357,7 @@ fn lane_relay_envelope_rejects_settlement_tampering() -> Result<()> {
     let settlement = LaneBlockCommitment {
         block_height: 3,
         lane_id,
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
         tx_count: 1,
         total_local_micro: 50,
@@ -455,6 +460,7 @@ fn lane_relay_quorum_rejects_out_of_range_signer() {
     let settlement = LaneBlockCommitment {
         block_height: 5,
         lane_id,
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
         tx_count: 2,
         total_local_micro: 15,
@@ -499,6 +505,7 @@ fn lane_relay_quorum_rejects_zero_signature() {
     let settlement = LaneBlockCommitment {
         block_height: 6,
         lane_id,
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
         tx_count: 1,
         total_local_micro: 20,
@@ -542,6 +549,7 @@ fn lane_relay_quorum_requires_quorum_bitmap() {
     let settlement = LaneBlockCommitment {
         block_height: 7,
         lane_id,
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
         tx_count: 3,
         total_local_micro: 30,
@@ -586,6 +594,7 @@ fn lane_relay_quorum_accepts_exact_min_quorum() {
     let settlement = LaneBlockCommitment {
         block_height: 9,
         lane_id,
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
         tx_count: 1,
         total_local_micro: 12,
@@ -625,6 +634,7 @@ fn lane_relay_quorum_rejects_signer_bitmap_length_mismatch() {
     let settlement = LaneBlockCommitment {
         block_height: 8,
         lane_id,
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
         tx_count: 1,
         total_local_micro: 11,
@@ -670,6 +680,7 @@ fn verify_lane_relay_envelopes_allows_distinct_lanes_on_same_height() {
     let settlement = LaneBlockCommitment {
         block_height: first.block_height,
         lane_id: LaneId::new(first.lane_id.as_u32() + 1),
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id: DataSpaceId::new(first.dataspace_id.as_u64() + 1),
         tx_count: 1,
         total_local_micro: 9,
@@ -705,6 +716,7 @@ fn verify_lane_relay_envelopes_allows_distinct_lanes_on_same_dataspace_and_heigh
     let settlement = LaneBlockCommitment {
         block_height: first.block_height,
         lane_id: LaneId::new(first.lane_id.as_u32() + 2),
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id: first.dataspace_id,
         tx_count: 2,
         total_local_micro: 16,
@@ -740,6 +752,7 @@ fn verify_lane_relay_envelopes_allows_distinct_dataspaces_on_same_lane_and_heigh
     let settlement = LaneBlockCommitment {
         block_height: first.block_height,
         lane_id: first.lane_id,
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id: DataSpaceId::new(first.dataspace_id.as_u64() + 1),
         tx_count: 1,
         total_local_micro: 13,
@@ -776,6 +789,7 @@ fn verify_lane_relay_envelopes_allows_same_lane_across_heights() {
     let settlement = LaneBlockCommitment {
         block_height: next_height,
         lane_id: first.lane_id,
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id: first.dataspace_id,
         tx_count: 3,
         total_local_micro: 14,
@@ -955,6 +969,7 @@ fn sample_relay_envelope() -> LaneRelayEnvelope {
     let settlement = LaneBlockCommitment {
         block_height: 4,
         lane_id,
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
         tx_count: 2,
         total_local_micro: 75,

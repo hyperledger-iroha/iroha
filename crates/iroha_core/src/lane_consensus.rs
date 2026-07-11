@@ -2,25 +2,2014 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature};
+use iroha_crypto::{Algorithm, Hash, HashOf, PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
     block::consensus::{
-        CertPhase, LaneBlockProposalV1, LaneBlockQcV1, LaneBlockVoteBodyV1,
-        SumeragiLaneBlockSessionStatus,
+        CertPhase, LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1,
+        LaneBlockVoteBodyV1, LanePayloadAvailabilityBodyV1, LanePayloadAvailabilityQcV1,
+        NativeAmxReceipt, SumeragiLaneBlockSessionStatus, SumeragiLanePayloadOwnership,
     },
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
+    merge::{MAX_MERGE_EXECUTION_ENTRYPOINTS, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES},
     nexus::{DataSpaceId, LaneId},
     peer::PeerId,
+    transaction::signed::TransactionEntrypoint,
 };
 use iroha_logger::prelude::*;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
+
+use crate::{
+    queue::{LaneQueueReservationKeyV1, RouteLegRole, RoutingPlan},
+    tx::AcceptedTransaction,
+};
+
+/// Maximum executable entrypoints retained in one autonomous lane payload.
+///
+/// The proposal path applies tighter configured block limits. This hard ceiling
+/// is a final defence for artifacts recovered from untrusted storage or future
+/// lane-local transport.
+pub(crate) const MAX_LANE_EXECUTABLE_ENTRYPOINTS: usize = MAX_MERGE_EXECUTION_ENTRYPOINTS;
+
+/// Maximum lane validators admitted into one vote or certificate.
+pub(crate) const MAX_LANE_BLOCK_VALIDATORS: usize = 128;
+/// Canonical compressed BLS-normal signature and proof-of-possession length.
+pub(crate) const LANE_BLS_PROOF_BYTES: usize = 96;
+/// Maximum canonical READY body bytes before signing or hashing.
+pub(crate) const MAX_LANE_PAYLOAD_AVAILABILITY_BODY_BYTES: usize = 4 * 1024;
+/// Maximum self-contained READY QC bytes admitted from wire or storage.
+pub(crate) const MAX_LANE_PAYLOAD_AVAILABILITY_QC_BYTES: usize = 64 * 1024;
+/// Maximum UTF-8 bytes retained for the READY consensus-domain tag.
+const MAX_LANE_AVAILABILITY_QC_MODE_TAG_BYTES: usize = 256;
+
+/// Bytes reserved below the default consensus frame cap for the authenticated
+/// view/QC envelope and the later globally certified merge transcript.
+pub(crate) const LANE_EXECUTABLE_ENVELOPE_HEADROOM_BYTES: usize =
+    16 * 1024 * 1024 - MAX_LANE_EXECUTABLE_PAYLOAD_BYTES;
+/// Maximum canonical Norito body bytes retained for one autonomous lane payload.
+///
+/// The payload body is at most half of one authenticated source bundle because
+/// that bundle also carries availability, view-change, prepare, commit, and PoP
+/// evidence. The global merge batch then has a separate bounded budget for the
+/// repeated executable transcript, deterministic results, and settlement.
+pub(crate) const MAX_LANE_EXECUTABLE_PAYLOAD_BYTES: usize =
+    MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES / 2;
+
+/// Maximum authenticated view transitions retained for one lane height.
+pub(crate) const MAX_LANE_NEW_VIEW_CERTIFICATES: usize = 256;
+
+/// Canonical, producer-authenticated executable payload for one lane height.
+///
+/// `payload_hash` deliberately excludes the lane view and the producer. It is
+/// therefore stable while an authenticated NewView certificate moves the exact
+/// same transactions to a later view. The producer signature separately binds
+/// the payload hash to the canonical origin proposal (including its view).
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct LaneExecutablePayloadV1 {
+    /// Artifact schema version. Only version one is accepted.
+    pub version: u8,
+    /// Hash of the chain identifier that owns this payload.
+    pub chain_id_hash: Hash,
+    /// Consensus epoch at the proposal height.
+    pub epoch: u64,
+    /// First canonical proposal that advertised this executable payload.
+    pub origin_proposal: LaneBlockProposalV1,
+    /// Canonical hashes of `entrypoints`, in descriptor order.
+    pub entrypoint_hashes: Vec<Hash>,
+    /// Executable transaction entrypoints owned by the lane.
+    pub entrypoints: Vec<TransactionEntrypoint>,
+    /// Exact queue reservation identities in entrypoint order. Global-block
+    /// handoffs created by the compatibility path leave this empty; a truly
+    /// autonomous payload must bind one reservation per entrypoint.
+    pub reservation_keys: Vec<LaneQueueReservationKeyV1>,
+    /// Full coordinator/participant routing plans in entrypoint order.
+    pub routing_plans: Vec<RoutingPlan>,
+    /// Native AMX certificates aligned exactly with entrypoints and routing plans.
+    ///
+    /// Autonomous payloads carry one element per entrypoint: `Some` for a
+    /// cross-dataspace native AMX plan and `None` for a single-route plan.
+    pub native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
+    /// View-neutral digest of chain, epoch, lane coordinates, predecessor,
+    /// committee, and exact executable entrypoints.
+    pub payload_hash: Hash,
+    /// Lane committee member that authenticated the origin payload.
+    pub producer: PeerId,
+    /// BLS-normal signature over the producer-bound payload preimage.
+    pub producer_signature: Vec<u8>,
+}
+
+/// Producer handoff carrying the exact lane payload from the authenticated
+/// global proposer to the independently selected lane committee.
+///
+/// This signature does not authorize lane execution. It only lets an active
+/// lane committee member authenticate and verify the bytes before producing a
+/// canonical [`LaneExecutablePayloadV1`] under its own committee key.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct LaneExecutablePayloadHandoffV1 {
+    /// Artifact schema version. Only version one is accepted.
+    pub version: u8,
+    /// Hash of the chain identifier that owns this payload.
+    pub chain_id_hash: Hash,
+    /// Consensus epoch at the proposal height.
+    pub epoch: u64,
+    /// Canonical view-zero proposal selected by the global proposer.
+    pub origin_proposal: LaneBlockProposalV1,
+    /// Canonical hashes of `entrypoints`, in descriptor order.
+    pub entrypoint_hashes: Vec<Hash>,
+    /// Exact executable transaction entrypoints offered to the lane committee.
+    pub entrypoints: Vec<TransactionEntrypoint>,
+    /// View-neutral executable payload digest.
+    pub payload_hash: Hash,
+    /// Authenticated global proposer that supplied the bytes.
+    pub proposer: PeerId,
+    /// Signature over chain, epoch, height/view, proposal, payload, and proposer.
+    pub proposer_signature: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Encode)]
+struct LaneExecutablePayloadPreimage {
+    purpose: String,
+    version: u8,
+    chain_id_hash: Hash,
+    epoch: u64,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+    proposal_height: u64,
+    global_proposal_hint: Option<LaneBlockProposalPayloadHintV1>,
+    previous_lane_block_height: u64,
+    previous_lane_block_descriptor_hash: Option<Hash>,
+    lane_block_height: u64,
+    accepted_candidate_indices: Vec<u64>,
+    accepted_transaction_hashes: Vec<Hash>,
+    validator_set_hash_version: u16,
+    validator_set_hash: HashOf<Vec<PeerId>>,
+    validator_set: Vec<PeerId>,
+    validator_count: u32,
+    min_quorum: u32,
+    qc_mode_tag: String,
+    entrypoints: Vec<TransactionEntrypoint>,
+    reservation_keys: Vec<LaneQueueReservationKeyV1>,
+    routing_plans: Vec<RoutingPlan>,
+    native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
+}
+
+#[derive(Clone, Debug, Encode)]
+struct LaneExecutablePayloadSignaturePreimage {
+    purpose: String,
+    version: u8,
+    chain_id_hash: Hash,
+    epoch: u64,
+    global_proposal_hint: Option<LaneBlockProposalPayloadHintV1>,
+    origin_proposal_hash: Hash,
+    origin_descriptor_hash: Hash,
+    origin_lane_block_view: u64,
+    payload_hash: Hash,
+    producer: PeerId,
+}
+
+#[derive(Clone, Debug, Encode)]
+struct LaneExecutablePayloadHandoffSignaturePreimage {
+    purpose: String,
+    version: u8,
+    chain_id_hash: Hash,
+    epoch: u64,
+    global_proposal_hint: LaneBlockProposalPayloadHintV1,
+    proposal_height: u64,
+    origin_lane_block_view: u64,
+    origin_proposal_hash: Hash,
+    origin_descriptor_hash: Hash,
+    payload_hash: Hash,
+    proposer: PeerId,
+}
+
+/// Authenticated request to advance one lane height to the next view while
+/// retaining the exact executable payload.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+pub struct LaneBlockNewViewBodyV1 {
+    /// Certificate schema version. Only version one is accepted.
+    pub version: u8,
+    /// Hash of the chain identifier that owns this transition.
+    pub chain_id_hash: Hash,
+    /// Consensus epoch at the proposal height.
+    pub epoch: u64,
+    /// Lane whose view advances.
+    pub lane_id: LaneId,
+    /// Dataspace bound to the lane.
+    pub dataspace_id: DataSpaceId,
+    /// Exact active lane incarnation commitment.
+    pub lane_incarnation: Hash,
+    /// Global compatibility height that selected the lane work.
+    pub proposal_height: u64,
+    /// Lane-local height whose view advances.
+    pub lane_block_height: u64,
+    /// View containing the locked proposal.
+    pub from_view: u64,
+    /// Exact next view authorized by this body.
+    pub target_view: u64,
+    /// Locked proposal digest retained across the transition.
+    pub locked_proposal_hash: Hash,
+    /// Locked descriptor digest retained across the transition.
+    pub locked_descriptor_hash: Hash,
+    /// View-neutral executable payload digest retained across the transition.
+    pub executable_payload_hash: Hash,
+    /// Version of the validator-set hashing scheme.
+    pub validator_set_hash_version: u16,
+    /// Hash of the canonical lane committee.
+    pub validator_set_hash: HashOf<Vec<PeerId>>,
+    /// Number of validators in the lane committee.
+    pub validator_count: u32,
+    /// Minimum distinct signers required for this transition.
+    pub min_quorum: u32,
+    /// Lane consensus domain tag.
+    pub qc_mode_tag: String,
+}
+
+impl LaneBlockNewViewBodyV1 {
+    /// Canonical, chain-bound BLS signature preimage.
+    #[must_use]
+    pub(crate) fn signature_preimage(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(512);
+        out.extend_from_slice(b"iroha:nexus:lane-new-view:v1");
+        out.extend_from_slice(
+            &norito::to_bytes(self).expect("lane NewView body must encode canonically"),
+        );
+        out
+    }
+}
+
+/// Individual committee vote for a lane-local view transition.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct LaneBlockNewViewVoteV1 {
+    /// Common body signed by the committee member.
+    pub body: LaneBlockNewViewBodyV1,
+    /// Committee member producing the vote.
+    pub signer: PeerId,
+    /// BLS-normal signature over `body.signature_preimage()`.
+    pub bls_signature: Vec<u8>,
+}
+
+/// Individual READY vote for one exact autonomous lane executable payload.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct LanePayloadAvailabilityVoteV1 {
+    /// Exact payload/session body signed by the committee member.
+    pub body: LanePayloadAvailabilityBodyV1,
+    /// Committee member that durably retained the payload before signing.
+    pub signer: PeerId,
+    /// PoPs aligned with the exact historical committee order.
+    pub validator_set_pops: Vec<Vec<u8>>,
+    /// BLS-normal signature over `body.signature_preimage()`.
+    pub bls_signature: Vec<u8>,
+}
+
+/// Quorum certificate authorizing one lane-local view transition.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct LaneBlockNewViewCertificateV1 {
+    /// Body certified by the aggregate signature.
+    pub body: LaneBlockNewViewBodyV1,
+    /// Canonical validator order indexed by `signers_bitmap`.
+    pub validator_set: Vec<PeerId>,
+    /// Compact signer bitmap (LSB-first).
+    pub signers_bitmap: Vec<u8>,
+    /// BLS12-381 aggregate signature bytes.
+    pub bls_aggregate_signature: Vec<u8>,
+}
+
+/// Persistable NewView certificate plus the exact PoPs needed to verify it
+/// after restart without trusting current mutable topology state.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub(crate) struct DurableLaneBlockNewViewCertificateV1 {
+    /// Authenticated lane-local NewView certificate.
+    pub(crate) certificate: LaneBlockNewViewCertificateV1,
+    /// Proofs of possession for exactly the selected certificate signers.
+    pub(crate) signer_pops: BTreeMap<PublicKey, Vec<u8>>,
+}
+
+/// Restart-verifiable lane payload availability certificate.
+///
+/// An autonomous prepare vote carries a separate, domain-separated READY
+/// signature only after the signer validates and durably persists the exact
+/// producer-authenticated payload. The prepare QC embeds the aggregate READY
+/// certificate and historical signer PoPs, so no unsigned sidecar field is
+/// trusted after restart.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub(crate) struct DurableLanePayloadAvailabilityCertificateV1 {
+    /// Prepare QC containing the exact aggregate READY certificate.
+    pub(crate) certificate: LaneBlockQcV1,
+}
+
+/// Restart-verifiable compaction point for an authenticated lane view chain.
+///
+/// The quorum certificate signs the exact `source_proposal` and authorizes the
+/// exact next-view `target_proposal`. Both proposals are retained so restart
+/// validation never has to trust a mutable topology, an implicit view number,
+/// or certificates that were deliberately compacted away.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub(crate) struct DurableLaneBlockViewCheckpointV1 {
+    /// Canonical proposal locked by the compacting NewView quorum.
+    pub(crate) source_proposal: LaneBlockProposalV1,
+    /// Canonical next-view proposal authorized by `certificate`.
+    pub(crate) target_proposal: LaneBlockProposalV1,
+    /// Quorum-authenticated transition, including restart-verifiable PoPs.
+    pub(crate) certificate: DurableLaneBlockNewViewCertificateV1,
+}
+
+/// Failure while building or validating an autonomous lane payload or NewView proof.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub(crate) enum LaneAutonomousArtifactError {
+    /// An unsupported artifact version was supplied.
+    #[error("unsupported autonomous lane artifact version")]
+    UnsupportedVersion,
+    /// The embedded standalone lane proposal is invalid.
+    #[error("invalid autonomous lane proposal")]
+    InvalidProposal,
+    /// The artifact belongs to another chain or epoch.
+    #[error("autonomous lane artifact chain or epoch mismatch")]
+    ChainOrEpochMismatch,
+    /// Entrypoint count exceeds the defensive hard limit.
+    #[error("autonomous lane payload entrypoint limit exceeded")]
+    EntrypointLimitExceeded,
+    /// Canonical entrypoint bytes exceed the defensive hard limit.
+    #[error("autonomous lane payload byte limit exceeded")]
+    PayloadByteLimitExceeded,
+    /// Entrypoints do not match the descriptor hashes.
+    #[error("autonomous lane payload entrypoints do not match descriptor")]
+    EntrypointMismatch,
+    /// Durable queue reservations do not exactly bind the executable payload.
+    #[error("autonomous lane payload reservation bindings do not match payload")]
+    ReservationMismatch,
+    /// Full routing plans do not exactly bind coordinator-owned execution.
+    #[error("autonomous lane payload routing plans do not match payload")]
+    RoutingPlanMismatch,
+    /// Native AMX receipts are missing, extra, reordered, or do not bind the exact session.
+    #[error("autonomous lane payload native AMX receipts do not match payload")]
+    NativeAmxReceiptMismatch,
+    /// Canonical payload hashing failed or the stored digest mismatched.
+    #[error("autonomous lane payload hash mismatch")]
+    PayloadHashMismatch,
+    /// Payload producer is not a member of the lane committee.
+    #[error("autonomous lane payload producer is not in committee")]
+    ProducerNotInCommittee,
+    /// Payload producer is not a BLS-normal consensus identity.
+    #[error("autonomous lane payload producer is not BLS-normal")]
+    ProducerNotBlsNormal,
+    /// Producer signature is missing, malformed, or invalid.
+    #[error("autonomous lane payload producer signature is invalid")]
+    InvalidProducerSignature,
+    /// Handoff proposer signature is missing, malformed, or invalid.
+    #[error("autonomous lane payload handoff signature is invalid")]
+    InvalidHandoffSignature,
+    /// Handoff transport sender did not match the authenticated proposer.
+    #[error("autonomous lane payload handoff sender mismatch")]
+    HandoffSenderMismatch,
+    /// Handoff proposer was not in the authenticated global authority set.
+    #[error("autonomous lane payload handoff proposer is not global authority")]
+    HandoffProposerNotAuthority,
+    /// NewView body is malformed, stale, or skips a view.
+    #[error("lane NewView body is malformed")]
+    InvalidNewViewBody,
+    /// NewView signer is not in the certified committee.
+    #[error("lane NewView signer is not in committee")]
+    NewViewSignerNotInCommittee,
+    /// NewView vote signature is invalid.
+    #[error("lane NewView vote signature is invalid")]
+    InvalidNewViewSignature,
+    /// The same signer appeared more than once.
+    #[error("duplicate lane NewView signer")]
+    DuplicateNewViewSigner,
+    /// Votes or certificate signers do not reach the bound quorum.
+    #[error("lane NewView quorum is not met")]
+    NewViewQuorumNotMet,
+    /// Certificate bitmap is malformed.
+    #[error("lane NewView signer bitmap is malformed")]
+    InvalidNewViewBitmap,
+    /// Required signer proof of possession is absent or invalid.
+    #[error("lane NewView signer proof of possession is invalid")]
+    InvalidNewViewPop,
+    /// Aggregate signature is missing, malformed, or invalid.
+    #[error("lane NewView aggregate signature is invalid")]
+    InvalidNewViewAggregate,
+    /// Votes certify different NewView bodies.
+    #[error("lane NewView vote body mismatch")]
+    NewViewBodyMismatch,
+    /// NewView body does not bind the supplied source proposal and payload.
+    #[error("lane NewView transition source mismatch")]
+    NewViewSourceMismatch,
+    /// Target proposal is not the deterministic next-view form of the source.
+    #[error("lane NewView target proposal mismatch")]
+    NewViewTargetMismatch,
+    /// View arithmetic overflowed.
+    #[error("lane NewView target overflow")]
+    NewViewOverflow,
+    /// BLS aggregation failed.
+    #[error("lane NewView signature aggregation failed")]
+    NewViewAggregation,
+    /// Availability certificate does not bind the exact executable payload.
+    #[error("lane payload availability certificate does not match payload")]
+    AvailabilityMismatch,
+    /// Availability body is malformed or exceeds defensive limits.
+    #[error("lane payload availability body is invalid")]
+    InvalidAvailabilityBody,
+    /// READY signer is not in the exact certified lane committee.
+    #[error("lane payload availability signer is not in committee")]
+    AvailabilitySignerNotInCommittee,
+    /// READY signer appeared more than once.
+    #[error("duplicate lane payload availability signer")]
+    DuplicateAvailabilitySigner,
+    /// READY votes certify different payload/session bodies.
+    #[error("lane payload availability vote body mismatch")]
+    AvailabilityBodyMismatch,
+    /// READY signer proof of possession is missing, malformed, or invalid.
+    #[error("lane payload availability signer proof of possession is invalid")]
+    InvalidAvailabilityPop,
+    /// READY vote signature is missing, malformed, or invalid.
+    #[error("lane payload availability vote signature is invalid")]
+    InvalidAvailabilitySignature,
+    /// READY votes do not satisfy the exact committee quorum.
+    #[error("lane payload availability quorum is not met")]
+    AvailabilityQuorumNotMet,
+    /// READY signer bitmap is malformed or has trailing bits set.
+    #[error("lane payload availability signer bitmap is invalid")]
+    InvalidAvailabilityBitmap,
+    /// READY aggregate signature construction or verification failed.
+    #[error("lane payload availability aggregate signature is invalid")]
+    InvalidAvailabilityAggregate,
+    /// Availability certificate is not a valid aggregate prepare QC.
+    #[error("lane payload availability certificate is invalid")]
+    InvalidAvailabilityCertificate,
+}
+
+impl LaneExecutablePayloadV1 {
+    /// Construct and sign an autonomous executable payload.
+    pub(crate) fn new_signed(
+        chain_id_hash: Hash,
+        epoch: u64,
+        origin_proposal: LaneBlockProposalV1,
+        entrypoints: Vec<TransactionEntrypoint>,
+        producer: PeerId,
+        private_key: &PrivateKey,
+    ) -> Result<Self, LaneAutonomousArtifactError> {
+        Self::new_signed_with_reservations(
+            chain_id_hash,
+            epoch,
+            origin_proposal,
+            entrypoints,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            producer,
+            private_key,
+        )
+    }
+
+    /// Construct and sign a truly autonomous payload with exact durable queue
+    /// ownership and full routing-plan bindings.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_signed_with_reservations(
+        chain_id_hash: Hash,
+        epoch: u64,
+        origin_proposal: LaneBlockProposalV1,
+        entrypoints: Vec<TransactionEntrypoint>,
+        reservation_keys: Vec<LaneQueueReservationKeyV1>,
+        routing_plans: Vec<RoutingPlan>,
+        native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
+        producer: PeerId,
+        private_key: &PrivateKey,
+    ) -> Result<Self, LaneAutonomousArtifactError> {
+        validate_lane_block_proposal(&origin_proposal)
+            .map_err(|_| LaneAutonomousArtifactError::InvalidProposal)?;
+        let entrypoint_hashes = entrypoints
+            .iter()
+            .map(|entrypoint| Hash::from(entrypoint.hash()))
+            .collect::<Vec<_>>();
+        let mut payload = Self {
+            version: 1,
+            chain_id_hash,
+            epoch,
+            origin_proposal,
+            entrypoint_hashes,
+            entrypoints,
+            reservation_keys,
+            routing_plans,
+            native_amx_receipts,
+            payload_hash: Hash::prehashed([0; Hash::LENGTH]),
+            producer,
+            producer_signature: Vec::new(),
+        };
+        payload.payload_hash = payload.computed_payload_hash()?;
+        payload.producer_signature =
+            Signature::try_new(private_key, &payload.producer_signature_preimage())
+                .map_err(|_| LaneAutonomousArtifactError::InvalidProducerSignature)?
+                .payload()
+                .to_vec();
+        payload.validate(chain_id_hash, epoch)?;
+        Ok(payload)
+    }
+
+    /// Compute the canonical view-neutral executable payload digest.
+    pub(crate) fn computed_payload_hash(&self) -> Result<Hash, LaneAutonomousArtifactError> {
+        compute_lane_executable_payload_hash(
+            self.version,
+            self.chain_id_hash,
+            self.epoch,
+            &self.origin_proposal,
+            &self.entrypoints,
+            &self.reservation_keys,
+            &self.routing_plans,
+            &self.native_amx_receipts,
+        )
+    }
+
+    fn producer_signature_preimage(&self) -> Vec<u8> {
+        let descriptor = &self.origin_proposal.descriptor;
+        norito::to_bytes(&LaneExecutablePayloadSignaturePreimage {
+            purpose: "nexus:lane-executable-payload-signature:v1".to_owned(),
+            version: self.version,
+            chain_id_hash: self.chain_id_hash,
+            epoch: self.epoch,
+            global_proposal_hint: self.origin_proposal.payload_block_hint,
+            origin_proposal_hash: self.origin_proposal.proposal_hash,
+            origin_descriptor_hash: descriptor.descriptor_hash,
+            origin_lane_block_view: descriptor.lane_block_view,
+            payload_hash: self.payload_hash,
+            producer: self.producer.clone(),
+        })
+        .expect("lane executable payload signature preimage must encode")
+    }
+
+    /// Validate shape, chain/epoch binding, transaction hashes, producer
+    /// authority, canonical digest, and producer signature.
+    pub(crate) fn validate(
+        &self,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+    ) -> Result<(), LaneAutonomousArtifactError> {
+        validate_lane_executable_payload_body(
+            self.version,
+            self.chain_id_hash,
+            self.epoch,
+            &self.origin_proposal,
+            &self.entrypoint_hashes,
+            &self.entrypoints,
+            &self.reservation_keys,
+            &self.routing_plans,
+            &self.native_amx_receipts,
+            self.payload_hash,
+            expected_chain_id_hash,
+            expected_epoch,
+        )?;
+        if !self
+            .origin_proposal
+            .descriptor
+            .validator_set
+            .contains(&self.producer)
+        {
+            return Err(LaneAutonomousArtifactError::ProducerNotInCommittee);
+        }
+        if !peer_uses_bls_normal(&self.producer) {
+            return Err(LaneAutonomousArtifactError::ProducerNotBlsNormal);
+        }
+        Signature::try_from_bytes(&self.producer_signature)
+            .map_err(|_| LaneAutonomousArtifactError::InvalidProducerSignature)?
+            .verify(
+                self.producer.public_key(),
+                &self.producer_signature_preimage(),
+            )
+            .map_err(|_| LaneAutonomousArtifactError::InvalidProducerSignature)
+    }
+
+    /// Return whether a proposal is the same view-neutral lane payload domain.
+    pub(crate) fn matches_proposal_static(&self, proposal: &LaneBlockProposalV1) -> bool {
+        if validate_lane_block_proposal(proposal).is_err() {
+            return false;
+        }
+        let origin = &self.origin_proposal.descriptor;
+        let candidate = &proposal.descriptor;
+        origin.lane_id == candidate.lane_id
+            && origin.dataspace_id == candidate.dataspace_id
+            && origin.lane_incarnation == candidate.lane_incarnation
+            && origin.proposal_height == candidate.proposal_height
+            && origin.previous_lane_block_height == candidate.previous_lane_block_height
+            && origin.previous_lane_block_descriptor_hash
+                == candidate.previous_lane_block_descriptor_hash
+            && origin.lane_block_height == candidate.lane_block_height
+            && origin.accepted_candidate_indices == candidate.accepted_candidate_indices
+            && origin.accepted_transaction_hashes == candidate.accepted_transaction_hashes
+            && origin.validator_set_hash_version == candidate.validator_set_hash_version
+            && origin.validator_set_hash == candidate.validator_set_hash
+            && origin.validator_set == candidate.validator_set
+            && origin.validator_count == candidate.validator_count
+            && origin.min_quorum == candidate.min_quorum
+            && origin.qc_mode_tag == candidate.qc_mode_tag
+    }
+}
+
+/// Build the exact READY body for a producer-authenticated payload and the
+/// view-specific proposal currently being prepared.
+pub(crate) fn lane_payload_availability_body(
+    executable_payload: &LaneExecutablePayloadV1,
+    current_proposal: &LaneBlockProposalV1,
+    expected_chain_id_hash: Hash,
+    expected_epoch: u64,
+) -> Result<LanePayloadAvailabilityBodyV1, LaneAutonomousArtifactError> {
+    executable_payload.validate(expected_chain_id_hash, expected_epoch)?;
+    validate_lane_block_proposal(current_proposal)
+        .map_err(|_| LaneAutonomousArtifactError::InvalidProposal)?;
+    if !executable_payload.matches_proposal_static(current_proposal) {
+        return Err(LaneAutonomousArtifactError::AvailabilityMismatch);
+    }
+    let expected_current = if current_proposal.descriptor.lane_block_view
+        == executable_payload
+            .origin_proposal
+            .descriptor
+            .lane_block_view
+    {
+        executable_payload.origin_proposal.clone()
+    } else {
+        retarget_lane_block_proposal_exact_view(
+            &executable_payload.origin_proposal,
+            current_proposal.descriptor.lane_block_view,
+        )?
+    };
+    if !expected_current.same_consensus_identity(current_proposal) {
+        return Err(LaneAutonomousArtifactError::AvailabilityMismatch);
+    }
+
+    let origin = &executable_payload.origin_proposal.descriptor;
+    let current = &current_proposal.descriptor;
+    let body = LanePayloadAvailabilityBodyV1 {
+        version: 1,
+        chain_id_hash: expected_chain_id_hash,
+        epoch: expected_epoch,
+        lane_id: current.lane_id,
+        dataspace_id: current.dataspace_id,
+        lane_incarnation: current.lane_incarnation,
+        proposal_height: current.proposal_height,
+        lane_block_height: current.lane_block_height,
+        origin_lane_block_view: origin.lane_block_view,
+        origin_proposal_hash: executable_payload.origin_proposal.proposal_hash,
+        origin_descriptor_hash: origin.descriptor_hash,
+        current_lane_block_view: current.lane_block_view,
+        current_proposal_hash: current_proposal.proposal_hash,
+        current_descriptor_hash: current.descriptor_hash,
+        current_subject_hash: current.subject_hash,
+        current_payload_ownership_hash: current.payload_ownership_hash,
+        current_rbc_instance_hash: current.rbc_instance_hash,
+        executable_payload_hash: executable_payload.payload_hash,
+        validator_set_hash_version: current.validator_set_hash_version,
+        validator_set_hash: current.validator_set_hash,
+        validator_count: current.validator_count,
+        min_quorum: current.min_quorum,
+        qc_mode_tag: current.qc_mode_tag.clone(),
+    };
+    validate_lane_payload_availability_body_shape(&body)?;
+    Ok(body)
+}
+
+/// Verify that a READY body names the exact payload and current proposal.
+pub(crate) fn validate_lane_payload_availability_body_against_payload(
+    body: &LanePayloadAvailabilityBodyV1,
+    executable_payload: &LaneExecutablePayloadV1,
+    current_proposal: &LaneBlockProposalV1,
+    expected_chain_id_hash: Hash,
+    expected_epoch: u64,
+) -> Result<(), LaneAutonomousArtifactError> {
+    let expected = lane_payload_availability_body(
+        executable_payload,
+        current_proposal,
+        expected_chain_id_hash,
+        expected_epoch,
+    )?;
+    if body != &expected {
+        return Err(LaneAutonomousArtifactError::AvailabilityMismatch);
+    }
+    Ok(())
+}
+
+fn validate_lane_payload_availability_body_shape(
+    body: &LanePayloadAvailabilityBodyV1,
+) -> Result<(), LaneAutonomousArtifactError> {
+    let validator_count = usize::try_from(body.validator_count)
+        .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityBody)?;
+    if body.version != 1
+        || body.proposal_height == 0
+        || body.lane_block_height == 0
+        || body.lane_incarnation.as_ref().iter().all(|byte| *byte == 0)
+        || body.origin_lane_block_view > body.current_lane_block_view
+        || body.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
+        || validator_count == 0
+        || validator_count > MAX_LANE_BLOCK_VALIDATORS
+        || body.min_quorum == 0
+        || body.min_quorum > body.validator_count
+        || body.qc_mode_tag.trim().is_empty()
+        || body.qc_mode_tag.len() > MAX_LANE_AVAILABILITY_QC_MODE_TAG_BYTES
+    {
+        return Err(LaneAutonomousArtifactError::InvalidAvailabilityBody);
+    }
+    if norito::to_bytes(body).map_or(true, |encoded| {
+        encoded.len() > MAX_LANE_PAYLOAD_AVAILABILITY_BODY_BYTES
+    }) {
+        return Err(LaneAutonomousArtifactError::InvalidAvailabilityBody);
+    }
+    Ok(())
+}
+
+fn validate_availability_body_matches_proposal(
+    body: &LanePayloadAvailabilityBodyV1,
+    proposal: &LaneBlockProposalV1,
+) -> Result<(), LaneAutonomousArtifactError> {
+    validate_lane_payload_availability_body_shape(body)?;
+    let descriptor = &proposal.descriptor;
+    if body.lane_id != descriptor.lane_id
+        || body.dataspace_id != descriptor.dataspace_id
+        || body.lane_incarnation != descriptor.lane_incarnation
+        || body.proposal_height != descriptor.proposal_height
+        || body.lane_block_height != descriptor.lane_block_height
+        || body.current_lane_block_view != descriptor.lane_block_view
+        || body.current_proposal_hash != proposal.proposal_hash
+        || body.current_descriptor_hash != descriptor.descriptor_hash
+        || body.current_subject_hash != descriptor.subject_hash
+        || body.current_payload_ownership_hash != descriptor.payload_ownership_hash
+        || body.current_rbc_instance_hash != descriptor.rbc_instance_hash
+        || body.validator_set_hash_version != descriptor.validator_set_hash_version
+        || body.validator_set_hash != descriptor.validator_set_hash
+        || body.validator_count != descriptor.validator_count
+        || body.min_quorum != descriptor.min_quorum
+        || body.qc_mode_tag != descriptor.qc_mode_tag
+    {
+        return Err(LaneAutonomousArtifactError::AvailabilityMismatch);
+    }
+    Ok(())
+}
+
+fn availability_body_matches_lane_vote_body(
+    availability: &LanePayloadAvailabilityBodyV1,
+    vote: &LaneBlockVoteBodyV1,
+) -> bool {
+    availability.lane_id == vote.lane_id
+        && availability.dataspace_id == vote.dataspace_id
+        && availability.lane_incarnation == vote.lane_incarnation
+        && availability.proposal_height == vote.proposal_height
+        && availability.lane_block_height == vote.lane_block_height
+        && availability.current_lane_block_view == vote.lane_block_view
+        && availability.current_proposal_hash == vote.proposal_hash
+        && availability.current_descriptor_hash == vote.descriptor_hash
+        && availability.current_subject_hash == vote.subject_hash
+        && availability.current_payload_ownership_hash == vote.payload_ownership_hash
+        && availability.current_rbc_instance_hash == vote.rbc_instance_hash
+        && availability.validator_set_hash_version == vote.validator_set_hash_version
+        && availability.validator_set_hash == vote.validator_set_hash
+        && availability.validator_count == vote.validator_count
+        && availability.min_quorum == vote.min_quorum
+        && availability.qc_mode_tag == vote.qc_mode_tag
+}
+
+impl LanePayloadAvailabilityVoteV1 {
+    /// Construct a READY vote after the caller has durably retained the exact payload.
+    pub(crate) fn new_signed(
+        body: LanePayloadAvailabilityBodyV1,
+        signer: PeerId,
+        validator_set_pops: Vec<Vec<u8>>,
+        private_key: &PrivateKey,
+    ) -> Result<Self, LaneAutonomousArtifactError> {
+        validate_lane_payload_availability_body_shape(&body)?;
+        let signature = Signature::try_new(private_key, &body.signature_preimage())
+            .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilitySignature)?;
+        let vote = Self {
+            body,
+            signer,
+            validator_set_pops,
+            bls_signature: signature.payload().to_vec(),
+        };
+        vote.validate_shape_and_signature()?;
+        Ok(vote)
+    }
+
+    fn validate_shape(&self) -> Result<(), LaneAutonomousArtifactError> {
+        validate_lane_payload_availability_body_shape(&self.body)?;
+        let validator_count = usize::try_from(self.body.validator_count)
+            .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityBody)?;
+        if self.validator_set_pops.len() != validator_count
+            || self
+                .validator_set_pops
+                .iter()
+                .any(|pop| pop.len() != LANE_BLS_PROOF_BYTES)
+        {
+            return Err(LaneAutonomousArtifactError::InvalidAvailabilityPop);
+        }
+        if !peer_uses_bls_normal(&self.signer) || self.bls_signature.len() != LANE_BLS_PROOF_BYTES {
+            return Err(LaneAutonomousArtifactError::InvalidAvailabilitySignature);
+        }
+        Ok(())
+    }
+
+    fn verify_signature(&self) -> Result<(), LaneAutonomousArtifactError> {
+        Signature::try_from_bytes(&self.bls_signature)
+            .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilitySignature)?
+            .verify(self.signer.public_key(), &self.body.signature_preimage())
+            .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilitySignature)
+    }
+
+    fn validate_shape_and_signature(&self) -> Result<(), LaneAutonomousArtifactError> {
+        self.validate_shape()?;
+        self.verify_signature()
+    }
+
+    fn validate_against_validator_set(
+        &self,
+        validator_set: &[PeerId],
+    ) -> Result<(), LaneAutonomousArtifactError> {
+        self.validate_shape_and_signature()?;
+        validate_lane_block_validator_set_fields(
+            self.body.validator_set_hash_version,
+            self.body.validator_set_hash,
+            self.body.validator_count,
+            validator_set,
+        )
+        .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityBody)?;
+        if validator_set.len() > MAX_LANE_BLOCK_VALIDATORS || !validator_set.contains(&self.signer)
+        {
+            return Err(LaneAutonomousArtifactError::AvailabilitySignerNotInCommittee);
+        }
+        for (validator, pop) in validator_set.iter().zip(&self.validator_set_pops) {
+            if !peer_uses_bls_normal(validator)
+                || iroha_crypto::bls_normal_pop_verify(validator.public_key(), pop).is_err()
+            {
+                return Err(LaneAutonomousArtifactError::InvalidAvailabilityPop);
+            }
+        }
+        Ok(())
+    }
+}
+
+fn aggregate_lane_payload_availability_votes(
+    body: LanePayloadAvailabilityBodyV1,
+    validator_set: Vec<PeerId>,
+    votes: &[LanePayloadAvailabilityVoteV1],
+) -> Result<LanePayloadAvailabilityQcV1, LaneAutonomousArtifactError> {
+    validate_lane_payload_availability_body_shape(&body)?;
+    validate_lane_block_validator_set_fields(
+        body.validator_set_hash_version,
+        body.validator_set_hash,
+        body.validator_count,
+        &validator_set,
+    )
+    .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityBody)?;
+    if validator_set.len() > MAX_LANE_BLOCK_VALIDATORS {
+        return Err(LaneAutonomousArtifactError::InvalidAvailabilityBody);
+    }
+
+    let mut indexed_signatures = BTreeMap::<usize, Vec<u8>>::new();
+    let mut canonical_pops: Option<Vec<Vec<u8>>> = None;
+    for vote in votes {
+        if vote.body != body {
+            return Err(LaneAutonomousArtifactError::AvailabilityBodyMismatch);
+        }
+        vote.validate_against_validator_set(&validator_set)?;
+        let index = validator_set
+            .iter()
+            .position(|validator| validator == &vote.signer)
+            .ok_or(LaneAutonomousArtifactError::AvailabilitySignerNotInCommittee)?;
+        if indexed_signatures
+            .insert(index, vote.bls_signature.clone())
+            .is_some()
+        {
+            return Err(LaneAutonomousArtifactError::DuplicateAvailabilitySigner);
+        }
+        match &mut canonical_pops {
+            Some(existing) if vote.validator_set_pops.as_slice() < existing.as_slice() => {
+                *existing = vote.validator_set_pops.clone();
+            }
+            None => canonical_pops = Some(vote.validator_set_pops.clone()),
+            Some(_) => {}
+        }
+    }
+    if indexed_signatures.len()
+        < usize::try_from(body.min_quorum)
+            .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityBody)?
+    {
+        return Err(LaneAutonomousArtifactError::AvailabilityQuorumNotMet);
+    }
+
+    let mut signers_bitmap = vec![0_u8; validator_set.len().div_ceil(8)];
+    let ordered_signatures = indexed_signatures
+        .into_iter()
+        .map(|(index, signature)| {
+            signers_bitmap[index / 8] |= 1_u8 << (index % 8);
+            signature
+        })
+        .collect::<Vec<_>>();
+    let signature_refs = ordered_signatures
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let bls_aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+        .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityAggregate)?;
+    let qc = LanePayloadAvailabilityQcV1 {
+        body,
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set,
+        validator_set_pops: canonical_pops
+            .ok_or(LaneAutonomousArtifactError::AvailabilityQuorumNotMet)?,
+        signers_bitmap,
+        bls_aggregate_signature,
+    };
+    validate_lane_payload_availability_qc(&qc)?;
+    Ok(qc)
+}
+
+/// Validate a self-contained exact-payload READY quorum certificate.
+pub(crate) fn validate_lane_payload_availability_qc(
+    qc: &LanePayloadAvailabilityQcV1,
+) -> Result<(), LaneAutonomousArtifactError> {
+    validate_lane_payload_availability_body_shape(&qc.body)?;
+    if qc.validator_set.len() > MAX_LANE_BLOCK_VALIDATORS
+        || qc.validator_set_hash_version != qc.body.validator_set_hash_version
+        || qc.validator_set_hash != qc.body.validator_set_hash
+    {
+        return Err(LaneAutonomousArtifactError::InvalidAvailabilityBody);
+    }
+    validate_lane_block_validator_set_fields(
+        qc.validator_set_hash_version,
+        qc.validator_set_hash,
+        qc.body.validator_count,
+        &qc.validator_set,
+    )
+    .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityBody)?;
+    if qc.validator_set_pops.len() != qc.validator_set.len()
+        || qc
+            .validator_set_pops
+            .iter()
+            .any(|pop| pop.len() != LANE_BLS_PROOF_BYTES)
+    {
+        return Err(LaneAutonomousArtifactError::InvalidAvailabilityPop);
+    }
+    let expected_bitmap_len = qc.validator_set.len().div_ceil(8);
+    if qc.signers_bitmap.len() != expected_bitmap_len
+        || qc.bls_aggregate_signature.len() != LANE_BLS_PROOF_BYTES
+    {
+        return Err(LaneAutonomousArtifactError::InvalidAvailabilityBitmap);
+    }
+    if norito::to_bytes(qc).map_or(true, |encoded| {
+        encoded.len() > MAX_LANE_PAYLOAD_AVAILABILITY_QC_BYTES
+    }) {
+        return Err(LaneAutonomousArtifactError::InvalidAvailabilityBody);
+    }
+    if let Some(last) = qc.signers_bitmap.last().copied() {
+        let used_bits = qc.validator_set.len() % 8;
+        if used_bits != 0 && last & !((1_u8 << used_bits) - 1) != 0 {
+            return Err(LaneAutonomousArtifactError::InvalidAvailabilityBitmap);
+        }
+    }
+
+    let mut signer_count = 0_usize;
+    let mut public_keys = Vec::<&PublicKey>::new();
+    let mut pop_refs = Vec::<&[u8]>::new();
+    for (index, (validator, pop)) in qc
+        .validator_set
+        .iter()
+        .zip(&qc.validator_set_pops)
+        .enumerate()
+    {
+        if !peer_uses_bls_normal(validator)
+            || iroha_crypto::bls_normal_pop_verify(validator.public_key(), pop).is_err()
+        {
+            return Err(LaneAutonomousArtifactError::InvalidAvailabilityPop);
+        }
+        if qc.signers_bitmap[index / 8] & (1_u8 << (index % 8)) != 0 {
+            signer_count = signer_count.saturating_add(1);
+            public_keys.push(validator.public_key());
+            pop_refs.push(pop.as_slice());
+        }
+    }
+    if signer_count
+        < usize::try_from(qc.body.min_quorum)
+            .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityBody)?
+    {
+        return Err(LaneAutonomousArtifactError::AvailabilityQuorumNotMet);
+    }
+    iroha_crypto::bls_normal_verify_preaggregated_same_message(
+        &qc.body.signature_preimage(),
+        &qc.bls_aggregate_signature,
+        &public_keys,
+        &pop_refs,
+    )
+    .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityAggregate)
+}
+
+pub(crate) fn compute_lane_executable_payload_hash(
+    version: u8,
+    chain_id_hash: Hash,
+    epoch: u64,
+    origin_proposal: &LaneBlockProposalV1,
+    entrypoints: &[TransactionEntrypoint],
+    reservation_keys: &[LaneQueueReservationKeyV1],
+    routing_plans: &[RoutingPlan],
+    native_amx_receipts: &[Option<NativeAmxReceipt>],
+) -> Result<Hash, LaneAutonomousArtifactError> {
+    let descriptor = &origin_proposal.descriptor;
+    let preimage = LaneExecutablePayloadPreimage {
+        purpose: "nexus:lane-executable-payload:v1".to_owned(),
+        version,
+        chain_id_hash,
+        epoch,
+        global_proposal_hint: origin_proposal.payload_block_hint,
+        lane_id: descriptor.lane_id,
+        dataspace_id: descriptor.dataspace_id,
+        lane_incarnation: descriptor.lane_incarnation,
+        proposal_height: descriptor.proposal_height,
+        previous_lane_block_height: descriptor.previous_lane_block_height,
+        previous_lane_block_descriptor_hash: descriptor.previous_lane_block_descriptor_hash,
+        lane_block_height: descriptor.lane_block_height,
+        accepted_candidate_indices: descriptor.accepted_candidate_indices.clone(),
+        accepted_transaction_hashes: descriptor.accepted_transaction_hashes.clone(),
+        validator_set_hash_version: descriptor.validator_set_hash_version,
+        validator_set_hash: descriptor.validator_set_hash,
+        validator_set: descriptor.validator_set.clone(),
+        validator_count: descriptor.validator_count,
+        min_quorum: descriptor.min_quorum,
+        qc_mode_tag: descriptor.qc_mode_tag.clone(),
+        entrypoints: entrypoints.to_vec(),
+        reservation_keys: reservation_keys.to_vec(),
+        routing_plans: routing_plans.to_vec(),
+        native_amx_receipts: native_amx_receipts.to_vec(),
+    };
+    let bytes = norito::to_bytes(&preimage)
+        .map_err(|_| LaneAutonomousArtifactError::PayloadHashMismatch)?;
+    Ok(Hash::new(bytes))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_lane_executable_payload_body(
+    version: u8,
+    chain_id_hash: Hash,
+    epoch: u64,
+    origin_proposal: &LaneBlockProposalV1,
+    entrypoint_hashes: &[Hash],
+    entrypoints: &[TransactionEntrypoint],
+    reservation_keys: &[LaneQueueReservationKeyV1],
+    routing_plans: &[RoutingPlan],
+    native_amx_receipts: &[Option<NativeAmxReceipt>],
+    payload_hash: Hash,
+    expected_chain_id_hash: Hash,
+    expected_epoch: u64,
+) -> Result<(), LaneAutonomousArtifactError> {
+    if version != 1 {
+        return Err(LaneAutonomousArtifactError::UnsupportedVersion);
+    }
+    if chain_id_hash != expected_chain_id_hash || epoch != expected_epoch {
+        return Err(LaneAutonomousArtifactError::ChainOrEpochMismatch);
+    }
+    validate_lane_block_proposal(origin_proposal)
+        .map_err(|_| LaneAutonomousArtifactError::InvalidProposal)?;
+    if origin_proposal
+        .payload_block_hint
+        .is_some_and(|hint| hint.proposal_height != origin_proposal.descriptor.proposal_height)
+    {
+        return Err(LaneAutonomousArtifactError::InvalidProposal);
+    }
+    if entrypoints.is_empty()
+        || entrypoints.len() > MAX_LANE_EXECUTABLE_ENTRYPOINTS
+        || entrypoint_hashes.len() > MAX_LANE_EXECUTABLE_ENTRYPOINTS
+    {
+        return Err(LaneAutonomousArtifactError::EntrypointLimitExceeded);
+    }
+    let encoded_payload_body_len = Encode::encode(&(
+        entrypoints.to_vec(),
+        reservation_keys.to_vec(),
+        routing_plans.to_vec(),
+        native_amx_receipts.to_vec(),
+    ))
+    .len();
+    if !lane_executable_payload_body_within_limit(encoded_payload_body_len) {
+        return Err(LaneAutonomousArtifactError::PayloadByteLimitExceeded);
+    }
+    let actual_hashes = entrypoints
+        .iter()
+        .map(|entrypoint| Hash::from(entrypoint.hash()))
+        .collect::<Vec<_>>();
+    if actual_hashes.iter().copied().collect::<BTreeSet<_>>().len() != actual_hashes.len()
+        || entrypoint_hashes
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .len()
+            != entrypoint_hashes.len()
+    {
+        return Err(LaneAutonomousArtifactError::EntrypointMismatch);
+    }
+    if actual_hashes != entrypoint_hashes
+        || entrypoint_hashes != origin_proposal.descriptor.accepted_transaction_hashes
+    {
+        return Err(LaneAutonomousArtifactError::EntrypointMismatch);
+    }
+    let descriptor = &origin_proposal.descriptor;
+    if reservation_keys.is_empty() != routing_plans.is_empty()
+        || (!reservation_keys.is_empty()
+            && (reservation_keys.len() != entrypoints.len()
+                || routing_plans.len() != entrypoints.len()
+                || native_amx_receipts.len() != entrypoints.len()))
+        || (reservation_keys.is_empty() && !native_amx_receipts.is_empty())
+        || (origin_proposal.payload_block_hint.is_none() && reservation_keys.is_empty())
+    {
+        return Err(LaneAutonomousArtifactError::ReservationMismatch);
+    }
+    let mut reservation_digests = BTreeSet::new();
+    let mut signed_transaction_hashes = BTreeSet::new();
+    for ((((entrypoint, entrypoint_hash), key), routing_plan), native_amx_receipt) in entrypoints
+        .iter()
+        .zip(entrypoint_hashes)
+        .zip(reservation_keys)
+        .zip(routing_plans)
+        .zip(native_amx_receipts)
+    {
+        let accepted = AcceptedTransaction::new_unchecked_entrypoint(std::borrow::Cow::Owned(
+            entrypoint.clone(),
+        ));
+        if key.signed_transaction_hash != accepted.hash()
+            || Hash::from(key.entrypoint_hash) != *entrypoint_hash
+            || key.lane_id != descriptor.lane_id
+            || key.dataspace_id != descriptor.dataspace_id
+            || key.lane_incarnation != descriptor.lane_incarnation
+            || key.proposal_height != descriptor.proposal_height
+            || key.lane_block_height != descriptor.lane_block_height
+            || key.lane_block_view != descriptor.lane_block_view
+            || key.coordinator_leg.role != RouteLegRole::Coordinator
+            || key.coordinator_leg.route.lane_id != descriptor.lane_id
+            || key.coordinator_leg.route.dataspace_id != descriptor.dataspace_id
+            || !reservation_digests.insert(key.digest())
+            || !signed_transaction_hashes.insert(key.signed_transaction_hash)
+        {
+            return Err(LaneAutonomousArtifactError::ReservationMismatch);
+        }
+        if routing_plan.digest() != key.routing_plan_digest
+            || routing_plan.coordinator_leg() != key.coordinator_leg
+        {
+            return Err(LaneAutonomousArtifactError::RoutingPlanMismatch);
+        }
+        if !crate::native_amx::receipt_shape_matches_coordinator_payload(
+            native_amx_receipt.as_ref(),
+            routing_plan,
+            accepted.hash().as_ref(),
+            *entrypoint_hash,
+            chain_id_hash,
+            origin_proposal,
+        ) {
+            return Err(LaneAutonomousArtifactError::NativeAmxReceiptMismatch);
+        }
+    }
+    if compute_lane_executable_payload_hash(
+        version,
+        chain_id_hash,
+        epoch,
+        origin_proposal,
+        entrypoints,
+        reservation_keys,
+        routing_plans,
+        native_amx_receipts,
+    )? != payload_hash
+    {
+        return Err(LaneAutonomousArtifactError::PayloadHashMismatch);
+    }
+    Ok(())
+}
+
+const fn lane_executable_payload_body_within_limit(encoded_len: usize) -> bool {
+    encoded_len <= MAX_LANE_EXECUTABLE_PAYLOAD_BYTES
+}
+
+impl LaneExecutablePayloadHandoffV1 {
+    /// Construct a proposer-authenticated handoff for a lane committee.
+    pub(crate) fn new_signed(
+        chain_id_hash: Hash,
+        epoch: u64,
+        origin_proposal: LaneBlockProposalV1,
+        entrypoints: Vec<TransactionEntrypoint>,
+        proposer: PeerId,
+        private_key: &PrivateKey,
+    ) -> Result<Self, LaneAutonomousArtifactError> {
+        if origin_proposal.payload_block_hint.is_none() {
+            return Err(LaneAutonomousArtifactError::InvalidProposal);
+        }
+        let entrypoint_hashes = entrypoints
+            .iter()
+            .map(|entrypoint| Hash::from(entrypoint.hash()))
+            .collect::<Vec<_>>();
+        let payload_hash = compute_lane_executable_payload_hash(
+            1,
+            chain_id_hash,
+            epoch,
+            &origin_proposal,
+            &entrypoints,
+            &[],
+            &[],
+            &[],
+        )?;
+        let mut handoff = Self {
+            version: 1,
+            chain_id_hash,
+            epoch,
+            origin_proposal,
+            entrypoint_hashes,
+            entrypoints,
+            payload_hash,
+            proposer,
+            proposer_signature: Vec::new(),
+        };
+        handoff.proposer_signature =
+            Signature::try_new(private_key, &handoff.proposer_signature_preimage())
+                .map_err(|_| LaneAutonomousArtifactError::InvalidHandoffSignature)?
+                .payload()
+                .to_vec();
+        handoff.validate(chain_id_hash, epoch)?;
+        Ok(handoff)
+    }
+
+    fn proposer_signature_preimage(&self) -> Vec<u8> {
+        let descriptor = &self.origin_proposal.descriptor;
+        norito::to_bytes(&LaneExecutablePayloadHandoffSignaturePreimage {
+            purpose: "nexus:lane-executable-payload-handoff:v1".to_owned(),
+            version: self.version,
+            chain_id_hash: self.chain_id_hash,
+            epoch: self.epoch,
+            global_proposal_hint: self
+                .origin_proposal
+                .payload_block_hint
+                .expect("validated lane payload handoff has a global proposal hint"),
+            proposal_height: descriptor.proposal_height,
+            origin_lane_block_view: descriptor.lane_block_view,
+            origin_proposal_hash: self.origin_proposal.proposal_hash,
+            origin_descriptor_hash: descriptor.descriptor_hash,
+            payload_hash: self.payload_hash,
+            proposer: self.proposer.clone(),
+        })
+        .expect("lane executable payload handoff signature preimage must encode")
+    }
+
+    /// Validate the complete handoff body and proposer signature.
+    pub(crate) fn validate(
+        &self,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+    ) -> Result<(), LaneAutonomousArtifactError> {
+        if self.origin_proposal.payload_block_hint.is_none() {
+            return Err(LaneAutonomousArtifactError::InvalidProposal);
+        }
+        validate_lane_executable_payload_body(
+            self.version,
+            self.chain_id_hash,
+            self.epoch,
+            &self.origin_proposal,
+            &self.entrypoint_hashes,
+            &self.entrypoints,
+            &[],
+            &[],
+            &[],
+            self.payload_hash,
+            expected_chain_id_hash,
+            expected_epoch,
+        )?;
+        if self.origin_proposal.descriptor.lane_block_view != 0 {
+            return Err(LaneAutonomousArtifactError::InvalidProposal);
+        }
+        Signature::try_from_bytes(&self.proposer_signature)
+            .map_err(|_| LaneAutonomousArtifactError::InvalidHandoffSignature)?
+            .verify(
+                self.proposer.public_key(),
+                &self.proposer_signature_preimage(),
+            )
+            .map_err(|_| LaneAutonomousArtifactError::InvalidHandoffSignature)
+    }
+
+    /// Enforce transport identity and authenticated global proposer authority.
+    pub(crate) fn validate_sender_authority(
+        &self,
+        sender: Option<&PeerId>,
+        global_authority: &[PeerId],
+    ) -> Result<(), LaneAutonomousArtifactError> {
+        if sender != Some(&self.proposer) {
+            return Err(LaneAutonomousArtifactError::HandoffSenderMismatch);
+        }
+        if !global_authority.contains(&self.proposer) {
+            return Err(LaneAutonomousArtifactError::HandoffProposerNotAuthority);
+        }
+        Ok(())
+    }
+}
+
+/// Derive the only valid next-view proposal for the exact same lane payload.
+pub(crate) fn retarget_lane_block_proposal_view(
+    source: &LaneBlockProposalV1,
+    target_view: u64,
+) -> Result<LaneBlockProposalV1, LaneAutonomousArtifactError> {
+    validate_lane_block_proposal(source)
+        .map_err(|_| LaneAutonomousArtifactError::InvalidProposal)?;
+    if source.descriptor.lane_block_view.checked_add(1) != Some(target_view) {
+        return Err(if source.descriptor.lane_block_view == u64::MAX {
+            LaneAutonomousArtifactError::NewViewOverflow
+        } else {
+            LaneAutonomousArtifactError::InvalidNewViewBody
+        });
+    }
+    retarget_lane_block_proposal_exact_view(source, target_view)
+}
+
+/// Derive the canonical proposal representation for an exact autonomous view.
+///
+/// This helper intentionally does not authorize a view jump. It is used only
+/// to revalidate a quorum-signed checkpoint after the earlier, already
+/// validated certificate chain has been compacted. Live transitions must use
+/// [`retarget_lane_block_proposal_view`], which enforces `source + 1`.
+pub(crate) fn retarget_lane_block_proposal_exact_view(
+    source: &LaneBlockProposalV1,
+    target_view: u64,
+) -> Result<LaneBlockProposalV1, LaneAutonomousArtifactError> {
+    validate_lane_block_proposal(source)
+        .map_err(|_| LaneAutonomousArtifactError::InvalidProposal)?;
+    let source_descriptor = &source.descriptor;
+    let subject_hash = SumeragiLanePayloadOwnership::compute_replay_subject_hash(
+        source_descriptor.lane_id,
+        source_descriptor.dataspace_id,
+        source_descriptor.lane_incarnation,
+        source_descriptor.lane_block_height,
+        target_view,
+        &source_descriptor.accepted_candidate_indices,
+        &source_descriptor.accepted_transaction_hashes,
+        &source_descriptor.qc_mode_tag,
+    )
+    .map_err(|_| LaneAutonomousArtifactError::NewViewTargetMismatch)?;
+    let payload_ownership_hash =
+        SumeragiLanePayloadOwnership::compute_replay_payload_ownership_hash(
+            source_descriptor.lane_id,
+            source_descriptor.dataspace_id,
+            source_descriptor.lane_incarnation,
+            source_descriptor.lane_block_height,
+            target_view,
+            subject_hash,
+            &source_descriptor.accepted_candidate_indices,
+            &source_descriptor.accepted_transaction_hashes,
+            &source_descriptor.qc_mode_tag,
+        )
+        .map_err(|_| LaneAutonomousArtifactError::NewViewTargetMismatch)?;
+    let rbc_instance_hash = SumeragiLanePayloadOwnership::compute_replay_rbc_instance_hash(
+        source_descriptor.lane_id,
+        source_descriptor.dataspace_id,
+        source_descriptor.lane_incarnation,
+        source_descriptor.lane_block_height,
+        target_view,
+        subject_hash,
+        payload_ownership_hash,
+    )
+    .map_err(|_| LaneAutonomousArtifactError::NewViewTargetMismatch)?;
+
+    let mut descriptor = source_descriptor.clone();
+    descriptor.lane_block_view = target_view;
+    descriptor.subject_hash = subject_hash;
+    descriptor.payload_ownership_hash = payload_ownership_hash;
+    descriptor.rbc_instance_hash = rbc_instance_hash;
+    descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+    let mut proposal = LaneBlockProposalV1 {
+        descriptor,
+        proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+        // The original global-block hint names view-specific ownership and is
+        // not authoritative for the autonomous successor.
+        payload_block_hint: None,
+    };
+    proposal.proposal_hash = proposal.computed_proposal_hash();
+    Ok(proposal)
+}
+
+impl LaneBlockNewViewBodyV1 {
+    /// Build the exact next-view body for a locked proposal and executable payload.
+    pub(crate) fn for_transition(
+        source: &LaneBlockProposalV1,
+        executable_payload: &LaneExecutablePayloadV1,
+        target_view: u64,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+    ) -> Result<Self, LaneAutonomousArtifactError> {
+        executable_payload.validate(expected_chain_id_hash, expected_epoch)?;
+        if !executable_payload.matches_proposal_static(source) {
+            return Err(LaneAutonomousArtifactError::NewViewSourceMismatch);
+        }
+        retarget_lane_block_proposal_view(source, target_view)?;
+        let descriptor = &source.descriptor;
+        Ok(Self {
+            version: 1,
+            chain_id_hash: expected_chain_id_hash,
+            epoch: expected_epoch,
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            lane_incarnation: descriptor.lane_incarnation,
+            proposal_height: descriptor.proposal_height,
+            lane_block_height: descriptor.lane_block_height,
+            from_view: descriptor.lane_block_view,
+            target_view,
+            locked_proposal_hash: source.proposal_hash,
+            locked_descriptor_hash: descriptor.descriptor_hash,
+            executable_payload_hash: executable_payload.payload_hash,
+            validator_set_hash_version: descriptor.validator_set_hash_version,
+            validator_set_hash: descriptor.validator_set_hash,
+            validator_count: descriptor.validator_count,
+            min_quorum: descriptor.min_quorum,
+            qc_mode_tag: descriptor.qc_mode_tag.clone(),
+        })
+    }
+}
+
+fn validate_lane_block_new_view_body(
+    body: &LaneBlockNewViewBodyV1,
+) -> Result<(), LaneAutonomousArtifactError> {
+    if body.version != 1 {
+        return Err(LaneAutonomousArtifactError::UnsupportedVersion);
+    }
+    if body.proposal_height == 0
+        || body.lane_block_height == 0
+        || body.lane_incarnation.as_ref().iter().all(|byte| *byte == 0)
+        || body.qc_mode_tag.trim().is_empty()
+        || body.from_view.checked_add(1) != Some(body.target_view)
+        || body.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
+        || body.validator_count == 0
+        || usize::try_from(body.validator_count)
+            .map_or(true, |count| count > MAX_LANE_BLOCK_VALIDATORS)
+        || body.min_quorum == 0
+        || body.min_quorum > body.validator_count
+    {
+        return Err(LaneAutonomousArtifactError::InvalidNewViewBody);
+    }
+    Ok(())
+}
+
+impl LaneBlockNewViewVoteV1 {
+    /// Sign a canonical NewView body with a lane committee key.
+    pub(crate) fn new_signed(
+        body: LaneBlockNewViewBodyV1,
+        signer: PeerId,
+        private_key: &PrivateKey,
+    ) -> Result<Self, LaneAutonomousArtifactError> {
+        validate_lane_block_new_view_body(&body)?;
+        if !peer_uses_bls_normal(&signer) {
+            return Err(LaneAutonomousArtifactError::ProducerNotBlsNormal);
+        }
+        let bls_signature = Signature::try_new(private_key, &body.signature_preimage())
+            .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewSignature)?
+            .payload()
+            .to_vec();
+        let vote = Self {
+            body,
+            signer,
+            bls_signature,
+        };
+        vote.validate_ingress()?;
+        Ok(vote)
+    }
+
+    /// Verify shape, signer algorithm, and individual BLS signature.
+    pub(crate) fn validate_ingress(&self) -> Result<(), LaneAutonomousArtifactError> {
+        validate_lane_block_new_view_body(&self.body)?;
+        if !peer_uses_bls_normal(&self.signer) {
+            return Err(LaneAutonomousArtifactError::ProducerNotBlsNormal);
+        }
+        Signature::try_from_bytes(&self.bls_signature)
+            .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewSignature)?
+            .verify(self.signer.public_key(), &self.body.signature_preimage())
+            .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewSignature)
+    }
+}
+
+/// Aggregate distinct, individually valid NewView votes in canonical committee order.
+pub(crate) fn aggregate_lane_block_new_view_votes(
+    body: LaneBlockNewViewBodyV1,
+    validator_set: Vec<PeerId>,
+    votes: &[LaneBlockNewViewVoteV1],
+) -> Result<LaneBlockNewViewCertificateV1, LaneAutonomousArtifactError> {
+    validate_lane_block_new_view_body(&body)?;
+    validate_lane_block_validator_set_fields(
+        body.validator_set_hash_version,
+        body.validator_set_hash,
+        body.validator_count,
+        &validator_set,
+    )
+    .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewBody)?;
+    let mut signatures = BTreeMap::<usize, Vec<u8>>::new();
+    for vote in votes {
+        if vote.body != body {
+            return Err(LaneAutonomousArtifactError::NewViewBodyMismatch);
+        }
+        vote.validate_ingress()?;
+        let index = validator_set
+            .iter()
+            .position(|validator| validator == &vote.signer)
+            .ok_or(LaneAutonomousArtifactError::NewViewSignerNotInCommittee)?;
+        if signatures
+            .insert(index, vote.bls_signature.clone())
+            .is_some()
+        {
+            return Err(LaneAutonomousArtifactError::DuplicateNewViewSigner);
+        }
+    }
+    if signatures.len()
+        < usize::try_from(body.min_quorum)
+            .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewBody)?
+    {
+        return Err(LaneAutonomousArtifactError::NewViewQuorumNotMet);
+    }
+    let mut signers_bitmap = vec![0_u8; validator_set.len().div_ceil(8)];
+    let ordered = signatures
+        .into_iter()
+        .map(|(index, signature)| {
+            signers_bitmap[index / 8] |= 1_u8 << (index % 8);
+            signature
+        })
+        .collect::<Vec<_>>();
+    let refs = ordered.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let bls_aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&refs)
+        .map_err(|_| LaneAutonomousArtifactError::NewViewAggregation)?;
+    Ok(LaneBlockNewViewCertificateV1 {
+        body,
+        validator_set,
+        signers_bitmap,
+        bls_aggregate_signature,
+    })
+}
+
+/// Validate a NewView certificate, including exact signer PoPs and aggregate signature.
+pub(crate) fn validate_lane_block_new_view_certificate(
+    certificate: &LaneBlockNewViewCertificateV1,
+    signer_pops: &BTreeMap<PublicKey, Vec<u8>>,
+) -> Result<(), LaneAutonomousArtifactError> {
+    let body = &certificate.body;
+    validate_lane_block_new_view_body(body)?;
+    validate_lane_block_validator_set_fields(
+        body.validator_set_hash_version,
+        body.validator_set_hash,
+        body.validator_count,
+        &certificate.validator_set,
+    )
+    .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewBody)?;
+    if certificate.signers_bitmap.len() != certificate.validator_set.len().div_ceil(8)
+        || certificate.bls_aggregate_signature.is_empty()
+    {
+        return Err(LaneAutonomousArtifactError::InvalidNewViewBitmap);
+    }
+    let mut signer_count = 0_usize;
+    let mut public_keys = Vec::<&PublicKey>::new();
+    let mut pop_refs = Vec::<&[u8]>::new();
+    let mut selected_keys = BTreeSet::new();
+    for (byte_index, byte) in certificate.signers_bitmap.iter().copied().enumerate() {
+        for bit in 0..8 {
+            if byte & (1_u8 << bit) == 0 {
+                continue;
+            }
+            let signer_index = byte_index * 8 + bit;
+            let signer = certificate
+                .validator_set
+                .get(signer_index)
+                .ok_or(LaneAutonomousArtifactError::InvalidNewViewBitmap)?;
+            if !peer_uses_bls_normal(signer) {
+                return Err(LaneAutonomousArtifactError::ProducerNotBlsNormal);
+            }
+            let public_key = signer.public_key();
+            let pop = signer_pops
+                .get(public_key)
+                .ok_or(LaneAutonomousArtifactError::InvalidNewViewPop)?;
+            iroha_crypto::bls_normal_pop_verify(public_key, pop)
+                .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewPop)?;
+            selected_keys.insert(public_key.clone());
+            public_keys.push(public_key);
+            pop_refs.push(pop.as_slice());
+            signer_count = signer_count.saturating_add(1);
+        }
+    }
+    if signer_count
+        < usize::try_from(body.min_quorum)
+            .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewBody)?
+    {
+        return Err(LaneAutonomousArtifactError::NewViewQuorumNotMet);
+    }
+    if selected_keys != signer_pops.keys().cloned().collect::<BTreeSet<_>>() {
+        return Err(LaneAutonomousArtifactError::InvalidNewViewPop);
+    }
+    iroha_crypto::bls_normal_verify_preaggregated_same_message(
+        &body.signature_preimage(),
+        &certificate.bls_aggregate_signature,
+        &public_keys,
+        &pop_refs,
+    )
+    .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewAggregate)
+}
+
+/// Validate a durable lane availability DELIVER certificate against the exact
+/// producer-authenticated executable payload.
+pub(crate) fn validate_lane_payload_availability_certificate(
+    durable: &DurableLanePayloadAvailabilityCertificateV1,
+    executable_payload: &LaneExecutablePayloadV1,
+    expected_chain_id_hash: Hash,
+    expected_epoch: u64,
+) -> Result<(), LaneAutonomousArtifactError> {
+    executable_payload.validate(expected_chain_id_hash, expected_epoch)?;
+    if durable.certificate.body.phase != CertPhase::Prepare {
+        return Err(LaneAutonomousArtifactError::InvalidAvailabilityCertificate);
+    }
+    let availability_qc = durable
+        .certificate
+        .payload_availability_qc
+        .as_ref()
+        .ok_or(LaneAutonomousArtifactError::InvalidAvailabilityCertificate)?;
+    // Availability is view-neutral, but each READY signature names the exact
+    // view-specific proposal/RBC session in which retention was certified.
+    let certified_proposal = if durable.certificate.body.lane_block_view
+        == executable_payload
+            .origin_proposal
+            .descriptor
+            .lane_block_view
+    {
+        executable_payload.origin_proposal.clone()
+    } else {
+        retarget_lane_block_proposal_exact_view(
+            &executable_payload.origin_proposal,
+            durable.certificate.body.lane_block_view,
+        )?
+    };
+    if durable.certificate.body != certified_proposal.vote_body(CertPhase::Prepare)
+        || durable.certificate.validator_set != certified_proposal.descriptor.validator_set
+        || durable.certificate.signers_bitmap != availability_qc.signers_bitmap
+    {
+        return Err(LaneAutonomousArtifactError::AvailabilityMismatch);
+    }
+    validate_lane_payload_availability_body_against_payload(
+        &availability_qc.body,
+        executable_payload,
+        &certified_proposal,
+        expected_chain_id_hash,
+        expected_epoch,
+    )?;
+    validate_lane_payload_availability_qc(availability_qc)
+        .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityCertificate)?;
+    let historical_pops = availability_qc
+        .validator_set
+        .iter()
+        .cloned()
+        .zip(availability_qc.validator_set_pops.iter().cloned())
+        .map(|(peer, pop)| (peer.public_key().clone(), pop))
+        .collect::<BTreeMap<_, _>>();
+    validate_lane_block_qc_aggregate(&durable.certificate, &historical_pops)
+        .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityCertificate)?;
+    validate_qc_matches_proposal(&durable.certificate, &certified_proposal)
+        .map_err(|_| LaneAutonomousArtifactError::AvailabilityMismatch)
+}
+
+/// Validate a complete source-payload-certificate-target transition.
+pub(crate) fn validate_lane_block_new_view_transition(
+    source: &LaneBlockProposalV1,
+    target: &LaneBlockProposalV1,
+    executable_payload: &LaneExecutablePayloadV1,
+    durable_certificate: &DurableLaneBlockNewViewCertificateV1,
+    expected_chain_id_hash: Hash,
+    expected_epoch: u64,
+) -> Result<(), LaneAutonomousArtifactError> {
+    executable_payload.validate(expected_chain_id_hash, expected_epoch)?;
+    validate_lane_block_new_view_certificate(
+        &durable_certificate.certificate,
+        &durable_certificate.signer_pops,
+    )?;
+    let expected_body = LaneBlockNewViewBodyV1::for_transition(
+        source,
+        executable_payload,
+        target.descriptor.lane_block_view,
+        expected_chain_id_hash,
+        expected_epoch,
+    )?;
+    if durable_certificate.certificate.body != expected_body {
+        return Err(LaneAutonomousArtifactError::NewViewSourceMismatch);
+    }
+    if retarget_lane_block_proposal_view(source, expected_body.target_view)? != *target {
+        return Err(LaneAutonomousArtifactError::NewViewTargetMismatch);
+    }
+    Ok(())
+}
+
+/// Validate a compacted lane view checkpoint without consulting discarded
+/// certificates or mutable committee state.
+pub(crate) fn validate_lane_block_view_checkpoint(
+    checkpoint: &DurableLaneBlockViewCheckpointV1,
+    executable_payload: &LaneExecutablePayloadV1,
+    expected_chain_id_hash: Hash,
+    expected_epoch: u64,
+) -> Result<(), LaneAutonomousArtifactError> {
+    executable_payload.validate(expected_chain_id_hash, expected_epoch)?;
+    let source_view = checkpoint.source_proposal.descriptor.lane_block_view;
+    if source_view == 0 {
+        return Err(LaneAutonomousArtifactError::InvalidNewViewBody);
+    }
+    let expected_source =
+        retarget_lane_block_proposal_exact_view(&executable_payload.origin_proposal, source_view)?;
+    if expected_source != checkpoint.source_proposal {
+        return Err(LaneAutonomousArtifactError::NewViewSourceMismatch);
+    }
+    let target_view = source_view
+        .checked_add(1)
+        .ok_or(LaneAutonomousArtifactError::NewViewOverflow)?;
+    let expected_target =
+        retarget_lane_block_proposal_view(&checkpoint.source_proposal, target_view)?;
+    if expected_target != checkpoint.target_proposal {
+        return Err(LaneAutonomousArtifactError::NewViewTargetMismatch);
+    }
+    validate_lane_block_new_view_transition(
+        &checkpoint.source_proposal,
+        &checkpoint.target_proposal,
+        executable_payload,
+        &checkpoint.certificate,
+        expected_chain_id_hash,
+        expected_epoch,
+    )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct LaneBlockNewViewSlotKey {
+    chain_id_hash: Hash,
+    epoch: u64,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+    lane_block_height: u64,
+    target_view: u64,
+}
+
+impl From<&LaneBlockNewViewBodyV1> for LaneBlockNewViewSlotKey {
+    fn from(body: &LaneBlockNewViewBodyV1) -> Self {
+        Self {
+            chain_id_hash: body.chain_id_hash,
+            epoch: body.epoch,
+            lane_id: body.lane_id,
+            dataspace_id: body.dataspace_id,
+            lane_incarnation: body.lane_incarnation,
+            lane_block_height: body.lane_block_height,
+            target_view: body.target_view,
+        }
+    }
+}
+
+/// Result of inserting a pre-validated NewView certificate into the bounded cache.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LaneBlockNewViewCacheOutcome {
+    /// Certificate body was newly retained.
+    Inserted,
+    /// The same certified body was already retained.
+    Duplicate,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct LaneExecutablePayloadHandoffSlotKey {
+    chain_id_hash: Hash,
+    epoch: u64,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+    lane_block_height: u64,
+}
+
+impl From<&LaneExecutablePayloadHandoffV1> for LaneExecutablePayloadHandoffSlotKey {
+    fn from(handoff: &LaneExecutablePayloadHandoffV1) -> Self {
+        let descriptor = &handoff.origin_proposal.descriptor;
+        Self {
+            chain_id_hash: handoff.chain_id_hash,
+            epoch: handoff.epoch,
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            lane_incarnation: descriptor.lane_incarnation,
+            lane_block_height: descriptor.lane_block_height,
+        }
+    }
+}
+
+/// Bounded first-wins cache for authenticated handoffs awaiting their global
+/// proposal anchor.
+#[derive(Clone, Debug)]
+pub(crate) struct LaneExecutablePayloadHandoffCache {
+    capacity: usize,
+    handoffs: BTreeMap<LaneExecutablePayloadHandoffSlotKey, LaneExecutablePayloadHandoffV1>,
+    order: VecDeque<LaneExecutablePayloadHandoffSlotKey>,
+}
+
+impl LaneExecutablePayloadHandoffCache {
+    /// Construct a bounded handoff cache.
+    #[must_use]
+    pub(crate) fn new(capacity: usize) -> Self {
+        Self {
+            capacity: capacity.max(1),
+            handoffs: BTreeMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    /// Retain one fully validated handoff, rejecting slot substitution.
+    pub(crate) fn insert(
+        &mut self,
+        handoff: LaneExecutablePayloadHandoffV1,
+    ) -> Result<LaneBlockNewViewCacheOutcome, LaneAutonomousArtifactError> {
+        let key = LaneExecutablePayloadHandoffSlotKey::from(&handoff);
+        if let Some(existing) = self.handoffs.get(&key) {
+            if existing == &handoff {
+                return Ok(LaneBlockNewViewCacheOutcome::Duplicate);
+            }
+            return Err(LaneAutonomousArtifactError::PayloadHashMismatch);
+        }
+        self.handoffs.insert(key, handoff);
+        self.order.push_back(key);
+        while self.handoffs.len() > self.capacity {
+            if let Some(oldest) = self.order.pop_front() {
+                self.handoffs.remove(&oldest);
+            }
+        }
+        Ok(LaneBlockNewViewCacheOutcome::Inserted)
+    }
+
+    /// Snapshot retained handoffs for anchor re-evaluation on the next tick.
+    pub(crate) fn snapshot(&self) -> Vec<LaneExecutablePayloadHandoffV1> {
+        self.handoffs.values().cloned().collect()
+    }
+
+    /// Remove the exact slot occupied by `handoff` after successful processing.
+    pub(crate) fn remove(&mut self, handoff: &LaneExecutablePayloadHandoffV1) {
+        let key = LaneExecutablePayloadHandoffSlotKey::from(handoff);
+        self.handoffs.remove(&key);
+        self.order.retain(|candidate| *candidate != key);
+    }
+}
+
+/// Bounded conflict detector for independently advancing lane views.
+#[derive(Clone, Debug)]
+pub(crate) struct LaneBlockNewViewCertificateCache {
+    capacity: usize,
+    certificates: BTreeMap<LaneBlockNewViewSlotKey, LaneBlockNewViewCertificateV1>,
+    order: VecDeque<LaneBlockNewViewSlotKey>,
+}
+
+/// Bounded vote collector for lane-local NewView certificates.
+#[derive(Clone, Debug)]
+pub(crate) struct LaneBlockNewViewVoteCache {
+    capacity: usize,
+    votes: BTreeMap<
+        LaneBlockNewViewSlotKey,
+        (
+            LaneBlockNewViewBodyV1,
+            BTreeMap<PeerId, LaneBlockNewViewVoteV1>,
+        ),
+    >,
+    order: VecDeque<LaneBlockNewViewSlotKey>,
+}
+
+impl LaneBlockNewViewVoteCache {
+    /// Construct a bounded vote collector.
+    #[must_use]
+    pub(crate) fn new(capacity: usize) -> Self {
+        Self {
+            capacity: capacity.max(1),
+            votes: BTreeMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    /// Insert a signed vote and return a certificate once quorum is reached.
+    pub(crate) fn insert_and_maybe_seal(
+        &mut self,
+        vote: LaneBlockNewViewVoteV1,
+        validator_set: &[PeerId],
+    ) -> Result<
+        (
+            LaneBlockNewViewCacheOutcome,
+            Option<LaneBlockNewViewCertificateV1>,
+        ),
+        LaneAutonomousArtifactError,
+    > {
+        vote.validate_ingress()?;
+        validate_lane_block_validator_set_fields(
+            vote.body.validator_set_hash_version,
+            vote.body.validator_set_hash,
+            vote.body.validator_count,
+            validator_set,
+        )
+        .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewBody)?;
+        if !validator_set.contains(&vote.signer) {
+            return Err(LaneAutonomousArtifactError::NewViewSignerNotInCommittee);
+        }
+        let key = LaneBlockNewViewSlotKey::from(&vote.body);
+        if let Some((existing_body, existing_votes)) = self.votes.get(&key) {
+            if existing_body != &vote.body {
+                if existing_votes.contains_key(&vote.signer) {
+                    return Err(LaneAutonomousArtifactError::NewViewBodyMismatch);
+                }
+                // One target slot cannot collect competing bodies in the same
+                // bounded cache: retain the first observed body fail-closed.
+                return Err(LaneAutonomousArtifactError::NewViewBodyMismatch);
+            }
+            if let Some(existing) = existing_votes.get(&vote.signer) {
+                if existing == &vote {
+                    return Ok((LaneBlockNewViewCacheOutcome::Duplicate, None));
+                }
+                return Err(LaneAutonomousArtifactError::InvalidNewViewSignature);
+            }
+        }
+
+        if !self.votes.contains_key(&key) {
+            self.votes.insert(key, (vote.body.clone(), BTreeMap::new()));
+            self.order.push_back(key);
+        }
+        while self.votes.len() > self.capacity {
+            if let Some(oldest) = self.order.pop_front() {
+                self.votes.remove(&oldest);
+            }
+        }
+        let (body, votes) = self
+            .votes
+            .get_mut(&key)
+            .expect("newest NewView vote slot survives bounded eviction");
+        votes.insert(vote.signer.clone(), vote);
+        let certificate = if votes.len()
+            >= usize::try_from(body.min_quorum)
+                .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewBody)?
+        {
+            Some(aggregate_lane_block_new_view_votes(
+                body.clone(),
+                validator_set.to_vec(),
+                &votes.values().cloned().collect::<Vec<_>>(),
+            )?)
+        } else {
+            None
+        };
+        Ok((LaneBlockNewViewCacheOutcome::Inserted, certificate))
+    }
+
+    /// Return whether an identical vote is already retained.
+    pub(crate) fn contains(&self, vote: &LaneBlockNewViewVoteV1) -> bool {
+        self.votes
+            .get(&LaneBlockNewViewSlotKey::from(&vote.body))
+            .and_then(|(_, votes)| votes.get(&vote.signer))
+            == Some(vote)
+    }
+
+    /// Snapshot retained votes produced by one local committee identity.
+    pub(crate) fn votes_for_signer(&self, signer: &PeerId) -> Vec<LaneBlockNewViewVoteV1> {
+        self.votes
+            .values()
+            .filter_map(|(_, votes)| votes.get(signer).cloned())
+            .collect()
+    }
+}
+
+impl LaneBlockNewViewCertificateCache {
+    /// Construct a cache with a strict minimum capacity of one.
+    #[must_use]
+    pub(crate) fn new(capacity: usize) -> Self {
+        Self {
+            capacity: capacity.max(1),
+            certificates: BTreeMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    /// Insert a certificate after full aggregate validation.
+    pub(crate) fn insert(
+        &mut self,
+        certificate: LaneBlockNewViewCertificateV1,
+        signer_pops: &BTreeMap<PublicKey, Vec<u8>>,
+    ) -> Result<LaneBlockNewViewCacheOutcome, LaneAutonomousArtifactError> {
+        validate_lane_block_new_view_certificate(&certificate, signer_pops)?;
+        let key = LaneBlockNewViewSlotKey::from(&certificate.body);
+        if let Some(existing) = self.certificates.get(&key) {
+            if existing.body == certificate.body {
+                return Ok(LaneBlockNewViewCacheOutcome::Duplicate);
+            }
+            return Err(LaneAutonomousArtifactError::NewViewBodyMismatch);
+        }
+        self.certificates.insert(key, certificate);
+        self.order.push_back(key);
+        while self.certificates.len() > self.capacity {
+            if let Some(oldest) = self.order.pop_front() {
+                self.certificates.remove(&oldest);
+            }
+        }
+        Ok(LaneBlockNewViewCacheOutcome::Inserted)
+    }
+
+    /// Number of retained certificate slots.
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.certificates.len()
+    }
+}
 
 /// Individual lane-local block vote before committee aggregation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct LaneBlockVoteV1 {
     /// Body signed by the lane validator.
     pub body: LaneBlockVoteBodyV1,
+    /// Separate exact-payload READY vote paired with autonomous prepares.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub payload_availability_vote: Option<LanePayloadAvailabilityVoteV1>,
     /// Validator that produced the vote.
     pub signer: PeerId,
     /// BLS signature over [`LaneBlockVoteBodyV1::signature_preimage`].
@@ -34,6 +2023,8 @@ pub(crate) struct LaneBlockSessionKey {
     pub(crate) lane_id: LaneId,
     /// Dataspace bound to the lane-local block.
     pub(crate) dataspace_id: DataSpaceId,
+    /// Exact lane lifecycle incarnation.
+    pub(crate) lane_incarnation: Hash,
     /// Lane-local block height.
     pub(crate) lane_block_height: u64,
     /// Lane-local view.
@@ -47,6 +2038,7 @@ pub(crate) struct LaneBlockSessionKey {
 struct LaneBlockSlotKey {
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
     lane_block_height: u64,
     lane_block_view: u64,
 }
@@ -56,6 +2048,8 @@ struct LaneBlockSlotKey {
 pub(crate) struct LaneBlockSession {
     /// Proposal artifact, when it has arrived.
     pub(crate) proposal: Option<LaneBlockProposalV1>,
+    /// Exact autonomous payload/session body authorized from durable bytes.
+    pub(crate) payload_availability_body: Option<LanePayloadAvailabilityBodyV1>,
     /// Prepare votes keyed by signer.
     pub(crate) prepare_votes: BTreeMap<PeerId, LaneBlockVoteV1>,
     /// Commit votes keyed by signer.
@@ -122,12 +2116,24 @@ pub(crate) enum LaneBlockSessionError {
     /// another proposal already owns the same lane slot
     #[error("conflicting lane block proposal for lane slot")]
     ConflictingProposal,
+    /// executable entrypoint is already owned by another live lane block
+    #[error("lane block proposal reuses an entrypoint owned by another live lane block")]
+    EntrypointAlreadyClaimed,
     /// vote body does not match the cached proposal artifact
     #[error("lane block vote body does not match proposal")]
     VoteProposalMismatch,
     /// vote signer is not in the cached proposal validator set
     #[error("lane block vote signer is not in validator set")]
     VoteSignerNotInValidatorSet,
+    /// autonomous payload evidence arrived before exact durable authorization
+    #[error("lane payload availability evidence is not authorized for this session")]
+    AvailabilityNotAuthorized,
+    /// autonomous payload evidence differs from the exact authorized body
+    #[error("lane payload availability evidence does not match authorized payload")]
+    AvailabilityMismatch,
+    /// commit evidence arrived before a valid prepare certificate
+    #[error("lane block commit evidence arrived before prepare certificate")]
+    CommitBeforePrepareQc,
     /// signer already submitted different vote bytes for the same proposal phase
     #[error("conflicting lane block vote for signer")]
     ConflictingVote,
@@ -142,25 +2148,28 @@ pub(crate) enum LaneBlockSessionError {
 /// Bounded in-memory cache for standalone lane-block consensus sessions.
 ///
 /// The capacity bounds ordinary uncommitted session state. Sessions that
-/// already carry a proposal plus prepare and commit QCs are protected from
-/// eviction until the executor boundary drains them, because dropping certified
-/// lane blocks under queue backpressure can strand lane-local progress.
+/// already carry a proposal plus Prepare and Commit QCs are protected from
+/// eviction until the durable consumer boundary drains them, because dropping
+/// certified lane blocks under queue backpressure can strand lane-local
+/// progress.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LaneBlockSessionCache {
     capacity: usize,
     sessions: BTreeMap<LaneBlockSessionKey, LaneBlockSession>,
     slot_proposals: BTreeMap<LaneBlockSlotKey, Hash>,
+    entrypoint_claims: BTreeMap<Hash, LaneBlockSessionKey>,
     order: VecDeque<LaneBlockSessionKey>,
 }
 
 impl LaneBlockSessionCache {
-    /// Build a cache that stores at most `capacity.max(1)` uncommitted sessions.
+    /// Build a cache that stores at most `capacity.max(1)` unprotected sessions.
     #[must_use]
     pub(crate) fn new(capacity: usize) -> Self {
         Self {
             capacity: capacity.max(1),
             sessions: BTreeMap::new(),
             slot_proposals: BTreeMap::new(),
+            entrypoint_claims: BTreeMap::new(),
             order: VecDeque::new(),
         }
     }
@@ -178,7 +2187,6 @@ impl LaneBlockSessionCache {
     }
 
     /// Get a cached session by key.
-    #[cfg(test)]
     pub(crate) fn get(&self, key: &LaneBlockSessionKey) -> Option<&LaneBlockSession> {
         self.sessions.get(key)
     }
@@ -204,6 +2212,7 @@ impl LaneBlockSessionCache {
         {
             return Err(LaneBlockSessionError::ConflictingProposal);
         }
+        self.ensure_entrypoints_available(proposal, key)?;
         Ok(())
     }
 
@@ -213,16 +2222,24 @@ impl LaneBlockSessionCache {
         vote: &LaneBlockVoteV1,
         _sender: Option<&PeerId>,
     ) -> Result<(), LaneBlockSessionError> {
-        vote.validate_ingress(vote.body.phase)
+        vote.validate_ingress_shape(vote.body.phase)
             .map_err(LaneBlockSessionError::InvalidVote)?;
         let phase = vote.body.phase;
         let key = LaneBlockSessionKey::from_vote_body(&vote.body);
         let Some(session) = self.sessions.get(&key) else {
+            if vote.payload_availability_vote.is_some() {
+                return Err(LaneBlockSessionError::AvailabilityNotAuthorized);
+            }
+            if phase == CertPhase::Commit {
+                return Err(LaneBlockSessionError::CommitBeforePrepareQc);
+            }
+            vote.verify_signatures()
+                .map_err(LaneBlockSessionError::InvalidVote)?;
             return Ok(());
         };
-        if let Some(proposal) = &session.proposal {
-            validate_vote_matches_proposal(vote, proposal)?;
-        }
+        validate_vote_matches_session(vote, session)?;
+        vote.verify_signatures()
+            .map_err(LaneBlockSessionError::InvalidVote)?;
         let votes = votes_for_phase(session, phase).ok_or(LaneBlockSessionError::InvalidVote(
             LaneBlockVoteIngressError::InvalidBody,
         ))?;
@@ -243,6 +2260,16 @@ impl LaneBlockSessionCache {
             == Some(proposal)
     }
 
+    /// Return whether the proposal's consensus identity is cached, ignoring its
+    /// advisory global-block recovery hint.
+    pub(crate) fn contains_proposal_identity(&self, proposal: &LaneBlockProposalV1) -> bool {
+        let key = LaneBlockSessionKey::from_proposal(proposal);
+        self.sessions
+            .get(&key)
+            .and_then(|session| session.proposal.as_ref())
+            .is_some_and(|cached| cached.same_consensus_identity(proposal))
+    }
+
     /// Return whether the exact vote artifact is already cached.
     pub(crate) fn contains_vote(&self, vote: &LaneBlockVoteV1) -> bool {
         let key = LaneBlockSessionKey::from_vote_body(&vote.body);
@@ -251,6 +2278,74 @@ impl LaneBlockSessionCache {
             .and_then(|session| votes_for_phase(session, vote.body.phase))
             .and_then(|votes| votes.get(&vote.signer))
             == Some(vote)
+    }
+
+    /// Return the proposal bound to an exact session key.
+    pub(crate) fn proposal_for_key(
+        &self,
+        key: &LaneBlockSessionKey,
+    ) -> Option<LaneBlockProposalV1> {
+        self.sessions
+            .get(key)
+            .and_then(|session| session.proposal.clone())
+    }
+
+    /// Authorize the exact autonomous payload body derived from durable bytes.
+    ///
+    /// Existing compatibility prepare votes/QCs are purged before the body is
+    /// installed, preventing reordered unsigned votes from being reused after
+    /// an autonomous payload arrives.
+    pub(crate) fn authorize_payload_availability(
+        &mut self,
+        proposal: &LaneBlockProposalV1,
+        body: LanePayloadAvailabilityBodyV1,
+    ) -> Result<(), LaneBlockSessionError> {
+        validate_availability_body_matches_proposal(&body, proposal)
+            .map_err(|_| LaneBlockSessionError::AvailabilityMismatch)?;
+        let key = LaneBlockSessionKey::from_proposal(proposal);
+        let session = self
+            .sessions
+            .get_mut(&key)
+            .ok_or(LaneBlockSessionError::AvailabilityNotAuthorized)?;
+        if !session
+            .proposal
+            .as_ref()
+            .is_some_and(|cached| cached.same_consensus_identity(proposal))
+        {
+            return Err(LaneBlockSessionError::AvailabilityMismatch);
+        }
+        if let Some(existing) = &session.payload_availability_body {
+            return if existing == &body {
+                Ok(())
+            } else {
+                Err(LaneBlockSessionError::AvailabilityMismatch)
+            };
+        }
+
+        session.payload_availability_body = Some(body.clone());
+        session.prepare_votes.retain(|_, vote| {
+            vote.payload_availability_vote
+                .as_ref()
+                .is_some_and(|availability| availability.body == body)
+        });
+        let prepare_qc_matches = session
+            .prepare_qc
+            .as_ref()
+            .and_then(|qc| qc.payload_availability_qc.as_ref())
+            .is_some_and(|availability| availability.body == body);
+        if !prepare_qc_matches {
+            session.prepare_qc = None;
+            session.commit_votes.clear();
+            session.commit_qc = None;
+            session.pending_commit_vote_request = false;
+            session.commit_vote_request_drained = false;
+            session.pending_committed_session_drain = false;
+            session.committed_session_drained = false;
+        }
+        try_seal_phase_qc(session, CertPhase::Prepare);
+        refresh_commit_vote_request_ready(session);
+        refresh_committed_session_ready(session);
+        Ok(())
     }
 
     /// Return the cached proposal validator set for a session, if the proposal is known.
@@ -483,7 +2578,7 @@ impl LaneBlockSessionCache {
     /// Remove cached sessions whose lane/dataspace/height no longer belongs to the active topology.
     pub(crate) fn retain_sessions_for_admissible_lanes(
         &mut self,
-        admissible_lane: impl Fn(LaneId, DataSpaceId, u64, u64) -> bool,
+        admissible_lane: impl Fn(LaneId, DataSpaceId, Hash, u64, u64) -> bool,
     ) -> usize {
         let before = self.sessions.len();
         self.sessions.retain(|key, session| {
@@ -491,6 +2586,7 @@ impl LaneBlockSessionCache {
             admissible_lane(
                 key.lane_id,
                 key.dataspace_id,
+                key.lane_incarnation,
                 key.lane_block_height,
                 proposal_height,
             )
@@ -503,6 +2599,7 @@ impl LaneBlockSessionCache {
                     LaneBlockSlotKey {
                         lane_id: key.lane_id,
                         dataspace_id: key.dataspace_id,
+                        lane_incarnation: key.lane_incarnation,
                         lane_block_height: key.lane_block_height,
                         lane_block_view: key.lane_block_view,
                     },
@@ -514,13 +2611,15 @@ impl LaneBlockSessionCache {
             .retain(|key, proposal_hash| retained_slot_proposals.contains(&(*key, *proposal_hash)));
         let retained_keys = self.sessions.keys().copied().collect::<BTreeSet<_>>();
         self.order.retain(|key| retained_keys.contains(key));
+        self.rebuild_entrypoint_claims();
         before.saturating_sub(self.sessions.len())
     }
 
     /// Return lanes with committed lane-block sessions that have not yet drained to execution.
+    #[cfg(test)]
     pub(crate) fn pending_lane_ids_for_admissible_lanes(
         &self,
-        admissible_lane: impl Fn(LaneId, DataSpaceId, u64, u64) -> bool,
+        admissible_lane: impl Fn(LaneId, DataSpaceId, Hash, u64, u64) -> bool,
     ) -> BTreeSet<LaneId> {
         self.sessions
             .iter()
@@ -534,8 +2633,45 @@ impl LaneBlockSessionCache {
                 admissible_lane(
                     key.lane_id,
                     key.dataspace_id,
+                    key.lane_incarnation,
                     key.lane_block_height,
                     proposal_height,
+                )
+                .then_some(key.lane_id)
+            })
+            .collect()
+    }
+
+    /// Return lanes with non-drained lane-block consensus evidence.
+    ///
+    /// The predicate receives whether the matching session has any vote or QC
+    /// evidence so proposal planning can distinguish proposal-only artifacts
+    /// from committee-certified in-flight work. Drained committed sessions are
+    /// excluded because the committed lane-block queue owns application
+    /// ordering after that point.
+    pub(crate) fn inflight_lane_ids_for_admissible_lanes(
+        &self,
+        admissible_lane: impl Fn(LaneId, DataSpaceId, Hash, u64, u64, bool) -> bool,
+    ) -> BTreeSet<LaneId> {
+        self.sessions
+            .iter()
+            .filter_map(|(key, session)| {
+                if session.committed_session_drained {
+                    return None;
+                }
+                let has_consensus_evidence = session_has_consensus_evidence(session);
+                if session.proposal.is_none() && !has_consensus_evidence {
+                    return None;
+                }
+                let proposal_height =
+                    session_proposal_height(session).unwrap_or(key.lane_block_height);
+                admissible_lane(
+                    key.lane_id,
+                    key.dataspace_id,
+                    key.lane_incarnation,
+                    key.lane_block_height,
+                    proposal_height,
+                    has_consensus_evidence,
                 )
                 .then_some(key.lane_id)
             })
@@ -552,6 +2688,7 @@ impl LaneBlockSessionCache {
                 SumeragiLaneBlockSessionStatus {
                     lane_id: key.lane_id,
                     dataspace_id: key.dataspace_id,
+                    lane_incarnation: key.lane_incarnation,
                     lane_block_height: key.lane_block_height,
                     lane_block_view: key.lane_block_view,
                     proposal_hash: key.proposal_hash,
@@ -589,6 +2726,7 @@ impl LaneBlockSessionCache {
         {
             return Err(LaneBlockSessionError::ConflictingProposal);
         }
+        self.ensure_entrypoints_available(&proposal, key)?;
 
         self.touch(key);
         let session = self.sessions.entry(key).or_default();
@@ -615,6 +2753,17 @@ impl LaneBlockSessionCache {
         refresh_commit_vote_request_ready(session);
         refresh_committed_session_ready(session);
         self.slot_proposals.insert(slot_key, key.proposal_hash);
+        for entrypoint_hash in &session
+            .proposal
+            .as_ref()
+            .expect("proposal was installed before entrypoint claims")
+            .descriptor
+            .accepted_transaction_hashes
+        {
+            self.entrypoint_claims
+                .entry(*entrypoint_hash)
+                .or_insert(key);
+        }
         self.evict();
         Ok(LaneBlockSessionInsertOutcome::Inserted)
     }
@@ -623,8 +2772,9 @@ impl LaneBlockSessionCache {
     ///
     /// Durable Kura artifacts prove the proposal payload already reached a
     /// canonical block. Recovery may therefore replace a conflicting in-memory
-    /// proposal shell for the same lane slot, but only before that conflicting
-    /// proposal has accumulated any vote or QC evidence.
+    /// proposal shell or individually voted proposal for the same lane slot.
+    /// A verified quorum certificate remains protected because it proves the
+    /// committee already certified that conflicting identity.
     pub(crate) fn insert_recovered_proposal_replacing_uncommitted_conflict(
         &mut self,
         proposal: LaneBlockProposalV1,
@@ -639,18 +2789,17 @@ impl LaneBlockSessionCache {
             let existing_key = LaneBlockSessionKey {
                 lane_id: key.lane_id,
                 dataspace_id: key.dataspace_id,
+                lane_incarnation: key.lane_incarnation,
                 lane_block_height: key.lane_block_height,
                 lane_block_view: key.lane_block_view,
                 proposal_hash: existing_hash,
             };
             if let Some(existing_session) = self.sessions.get(&existing_key)
-                && session_has_consensus_evidence(existing_session)
+                && session_has_quorum_certificate(existing_session)
             {
                 return Err(LaneBlockSessionError::ConflictingProposal);
             }
-            self.sessions.remove(&existing_key);
-            self.order.retain(|ordered| *ordered != existing_key);
-            self.slot_proposals.remove(&slot_key);
+            self.remove_slot_conflict(slot_key, existing_hash);
         }
 
         self.insert_proposal(proposal)
@@ -662,16 +2811,25 @@ impl LaneBlockSessionCache {
         vote: LaneBlockVoteV1,
         _sender: Option<&PeerId>,
     ) -> Result<LaneBlockSessionInsertOutcome, LaneBlockSessionError> {
-        vote.validate_ingress(vote.body.phase)
+        vote.validate_ingress_shape(vote.body.phase)
             .map_err(LaneBlockSessionError::InvalidVote)?;
         let phase = vote.body.phase;
         let key = LaneBlockSessionKey::from_vote_body(&vote.body);
 
+        if let Some(session) = self.sessions.get(&key) {
+            validate_vote_matches_session(&vote, session)?;
+        } else {
+            if vote.payload_availability_vote.is_some() {
+                return Err(LaneBlockSessionError::AvailabilityNotAuthorized);
+            }
+            if phase == CertPhase::Commit {
+                return Err(LaneBlockSessionError::CommitBeforePrepareQc);
+            }
+        }
+        vote.verify_signatures()
+            .map_err(LaneBlockSessionError::InvalidVote)?;
         self.touch(key);
         let session = self.sessions.entry(key).or_default();
-        if let Some(proposal) = &session.proposal {
-            validate_vote_matches_proposal(&vote, proposal)?;
-        }
         let votes = votes_for_phase_mut(session, phase).ok_or(
             LaneBlockSessionError::InvalidVote(LaneBlockVoteIngressError::InvalidBody),
         )?;
@@ -695,6 +2853,7 @@ impl LaneBlockSessionCache {
         &mut self,
         qc: LaneBlockQcV1,
     ) -> Result<LaneBlockSessionInsertOutcome, LaneBlockSessionError> {
+        self.validate_qc_session_preconditions(&qc)?;
         validate_lane_block_qc(&qc).map_err(LaneBlockSessionError::InvalidQc)?;
         self.insert_validated_qc(qc)
     }
@@ -706,8 +2865,25 @@ impl LaneBlockSessionCache {
         qc: LaneBlockQcV1,
         pops: &BTreeMap<PublicKey, Vec<u8>>,
     ) -> Result<LaneBlockSessionInsertOutcome, LaneBlockSessionError> {
+        self.validate_qc_session_preconditions(&qc)?;
         validate_lane_block_qc_aggregate(&qc, pops).map_err(LaneBlockSessionError::InvalidQc)?;
         self.insert_validated_qc(qc)
+    }
+
+    fn validate_qc_session_preconditions(
+        &self,
+        qc: &LaneBlockQcV1,
+    ) -> Result<(), LaneBlockSessionError> {
+        let key = LaneBlockSessionKey::from_vote_body(&qc.body);
+        if let Some(session) = self.sessions.get(&key) {
+            validate_qc_matches_session(qc, session)
+        } else if qc.payload_availability_qc.is_some() {
+            Err(LaneBlockSessionError::AvailabilityNotAuthorized)
+        } else if qc.body.phase == CertPhase::Commit {
+            Err(LaneBlockSessionError::CommitBeforePrepareQc)
+        } else {
+            Ok(())
+        }
     }
 
     fn insert_validated_qc(
@@ -718,9 +2894,7 @@ impl LaneBlockSessionCache {
 
         self.touch(key);
         let session = self.sessions.entry(key).or_default();
-        if let Some(proposal) = &session.proposal {
-            validate_qc_matches_proposal(&qc, proposal)?;
-        }
+        validate_qc_matches_session(&qc, session)?;
         let slot = qc_for_phase_mut(session, qc.body.phase).ok_or(
             LaneBlockSessionError::InvalidQc(LaneBlockQcIngressError::InvalidBody),
         )?;
@@ -753,6 +2927,21 @@ impl LaneBlockSessionCache {
         }
     }
 
+    fn remove_slot_conflict(&mut self, slot_key: LaneBlockSlotKey, existing_hash: Hash) {
+        let existing_key = LaneBlockSessionKey {
+            lane_id: slot_key.lane_id,
+            dataspace_id: slot_key.dataspace_id,
+            lane_incarnation: slot_key.lane_incarnation,
+            lane_block_height: slot_key.lane_block_height,
+            lane_block_view: slot_key.lane_block_view,
+            proposal_hash: existing_hash,
+        };
+        self.sessions.remove(&existing_key);
+        self.order.retain(|ordered| *ordered != existing_key);
+        self.slot_proposals.remove(&slot_key);
+        self.rebuild_entrypoint_claims();
+    }
+
     fn unprotected_session_count(&self) -> usize {
         self.sessions
             .values()
@@ -783,10 +2972,74 @@ impl LaneBlockSessionCache {
                     self.slot_proposals.remove(&slot);
                 }
             }
+            self.rebuild_entrypoint_claims();
             return true;
         }
         false
     }
+
+    fn ensure_entrypoints_available(
+        &self,
+        proposal: &LaneBlockProposalV1,
+        key: LaneBlockSessionKey,
+    ) -> Result<(), LaneBlockSessionError> {
+        for entrypoint_hash in &proposal.descriptor.accepted_transaction_hashes {
+            let Some(owner) = self.entrypoint_claims.get(entrypoint_hash) else {
+                continue;
+            };
+            // A NewView certificate moves one immutable executable payload to
+            // another view. Those proposals intentionally share entrypoints;
+            // only an exact view-neutral payload match may share the claim.
+            let shares_exact_payload = self
+                .sessions
+                .get(owner)
+                .and_then(|session| session.proposal.as_ref())
+                .is_some_and(|owner_proposal| {
+                    same_lane_block_executable_payload(owner_proposal, proposal)
+                });
+            if *owner != key && !shares_exact_payload {
+                return Err(LaneBlockSessionError::EntrypointAlreadyClaimed);
+            }
+        }
+        Ok(())
+    }
+
+    fn rebuild_entrypoint_claims(&mut self) {
+        self.entrypoint_claims.clear();
+        for (key, session) in &self.sessions {
+            let Some(proposal) = &session.proposal else {
+                continue;
+            };
+            for entrypoint_hash in &proposal.descriptor.accepted_transaction_hashes {
+                self.entrypoint_claims
+                    .entry(*entrypoint_hash)
+                    .or_insert(*key);
+            }
+        }
+    }
+}
+
+fn same_lane_block_executable_payload(
+    left: &LaneBlockProposalV1,
+    right: &LaneBlockProposalV1,
+) -> bool {
+    let left = &left.descriptor;
+    let right = &right.descriptor;
+    left.lane_id == right.lane_id
+        && left.dataspace_id == right.dataspace_id
+        && left.lane_incarnation == right.lane_incarnation
+        && left.proposal_height == right.proposal_height
+        && left.previous_lane_block_height == right.previous_lane_block_height
+        && left.previous_lane_block_descriptor_hash == right.previous_lane_block_descriptor_hash
+        && left.lane_block_height == right.lane_block_height
+        && left.accepted_candidate_indices == right.accepted_candidate_indices
+        && left.accepted_transaction_hashes == right.accepted_transaction_hashes
+        && left.validator_set_hash_version == right.validator_set_hash_version
+        && left.validator_set_hash == right.validator_set_hash
+        && left.validator_set == right.validator_set
+        && left.validator_count == right.validator_count
+        && left.min_quorum == right.min_quorum
+        && left.qc_mode_tag == right.qc_mode_tag
 }
 
 impl Default for LaneBlockSessionCache {
@@ -824,6 +3077,7 @@ impl LaneBlockSessionKey {
         Self {
             lane_id: descriptor.lane_id,
             dataspace_id: descriptor.dataspace_id,
+            lane_incarnation: descriptor.lane_incarnation,
             lane_block_height: descriptor.lane_block_height,
             lane_block_view: descriptor.lane_block_view,
             proposal_hash: proposal.proposal_hash,
@@ -834,6 +3088,7 @@ impl LaneBlockSessionKey {
         Self {
             lane_id: body.lane_id,
             dataspace_id: body.dataspace_id,
+            lane_incarnation: body.lane_incarnation,
             lane_block_height: body.lane_block_height,
             lane_block_view: body.lane_block_view,
             proposal_hash: body.proposal_hash,
@@ -846,6 +3101,7 @@ impl LaneBlockSlotKey {
         Self {
             lane_id: key.lane_id,
             dataspace_id: key.dataspace_id,
+            lane_incarnation: key.lane_incarnation,
             lane_block_height: key.lane_block_height,
             lane_block_view: key.lane_block_view,
         }
@@ -927,6 +3183,21 @@ fn validate_vote_matches_proposal(
     if !proposal.descriptor.validator_set.contains(&vote.signer) {
         return Err(LaneBlockSessionError::VoteSignerNotInValidatorSet);
     }
+    match &vote.payload_availability_vote {
+        Some(availability_vote) => {
+            if vote.body.phase != CertPhase::Prepare
+                || availability_vote.signer != vote.signer
+                || validate_availability_body_matches_proposal(&availability_vote.body, proposal)
+                    .is_err()
+                || availability_vote
+                    .validate_against_validator_set(&proposal.descriptor.validator_set)
+                    .is_err()
+            {
+                return Err(LaneBlockSessionError::AvailabilityMismatch);
+            }
+        }
+        None => {}
+    }
     Ok(())
 }
 
@@ -941,6 +3212,86 @@ fn validate_qc_matches_proposal(
     {
         return Err(LaneBlockSessionError::QcProposalMismatch);
     }
+    match &qc.payload_availability_qc {
+        Some(availability_qc) => {
+            if qc.body.phase != CertPhase::Prepare
+                || validate_availability_body_matches_proposal(&availability_qc.body, proposal)
+                    .is_err()
+                || validate_lane_payload_availability_qc(availability_qc).is_err()
+            {
+                return Err(LaneBlockSessionError::AvailabilityMismatch);
+            }
+        }
+        None => {}
+    }
+    Ok(())
+}
+
+fn validate_vote_matches_session(
+    vote: &LaneBlockVoteV1,
+    session: &LaneBlockSession,
+) -> Result<(), LaneBlockSessionError> {
+    match vote.body.phase {
+        CertPhase::Prepare => match (
+            session.payload_availability_body.as_ref(),
+            vote.payload_availability_vote.as_ref(),
+        ) {
+            (Some(expected), Some(actual)) if &actual.body == expected => {}
+            (None, None) => {}
+            (None, Some(_)) => return Err(LaneBlockSessionError::AvailabilityNotAuthorized),
+            _ => return Err(LaneBlockSessionError::AvailabilityMismatch),
+        },
+        CertPhase::Commit => {
+            if vote.payload_availability_vote.is_some() {
+                return Err(LaneBlockSessionError::AvailabilityMismatch);
+            }
+            if session.prepare_qc.is_none() {
+                return Err(LaneBlockSessionError::CommitBeforePrepareQc);
+            }
+        }
+        CertPhase::NewView => {
+            return Err(LaneBlockSessionError::InvalidVote(
+                LaneBlockVoteIngressError::InvalidBody,
+            ));
+        }
+    }
+    if let Some(proposal) = &session.proposal {
+        validate_vote_matches_proposal(vote, proposal)?;
+    }
+    Ok(())
+}
+
+fn validate_qc_matches_session(
+    qc: &LaneBlockQcV1,
+    session: &LaneBlockSession,
+) -> Result<(), LaneBlockSessionError> {
+    match qc.body.phase {
+        CertPhase::Prepare => match (
+            session.payload_availability_body.as_ref(),
+            qc.payload_availability_qc.as_ref(),
+        ) {
+            (Some(expected), Some(actual)) if &actual.body == expected => {}
+            (None, None) => {}
+            (None, Some(_)) => return Err(LaneBlockSessionError::AvailabilityNotAuthorized),
+            _ => return Err(LaneBlockSessionError::AvailabilityMismatch),
+        },
+        CertPhase::Commit => {
+            if qc.payload_availability_qc.is_some() {
+                return Err(LaneBlockSessionError::AvailabilityMismatch);
+            }
+            if session.prepare_qc.is_none() {
+                return Err(LaneBlockSessionError::CommitBeforePrepareQc);
+            }
+        }
+        CertPhase::NewView => {
+            return Err(LaneBlockSessionError::InvalidQc(
+                LaneBlockQcIngressError::InvalidBody,
+            ));
+        }
+    }
+    if let Some(proposal) = &session.proposal {
+        validate_qc_matches_proposal(qc, proposal)?;
+    }
     Ok(())
 }
 
@@ -949,17 +3300,50 @@ fn lane_block_qc_certifies_same_body(left: &LaneBlockQcV1, right: &LaneBlockQcV1
         && left.validator_set_hash_version == right.validator_set_hash_version
         && left.validator_set_hash == right.validator_set_hash
         && left.validator_set == right.validator_set
+        && left.payload_availability_qc == right.payload_availability_qc
 }
 
 fn reconcile_session_with_proposal(session: &mut LaneBlockSession, proposal: &LaneBlockProposalV1) {
+    let availability_body = session.payload_availability_body.clone();
+    let has_prepare_qc = session.prepare_qc.is_some();
     for phase in [CertPhase::Prepare, CertPhase::Commit] {
         if let Some(votes) = votes_for_phase_mut(session, phase) {
-            votes.retain(|_, vote| validate_vote_matches_proposal(vote, proposal).is_ok());
+            votes.retain(|_, vote| {
+                if validate_vote_matches_proposal(vote, proposal).is_err() {
+                    return false;
+                }
+                match phase {
+                    CertPhase::Prepare => match (
+                        availability_body.as_ref(),
+                        vote.payload_availability_vote.as_ref(),
+                    ) {
+                        (Some(expected), Some(actual)) => &actual.body == expected,
+                        (None, None) => true,
+                        _ => false,
+                    },
+                    CertPhase::Commit => vote.payload_availability_vote.is_none() && has_prepare_qc,
+                    CertPhase::NewView => false,
+                }
+            });
         }
         if let Some(slot) = qc_for_phase_mut(session, phase) {
-            let keep_qc = slot
-                .as_ref()
-                .is_none_or(|qc| validate_qc_matches_proposal(qc, proposal).is_ok());
+            let keep_qc = slot.as_ref().is_none_or(|qc| {
+                if validate_qc_matches_proposal(qc, proposal).is_err() {
+                    return false;
+                }
+                match phase {
+                    CertPhase::Prepare => match (
+                        availability_body.as_ref(),
+                        qc.payload_availability_qc.as_ref(),
+                    ) {
+                        (Some(expected), Some(actual)) => &actual.body == expected,
+                        (None, None) => true,
+                        _ => false,
+                    },
+                    CertPhase::Commit => qc.payload_availability_qc.is_none() && has_prepare_qc,
+                    CertPhase::NewView => false,
+                }
+            });
             if !keep_qc {
                 *slot = None;
             }
@@ -995,6 +3379,10 @@ fn session_has_consensus_evidence(session: &LaneBlockSession) -> bool {
         || !session.commit_votes.is_empty()
         || session.prepare_qc.is_some()
         || session.commit_qc.is_some()
+}
+
+fn session_has_quorum_certificate(session: &LaneBlockSession) -> bool {
+    session.prepare_qc.is_some() || session.commit_qc.is_some()
 }
 
 fn lane_block_session_validator_summary(session: &LaneBlockSession) -> Option<(u32, u32)> {
@@ -1114,6 +3502,51 @@ fn peer_uses_bls_normal(peer: &PeerId) -> bool {
 }
 
 impl LaneBlockVoteV1 {
+    /// Validate bounded vote shape before any BLS operation.
+    pub fn validate_ingress_shape(
+        &self,
+        expected_phase: CertPhase,
+    ) -> Result<(), LaneBlockVoteIngressError> {
+        validate_lane_block_vote_body_shape(&self.body)?;
+        if self.body.phase != expected_phase {
+            return Err(LaneBlockVoteIngressError::PhaseMismatch {
+                expected: expected_phase,
+                actual: self.body.phase,
+            });
+        }
+        if !peer_uses_bls_normal(&self.signer) {
+            return Err(LaneBlockVoteIngressError::SignerNotBlsNormal);
+        }
+        if self.bls_signature.len() != LANE_BLS_PROOF_BYTES {
+            return Err(LaneBlockVoteIngressError::InvalidSignature);
+        }
+        if let Some(availability) = &self.payload_availability_vote {
+            if self.body.phase != CertPhase::Prepare
+                || availability.signer != self.signer
+                || !availability_body_matches_lane_vote_body(&availability.body, &self.body)
+            {
+                return Err(LaneBlockVoteIngressError::InvalidAvailability);
+            }
+            availability
+                .validate_shape()
+                .map_err(|_| LaneBlockVoteIngressError::InvalidAvailability)?;
+        }
+        Ok(())
+    }
+
+    fn verify_signatures(&self) -> Result<(), LaneBlockVoteIngressError> {
+        Signature::try_from_bytes(&self.bls_signature)
+            .map_err(|_| LaneBlockVoteIngressError::InvalidSignature)?
+            .verify(self.signer.public_key(), &self.body.signature_preimage())
+            .map_err(|_| LaneBlockVoteIngressError::InvalidSignature)?;
+        if let Some(availability) = &self.payload_availability_vote {
+            availability
+                .verify_signature()
+                .map_err(|_| LaneBlockVoteIngressError::InvalidAvailability)?;
+        }
+        Ok(())
+    }
+
     /// Validate phase, BLS-normal identity, and vote signature.
     ///
     /// This is the stateless ingress prefilter. Callers that know the current
@@ -1129,20 +3562,8 @@ impl LaneBlockVoteV1 {
         &self,
         expected_phase: CertPhase,
     ) -> Result<(), LaneBlockVoteIngressError> {
-        validate_lane_block_vote_body_shape(&self.body)?;
-        if self.body.phase != expected_phase {
-            return Err(LaneBlockVoteIngressError::PhaseMismatch {
-                expected: expected_phase,
-                actual: self.body.phase,
-            });
-        }
-        if !peer_uses_bls_normal(&self.signer) {
-            return Err(LaneBlockVoteIngressError::SignerNotBlsNormal);
-        }
-        Signature::try_from_bytes(&self.bls_signature)
-            .map_err(|_| LaneBlockVoteIngressError::InvalidSignature)?
-            .verify(self.signer.public_key(), &self.body.signature_preimage())
-            .map_err(|_| LaneBlockVoteIngressError::InvalidSignature)
+        self.validate_ingress_shape(expected_phase)?;
+        self.verify_signatures()
     }
 }
 
@@ -1166,6 +3587,9 @@ pub enum LaneBlockVoteIngressError {
     /// lane block vote signature is missing, malformed, or invalid
     #[error("lane block vote signature is invalid")]
     InvalidSignature,
+    /// paired autonomous payload READY vote is malformed or invalid
+    #[error("lane payload availability vote is invalid")]
+    InvalidAvailability,
 }
 
 /// Failure while validating a standalone lane-local block proposal before session insertion.
@@ -1242,6 +3666,12 @@ pub enum LaneBlockQcIngressError {
     /// aggregate signature does not verify for the selected signers
     #[error("lane block QC aggregate signature is invalid")]
     AggregateSignatureInvalid,
+    /// payload availability proof is present in a phase where it is forbidden
+    #[error("lane block QC carries an unexpected payload availability proof")]
+    UnexpectedAvailabilityQc,
+    /// autonomous payload availability proof is malformed or invalid
+    #[error("lane block QC payload availability proof is invalid")]
+    InvalidAvailabilityQc,
 }
 
 /// Failure while building a lane-local block QC from validator votes.
@@ -1289,6 +3719,12 @@ pub enum LaneBlockQcBuildError {
     /// BLS signature aggregation failed
     #[error("failed to aggregate lane block BLS signatures")]
     SignatureAggregate,
+    /// autonomous prepare votes do not carry one exact READY body
+    #[error("lane block prepare votes carry mismatched payload availability evidence")]
+    AvailabilityMismatch,
+    /// autonomous READY vote aggregation failed
+    #[error("failed to aggregate lane payload availability votes")]
+    AvailabilityAggregate,
 }
 
 /// Validate the signer-independent body of a standalone lane-local block proposal.
@@ -1308,17 +3744,42 @@ pub fn validate_lane_block_proposal(
     proposal: &LaneBlockProposalV1,
 ) -> Result<(), LaneBlockProposalIngressError> {
     let descriptor = &proposal.descriptor;
-    if descriptor.lane_block_height == 0
+    if descriptor.proposal_height == 0
+        || descriptor.lane_block_height == 0
+        || descriptor
+            .lane_incarnation
+            .as_ref()
+            .iter()
+            .all(|byte| *byte == 0)
         || descriptor.qc_mode_tag.trim().is_empty()
         || descriptor.accepted_candidate_indices.is_empty()
+        || descriptor.accepted_candidate_indices.len() > MAX_LANE_EXECUTABLE_ENTRYPOINTS
         || descriptor.accepted_candidate_indices.len()
             != descriptor.accepted_transaction_hashes.len()
         || descriptor.previous_lane_block_height == 0
             && descriptor.previous_lane_block_descriptor_hash.is_some()
-        || descriptor.lane_block_height <= descriptor.previous_lane_block_height
+        || descriptor.previous_lane_block_height.checked_add(1)
+            != Some(descriptor.lane_block_height)
         || descriptor.min_quorum == 0
         || descriptor.validator_count == 0
         || descriptor.min_quorum > descriptor.validator_count
+    {
+        return Err(LaneBlockProposalIngressError::InvalidBody);
+    }
+    if descriptor
+        .accepted_candidate_indices
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>()
+        .len()
+        != descriptor.accepted_candidate_indices.len()
+        || descriptor
+            .accepted_transaction_hashes
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .len()
+            != descriptor.accepted_transaction_hashes.len()
     {
         return Err(LaneBlockProposalIngressError::InvalidBody);
     }
@@ -1390,11 +3851,29 @@ pub fn validate_lane_block_qc(qc: &LaneBlockQcV1) -> Result<(), LaneBlockQcIngre
         _ => LaneBlockQcIngressError::InvalidBody,
     })?;
 
+    match &qc.payload_availability_qc {
+        Some(availability_qc) => {
+            if qc.body.phase != CertPhase::Prepare {
+                return Err(LaneBlockQcIngressError::UnexpectedAvailabilityQc);
+            }
+            if !availability_body_matches_lane_vote_body(&availability_qc.body, &qc.body)
+                || availability_qc.validator_set_hash_version != qc.validator_set_hash_version
+                || availability_qc.validator_set_hash != qc.validator_set_hash
+                || availability_qc.validator_set != qc.validator_set
+            {
+                return Err(LaneBlockQcIngressError::InvalidAvailabilityQc);
+            }
+            validate_lane_payload_availability_qc(availability_qc)
+                .map_err(|_| LaneBlockQcIngressError::InvalidAvailabilityQc)?;
+        }
+        None => {}
+    }
+
     let expected_bitmap_len = qc.validator_set.len().div_ceil(8);
     if qc.signers_bitmap.len() != expected_bitmap_len {
         return Err(LaneBlockQcIngressError::SignerBitmapLengthMismatch);
     }
-    if qc.bls_aggregate_signature.is_empty() {
+    if qc.bls_aggregate_signature.len() != LANE_BLS_PROOF_BYTES {
         return Err(LaneBlockQcIngressError::AggregateSignatureMissing);
     }
 
@@ -1546,6 +4025,44 @@ pub fn aggregate_lane_block_votes_to_qc(
     let bls_aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
         .map_err(|_| LaneBlockQcBuildError::SignatureAggregate)?;
 
+    let payload_availability_qc = if votes
+        .iter()
+        .any(|vote| vote.payload_availability_vote.is_some())
+    {
+        if body.phase != CertPhase::Prepare
+            || votes
+                .iter()
+                .any(|vote| vote.payload_availability_vote.is_none())
+        {
+            return Err(LaneBlockQcBuildError::AvailabilityMismatch);
+        }
+        let availability_votes = votes
+            .iter()
+            .filter_map(|vote| vote.payload_availability_vote.clone())
+            .collect::<Vec<_>>();
+        let availability_body = availability_votes
+            .first()
+            .map(|vote| vote.body.clone())
+            .ok_or(LaneBlockQcBuildError::AvailabilityMismatch)?;
+        if !availability_body_matches_lane_vote_body(&availability_body, &body)
+            || availability_votes
+                .iter()
+                .any(|vote| vote.body != availability_body)
+        {
+            return Err(LaneBlockQcBuildError::AvailabilityMismatch);
+        }
+        Some(
+            aggregate_lane_payload_availability_votes(
+                availability_body,
+                validator_set.clone(),
+                &availability_votes,
+            )
+            .map_err(|_| LaneBlockQcBuildError::AvailabilityAggregate)?,
+        )
+    } else {
+        None
+    };
+
     Ok(LaneBlockQcV1 {
         body,
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
@@ -1553,6 +4070,7 @@ pub fn aggregate_lane_block_votes_to_qc(
         validator_set,
         signers_bitmap,
         bls_aggregate_signature,
+        payload_availability_qc,
     })
 }
 
@@ -1560,9 +4078,12 @@ fn validate_lane_block_vote_body_shape(
     body: &LaneBlockVoteBodyV1,
 ) -> Result<(), LaneBlockVoteIngressError> {
     if body.phase == CertPhase::NewView
+        || body.proposal_height == 0
         || body.lane_block_height == 0
+        || body.lane_incarnation.as_ref().iter().all(|byte| *byte == 0)
         || body.qc_mode_tag.trim().is_empty()
         || body.accepted_candidate_indices.is_empty()
+        || body.accepted_candidate_indices.len() > MAX_LANE_EXECUTABLE_ENTRYPOINTS
         || body.accepted_candidate_indices.len() != body.accepted_transaction_hashes.len()
         || body.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
         || body.validator_count == 0
@@ -1595,6 +4116,9 @@ fn validate_lane_block_validator_set_fields(
     if validator_set.is_empty() {
         return Err(LaneBlockQcBuildError::EmptyValidatorSet);
     }
+    if validator_set.len() > MAX_LANE_BLOCK_VALIDATORS {
+        return Err(LaneBlockQcBuildError::ValidatorCountMismatch);
+    }
     let actual_validator_count = u32::try_from(validator_set.len())
         .map_err(|_| LaneBlockQcBuildError::ValidatorCountMismatch)?;
     if actual_validator_count != validator_count {
@@ -1624,6 +4148,7 @@ mod tests {
 
     use iroha_crypto::{Hash, HashOf, KeyPair, PublicKey, bls_normal_pop_prove};
     use iroha_data_model::{
+        account::AccountId,
         block::{
             Header as BlockHeader,
             consensus::{
@@ -1631,8 +4156,12 @@ mod tests {
             },
         },
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        isi::InstructionBox,
         nexus::{DataSpaceId, LaneId},
+        transaction::signed::{ExecutionStep, TransactionEntrypoint},
+        trigger::time::TimeTriggerEntrypoint,
     };
+    use iroha_primitives::const_vec::ConstVec;
 
     use super::*;
 
@@ -1658,6 +4187,7 @@ mod tests {
             .expect("checked lane block fixture signature verifies");
         LaneBlockVoteV1 {
             body: body.clone(),
+            payload_availability_vote: None,
             signer: peer(keypair),
             bls_signature: signature.payload().to_vec(),
         }
@@ -1676,11 +4206,50 @@ mod tests {
             .collect()
     }
 
+    fn aligned_validator_pops(validator_set: &[PeerId], keypairs: &[KeyPair]) -> Vec<Vec<u8>> {
+        validator_set
+            .iter()
+            .map(|validator| {
+                let keypair = keypairs
+                    .iter()
+                    .find(|keypair| keypair.public_key() == validator.public_key())
+                    .expect("fixture validator keypair");
+                bls_normal_pop_prove(keypair.private_key()).expect("checked lane block fixture PoP")
+            })
+            .collect()
+    }
+
+    fn signed_autonomous_prepare_vote(
+        payload: &LaneExecutablePayloadV1,
+        current_proposal: &LaneBlockProposalV1,
+        chain_id_hash: Hash,
+        epoch: u64,
+        keypair: &KeyPair,
+        all_keypairs: &[KeyPair],
+    ) -> LaneBlockVoteV1 {
+        let body = current_proposal.vote_body(CertPhase::Prepare);
+        let mut vote = signed_vote(&body, keypair);
+        let availability_body =
+            lane_payload_availability_body(payload, current_proposal, chain_id_hash, epoch)
+                .expect("fixture availability body");
+        vote.payload_availability_vote = Some(
+            LanePayloadAvailabilityVoteV1::new_signed(
+                availability_body,
+                peer(keypair),
+                aligned_validator_pops(&current_proposal.descriptor.validator_set, all_keypairs),
+                keypair.private_key(),
+            )
+            .expect("fixture READY vote"),
+        );
+        vote
+    }
+
     fn vote_body(validator_set: &[PeerId]) -> LaneBlockVoteBodyV1 {
         LaneBlockVoteBodyV1 {
             phase: CertPhase::Prepare,
             lane_id: LaneId::new(7),
             dataspace_id: DataSpaceId::new(11),
+            lane_incarnation: Hash::new(b"lane-consensus-fixture-incarnation"),
             proposal_height: 12,
             lane_block_height: 13,
             lane_block_view: 2,
@@ -1706,6 +4275,7 @@ mod tests {
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id: LaneId::new(7),
             dataspace_id: DataSpaceId::new(11),
+            lane_incarnation: Hash::new(b"lane-consensus-fixture-incarnation"),
             proposal_height: 12,
             previous_lane_block_height: 12,
             previous_lane_block_descriptor_hash: Some(Hash::prehashed([0x20; Hash::LENGTH])),
@@ -1737,6 +4307,662 @@ mod tests {
         proposal
     }
 
+    fn autonomous_payload_fixture(keypairs: &[KeyPair]) -> (Hash, u64, LaneExecutablePayloadV1) {
+        let mut validator_set = keypairs.iter().map(peer).collect::<Vec<_>>();
+        validator_set.sort();
+        let entrypoint = TransactionEntrypoint::Time(TimeTriggerEntrypoint {
+            id: "lane-autonomous-checkpoint"
+                .parse()
+                .expect("fixture trigger id"),
+            instructions: ExecutionStep(ConstVec::from(Vec::<InstructionBox>::new())),
+            authority: AccountId::new(keypairs[0].public_key().clone()),
+        });
+        let entrypoint_hash = Hash::from(entrypoint.hash());
+        let mut descriptor = LaneBlockDescriptorV1 {
+            lane_id: LaneId::new(7),
+            dataspace_id: DataSpaceId::new(11),
+            lane_incarnation: Hash::new(b"lane-autonomous-checkpoint-incarnation"),
+            proposal_height: 12,
+            previous_lane_block_height: 12,
+            previous_lane_block_descriptor_hash: Some(Hash::new(b"lane-autonomous-predecessor")),
+            lane_block_height: 13,
+            lane_block_view: 0,
+            subject_hash: Hash::new(b"lane-autonomous-subject"),
+            payload_ownership_hash: Hash::new(b"lane-autonomous-ownership"),
+            rbc_instance_hash: Hash::new(b"lane-autonomous-rbc"),
+            accepted_candidate_indices: vec![0],
+            accepted_transaction_hashes: vec![entrypoint_hash],
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set: validator_set.clone(),
+            validator_count: u32::try_from(validator_set.len()).expect("validator count"),
+            min_quorum: 2,
+            qc_mode_tag: "permissioned:lane:7:dataspace:11".to_owned(),
+            descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+        let mut proposal = LaneBlockProposalV1 {
+            descriptor,
+            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            payload_block_hint: Some(LaneBlockProposalPayloadHintV1 {
+                proposal_height: 12,
+                proposal_view: 3,
+                proposal_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                    b"lane-autonomous-anchor",
+                )),
+            }),
+        };
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        let chain_id_hash = Hash::new(b"lane-autonomous-chain");
+        let epoch = 4;
+        let producer = validator_set[0].clone();
+        let producer_key = keypairs
+            .iter()
+            .find(|keypair| keypair.public_key() == producer.public_key())
+            .expect("producer fixture key");
+        let payload = LaneExecutablePayloadV1::new_signed(
+            chain_id_hash,
+            epoch,
+            proposal,
+            vec![entrypoint],
+            producer,
+            producer_key.private_key(),
+        )
+        .expect("signed autonomous payload");
+        (chain_id_hash, epoch, payload)
+    }
+
+    fn durable_new_view_certificate(
+        source: &LaneBlockProposalV1,
+        payload: &LaneExecutablePayloadV1,
+        keypairs: &[KeyPair],
+        chain_id_hash: Hash,
+        epoch: u64,
+    ) -> DurableLaneBlockNewViewCertificateV1 {
+        let target_view = source
+            .descriptor
+            .lane_block_view
+            .checked_add(1)
+            .expect("fixture view");
+        let body = LaneBlockNewViewBodyV1::for_transition(
+            source,
+            payload,
+            target_view,
+            chain_id_hash,
+            epoch,
+        )
+        .expect("NewView body");
+        let votes = keypairs
+            .iter()
+            .take(2)
+            .map(|keypair| {
+                LaneBlockNewViewVoteV1::new_signed(
+                    body.clone(),
+                    peer(keypair),
+                    keypair.private_key(),
+                )
+                .expect("NewView vote")
+            })
+            .collect::<Vec<_>>();
+        let certificate = aggregate_lane_block_new_view_votes(
+            body,
+            payload.origin_proposal.descriptor.validator_set.clone(),
+            &votes,
+        )
+        .expect("NewView certificate");
+        DurableLaneBlockNewViewCertificateV1 {
+            certificate,
+            signer_pops: signer_pops(&keypairs[..2]),
+        }
+    }
+
+    #[test]
+    fn payload_availability_deliver_binds_exact_durable_payload() {
+        let keypairs = [
+            checked_bls_keypair(1),
+            checked_bls_keypair(2),
+            checked_bls_keypair(3),
+        ];
+        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
+        let body = payload.origin_proposal.vote_body(CertPhase::Prepare);
+        let votes = [
+            signed_autonomous_prepare_vote(
+                &payload,
+                &payload.origin_proposal,
+                chain_id_hash,
+                epoch,
+                &keypairs[0],
+                &keypairs,
+            ),
+            signed_autonomous_prepare_vote(
+                &payload,
+                &payload.origin_proposal,
+                chain_id_hash,
+                epoch,
+                &keypairs[1],
+                &keypairs,
+            ),
+        ];
+        let certificate = aggregate_lane_block_votes_to_qc(
+            body,
+            payload.origin_proposal.descriptor.validator_set.clone(),
+            &votes,
+        )
+        .expect("availability READY quorum");
+        let durable = DurableLanePayloadAvailabilityCertificateV1 { certificate };
+        validate_lane_payload_availability_certificate(&durable, &payload, chain_id_hash, epoch)
+            .expect("availability DELIVER certificate");
+
+        let mut wrong_payload = durable.clone();
+        wrong_payload
+            .certificate
+            .payload_availability_qc
+            .as_mut()
+            .expect("availability QC")
+            .body
+            .executable_payload_hash = Hash::new(b"wrong-availability-payload");
+        assert_eq!(
+            validate_lane_payload_availability_certificate(
+                &wrong_payload,
+                &payload,
+                chain_id_hash,
+                epoch,
+            ),
+            Err(LaneAutonomousArtifactError::AvailabilityMismatch)
+        );
+        let mut forged = durable.clone();
+        forged
+            .certificate
+            .payload_availability_qc
+            .as_mut()
+            .expect("availability QC")
+            .bls_aggregate_signature[0] ^= 1;
+        assert_eq!(
+            validate_lane_payload_availability_certificate(&forged, &payload, chain_id_hash, epoch,),
+            Err(LaneAutonomousArtifactError::InvalidAvailabilityCertificate)
+        );
+        let mut forged_prepare = durable;
+        forged_prepare.certificate.bls_aggregate_signature[0] ^= 1;
+        assert_eq!(
+            validate_lane_payload_availability_certificate(
+                &forged_prepare,
+                &payload,
+                chain_id_hash,
+                epoch,
+            ),
+            Err(LaneAutonomousArtifactError::InvalidAvailabilityCertificate)
+        );
+    }
+
+    #[test]
+    fn payload_availability_qc_rejects_duplicate_bitmap_roster_and_pop_attacks() {
+        let keypairs = [
+            checked_bls_keypair(31),
+            checked_bls_keypair(32),
+            checked_bls_keypair(33),
+        ];
+        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
+        let outer_votes = [
+            signed_autonomous_prepare_vote(
+                &payload,
+                &payload.origin_proposal,
+                chain_id_hash,
+                epoch,
+                &keypairs[0],
+                &keypairs,
+            ),
+            signed_autonomous_prepare_vote(
+                &payload,
+                &payload.origin_proposal,
+                chain_id_hash,
+                epoch,
+                &keypairs[1],
+                &keypairs,
+            ),
+        ];
+        let ready_votes = outer_votes
+            .iter()
+            .map(|vote| {
+                vote.payload_availability_vote
+                    .clone()
+                    .expect("fixture READY vote")
+            })
+            .collect::<Vec<_>>();
+        let availability_body = ready_votes[0].body.clone();
+        let validator_set = payload.origin_proposal.descriptor.validator_set.clone();
+        assert!(
+            norito::to_bytes(&availability_body)
+                .expect("availability body encodes")
+                .len()
+                <= MAX_LANE_PAYLOAD_AVAILABILITY_BODY_BYTES
+        );
+
+        let mut oversized_body = availability_body.clone();
+        oversized_body.validator_count =
+            u32::try_from(MAX_LANE_BLOCK_VALIDATORS + 1).expect("hard cap fits u32");
+        assert_eq!(
+            validate_lane_payload_availability_body_shape(&oversized_body),
+            Err(LaneAutonomousArtifactError::InvalidAvailabilityBody)
+        );
+        let mut oversized_domain = availability_body.clone();
+        oversized_domain.qc_mode_tag = "x".repeat(MAX_LANE_PAYLOAD_AVAILABILITY_BODY_BYTES + 1);
+        assert_eq!(
+            validate_lane_payload_availability_body_shape(&oversized_domain),
+            Err(LaneAutonomousArtifactError::InvalidAvailabilityBody)
+        );
+
+        assert_eq!(
+            aggregate_lane_payload_availability_votes(
+                availability_body.clone(),
+                validator_set.clone(),
+                &[ready_votes[0].clone(), ready_votes[0].clone()],
+            ),
+            Err(LaneAutonomousArtifactError::DuplicateAvailabilitySigner)
+        );
+
+        let qc = aggregate_lane_payload_availability_votes(
+            availability_body,
+            validator_set,
+            &ready_votes,
+        )
+        .expect("valid READY QC");
+        assert!(
+            norito::to_bytes(&qc)
+                .expect("availability QC encodes")
+                .len()
+                <= MAX_LANE_PAYLOAD_AVAILABILITY_QC_BYTES
+        );
+
+        let mut trailing_bit = qc.clone();
+        *trailing_bit
+            .signers_bitmap
+            .last_mut()
+            .expect("fixture signer bitmap") |= 0b1000_0000;
+        assert_eq!(
+            validate_lane_payload_availability_qc(&trailing_bit),
+            Err(LaneAutonomousArtifactError::InvalidAvailabilityBitmap)
+        );
+
+        let mut below_quorum = qc.clone();
+        below_quorum.signers_bitmap = vec![0b0000_0001];
+        assert_eq!(
+            validate_lane_payload_availability_qc(&below_quorum),
+            Err(LaneAutonomousArtifactError::AvailabilityQuorumNotMet)
+        );
+
+        let mut duplicate_roster = qc.clone();
+        duplicate_roster.validator_set[1] = duplicate_roster.validator_set[0].clone();
+        assert_eq!(
+            validate_lane_payload_availability_qc(&duplicate_roster),
+            Err(LaneAutonomousArtifactError::InvalidAvailabilityBody)
+        );
+
+        let mut invalid_pop = qc;
+        invalid_pop.validator_set_pops[0][0] ^= 1;
+        assert_eq!(
+            validate_lane_payload_availability_qc(&invalid_pop),
+            Err(LaneAutonomousArtifactError::InvalidAvailabilityPop)
+        );
+    }
+
+    #[test]
+    fn payload_availability_tracks_authenticated_new_view_without_rebinding_origin() {
+        let keypairs = [
+            checked_bls_keypair(41),
+            checked_bls_keypair(42),
+            checked_bls_keypair(43),
+        ];
+        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
+        let source = payload.origin_proposal.clone();
+        let target = retarget_lane_block_proposal_view(&source, 1).expect("next-view proposal");
+        let new_view =
+            durable_new_view_certificate(&source, &payload, &keypairs, chain_id_hash, epoch);
+        validate_lane_block_new_view_transition(
+            &source,
+            &target,
+            &payload,
+            &new_view,
+            chain_id_hash,
+            epoch,
+        )
+        .expect("authenticated contiguous NewView transition");
+
+        let votes = [
+            signed_autonomous_prepare_vote(
+                &payload,
+                &target,
+                chain_id_hash,
+                epoch,
+                &keypairs[0],
+                &keypairs,
+            ),
+            signed_autonomous_prepare_vote(
+                &payload,
+                &target,
+                chain_id_hash,
+                epoch,
+                &keypairs[1],
+                &keypairs,
+            ),
+        ];
+        let certificate = aggregate_lane_block_votes_to_qc(
+            target.vote_body(CertPhase::Prepare),
+            target.descriptor.validator_set.clone(),
+            &votes,
+        )
+        .expect("next-view exact availability QC");
+        let durable = DurableLanePayloadAvailabilityCertificateV1 { certificate };
+        validate_lane_payload_availability_certificate(&durable, &payload, chain_id_hash, epoch)
+            .expect("next-view availability remains bound to immutable origin payload");
+
+        let mut stale_origin = durable.clone();
+        stale_origin
+            .certificate
+            .payload_availability_qc
+            .as_mut()
+            .expect("availability QC")
+            .body
+            .origin_proposal_hash = Hash::new(b"stale-origin-rebinding");
+        assert_eq!(
+            validate_lane_payload_availability_certificate(
+                &stale_origin,
+                &payload,
+                chain_id_hash,
+                epoch,
+            ),
+            Err(LaneAutonomousArtifactError::AvailabilityMismatch)
+        );
+
+        let mut stale_incarnation = durable.clone();
+        stale_incarnation
+            .certificate
+            .payload_availability_qc
+            .as_mut()
+            .expect("availability QC")
+            .body
+            .lane_incarnation = Hash::new(b"recreated-lane-incarnation");
+        assert_eq!(
+            validate_lane_payload_availability_certificate(
+                &stale_incarnation,
+                &payload,
+                chain_id_hash,
+                epoch,
+            ),
+            Err(LaneAutonomousArtifactError::AvailabilityMismatch)
+        );
+
+        let unrelated = {
+            let mut proposal = target.clone();
+            proposal.descriptor.accepted_transaction_hashes[0] =
+                Hash::new(b"unrelated-proposal-entrypoint");
+            proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+            proposal.proposal_hash = proposal.computed_proposal_hash();
+            proposal
+        };
+        assert_eq!(
+            lane_payload_availability_body(&payload, &unrelated, chain_id_hash, epoch,),
+            Err(LaneAutonomousArtifactError::AvailabilityMismatch)
+        );
+
+        let skipped = retarget_lane_block_proposal_exact_view(&source, 2)
+            .expect("canonical but unauthorized skipped-view proposal");
+        assert_eq!(
+            validate_lane_block_new_view_transition(
+                &source,
+                &skipped,
+                &payload,
+                &new_view,
+                chain_id_hash,
+                epoch,
+            ),
+            Err(LaneAutonomousArtifactError::InvalidNewViewBody)
+        );
+    }
+
+    #[test]
+    fn autonomous_session_requires_authorized_ready_quorum_and_resists_cache_flood() {
+        let keypairs = [
+            checked_bls_keypair(51),
+            checked_bls_keypair(52),
+            checked_bls_keypair(53),
+        ];
+        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
+        let proposal = payload.origin_proposal.clone();
+        let availability_body =
+            lane_payload_availability_body(&payload, &proposal, chain_id_hash, epoch)
+                .expect("authorized availability body");
+        let key = LaneBlockSessionKey::from_proposal(&proposal);
+        let mut cache = LaneBlockSessionCache::new(1);
+        cache
+            .insert_proposal(proposal.clone())
+            .expect("cache autonomous proposal");
+        cache
+            .authorize_payload_availability(&proposal, availability_body.clone())
+            .expect("authorize exact durable payload");
+
+        let unsigned_prepare = signed_vote(&proposal.vote_body(CertPhase::Prepare), &keypairs[0]);
+        assert_eq!(
+            cache.insert_vote(unsigned_prepare, None),
+            Err(LaneBlockSessionError::AvailabilityMismatch)
+        );
+
+        for nonce in 0_u8..32 {
+            let proposal_hash =
+                Hash::new([b"unauthorized-ready-flood-".as_slice(), &[nonce]].concat());
+            let descriptor_hash =
+                Hash::new([b"unauthorized-ready-descriptor-".as_slice(), &[nonce]].concat());
+            let mut body = proposal.vote_body(CertPhase::Prepare);
+            body.proposal_hash = proposal_hash;
+            body.descriptor_hash = descriptor_hash;
+            let mut ready_body = availability_body.clone();
+            ready_body.current_proposal_hash = proposal_hash;
+            ready_body.current_descriptor_hash = descriptor_hash;
+            let vote = LaneBlockVoteV1 {
+                body,
+                payload_availability_vote: Some(LanePayloadAvailabilityVoteV1 {
+                    body: ready_body,
+                    signer: peer(&keypairs[0]),
+                    validator_set_pops: aligned_validator_pops(
+                        &proposal.descriptor.validator_set,
+                        &keypairs,
+                    ),
+                    // Shape-valid but deliberately unverified: authorization
+                    // rejection must happen before any cryptographic work.
+                    bls_signature: vec![0; LANE_BLS_PROOF_BYTES],
+                }),
+                signer: peer(&keypairs[0]),
+                bls_signature: vec![0; LANE_BLS_PROOF_BYTES],
+            };
+            assert_eq!(
+                cache.insert_vote(vote, None),
+                Err(LaneBlockSessionError::AvailabilityNotAuthorized)
+            );
+        }
+        assert_eq!(cache.len(), 1);
+        assert_eq!(
+            cache
+                .get(&key)
+                .and_then(|session| session.payload_availability_body.as_ref()),
+            Some(&availability_body)
+        );
+
+        for keypair in keypairs.iter().take(2) {
+            cache
+                .insert_vote(
+                    signed_autonomous_prepare_vote(
+                        &payload,
+                        &proposal,
+                        chain_id_hash,
+                        epoch,
+                        keypair,
+                        &keypairs,
+                    ),
+                    None,
+                )
+                .expect("cache exact READY vote");
+        }
+        let prepare_qc = cache
+            .get(&key)
+            .and_then(|session| session.prepare_qc.as_ref())
+            .expect("READY quorum seals prepare QC");
+        assert!(prepare_qc.payload_availability_qc.is_some());
+    }
+
+    #[test]
+    fn autonomous_payload_body_cap_reserves_consensus_envelope_headroom() {
+        assert_eq!(
+            MAX_LANE_EXECUTABLE_PAYLOAD_BYTES * 2,
+            MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES,
+            "an executable payload must leave half of its source bundle for authenticated proof material"
+        );
+        assert_eq!(
+            MAX_LANE_EXECUTABLE_PAYLOAD_BYTES + LANE_EXECUTABLE_ENVELOPE_HEADROOM_BYTES,
+            iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONSENSUS.get(),
+        );
+        assert!(lane_executable_payload_body_within_limit(
+            MAX_LANE_EXECUTABLE_PAYLOAD_BYTES - 1
+        ));
+        assert!(lane_executable_payload_body_within_limit(
+            MAX_LANE_EXECUTABLE_PAYLOAD_BYTES
+        ));
+        assert!(!lane_executable_payload_body_within_limit(
+            MAX_LANE_EXECUTABLE_PAYLOAD_BYTES + 1
+        ));
+    }
+
+    #[test]
+    fn native_amx_receipt_vector_is_payload_hash_bound_and_exactly_aligned() {
+        let keypairs = [
+            checked_bls_keypair(21),
+            checked_bls_keypair(22),
+            checked_bls_keypair(23),
+        ];
+        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
+        let descriptor = &payload.origin_proposal.descriptor;
+        let receipt = NativeAmxReceipt {
+            version: 2,
+            source_id: [0xA5; Hash::LENGTH],
+            chain_id_hash,
+            plan_digest: Hash::new(b"payload-hash-bound-native-amx-plan"),
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            lane_incarnation: descriptor.lane_incarnation,
+            authority_context_height: descriptor.proposal_height,
+            lane_block_height: descriptor.lane_block_height,
+            lane_block_view: descriptor.lane_block_view,
+            coordinator_proposal_hash: payload.origin_proposal.proposal_hash,
+            legs: Vec::new(),
+        };
+        let with_receipt = compute_lane_executable_payload_hash(
+            payload.version,
+            chain_id_hash,
+            epoch,
+            &payload.origin_proposal,
+            &payload.entrypoints,
+            &payload.reservation_keys,
+            &payload.routing_plans,
+            &[Some(receipt)],
+        )
+        .expect("receipt-bearing payload hash");
+        assert_ne!(payload.payload_hash, with_receipt);
+
+        let mut misaligned = payload;
+        misaligned.native_amx_receipts.push(None);
+        assert_eq!(
+            misaligned.validate(chain_id_hash, epoch),
+            Err(LaneAutonomousArtifactError::ReservationMismatch)
+        );
+    }
+
+    #[test]
+    fn compacted_new_view_checkpoint_is_independently_restart_verifiable() {
+        let keypairs = [
+            checked_bls_keypair(1),
+            checked_bls_keypair(2),
+            checked_bls_keypair(3),
+        ];
+        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
+        let source = retarget_lane_block_proposal_exact_view(&payload.origin_proposal, 256)
+            .expect("canonical checkpoint source");
+        let target =
+            retarget_lane_block_proposal_view(&source, 257).expect("canonical checkpoint target");
+        let checkpoint = DurableLaneBlockViewCheckpointV1 {
+            source_proposal: source.clone(),
+            target_proposal: target,
+            certificate: durable_new_view_certificate(
+                &source,
+                &payload,
+                &keypairs,
+                chain_id_hash,
+                epoch,
+            ),
+        };
+
+        validate_lane_block_view_checkpoint(&checkpoint, &payload, chain_id_hash, epoch)
+            .expect("checkpoint validates without the first 256 certificates");
+        assert_eq!(checkpoint.source_proposal.descriptor.lane_block_view, 256);
+        assert_eq!(checkpoint.target_proposal.descriptor.lane_block_view, 257);
+    }
+
+    #[test]
+    fn compacted_new_view_checkpoint_rejects_forged_jump_and_replay_domains() {
+        let keypairs = [
+            checked_bls_keypair(11),
+            checked_bls_keypair(12),
+            checked_bls_keypair(13),
+        ];
+        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
+        let source = retarget_lane_block_proposal_exact_view(&payload.origin_proposal, 256)
+            .expect("canonical checkpoint source");
+        let target =
+            retarget_lane_block_proposal_view(&source, 257).expect("canonical checkpoint target");
+        let mut checkpoint = DurableLaneBlockViewCheckpointV1 {
+            source_proposal: source.clone(),
+            target_proposal: target,
+            certificate: durable_new_view_certificate(
+                &source,
+                &payload,
+                &keypairs,
+                chain_id_hash,
+                epoch,
+            ),
+        };
+
+        checkpoint.source_proposal.descriptor.lane_block_view = 255;
+        checkpoint.source_proposal.descriptor.descriptor_hash = checkpoint
+            .source_proposal
+            .descriptor
+            .computed_descriptor_hash();
+        checkpoint.source_proposal.proposal_hash =
+            checkpoint.source_proposal.computed_proposal_hash();
+        assert!(matches!(
+            validate_lane_block_view_checkpoint(&checkpoint, &payload, chain_id_hash, epoch),
+            Err(LaneAutonomousArtifactError::NewViewSourceMismatch)
+        ));
+
+        let valid_source = retarget_lane_block_proposal_exact_view(&payload.origin_proposal, 256)
+            .expect("canonical checkpoint source");
+        checkpoint.source_proposal = valid_source;
+        assert!(matches!(
+            validate_lane_block_view_checkpoint(
+                &checkpoint,
+                &payload,
+                Hash::new(b"another-chain"),
+                epoch,
+            ),
+            Err(LaneAutonomousArtifactError::ChainOrEpochMismatch)
+        ));
+        assert!(matches!(
+            validate_lane_block_view_checkpoint(
+                &checkpoint,
+                &payload,
+                chain_id_hash,
+                epoch.saturating_add(1),
+            ),
+            Err(LaneAutonomousArtifactError::ChainOrEpochMismatch)
+        ));
+    }
+
     fn lane_block_proposal_at_height(
         validator_set: &[PeerId],
         lane_block_height: u64,
@@ -1749,6 +4975,7 @@ mod tests {
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id: LaneId::new(7),
             dataspace_id: DataSpaceId::new(11),
+            lane_incarnation: Hash::new(b"lane-consensus-fixture-incarnation"),
             proposal_height: lane_block_height,
             previous_lane_block_height: lane_block_height - 1,
             previous_lane_block_descriptor_hash: Some(Hash::prehashed([tag - 1; Hash::LENGTH])),
@@ -1838,6 +5065,84 @@ mod tests {
     }
 
     #[test]
+    fn lane_block_proposal_ingress_accepts_coordinate_boundaries() {
+        let keypairs = [
+            checked_bls_keypair(1),
+            checked_bls_keypair(2),
+            checked_bls_keypair(3),
+        ];
+        let mut validator_set = keypairs.iter().map(peer).collect::<Vec<_>>();
+        validator_set.sort();
+
+        let mut first = lane_block_proposal(&validator_set);
+        first.descriptor.proposal_height = 1;
+        first.descriptor.previous_lane_block_height = 0;
+        first.descriptor.previous_lane_block_descriptor_hash = None;
+        first.descriptor.lane_block_height = 1;
+        first.descriptor.descriptor_hash = first.descriptor.computed_descriptor_hash();
+        first.proposal_hash = first.computed_proposal_hash();
+        validate_lane_block_proposal(&first)
+            .expect("the first lane block has a canonical zero-height predecessor");
+
+        let mut highest = lane_block_proposal(&validator_set);
+        highest.descriptor.proposal_height = 1;
+        highest.descriptor.previous_lane_block_height = u64::MAX - 1;
+        highest.descriptor.lane_block_height = u64::MAX;
+        highest.descriptor.descriptor_hash = highest.descriptor.computed_descriptor_hash();
+        highest.proposal_hash = highest.computed_proposal_hash();
+        validate_lane_block_proposal(&highest)
+            .expect("maximal contiguous lane coordinates are independent of proposal height");
+    }
+
+    #[test]
+    fn lane_block_proposal_ingress_rejects_adversarial_coordinates() {
+        let keypairs = [
+            checked_bls_keypair(1),
+            checked_bls_keypair(2),
+            checked_bls_keypair(3),
+        ];
+        let mut validator_set = keypairs.iter().map(peer).collect::<Vec<_>>();
+        validator_set.sort();
+        let proposal = lane_block_proposal(&validator_set);
+
+        let mut zero_proposal_height = proposal.clone();
+        zero_proposal_height.descriptor.proposal_height = 0;
+        zero_proposal_height.descriptor.descriptor_hash =
+            zero_proposal_height.descriptor.computed_descriptor_hash();
+        zero_proposal_height.proposal_hash = zero_proposal_height.computed_proposal_hash();
+        assert_eq!(
+            validate_lane_block_proposal(&zero_proposal_height),
+            Err(LaneBlockProposalIngressError::InvalidBody)
+        );
+
+        let mut predecessor_gap = proposal.clone();
+        predecessor_gap.descriptor.previous_lane_block_height =
+            predecessor_gap.descriptor.lane_block_height - 2;
+        predecessor_gap.descriptor.descriptor_hash =
+            predecessor_gap.descriptor.computed_descriptor_hash();
+        predecessor_gap.proposal_hash = predecessor_gap.computed_proposal_hash();
+        assert_eq!(
+            validate_lane_block_proposal(&predecessor_gap),
+            Err(LaneBlockProposalIngressError::InvalidBody)
+        );
+
+        let mut overflowing_predecessor = proposal.clone();
+        overflowing_predecessor.descriptor.proposal_height = u64::MAX;
+        overflowing_predecessor
+            .descriptor
+            .previous_lane_block_height = u64::MAX;
+        overflowing_predecessor.descriptor.lane_block_height = u64::MAX;
+        overflowing_predecessor.descriptor.descriptor_hash = overflowing_predecessor
+            .descriptor
+            .computed_descriptor_hash();
+        overflowing_predecessor.proposal_hash = overflowing_predecessor.computed_proposal_hash();
+        assert_eq!(
+            validate_lane_block_proposal(&overflowing_predecessor),
+            Err(LaneBlockProposalIngressError::InvalidBody)
+        );
+    }
+
+    #[test]
     fn lane_block_proposal_ingress_rejects_shape_and_committee_drift() {
         let keypairs = [
             checked_bls_keypair(1),
@@ -1856,7 +5161,12 @@ mod tests {
         );
 
         let mut predecessor_at_genesis = proposal.clone();
+        predecessor_at_genesis.descriptor.proposal_height = 1;
         predecessor_at_genesis.descriptor.previous_lane_block_height = 0;
+        predecessor_at_genesis.descriptor.lane_block_height = 1;
+        predecessor_at_genesis.descriptor.descriptor_hash =
+            predecessor_at_genesis.descriptor.computed_descriptor_hash();
+        predecessor_at_genesis.proposal_hash = predecessor_at_genesis.computed_proposal_hash();
         assert_eq!(
             validate_lane_block_proposal(&predecessor_at_genesis),
             Err(LaneBlockProposalIngressError::InvalidBody)
@@ -1880,6 +5190,58 @@ mod tests {
         assert_eq!(
             validate_lane_block_proposal(&duplicate),
             Err(LaneBlockProposalIngressError::DuplicateValidator)
+        );
+    }
+
+    #[test]
+    fn lane_block_consensus_rejects_work_above_global_merge_capacity() {
+        let keypairs = [
+            checked_bls_keypair(1),
+            checked_bls_keypair(2),
+            checked_bls_keypair(3),
+        ];
+        let mut validator_set = keypairs.iter().map(peer).collect::<Vec<_>>();
+        validator_set.sort();
+        let indices = (0..u64::try_from(MAX_LANE_EXECUTABLE_ENTRYPOINTS)
+            .expect("entrypoint ceiling fits u64"))
+            .collect::<Vec<_>>();
+        let hashes = indices
+            .iter()
+            .map(|index| Hash::new(index.to_le_bytes()))
+            .collect::<Vec<_>>();
+
+        let mut at_limit = lane_block_proposal(&validator_set);
+        at_limit.descriptor.accepted_candidate_indices = indices.clone();
+        at_limit.descriptor.accepted_transaction_hashes = hashes.clone();
+        at_limit.descriptor.descriptor_hash = at_limit.descriptor.computed_descriptor_hash();
+        at_limit.proposal_hash = at_limit.computed_proposal_hash();
+        validate_lane_block_proposal(&at_limit)
+            .expect("a lane proposal at the global merge entrypoint ceiling is admissible");
+
+        let mut above_limit = at_limit;
+        above_limit
+            .descriptor
+            .accepted_candidate_indices
+            .push(u64::try_from(MAX_LANE_EXECUTABLE_ENTRYPOINTS).expect("ceiling fits u64"));
+        above_limit
+            .descriptor
+            .accepted_transaction_hashes
+            .push(Hash::new(b"above-global-merge-entrypoint-ceiling"));
+        above_limit.descriptor.descriptor_hash = above_limit.descriptor.computed_descriptor_hash();
+        above_limit.proposal_hash = above_limit.computed_proposal_hash();
+        assert_eq!(
+            validate_lane_block_proposal(&above_limit),
+            Err(LaneBlockProposalIngressError::InvalidBody)
+        );
+
+        let mut oversized_vote = vote_body(&validator_set);
+        oversized_vote.accepted_candidate_indices =
+            above_limit.descriptor.accepted_candidate_indices;
+        oversized_vote.accepted_transaction_hashes =
+            above_limit.descriptor.accepted_transaction_hashes;
+        assert_eq!(
+            validate_lane_block_vote_body_shape(&oversized_vote),
+            Err(LaneBlockVoteIngressError::InvalidBody)
         );
     }
 
@@ -1927,6 +5289,44 @@ mod tests {
 
         vote.validate_ingress(CertPhase::Prepare)
             .expect("valid signed lane block vote");
+    }
+
+    #[test]
+    fn lane_block_vote_and_qc_ingress_require_nonzero_proposal_height() {
+        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
+        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
+        validator_set.sort();
+
+        let mut highest_body = vote_body(&validator_set);
+        highest_body.proposal_height = 1;
+        highest_body.lane_block_height = u64::MAX;
+        let highest_votes = [
+            signed_vote(&highest_body, &keys[0]),
+            signed_vote(&highest_body, &keys[1]),
+        ];
+        for vote in &highest_votes {
+            vote.validate_ingress(CertPhase::Prepare)
+                .expect("maximal lane height is independent of proposal height");
+        }
+        let highest_qc =
+            aggregate_lane_block_votes_to_qc(highest_body, validator_set, &highest_votes)
+                .expect("maximal lane-height QC");
+        validate_lane_block_qc(&highest_qc)
+            .expect("maximal lane-height QC is valid at nonzero proposal height");
+
+        let mut zero_proposal_body = vote_body(&highest_qc.validator_set);
+        zero_proposal_body.proposal_height = 0;
+        let zero_proposal_vote = signed_vote(&zero_proposal_body, &keys[0]);
+        assert_eq!(
+            zero_proposal_vote.validate_ingress(CertPhase::Prepare),
+            Err(LaneBlockVoteIngressError::InvalidBody)
+        );
+        let mut zero_proposal_qc = highest_qc.clone();
+        zero_proposal_qc.body.proposal_height = 0;
+        assert_eq!(
+            validate_lane_block_qc(&zero_proposal_qc),
+            Err(LaneBlockQcIngressError::InvalidBody)
+        );
     }
 
     #[test]
@@ -3189,6 +6589,11 @@ mod tests {
             cache.insert_proposal(proposal.clone()),
             Ok(LaneBlockSessionInsertOutcome::Inserted)
         );
+        assert!(!cache.contains_proposal(&hinted));
+        assert!(
+            cache.contains_proposal_identity(&hinted),
+            "advisory payload hints must not change the cached consensus identity"
+        );
         assert!(
             cache.can_accept_proposal(&hinted).is_ok(),
             "hint-only duplicate must pass preflight"
@@ -3352,8 +6757,85 @@ mod tests {
         conflicting.descriptor.descriptor_hash = conflicting.descriptor.computed_descriptor_hash();
         conflicting.proposal_hash = conflicting.computed_proposal_hash();
         assert_eq!(
-            cache.insert_proposal(conflicting),
+            cache.insert_proposal(conflicting.clone()),
             Err(LaneBlockSessionError::ConflictingProposal)
+        );
+    }
+
+    #[test]
+    fn lane_block_session_cache_rejects_cross_session_entrypoint_replays() {
+        let keys = [
+            checked_bls_keypair(1),
+            checked_bls_keypair(2),
+            checked_bls_keypair(3),
+        ];
+        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
+        validator_set.sort();
+        let proposal = lane_block_proposal(&validator_set);
+        let mut later_height = lane_block_proposal_at_height(&validator_set, 14);
+        later_height.descriptor.accepted_transaction_hashes =
+            proposal.descriptor.accepted_transaction_hashes.clone();
+        later_height.descriptor.descriptor_hash =
+            later_height.descriptor.computed_descriptor_hash();
+        later_height.proposal_hash = later_height.computed_proposal_hash();
+        let different_route = rebind_lane_block_proposal_route(
+            proposal.clone(),
+            LaneId::new(8),
+            DataSpaceId::new(12),
+        );
+        let mut different_incarnation = proposal.clone();
+        different_incarnation.descriptor.lane_incarnation =
+            Hash::new(b"adversarial-recreated-lane-incarnation");
+        different_incarnation.descriptor.descriptor_hash =
+            different_incarnation.descriptor.computed_descriptor_hash();
+        different_incarnation.proposal_hash = different_incarnation.computed_proposal_hash();
+
+        let mut cache = LaneBlockSessionCache::new(8);
+        assert_eq!(
+            cache.insert_proposal(proposal.clone()),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+        for replay in [&later_height, &different_route, &different_incarnation] {
+            assert_eq!(
+                cache.can_accept_proposal(replay),
+                Err(LaneBlockSessionError::EntrypointAlreadyClaimed)
+            );
+            assert_eq!(
+                cache.insert_proposal(replay.clone()),
+                Err(LaneBlockSessionError::EntrypointAlreadyClaimed)
+            );
+        }
+
+        let next_view =
+            retarget_lane_block_proposal_view(&proposal, proposal.descriptor.lane_block_view + 1)
+                .expect("exact NewView successor");
+        assert_eq!(
+            cache.insert_proposal(next_view),
+            Ok(LaneBlockSessionInsertOutcome::Inserted),
+            "an exact view transition must retain the immutable payload claim"
+        );
+
+        let mut reordered = LaneBlockSessionCache::new(8);
+        assert_eq!(
+            reordered.insert_proposal(later_height.clone()),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+        assert_eq!(
+            reordered.insert_proposal(proposal.clone()),
+            Err(LaneBlockSessionError::EntrypointAlreadyClaimed),
+            "arrival order must not permit the same entrypoint in two live heights"
+        );
+
+        let removed = reordered.retain_sessions_for_admissible_lanes(
+            |_lane_id, _dataspace_id, _incarnation, lane_height, _proposal_height| {
+                lane_height != later_height.descriptor.lane_block_height
+            },
+        );
+        assert_eq!(removed, 1);
+        assert_eq!(
+            reordered.insert_proposal(proposal),
+            Ok(LaneBlockSessionInsertOutcome::Inserted),
+            "pruning the former live session must release its entrypoint claims"
         );
     }
 
@@ -3402,7 +6884,54 @@ mod tests {
     }
 
     #[test]
-    fn lane_block_session_cache_recovered_proposal_preserves_voted_conflicting_slot() {
+    fn lane_block_session_cache_single_orphan_vote_cannot_displace_slot_proposal() {
+        let keys = [
+            checked_bls_keypair(1),
+            checked_bls_keypair(2),
+            checked_bls_keypair(3),
+        ];
+        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
+        validator_set.sort();
+        let proposal = lane_block_proposal(&validator_set);
+        let conflicting = retag_lane_block_proposal_payload(proposal.clone(), 0xB1);
+        let conflicting_key = LaneBlockSessionKey::from_proposal(&conflicting);
+        let proposal_vote_body = proposal.vote_body(CertPhase::Prepare);
+        let proposal_vote = signed_vote(&proposal_vote_body, &keys[0]);
+        let mut cache = LaneBlockSessionCache::new(4);
+
+        assert_ne!(proposal.proposal_hash, conflicting.proposal_hash);
+        assert_eq!(
+            cache.insert_vote(proposal_vote.clone(), Some(&proposal_vote.signer)),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+        assert_eq!(
+            cache.insert_proposal(conflicting.clone()),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+        assert_eq!(
+            cache.can_accept_proposal(&proposal),
+            Err(LaneBlockSessionError::ConflictingProposal),
+            "one committee member must not select a conflicting live proposal"
+        );
+        assert_eq!(
+            cache.insert_proposal(proposal),
+            Err(LaneBlockSessionError::ConflictingProposal)
+        );
+
+        assert_eq!(
+            cache
+                .get(&conflicting_key)
+                .and_then(|session| session.proposal.as_ref()),
+            Some(&conflicting)
+        );
+        assert!(
+            cache.contains_vote(&proposal_vote),
+            "rejected displacement must not erase the bounded orphan vote evidence"
+        );
+    }
+
+    #[test]
+    fn lane_block_session_cache_recovered_proposal_replaces_singly_voted_conflicting_slot() {
         let keys = [
             checked_bls_keypair(1),
             checked_bls_keypair(2),
@@ -3428,16 +6957,20 @@ mod tests {
             Ok(LaneBlockSessionInsertOutcome::Inserted)
         );
         assert_eq!(
-            cache.insert_recovered_proposal_replacing_uncommitted_conflict(recovered),
-            Err(LaneBlockSessionError::ConflictingProposal)
+            cache.insert_recovered_proposal_replacing_uncommitted_conflict(recovered.clone()),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
         );
 
-        assert!(cache.get(&recovered_key).is_none());
         assert_eq!(
             cache
-                .get(&conflicting_key)
+                .get(&recovered_key)
                 .and_then(|session| session.proposal.as_ref()),
-            Some(&conflicting)
+            Some(&recovered)
+        );
+        assert_eq!(
+            cache.get(&conflicting_key),
+            None,
+            "a single Byzantine vote cannot pin a non-canonical proposal over durable payload evidence"
         );
     }
 
@@ -3701,9 +7234,10 @@ mod tests {
 
         assert_eq!(
             cache.retain_sessions_for_admissible_lanes(
-                |lane_id, dataspace_id, lane_block_height, _proposal_height| {
+                |lane_id, dataspace_id, lane_incarnation, lane_block_height, _proposal_height| {
                     lane_id == active_lane
                         && dataspace_id == active_dataspace
+                        && lane_incarnation == active_proposal.descriptor.lane_incarnation
                         && lane_block_height > 12
                 },
             ),
@@ -3793,12 +7327,14 @@ mod tests {
         );
 
         let admissible_pending = cache.pending_lane_ids_for_admissible_lanes(
-            |lane_id, dataspace_id, lane_block_height, _proposal_height| {
+            |lane_id, dataspace_id, lane_incarnation, lane_block_height, _proposal_height| {
                 (lane_id == pending_lane
                     && dataspace_id == pending_dataspace
+                    && lane_incarnation == pending_proposal.descriptor.lane_incarnation
                     && lane_block_height == pending_proposal.descriptor.lane_block_height)
                     || (lane_id == drained_lane
                         && dataspace_id == drained_dataspace
+                        && lane_incarnation == drained_proposal.descriptor.lane_incarnation
                         && lane_block_height == drained_proposal.descriptor.lane_block_height)
             },
         );
@@ -3808,17 +7344,43 @@ mod tests {
             "only commit-certified sessions should block their lanes before drain"
         );
 
-        assert_eq!(cache.drain_committed_sessions().len(), 1);
-        let admissible_after_drain = cache.pending_lane_ids_for_admissible_lanes(
-            |lane_id, dataspace_id, lane_block_height, _proposal_height| {
+        let admissible_inflight_before_drain = cache.inflight_lane_ids_for_admissible_lanes(
+            |lane_id,
+             dataspace_id,
+             lane_incarnation,
+             lane_block_height,
+             _proposal_height,
+             _has_consensus_evidence| {
                 (lane_id == pending_lane
                     && dataspace_id == pending_dataspace
+                    && lane_incarnation == pending_proposal.descriptor.lane_incarnation
                     && lane_block_height == pending_proposal.descriptor.lane_block_height)
                     || (lane_id == drained_lane
                         && dataspace_id == drained_dataspace
+                        && lane_incarnation == drained_proposal.descriptor.lane_incarnation
+                        && lane_block_height == drained_proposal.descriptor.lane_block_height)
+            },
+        );
+        assert_eq!(
+            admissible_inflight_before_drain,
+            BTreeSet::from([pending_lane, drained_lane]),
+            "in-flight proposal planning should block both uncertified and commit-certified sessions before drain"
+        );
+
+        assert_eq!(cache.drain_committed_sessions().len(), 1);
+        let admissible_after_drain = cache.pending_lane_ids_for_admissible_lanes(
+            |lane_id, dataspace_id, lane_incarnation, lane_block_height, _proposal_height| {
+                (lane_id == pending_lane
+                    && dataspace_id == pending_dataspace
+                    && lane_incarnation == pending_proposal.descriptor.lane_incarnation
+                    && lane_block_height == pending_proposal.descriptor.lane_block_height)
+                    || (lane_id == drained_lane
+                        && dataspace_id == drained_dataspace
+                        && lane_incarnation == drained_proposal.descriptor.lane_incarnation
                         && lane_block_height == drained_proposal.descriptor.lane_block_height)
                     || (lane_id == inactive_lane
                         && dataspace_id == inactive_dataspace
+                        && lane_incarnation == inactive_proposal.descriptor.lane_incarnation
                         && lane_block_height == inactive_proposal.descriptor.lane_block_height)
             },
         );
@@ -3826,6 +7388,33 @@ mod tests {
             admissible_after_drain,
             BTreeSet::new(),
             "drained committed and uncertified sessions should not block proposal retries"
+        );
+
+        let admissible_inflight_after_drain = cache.inflight_lane_ids_for_admissible_lanes(
+            |lane_id,
+             dataspace_id,
+             lane_incarnation,
+             lane_block_height,
+             _proposal_height,
+             _has_consensus_evidence| {
+                (lane_id == pending_lane
+                    && dataspace_id == pending_dataspace
+                    && lane_incarnation == pending_proposal.descriptor.lane_incarnation
+                    && lane_block_height == pending_proposal.descriptor.lane_block_height)
+                    || (lane_id == drained_lane
+                        && dataspace_id == drained_dataspace
+                        && lane_incarnation == drained_proposal.descriptor.lane_incarnation
+                        && lane_block_height == drained_proposal.descriptor.lane_block_height)
+                    || (lane_id == inactive_lane
+                        && dataspace_id == inactive_dataspace
+                        && lane_incarnation == inactive_proposal.descriptor.lane_incarnation
+                        && lane_block_height == inactive_proposal.descriptor.lane_block_height)
+            },
+        );
+        assert_eq!(
+            admissible_inflight_after_drain,
+            BTreeSet::from([pending_lane, inactive_lane]),
+            "drained committed sessions should leave the in-flight set after drain"
         );
     }
 

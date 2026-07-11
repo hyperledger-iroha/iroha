@@ -1,7 +1,9 @@
 import { test as baseTest } from "node:test";
 import assert from "node:assert/strict";
 import {
+  hashInstructionBatch,
   hashSignedTransaction,
+  hashSignedTransactionPayload,
   resignSignedTransaction,
   submitSignedTransaction,
   buildRegisterSnsNameTransaction,
@@ -90,6 +92,47 @@ test("hashSignedTransaction delegates to native binding and returns hex", () => 
     const result = hashSignedTransaction(input);
     assert.equal(result, fakeHash.toString("hex"));
   });
+});
+
+test("hashSignedTransactionPayload delegates to the native payload hasher", () => {
+  const input = Buffer.from([0xca, 0xfe]);
+  const fakeHash = Buffer.alloc(32, 0x5a);
+  withNativeBinding({ hashSignedTransactionPayload: () => fakeHash }, () => {
+    assert.equal(hashSignedTransactionPayload(input), fakeHash.toString("hex"));
+    assert.deepEqual(
+      hashSignedTransactionPayload(input, { encoding: "buffer" }),
+      fakeHash,
+    );
+  });
+});
+
+test("hashInstructionBatch serializes instructions and delegates to native", () => {
+  const fakeHash = Buffer.alloc(32, 0x6b);
+  const calls = [];
+  withNativeBinding(
+    {
+      hashInstructionBatch: (instructions) => {
+        calls.push(instructions);
+        return fakeHash;
+      },
+    },
+    () => {
+      assert.equal(
+        hashInstructionBatch([{ Log: { level: "INFO", msg: "bound" } }]),
+        fakeHash.toString("hex"),
+      );
+      assert.deepEqual(
+        hashInstructionBatch([JSON.stringify({ Fail: { message: "stop" } })], {
+          encoding: "buffer",
+        }),
+        fakeHash,
+      );
+    },
+  );
+  assert.deepEqual(calls, [
+    [JSON.stringify({ Log: { level: "INFO", msg: "bound" } })],
+    [JSON.stringify({ Fail: { message: "stop" } })],
+  ]);
 });
 
 test("submitSignedTransaction submits payload and polls status until terminal", async () => {

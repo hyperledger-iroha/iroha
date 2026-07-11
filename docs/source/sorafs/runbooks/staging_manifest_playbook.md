@@ -23,31 +23,44 @@ fixtures are available in the repository.
 3. Ensure the Torii config enables the discovery cache and admission
    enforcement:
    ```toml
-   [torii.sorafs.discovery]
+   [sorafs.discovery]
    discovery_enabled = true
    known_capabilities = ["torii_gateway", "chunk_range_fetch", "vendor_reserved"]
 
-   [torii.sorafs.discovery.admission]
+   [sorafs.discovery.admission]
    envelopes_dir = "/var/lib/iroha/admission/sorafs"
+   trusted_council_keys = [
+     "ed0120REPLACE_WITH_COUNCIL_KEY_1",
+     "ed0120REPLACE_WITH_COUNCIL_KEY_2",
+     "ed0120REPLACE_WITH_COUNCIL_KEY_3",
+   ]
+   signature_threshold = 2
 
-   [torii.sorafs.storage]
+   [sorafs.storage]
    enabled = true
 
-   [torii.sorafs.gateway]
+   [sorafs.gateway]
    enforce_admission = true
    enforce_capabilities = true
    ```
 
+   Torii refuses to start when discovery/admission is enabled without a non-empty, satisfiable
+   Ed25519 council policy. Use governance council keys only; node identity, provider advert, and
+   request-signing keys are not admission trust roots.
+
 ## 2. Publish Admission Envelopes
 
 1. Copy the approved provider admission envelopes into the directory referenced
-   by `torii.sorafs.discovery.admission.envelopes_dir`:
+   by `sorafs.discovery.admission.envelopes_dir`:
    ```bash
-   install -m 0644 fixtures/sorafs_manifest/provider_admission/*.json \
+   install -m 0644 governance/providers/*.to \
      /var/lib/iroha/admission/sorafs/
    ```
-2. Restart Torii (or send a SIGHUP if you wrapped the loader with on-the-fly
-   reload).
+   Keep only canonical `.to` envelopes and the documented `README.md` in this directory. Symlinks,
+   directories, unknown files, oversized envelopes, corrupt Norito, and duplicate providers fail
+   startup.
+2. Restart Torii. Admission policy and registry replacement is a startup operation; do not assume
+   SIGHUP reloads trust roots.
 3. Tail the logs for admission messages:
    ```
    torii | grep "loaded provider admission envelope"
@@ -75,7 +88,7 @@ fixtures are available in the repository.
    ```bash
    sorafs-fetch \
      --plan fixtures/chunk_fetch_specs.json \
-     --gateway-provider name=staging,provider-id=<hex>,base-url=https://staging-gateway/,stream-token=<base64> \
+     --gateway-provider name=staging,provider-id=<hex>,gateway-key=<ed25519-public-key-hex>,base-url=https://staging-gateway/,stream-token=<base64> \
      --gateway-manifest-id <manifest_id_hex> \
      --gateway-chunker-handle sorafs.sf1@1.0.0 \
      --json-out=reports/staging_manifest.json

@@ -127,6 +127,31 @@ class HostileMarkdownString(str):
         return "secret-token-hostile-markdown-string"
 
 
+class HostilePhaseStatus(str):
+    """String subclass that copied corridor status checks must reject exactly."""
+
+    def __new__(cls, value: str = "passed"):
+        return str.__new__(cls, value)
+
+    def __eq__(self, other):
+        raise AssertionError("secret-token hostile phase status __eq__")
+
+    def __ne__(self, other):
+        raise AssertionError("secret-token hostile phase status __ne__")
+
+    def __str__(self):
+        raise AssertionError("secret-token hostile phase status __str__")
+
+    def __format__(self, format_spec):
+        raise AssertionError("secret-token hostile phase status __format__")
+
+    def __repr__(self):
+        return "secret-token-hostile-phase-status"
+
+    def __hash__(self):
+        return str.__hash__(self)
+
+
 class HostileReportFieldName(str):
     """String subclass that readiness field-name classifiers must reject exactly."""
 
@@ -2344,6 +2369,38 @@ def test_active_launch_evm_live_metadata_rejects_container_subclasses_without_ho
     assert (
         f"{label}: active {report.ACTIVE_LAUNCH_DISPLAY} live metadata summary "
         "is malformed"
+    ) in blockers
+    assert "secret-token" not in rendered
+
+
+def test_active_launch_evm_live_metadata_rejects_block_tag_subclasses_without_hooks() -> None:
+    """Active launch EVM block tags must reject string subclasses before equality."""
+
+    report = load_report_module()
+    label = f"domain {report.ACTIVE_LAUNCH_DOMAIN} ({report.ACTIVE_LAUNCH_CHAIN})"
+    expected_chain_id = active_evm_live_chain_id(report)
+    assert expected_chain_id is not None
+    lane = {
+        "evm_live_metadata": {
+            "source_rpc_chain_id": expected_chain_id,
+            "source_block_tag": HostilePublicCryptoString("finalized"),
+            "destination_rpc_chain_id": expected_chain_id,
+            "destination_block_tag": HostilePublicCryptoString("finalized"),
+        }
+    }
+
+    # Source-inventory marker: active EVM live block-tag exactness rejects copied
+    # string subclasses before equality hooks.
+    blockers = report._active_launch_evm_live_metadata_blockers(label, lane)
+    rendered = "\n".join(blockers)
+
+    assert (
+        f"{label}: {report.ACTIVE_LAUNCH_DISPLAY} source live block tag must be "
+        "finalized"
+    ) in blockers
+    assert (
+        f"{label}: {report.ACTIVE_LAUNCH_DISPLAY} destination live block tag "
+        "must be finalized"
     ) in blockers
     assert "secret-token" not in rendered
 
@@ -10273,6 +10330,47 @@ def test_release_readiness_json_loader_rejects_unreadable_file_shapes(
         assert "Traceback" not in message
 
 
+def test_release_readiness_json_loader_rejects_pathlike_subclasses_without_hooks(
+    tmp_path: Path,
+) -> None:
+    """Readiness JSON loading must reject hostile path-like objects before coercion."""
+
+    report = load_report_module()
+    json_path = tmp_path / "payload.json"
+    json_path.write_text("{}\n", encoding="utf-8")
+    json_text = str(json_path)
+
+    class HostileJsonPathString(str):
+        def __new__(cls):
+            return str.__new__(cls, json_text)
+
+        def __str__(self):
+            raise AssertionError("secret-token readiness JSON path was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token readiness JSON path was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token readiness JSON path was coerced")
+
+    class HostileJsonPathLike:
+        def __str__(self):
+            raise AssertionError("secret-token readiness JSON path-like was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token readiness JSON path-like was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token readiness JSON path-like was coerced")
+
+    for path in (HostileJsonPathString(), HostileJsonPathLike()):
+        with pytest.raises(OSError) as exc_info:
+            report._load_json_without_duplicate_keys(path)
+        message = str(exc_info.value)
+        assert message == "JSON path cannot be read"
+        assert "secret-token" not in message
+
+
 def test_release_readiness_report_guards_release_public_markdown_text_schema_gate_inventory(
     tmp_path: Path,
 ) -> None:
@@ -10476,6 +10574,46 @@ def test_release_readiness_public_blocker_helpers_reject_list_subclasses_without
     assert blocker_errors == [
         "readiness report blockers must be a list of non-empty canonical strings"
     ]
+
+
+def test_release_readiness_public_blocker_decode_helpers_reject_string_subclasses_without_hooks() -> None:
+    """Public blocker decode helpers must reject str subclasses before hooks."""
+
+    class HostilePublicBlockerText(str):
+        def __new__(cls):
+            return str.__new__(cls, "safe public blocker")
+
+        def __str__(self):
+            raise AssertionError("secret-token public blocker text stringified")
+
+        def __repr__(self):
+            return "secret-token-public-blocker-text"
+
+        def __len__(self):
+            raise AssertionError("secret-token public blocker text length")
+
+        def __eq__(self, _other):
+            raise AssertionError("secret-token public blocker text compared")
+
+        def __ne__(self, _other):
+            raise AssertionError("secret-token public blocker text compared")
+
+        def isascii(self):
+            raise AssertionError("secret-token public blocker text checked ASCII")
+
+        def casefold(self):
+            raise AssertionError("secret-token public blocker text casefolded")
+
+        def translate(self, _table):
+            raise AssertionError("secret-token public blocker text translated")
+
+    report = load_report_module()
+    blocker = HostilePublicBlockerText()
+
+    assert report._decoded_public_blocker_text(blocker) == ""
+    assert report._decoded_sensitive_public_marker_text(blocker) == ""
+    assert report._decoded_public_blocker_text_issue(blocker) == "non-string value"
+    assert report._canonical_public_blocker_key(blocker) == ""
 
 
 def test_release_readiness_public_report_rejects_hostile_copied_containers_without_leaking() -> None:
@@ -10804,6 +10942,54 @@ def test_release_readiness_markdown_table_containers_reject_subclasses_without_l
     assert "secret-token" not in rendered
 
 
+def test_release_readiness_corridor_markdown_helpers_use_exact_root_keys() -> None:
+    """Corridor Markdown must ignore copied root/phase aliases exactly."""
+
+    report = load_report_module()
+    phase = "rust-sccp"
+    secret_artifact = {
+        "path": "evidence/secret-token-corridor-root.log",
+        "bytes": 42,
+        "sha256": "11" * 32,
+    }
+
+    rows = [
+        *report._corridor_markdown_rows(
+            {
+                HostileReportFieldName("phases"): {phase: "passed"},
+                "evidence_artifacts": {phase: secret_artifact},
+            }
+        ),
+        *report._corridor_markdown_rows(
+            {
+                "phases": {phase: "passed"},
+                HostileReportFieldName("evidence_artifacts"): {
+                    phase: secret_artifact,
+                },
+            }
+        ),
+        *report._corridor_markdown_rows(
+            {
+                "phases": {HostileReportFieldName(phase): "passed"},
+                "evidence_artifacts": {phase: secret_artifact},
+            }
+        ),
+        *report._corridor_markdown_rows(
+            {
+                "phases": {phase: HostileReportFieldName("passed")},
+                "evidence_artifacts": {phase: secret_artifact},
+            }
+        ),
+    ]
+    rendered = "\n".join("| " + " | ".join(row) + " |" for row in rows)
+
+    assert "| `<invalid phase>` | `<invalid status>` | - | - |" in rendered
+    assert f"| `{phase}` | passed | - | - |" in rendered
+    assert "| `<invalid phase>` | passed | - | - |" in rendered
+    assert f"| `{phase}` | `<invalid status>` |" in rendered
+    assert "secret-token" not in rendered
+
+
 def test_release_readiness_markdown_native_source_containers_reject_subclasses_without_leaking() -> None:
     """Native/source Markdown helpers must reject container subclasses early."""
 
@@ -10945,6 +11131,34 @@ def test_release_readiness_markdown_native_source_containers_reject_subclasses_w
     assert "`<invalid gate>`" in rendered
     assert "source inventory gate must be an object" in rendered
     assert "secret-token" not in rendered
+
+
+def test_release_readiness_input_artifact_markdown_helpers_use_exact_keys() -> None:
+    """Input-artifact Markdown helpers must ignore hostile copied key aliases."""
+
+    report = load_report_module()
+    artifact = {
+        "path": "evidence/secret-token-input-alias.toml",
+        "bytes": 42,
+        "sha256": "11" * 32,
+    }
+    for field in ("path", "bytes", "sha256"):
+        artifact[HostileReportFieldName(field)] = artifact.pop(field)
+
+    path_cell = report._markdown_artifact_path_cell(artifact, field_label="path")
+    bytes_cell = report._markdown_artifact_bytes_cell(artifact)
+    hash_cell = report._markdown_artifact_hash_cell(artifact, field_label="sha256")
+    rows = report._input_artifact_markdown_rows([artifact])
+    rendered = "\n".join([path_cell, bytes_cell, hash_cell, *rows[0]])
+
+    assert path_cell == "`<invalid path>`"
+    assert bytes_cell == "`<invalid bytes>`"
+    assert hash_cell == "`<invalid sha256>`"
+    assert rows == [["`<invalid path>`", "`<invalid bytes>`", "`<invalid sha256>`"]]
+    assert "secret-token" not in rendered
+    assert "hostile" not in rendered
+    assert "__eq__" not in rendered
+    assert "__str__" not in rendered
 
 
 def test_release_readiness_markdown_lane_containers_reject_subclasses_without_leaking() -> None:
@@ -18984,12 +19198,32 @@ def test_release_readiness_native_evm_markdown_cells_ignore_hostile_aliases() ->
         },
         field_label="proving_key",
     )
+    bundle = {
+        "required": True,
+        "validation_status": "passed",
+        "artifact": {
+            "path": "native-prover-artifacts/proof.bin",
+            "sha256": "11" * 32,
+        },
+        "proof_artifact_hash": fixed_hex32(0x91),
+        "proving_key_hash": fixed_hex32(0x92),
+        "verifier_key_hash": fixed_hex32(0x93),
+        "destination_binding_hash": fixed_hex32(0x94),
+        "cross_sdk_fixture_parity_artifact": {
+            "path": "native-prover-artifacts/parity.json",
+            "sha256": "22" * 32,
+        },
+        "native_prover_self_test_artifact": {
+            "path": "native-prover-artifacts/self-test.json",
+            "sha256": "33" * 32,
+        },
+        "sdk_artifacts": sdk_artifacts,
+        "validation_blockers": ["secret-token-native-root-alias"],
+    }
+    for field in tuple(bundle):
+        bundle[HostileReportFieldName(field)] = bundle.pop(field)
     row_cells = report._native_evm_bundle_markdown_row_cells(
-        {
-            HostileReportFieldName("required"): True,
-            "validation_status": "passed",
-            "validation_blockers": [],
-        }
+        bundle
     )
 
     rendered = "\n".join(
@@ -19007,7 +19241,20 @@ def test_release_readiness_native_evm_markdown_cells_ignore_hostile_aliases() ->
     assert artifact_hash_cell == "`<invalid proving_key.sha256>`"
     assert support_artifact_cell == "`<invalid proving_key>`"
     assert support_artifact_hash_cell == "`<invalid proving_key>`"
-    assert row_cells[0] == "no"
+    assert row_cells == [
+        "no",
+        "blocked",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "`<invalid validation_status>`<br>`<invalid validation_blockers>`",
+    ]
     assert "secret-token" not in rendered
     assert "hostile readiness" not in rendered
     assert "__eq__" not in rendered
@@ -19282,6 +19529,51 @@ def test_release_readiness_native_evm_artifact_redaction_uses_exact_keys() -> No
     assert report._public_mapping_get_string_key(redacted, "sha256") == "11" * 32
 
 
+def test_release_readiness_native_evm_redaction_status_uses_exact_strings() -> None:
+    """Native EVM public redaction must not compare hostile status subclasses."""
+
+    report = load_report_module()
+    unsafe_artifact = {
+        "path": "native-prover-artifacts/unsafe|path.bin",
+        "bytes": 1,
+        "sha256": "11" * 32,
+    }
+    exact_blocked = report._redacted_public_native_evm_prover_bundle(
+        {
+            "validation_status": "blocked",
+            "artifact": dict(unsafe_artifact),
+        }
+    )
+    hostile_blocked = report._redacted_public_native_evm_prover_bundle(
+        {
+            "validation_status": HostilePhaseStatus("blocked"),
+            "artifact": dict(unsafe_artifact),
+        }
+    )
+
+    exact_artifact = report._public_mapping_get_string_key(exact_blocked, "artifact")
+    hostile_artifact = report._public_mapping_get_string_key(
+        hostile_blocked,
+        "artifact",
+    )
+    rendered = json.dumps(
+        {
+            "exact": exact_artifact,
+            "hostile": hostile_artifact,
+        },
+        sort_keys=True,
+    )
+
+    assert report._public_mapping_get_string_key(exact_artifact, "path") == "redacted"
+    assert (
+        report._public_mapping_get_string_key(hostile_artifact, "path")
+        == "native-prover-artifacts/unsafe|path.bin"
+    )
+    assert "secret-token" not in rendered
+    assert "__eq__" not in rendered
+    assert "__str__" not in rendered
+
+
 def test_release_readiness_cryptographic_evidence_exact_key_helpers_reject_hostile_required_keys(
     tmp_path: Path,
 ) -> None:
@@ -19394,6 +19686,46 @@ def test_release_readiness_active_launch_outer_summary_uses_exact_keys(
     assert rows[0]["source_adapter_gate_hash"] == ""
     assert rows[0]["evm_source_rpc_chain_id"] == ""
     assert markdown_rows[0][3] == "source=no, deploy=no, dest=no, route=no"
+    assert "secret-token" not in rendered
+    assert "hostile" not in rendered
+    assert "__eq__" not in rendered
+    assert "__str__" not in rendered
+
+
+def test_release_readiness_lane_markdown_helpers_use_exact_row_keys() -> None:
+    """Lane-readiness Markdown helpers must ignore hostile copied row-key aliases."""
+
+    report = load_report_module()
+    lane = {
+        "domain": report.ACTIVE_LAUNCH_DOMAIN,
+        "chain": report.ACTIVE_LAUNCH_CHAIN,
+        "production_ready": True,
+        "records": {
+            "source_verifier_material": True,
+            "source_adapter_deployment": True,
+            "destination_rollout": True,
+            "route_allowlist": True,
+        },
+        "blockers": ["secret-token-lane-alias"],
+    }
+    for field in ("domain", "chain", "production_ready", "records", "blockers"):
+        lane[HostileReportFieldName(field)] = lane.pop(field)
+
+    cells = report._lane_readiness_markdown_cells(lane)
+    rows = report._lane_readiness_markdown_rows(
+        {"lanes": [lane]},
+        max_blockers_per_lane=4,
+    )
+    rendered = "\n".join(str(value) for value in (*cells, *rows[0]))
+
+    assert cells == ("-", "-", "blocked", "source=no, deploy=no, dest=no, route=no", None)
+    assert rows[0] == [
+        "-",
+        "-",
+        "blocked",
+        "source=no, deploy=no, dest=no, route=no",
+        "`<invalid blockers>`",
+    ]
     assert "secret-token" not in rendered
     assert "hostile" not in rendered
     assert "__eq__" not in rendered
@@ -20231,6 +20563,22 @@ def test_release_readiness_cli_error_detail_treats_system_exit_as_opaque() -> No
 
     assert detail == fallback
     assert safe_message not in detail
+
+
+def test_release_readiness_cli_error_detail_redacts_unstringifiable_exceptions() -> None:
+    """Top-level readiness CLI errors must fall back when stringification fails."""
+
+    report = load_report_module()
+    fallback = "SCCP release readiness report generation failed"
+
+    class HostileCliException(RuntimeError):
+        def __str__(self):
+            raise AssertionError("secret-token readiness CLI exception was stringified")
+
+    detail = report._cli_error_detail(HostileCliException(), fallback=fallback)
+
+    assert detail == fallback
+    assert "secret-token" not in detail
 
 
 def test_release_readiness_report_markdown_marks_duplicate_public_blocker_strings(
@@ -25711,6 +26059,71 @@ def test_release_readiness_corridor_phase_keys_reject_string_subclasses_without_
         in errors
     )
     assert "secret-token" not in "\n".join(errors)
+
+
+def test_release_readiness_corridor_phase_statuses_use_exact_strings() -> None:
+    """Copied public corridor phase statuses must reject string subclasses exactly."""
+
+    report = load_report_module()
+    phases = report._corridor_phases()
+    phase = "js-sdk"
+    assert phase in phases
+    phase_status = {known_phase: "passed" for known_phase in phases}
+    phase_status[phase] = HostilePhaseStatus("passed")
+    evidence_artifacts = {
+        known_phase: {
+            "path": f"corridor/{known_phase}.log",
+            "bytes": 1,
+            "sha256": "a" * 64,
+        }
+        for known_phase in phases
+    }
+
+    errors = report._public_corridor_errors(
+        {
+            "production_ready": True,
+            "phases": phase_status,
+            "evidence_artifacts": evidence_artifacts,
+            "require_phase_evidence": True,
+            "blockers": [],
+        },
+    )
+    uses_shared_artifact = report._corridor_uses_shared_full_run_artifact(
+        evidence_artifacts,
+        phase_status,
+        phases,
+    )
+    surfaces = report._submission_surfaces(phase_status)
+    rendered = "\n".join(
+        [
+            *errors,
+            *(
+                blocker
+                for surface in surfaces
+                for blocker in surface["validation_blockers"]
+            ),
+        ]
+    )
+
+    assert (
+        f"readiness report corridor phase {phase} status must be passed, failed, "
+        "skipped, or missing"
+    ) in rendered
+    assert (
+        f"readiness report corridor phase {phase} has no hashed evidence artifact"
+        not in rendered
+    )
+    assert uses_shared_artifact is False
+    assert any(
+        f"{phase} is invalid" in blocker
+        for surface in surfaces
+        for blocker in surface["validation_blockers"]
+    )
+    assert "secret-token" not in rendered
+    assert "hostile phase status" not in rendered
+    assert "__eq__" not in rendered
+    assert "__ne__" not in rendered
+    assert "__str__" not in rendered
 
 
 def test_release_readiness_corridor_phase_evidence_requires_exact_keys() -> None:
@@ -33687,6 +34100,37 @@ def test_release_readiness_path_helpers_reject_decoded_sensitive_marker_families
         assert name not in message
 
 
+def test_release_readiness_path_text_helpers_reject_string_subclasses_without_hooks(
+) -> None:
+    """Readiness path text scanners must reject string subclasses before hooks."""
+
+    report = load_report_module()
+
+    class HostilePathText(str):
+        def __new__(cls):
+            return str.__new__(cls, "operator/%2e%2e/secret-token.log")
+
+        def __iter__(self):
+            raise AssertionError("secret-token readiness path text was iterated")
+
+        def __contains__(self, _needle):
+            raise AssertionError("secret-token readiness path text containment ran")
+
+        def __hash__(self):
+            raise AssertionError("secret-token readiness path text was hashed")
+
+        def __str__(self):
+            raise AssertionError("secret-token readiness path text was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token readiness path text was repr'd")
+
+    hostile = HostilePathText()
+    assert report._path_control_character(hostile) == "non-string path"
+    assert report._path_markdown_unsafe_character(hostile) == "non-string path"
+    assert report._path_percent_encoded_traversal(hostile) == "non-string path"
+
+
 def test_release_readiness_phase_path_helpers_reject_string_subclasses_without_hooks(
 ) -> None:
     """Readiness phase/path helpers must reject copied string subclasses exactly."""
@@ -33805,6 +34249,102 @@ def test_release_readiness_output_collision_rejects_phase_assignment_subclasses_
 
     assert error == "readiness report phase evidence assignment must be an exact string"
     assert "secret-token" not in error
+
+
+def test_release_readiness_output_collision_rejects_pathlike_subclasses_without_hooks(
+    tmp_path: Path,
+) -> None:
+    """Readiness output collision helpers must reject hostile path-like objects."""
+
+    report = load_report_module()
+    output_path = tmp_path / "readiness.md"
+    path_text = str(output_path)
+
+    class HostileReadinessPathString(str):
+        def __new__(cls):
+            return str.__new__(cls, path_text)
+
+        def __str__(self):
+            raise AssertionError("secret-token readiness path was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token readiness path was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token readiness path was coerced")
+
+    class HostileReadinessPathLike:
+        def __str__(self):
+            raise AssertionError("secret-token readiness path-like was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token readiness path-like was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token readiness path-like was coerced")
+
+    boundaries = (
+        (
+            lambda path: report._same_resolved_path(path, output_path),
+            "readiness report path must be a native path",
+        ),
+        (
+            lambda path: report._same_resolved_path(output_path, path),
+            "readiness report path must be a native path",
+        ),
+        (
+            lambda path: report._readiness_output_collision_error(
+                path,
+                toml_paths=(),
+                phase_evidence=(),
+                phase_evidence_dir=None,
+                native_evm_prover_bundle=None,
+                phases=("rust-sccp",),
+            ),
+            "readiness report output path must be a native path",
+        ),
+        (
+            lambda path: report._readiness_output_collision_error(
+                output_path,
+                toml_paths=[path],
+                phase_evidence=(),
+                phase_evidence_dir=None,
+                native_evm_prover_bundle=None,
+                phases=("rust-sccp",),
+            ),
+            "readiness report input evidence path must be a native path",
+        ),
+        (
+            lambda path: report._readiness_output_collision_error(
+                output_path,
+                toml_paths=(),
+                phase_evidence=(),
+                phase_evidence_dir=path,
+                native_evm_prover_bundle=None,
+                phases=("rust-sccp",),
+            ),
+            "readiness report phase evidence directory path must be a native path",
+        ),
+        (
+            lambda path: report._readiness_output_collision_error(
+                output_path,
+                toml_paths=(),
+                phase_evidence=(),
+                phase_evidence_dir=None,
+                native_evm_prover_bundle=path,
+                phases=("rust-sccp",),
+            ),
+            "readiness report native EVM prover bundle path must be a native path",
+        ),
+    )
+
+    for path in (HostileReadinessPathString(), HostileReadinessPathLike()):
+        for boundary, expected_error in boundaries:
+            with pytest.raises(ValueError) as exc_info:
+                boundary(path)
+            message = str(exc_info.value)
+            assert message == expected_error
+            assert "secret-token" not in message
 
 
 def test_release_readiness_report_requires_contract_smoke_node_success_evidence(
@@ -46162,6 +46702,49 @@ def test_release_readiness_report_rejects_directory_phase_evidence(
     assert "IsADirectory" not in completed.stderr
     assert "corridor-directory" not in completed.stderr
     assert "corridor-directory" not in completed.stdout
+
+
+def test_release_readiness_artifact_helper_rejects_pathlike_subclasses_without_hooks(
+    tmp_path: Path,
+) -> None:
+    """Readiness artifact hashing must require native paths before path access."""
+
+    report = load_report_module()
+    artifact = tmp_path / "complete.toml"
+    artifact.write_text("release evidence\n", encoding="utf-8")
+    artifact_text = str(artifact)
+
+    class HostileArtifactPathString(str):
+        def __new__(cls):
+            return str.__new__(cls, artifact_text)
+
+        def __str__(self):
+            raise AssertionError("secret-token readiness artifact path was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token readiness artifact path was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token readiness artifact path was coerced")
+
+    class HostileArtifactPathLike:
+        def __str__(self):
+            raise AssertionError(
+                "secret-token readiness artifact path-like was stringified"
+            )
+
+        def __repr__(self):
+            raise AssertionError("secret-token readiness artifact path-like was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token readiness artifact path-like was coerced")
+
+    for path in (HostileArtifactPathString(), HostileArtifactPathLike()):
+        with pytest.raises(ValueError) as exc_info:
+            report._artifact(path)
+        message = str(exc_info.value)
+        assert message == "release artifact path must be a regular file"
+        assert "secret-token" not in message
 
 
 def test_release_readiness_rejects_control_character_artifact_paths(

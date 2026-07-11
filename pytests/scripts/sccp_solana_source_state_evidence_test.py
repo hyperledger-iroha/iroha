@@ -742,6 +742,29 @@ def test_solana_network_parser_rejects_unknown_profiles():
             raise AssertionError(f"unsupported Solana network {value!r} accepted")
 
 
+def test_solana_network_parser_rejects_noncanonical_case():
+    module = load_evidence_module()
+
+    for value in ("MAINNET", "Mainnet-beta", "SOLANA-MAINNET-BETA", "Testnet"):
+        try:
+            module.parse_solana_network(value)
+        except module.argparse.ArgumentTypeError as exc:
+            assert "mainnet-beta or testnet" in str(exc)
+        else:
+            raise AssertionError(
+                f"noncanonical Solana network case {value!r} was accepted"
+            )
+
+        try:
+            module._solana_profile_for_network(value)
+        except ValueError as exc:
+            assert str(exc) == "solana_network must be mainnet-beta or testnet"
+        else:
+            raise AssertionError(
+                f"noncanonical Solana profile case {value!r} was accepted"
+            )
+
+
 def test_solana_source_state_toml_renderer_rejects_string_subclasses_without_hooks():
     module = load_evidence_module()
 

@@ -83,9 +83,9 @@ use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::chunker_registry;
 use sorafs_manifest::deal::{MICRO_XOR_PER_XOR, XorAmount};
 use sorafs_manifest::repair::{
-    REPAIR_ESCALATION_APPROVAL_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1,
-    REPAIR_WORKER_SIGNATURE_VERSION_V1, RepairEscalationApprovalV1, RepairSlashProposalV1,
-    RepairTicketId, RepairWorkerActionV1, RepairWorkerSignaturePayloadV1,
+    REPAIR_SLASH_PROPOSAL_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1,
+    RepairSlashProposalV1, RepairTicketId, RepairWorkerActionV1,
+    RepairWorkerSignaturePayloadV1,
 };
 use sorafs_manifest::{
     ChunkingProfileV1, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1, PinPolicy,
@@ -3651,21 +3651,6 @@ pub struct RepairEscalateArgs {
     /// Optional timestamp for the proposal (RFC3339 or `@unix_seconds`).
     #[arg(long = "submitted-at", value_name = "RFC3339|@UNIX")]
     submitted_at: Option<String>,
-    /// Optional approval votes in favor of the slash decision.
-    #[arg(long = "approve-votes", value_name = "COUNT")]
-    approve_votes: Option<u32>,
-    /// Optional approval votes against the slash decision.
-    #[arg(long = "reject-votes", value_name = "COUNT")]
-    reject_votes: Option<u32>,
-    /// Optional approval abstain votes.
-    #[arg(long = "abstain-votes", value_name = "COUNT")]
-    abstain_votes: Option<u32>,
-    /// Optional timestamp when approval was recorded (RFC3339 or `@unix_seconds`).
-    #[arg(long = "approved-at", value_name = "RFC3339|@UNIX")]
-    approved_at: Option<String>,
-    /// Optional timestamp when the decision became final after appeals (RFC3339 or `@unix_seconds`).
-    #[arg(long = "finalized-at", value_name = "RFC3339|@UNIX")]
-    finalized_at: Option<String>,
 }
 
 impl Run for RepairEscalateArgs {
@@ -3692,34 +3677,6 @@ impl RepairEscalateArgs {
         };
         let submitted_at_unix =
             parse_timestamp_or_now(self.submitted_at.as_deref(), "submitted-at")?;
-        let wants_approval = self.approve_votes.is_some()
-            || self.reject_votes.is_some()
-            || self.abstain_votes.is_some()
-            || self.approved_at.is_some()
-            || self.finalized_at.is_some();
-        let approval = if wants_approval {
-            let approve_votes = self.approve_votes.ok_or_else(|| {
-                eyre!("--approve-votes is required when supplying an approval summary")
-            })?;
-            let approved_at = self.approved_at.as_deref().ok_or_else(|| {
-                eyre!("--approved-at is required when supplying an approval summary")
-            })?;
-            let finalized_at = self.finalized_at.as_deref().ok_or_else(|| {
-                eyre!("--finalized-at is required when supplying an approval summary")
-            })?;
-            let approved_at_unix = parse_timestamp_value(approved_at, "approved-at")?;
-            let finalized_at_unix = parse_timestamp_value(finalized_at, "finalized-at")?;
-            Some(RepairEscalationApprovalV1 {
-                version: REPAIR_ESCALATION_APPROVAL_VERSION_V1,
-                approve_votes,
-                reject_votes: self.reject_votes.unwrap_or(0),
-                abstain_votes: self.abstain_votes.unwrap_or(0),
-                approved_at_unix,
-                finalized_at_unix,
-            })
-        } else {
-            None
-        };
         let proposal = RepairSlashProposalV1 {
             version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
             ticket_id,
@@ -3729,7 +3686,10 @@ impl RepairEscalateArgs {
             proposed_penalty_nano: self.penalty_nano,
             submitted_at_unix,
             rationale: self.rationale.clone(),
-            approval,
+            // Approval summaries embedded by the proposal submitter are not an
+            // authority source. The repair store derives decisions only from
+            // its authenticated, durably recorded governance votes.
+            approval: None,
         };
         proposal
             .validate()
@@ -5226,6 +5186,7 @@ impl Run for FetchArgs {
             provider_inputs.push(GatewayProviderInput {
                 name: parsed.name,
                 provider_id_hex: parsed.provider_id_hex,
+                gateway_public_key_hex: parsed.gateway_public_key_hex,
                 base_url: parsed.base_url,
                 stream_token_b64: parsed.stream_token_b64,
                 privacy_events_url: parsed.privacy_events_url,
@@ -5585,6 +5546,7 @@ impl Run for FetchArgs {
 struct ParsedGatewayProvider {
     name: String,
     provider_id_hex: String,
+    gateway_public_key_hex: String,
     base_url: String,
     stream_token_b64: String,
     privacy_events_url: Option<String>,
@@ -5593,6 +5555,7 @@ struct ParsedGatewayProvider {
 fn parse_gateway_provider_spec(value: &str) -> Result<ParsedGatewayProvider> {
     let mut name: Option<String> = None;
     let mut provider_id: Option<String> = None;
+    let mut gateway_public_key: Option<String> = None;
     let mut base_url: Option<String> = None;
     let mut stream_token: Option<String> = None;
     let mut privacy_events_url: Option<String> = None;
@@ -5617,6 +5580,10 @@ fn parse_gateway_provider_spec(value: &str) -> Result<ParsedGatewayProvider> {
                 let normalised = validate_hex_digest(val, "--gateway-provider provider-id")?;
                 provider_id = Some(normalised);
             }
+            "gateway-key" | "gateway_key" | "gateway-public-key" | "gateway_public_key" => {
+                let normalised = validate_hex_digest(val, "--gateway-provider gateway-key")?;
+                gateway_public_key = Some(normalised);
+            }
             "base-url" | "base_url" => {
                 if val.is_empty() {
                     return Err(eyre!("--gateway-provider base-url must not be empty"));
@@ -5637,7 +5604,7 @@ fn parse_gateway_provider_spec(value: &str) -> Result<ParsedGatewayProvider> {
             }
             other => {
                 return Err(eyre!(
-                    "unknown --gateway-provider key `{other}`; expected name, provider-id, base-url, stream-token, privacy-url"
+                    "unknown --gateway-provider key `{other}`; expected name, provider-id, gateway-key, base-url, stream-token, privacy-url"
                 ));
             }
         }
@@ -5646,6 +5613,8 @@ fn parse_gateway_provider_spec(value: &str) -> Result<ParsedGatewayProvider> {
     let name = name.ok_or_else(|| eyre!("--gateway-provider requires name=<alias>"))?;
     let provider_id_hex =
         provider_id.ok_or_else(|| eyre!("--gateway-provider requires provider-id=<hex>"))?;
+    let gateway_public_key_hex =
+        gateway_public_key.ok_or_else(|| eyre!("--gateway-provider requires gateway-key=<hex>"))?;
     let base_url =
         base_url.ok_or_else(|| eyre!("--gateway-provider requires base-url=<https://...>"))?;
     let stream_token_b64 =
@@ -5654,6 +5623,7 @@ fn parse_gateway_provider_spec(value: &str) -> Result<ParsedGatewayProvider> {
     Ok(ParsedGatewayProvider {
         name,
         provider_id_hex,
+        gateway_public_key_hex,
         base_url,
         stream_token_b64,
         privacy_events_url,
@@ -22687,12 +22657,14 @@ mod tests {
     #[test]
     fn gateway_provider_spec_parses_expected_keys() {
         let id_hex = "11".repeat(32);
+        let key_hex = "22".repeat(32);
         let spec = format!(
-            "name=alpha, provider-id={id_hex}, base-url=https://example.com, stream-token=YWJj"
+            "name=alpha, provider-id={id_hex}, gateway-key={key_hex}, base-url=https://example.com, stream-token=YWJj"
         );
         let parsed = parse_gateway_provider_spec(&spec).expect("parse spec");
         assert_eq!(parsed.name, "alpha");
         assert_eq!(parsed.provider_id_hex, id_hex);
+        assert_eq!(parsed.gateway_public_key_hex, key_hex);
         assert_eq!(parsed.base_url, "https://example.com");
         assert_eq!(parsed.stream_token_b64, "YWJj");
     }
@@ -27929,7 +27901,7 @@ mod tests {
     }
 
     #[test]
-    fn repair_escalate_builds_slash_proposal() {
+    fn repair_escalate_builds_unapproved_slash_proposal() {
         let manifest_digest = [0x77_u8; 32];
         let provider_id = [0x88_u8; 32];
         let args = RepairEscalateArgs {
@@ -27940,11 +27912,6 @@ mod tests {
             rationale: "sla_missed".to_string(),
             auditor: None,
             submitted_at: Some("@1700000504".to_string()),
-            approve_votes: Some(2),
-            reject_votes: Some(1),
-            abstain_votes: Some(0),
-            approved_at: Some("@1700000600".to_string()),
-            finalized_at: Some("@1700000700".to_string()),
         };
         let mut ctx = TestContext::new();
         let expected_auditor = ctx.config().account.to_string();
@@ -27956,12 +27923,7 @@ mod tests {
             assert_eq!(proposal.auditor_account, expected_auditor);
             assert_eq!(proposal.proposed_penalty_nano, 900);
             assert_eq!(proposal.submitted_at_unix, 1_700_000_504);
-            let approval = proposal.approval.as_ref().expect("approval");
-            assert_eq!(approval.approve_votes, 2);
-            assert_eq!(approval.reject_votes, 1);
-            assert_eq!(approval.abstain_votes, 0);
-            assert_eq!(approval.approved_at_unix, 1_700_000_600);
-            assert_eq!(approval.finalized_at_unix, 1_700_000_700);
+            assert!(proposal.approval.is_none());
             Ok(Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
@@ -27985,11 +27947,6 @@ mod tests {
             rationale: "missing-approval".to_string(),
             auditor: None,
             submitted_at: Some("@1700000605".to_string()),
-            approve_votes: None,
-            reject_votes: None,
-            abstain_votes: None,
-            approved_at: None,
-            finalized_at: None,
         };
         let mut ctx = TestContext::new();
         let expected_auditor = ctx.config().account.to_string();

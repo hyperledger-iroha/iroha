@@ -1997,10 +1997,6 @@ fn mcp_paths() -> Map {
     );
     post_operation.insert("operationId".into(), Value::String("mcpJsonRpc".to_owned()));
     post_operation.insert(
-        "requestBody".into(),
-        Value::Object(json_request_body("#/components/schemas/JsonValue")),
-    );
-    post_operation.insert(
         "responses".into(),
         Value::Object(single_json_response("#/components/schemas/JsonValue")),
     );
@@ -2532,7 +2528,7 @@ fn zk_paths() -> Map {
         Value::Object(json_get_operation(
             "ZK",
             "Fetch a verification key.",
-            "Fetch a verification key by backend and name.",
+            "Fetch a verification key by backend and name. The response includes namespace and owner_manifest_id identity metadata plus record_norito_base64, the standard-base64 canonical Norito VerifyingKeyRecord archive used by SDK proof-attachment builders.",
             "#/components/schemas/JsonValue",
             vec![
                 string_path_param("backend", "Verification backend label."),
@@ -4096,8 +4092,8 @@ fn sorafs_paths() -> Map {
         "/v1/sorafs/capacity/por-challenge".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
-            "Submit PoR challenge.",
-            "Submit proof-of-replication challenge.",
+            "External PoR challenge submission retired.",
+            "Return 410 Gone after operator authentication. The verified coordinator scheduler is the only permitted future production authority; automation enablement fails closed until authenticated external drand/VRF feeds are configured.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -4108,7 +4104,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit PoR proof.",
-            "Submit proof-of-replication proof.",
+            "Submit a domain-separated provider-signed proof whose request key and current admitted advert key match the proof signer.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -4119,7 +4115,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit PoR verdict.",
-            "Submit proof-of-replication verdict.",
+            "Submit a fully signed verdict whose unique signers belong to the configured operator/auditor trust set and meet the PoR auditor threshold.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -4177,7 +4173,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Manual PoR trigger retired.",
-            "Return a fail-closed retirement response for the legacy manual PoR trigger route. Submit governed PorChallengeV1 payloads through `/v1/sorafs/capacity/por-challenge` or the scheduler runtime instead.",
+            "Return a fail-closed retirement response for the legacy manual PoR trigger route. The verified scheduler is the only permitted future challenge authority, and is not enabled without authenticated external drand/VRF feeds.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -4187,8 +4183,8 @@ fn sorafs_paths() -> Map {
         "/v1/sorafs/capacity/por".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
-            "Submit PoR capacity report.",
-            "Submit PoR capacity report.",
+            "Manual PoR observation retired.",
+            "Return 410 Gone; PoR metering is derived from authenticated proof and verdict lifecycle transitions.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -6047,62 +6043,71 @@ fn nexus_paths() -> Map {
 }
 
 fn nexus_lane_lifecycle_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
+    let mut get_operation = Map::new();
+    get_operation.insert(
         "tags".into(),
         Value::Array(vec![Value::String("Nexus".to_owned())]),
     );
-    operation.insert(
+    get_operation.insert(
         "summary".into(),
-        Value::String("Apply a lane lifecycle plan.".to_owned()),
+        Value::String("Fetch the lane lifecycle catalog commitment.".to_owned()),
     );
-    operation.insert(
+    get_operation.insert(
         "description".into(),
         Value::String(
-            "Apply a Nexus lane lifecycle plan. Accepted responses report configured lane namespace size, active lane ids/count, and live autoscale-capacity lane ids/count separately."
+            "Return the exact canonical lane catalog, active lane incarnations, and their domain-separated commitments. Use both commitments in a signed `SetParameter(nexus_lane_lifecycle_v1)` transaction. Responses support JSON and native Norito."
                 .to_owned(),
         ),
     );
-    operation.insert(
+    get_operation.insert(
         "operationId".into(),
-        Value::String("nexusLaneLifecycle".to_owned()),
+        Value::String("getNexusLaneLifecycleStatus".to_owned()),
     );
-    operation.insert(
-        "requestBody".into(),
-        Value::Object(json_request_body("#/components/schemas/JsonValue")),
-    );
-    let mut responses = Map::new();
-    responses.insert(
-        "202".to_owned(),
-        json_response(
-            "Lane lifecycle plan accepted.",
-            schema_ref("NexusLaneLifecycleResponse"),
+    let mut get_responses = Map::new();
+    get_responses.insert(
+        "200".to_owned(),
+        dual_format_response(
+            "Exact current lane catalog and optimistic concurrency commitment.",
+            "#/components/schemas/NexusLaneLifecycleStatusV1",
         ),
     );
-    responses.insert(
-        "400".to_owned(),
-        json_response(
-            "Lane lifecycle plan failed validation.",
-            error_schema_reference(),
+    get_responses.insert("406".to_owned(), not_acceptable_response());
+    get_operation.insert("responses".into(), Value::Object(get_responses));
+
+    let mut post_operation = Map::new();
+    post_operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Nexus".to_owned())]),
+    );
+    post_operation.insert(
+        "summary".into(),
+        Value::String("Retired node-local lifecycle mutation route.".to_owned()),
+    );
+    post_operation.insert(
+        "description".into(),
+        Value::String(
+            "This route never mutates state and always rejects valid request bodies. Submit a signed transaction containing `SetParameter` with custom id `nexus_lane_lifecycle_v1` instead."
+                .to_owned(),
         ),
     );
-    responses.insert(
-        "401".to_owned(),
-        json_response(
-            "Operator authentication is required or invalid.",
-            error_schema_reference(),
-        ),
+    post_operation.insert("deprecated".into(), Value::Bool(true));
+    post_operation.insert(
+        "operationId".into(),
+        Value::String("deprecatedPostNexusLaneLifecycle".to_owned()),
     );
-    responses.insert(
+    let mut post_responses = Map::new();
+    post_responses.insert(
         "403".to_owned(),
         json_response(
-            "Operator is not authorized to apply lane lifecycle plans.",
+            "Node-local lane lifecycle mutation is disabled.",
             error_schema_reference(),
         ),
     );
-    operation.insert("responses".into(), Value::Object(responses));
+    post_operation.insert("responses".into(), Value::Object(post_responses));
+
     let mut methods = Map::new();
-    methods.insert("post".to_owned(), Value::Object(operation));
+    methods.insert("get".to_owned(), Value::Object(get_operation));
+    methods.insert("post".to_owned(), Value::Object(post_operation));
     methods
 }
 
@@ -9294,59 +9299,75 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "NexusLaneLifecycleResponse".to_owned(),
+        "NexusLaneLifecycleIncarnationEntry".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["lane_id", "incarnation"],
+            "additionalProperties": false,
+            "properties": {
+                "lane_id": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "description": "Active lane identifier."
+                },
+                "incarnation": {
+                    "type": "string",
+                    "description": "Non-zero commitment identifying this exact active lane incarnation."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "NexusLaneLifecycleStatusV1".to_owned(),
         norito::json!({
             "type": "object",
             "required": [
-                "ok",
-                "configured_lane_count",
+                "version",
+                "nexus_enabled",
                 "lane_count",
-                "active_lane_count",
-                "active_lane_ids",
-                "autoscale_capacity_lane_count",
-                "autoscale_capacity_lane_ids"
+                "lanes",
+                "catalog_hash",
+                "incarnations",
+                "incarnation_root"
             ],
             "additionalProperties": false,
             "properties": {
-                "ok": {
-                    "type": "boolean",
-                    "enum": [true],
-                    "description": "True when the signed lane lifecycle plan was accepted and applied."
-                },
-                "configured_lane_count": {
+                "version": {
                     "type": "integer",
-                    "format": "uint64",
-                    "minimum": 0,
-                    "description": "Configured lane namespace size after the lifecycle plan."
+                    "format": "uint8",
+                    "enum": [1],
+                    "description": "Lifecycle status layout version."
+                },
+                "nexus_enabled": {
+                    "type": "boolean",
+                    "description": "Whether Nexus lane routing is enabled on this node."
                 },
                 "lane_count": {
                     "type": "integer",
-                    "format": "uint64",
-                    "minimum": 0,
-                    "deprecated": true,
-                    "description": "Legacy alias for `configured_lane_count`."
+                    "format": "uint32",
+                    "minimum": 1,
+                    "description": "Exclusive lane-id bound for the current catalog namespace."
                 },
-                "active_lane_count": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "minimum": 0,
-                    "description": "Number of lanes active at the committed lane-authority height."
-                },
-                "active_lane_ids": {
+                "lanes": {
                     "type": "array",
-                    "items": { "type": "integer", "format": "uint64", "minimum": 0 },
-                    "description": "Lane ids active at the committed lane-authority height."
+                    "minItems": 1,
+                    "items": { "$ref": "#/components/schemas/JsonValue" },
+                    "description": "Exact canonical active lane metadata ordered by lane id."
                 },
-                "autoscale_capacity_lane_count": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "minimum": 0,
-                    "description": "Number of active autoscale-managed elastic lanes that currently count as horizontal capacity."
+                "catalog_hash": {
+                    "type": "string",
+                    "description": "Domain-separated hash to place in `expected_catalog_hash` of `nexus_lane_lifecycle_v1`."
                 },
-                "autoscale_capacity_lane_ids": {
+                "incarnations": {
                     "type": "array",
-                    "items": { "type": "integer", "format": "uint64", "minimum": 0 },
-                    "description": "Active autoscale-managed elastic lane ids that currently count as horizontal capacity."
+                    "minItems": 1,
+                    "items": { "$ref": "#/components/schemas/NexusLaneLifecycleIncarnationEntry" },
+                    "description": "Canonical active lane-id/incarnation commitments, exactly matching `lanes`."
+                },
+                "incarnation_root": {
+                    "type": "string",
+                    "description": "Domain-separated root to place in `expected_incarnation_root` of `nexus_lane_lifecycle_v1`."
                 }
             }
         }),
@@ -9559,8 +9580,8 @@ fn openapi_schemas() -> Map {
         "Hash".to_owned(),
         norito::json!({
             "type": "string",
-            "pattern": "^hash:[0-9a-fA-F]{64}#[0-9a-fA-F]{4}$",
-            "description": "Norito JSON hash string with checksum."
+            "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
+            "description": "Canonical Norito JSON hash literal. Consumers must also verify the CRC16 checksum and Iroha marker bit."
         }),
     );
     schemas.insert(
@@ -9568,7 +9589,7 @@ fn openapi_schemas() -> Map {
         norito::json!({
             "type": "object",
             "required": ["source_id", "local_amount_micro", "xor_due_micro", "xor_after_haircut_micro", "xor_variance_micro", "timestamp_ms"],
-            "additionalProperties": true,
+            "additionalProperties": false,
             "properties": {
                 "source_id": {
                     "type": "string",
@@ -9588,7 +9609,7 @@ fn openapi_schemas() -> Map {
         norito::json!({
             "type": "object",
             "required": ["epsilon_bps", "twap_window_seconds", "liquidity_profile", "twap_local_per_xor", "volatility_class"],
-            "additionalProperties": true,
+            "additionalProperties": false,
             "properties": {
                 "epsilon_bps": { "type": "integer", "format": "uint16", "minimum": 0 },
                 "twap_window_seconds": { "type": "integer", "format": "uint32", "minimum": 0 },
@@ -9599,12 +9620,59 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "NexusFeeScheduleInputs".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["tx_bytes_len", "instruction_count", "gas_used", "base_fee", "per_byte_fee", "per_instruction_fee", "per_gas_unit_fee"],
+            "additionalProperties": false,
+            "properties": {
+                "tx_bytes_len": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "instruction_count": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "gas_used": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "base_fee": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$" },
+                "per_byte_fee": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$" },
+                "per_instruction_fee": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$" },
+                "per_gas_unit_fee": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$" }
+            }
+        }),
+    );
+    schemas.insert(
+        "NexusFeeReceipt".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["version", "source_id", "dataspace_id", "lane_id", "block_height", "payer_account_id", "fee_asset_id", "fee_amount", "schedule"],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "format": "uint16", "enum": [1] },
+                "source_id": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
+                "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295u64 },
+                "block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "payer_account_id": { "type": "string", "minLength": 1 },
+                "fee_asset_id": { "type": "string", "minLength": 1 },
+                "fee_amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$" },
+                "schedule": { "$ref": "#/components/schemas/NexusFeeScheduleInputs" }
+            }
+        }),
+    );
+    schemas.insert(
         "NativeAmxAttestationBody".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["source_id", "tx_entrypoint_hash", "plan_digest", "phase", "coordinator_lane_id", "coordinator_dataspace_id", "participant_lane_id", "participant_dataspace_id", "planned_coordinator_block_height"],
-            "additionalProperties": true,
+            "required": ["round", "epoch", "source_id", "tx_entrypoint_hash", "plan_digest", "phase", "coordinator_lane_id", "coordinator_dataspace_id", "participant_lane_id", "participant_dataspace_id", "planned_coordinator_block_height"],
+            "additionalProperties": false,
             "properties": {
+                "round": {
+                    "type": "object",
+                    "required": ["context_id", "height", "view"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "context_id": { "$ref": "#/components/schemas/Hash" },
+                        "height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                        "view": { "type": "integer", "format": "uint64", "minimum": 0 }
+                    }
+                },
+                "epoch": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "source_id": {
                     "type": "string",
                     "pattern": "^[0-9a-fA-F]{64}$",
@@ -9617,11 +9685,11 @@ fn openapi_schemas() -> Map {
                     "enum": ["prepare", "commit"],
                     "description": "Native AMX phase certified by the participant committee."
                 },
-                "coordinator_lane_id": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "coordinator_lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295u64 },
                 "coordinator_dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "participant_lane_id": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "participant_lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295u64 },
                 "participant_dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "planned_coordinator_block_height": { "type": "integer", "format": "uint64", "minimum": 0 }
+                "planned_coordinator_block_height": { "type": "integer", "format": "uint64", "minimum": 1 }
             }
         }),
     );
@@ -9630,24 +9698,27 @@ fn openapi_schemas() -> Map {
         norito::json!({
             "type": "object",
             "required": ["body", "validator_set_hash_version", "validator_set_hash", "validator_set", "signers_bitmap", "bls_aggregate_signature"],
-            "additionalProperties": true,
+            "additionalProperties": false,
             "properties": {
                 "body": { "$ref": "#/components/schemas/NativeAmxAttestationBody" },
-                "validator_set_hash_version": { "type": "integer", "format": "uint16", "minimum": 0 },
+                "validator_set_hash_version": { "type": "integer", "format": "uint16", "enum": [1] },
                 "validator_set_hash": { "$ref": "#/components/schemas/Hash" },
                 "validator_set": {
                     "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
                     "items": { "type": "string" },
                     "description": "Ordered validator ids used to assemble the QC."
                 },
                 "signers_bitmap": {
                     "type": "array",
+                    "minItems": 1,
                     "items": { "type": "integer", "minimum": 0, "maximum": 255 }
                 },
                 "bls_aggregate_signature": {
                     "type": "string",
-                    "pattern": "^[0-9a-fA-F]*$",
-                    "description": "BLS aggregate signature bytes encoded as hex."
+                    "pattern": "^[0-9a-fA-F]{192}$",
+                    "description": "Compressed 96-byte BLS12-381 aggregate signature encoded as hex."
                 }
             }
         }),
@@ -9657,9 +9728,9 @@ fn openapi_schemas() -> Map {
         norito::json!({
             "type": "object",
             "required": ["lane_id", "dataspace_id", "prepare_qc", "commit_qc"],
-            "additionalProperties": true,
+            "additionalProperties": false,
             "properties": {
-                "lane_id": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295u64 },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "prepare_qc": { "$ref": "#/components/schemas/NativeAmxAttestationQc" },
                 "commit_qc": { "$ref": "#/components/schemas/NativeAmxAttestationQc" }
@@ -9670,21 +9741,28 @@ fn openapi_schemas() -> Map {
         "NativeAmxReceipt".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["version", "source_id", "plan_digest", "lane_id", "dataspace_id", "block_height", "legs"],
-            "additionalProperties": true,
+            "required": ["version", "source_id", "chain_id_hash", "plan_digest", "lane_id", "dataspace_id", "lane_incarnation", "authority_context_height", "lane_block_height", "lane_block_view", "coordinator_proposal_hash", "legs"],
+            "additionalProperties": false,
             "properties": {
-                "version": { "type": "integer", "format": "uint16", "minimum": 0 },
+                "version": { "type": "integer", "format": "uint16", "enum": [2] },
                 "source_id": {
                     "type": "string",
                     "pattern": "^[0-9a-fA-F]{64}$",
                     "description": "Source transaction hash/id as 32-byte hex."
                 },
+                "chain_id_hash": { "$ref": "#/components/schemas/Hash" },
                 "plan_digest": { "$ref": "#/components/schemas/Hash" },
-                "lane_id": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295u64 },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
+                "authority_context_height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "lane_block_height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "lane_block_view": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "coordinator_proposal_hash": { "$ref": "#/components/schemas/Hash" },
                 "legs": {
                     "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
                     "items": { "$ref": "#/components/schemas/NativeAmxLegRecord" }
                 }
             }
@@ -9694,11 +9772,12 @@ fn openapi_schemas() -> Map {
         "LaneSettlementCommitment".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["block_height", "lane_id", "dataspace_id", "tx_count", "total_local_micro", "total_xor_due_micro", "total_xor_after_haircut_micro", "total_xor_variance_micro", "swap_metadata", "receipts", "nexus_fee_receipts", "native_amx_receipts"],
-            "additionalProperties": true,
+            "required": ["block_height", "lane_id", "lane_incarnation", "dataspace_id", "tx_count", "total_local_micro", "total_xor_due_micro", "total_xor_after_haircut_micro", "total_xor_variance_micro", "swap_metadata", "receipts", "nexus_fee_receipts", "native_amx_receipts"],
+            "additionalProperties": false,
             "properties": {
                 "block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "lane_id": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295u64 },
+                "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "tx_count": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "total_local_micro": { "type": "string", "pattern": "^[0-9]+$" },
@@ -9717,13 +9796,45 @@ fn openapi_schemas() -> Map {
                 },
                 "nexus_fee_receipts": {
                     "type": "array",
-                    "items": { "$ref": "#/components/schemas/JsonValue" },
-                    "description": "Versioned Nexus fee receipts encoded with their canonical Norito JSON shape."
+                    "uniqueItems": true,
+                    "items": { "$ref": "#/components/schemas/NexusFeeReceipt" },
+                    "description": "Versioned Nexus fee receipts with exact recomputation inputs."
                 },
                 "native_amx_receipts": {
                     "type": "array",
+                    "uniqueItems": true,
                     "items": { "$ref": "#/components/schemas/NativeAmxReceipt" }
                 }
+            }
+        }),
+    );
+    schemas.insert(
+        "LaneRelayEnvelope".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["lane_id", "lane_incarnation", "dataspace_id", "block_height", "block_hash", "da_commitment_hash", "commit_qc", "settlement_commitment", "settlement_hash", "rbc_bytes_total"],
+            "additionalProperties": false,
+            "properties": {
+                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295u64 },
+                "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
+                "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "block_hash": { "$ref": "#/components/schemas/Hash" },
+                "da_commitment_hash": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/Hash" },
+                        { "type": "null" }
+                    ]
+                },
+                "commit_qc": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/JsonValue" },
+                        { "type": "null" }
+                    ]
+                },
+                "settlement_commitment": { "$ref": "#/components/schemas/LaneSettlementCommitment" },
+                "settlement_hash": { "$ref": "#/components/schemas/Hash" },
+                "rbc_bytes_total": { "type": "integer", "format": "uint64", "minimum": 0 }
             }
         }),
     );
@@ -9731,13 +9842,54 @@ fn openapi_schemas() -> Map {
         "SumeragiStatusResponse".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["lane_settlement_commitments"],
-            "additionalProperties": true,
+            "required": [
+                "protocol_version",
+                "node_fingerprint",
+                "build_fingerprint",
+                "config_fingerprint",
+                "height_context_id",
+                "height",
+                "view",
+                "phase",
+                "leader",
+                "body_state",
+                "last_committed_height",
+                "lane_settlement_commitments",
+                "lane_relay_envelopes"
+            ],
+            "additionalProperties": false,
             "properties": {
+                "protocol_version": { "type": "integer", "minimum": 2, "maximum": 2 },
+                "node_fingerprint": { "$ref": "#/components/schemas/Hash" },
+                "build_fingerprint": { "$ref": "#/components/schemas/Hash" },
+                "config_fingerprint": { "$ref": "#/components/schemas/Hash" },
+                "height_context_id": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 1,
+                    "items": { "$ref": "#/components/schemas/Hash" },
+                    "description": "Single-field HeightContextId tuple containing the frozen context hash."
+                },
+                "height": { "type": "integer", "minimum": 0 },
+                "view": { "type": "integer", "minimum": 0 },
+                "phase": { "$ref": "#/components/schemas/JsonValue" },
+                "leader": { "type": "integer", "minimum": 0 },
+                "locked_prepare_qc": { "$ref": "#/components/schemas/JsonValue", "nullable": true },
+                "highest_prepare_qc": { "$ref": "#/components/schemas/JsonValue", "nullable": true },
+                "last_timeout_certificate": { "$ref": "#/components/schemas/JsonValue", "nullable": true },
+                "body_state": { "$ref": "#/components/schemas/JsonValue" },
+                "pending_persistence_id": { "type": "integer", "minimum": 0, "nullable": true },
+                "last_committed_height": { "type": "integer", "minimum": 0 },
+                "last_committed_subject": { "$ref": "#/components/schemas/JsonValue", "nullable": true },
                 "lane_settlement_commitments": {
                     "type": "array",
                     "items": { "$ref": "#/components/schemas/LaneSettlementCommitment" },
                     "description": "Per-lane/dataspace settlement commitments surfaced for Nexus fee and native AMX audit consumers."
+                },
+                "lane_relay_envelopes": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/LaneRelayEnvelope" },
+                    "description": "Relay envelopes that preserve and hash the exact settlement commitment."
                 }
             }
         }),
@@ -13622,6 +13774,17 @@ mod tests {
         assert!(vpn_receipts_post_description.contains("SettleVpnLease"));
         assert!(paths.contains_key("/v1/mcp"));
         assert!(paths.contains_key("/v1/zk/attachments"));
+        let verifying_key_get_description = paths
+            .get("/v1/zk/vk/{backend}/{name}")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("get"))
+            .and_then(Value::as_object)
+            .and_then(|get| get.get("description"))
+            .and_then(Value::as_str)
+            .expect("verifying-key detail description");
+        assert!(verifying_key_get_description.contains("record_norito_base64"));
+        assert!(verifying_key_get_description.contains("namespace"));
+        assert!(verifying_key_get_description.contains("owner_manifest_id"));
         assert!(paths.contains_key("/v1/multisig/propose"));
         assert!(paths.contains_key("/v1/multisig/approve"));
         assert!(paths.contains_key("/v1/contracts/call/multisig/propose"));
@@ -15132,7 +15295,8 @@ mod tests {
         for key in [
             "JsonValue",
             "JsonList",
-            "NexusLaneLifecycleResponse",
+            "NexusLaneLifecycleIncarnationEntry",
+            "NexusLaneLifecycleStatusV1",
             "AppPageMetadata",
             "AccountQueryResponse",
             "DomainQueryResponse",
@@ -15146,6 +15310,9 @@ mod tests {
             "SumeragiStatusResponse",
             "LaneSettlementCommitment",
             "LaneSettlementReceipt",
+            "LaneRelayEnvelope",
+            "NexusFeeScheduleInputs",
+            "NexusFeeReceipt",
             "NativeAmxReceipt",
             "NativeAmxLegRecord",
             "NativeAmxAttestationQc",
@@ -15160,26 +15327,26 @@ mod tests {
     }
 
     #[test]
-    fn generated_spec_documents_nexus_lifecycle_response_contract() {
+    fn generated_spec_documents_nexus_lifecycle_status_and_deprecated_post() {
         let doc = generate_spec();
         let paths = doc
             .get("paths")
             .and_then(Value::as_object)
             .expect("paths section");
-        let responses = paths
+        let path = paths
             .get("/v1/nexus/lifecycle")
             .and_then(Value::as_object)
-            .and_then(|path| path.get("post"))
+            .expect("Nexus lifecycle path");
+        let get = path
+            .get("get")
             .and_then(Value::as_object)
-            .and_then(|post| post.get("responses"))
+            .expect("Nexus lifecycle GET operation");
+        let responses = get
+            .get("responses")
             .and_then(Value::as_object)
-            .expect("Nexus lifecycle responses");
-        assert!(
-            !responses.contains_key("200"),
-            "lifecycle accepts plans with 202, not 200"
-        );
-        let accepted_schema_ref = responses
-            .get("202")
+            .expect("Nexus lifecycle GET responses");
+        let status_schema_ref = responses
+            .get("200")
             .and_then(Value::as_object)
             .and_then(|response| response.get("content"))
             .and_then(Value::as_object)
@@ -15190,18 +15357,41 @@ mod tests {
             .and_then(|schema| schema.get("$ref"))
             .and_then(Value::as_str);
         assert_eq!(
-            accepted_schema_ref,
-            Some("#/components/schemas/NexusLaneLifecycleResponse")
+            status_schema_ref,
+            Some("#/components/schemas/NexusLaneLifecycleStatusV1")
         );
+        let content = responses
+            .get("200")
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("content"))
+            .and_then(Value::as_object)
+            .expect("lifecycle status response content");
+        assert!(content.contains_key("application/json"));
+        assert!(content.contains_key("application/x-norito"));
+
+        let post = path
+            .get("post")
+            .and_then(Value::as_object)
+            .expect("deprecated Nexus lifecycle POST operation");
+        assert_eq!(post.get("deprecated"), Some(&Value::Bool(true)));
+        assert!(
+            !post.contains_key("requestBody"),
+            "the fixed-rejection POST must not advertise or decode a request body"
+        );
+        let post_responses = post
+            .get("responses")
+            .and_then(Value::as_object)
+            .expect("deprecated POST responses");
+        assert_eq!(post_responses.keys().collect::<Vec<_>>(), vec!["403"]);
 
         let schema = doc
             .get("components")
             .and_then(Value::as_object)
             .and_then(|components| components.get("schemas"))
             .and_then(Value::as_object)
-            .and_then(|schemas| schemas.get("NexusLaneLifecycleResponse"))
+            .and_then(|schemas| schemas.get("NexusLaneLifecycleStatusV1"))
             .and_then(Value::as_object)
-            .expect("NexusLaneLifecycleResponse schema");
+            .expect("NexusLaneLifecycleStatusV1 schema");
         assert_eq!(
             schema.get("additionalProperties"),
             Some(&Value::Bool(false))
@@ -15211,17 +15401,17 @@ mod tests {
             .and_then(Value::as_array)
             .expect("required lifecycle response fields");
         for field in [
-            "ok",
-            "configured_lane_count",
+            "version",
+            "nexus_enabled",
             "lane_count",
-            "active_lane_count",
-            "active_lane_ids",
-            "autoscale_capacity_lane_count",
-            "autoscale_capacity_lane_ids",
+            "lanes",
+            "catalog_hash",
+            "incarnations",
+            "incarnation_root",
         ] {
             assert!(
                 required.iter().any(|value| value.as_str() == Some(field)),
-                "Nexus lifecycle response should require {field}"
+                "Nexus lifecycle status should require {field}"
             );
         }
         let properties = schema
@@ -15230,26 +15420,24 @@ mod tests {
             .expect("lifecycle response properties");
         assert_eq!(
             properties
-                .get("active_lane_ids")
+                .get("lanes")
                 .and_then(Value::as_object)
                 .and_then(|property| property.get("type"))
                 .and_then(Value::as_str),
             Some("array")
         );
+        assert!(properties.contains_key("catalog_hash"));
+        assert!(properties.contains_key("incarnations"));
+        assert!(properties.contains_key("incarnation_root"));
         assert_eq!(
             properties
-                .get("autoscale_capacity_lane_ids")
+                .get("incarnations")
                 .and_then(Value::as_object)
-                .and_then(|property| property.get("type"))
+                .and_then(|property| property.get("items"))
+                .and_then(Value::as_object)
+                .and_then(|items| items.get("$ref"))
                 .and_then(Value::as_str),
-            Some("array")
-        );
-        assert_eq!(
-            properties
-                .get("lane_count")
-                .and_then(Value::as_object)
-                .and_then(|property| property.get("deprecated")),
-            Some(&Value::Bool(true))
+            Some("#/components/schemas/NexusLaneLifecycleIncarnationEntry")
         );
     }
 
@@ -15287,21 +15475,75 @@ mod tests {
             .and_then(|components| components.get("schemas"))
             .and_then(Value::as_object)
             .expect("components schemas");
-        let status_properties = schemas
+        let status_schema = schemas
             .get("SumeragiStatusResponse")
             .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
+            .expect("status response schema");
+        assert_eq!(
+            status_schema
+                .get("additionalProperties")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let status_properties = status_schema
+            .get("properties")
             .and_then(Value::as_object)
             .expect("status response properties");
         assert_eq!(
             status_properties
-                .get("lane_settlement_commitments")
+                .get("protocol_version")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("minimum"))
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            status_properties
+                .get("lane_relay_envelopes")
                 .and_then(Value::as_object)
                 .and_then(|schema| schema.get("items"))
                 .and_then(Value::as_object)
                 .and_then(|items| items.get("$ref"))
                 .and_then(Value::as_str),
-            Some("#/components/schemas/LaneSettlementCommitment")
+            Some("#/components/schemas/LaneRelayEnvelope")
+        );
+        assert!(status_properties.contains_key("height_context_id"));
+        assert!(status_properties.contains_key("pending_persistence_id"));
+        assert!(status_properties.contains_key("last_committed_subject"));
+        assert!(status_properties.contains_key("lane_settlement_commitments"));
+        for field in [
+            "node_fingerprint",
+            "build_fingerprint",
+            "config_fingerprint",
+        ] {
+            assert_eq!(
+                status_properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some("#/components/schemas/Hash")
+            );
+        }
+        let height_context = status_properties
+            .get("height_context_id")
+            .and_then(Value::as_object)
+            .expect("height context id schema");
+        assert_eq!(
+            height_context.get("minItems").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            height_context.get("maxItems").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            height_context
+                .get("items")
+                .and_then(Value::as_object)
+                .and_then(|items| items.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/Hash")
         );
 
         let commitment_properties = schemas
@@ -15328,7 +15570,25 @@ mod tests {
                 .and_then(Value::as_object)
                 .and_then(|items| items.get("$ref"))
                 .and_then(Value::as_str),
-            Some("#/components/schemas/JsonValue")
+            Some("#/components/schemas/NexusFeeReceipt")
+        );
+        assert_eq!(
+            schemas
+                .get("LaneSettlementCommitment")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("additionalProperties"))
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            schemas
+                .get("LaneSettlementCommitment")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("required"))
+                .and_then(Value::as_array)
+                .is_some_and(|required| required
+                    .iter()
+                    .any(|field| field.as_str() == Some("lane_incarnation")))
         );
 
         let receipt_properties = schemas
@@ -15337,6 +15597,27 @@ mod tests {
             .and_then(|schema| schema.get("properties"))
             .and_then(Value::as_object)
             .expect("native AMX receipt properties");
+        let receipt_required = schemas
+            .get("NativeAmxReceipt")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("required"))
+            .and_then(Value::as_array)
+            .expect("native AMX receipt required fields");
+        for field in [
+            "chain_id_hash",
+            "lane_incarnation",
+            "authority_context_height",
+            "lane_block_height",
+            "lane_block_view",
+            "coordinator_proposal_hash",
+        ] {
+            assert!(
+                receipt_required
+                    .iter()
+                    .any(|required| required.as_str() == Some(field)),
+                "native AMX receipt must require {field}"
+            );
+        }
         assert_eq!(
             receipt_properties
                 .get("legs")
@@ -15347,6 +15628,15 @@ mod tests {
                 .and_then(Value::as_str),
             Some("#/components/schemas/NativeAmxLegRecord")
         );
+        let legs_schema = receipt_properties
+            .get("legs")
+            .and_then(Value::as_object)
+            .expect("native AMX legs schema");
+        assert_eq!(legs_schema.get("minItems").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            legs_schema.get("uniqueItems").and_then(Value::as_bool),
+            Some(true)
+        );
 
         let leg_properties = schemas
             .get("NativeAmxLegRecord")
@@ -15354,6 +15644,14 @@ mod tests {
             .and_then(|schema| schema.get("properties"))
             .and_then(Value::as_object)
             .expect("native AMX leg properties");
+        assert_eq!(
+            leg_properties
+                .get("lane_incarnation")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/Hash")
+        );
         for qc_field in ["prepare_qc", "commit_qc"] {
             assert_eq!(
                 leg_properties
@@ -15380,11 +15678,66 @@ mod tests {
                 .and_then(Value::as_str),
             Some("#/components/schemas/NativeAmxAttestationBody")
         );
+        let validator_set = qc_properties
+            .get("validator_set")
+            .and_then(Value::as_object)
+            .expect("native AMX validator set schema");
+        assert_eq!(
+            validator_set.get("minItems").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            validator_set.get("uniqueItems").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            qc_properties
+                .get("signers_bitmap")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("minItems"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            qc_properties
+                .get("bls_aggregate_signature")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("pattern"))
+                .and_then(Value::as_str),
+            Some("^[0-9a-fA-F]{192}$")
+        );
 
-        let body_phase = schemas
+        let body_schema = schemas
             .get("NativeAmxAttestationBody")
             .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
+            .expect("native AMX body schema");
+        let body_required = body_schema
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("native AMX body required fields");
+        for field in [
+            "chain_id_hash",
+            "coordinator_lane_incarnation",
+            "participant_lane_incarnation",
+            "authority_context_height",
+            "coordinator_lane_block_height",
+            "coordinator_lane_block_view",
+            "coordinator_proposal_hash",
+        ] {
+            assert!(
+                body_required
+                    .iter()
+                    .any(|required| required.as_str() == Some(field)),
+                "native AMX body must require {field}"
+            );
+        }
+        assert!(
+            !body_required
+                .iter()
+                .any(|required| required.as_str() == Some("planned_coordinator_block_height"))
+        );
+        let body_phase = body_schema
+            .get("properties")
             .and_then(Value::as_object)
             .and_then(|properties| properties.get("phase"))
             .and_then(Value::as_object)

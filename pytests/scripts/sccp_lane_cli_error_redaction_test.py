@@ -83,6 +83,35 @@ def nested_html_entity_text(value: str, *, layers: int = 5) -> str:
     return encoded
 
 
+class HostileLanePublicBlockerText(str):
+    def __new__(cls):
+        return str.__new__(cls, "safe public blocker")
+
+    def __str__(self):
+        raise AssertionError("secret-token lane public blocker text stringified")
+
+    def __repr__(self):
+        return "secret-token-lane-public-blocker-text"
+
+    def __len__(self):
+        raise AssertionError("secret-token lane public blocker text length")
+
+    def __iter__(self):
+        raise AssertionError("secret-token lane public blocker text iterated")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token lane public blocker text compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token lane public blocker text compared")
+
+    def isascii(self):
+        raise AssertionError("secret-token lane public blocker text checked ASCII")
+
+    def casefold(self):
+        raise AssertionError("secret-token lane public blocker text casefolded")
+
+
 SENSITIVE_MESSAGES = (
     ("operator secret-token value", ("secret-token",)),
     (
@@ -194,6 +223,16 @@ def test_lane_cli_error_detail_normalizes_decoded_text_with_casefold():
         assert stale_marker not in source, script_name
 
 
+def test_lane_public_blocker_decode_helpers_reject_string_subclasses_without_hooks():
+    for script_name, _fallback in LANE_CLI_HELPERS:
+        module = load_helper(script_name)
+        blocker = HostileLanePublicBlockerText()
+
+        assert module._decoded_public_blocker_text(blocker) == "", script_name
+        if hasattr(module, "_decoded_cli_error_text_issue"):
+            assert module._decoded_cli_error_text_issue(blocker) is True, script_name
+
+
 def test_lane_cli_error_detail_redacts_decoded_sensitive_messages():
     for script_name, fallback in LANE_CLI_HELPERS:
         module = load_helper(script_name)
@@ -230,6 +269,18 @@ def test_lane_cli_error_detail_treats_system_exit_as_opaque():
         detail = module._cli_error_detail(SystemExit(safe_message), fallback=fallback)
         assert detail == fallback, script_name
         assert safe_message not in detail
+
+
+def test_lane_cli_error_detail_redacts_unstringifiable_exceptions():
+    class HostileCliException(RuntimeError):
+        def __str__(self):
+            raise AssertionError("secret-token lane CLI exception was stringified")
+
+    for script_name, fallback in LANE_CLI_HELPERS:
+        module = load_helper(script_name)
+        detail = module._cli_error_detail(HostileCliException(), fallback=fallback)
+        assert detail == fallback, script_name
+        assert "secret-token" not in detail
 
 
 def test_lane_cli_error_detail_preserves_safe_runtime_error_messages():

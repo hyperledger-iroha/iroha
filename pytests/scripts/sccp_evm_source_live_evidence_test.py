@@ -341,6 +341,7 @@ def fake_opener_for(
     receipt_transaction_hash=None,
     receipt_contract_address=None,
     omit_receipt_contract_address=False,
+    receipt_status="0x1",
     receipt_block_hash=None,
     receipt_block_number="0x1234",
     block_response_hash=None,
@@ -404,7 +405,7 @@ def fake_opener_for(
             )
             receipt = {
                 "transactionHash": transaction_hash,
-                "status": "0x1",
+                "status": receipt_status,
                 "blockHash": receipt_block_hash,
                 "blockNumber": receipt_block_number,
             }
@@ -639,6 +640,35 @@ def test_evm_source_json_rpc_rejects_duplicate_json_keys():
         raise AssertionError("duplicate-key EVM source JSON-RPC response was accepted")
 
 
+def test_evm_source_json_object_rejects_key_subclasses_without_hooks():
+    module = load_live_module()
+
+    class HostileJsonKey(str):
+        def __new__(cls):
+            return str.__new__(cls, "secret-token-result")
+
+        def __hash__(self):
+            raise AssertionError("secret-token EVM source JSON key was hashed")
+
+        def __eq__(self, _other):
+            raise AssertionError("secret-token EVM source JSON key was compared")
+
+        def __str__(self):
+            raise AssertionError("secret-token EVM source JSON key was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token EVM source JSON key was repr'd")
+
+    try:
+        module._json_object_without_duplicate_keys([(HostileJsonKey(), "0x1")])
+    except ValueError as exc:
+        message = str(exc)
+        assert message == "JSON-RPC returned duplicate JSON keys"
+        assert "secret-token" not in message
+    else:
+        raise AssertionError("hostile EVM source JSON key subclass was accepted")
+
+
 def test_evm_source_json_rpc_url_rejects_hidden_request_state():
     module = load_live_module()
 
@@ -673,6 +703,22 @@ def test_evm_source_json_rpc_url_rejects_hidden_request_state():
         def __repr__(self):
             raise AssertionError("secret-token EVM source RPC URL label was repr'd")
 
+    class HostileSourceRpcHost(str):
+        def __new__(cls):
+            return str.__new__(cls, "localhost")
+
+        def __str__(self):
+            raise AssertionError("secret-token EVM source RPC host was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token EVM source RPC host was repr'd")
+
+        def strip(self, *_args):
+            raise AssertionError("secret-token EVM source RPC host was stripped")
+
+        def lower(self):
+            raise AssertionError("secret-token EVM source RPC host was lowered")
+
     assert module._normalize_evm_rpc_url("https://ethereum.example") == (
         "https://ethereum.example"
     )
@@ -682,6 +728,9 @@ def test_evm_source_json_rpc_url_rejects_hidden_request_state():
     assert module._normalize_evm_rpc_url("http://127.0.0.1:8545") == (
         "http://127.0.0.1:8545"
     )
+    hostile_host = HostileSourceRpcHost()
+    assert module._evm_rpc_host_is_loopback(hostile_host) is False
+    assert module._evm_rpc_host_is_non_public_dns(hostile_host) is True
 
     def forbidden_opener(_request, timeout):
         raise AssertionError("malformed EVM source RPC URL reached the opener")
@@ -822,6 +871,37 @@ def test_evm_source_json_rpc_rejects_envelope_drift():
             assert expected_message in str(exc)
         else:
             raise AssertionError(failure)
+
+    original_json_loads = module.json.loads
+
+    def hostile_json_loads(*args, **kwargs):
+        decoded = original_json_loads(*args, **kwargs)
+        if type(decoded) is dict and decoded.get("jsonrpc") == "2.0":
+            decoded["jsonrpc"] = HostileSourceLiveString("2.0")
+        return decoded
+
+    def opener(_request, timeout):
+        del timeout
+        return FakeResponse({"jsonrpc": "2.0", "id": 1, "result": "0x38"})
+
+    module.json.loads = hostile_json_loads
+    try:
+        try:
+            module._json_rpc(
+                "https://bsc.example",
+                "eth_chainId",
+                [],
+                opener=opener,
+                timeout=3.0,
+            )
+        except RuntimeError as exc:
+            rendered = str(exc)
+            assert "protocol version" in rendered
+            assert "secret-token" not in rendered
+        else:
+            raise AssertionError("hostile EVM source JSON-RPC protocol was accepted")
+    finally:
+        module.json.loads = original_json_loads
 
 
 def test_evm_source_live_numeric_parsers_require_canonical_decimal():
@@ -1990,6 +2070,35 @@ def test_evm_source_live_rejects_non_string_copied_metadata_without_stringifying
             )
 
 
+def test_evm_source_live_direct_summary_string_comparisons_use_exact_strings():
+    module = load_live_module()
+    summary = full_evm_source_live_summary(module)
+
+    forged = copy.deepcopy(summary)
+    forged["source_bridge"]["chain"] = HostileSourceLiveString("eth")
+    try:
+        module._validate_source_summary(forged)
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "source chain metadata must match domain"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+    else:
+        raise AssertionError("EVM source summary accepted hostile chain metadata")
+
+    forged = copy.deepcopy(summary)
+    forged["block_tag"] = HostileSourceLiveString("finalized")
+    assert "--block-tag finalized" in module._toml_prerequisites(forged)
+
+    forged = copy.deepcopy(summary)
+    forged["source_bridge"]["deployment_receipt_status"] = HostileSourceLiveString(
+        "0x1"
+    )
+    prerequisites = module._toml_prerequisites(forged)
+    assert "--deployment-transaction-hash" in prerequisites
+    assert "secret-token" not in "\n".join(prerequisites)
+
+
 def test_evm_source_live_offline_args_reject_non_string_runtime_metadata_without_stringifying():
     module = load_live_module()
     summary = full_evm_source_live_summary(module)
@@ -2376,6 +2485,38 @@ def test_evm_source_live_rejects_receipt_transaction_hash_drift():
         assert "transactionHash does not match" in str(exc)
     else:
         raise AssertionError("drifted deployment receipt transactionHash was accepted")
+
+
+def test_evm_source_live_rejects_hostile_receipt_status_without_hooks(monkeypatch):
+    module = load_live_module()
+    fake = fake_opener_for(
+        module,
+    )
+
+    def hostile_receipt_rpc(*_args, **_kwargs):
+        return {
+            "transactionHash": "0x" + "de" * 32,
+            "status": HostileSourceLiveString("0x1"),
+        }
+
+    monkeypatch.setattr(module, "_json_rpc", hostile_receipt_rpc)
+    try:
+        module._receipt_summary(
+            "https://ethereum.example",
+            deployment_transaction_hash=bytes.fromhex("de" * 32),
+            bridge_address=fake.bridge,
+            opener=fake.opener,
+            timeout=1.0,
+        )
+    except RuntimeError as exc:
+        rendered = str(exc)
+        assert rendered == "deployment transaction receipt status must be 0x1"
+        assert "secret-token" not in rendered
+        assert "EVM source live exact string" not in rendered
+        assert "__eq__" not in rendered
+        assert "__ne__" not in rendered
+    else:
+        raise AssertionError("hostile deployment receipt status was accepted")
 
 
 def test_evm_source_live_redacts_receipt_field_parser_exception_causes(monkeypatch):

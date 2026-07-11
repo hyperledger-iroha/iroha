@@ -40,16 +40,16 @@ It assumes the orchestration stack delivered under SF-6 is already deployed (`so
      sorafs_cli fetch \
        --plan fixtures/sorafs_manifest/ci_sample/payload.plan.json \
        --manifest-id "$CANARY_MANIFEST_ID" \
-       --provider name=alpha,provider-id="$PROVIDER_ALPHA_ID",base-url=https://gw-alpha.example,stream-token="$PROVIDER_ALPHA_TOKEN" \
-       --provider name=beta,provider-id="$PROVIDER_BETA_ID",base-url=https://gw-beta.example,stream-token="$PROVIDER_BETA_TOKEN" \
-       --provider name=gamma,provider-id="$PROVIDER_GAMMA_ID",base-url=https://gw-gamma.example,stream-token="$PROVIDER_GAMMA_TOKEN" \
+       --provider name=alpha,provider-id="$PROVIDER_ALPHA_ID",gateway-key="$PROVIDER_ALPHA_GATEWAY_KEY",base-url=https://gw-alpha.example/,stream-token="$PROVIDER_ALPHA_TOKEN" \
+       --provider name=beta,provider-id="$PROVIDER_BETA_ID",gateway-key="$PROVIDER_BETA_GATEWAY_KEY",base-url=https://gw-beta.example/,stream-token="$PROVIDER_BETA_TOKEN" \
+       --provider name=gamma,provider-id="$PROVIDER_GAMMA_ID",gateway-key="$PROVIDER_GAMMA_GATEWAY_KEY",base-url=https://gw-gamma.example/,stream-token="$PROVIDER_GAMMA_TOKEN" \
        --max-peers=3 \
        --retry-budget=4 \
        --scoreboard-out artifacts/canary.scoreboard.json \
        --json-out artifacts/canary.fetch.json
      ```
 
-     Environment variables should contain the manifest payload digest (hex) and base64-encoded stream tokens for each provider participating in the canary.
+     Environment variables should contain the manifest payload digest (hex), authenticated Ed25519 gateway public keys (64 hex characters), and base64-encoded stream tokens for each provider participating in the canary.
    - Diff `artifacts/canary.scoreboard.json` against the previous release. Any new ineligible provider or weight shift >10 % requires review.
 4. **Verify telemetry is wired.**
    - Open the Grafana export in `docs/examples/sorafs_fetch_dashboard.json`. Ensure the `sorafs_orchestrator_*` metrics populate in staging before progressing.

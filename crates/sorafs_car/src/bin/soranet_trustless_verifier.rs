@@ -58,7 +58,7 @@ struct Args {
 
     /// Override the ValidationOutcomeV1 generated_at timestamp.
     #[arg(long)]
-    generated_at: Option<u64>,
+    generated_at: Option<String>,
 
     /// Suppress stdout output (useful when `--json-out` is set).
     #[arg(long)]
@@ -77,6 +77,11 @@ fn main() {
 
 fn run() -> Result<i32> {
     let args = Args::parse();
+    if !args.validation_outcome && args.generated_at.is_some() {
+        return Err(eyre::eyre!(
+            "--generated-at only applies with --validation-outcome"
+        ));
+    }
     let config_path = args.config.clone().unwrap_or_else(default_config_path);
     let config = TrustlessVerifierConfig::from_file(&config_path)?;
 
@@ -90,8 +95,8 @@ fn run() -> Result<i32> {
                 "--validation-outcome emits manifest/CAR replay outcomes; omit --pin-record or use summary mode for pin-record validation"
             ));
         }
-        let generated_at = match args.generated_at {
-            Some(generated_at) => generated_at,
+        let generated_at = match args.generated_at.as_deref() {
+            Some(generated_at) => parse_generated_at(generated_at)?,
             None => unix_time_now()
                 .wrap_err("failed to derive ValidationOutcomeV1 generated_at timestamp")?,
         };
@@ -197,6 +202,37 @@ fn unix_time_now() -> Result<u64> {
         .duration_since(UNIX_EPOCH)
         .wrap_err("system time is before the UNIX epoch")?
         .as_secs())
+}
+
+fn parse_generated_at(value: &str) -> Result<u64> {
+    require_canonical_positive_decimal("--generated-at", value)?;
+    value
+        .parse::<u64>()
+        .wrap_err_with(|| format!("invalid --generated-at value `{value}`"))
+}
+
+fn require_canonical_positive_decimal(label: &str, value: &str) -> Result<()> {
+    if value.is_empty() {
+        return Err(eyre::eyre!("{label} must not be empty"));
+    }
+    if value.as_bytes().iter().any(u8::is_ascii_whitespace) {
+        return Err(eyre::eyre!("{label} must not contain ASCII whitespace"));
+    }
+    if value.starts_with('+') || value.starts_with('-') {
+        return Err(eyre::eyre!("{label} must be an unsigned decimal token"));
+    }
+    if !value.chars().all(|c| c.is_ascii_digit()) {
+        return Err(eyre::eyre!("{label} must contain only decimal digits"));
+    }
+    if value.len() > 1 && value.starts_with('0') {
+        return Err(eyre::eyre!(
+            "{label} must use canonical decimal without leading zeros"
+        ));
+    }
+    if value == "0" {
+        return Err(eyre::eyre!("{label} must be greater than zero"));
+    }
+    Ok(())
 }
 
 fn open_output_file(path: &Path, label: &str) -> Result<fs::File> {
@@ -342,6 +378,35 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().canonicalize().expect("canonical tempdir");
         (temp, path)
+    }
+
+    #[test]
+    fn parse_generated_at_rejects_noncanonical_values() {
+        assert_eq!(parse_generated_at("123").expect("timestamp"), 123);
+
+        for value in [
+            "",
+            "0",
+            "0123",
+            "+123",
+            "-123",
+            "123 ",
+            "12_3",
+            "18446744073709551616",
+        ] {
+            let err = parse_generated_at(value).expect_err("invalid generated_at must fail");
+            let message = err.to_string();
+            assert!(
+                message.contains("empty")
+                    || message.contains("greater than zero")
+                    || message.contains("leading zeros")
+                    || message.contains("unsigned decimal")
+                    || message.contains("whitespace")
+                    || message.contains("decimal digits")
+                    || message.contains("invalid --generated-at"),
+                "unexpected generated_at error for {value:?}: {message}"
+            );
+        }
     }
 
     #[test]

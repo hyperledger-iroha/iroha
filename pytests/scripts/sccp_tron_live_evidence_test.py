@@ -795,6 +795,35 @@ def test_tron_api_rejects_duplicate_json_keys():
         raise AssertionError("duplicate-key TRON API response was accepted")
 
 
+def test_tron_json_object_rejects_key_subclasses_without_hooks():
+    module = load_live_module()
+
+    class HostileJsonKey(str):
+        def __new__(cls):
+            return str.__new__(cls, "secret-token-result")
+
+        def __hash__(self):
+            raise AssertionError("secret-token TRON JSON key was hashed")
+
+        def __eq__(self, _other):
+            raise AssertionError("secret-token TRON JSON key was compared")
+
+        def __str__(self):
+            raise AssertionError("secret-token TRON JSON key was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token TRON JSON key was repr'd")
+
+    try:
+        module._json_object_without_duplicate_keys([(HostileJsonKey(), {"result": True})])
+    except ValueError as exc:
+        message = str(exc)
+        assert message == "duplicate JSON keys"
+        assert "secret-token" not in message
+    else:
+        raise AssertionError("hostile TRON JSON key subclass was accepted")
+
+
 def test_tron_node_url_rejects_hidden_request_state():
     module = load_live_module()
 
@@ -827,6 +856,22 @@ def test_tron_node_url_rejects_hidden_request_state():
         def __repr__(self):
             raise AssertionError("secret-token TRON node URL label was repr'd")
 
+    class HostileTronNodeHost(str):
+        def __new__(cls):
+            return str.__new__(cls, "localhost")
+
+        def __str__(self):
+            raise AssertionError("secret-token TRON node host was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token TRON node host was repr'd")
+
+        def strip(self, *_args):
+            raise AssertionError("secret-token TRON node host was stripped")
+
+        def lower(self):
+            raise AssertionError("secret-token TRON node host was lowered")
+
     assert module._normalize_tron_node_url("https://tron.example") == (
         "https://tron.example"
     )
@@ -836,6 +881,9 @@ def test_tron_node_url_rejects_hidden_request_state():
     assert module._normalize_tron_node_url("http://127.0.0.1:8090") == (
         "http://127.0.0.1:8090"
     )
+    hostile_host = HostileTronNodeHost()
+    assert module._tron_node_host_is_loopback(hostile_host) is False
+    assert module._tron_node_host_is_non_public_dns(hostile_host) is True
 
     def forbidden_opener(_request, timeout):
         raise AssertionError("malformed TRON node URL reached the opener")
@@ -1513,6 +1561,36 @@ def test_tron_live_runtime_files_reject_unreadable_file_shapes(tmp_path):
 
         def __fspath__(self):
             raise AssertionError("secret-token TRON runtime path-like fspath ran")
+
+    # Source-inventory marker: live runtime text file native path helpers reject path-like inputs.
+    for hidden_file in (
+        str(api_key_file),
+        HostileRuntimeFile(str(api_key_file)),
+        HostileRuntimePathLike(),
+    ):
+        try:
+            module._read_runtime_text_file(
+                hidden_file,
+                error_message="--tron-pro-api-key-file cannot be read",
+            )
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "--tron-pro-api-key-file cannot be read"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError("TRON live runtime text helper accepted hostile path")
+
+        try:
+            module._reject_runtime_file_symlink_path(hidden_file)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "runtime file cannot be read"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("TRON live runtime symlink helper accepted hostile path")
 
     hidden_file_cases = (
         (
@@ -2822,6 +2900,11 @@ def test_tron_live_exact_string_parsers_reject_string_subclasses_without_hooks()
 
     cases = (
         (
+            lambda: module._strip_0x(hostile),
+            module.argparse.ArgumentTypeError,
+            "0x text must be an exact string",
+        ),
+        (
             lambda: module._parse_exact_hex_blob(
                 hostile,
                 label="source-event log data",
@@ -3275,6 +3358,117 @@ def test_live_evidence_source_event_replay_args_reject_non_string_copied_metadat
     transaction_result = collect_complete_source_event_transaction_summary(module)
     tampered = json.loads(json.dumps(transaction_result.summary))
     tampered["source_event_transaction"]["transaction_id"] = HostileImportedScalar()
+    assert module._offline_source_event_args(tampered) is None
+
+
+def test_live_evidence_source_event_trigger_request_rejects_subclasses_without_hooks():
+    module = load_live_module()
+    fake = fake_opener_for(module)
+
+    summary = module.collect_live_evidence(
+        SimpleNamespace(
+            tron_node_url="https://tron.example",
+            source_bridge_address=fake.bridge,
+            destination_verifier_address=None,
+            caller_address=None,
+            no_getcontract=False,
+            source_event_digest=bytes.fromhex(TRON_SOURCE_EVENT_DIGEST_VECTOR),
+            full_toml=False,
+            timeout=1.0,
+        ),
+        opener=fake.opener,
+    )
+
+    for field in ("endpoint", "function_selector", "parameter"):
+        tampered = json.loads(json.dumps(summary))
+        request = tampered["source_event_call"]["trigger_request"]
+        request[field] = HostileTronLiveString(request[field])
+        assert module._offline_source_event_args(tampered) is None, field
+
+    tampered = json.loads(json.dumps(summary))
+    tampered["source_event_call"]["trigger_request"]["call_value"] = (
+        HostileTronLiveInt()
+    )
+    assert module._offline_source_event_args(tampered) is None
+
+
+def test_live_evidence_source_event_transaction_verifier_rejects_subclasses_without_hooks():
+    module = load_live_module()
+    summary = collect_complete_source_event_transaction_summary(module).summary
+
+    string_cases = (
+        ("transaction-status", ("source_event_transaction", "receipt_status")),
+        ("event-address", ("source_event_transaction", "event_address")),
+        ("event-topic", ("source_event_transaction", "event_topic0")),
+        ("source-event-digest", ("source_event_transaction", "source_event_digest")),
+        ("event-data", ("source_event_transaction", "event_data")),
+        (
+            "trigger-transaction-id",
+            ("source_event_transaction", "trigger_contract", "transaction_id"),
+        ),
+        (
+            "trigger-contract-ret",
+            ("source_event_transaction", "trigger_contract", "contract_ret"),
+        ),
+        (
+            "trigger-contract-type",
+            ("source_event_transaction", "trigger_contract", "contract_type"),
+        ),
+        (
+            "trigger-type-url",
+            ("source_event_transaction", "trigger_contract", "type_url"),
+        ),
+        (
+            "trigger-owner",
+            ("source_event_transaction", "trigger_contract", "owner_address"),
+        ),
+        (
+            "trigger-contract",
+            ("source_event_transaction", "trigger_contract", "contract_address"),
+        ),
+        (
+            "trigger-call-data",
+            ("source_event_transaction", "trigger_contract", "call_data"),
+        ),
+        (
+            "source-proof-bytes",
+            (
+                "source_event_transaction",
+                "trigger_contract",
+                "source_proof_transaction_bytes",
+            ),
+        ),
+        (
+            "source-proof-hash",
+            (
+                "source_event_transaction",
+                "trigger_contract",
+                "source_proof_transaction_hash",
+            ),
+        ),
+        (
+            "raw-summary-call-data",
+            ("source_event_transaction", "trigger_contract", "raw_data_call_data"),
+        ),
+        (
+            "signature-recovered",
+            (
+                "source_event_transaction",
+                "trigger_contract",
+                "signature_recovered_address",
+            ),
+        ),
+    )
+    for case_id, path in string_cases:
+        tampered = json.loads(json.dumps(summary))
+        target = tampered
+        for segment in path[:-1]:
+            target = target[segment]
+        target[path[-1]] = HostileTronLiveString(target[path[-1]])
+        assert module._offline_source_event_args(tampered) is None, case_id
+
+    tampered = json.loads(json.dumps(summary))
+    tampered["source_event_transaction"]["log_index"] = HostileTronLiveInt()
     assert module._offline_source_event_args(tampered) is None
 
 
@@ -7953,6 +8147,108 @@ def test_live_evidence_rejects_uppercase_source_event_trigger_calldata():
         raise AssertionError("uppercase source-event trigger calldata was accepted")
 
 
+def test_live_evidence_source_event_transaction_parser_rejects_string_subclasses_without_hooks():
+    module = load_live_module()
+
+    def mutate_receipt_status(decoded):
+        receipt = decoded.get("receipt") if type(decoded) is dict else None
+        if type(receipt) is dict and receipt.get("result") == "SUCCESS":
+            receipt["result"] = HostileTronLiveString("SUCCESS")
+
+    def mutate_contract_ret(decoded):
+        ret = decoded.get("ret") if type(decoded) is dict else None
+        if type(ret) is list and ret and type(ret[0]) is dict:
+            if ret[0].get("contractRet") == "SUCCESS":
+                ret[0]["contractRet"] = HostileTronLiveString("SUCCESS")
+
+    def mutate_contract_type(decoded):
+        raw_data = decoded.get("raw_data") if type(decoded) is dict else None
+        contracts = raw_data.get("contract") if type(raw_data) is dict else None
+        if type(contracts) is list and contracts and type(contracts[0]) is dict:
+            if contracts[0].get("type") == "TriggerSmartContract":
+                contracts[0]["type"] = HostileTronLiveString("TriggerSmartContract")
+
+    def mutate_type_url(decoded):
+        raw_data = decoded.get("raw_data") if type(decoded) is dict else None
+        contracts = raw_data.get("contract") if type(raw_data) is dict else None
+        contract = contracts[0] if type(contracts) is list and contracts else None
+        parameter = contract.get("parameter") if type(contract) is dict else None
+        if type(parameter) is dict:
+            if (
+                parameter.get("type_url")
+                == "type.googleapis.com/protocol.TriggerSmartContract"
+            ):
+                parameter["type_url"] = HostileTronLiveString(
+                    "type.googleapis.com/protocol.TriggerSmartContract"
+                )
+
+    cases = (
+        (
+            "receipt status",
+            mutate_receipt_status,
+            "source-event transaction receipt status must be SUCCESS",
+        ),
+        (
+            "contractRet",
+            mutate_contract_ret,
+            "source-event transaction contractRet must be SUCCESS",
+        ),
+        (
+            "contract type",
+            mutate_contract_type,
+            "source-event transaction must be TriggerSmartContract",
+        ),
+        (
+            "type URL",
+            mutate_type_url,
+            "source-event transaction TriggerSmartContract type_url mismatch",
+        ),
+    )
+
+    for label, mutate_decoded, expected_message in cases:
+        fake = fake_opener_for(
+            module,
+            submitted_source_event_digests=[TRON_SOURCE_EVENT_DIGEST_VECTOR],
+            source_event_transaction_id=TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR,
+        )
+        original_json_loads = module.json.loads
+
+        def hostile_json_loads(*args, **kwargs):
+            decoded = original_json_loads(*args, **kwargs)
+            mutate_decoded(decoded)
+            return decoded
+
+        module.json.loads = hostile_json_loads
+
+        try:
+            module.collect_live_evidence(
+                SimpleNamespace(
+                    tron_node_url="https://tron.example",
+                    source_bridge_address=fake.bridge,
+                    destination_verifier_address=None,
+                    caller_address=None,
+                    no_getcontract=False,
+                    source_event_digest=bytes.fromhex(TRON_SOURCE_EVENT_DIGEST_VECTOR),
+                    source_event_transaction_id=bytes.fromhex(
+                        TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR
+                    ),
+                    full_toml=False,
+                    timeout=1.0,
+                ),
+                opener=fake.opener,
+            )
+        except RuntimeError as exc:
+            rendered = str(exc)
+            assert expected_message in rendered, label
+            assert "secret-token" not in rendered
+        else:
+            raise AssertionError(
+                f"source-event transaction parser accepted hostile {label}"
+            )
+        finally:
+            module.json.loads = original_json_loads
+
+
 def test_live_evidence_rejects_non_canonical_source_event_log_data_prefix():
     module = load_live_module()
     fake = fake_opener_for(
@@ -10014,6 +10310,182 @@ def test_live_evidence_full_toml_rejects_non_string_route_canary_metadata_withou
         assert module._offline_full_toml_args(tampered_summary) is None, case_id
 
 
+def test_live_evidence_route_canary_verifier_rejects_string_subclasses_without_hooks():
+    module = load_live_module()
+    setup = route_canary_full_rollout_setup(
+        module,
+        route_canary_transaction_id=TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR,
+    )
+
+    summary = module.collect_live_evidence(
+        live_full_rollout_args(
+            setup.fake,
+            setup.expected,
+            source_code_hash=setup.source_code_hash,
+            route_canary_transaction_id=bytes.fromhex(
+                TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+            ),
+        ),
+        opener=setup.fake.opener,
+    )
+
+    cases = (
+        ("route-canary-source", ("route_canary", "evidence_source")),
+        ("route-canary-hash", ("route_canary", "evidence_hash")),
+        (
+            "route-canary-copy-hash",
+            ("route_canary", "transaction", "route_canary_evidence_hash"),
+        ),
+        (
+            "transaction-hash",
+            ("route_canary_transaction", "route_canary_evidence_hash"),
+        ),
+        ("receipt-status", ("route_canary_transaction", "receipt_status")),
+        ("event-topic", ("route_canary_transaction", "event_topic0")),
+        (
+            "route-allowlist",
+            ("route_canary_transaction", "route_allowlist_hash"),
+        ),
+        (
+            "trigger-selector",
+            ("route_canary_transaction", "trigger_contract", "function_selector"),
+        ),
+        (
+            "trigger-signature",
+            ("route_canary_transaction", "trigger_contract", "function_signature"),
+        ),
+        (
+            "public-message",
+            ("route_canary_transaction", "trigger_contract", "public_inputs_message_id"),
+        ),
+        (
+            "transaction-message",
+            ("route_canary_transaction", "message_id"),
+        ),
+        (
+            "public-root",
+            (
+                "route_canary_transaction",
+                "trigger_contract",
+                "public_inputs_commitment_root",
+            ),
+        ),
+        (
+            "transaction-root",
+            ("route_canary_transaction", "commitment_root"),
+        ),
+        (
+            "trigger-statement",
+            ("route_canary_transaction", "trigger_contract", "statement_hash"),
+        ),
+        (
+            "transaction-statement",
+            ("route_canary_transaction", "statement_hash"),
+        ),
+        (
+            "trigger-owner",
+            ("route_canary_transaction", "trigger_contract", "owner_address"),
+        ),
+        (
+            "trigger-raw-owner",
+            ("route_canary_transaction", "trigger_contract", "raw_data_owner_address"),
+        ),
+        (
+            "trigger-recovered-owner",
+            (
+                "route_canary_transaction",
+                "trigger_contract",
+                "signature_recovered_address",
+            ),
+        ),
+    )
+    for case_id, path in cases:
+        tampered_summary = json.loads(json.dumps(summary))
+        target = tampered_summary
+        for segment in path[:-1]:
+            target = target[segment]
+        target[path[-1]] = HostileTronLiveString(target[path[-1]])
+
+        assert module._route_canary_transaction_verified(tampered_summary) is False
+        assert module._offline_full_toml_args(tampered_summary) is None, case_id
+        try:
+            module.render_offline_full_toml(tampered_summary)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert "full TOML" in rendered or "route-canary" in rendered, case_id
+            assert "secret-token" not in rendered, case_id
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                "TRON full TOML rendered route-canary string subclass "
+                f"{case_id}"
+            )
+
+
+def test_live_evidence_route_canary_verifier_rejects_integer_subclasses_without_hooks():
+    module = load_live_module()
+    setup = route_canary_full_rollout_setup(
+        module,
+        route_canary_transaction_id=TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR,
+    )
+
+    summary = module.collect_live_evidence(
+        live_full_rollout_args(
+            setup.fake,
+            setup.expected,
+            source_code_hash=setup.source_code_hash,
+            route_canary_transaction_id=bytes.fromhex(
+                TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+            ),
+        ),
+        opener=setup.fake.opener,
+    )
+
+    cases = (
+        (
+            "public-target-domain",
+            ("route_canary_transaction", "trigger_contract", "public_inputs_target_domain"),
+        ),
+        (
+            "proof-bytes-length",
+            ("route_canary_transaction", "trigger_contract", "proof_bytes_length"),
+        ),
+        (
+            "proof-version",
+            ("route_canary_transaction", "trigger_contract", "proof_version"),
+        ),
+        (
+            "proof-source-domain",
+            ("route_canary_transaction", "trigger_contract", "proof_source_domain"),
+        ),
+        (
+            "signature-count",
+            ("route_canary_transaction", "trigger_contract", "signature_count"),
+        ),
+    )
+    for case_id, path in cases:
+        tampered_summary = json.loads(json.dumps(summary))
+        target = tampered_summary
+        for segment in path[:-1]:
+            target = target[segment]
+        target[path[-1]] = HostileTronLiveInt()
+
+        assert module._route_canary_transaction_verified(tampered_summary) is False
+        assert module._offline_full_toml_args(tampered_summary) is None, case_id
+        try:
+            module.render_offline_full_toml(tampered_summary)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert "full TOML" in rendered or "route-canary" in rendered, case_id
+            assert "secret-token" not in rendered, case_id
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                "TRON full TOML rendered route-canary integer subclass "
+                f"{case_id}"
+            )
+
+
 def test_live_evidence_full_toml_rejects_copied_key_aliases_without_stringifying():
     module = load_live_module()
     setup = route_canary_full_rollout_setup(
@@ -11598,6 +12070,102 @@ def test_live_evidence_rejects_route_canary_wrong_trigger_contract():
         assert "contract_address does not match destination verifier" in str(exc)
     else:
         raise AssertionError("route canary with wrong trigger contract was accepted")
+
+
+def test_live_evidence_route_canary_transaction_parser_rejects_string_subclasses_without_hooks():
+    module = load_live_module()
+
+    def mutate_receipt_status(decoded):
+        receipt = decoded.get("receipt") if type(decoded) is dict else None
+        if type(receipt) is dict and receipt.get("result") == "SUCCESS":
+            receipt["result"] = HostileTronLiveString("SUCCESS")
+
+    def mutate_contract_ret(decoded):
+        ret = decoded.get("ret") if type(decoded) is dict else None
+        if type(ret) is list and ret and type(ret[0]) is dict:
+            if ret[0].get("contractRet") == "SUCCESS":
+                ret[0]["contractRet"] = HostileTronLiveString("SUCCESS")
+
+    def mutate_contract_type(decoded):
+        raw_data = decoded.get("raw_data") if type(decoded) is dict else None
+        contracts = raw_data.get("contract") if type(raw_data) is dict else None
+        if type(contracts) is list and contracts and type(contracts[0]) is dict:
+            if contracts[0].get("type") == "TriggerSmartContract":
+                contracts[0]["type"] = HostileTronLiveString("TriggerSmartContract")
+
+    def mutate_type_url(decoded):
+        raw_data = decoded.get("raw_data") if type(decoded) is dict else None
+        contracts = raw_data.get("contract") if type(raw_data) is dict else None
+        contract = contracts[0] if type(contracts) is list and contracts else None
+        parameter = contract.get("parameter") if type(contract) is dict else None
+        if type(parameter) is dict:
+            if (
+                parameter.get("type_url")
+                == "type.googleapis.com/protocol.TriggerSmartContract"
+            ):
+                parameter["type_url"] = HostileTronLiveString(
+                    "type.googleapis.com/protocol.TriggerSmartContract"
+                )
+
+    cases = (
+        (
+            "receipt status",
+            mutate_receipt_status,
+            "route-canary transaction receipt status must be SUCCESS",
+        ),
+        (
+            "contractRet",
+            mutate_contract_ret,
+            "route-canary transaction contractRet must be SUCCESS",
+        ),
+        (
+            "contract type",
+            mutate_contract_type,
+            "route-canary transaction must be TriggerSmartContract",
+        ),
+        (
+            "type URL",
+            mutate_type_url,
+            "route-canary transaction TriggerSmartContract type_url mismatch",
+        ),
+    )
+
+    for label, mutate_decoded, expected_message in cases:
+        setup = route_canary_full_rollout_setup(
+            module,
+            route_canary_transaction_id=TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR,
+        )
+        original_json_loads = module.json.loads
+
+        def hostile_json_loads(*args, **kwargs):
+            decoded = original_json_loads(*args, **kwargs)
+            mutate_decoded(decoded)
+            return decoded
+
+        module.json.loads = hostile_json_loads
+
+        try:
+            module.collect_live_evidence(
+                live_full_rollout_args(
+                    setup.fake,
+                    setup.expected,
+                    source_code_hash=setup.source_code_hash,
+                    route_canary_transaction_id=bytes.fromhex(
+                        TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+                    ),
+                ),
+                opener=setup.fake.opener,
+            )
+        except RuntimeError as exc:
+            rendered = str(exc)
+            assert expected_message in rendered, label
+            assert "secret-token" not in rendered
+        else:
+            raise AssertionError(
+                f"route-canary transaction parser accepted hostile {label}"
+            )
+        finally:
+            module.json.loads = original_json_loads
 
 
 def test_live_evidence_rejects_uppercase_route_canary_trigger_calldata():

@@ -9,12 +9,12 @@ use std::{
     convert::{Infallible, TryInto},
     fs,
     io::{self, Read, Write},
-    net::SocketAddr,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     num::NonZeroU32,
     path::{Component, Path as StdPath, PathBuf},
     str::FromStr,
     sync::{
-        LazyLock, Mutex,
+        Arc, LazyLock, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -103,6 +103,8 @@ use sorafs_car::{
     compute_chunk_plan_digest_sha3, por_json::sample_to_map, verifier::CarVerifyError,
 };
 use sorafs_chunker::ChunkProfile;
+#[cfg(test)]
+use sorafs_manifest::StreamTokenV1;
 use sorafs_manifest::{
     AdvertEndpoint, AdvertValidationError, CapabilityTlv, CapabilityType, EndpointKind,
     EndpointMetadata, EndpointMetadataKey, MAX_PROOF_STREAM_SAMPLE_COUNT, ManifestV1,
@@ -119,6 +121,7 @@ use sorafs_manifest::{
     capacity::CapacityTelemetryV1,
     chunker_registry,
     deal::XorAmount,
+    derive_orderbook_order_id_v1,
     por::{AuditVerdictV1, PorChallengeV1, PorProofV1},
     potr::{PotrReceiptV1, PotrSignatureAlgorithm, PotrSignatureV1, PotrStatus},
     repair::{RepairTaskEventV1, RepairTaskStatusV1},
@@ -144,14 +147,14 @@ use sorafs_node::{
     ModerationScreeningRecord, ModerationScreeningSnapshot, ModerationScreeningVerdict,
     NodeStorageError, OrderbookCancelOutcome, OrderbookEvent, OrderbookEventKind,
     OrderbookReceiptOutcome, OrderbookRuntimeError, OrderbookSnapshot, OrderbookSubmitOutcome,
-    PorTrackerError, PrivacyAggregateScheduleOutcome, PrivacyAggregateSourceEvent,
-    PrivacyAggregateSourceMetric, RepairEvent, ReserveAppealDecision, ReserveAppealOutcome,
-    ReserveAppealRecord, ReserveAppealRequest, ReserveAppealRuntimeError, ReserveAppealSnapshot,
-    ReserveAppealStatus, ReserveCreditLineSnapshot, ReserveLifecycleEvent,
-    ReserveLifecyclePolicyOutcome, ReserveLifecyclePolicyRecord, ReserveLifecyclePolicySnapshot,
-    ReserveLifecyclePolicyUpdate, ReserveLifecycleRuntimeError, ReserveLifecycleSnapshot,
-    ReserveLifecycleUpdate, ReserveMovementCustodyStatus, ReserveMovementCustodyUpdate,
-    ReserveMovementKind, ReserveMovementOutcome, ReserveMovementRecord, ReserveMovementRequest,
+    PrivacyAggregateScheduleOutcome, PrivacyAggregateSourceEvent, PrivacyAggregateSourceMetric,
+    RepairEvent, ReserveAppealDecision, ReserveAppealOutcome, ReserveAppealRecord,
+    ReserveAppealRequest, ReserveAppealRuntimeError, ReserveAppealSnapshot, ReserveAppealStatus,
+    ReserveCreditLineSnapshot, ReserveLifecycleEvent, ReserveLifecyclePolicyOutcome,
+    ReserveLifecyclePolicyRecord, ReserveLifecyclePolicySnapshot, ReserveLifecyclePolicyUpdate,
+    ReserveLifecycleRuntimeError, ReserveLifecycleSnapshot, ReserveLifecycleUpdate,
+    ReserveMovementCustodyStatus, ReserveMovementCustodyUpdate, ReserveMovementKind,
+    ReserveMovementOutcome, ReserveMovementRecord, ReserveMovementRequest,
     ReserveMovementRuntimeError, ReserveProviderBalance, ReserveProviderCreditLineState,
     ReserveProviderLifecycleSummary, TransparencyLedgerSourceEntry,
     appeal_finance_report_source_entry, appeal_finance_settlement_receipt_source_entry,
@@ -173,8 +176,9 @@ use sorafs_orchestrator::appeals::{
     parse_appeal_decimal_literal,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use tokio::sync::{RwLock, broadcast, mpsc};
+use tokio::sync::{Mutex as AsyncMutex, RwLock, broadcast, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
+use url::Host as UrlHost;
 use urlencoding::decode;
 
 use crate::{
@@ -182,9 +186,11 @@ use crate::{
     routing::MaybeTelemetry,
     sorafs::{
         AdmissionRegistry, AliasCacheEnforcement, AliasCachePolicyExt, AliasCachePolicyHttpExt,
-        AliasProofEvaluationExt, AliasProofState, BLINDED_CID_LEN, CacheDecision, QuotaExceeded,
-        SorafsAction, StreamTokenConcurrencyPermit, StreamTokenHeaderError, StreamTokenIssuerError,
-        StreamTokenQuotaExceeded, TokenOverrides, decode_token_base64,
+        AliasProofEvaluationExt, AliasProofState, BLINDED_CID_LEN, CacheDecision,
+        MAX_CLIENT_ID_BYTES, MAX_NONCE_BYTES, MAX_STREAM_TOKEN_BASE64_BYTES,
+        MAX_TOKEN_FUTURE_SKEW_SECS, QuotaExceeded, SorafsAction, StreamTokenConcurrencyPermit,
+        StreamTokenHeaderError, StreamTokenIssuerError, StreamTokenQuotaError, TokenOverrides,
+        decode_token_base64,
         discovery::{
             AdvertError, AdvertIngest, AdvertIngestResult, AdvertWarning, ProviderAdvertCache,
             capability_name,
@@ -203,7 +209,7 @@ use crate::{
         },
         site::{
             content_type_for_path, decode_content_cid, encode_content_cid, find_site_binding,
-            load_site_bindings_from_env, normalize_host_header, path_components_for_request,
+            normalize_host_header, path_components_for_request,
         },
     },
     utils::extractors::{ExtractAccept, JsonOnly, NoritoJson},
@@ -2363,7 +2369,7 @@ pub struct ModerationBallotTallyRequestDto {
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload accepted by `/v1/sorafs/storage/por-challenge`.
+/// JSON payload retained for the retired `/v1/sorafs/storage/por-challenge` route.
 pub struct StoragePorChallengeDto {
     /// Base64-encoded Norito PoR challenge payload.
     pub challenge_b64: String,
@@ -2371,7 +2377,7 @@ pub struct StoragePorChallengeDto {
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload accepted by `/v1/sorafs/storage/por-proof`.
+/// JSON payload retained for the retired `/v1/sorafs/storage/por-proof` route.
 pub struct StoragePorProofDto {
     /// Base64-encoded Norito PoR proof payload.
     pub proof_b64: String,
@@ -2379,7 +2385,7 @@ pub struct StoragePorProofDto {
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload accepted by `/v1/sorafs/storage/por-verdict`.
+/// JSON payload retained for the retired `/v1/sorafs/storage/por-verdict` route.
 pub struct StoragePorVerdictDto {
     /// Base64-encoded Norito PoR verdict payload.
     pub verdict_b64: String,
@@ -2496,6 +2502,97 @@ pub struct StorageStoredFileDto {
 const DEFAULT_LIST_LIMIT: usize = 50;
 const MAX_LIST_LIMIT: usize = 500;
 const MAX_POR_SAMPLE_COUNT: usize = MAX_LIST_LIMIT;
+/// Maximum number of distinct approved providers attempted for one CID miss.
+const MAX_REMOTE_CID_SOURCES: usize = 16;
+/// Maximum registry orders inspected while resolving one CID miss.
+const MAX_REMOTE_REPLICATION_ORDERS_SCANNED: usize = 4_096;
+/// Maximum provider identifiers inspected from one replication order.
+const MAX_REMOTE_PROVIDERS_PER_ORDER: usize = 64;
+/// Maximum provider DNS lookups performed concurrently for one CID miss.
+const MAX_REMOTE_DNS_CONCURRENCY: usize = 4;
+/// Maximum number of active or recently completed CID hydration keys retained process-wide.
+const MAX_REMOTE_CID_HYDRATIONS: usize = 128;
+/// Maximum number of socket addresses accepted from one provider DNS answer.
+const MAX_REMOTE_SOURCE_ADDRESSES: usize = 8;
+/// Maximum remote response header count accepted after the HTTP parser.
+const MAX_REMOTE_RESPONSE_HEADERS: usize = 64;
+/// Maximum aggregate remote response header bytes accepted after the HTTP parser.
+const MAX_REMOTE_RESPONSE_HEADER_BYTES: usize = 32 * 1024;
+/// Maximum JSON metadata response accepted from a remote storage provider.
+const MAX_REMOTE_MANIFEST_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+/// Maximum canonical Norito manifest accepted during remote hydration.
+const MAX_REMOTE_MANIFEST_BYTES: usize = 512 * 1024;
+/// Maximum remote directory entries reconstructed during hydration.
+const MAX_REMOTE_SITE_FILES: usize = 4_096;
+/// Hard in-memory payload ceiling for one remote hydration.
+const MAX_REMOTE_HYDRATION_PAYLOAD_BYTES: u64 = 32 * 1024 * 1024;
+/// Maximum bytes returned by one site response without explicit streaming support.
+const MAX_SITE_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
+/// DNS resolution deadline used before constructing a pinned HTTP client.
+const REMOTE_DNS_TIMEOUT: Duration = Duration::from_secs(3);
+/// Full remote hydration request deadline.
+const REMOTE_FETCH_TIMEOUT: Duration = Duration::from_secs(20);
+/// TCP/TLS connection deadline for one approved provider route.
+const REMOTE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Failure backoff shared by requests that joined the same CID hydration flight.
+const REMOTE_HYDRATION_FAILURE_BACKOFF: Duration = Duration::from_secs(5);
+/// Idle retention for bounded CID hydration admission entries.
+const REMOTE_HYDRATION_FLIGHT_RETENTION: Duration = Duration::from_secs(10);
+
+struct CidHydrationFlight {
+    gate: AsyncMutex<()>,
+    last_failure: Mutex<Option<Instant>>,
+    last_activity: Mutex<Instant>,
+}
+
+impl CidHydrationFlight {
+    fn new() -> Self {
+        Self {
+            gate: AsyncMutex::new(()),
+            last_failure: Mutex::new(None),
+            last_activity: Mutex::new(Instant::now()),
+        }
+    }
+
+    fn touch(&self) {
+        if let Ok(mut last_activity) = self.last_activity.lock() {
+            *last_activity = Instant::now();
+        }
+    }
+
+    fn record_failure(&self) {
+        if let Ok(mut last_failure) = self.last_failure.lock() {
+            *last_failure = Some(Instant::now());
+        }
+        self.touch();
+    }
+
+    fn clear_failure(&self) {
+        if let Ok(mut last_failure) = self.last_failure.lock() {
+            *last_failure = None;
+        }
+        self.touch();
+    }
+
+    fn failure_backoff_active(&self) -> bool {
+        self.last_failure.lock().map_or(true, |last_failure| {
+            last_failure
+                .is_some_and(|failed_at| failed_at.elapsed() < REMOTE_HYDRATION_FAILURE_BACKOFF)
+        })
+    }
+
+    fn is_expired(&self) -> bool {
+        let idle = self.last_activity.lock().map_or(false, |last_activity| {
+            last_activity.elapsed() >= REMOTE_HYDRATION_FLIGHT_RETENTION
+        });
+        idle && self.gate.try_lock().is_ok()
+    }
+}
+
+type CidHydrationFlights = BTreeMap<Vec<u8>, Arc<CidHydrationFlight>>;
+
+static CID_HYDRATION_FLIGHTS: LazyLock<Mutex<CidHydrationFlights>> =
+    LazyLock::new(|| Mutex::new(BTreeMap::new()));
 const REPUTATION_CACHE_CONTROL: &str = "public, max-age=30, must-revalidate";
 
 #[derive(Debug, Default)]
@@ -15758,7 +15855,8 @@ fn appeal_finance_weekly_rollup_publish_json(rollup: &SoraFsAppealFinanceWeeklyR
 
 fn orderbook_runtime_error_response(err: OrderbookRuntimeError) -> Response {
     let status = match err {
-        OrderbookRuntimeError::DuplicateOrderId { .. } => StatusCode::CONFLICT,
+        OrderbookRuntimeError::DuplicateOrderId { .. }
+        | OrderbookRuntimeError::StaleOwnerNonce { .. } => StatusCode::CONFLICT,
         OrderbookRuntimeError::DuplicateReceiptId { .. }
         | OrderbookRuntimeError::ReceiptRangeOverlap { .. } => StatusCode::CONFLICT,
         OrderbookRuntimeError::OrderNotFound { .. } => StatusCode::NOT_FOUND,
@@ -15770,7 +15868,11 @@ fn orderbook_runtime_error_response(err: OrderbookRuntimeError) -> Response {
         OrderbookRuntimeError::ReserveLifecycleAdvertDisabled { .. } => {
             StatusCode::PRECONDITION_FAILED
         }
+        OrderbookRuntimeError::ResourceExhausted { .. } => StatusCode::TOO_MANY_REQUESTS,
+        OrderbookRuntimeError::InvalidSnapshot(_) => StatusCode::BAD_REQUEST,
+        OrderbookRuntimeError::Checkpoint(_) => StatusCode::SERVICE_UNAVAILABLE,
         OrderbookRuntimeError::SequenceOverflow
+        | OrderbookRuntimeError::EventSequenceOverflow
         | OrderbookRuntimeError::MissingMatchedOrder
         | OrderbookRuntimeError::InvalidMatchedSides
         | OrderbookRuntimeError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
@@ -15781,7 +15883,9 @@ fn orderbook_runtime_error_response(err: OrderbookRuntimeError) -> Response {
 fn reserve_lifecycle_runtime_error_response(err: ReserveLifecycleRuntimeError) -> Response {
     let status = match err {
         ReserveLifecycleRuntimeError::ProjectionFailed(_) => StatusCode::BAD_REQUEST,
+        ReserveLifecycleRuntimeError::ResourceExhausted { .. } => StatusCode::TOO_MANY_REQUESTS,
         ReserveLifecycleRuntimeError::EventSequenceOverflow
+        | ReserveLifecycleRuntimeError::Checkpoint(_)
         | ReserveLifecycleRuntimeError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
     };
     json_error(status, format!("sorafs reserve lifecycle error: {err}"))
@@ -15797,8 +15901,10 @@ fn reserve_movement_runtime_error_response(err: ReserveMovementRuntimeError) -> 
             StatusCode::CONFLICT
         }
         ReserveMovementRuntimeError::MovementNotFound { .. } => StatusCode::NOT_FOUND,
+        ReserveMovementRuntimeError::ResourceExhausted { .. } => StatusCode::TOO_MANY_REQUESTS,
         ReserveMovementRuntimeError::EventSequenceOverflow
         | ReserveMovementRuntimeError::ArithmeticFailed(_)
+        | ReserveMovementRuntimeError::Checkpoint(_)
         | ReserveMovementRuntimeError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
     };
     json_error(status, format!("sorafs reserve movement error: {err}"))
@@ -15813,8 +15919,10 @@ fn reserve_appeal_runtime_error_response(err: ReserveAppealRuntimeError) -> Resp
         | ReserveAppealRuntimeError::InvalidAppealTransition { .. }
         | ReserveAppealRuntimeError::PolicyIdCollision { .. } => StatusCode::CONFLICT,
         ReserveAppealRuntimeError::AppealNotFound { .. } => StatusCode::NOT_FOUND,
+        ReserveAppealRuntimeError::ResourceExhausted { .. } => StatusCode::TOO_MANY_REQUESTS,
         ReserveAppealRuntimeError::EventSequenceOverflow
         | ReserveAppealRuntimeError::LifecyclePolicyProjectionFailed(_)
+        | ReserveAppealRuntimeError::Checkpoint(_)
         | ReserveAppealRuntimeError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
     };
     json_error(status, format!("sorafs reserve appeal error: {err}"))
@@ -15822,7 +15930,7 @@ fn reserve_appeal_runtime_error_response(err: ReserveAppealRuntimeError) -> Resp
 
 #[cfg(test)]
 #[test]
-fn orderbook_admission_policy_errors_map_to_bad_request() {
+fn orderbook_admission_and_replay_errors_map_to_expected_status() {
     let response = orderbook_runtime_error_response(OrderbookRuntimeError::OrderBelowMinimum {
         quantity_gib: 1,
         min_order_gib: 8,
@@ -15842,6 +15950,13 @@ fn orderbook_admission_policy_errors_map_to_bad_request() {
             stage: "default".to_owned(),
         });
     assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+
+    let response = orderbook_runtime_error_response(OrderbookRuntimeError::StaleOwnerNonce {
+        owner_account_hex: hex::encode(b"buyer@sora"),
+        nonce: 7,
+        highest_nonce: 7,
+    });
+    assert_eq!(response.status(), StatusCode::CONFLICT);
 }
 
 fn moderation_ballot_runtime_error_response(err: ModerationBallotRuntimeError) -> Response {
@@ -15865,7 +15980,10 @@ fn moderation_ballot_runtime_error_response(err: ModerationBallotRuntimeError) -
         | ModerationBallotRuntimeError::MissingCommit { .. }
         | ModerationBallotRuntimeError::TallyWindowOpen { .. }
         | ModerationBallotRuntimeError::QuorumNotMet { .. } => StatusCode::PRECONDITION_FAILED,
-        ModerationBallotRuntimeError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
+        ModerationBallotRuntimeError::ResourceExhausted { .. } => StatusCode::TOO_MANY_REQUESTS,
+        ModerationBallotRuntimeError::Checkpoint(_) => StatusCode::SERVICE_UNAVAILABLE,
+        ModerationBallotRuntimeError::EventSequenceOverflow
+        | ModerationBallotRuntimeError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
         ModerationBallotRuntimeError::Validation(_)
         | ModerationBallotRuntimeError::MissingRoundId
         | ModerationBallotRuntimeError::MissingJurors
@@ -15929,10 +16047,12 @@ where
 fn moderation_model_registry_error_response(err: ModerationModelRegistryError) -> Response {
     let status = match err {
         ModerationModelRegistryError::ConflictingReproManifest { .. } => StatusCode::CONFLICT,
+        ModerationModelRegistryError::ResourceExhausted { .. } => StatusCode::TOO_MANY_REQUESTS,
         ModerationModelRegistryError::InvalidReproManifest { .. }
         | ModerationModelRegistryError::InvalidCorpusManifest { .. }
         | ModerationModelRegistryError::InvalidRegistrySnapshot { .. }
         | ModerationModelRegistryError::CorpusEncoding { .. } => StatusCode::BAD_REQUEST,
+        ModerationModelRegistryError::Checkpoint { .. } => StatusCode::SERVICE_UNAVAILABLE,
         ModerationModelRegistryError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
     };
     json_error(
@@ -16359,11 +16479,13 @@ fn ensure_evidence_viewer_access_binds_quarantine(
 
 fn moderation_screening_error_response(err: ModerationScreeningError) -> Response {
     let status = match err {
+        ModerationScreeningError::ResourceExhausted { .. } => StatusCode::TOO_MANY_REQUESTS,
         ModerationScreeningError::ConflictingRecord { .. } => StatusCode::CONFLICT,
         ModerationScreeningError::UnknownQuarantine { .. } => StatusCode::NOT_FOUND,
         ModerationScreeningError::InvalidTransition { .. } => StatusCode::CONFLICT,
         ModerationScreeningError::InvalidInput { .. }
         | ModerationScreeningError::InvalidSnapshot { .. } => StatusCode::BAD_REQUEST,
+        ModerationScreeningError::Checkpoint { .. } => StatusCode::SERVICE_UNAVAILABLE,
         ModerationScreeningError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
     };
     json_error(status, format!("sorafs moderation screening error: {err}"))
@@ -16371,6 +16493,7 @@ fn moderation_screening_error_response(err: ModerationScreeningError) -> Respons
 
 fn moderation_quarantine_object_error_response(err: ModerationQuarantineObjectError) -> Response {
     let status = match err {
+        ModerationQuarantineObjectError::ResourceExhausted { .. } => StatusCode::TOO_MANY_REQUESTS,
         ModerationQuarantineObjectError::StorageDisabled => StatusCode::SERVICE_UNAVAILABLE,
         ModerationQuarantineObjectError::UnknownQuarantine { .. }
         | ModerationQuarantineObjectError::MissingObject { .. } => StatusCode::NOT_FOUND,
@@ -16380,8 +16503,8 @@ fn moderation_quarantine_object_error_response(err: ModerationQuarantineObjectEr
         ModerationQuarantineObjectError::InvalidInput { .. }
         | ModerationQuarantineObjectError::InvalidSnapshot { .. }
         | ModerationQuarantineObjectError::Codec { .. } => StatusCode::BAD_REQUEST,
-        ModerationQuarantineObjectError::Io { .. }
-        | ModerationQuarantineObjectError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
+        ModerationQuarantineObjectError::Io { .. } => StatusCode::SERVICE_UNAVAILABLE,
+        ModerationQuarantineObjectError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
     };
     json_error(
         status,
@@ -16391,6 +16514,7 @@ fn moderation_quarantine_object_error_response(err: ModerationQuarantineObjectEr
 
 fn moderation_evidence_viewer_error_response(err: ModerationEvidenceViewerError) -> Response {
     let status = match err {
+        ModerationEvidenceViewerError::ResourceExhausted { .. } => StatusCode::TOO_MANY_REQUESTS,
         ModerationEvidenceViewerError::UnknownQuarantine { .. }
         | ModerationEvidenceViewerError::MissingObject { .. }
         | ModerationEvidenceViewerError::UnknownSession { .. } => StatusCode::NOT_FOUND,
@@ -16401,13 +16525,48 @@ fn moderation_evidence_viewer_error_response(err: ModerationEvidenceViewerError)
         | ModerationEvidenceViewerError::InvalidSnapshot { .. }
         | ModerationEvidenceViewerError::Codec { .. } => StatusCode::BAD_REQUEST,
         ModerationEvidenceViewerError::TransparencyExport { .. }
-        | ModerationEvidenceViewerError::Io { .. }
-        | ModerationEvidenceViewerError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
+        | ModerationEvidenceViewerError::Io { .. } => StatusCode::SERVICE_UNAVAILABLE,
+        ModerationEvidenceViewerError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
     };
     json_error(
         status,
         format!("sorafs moderation evidence viewer error: {err}"),
     )
+}
+
+#[cfg(test)]
+#[test]
+fn moderation_resource_exhaustion_errors_map_to_too_many_requests() {
+    let limit = 1;
+    let responses = [
+        moderation_ballot_runtime_error_response(ModerationBallotRuntimeError::ResourceExhausted {
+            resource: "ballots",
+            limit,
+        }),
+        moderation_model_registry_error_response(ModerationModelRegistryError::ResourceExhausted {
+            resource: "reproducibility_manifests",
+            limit,
+        }),
+        moderation_screening_error_response(ModerationScreeningError::ResourceExhausted {
+            resource: "screening_records",
+            limit,
+        }),
+        moderation_quarantine_object_error_response(
+            ModerationQuarantineObjectError::ResourceExhausted {
+                resource: "quarantine_objects",
+                limit,
+            },
+        ),
+        moderation_evidence_viewer_error_response(
+            ModerationEvidenceViewerError::ResourceExhausted {
+                resource: "evidence_viewer_sessions",
+                limit,
+            },
+        ),
+    ];
+    for response in responses {
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
 }
 
 fn moderation_screening_outcome_json(outcome: &ModerationScreeningOutcome) -> Value {
@@ -20544,6 +20703,9 @@ pub(crate) async fn handle_get_sorafs_por_ingestion(
         Err(NodeStorageError::Storage(err)) => {
             return node_storage_error_response(NodeStorageError::Storage(err));
         }
+        Err(NodeStorageError::Scheduler(err)) => {
+            return node_storage_error_response(NodeStorageError::Scheduler(err));
+        }
     };
     if status.providers.is_empty() {
         return json_error(
@@ -21550,6 +21712,11 @@ fn normalized_site_request_host(headers: &HeaderMap) -> Result<String, Response>
         .ok_or_else(|| json_error(StatusCode::BAD_REQUEST, "invalid Host header"))
 }
 
+fn decode_canonical_content_cid(cid: &str) -> Option<Vec<u8>> {
+    let decoded = decode_content_cid(cid)?;
+    (encode_content_cid(&decoded) == cid).then_some(decoded)
+}
+
 fn extract_cid_from_untrusted_host(
     host: &str,
     config: &iroha_config::parameters::actual::SorafsGatewayUntrustedHosting,
@@ -21562,6 +21729,7 @@ fn extract_cid_from_untrusted_host(
         config.cid_host_suffixes.live.as_str(),
         config.cid_host_suffixes.taira.as_str(),
     ] {
+        let suffix = suffix.trim().trim_end_matches('.').to_ascii_lowercase();
         if suffix.is_empty() {
             continue;
         }
@@ -21574,7 +21742,7 @@ fn extract_cid_from_untrusted_host(
             continue;
         }
 
-        if decode_content_cid(cid_label).is_none() {
+        if decode_canonical_content_cid(cid_label).is_none() {
             return Err(json_error(
                 StatusCode::BAD_REQUEST,
                 "invalid content CID host",
@@ -21739,13 +21907,11 @@ async fn resolve_site_host(
         return Ok(resolved);
     }
 
-    let bindings = match load_site_bindings_from_env() {
-        Ok(Some(document)) => document,
-        Ok(None) => return Err(StatusCode::NOT_FOUND.into_response()),
-        Err(err) => return Err(json_error(StatusCode::INTERNAL_SERVER_ERROR, err)),
+    let Some(bindings) = state.sorafs_site_bindings.as_deref() else {
+        return Err(StatusCode::NOT_FOUND.into_response());
     };
 
-    let Some(binding) = find_site_binding(&bindings, &host).cloned() else {
+    let Some(binding) = find_site_binding(bindings, &host).cloned() else {
         return Err(StatusCode::NOT_FOUND.into_response());
     };
 
@@ -21781,12 +21947,24 @@ struct RemoteCidSource {
     manifest_digest_hex: String,
     provider_id_hex: String,
     torii_base_url: reqwest::Url,
+    pinned_addrs: Vec<SocketAddr>,
+}
+
+struct UnresolvedRemoteCidSource {
+    manifest_digest_hex: String,
+    provider_id_hex: String,
+    torii_base_url: reqwest::Url,
 }
 
 struct RemoteSiteBundle {
     manifest: ManifestV1,
     payload: Vec<u8>,
-    files: Option<Vec<StorageFileEntryDto>>,
+    plan: CarBuildPlan,
+}
+
+enum RemoteFetchError {
+    Source(String),
+    Denylisted(DenylistHit),
 }
 
 fn find_local_site_manifest_by_cid(
@@ -21818,42 +21996,205 @@ fn normalize_provider_torii_base_url(host_pattern: &str) -> Result<reqwest::Url,
     if trimmed.is_empty() {
         return Err("provider advert endpoint host pattern must not be empty".to_string());
     }
+    if trimmed.bytes().any(|byte| byte.is_ascii_control())
+        || trimmed.contains('\\')
+        || trimmed.contains('%')
+    {
+        return Err("provider advert endpoint contains unsafe characters".to_string());
+    }
 
     let with_scheme = if trimmed.contains("://") {
         trimmed.to_owned()
     } else {
-        let lower = trimmed.to_ascii_lowercase();
-        let scheme = if lower.starts_with("localhost")
-            || lower.starts_with("127.")
-            || lower.starts_with("[::1]")
-            || lower.starts_with("::1")
-        {
-            "http"
-        } else {
-            "https"
-        };
-        format!("{scheme}://{trimmed}")
+        format!("https://{trimmed}")
     };
+    let authority_and_path = with_scheme
+        .split_once("://")
+        .map(|(_, value)| value)
+        .unwrap_or_default();
+    if authority_and_path
+        .split_once('/')
+        .is_some_and(|(_, path)| !path.is_empty())
+    {
+        return Err(
+            "provider advert Torii endpoint must use the origin root as its base path".to_string(),
+        );
+    }
 
     let mut url = reqwest::Url::parse(&with_scheme)
         .map_err(|err| format!("invalid provider advert endpoint `{trimmed}`: {err}"))?;
-    if !url.path().ends_with('/') {
-        let normalized = format!("{}/", url.path());
-        url.set_path(&normalized);
+    if url.scheme() != "https" {
+        return Err("provider advert Torii endpoints must use HTTPS".to_string());
     }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("provider advert Torii endpoints must not contain credentials".to_string());
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(
+            "provider advert Torii endpoints must not contain a query or fragment".to_string(),
+        );
+    }
+    if url.host_str().is_none() {
+        return Err("provider advert Torii endpoint is missing a host".to_string());
+    }
+    if url.port() == Some(0) {
+        return Err("provider advert Torii endpoint port must be non-zero".to_string());
+    }
+    if url.path() != "/" {
+        return Err(
+            "provider advert Torii endpoint must use the origin root as its base path".to_string(),
+        );
+    }
+    url.set_path("/");
     Ok(url)
+}
+
+fn ipv4_is_public(ip: Ipv4Addr) -> bool {
+    let [a, b, c, _] = ip.octets();
+    !(a == 0
+        || a == 10
+        || a == 127
+        || (a == 100 && (64..=127).contains(&b))
+        || (a == 169 && b == 254)
+        || (a == 172 && (16..=31).contains(&b))
+        || (a == 192 && b == 0 && c == 0)
+        || (a == 192 && b == 0 && c == 2)
+        || (a == 192 && b == 88 && c == 99)
+        || (a == 192 && b == 168)
+        || (a == 198 && (b == 18 || b == 19))
+        || (a == 198 && b == 51 && c == 100)
+        || (a == 203 && b == 0 && c == 113)
+        || a >= 224)
+}
+
+fn embedded_ipv4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
+    let segments = ip.segments();
+    let is_mapped = segments[..5] == [0; 5] && segments[5] == u16::MAX;
+    if !is_mapped {
+        return None;
+    }
+    let [a, b] = segments[6].to_be_bytes();
+    let [c, d] = segments[7].to_be_bytes();
+    Some(Ipv4Addr::new(a, b, c, d))
+}
+
+fn ipv6_is_public(ip: Ipv6Addr) -> bool {
+    if ip.is_unspecified() || ip.is_loopback() || ip.is_multicast() {
+        return false;
+    }
+    if let Some(ipv4) = embedded_ipv4(ip) {
+        return ipv4_is_public(ipv4);
+    }
+
+    let segments = ip.segments();
+    let first = segments[0];
+    let second = segments[1];
+    let global_unicast = first & 0xe000 == 0x2000;
+    let documentation =
+        (first == 0x2001 && second == 0x0db8) || (first == 0x3fff && second & 0xf000 == 0);
+    // The IANA special-purpose registry assigns 2001:0000::/23 to transition,
+    // benchmarking, ORCHID, and anycast functions. None are provider origins.
+    let special_purpose = first == 0x2001 && second <= 0x01ff;
+    let transition = first == 0x2002;
+
+    global_unicast && !documentation && !special_purpose && !transition
+}
+
+fn ip_is_public(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => ipv4_is_public(ip),
+        IpAddr::V6(ip) => ipv6_is_public(ip),
+    }
+}
+
+async fn resolve_public_endpoint(url: &reqwest::Url) -> Result<Vec<SocketAddr>, String> {
+    let parsed_host = url
+        .host()
+        .ok_or_else(|| "provider endpoint is missing a host".to_string())?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| "provider endpoint is missing a host".to_string())?;
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| "provider endpoint is missing a port".to_string())?;
+
+    let addrs = match parsed_host {
+        UrlHost::Ipv4(ip) => vec![SocketAddr::new(IpAddr::V4(ip), port)],
+        UrlHost::Ipv6(ip) => vec![SocketAddr::new(IpAddr::V6(ip), port)],
+        UrlHost::Domain(domain) => {
+            let resolved =
+                tokio::time::timeout(REMOTE_DNS_TIMEOUT, tokio::net::lookup_host((domain, port)))
+                    .await
+                    .map_err(|_| format!("DNS resolution for `{host}` timed out"))?
+                    .map_err(|err| {
+                        format!("failed to resolve provider endpoint `{host}`: {err}")
+                    })?;
+            let mut addrs = Vec::with_capacity(MAX_REMOTE_SOURCE_ADDRESSES);
+            for addr in resolved {
+                if addrs.len() == MAX_REMOTE_SOURCE_ADDRESSES {
+                    return Err(format!(
+                        "provider endpoint `{host}` resolved to more than {MAX_REMOTE_SOURCE_ADDRESSES} addresses"
+                    ));
+                }
+                addrs.push(addr);
+            }
+            addrs
+        }
+    };
+
+    if addrs.is_empty() {
+        return Err(format!(
+            "provider endpoint `{host}` resolved to no addresses"
+        ));
+    }
+    if addrs.len() > MAX_REMOTE_SOURCE_ADDRESSES {
+        return Err(format!(
+            "provider endpoint `{host}` resolved to {} addresses; maximum is {MAX_REMOTE_SOURCE_ADDRESSES}",
+            addrs.len()
+        ));
+    }
+    if let Some(addr) = addrs.iter().find(|addr| !ip_is_public(addr.ip())) {
+        return Err(format!(
+            "provider endpoint `{host}` resolved to forbidden address {}",
+            addr.ip()
+        ));
+    }
+
+    let mut addrs = addrs;
+    addrs.sort_unstable();
+    addrs.dedup();
+    Ok(addrs)
 }
 
 fn storage_file_entries_from_manifest_response(
     files: &[StorageStoredFileDto],
+    content_length: u64,
 ) -> Result<Option<Vec<StorageFileEntryDto>>, String> {
     if files.is_empty() {
         return Ok(None);
+    }
+    if files.len() > MAX_REMOTE_SITE_FILES {
+        return Err(format!(
+            "remote manifest contains {} files; maximum is {MAX_REMOTE_SITE_FILES}",
+            files.len()
+        ));
     }
 
     let mut cursor = 0_u64;
     let mut entries = Vec::with_capacity(files.len());
     for file in files {
+        if file.path.is_empty()
+            || file.path.iter().any(|component| {
+                component.is_empty()
+                    || component == "."
+                    || component == ".."
+                    || component.contains('/')
+                    || component.contains('\\')
+                    || component.bytes().any(|byte| byte.is_ascii_control())
+            })
+        {
+            return Err("remote manifest contains an unsafe file path".to_string());
+        }
         if file.offset != cursor {
             return Err(format!(
                 "remote manifest layout is non-contiguous at `{}`: expected offset {cursor}, found {}",
@@ -21865,7 +22206,20 @@ fn storage_file_entries_from_manifest_response(
             path: file.path.clone(),
             size: file.size,
         });
-        cursor = cursor.saturating_add(file.size);
+        cursor = cursor
+            .checked_add(file.size)
+            .ok_or_else(|| "remote manifest file layout overflows u64".to_string())?;
+        if cursor > content_length {
+            return Err(format!(
+                "remote manifest file `{}` exceeds declared content length",
+                file.path.join("/")
+            ));
+        }
+    }
+    if cursor != content_length {
+        return Err(format!(
+            "remote manifest file sizes total {cursor} but content length is {content_length}"
+        ));
     }
 
     Ok(Some(entries))
@@ -21881,8 +22235,12 @@ async fn resolve_remote_cid_sources(
     };
 
     let mut provider_specs = Vec::<(String, String)>::new();
-    for prefer_completed in [true, false] {
-        for order in &snapshot.replication_orders {
+    'orders: for prefer_completed in [true, false] {
+        for order in snapshot
+            .replication_orders
+            .iter()
+            .take(MAX_REMOTE_REPLICATION_ORDERS_SCANNED)
+        {
             if order.manifest_cid() != cid_bytes {
                 continue;
             }
@@ -21898,7 +22256,11 @@ async fn resolve_remote_cid_sources(
             if manifest.status_label() != "approved" {
                 continue;
             }
-            for provider_id_hex in order.providers() {
+            for provider_id_hex in order
+                .providers()
+                .iter()
+                .take(MAX_REMOTE_PROVIDERS_PER_ORDER)
+            {
                 if provider_specs.iter().any(|existing| {
                     existing.0 == order.manifest_digest_hex() && existing.1 == *provider_id_hex
                 }) {
@@ -21908,6 +22270,9 @@ async fn resolve_remote_cid_sources(
                     order.manifest_digest_hex().to_owned(),
                     provider_id_hex.clone(),
                 ));
+                if provider_specs.len() == MAX_REMOTE_CID_SOURCES {
+                    break 'orders;
+                }
             }
         }
     }
@@ -21922,27 +22287,64 @@ async fn resolve_remote_cid_sources(
             "SoraFS discovery cache is not available for CID gateway fetch",
         ));
     };
-    let cache = cache.read().await;
+    let candidates = {
+        let cache = cache.read().await;
+        provider_specs
+            .into_iter()
+            .filter_map(|(manifest_digest_hex, provider_id_hex)| {
+                let provider_id = decode_hex_32(&provider_id_hex).ok()?;
+                if hex::encode(provider_id) != provider_id_hex {
+                    return None;
+                }
+                let manifest_digest = decode_hex_32(&manifest_digest_hex).ok()?;
+                if hex::encode(manifest_digest) != manifest_digest_hex {
+                    return None;
+                }
+                let record = cache.record_by_provider(&provider_id)?;
+                let endpoint = record
+                    .advert()
+                    .body
+                    .endpoints
+                    .iter()
+                    .find(|endpoint| endpoint.kind == EndpointKind::Torii)?;
+                Some((
+                    manifest_digest_hex,
+                    manifest_digest,
+                    provider_id_hex,
+                    provider_id,
+                    endpoint.host_pattern.clone(),
+                ))
+            })
+            .collect::<Vec<_>>()
+    };
 
-    let mut sources = Vec::new();
-    for (manifest_digest_hex, provider_id_hex) in provider_specs {
-        let provider_id = match decode_hex_32(&provider_id_hex) {
-            Ok(bytes) => bytes,
-            Err(_) => continue,
-        };
-        let Some(record) = cache.record_by_provider(&provider_id) else {
+    let now = SystemTime::now();
+    if let Some(denylist) = &state.sorafs_gateway_denylist {
+        if let Some(hit) = denylist.check_cid(cid_bytes, now) {
+            return Err(gateway_policy_violation_response(
+                PolicyViolation::Denylisted(Box::new(hit)),
+                None,
+            ));
+        }
+    }
+
+    let mut unresolved = Vec::with_capacity(candidates.len());
+    for (manifest_digest_hex, manifest_digest, provider_id_hex, provider_id, host_pattern) in
+        candidates
+    {
+        if state
+            .sorafs_gateway_denylist
+            .as_ref()
+            .is_some_and(|denylist| {
+                denylist.check_provider(&provider_id, now).is_some()
+                    || denylist
+                        .check_manifest_digest(&manifest_digest, now)
+                        .is_some()
+            })
+        {
             continue;
-        };
-        let Some(endpoint) = record
-            .advert()
-            .body
-            .endpoints
-            .iter()
-            .find(|endpoint| endpoint.kind == EndpointKind::Torii)
-        else {
-            continue;
-        };
-        let torii_base_url = match normalize_provider_torii_base_url(&endpoint.host_pattern) {
+        }
+        let torii_base_url = match normalize_provider_torii_base_url(&host_pattern) {
             Ok(url) => url,
             Err(err) => {
                 warn!(
@@ -21954,10 +22356,49 @@ async fn resolve_remote_cid_sources(
                 continue;
             }
         };
-        sources.push(RemoteCidSource {
+        if state
+            .sorafs_gateway_denylist
+            .as_ref()
+            .is_some_and(|denylist| denylist.check_url(torii_base_url.as_str(), now).is_some())
+        {
+            continue;
+        }
+        unresolved.push(UnresolvedRemoteCidSource {
             manifest_digest_hex,
             provider_id_hex,
             torii_base_url,
+        });
+    }
+
+    let mut resolved = stream::iter(unresolved.into_iter().enumerate())
+        .map(|(index, source)| async move {
+            let addresses = resolve_public_endpoint(&source.torii_base_url).await;
+            (index, source, addresses)
+        })
+        .buffer_unordered(MAX_REMOTE_DNS_CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await;
+    resolved.sort_by_key(|(index, _, _)| *index);
+
+    let mut sources = Vec::with_capacity(resolved.len());
+    for (_, source, addresses) in resolved {
+        let pinned_addrs = match addresses {
+            Ok(addrs) => addrs,
+            Err(err) => {
+                warn!(
+                    provider_id_hex = %source.provider_id_hex,
+                    manifest_digest_hex = %source.manifest_digest_hex,
+                    %err,
+                    "ignoring unsafe or unresolvable Torii endpoint advertised for CID gateway fetch"
+                );
+                continue;
+            }
+        };
+        sources.push(RemoteCidSource {
+            manifest_digest_hex: source.manifest_digest_hex,
+            provider_id_hex: source.provider_id_hex,
+            torii_base_url: source.torii_base_url,
+            pinned_addrs,
         });
     }
 
@@ -21971,62 +22412,340 @@ async fn resolve_remote_cid_sources(
     Ok(Some(sources))
 }
 
+fn chunk_profile_from_manifest_descriptor(manifest: &ManifestV1) -> Result<ChunkProfile, String> {
+    if manifest.chunking.profile_id.0 == 0 {
+        if manifest.chunking.min_size == 0
+            || manifest.chunking.target_size == 0
+            || manifest.chunking.max_size == 0
+            || manifest.chunking.min_size > manifest.chunking.target_size
+            || manifest.chunking.target_size > manifest.chunking.max_size
+        {
+            return Err(
+                "manifest inline chunker profile has invalid chunk size bounds".to_string(),
+            );
+        }
+        return Ok(ChunkProfile {
+            min_size: usize::try_from(manifest.chunking.min_size)
+                .map_err(|_| "manifest chunk minimum exceeds host limits".to_string())?,
+            target_size: usize::try_from(manifest.chunking.target_size)
+                .map_err(|_| "manifest chunk target exceeds host limits".to_string())?,
+            max_size: usize::try_from(manifest.chunking.max_size)
+                .map_err(|_| "manifest chunk maximum exceeds host limits".to_string())?,
+            break_mask: u64::from(manifest.chunking.break_mask),
+        });
+    }
+
+    let descriptor = chunker_registry::lookup(manifest.chunking.profile_id).ok_or_else(|| {
+        format!(
+            "manifest chunker profile id {} is not registered",
+            manifest.chunking.profile_id.0
+        )
+    })?;
+    if descriptor.multihash_code != manifest.chunking.multihash_code {
+        return Err(format!(
+            "manifest multihash code {} does not match registry descriptor {}",
+            manifest.chunking.multihash_code, descriptor.multihash_code
+        ));
+    }
+    Ok(descriptor.profile)
+}
+
+fn remote_manifest_denylist_hit(
+    state: &SharedAppState,
+    manifest: &ManifestV1,
+) -> Result<Option<DenylistHit>, String> {
+    let Some(denylist) = &state.sorafs_gateway_denylist else {
+        return Ok(None);
+    };
+    let manifest_digest: [u8; 32] = manifest
+        .digest()
+        .map_err(|err| format!("failed to digest remote manifest: {err}"))?
+        .into();
+    let now = SystemTime::now();
+    Ok(denylist
+        .check_manifest_digest(&manifest_digest, now)
+        .or_else(|| denylist.check_cid(&manifest.root_cid, now)))
+}
+
+fn build_pinned_remote_client(source: &RemoteCidSource) -> Result<reqwest::Client, String> {
+    if source.pinned_addrs.is_empty()
+        || source
+            .pinned_addrs
+            .iter()
+            .any(|addr| !ip_is_public(addr.ip()))
+    {
+        return Err("provider endpoint has no safe pinned addresses".to_string());
+    }
+    match source.torii_base_url.host() {
+        Some(UrlHost::Ipv4(ip))
+            if source
+                .pinned_addrs
+                .iter()
+                .any(|addr| addr.ip() != IpAddr::V4(ip)) =>
+        {
+            return Err("provider IPv4 endpoint does not match its pinned address".to_string());
+        }
+        Some(UrlHost::Ipv6(ip))
+            if source
+                .pinned_addrs
+                .iter()
+                .any(|addr| addr.ip() != IpAddr::V6(ip)) =>
+        {
+            return Err("provider IPv6 endpoint does not match its pinned address".to_string());
+        }
+        Some(UrlHost::Domain(_)) => {}
+        Some(UrlHost::Ipv4(_) | UrlHost::Ipv6(_)) => {}
+        None => return Err("provider endpoint is missing a host".to_string()),
+    }
+    let mut builder = reqwest::Client::builder()
+        .https_only(true)
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .referer(false)
+        .timeout(REMOTE_FETCH_TIMEOUT)
+        .connect_timeout(REMOTE_CONNECT_TIMEOUT)
+        .http2_max_header_list_size(32 * 1024)
+        .pool_max_idle_per_host(1);
+    if let Some(domain) = source.torii_base_url.domain() {
+        builder = builder.resolve_to_addrs(domain, &source.pinned_addrs);
+    }
+    builder
+        .build()
+        .map_err(|err| format!("failed to build pinned CID gateway fetch client: {err}"))
+}
+
+async fn bounded_remote_response_bytes(
+    response: reqwest::Response,
+    max_bytes: usize,
+    label: &str,
+) -> Result<(StatusCode, Vec<u8>), String> {
+    if response.headers().len() > MAX_REMOTE_RESPONSE_HEADERS {
+        return Err(format!(
+            "{label} returned too many headers; maximum is {MAX_REMOTE_RESPONSE_HEADERS}"
+        ));
+    }
+    let header_bytes = response
+        .headers()
+        .iter()
+        .try_fold(0usize, |total, (name, value)| {
+            total
+                .checked_add(name.as_str().len())
+                .and_then(|total| total.checked_add(value.as_bytes().len()))
+        });
+    if header_bytes.is_none_or(|bytes| bytes > MAX_REMOTE_RESPONSE_HEADER_BYTES) {
+        return Err(format!(
+            "{label} response headers exceed {MAX_REMOTE_RESPONSE_HEADER_BYTES} bytes"
+        ));
+    }
+    if response
+        .headers()
+        .get(header::CONTENT_ENCODING)
+        .is_some_and(|value| {
+            value
+                .to_str()
+                .map_or(true, |value| !value.eq_ignore_ascii_case("identity"))
+        })
+    {
+        return Err(format!("{label} returned an unsupported content encoding"));
+    }
+    if !response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"))
+    {
+        return Err(format!("{label} did not return application/json"));
+    }
+    let declared_length = response.content_length();
+    if declared_length.is_some_and(|length| length > u64::try_from(max_bytes).unwrap_or(u64::MAX)) {
+        return Err(format!("{label} response exceeds {max_bytes} bytes"));
+    }
+
+    let status = response.status();
+    if status.is_redirection() {
+        return Err(format!(
+            "{label} returned redirect status {status}; redirects are forbidden"
+        ));
+    }
+    let mut body = Vec::with_capacity(
+        response
+            .content_length()
+            .and_then(|length| usize::try_from(length).ok())
+            .unwrap_or_default()
+            .min(max_bytes),
+    );
+    let mut response = response;
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|err| format!("failed to read {label} response: {err}"))?
+    {
+        let next_len = body
+            .len()
+            .checked_add(chunk.len())
+            .ok_or_else(|| format!("{label} response length overflow"))?;
+        if next_len > max_bytes {
+            return Err(format!("{label} response exceeds {max_bytes} bytes"));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    if declared_length.is_some_and(|length| usize::try_from(length).ok() != Some(body.len())) {
+        return Err(format!(
+            "{label} response length does not match Content-Length"
+        ));
+    }
+    Ok((status, body))
+}
+
+fn base64_encoded_length(decoded_len: u64) -> Result<usize, String> {
+    let groups = decoded_len
+        .checked_add(2)
+        .ok_or_else(|| "remote payload base64 length overflow".to_string())?
+        / 3;
+    let encoded = groups
+        .checked_mul(4)
+        .ok_or_else(|| "remote payload base64 length overflow".to_string())?;
+    usize::try_from(encoded).map_err(|_| "remote payload exceeds host limits".to_string())
+}
+
 async fn fetch_remote_site_bundle_from_source(
+    state: &SharedAppState,
+    source: &RemoteCidSource,
+    cid_bytes: &[u8],
+) -> Result<RemoteSiteBundle, RemoteFetchError> {
+    let client = build_pinned_remote_client(source).map_err(RemoteFetchError::Source)?;
+    fetch_remote_site_bundle_from_source_with_client(state, &client, source, cid_bytes).await
+}
+
+async fn fetch_remote_site_bundle_from_source_with_client(
+    state: &SharedAppState,
     client: &reqwest::Client,
     source: &RemoteCidSource,
     cid_bytes: &[u8],
-) -> Result<RemoteSiteBundle, String> {
+) -> Result<RemoteSiteBundle, RemoteFetchError> {
     let manifest_url = source
         .torii_base_url
         .join(&format!(
             "v1/sorafs/storage/manifest/{}",
             source.manifest_digest_hex
         ))
-        .map_err(|err| format!("failed to build remote manifest URL: {err}"))?;
+        .map_err(|err| {
+            RemoteFetchError::Source(format!("failed to build remote manifest URL: {err}"))
+        })?;
     let manifest_response = client
         .get(manifest_url)
+        .header(header::ACCEPT, "application/json")
+        .header(header::ACCEPT_ENCODING, "identity")
         .send()
         .await
-        .map_err(|err| format!("failed to fetch remote manifest metadata: {err}"))?;
-    let manifest_status = manifest_response.status();
-    let manifest_body = manifest_response
-        .bytes()
-        .await
-        .map_err(|err| format!("failed to read remote manifest metadata: {err}"))?;
+        .map_err(|err| {
+            RemoteFetchError::Source(format!("failed to fetch remote manifest metadata: {err}"))
+        })?;
+    let (manifest_status, manifest_body) = bounded_remote_response_bytes(
+        manifest_response,
+        MAX_REMOTE_MANIFEST_RESPONSE_BYTES,
+        "remote manifest endpoint",
+    )
+    .await
+    .map_err(RemoteFetchError::Source)?;
     if !manifest_status.is_success() {
-        let details = String::from_utf8_lossy(&manifest_body);
-        return Err(format!(
-            "remote manifest endpoint returned {manifest_status}: {}",
-            details.trim()
-        ));
+        return Err(RemoteFetchError::Source(format!(
+            "remote manifest endpoint returned {manifest_status}"
+        )));
     }
     let manifest_response = norito::json::from_slice::<StorageManifestResponseDto>(&manifest_body)
-        .map_err(|err| format!("failed to decode remote manifest metadata response: {err}"))?;
+        .map_err(|err| {
+            RemoteFetchError::Source(format!(
+                "failed to decode remote manifest metadata response: {err}"
+            ))
+        })?;
     if manifest_response.manifest_digest_hex != source.manifest_digest_hex {
-        return Err(format!(
+        return Err(RemoteFetchError::Source(format!(
             "remote manifest digest mismatch: expected {}, found {}",
             source.manifest_digest_hex, manifest_response.manifest_digest_hex
+        )));
+    }
+    if manifest_response.manifest_id_hex != source.manifest_digest_hex {
+        return Err(RemoteFetchError::Source(
+            "remote manifest identifier does not match the approved registry digest".to_string(),
         ));
+    }
+    if manifest_response.manifest_b64.len()
+        > base64_encoded_length(u64::try_from(MAX_REMOTE_MANIFEST_BYTES).unwrap_or(u64::MAX))
+            .map_err(RemoteFetchError::Source)?
+    {
+        return Err(RemoteFetchError::Source(format!(
+            "remote manifest exceeds {MAX_REMOTE_MANIFEST_BYTES} bytes"
+        )));
     }
 
     let manifest_bytes = BASE64_STANDARD
         .decode(manifest_response.manifest_b64.as_bytes())
-        .map_err(|err| format!("failed to decode remote manifest payload: {err}"))?;
-    let manifest: ManifestV1 = norito::decode_from_bytes(&manifest_bytes)
-        .map_err(|err| format!("failed to decode remote manifest bytes: {err}"))?;
-    if manifest.root_cid != cid_bytes {
-        return Err("remote manifest CID does not match requested CID".to_string());
-    }
-    let manifest_digest = manifest.digest().map_err(|err| err.to_string())?;
-    let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
-    if manifest_digest_hex != source.manifest_digest_hex {
-        return Err(format!(
-            "decoded remote manifest digest mismatch: expected {}, found {manifest_digest_hex}",
-            source.manifest_digest_hex
+        .map_err(|err| {
+            RemoteFetchError::Source(format!("failed to decode remote manifest payload: {err}"))
+        })?;
+    if manifest_bytes.len() > MAX_REMOTE_MANIFEST_BYTES
+        || BASE64_STANDARD.encode(&manifest_bytes) != manifest_response.manifest_b64
+    {
+        return Err(RemoteFetchError::Source(
+            "remote manifest base64 is oversized or non-canonical".to_string(),
         ));
     }
-    if manifest_response.content_length > usize::MAX as u64 {
-        return Err("remote payload exceeds host limits".to_string());
+    let manifest: ManifestV1 = norito::decode_from_bytes(&manifest_bytes).map_err(|err| {
+        RemoteFetchError::Source(format!("failed to decode remote manifest bytes: {err}"))
+    })?;
+    let canonical_manifest_bytes = norito::to_bytes(&manifest).map_err(|err| {
+        RemoteFetchError::Source(format!("failed to re-encode remote manifest: {err}"))
+    })?;
+    if canonical_manifest_bytes != manifest_bytes {
+        return Err(RemoteFetchError::Source(
+            "remote manifest does not use canonical Norito encoding".to_string(),
+        ));
+    }
+    let manifest_constraints =
+        manifest_pin_policy_constraints_from_config(&state.state.gov.sorafs_pin_policy);
+    validate_manifest(&manifest, &manifest_constraints).map_err(|err| {
+        RemoteFetchError::Source(format!("remote manifest validation failed: {err}"))
+    })?;
+    if manifest.root_cid != cid_bytes {
+        return Err(RemoteFetchError::Source(
+            "remote manifest CID does not match requested CID".to_string(),
+        ));
+    }
+    let manifest_digest = manifest
+        .digest()
+        .map_err(|err| RemoteFetchError::Source(err.to_string()))?;
+    let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
+    if manifest_digest_hex != source.manifest_digest_hex {
+        return Err(RemoteFetchError::Source(format!(
+            "decoded remote manifest digest mismatch: expected {}, found {manifest_digest_hex}",
+            source.manifest_digest_hex
+        )));
+    }
+    if manifest.content_length != manifest_response.content_length {
+        return Err(RemoteFetchError::Source(format!(
+            "remote manifest content length mismatch: manifest declares {}, metadata declares {}",
+            manifest.content_length, manifest_response.content_length
+        )));
+    }
+    if let Some(hit) =
+        remote_manifest_denylist_hit(state, &manifest).map_err(RemoteFetchError::Source)?
+    {
+        return Err(RemoteFetchError::Denylisted(hit));
+    }
+
+    let storage = state.sorafs_node.storage().ok_or_else(|| {
+        RemoteFetchError::Source("local SoraFS storage backend is unavailable".to_string())
+    })?;
+    let hydration_limit = storage
+        .available_capacity()
+        .min(MAX_REMOTE_HYDRATION_PAYLOAD_BYTES);
+    if manifest_response.content_length > hydration_limit {
+        return Err(RemoteFetchError::Source(format!(
+            "remote payload requires {} bytes but hydration limit is {hydration_limit} bytes",
+            manifest_response.content_length
+        )));
     }
 
     let fetch_body = norito::json::to_vec(&StorageFetchRequestDto {
@@ -22035,49 +22754,134 @@ async fn fetch_remote_site_bundle_from_source(
         length: manifest_response.content_length,
         provider_id_hex: Some(source.provider_id_hex.clone()),
     })
-    .map_err(|err| format!("failed to encode remote fetch request: {err}"))?;
+    .map_err(|err| {
+        RemoteFetchError::Source(format!("failed to encode remote fetch request: {err}"))
+    })?;
     let fetch_url = source
         .torii_base_url
         .join("v1/sorafs/storage/fetch")
-        .map_err(|err| format!("failed to build remote payload URL: {err}"))?;
+        .map_err(|err| {
+            RemoteFetchError::Source(format!("failed to build remote payload URL: {err}"))
+        })?;
     let fetch_response = client
         .post(fetch_url)
         .header(header::CONTENT_TYPE.as_str(), "application/json")
+        .header(header::ACCEPT, "application/json")
+        .header(header::ACCEPT_ENCODING, "identity")
         .header(HEADER_SORA_MANIFEST_ENVELOPE, "cid-gateway-fetch")
         .body(fetch_body)
         .send()
         .await
-        .map_err(|err| format!("failed to fetch remote site payload: {err}"))?;
-    let fetch_status = fetch_response.status();
-    let fetch_body = fetch_response
-        .bytes()
-        .await
-        .map_err(|err| format!("failed to read remote site payload response: {err}"))?;
+        .map_err(|err| {
+            RemoteFetchError::Source(format!("failed to fetch remote site payload: {err}"))
+        })?;
+    let encoded_payload_len = base64_encoded_length(manifest_response.content_length)
+        .map_err(RemoteFetchError::Source)?;
+    let fetch_response_limit = encoded_payload_len.checked_add(8 * 1024).ok_or_else(|| {
+        RemoteFetchError::Source("remote fetch response limit overflow".to_string())
+    })?;
+    let (fetch_status, fetch_body) = bounded_remote_response_bytes(
+        fetch_response,
+        fetch_response_limit,
+        "remote payload endpoint",
+    )
+    .await
+    .map_err(RemoteFetchError::Source)?;
     if !fetch_status.is_success() {
-        let details = String::from_utf8_lossy(&fetch_body);
-        return Err(format!(
-            "remote payload endpoint returned {fetch_status}: {}",
-            details.trim()
+        return Err(RemoteFetchError::Source(format!(
+            "remote payload endpoint returned {fetch_status}"
+        )));
+    }
+    let fetch_response =
+        norito::json::from_slice::<StorageFetchResponseDto>(&fetch_body).map_err(|err| {
+            RemoteFetchError::Source(format!(
+                "failed to decode remote site payload response: {err}"
+            ))
+        })?;
+    if fetch_response.manifest_id_hex != manifest_response.manifest_id_hex
+        || fetch_response.offset != 0
+        || fetch_response.length != manifest_response.content_length
+    {
+        return Err(RemoteFetchError::Source(
+            "remote payload response does not match the exact requested manifest range".to_string(),
         ));
     }
-    let fetch_response = norito::json::from_slice::<StorageFetchResponseDto>(&fetch_body)
-        .map_err(|err| format!("failed to decode remote site payload response: {err}"))?;
+    if fetch_response.data_b64.len() != encoded_payload_len {
+        return Err(RemoteFetchError::Source(
+            "remote payload base64 length does not match declared content length".to_string(),
+        ));
+    }
     let payload = BASE64_STANDARD
         .decode(fetch_response.data_b64.as_bytes())
-        .map_err(|err| format!("failed to decode remote site payload bytes: {err}"))?;
-    if payload.len() as u64 != manifest_response.content_length {
-        return Err(format!(
+        .map_err(|err| {
+            RemoteFetchError::Source(format!("failed to decode remote site payload bytes: {err}"))
+        })?;
+    if BASE64_STANDARD.encode(&payload) != fetch_response.data_b64 {
+        return Err(RemoteFetchError::Source(
+            "remote payload does not use canonical base64".to_string(),
+        ));
+    }
+    if u64::try_from(payload.len()).ok() != Some(manifest_response.content_length) {
+        return Err(RemoteFetchError::Source(format!(
             "remote payload length mismatch: expected {}, found {}",
             manifest_response.content_length,
             payload.len()
+        )));
+    }
+    let expected_payload_digest =
+        decode_hex_32(&manifest_response.payload_digest_hex).map_err(RemoteFetchError::Source)?;
+    if hex::encode(expected_payload_digest) != manifest_response.payload_digest_hex
+        || blake3_hash(&payload).as_bytes() != &expected_payload_digest
+    {
+        return Err(RemoteFetchError::Source(
+            "remote payload digest does not match manifest metadata".to_string(),
         ));
     }
 
-    let files = storage_file_entries_from_manifest_response(&manifest_response.files)?;
+    let files = storage_file_entries_from_manifest_response(
+        &manifest_response.files,
+        manifest_response.content_length,
+    )
+    .map_err(RemoteFetchError::Source)?;
+    let profile =
+        chunk_profile_from_manifest_descriptor(&manifest).map_err(RemoteFetchError::Source)?;
+    let plan = build_plan_for_storage_pin_request(&payload, profile, files.as_deref())
+        .map_err(RemoteFetchError::Source)?;
+    if u64::try_from(plan.chunks.len()).ok() != Some(manifest_response.chunk_count)
+        || plan.payload_digest.as_bytes() != &expected_payload_digest
+    {
+        return Err(RemoteFetchError::Source(
+            "remote payload chunk plan does not match manifest metadata".to_string(),
+        ));
+    }
+    let expected_profile_handle = format!(
+        "{}.{}@{}",
+        manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
+    );
+    if manifest_response.chunk_profile_handle != expected_profile_handle {
+        return Err(RemoteFetchError::Source(
+            "remote chunk profile handle does not match the manifest".to_string(),
+        ));
+    }
+    if manifest_response.files.len() != plan.files.len()
+        || manifest_response
+            .files
+            .iter()
+            .zip(&plan.files)
+            .any(|(remote, planned)| {
+                usize::try_from(remote.first_chunk).ok() != Some(planned.first_chunk)
+                    || usize::try_from(remote.chunk_count).ok() != Some(planned.chunk_count)
+            })
+    {
+        return Err(RemoteFetchError::Source(
+            "remote file chunk layout does not match the verified payload plan".to_string(),
+        ));
+    }
+
     Ok(RemoteSiteBundle {
         manifest,
         payload,
-        files,
+        plan,
     })
 }
 
@@ -22088,41 +22892,29 @@ async fn fetch_remote_site_bundle(
     let Some(sources) = resolve_remote_cid_sources(state, cid_bytes).await? else {
         return Ok(None);
     };
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .build()
-        .map_err(|err| {
-            json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("failed to build CID gateway fetch client: {err}"),
-            )
-        })?;
-
-    let mut last_error = None;
     for source in &sources {
-        match fetch_remote_site_bundle_from_source(&client, source, cid_bytes).await {
+        match fetch_remote_site_bundle_from_source(state, source, cid_bytes).await {
             Ok(bundle) => return Ok(Some(bundle)),
-            Err(err) => {
+            Err(RemoteFetchError::Denylisted(hit)) => {
+                return Err(gateway_policy_violation_response(
+                    PolicyViolation::Denylisted(Box::new(hit)),
+                    None,
+                ));
+            }
+            Err(RemoteFetchError::Source(err)) => {
                 warn!(
                     provider_id_hex = %source.provider_id_hex,
                     manifest_digest_hex = %source.manifest_digest_hex,
                     %err,
                     "failed to hydrate CID gateway cache from remote provider"
                 );
-                last_error = Some(err);
             }
         }
     }
 
     Err(json_error(
         StatusCode::BAD_GATEWAY,
-        format!(
-            "failed to fetch the requested CID from remote SoraFS providers{}",
-            last_error
-                .as_deref()
-                .map(|err| format!(": {err}"))
-                .unwrap_or_default()
-        ),
+        "failed to fetch the requested CID from approved remote SoraFS providers",
     ))
 }
 
@@ -22130,11 +22922,14 @@ fn cache_remote_site_bundle(
     state: &SharedAppState,
     bundle: RemoteSiteBundle,
 ) -> Result<StoredManifest, Response> {
-    let profile =
-        chunk_profile_for_manifest(&bundle.manifest).map_err(ResponseError::into_response)?;
-    let plan =
-        build_plan_for_storage_pin_request(&bundle.payload, profile, bundle.files.as_deref())
-            .map_err(|err| json_error(StatusCode::BAD_GATEWAY, err))?;
+    if let Some(hit) = remote_manifest_denylist_hit(state, &bundle.manifest)
+        .map_err(|err| json_error(StatusCode::BAD_GATEWAY, err))?
+    {
+        return Err(gateway_policy_violation_response(
+            PolicyViolation::Denylisted(Box::new(hit)),
+            None,
+        ));
+    }
     let manifest_digest: [u8; 32] = bundle
         .manifest
         .digest()
@@ -22149,7 +22944,7 @@ fn cache_remote_site_bundle(
     let mut reader = bundle.payload.as_slice();
     match state
         .sorafs_node
-        .ingest_manifest(&bundle.manifest, &plan, &mut reader)
+        .ingest_manifest(&bundle.manifest, &bundle.plan, &mut reader)
     {
         Ok(_) => {}
         Err(NodeStorageError::Storage(StorageBackendError::ManifestExists { .. })) => {}
@@ -22162,18 +22957,77 @@ fn cache_remote_site_bundle(
         .map_err(node_storage_error_response)
 }
 
+fn cid_hydration_flight(cid_bytes: &[u8]) -> Result<Arc<CidHydrationFlight>, Response> {
+    let mut flights = CID_HYDRATION_FLIGHTS.lock().map_err(|_| {
+        json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "CID hydration admission state is unavailable",
+        )
+    })?;
+    flights.retain(|_, flight| !flight.is_expired());
+    if let Some(flight) = flights.get(cid_bytes) {
+        flight.touch();
+        return Ok(Arc::clone(flight));
+    }
+    if flights.len() >= MAX_REMOTE_CID_HYDRATIONS {
+        let mut response = json_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many distinct CID hydrations are already in progress",
+        );
+        response
+            .headers_mut()
+            .insert(RETRY_AFTER, HeaderValue::from_static("1"));
+        return Err(response);
+    }
+
+    let flight = Arc::new(CidHydrationFlight::new());
+    flights.insert(cid_bytes.to_vec(), Arc::clone(&flight));
+    Ok(flight)
+}
+
 pub(crate) async fn resolve_site_manifest_by_cid_unchecked(
     state: &SharedAppState,
     cid: &str,
 ) -> Result<StoredManifest, Response> {
-    let cid_bytes = decode_content_cid(cid)
+    let cid_bytes = decode_canonical_content_cid(cid)
         .ok_or_else(|| json_error(StatusCode::BAD_REQUEST, "invalid content CID"))?;
-    let stored = if let Some(stored) = find_local_site_manifest_by_cid(state, &cid_bytes)? {
-        stored
-    } else if let Some(bundle) = fetch_remote_site_bundle(state, &cid_bytes).await? {
-        cache_remote_site_bundle(state, bundle)?
-    } else {
-        return Err(StatusCode::NOT_FOUND.into_response());
+    if let Some(stored) = find_local_site_manifest_by_cid(state, &cid_bytes)? {
+        return Ok(stored);
+    }
+
+    let hydration_flight = cid_hydration_flight(&cid_bytes)?;
+    let _hydration_guard = hydration_flight.gate.lock().await;
+    let stored = match find_local_site_manifest_by_cid(state, &cid_bytes)? {
+        Some(stored) => stored,
+        None => {
+            if hydration_flight.failure_backoff_active() {
+                return Err(json_error(
+                    StatusCode::BAD_GATEWAY,
+                    "the shared CID hydration attempt failed; retry later",
+                ));
+            }
+            let bundle = match fetch_remote_site_bundle(state, &cid_bytes).await {
+                Ok(Some(bundle)) => bundle,
+                Ok(None) => {
+                    hydration_flight.record_failure();
+                    return Err(StatusCode::NOT_FOUND.into_response());
+                }
+                Err(response) => {
+                    hydration_flight.record_failure();
+                    return Err(response);
+                }
+            };
+            match cache_remote_site_bundle(state, bundle) {
+                Ok(stored) => {
+                    hydration_flight.clear_failure();
+                    stored
+                }
+                Err(response) => {
+                    hydration_flight.record_failure();
+                    return Err(response);
+                }
+            }
+        }
     };
 
     Ok(stored)
@@ -22186,6 +23040,393 @@ async fn resolve_site_manifest_by_cid(
     let stored = resolve_site_manifest_by_cid_unchecked(state, cid).await?;
     enforce_site_denylist(state, &stored)?;
     Ok(stored)
+}
+
+#[cfg(test)]
+mod remote_hydration_security_tests {
+    use std::convert::Infallible;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use axum::{Router, routing::get};
+    use tokio::net::TcpListener;
+
+    use super::*;
+
+    #[test]
+    fn provider_base_url_requires_clean_https_origin() {
+        assert_eq!(
+            normalize_provider_torii_base_url("provider.example:8443")
+                .expect("bare HTTPS origin")
+                .as_str(),
+            "https://provider.example:8443/"
+        );
+        assert!(normalize_provider_torii_base_url("https://provider.example/").is_ok());
+
+        for unsafe_url in [
+            "http://provider.example/",
+            "https://user@provider.example/",
+            "https://user:password@provider.example/",
+            "https://provider.example/?token=secret",
+            "https://provider.example/#fragment",
+            "https://provider.example/api",
+            "https://provider.example/a/..",
+            "https://provider.example/%2e%2e/",
+            "https://provider.example\\@127.0.0.1/",
+            "https://provider.example@127.0.0.1/",
+            "https://[fe80::1%25en0]/",
+            "https://provider.example:0/",
+        ] {
+            assert!(
+                normalize_provider_torii_base_url(unsafe_url).is_err(),
+                "unsafe endpoint should be rejected: {unsafe_url}"
+            );
+        }
+    }
+
+    #[test]
+    fn public_ip_policy_rejects_special_ipv4_and_ipv6_ranges() {
+        for ip in [
+            "0.0.0.0",
+            "10.0.0.1",
+            "100.64.0.1",
+            "127.0.0.1",
+            "169.254.169.254",
+            "172.16.0.1",
+            "192.0.0.1",
+            "192.0.2.1",
+            "192.168.1.1",
+            "198.18.0.1",
+            "198.51.100.1",
+            "203.0.113.1",
+            "224.0.0.1",
+            "255.255.255.255",
+            "::",
+            "::1",
+            "::ffff:127.0.0.1",
+            "::ffff:10.0.0.1",
+            "::ffff:169.254.169.254",
+            "::8.8.8.8",
+            "::192.168.1.1",
+            "fc00::1",
+            "fe80::1",
+            "ff02::1",
+            "2001:db8::1",
+            "2001:2::1",
+            "2002::1",
+            "3fff::1",
+        ] {
+            let parsed = ip.parse::<IpAddr>().expect("test IP literal");
+            assert!(!ip_is_public(parsed), "special address allowed: {ip}");
+        }
+
+        for ip in ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"] {
+            let parsed = ip.parse::<IpAddr>().expect("test public IP literal");
+            assert!(ip_is_public(parsed), "public address rejected: {ip}");
+        }
+    }
+
+    #[tokio::test]
+    async fn endpoint_resolution_rejects_private_literals_before_connect() {
+        for endpoint in [
+            "https://127.0.0.1/",
+            "https://127.1/",
+            "https://2130706433/",
+            "https://0177.0.0.1/",
+            "https://0x7f000001/",
+            "https://[::ffff:127.0.0.1]/",
+            "https://[fe80::1]/",
+        ] {
+            let private = normalize_provider_torii_base_url(endpoint)
+                .expect("syntactically valid private endpoint");
+            assert!(
+                resolve_public_endpoint(&private).await.is_err(),
+                "private endpoint should be rejected: {endpoint}"
+            );
+        }
+
+        let public =
+            normalize_provider_torii_base_url("https://8.8.8.8:444/").expect("public endpoint");
+        assert_eq!(
+            resolve_public_endpoint(&public)
+                .await
+                .expect("resolve public literal"),
+            vec!["8.8.8.8:444".parse().expect("socket literal")]
+        );
+        let public_v6 = normalize_provider_torii_base_url("https://[2606:4700:4700::1111]:444/")
+            .expect("public IPv6 endpoint");
+        assert_eq!(
+            resolve_public_endpoint(&public_v6)
+                .await
+                .expect("resolve public IPv6 literal"),
+            vec![
+                "[2606:4700:4700::1111]:444"
+                    .parse()
+                    .expect("IPv6 socket literal")
+            ]
+        );
+    }
+
+    #[test]
+    fn pinned_client_revalidates_addresses_to_prevent_rebinding() {
+        let mut source = RemoteCidSource {
+            manifest_digest_hex: hex::encode([0x11; 32]),
+            provider_id_hex: hex::encode([0x22; 32]),
+            torii_base_url: normalize_provider_torii_base_url("https://provider.example/")
+                .expect("provider URL"),
+            pinned_addrs: vec!["8.8.8.8:443".parse().expect("public address")],
+        };
+        assert!(build_pinned_remote_client(&source).is_ok());
+
+        source.pinned_addrs = vec!["127.0.0.1:443".parse().expect("loopback address")];
+        assert!(build_pinned_remote_client(&source).is_err());
+    }
+
+    #[test]
+    fn remote_file_layout_rejects_traversal_gaps_and_overflow() {
+        let file = |path: &[&str], offset, size| StorageStoredFileDto {
+            path: path
+                .iter()
+                .map(|component| (*component).to_owned())
+                .collect(),
+            offset,
+            size,
+            first_chunk: 0,
+            chunk_count: 1,
+        };
+        assert!(
+            storage_file_entries_from_manifest_response(&[file(&["..", "secret"], 0, 1)], 1)
+                .is_err()
+        );
+        assert!(
+            storage_file_entries_from_manifest_response(&[file(&["index.html"], 1, 1)], 1).is_err()
+        );
+        assert!(
+            storage_file_entries_from_manifest_response(
+                &[
+                    file(&["first"], 0, u64::MAX),
+                    file(&["second"], u64::MAX, 1),
+                ],
+                u64::MAX,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn site_ranges_are_bounded_and_single_only() {
+        let empty = HeaderMap::new();
+        assert_eq!(
+            parse_site_response_range(&empty, 7).expect("full range"),
+            SiteResponseRange {
+                offset: 0,
+                length: 7,
+                partial: false,
+            }
+        );
+        assert_eq!(
+            parse_site_response_range(&empty, MAX_SITE_RESPONSE_BYTES + 1)
+                .expect_err("oversized full response")
+                .status(),
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::RANGE, HeaderValue::from_static("bytes=2-5"));
+        assert_eq!(
+            parse_site_response_range(&headers, 10).expect("bounded range"),
+            SiteResponseRange {
+                offset: 2,
+                length: 4,
+                partial: true,
+            }
+        );
+        headers.insert(header::RANGE, HeaderValue::from_static("bytes=-3"));
+        assert_eq!(
+            parse_site_response_range(&headers, 10).expect("suffix range"),
+            SiteResponseRange {
+                offset: 7,
+                length: 3,
+                partial: true,
+            }
+        );
+        headers.insert(header::RANGE, HeaderValue::from_static("bytes=0-1,4-5"));
+        assert_eq!(
+            parse_site_response_range(&headers, 10)
+                .expect_err("multiple ranges")
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[test]
+    fn active_content_types_require_isolated_origin() {
+        for media_type in [
+            "text/html; charset=utf-8",
+            "text/css; charset=utf-8",
+            "text/javascript; charset=utf-8",
+            "image/svg+xml",
+            "application/xml; charset=utf-8",
+            "application/pdf",
+            "application/wasm",
+        ] {
+            assert!(content_type_is_active(media_type), "missed {media_type}");
+        }
+        assert!(!content_type_is_active("image/png"));
+        assert!(!content_type_is_active("application/octet-stream"));
+    }
+
+    #[tokio::test]
+    async fn same_cid_hydrations_share_one_exclusion_lock() {
+        let cid = b"single-flight-security-test-cid";
+        let first = cid_hydration_flight(cid).expect("first hydration flight");
+        let second = cid_hydration_flight(cid).expect("second hydration flight");
+        assert!(Arc::ptr_eq(&first, &second));
+
+        let active = Arc::new(AtomicUsize::new(0));
+        let maximum = Arc::new(AtomicUsize::new(0));
+        let mut tasks = Vec::new();
+        for _ in 0..24 {
+            let active = Arc::clone(&active);
+            let maximum = Arc::clone(&maximum);
+            let lock = Arc::clone(&first);
+            tasks.push(tokio::spawn(async move {
+                let _guard = lock.gate.lock().await;
+                let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                maximum.fetch_max(current, Ordering::SeqCst);
+                tokio::task::yield_now().await;
+                active.fetch_sub(1, Ordering::SeqCst);
+            }));
+        }
+        for task in tasks {
+            task.await.expect("hydration task");
+        }
+        assert_eq!(maximum.load(Ordering::SeqCst), 1);
+
+        first.record_failure();
+        assert!(second.failure_backoff_active());
+        first.clear_failure();
+        assert!(!second.failure_backoff_active());
+    }
+
+    #[tokio::test]
+    async fn remote_response_reader_rejects_redirects_and_declared_or_streamed_oversize_bodies() {
+        let router = Router::new()
+            .route(
+                "/ok",
+                get(|| async {
+                    let mut response = Response::new(Body::from("{}"));
+                    response.headers_mut().insert(
+                        header::CONTENT_TYPE,
+                        HeaderValue::from_static("application/json"),
+                    );
+                    response
+                }),
+            )
+            .route(
+                "/redirect",
+                get(|| async {
+                    let mut response = Response::new(Body::from("{}"));
+                    *response.status_mut() = StatusCode::FOUND;
+                    response
+                        .headers_mut()
+                        .insert(header::LOCATION, HeaderValue::from_static("/target"));
+                    response.headers_mut().insert(
+                        header::CONTENT_TYPE,
+                        HeaderValue::from_static("application/json"),
+                    );
+                    response
+                }),
+            )
+            .route(
+                "/declared-oversize",
+                get(|| async {
+                    let mut response = Response::new(Body::from("12345"));
+                    response.headers_mut().insert(
+                        header::CONTENT_TYPE,
+                        HeaderValue::from_static("application/json"),
+                    );
+                    response
+                        .headers_mut()
+                        .insert(header::CONTENT_LENGTH, HeaderValue::from_static("5"));
+                    response
+                }),
+            )
+            .route(
+                "/streamed-oversize",
+                get(|| async {
+                    let chunks = futures::stream::iter([
+                        Ok::<_, Infallible>(Bytes::from_static(b"123")),
+                        Ok::<_, Infallible>(Bytes::from_static(b"456")),
+                    ]);
+                    let mut response = Response::new(Body::from_stream(chunks));
+                    response.headers_mut().insert(
+                        header::CONTENT_TYPE,
+                        HeaderValue::from_static("application/json"),
+                    );
+                    response
+                }),
+            )
+            .route(
+                "/oversize-headers",
+                get(|| async {
+                    let mut response = Response::new(Body::from("{}"));
+                    response.headers_mut().insert(
+                        header::CONTENT_TYPE,
+                        HeaderValue::from_static("application/json"),
+                    );
+                    response.headers_mut().insert(
+                        HeaderName::from_static("x-adversarial-padding"),
+                        HeaderValue::from_str(&"a".repeat(MAX_REMOTE_RESPONSE_HEADER_BYTES + 1))
+                            .expect("oversized test header"),
+                    );
+                    response
+                }),
+            );
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind adversarial response server");
+        let addr = listener.local_addr().expect("response server address");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router)
+                .await
+                .expect("serve adversarial responses");
+        });
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("test client");
+
+        for path in [
+            "redirect",
+            "declared-oversize",
+            "streamed-oversize",
+            "oversize-headers",
+        ] {
+            let response = client
+                .get(format!("http://{addr}/{path}"))
+                .send()
+                .await
+                .expect("fetch adversarial response");
+            assert!(
+                bounded_remote_response_bytes(response, 4, "adversarial response")
+                    .await
+                    .is_err(),
+                "response should be rejected: {path}"
+            );
+        }
+        let response = client
+            .get(format!("http://{addr}/ok"))
+            .send()
+            .await
+            .expect("fetch bounded response");
+        let (status, body) = bounded_remote_response_bytes(response, 4, "bounded response")
+            .await
+            .expect("accept bounded response");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, b"{}");
+
+        server.abort();
+    }
 }
 
 fn enforce_site_denylist(state: &SharedAppState, stored: &StoredManifest) -> Result<(), Response> {
@@ -22449,11 +23690,21 @@ fn maybe_redirect_cid_gateway_request(
     uri: &Uri,
     cid: &str,
 ) -> Option<Response> {
+    redirect_cid_gateway_request(state, headers, uri, cid, false)
+}
+
+fn redirect_cid_gateway_request(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+    uri: &Uri,
+    cid: &str,
+    active_content: bool,
+) -> Option<Response> {
     let config = &state.sorafs_gateway_config.untrusted_hosting;
-    if !config.enabled || !config.path_gateway_redirect {
+    if !config.enabled || (!active_content && !config.path_gateway_redirect) {
         return None;
     }
-    if config.redirect_html_only && !is_browser_document_request(headers) {
+    if !active_content && config.redirect_html_only && !is_browser_document_request(headers) {
         return None;
     }
 
@@ -22467,42 +23718,236 @@ fn maybe_redirect_cid_gateway_request(
     Some(permanent_redirect(location))
 }
 
+fn is_cid_derived_isolated_origin(
+    headers: &HeaderMap,
+    cid: &str,
+    config: &iroha_config::parameters::actual::SorafsGatewayUntrustedHosting,
+) -> bool {
+    if !config.enabled {
+        return false;
+    }
+    let Some(host) = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .and_then(normalize_host_header)
+    else {
+        return false;
+    };
+
+    [
+        config.cid_host_suffixes.taira.as_str(),
+        config.cid_host_suffixes.live.as_str(),
+    ]
+    .into_iter()
+    .filter(|suffix| !suffix.is_empty())
+    .any(|suffix| {
+        host == format!(
+            "{cid}.{}",
+            suffix.trim().trim_end_matches('.').to_ascii_lowercase()
+        )
+    })
+}
+
+fn content_type_is_active(content_type: &str) -> bool {
+    let media_type = content_type
+        .split(';')
+        .next()
+        .unwrap_or(content_type)
+        .trim();
+    matches!(
+        media_type,
+        "text/html"
+            | "text/css"
+            | "application/xhtml+xml"
+            | "application/javascript"
+            | "text/javascript"
+            | "image/svg+xml"
+            | "application/xml"
+            | "text/xml"
+            | "application/pdf"
+            | "application/wasm"
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SiteResponseRange {
+    offset: u64,
+    length: usize,
+    partial: bool,
+}
+
+fn site_range_not_satisfiable(file_size: u64) -> Response {
+    let mut response = json_error(
+        StatusCode::RANGE_NOT_SATISFIABLE,
+        "requested site byte range is not satisfiable",
+    );
+    if let Ok(value) = HeaderValue::from_str(&format!("bytes */{file_size}")) {
+        response.headers_mut().insert(header::CONTENT_RANGE, value);
+    }
+    response
+        .headers_mut()
+        .insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    response
+}
+
+fn parse_site_response_range(
+    headers: &HeaderMap,
+    file_size: u64,
+) -> Result<SiteResponseRange, Response> {
+    let Some(raw) = headers.get(header::RANGE) else {
+        if file_size > MAX_SITE_RESPONSE_BYTES {
+            let mut response = json_error(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                format!(
+                    "site file exceeds {MAX_SITE_RESPONSE_BYTES} bytes; request one bounded byte range"
+                ),
+            );
+            response
+                .headers_mut()
+                .insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+            return Err(response);
+        }
+        let length = usize::try_from(file_size).map_err(|_| {
+            json_error(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "site file exceeds supported response size",
+            )
+        })?;
+        return Ok(SiteResponseRange {
+            offset: 0,
+            length,
+            partial: false,
+        });
+    };
+
+    let raw = raw
+        .to_str()
+        .map_err(|_| json_error(StatusCode::BAD_REQUEST, "invalid Range header"))?;
+    let spec = raw
+        .strip_prefix("bytes=")
+        .filter(|value| !value.contains(','))
+        .ok_or_else(|| json_error(StatusCode::BAD_REQUEST, "only one bytes range is supported"))?;
+    let (start, end) = spec
+        .split_once('-')
+        .ok_or_else(|| json_error(StatusCode::BAD_REQUEST, "invalid bytes range"))?;
+    if file_size == 0 {
+        return Err(site_range_not_satisfiable(file_size));
+    }
+
+    let (start, end) = if start.is_empty() {
+        let suffix = end
+            .parse::<u64>()
+            .ok()
+            .filter(|suffix| *suffix != 0)
+            .ok_or_else(|| site_range_not_satisfiable(file_size))?;
+        (file_size.saturating_sub(suffix), file_size - 1)
+    } else {
+        let start = start
+            .parse::<u64>()
+            .map_err(|_| site_range_not_satisfiable(file_size))?;
+        let end = if end.is_empty() {
+            file_size - 1
+        } else {
+            end.parse::<u64>()
+                .map_err(|_| site_range_not_satisfiable(file_size))?
+                .min(file_size - 1)
+        };
+        (start, end)
+    };
+    if start >= file_size || end < start {
+        return Err(site_range_not_satisfiable(file_size));
+    }
+    let length = end
+        .checked_sub(start)
+        .and_then(|length| length.checked_add(1))
+        .ok_or_else(|| site_range_not_satisfiable(file_size))?;
+    if length > MAX_SITE_RESPONSE_BYTES {
+        let mut response = json_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!("site byte ranges are limited to {MAX_SITE_RESPONSE_BYTES} bytes"),
+        );
+        response
+            .headers_mut()
+            .insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+        return Err(response);
+    }
+
+    Ok(SiteResponseRange {
+        offset: start,
+        length: usize::try_from(length).map_err(|_| site_range_not_satisfiable(file_size))?,
+        partial: true,
+    })
+}
+
 fn build_site_file_response(
     state: &SharedAppState,
     stored: &StoredManifest,
     path: &[String],
+    request_headers: &HeaderMap,
 ) -> Response {
     let Some(file) = stored.file_by_path(path) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-
-    let Ok(length) = usize::try_from(file.size) else {
+    let response_range = match parse_site_response_range(request_headers, file.size) {
+        Ok(range) => range,
+        Err(response) => return response,
+    };
+    let Some(storage_offset) = file.offset.checked_add(response_range.offset) else {
         return json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "stored file exceeds supported response size",
+            "stored file offset overflow",
         );
     };
 
-    let bytes =
-        match state
-            .sorafs_node
-            .read_payload_range(stored.manifest_id(), file.offset, length)
-        {
-            Ok(value) => value,
-            Err(err) => return node_storage_error_response(err),
-        };
+    let bytes = match state.sorafs_node.read_payload_range(
+        stored.manifest_id(),
+        storage_offset,
+        response_range.length,
+    ) {
+        Ok(value) => value,
+        Err(err) => return node_storage_error_response(err),
+    };
 
     let mut response = Response::new(Body::from(bytes));
-    *response.status_mut() = StatusCode::OK;
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static(content_type_for_path(path)),
-    );
+    *response.status_mut() = if response_range.partial {
+        StatusCode::PARTIAL_CONTENT
+    } else {
+        StatusCode::OK
+    };
+    let content_type = content_type_for_path(path);
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
     response.headers_mut().insert(
         header::CONTENT_LENGTH,
-        HeaderValue::from_str(&file.size.to_string())
+        HeaderValue::from_str(&response_range.length.to_string())
             .unwrap_or_else(|_| HeaderValue::from_static("0")),
     );
+    response
+        .headers_mut()
+        .insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    response.headers_mut().insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+    if content_type == "application/octet-stream" {
+        response.headers_mut().insert(
+            header::CONTENT_DISPOSITION,
+            HeaderValue::from_static("attachment"),
+        );
+    }
+    if response_range.partial {
+        let end = response_range
+            .offset
+            .saturating_add(u64::try_from(response_range.length).unwrap_or_default())
+            .saturating_sub(1);
+        if let Ok(value) = HeaderValue::from_str(&format!(
+            "bytes {}-{end}/{}",
+            response_range.offset, file.size
+        )) {
+            response.headers_mut().insert(header::CONTENT_RANGE, value);
+        }
+    }
     response
 }
 
@@ -22602,7 +24047,7 @@ pub(crate) async fn handle_get_sorafs_site_path(
         path = index_document_path(&resolved.index_document);
     }
 
-    build_site_file_response(&state, &resolved.stored, &path)
+    build_site_file_response(&state, &resolved.stored, &path, &headers)
 }
 
 #[cfg(feature = "app_api")]
@@ -22663,7 +24108,7 @@ pub(crate) async fn handle_get_sorafs_cid_root_redirect(
     uri: Uri,
     Path(cid): Path<String>,
 ) -> Response {
-    if decode_content_cid(&cid).is_none() {
+    if decode_canonical_content_cid(&cid).is_none() {
         return json_error(StatusCode::BAD_REQUEST, "invalid content CID");
     }
 
@@ -22696,7 +24141,7 @@ pub(crate) async fn handle_get_sorafs_cid_path(
     uri: Uri,
     Path((cid, raw_path)): Path<(String, String)>,
 ) -> Response {
-    if decode_content_cid(&cid).is_none() {
+    if decode_canonical_content_cid(&cid).is_none() {
         return json_error(StatusCode::BAD_REQUEST, "invalid content CID");
     }
 
@@ -22713,7 +24158,25 @@ pub(crate) async fn handle_get_sorafs_cid_path(
         return StatusCode::NOT_FOUND.into_response();
     };
 
-    let mut response = build_site_file_response(&state, &stored, &path);
+    if stored
+        .file_by_path(&path)
+        .is_some_and(|_| content_type_is_active(content_type_for_path(&path)))
+        && !is_cid_derived_isolated_origin(
+            &headers,
+            &cid,
+            &state.sorafs_gateway_config.untrusted_hosting,
+        )
+    {
+        if let Some(response) = redirect_cid_gateway_request(&state, &headers, &uri, &cid, true) {
+            return response;
+        }
+        return json_error(
+            StatusCode::MISDIRECTED_REQUEST,
+            "active CID content is available only from its CID-derived isolated origin",
+        );
+    }
+
+    let mut response = build_site_file_response(&state, &stored, &path, &headers);
     if response.status().is_success() {
         attach_cid_gateway_headers(&mut response, &stored);
     }
@@ -23249,6 +24712,50 @@ pub(crate) async fn handle_post_sorafs_storage_fetch(
 }
 
 #[cfg(feature = "app_api")]
+fn required_canonical_stream_header(
+    headers: &HeaderMap,
+    name: &'static str,
+    display_name: &'static str,
+    maximum_bytes: usize,
+) -> Result<String, Response> {
+    let value = headers
+        .get(name)
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::BAD_REQUEST,
+                format!("missing {display_name} header"),
+            )
+        })?
+        .to_str()
+        .map_err(|_| {
+            json_error(
+                StatusCode::BAD_REQUEST,
+                format!("{display_name} header must contain valid ASCII"),
+            )
+        })?;
+    if value.is_empty()
+        || value.len() > maximum_bytes
+        || !value.bytes().all(|b| b.is_ascii_graphic())
+    {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{display_name} header must contain 1-{maximum_bytes} visible ASCII bytes"),
+        ));
+    }
+    Ok(value.to_owned())
+}
+
+#[cfg(feature = "app_api")]
+fn is_canonical_lower_hex(value: &str, maximum_bytes: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= maximum_bytes
+        && value.len().is_multiple_of(2)
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+#[cfg(feature = "app_api")]
 pub(crate) async fn handle_post_sorafs_storage_token(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -23262,43 +24769,37 @@ pub(crate) async fn handle_post_sorafs_storage_token(
         return feature_disabled("stream token issuance is not enabled on this node");
     };
 
-    let client_id = match headers.get(HEADER_SORA_CLIENT) {
-        Some(value) => match value.to_str() {
-            Ok(id) if !id.trim().is_empty() => id.to_string(),
-            Ok(_) => {
-                return json_error(
-                    StatusCode::BAD_REQUEST,
-                    "X-SoraFS-Client header must not be empty",
-                );
-            }
-            Err(_) => {
-                return json_error(
-                    StatusCode::BAD_REQUEST,
-                    "X-SoraFS-Client header must contain valid ASCII",
-                );
-            }
-        },
-        None => return json_error(StatusCode::BAD_REQUEST, "missing X-SoraFS-Client header"),
+    let client_id = match required_canonical_stream_header(
+        &headers,
+        HEADER_SORA_CLIENT,
+        "X-SoraFS-Client",
+        MAX_CLIENT_ID_BYTES,
+    ) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let nonce = match required_canonical_stream_header(
+        &headers,
+        HEADER_SORA_NONCE,
+        "X-SoraFS-Nonce",
+        MAX_NONCE_BYTES,
+    ) {
+        Ok(value) => value,
+        Err(response) => return response,
     };
 
-    let nonce = match headers.get(HEADER_SORA_NONCE) {
-        Some(value) => match value.to_str() {
-            Ok(nonce) if !nonce.trim().is_empty() => nonce.to_string(),
-            Ok(_) => {
-                return json_error(
-                    StatusCode::BAD_REQUEST,
-                    "X-SoraFS-Nonce header must not be empty",
-                );
-            }
-            Err(_) => {
-                return json_error(
-                    StatusCode::BAD_REQUEST,
-                    "X-SoraFS-Nonce header must contain valid ASCII",
-                );
-            }
-        },
-        None => return json_error(StatusCode::BAD_REQUEST, "missing X-SoraFS-Nonce header"),
-    };
+    if !is_canonical_lower_hex(&req.manifest_id_hex, 256) {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "manifest_id_hex must be canonical lowercase hexadecimal and no more than 256 bytes",
+        );
+    }
+    if !is_canonical_lower_hex(&req.provider_id_hex, 64) || req.provider_id_hex.len() != 64 {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "provider_id_hex must be exactly 64 lowercase hexadecimal characters",
+        );
+    }
 
     let storage_manifest_id = match resolve_manifest_storage_id(&state, &req.manifest_id_hex) {
         Ok(manifest_id) => manifest_id,
@@ -23314,6 +24815,27 @@ pub(crate) async fn handle_post_sorafs_storage_token(
         Ok(bytes) => bytes,
         Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
     };
+    if provider_id.iter().all(|byte| *byte == 0) {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "provider_id_hex must not be all zero",
+        );
+    }
+    match state.sorafs_node.capacity_usage().provider_id {
+        Some(local_provider_id) if local_provider_id == provider_id => {}
+        Some(_) => {
+            return json_error(
+                StatusCode::FORBIDDEN,
+                "stream token provider does not match this gateway",
+            );
+        }
+        None => {
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "stream token provider identity is not configured",
+            );
+        }
+    }
 
     let overrides = TokenOverrides {
         ttl_secs: req.ttl_secs,
@@ -23331,43 +24853,62 @@ pub(crate) async fn handle_post_sorafs_storage_token(
     ) {
         Ok(token) => token,
         Err(err) => {
-            if let StreamTokenIssuerError::ClientQuotaExceeded {
-                limit,
-                retry_after_secs,
-                ..
-            } = err
-            {
-                let mut response = json_error(
-                    StatusCode::TOO_MANY_REQUESTS,
-                    format!(
-                        "stream token issuance quota exceeded (limit {limit} requests per minute)"
-                    ),
-                );
-                let headers = response.headers_mut();
-                headers.insert(
-                    header::RETRY_AFTER,
-                    HeaderValue::from_str(&retry_after_secs.to_string()).unwrap_or_else(|_| {
-                        panic!("Retry-After header produced invalid value: {retry_after_secs}")
-                    }),
-                );
-                headers.insert(
-                    header::HeaderName::from_static(HEADER_SORA_CLIENT),
-                    header_value(&client_id, "X-SoraFS-Client"),
-                );
-                headers.insert(
-                    header::HeaderName::from_static(HEADER_SORA_NONCE),
-                    header_value(&nonce, "X-SoraFS-Nonce"),
-                );
-                headers.insert(
-                    header::HeaderName::from_static(HEADER_SORA_CLIENT_QUOTA_REMAINING),
-                    header_value("0", "X-SoraFS-Client-Quota-Remaining"),
-                );
-                return response;
-            }
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("failed to issue stream token: {err}"),
-            );
+            return match &err {
+                StreamTokenIssuerError::ClientQuotaExceeded {
+                    limit,
+                    retry_after_secs,
+                    ..
+                } => {
+                    let mut response = json_error(
+                        StatusCode::TOO_MANY_REQUESTS,
+                        format!(
+                            "stream token issuance quota exceeded (limit {limit} requests per minute)"
+                        ),
+                    );
+                    let headers = response.headers_mut();
+                    if let Ok(value) = HeaderValue::from_str(&retry_after_secs.to_string()) {
+                        headers.insert(header::RETRY_AFTER, value);
+                    }
+                    headers.insert(
+                        header::HeaderName::from_static(HEADER_SORA_CLIENT),
+                        header_value(&client_id, "X-SoraFS-Client"),
+                    );
+                    headers.insert(
+                        header::HeaderName::from_static(HEADER_SORA_NONCE),
+                        header_value(&nonce, "X-SoraFS-Nonce"),
+                    );
+                    headers.insert(
+                        header::HeaderName::from_static(HEADER_SORA_CLIENT_QUOTA_REMAINING),
+                        header_value("0", "X-SoraFS-Client-Quota-Remaining"),
+                    );
+                    response
+                }
+                StreamTokenIssuerError::InvalidPolicy { .. }
+                | StreamTokenIssuerError::InvalidClientId
+                | StreamTokenIssuerError::InvalidBody(_) => {
+                    json_error(StatusCode::BAD_REQUEST, err.to_string())
+                }
+                StreamTokenIssuerError::ClientQuotaCapacityExceeded { .. }
+                | StreamTokenIssuerError::ClientQuotaStateUnavailable
+                | StreamTokenIssuerError::ClockRollback { .. } => {
+                    error!(?err, "stream token issuance quota state unavailable");
+                    let mut response = json_error(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "stream token issuance is temporarily unavailable",
+                    );
+                    response
+                        .headers_mut()
+                        .insert(RETRY_AFTER, HeaderValue::from_static("1"));
+                    response
+                }
+                _ => {
+                    error!(?err, "failed to issue stream token");
+                    json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "failed to issue stream token",
+                    )
+                }
+            };
         }
     };
 
@@ -23403,10 +24944,7 @@ pub(crate) async fn handle_post_sorafs_storage_token(
             "X-SoraFS-Verifying-Key",
         ),
     );
-    let quota_header = token_issue
-        .remaining_quota
-        .map(|quota| quota.to_string())
-        .unwrap_or_else(|| "unlimited".to_owned());
+    let quota_header = token_issue.remaining_quota.to_string();
     response_headers.insert(
         header::HeaderName::from_static(HEADER_SORA_CLIENT_QUOTA_REMAINING),
         header_value(&quota_header, "X-SoraFS-Client-Quota-Remaining"),
@@ -23532,20 +25070,23 @@ fn enforce_stream_token_for_request(
             "missing X-SoraFS-Stream-Token header",
         )
     })?;
-    let token_str = token_header
-        .to_str()
-        .map_err(|_| {
-            json_error(
-                StatusCode::BAD_REQUEST,
-                "X-SoraFS-Stream-Token header must contain valid ASCII",
-            )
-        })?
-        .trim();
+    let token_str = token_header.to_str().map_err(|_| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            "X-SoraFS-Stream-Token header must contain valid ASCII",
+        )
+    })?;
 
     if token_str.is_empty() {
         return Err(json_error(
             StatusCode::BAD_REQUEST,
             "X-SoraFS-Stream-Token header must not be empty",
+        ));
+    }
+    if token_str.len() > MAX_STREAM_TOKEN_BASE64_BYTES {
+        return Err(json_error(
+            StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
+            "X-SoraFS-Stream-Token header exceeds the protocol limit",
         ));
     }
 
@@ -23557,10 +25098,36 @@ fn enforce_stream_token_for_request(
                 "stream token must be base64 encoded",
             ));
         }
+        Err(StreamTokenHeaderError::HeaderTooLong { .. }) => {
+            return Err(json_error(
+                StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
+                "stream token header exceeds the protocol limit",
+            ));
+        }
+        Err(StreamTokenHeaderError::NonCanonicalEncoding) => {
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                "stream token must use canonical padded base64",
+            ));
+        }
+        Err(StreamTokenHeaderError::PayloadTooLong { .. }) => {
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                "decoded stream token exceeds the protocol limit",
+            ));
+        }
         Err(StreamTokenHeaderError::InvalidPayload(_)) => {
             return Err(json_error(
                 StatusCode::BAD_REQUEST,
                 "invalid stream token payload",
+            ));
+        }
+        Err(
+            StreamTokenHeaderError::InvalidBody(_) | StreamTokenHeaderError::InvalidSignatureLength,
+        ) => {
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                "invalid stream token policy",
             ));
         }
     };
@@ -23593,13 +25160,12 @@ fn enforce_stream_token_for_request(
             )
         })?
         .as_secs();
-    if now > token.body.ttl_epoch {
+    if token.body.issued_at > now.saturating_add(MAX_TOKEN_FUTURE_SKEW_SECS) {
         return Err(json_error(
             StatusCode::UNAUTHORIZED,
-            "stream token has expired",
+            "stream token was issued too far in the future",
         ));
     }
-
     if token.body.manifest_cid.as_slice() != manifest.manifest_cid() {
         return Err(json_error(
             StatusCode::FORBIDDEN,
@@ -23613,32 +25179,19 @@ fn enforce_stream_token_for_request(
         ));
     }
 
-    if let Some(provider_id) = state.sorafs_node.capacity_usage().provider_id {
-        if provider_id != token.body.provider_id {
+    match state.sorafs_node.capacity_usage().provider_id {
+        Some(provider_id) if provider_id == token.body.provider_id => {}
+        Some(_) => {
             return Err(json_error(
                 StatusCode::FORBIDDEN,
                 "stream token provider mismatch",
             ));
         }
-    }
-
-    match state
-        .stream_token_quota()
-        .try_acquire(&token.body.token_id, token.body.requests_per_minute)
-    {
-        Ok(()) => {}
-        Err(StreamTokenQuotaExceeded { retry_after_secs }) => {
-            telemetry.with_metrics(|metrics| {
-                metrics.inc_sorafs_range_fetch_throttle(RANGE_THROTTLE_REASON_QUOTA)
-            });
-            let mut response = json_error(
-                StatusCode::TOO_MANY_REQUESTS,
-                "stream token request quota exceeded",
-            );
-            if let Ok(value) = HeaderValue::from_str(&retry_after_secs.to_string()) {
-                response.headers_mut().insert(RETRY_AFTER, value);
-            }
-            return Err(response);
+        None => {
+            return Err(json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "stream token provider identity is not configured",
+            ));
         }
     }
 
@@ -23659,16 +25212,82 @@ fn enforce_stream_token_for_request(
     };
     let concurrency_guard = RangeFetchConcurrencyGuard::new(telemetry.clone(), concurrency_permit);
 
-    let allowed_bytes = token.body.rate_limit_bytes;
-    if allowed_bytes != 0 && requested_bytes > allowed_bytes {
-        telemetry.with_metrics(|metrics| {
-            metrics.inc_sorafs_range_fetch_throttle(RANGE_THROTTLE_REASON_BYTE_RATE)
-        });
-        drop(concurrency_guard);
-        return Err(json_error(
-            StatusCode::TOO_MANY_REQUESTS,
-            "stream token rate limit exceeded",
-        ));
+    let token_fingerprint = token.body_hash().map_err(|err| {
+        error!(?err, "failed to hash validated stream token body");
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to validate stream token",
+        )
+    })?;
+    match state.stream_token_quota().try_acquire(
+        &token.body.token_id,
+        *token_fingerprint.as_bytes(),
+        token.body.requests_per_minute,
+        token.body.rate_limit_bytes,
+        requested_bytes,
+        token.body.ttl_epoch,
+        now,
+    ) {
+        Ok(()) => {}
+        Err(StreamTokenQuotaError::Exceeded { retry_after_secs }) => {
+            telemetry.with_metrics(|metrics| {
+                metrics.inc_sorafs_range_fetch_throttle(RANGE_THROTTLE_REASON_QUOTA)
+            });
+            let mut response = json_error(
+                StatusCode::TOO_MANY_REQUESTS,
+                "stream token request quota exceeded",
+            );
+            if let Ok(value) = HeaderValue::from_str(&retry_after_secs.to_string()) {
+                response.headers_mut().insert(RETRY_AFTER, value);
+            }
+            return Err(response);
+        }
+        Err(StreamTokenQuotaError::ByteRateExceeded { retry_after_secs }) => {
+            telemetry.with_metrics(|metrics| {
+                metrics.inc_sorafs_range_fetch_throttle(RANGE_THROTTLE_REASON_BYTE_RATE)
+            });
+            let mut response = json_error(
+                StatusCode::TOO_MANY_REQUESTS,
+                "stream token rate limit exceeded",
+            );
+            if let Ok(value) = HeaderValue::from_str(&retry_after_secs.to_string()) {
+                response.headers_mut().insert(RETRY_AFTER, value);
+            }
+            return Err(response);
+        }
+        Err(
+            err @ (StreamTokenQuotaError::CapacityExceeded { .. }
+            | StreamTokenQuotaError::StateUnavailable
+            | StreamTokenQuotaError::ClockRollback { .. }),
+        ) => {
+            error!(?err, "stream token quota state unavailable");
+            let mut response = json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "stream token quota admission is temporarily unavailable",
+            );
+            response
+                .headers_mut()
+                .insert(RETRY_AFTER, HeaderValue::from_static("1"));
+            return Err(response);
+        }
+        Err(StreamTokenQuotaError::PolicyConflict) => {
+            return Err(json_error(
+                StatusCode::UNAUTHORIZED,
+                "stream token identifier conflicts with existing signed state",
+            ));
+        }
+        Err(StreamTokenQuotaError::Expired) => {
+            return Err(json_error(
+                StatusCode::UNAUTHORIZED,
+                "stream token has expired",
+            ));
+        }
+        Err(StreamTokenQuotaError::InvalidTokenId | StreamTokenQuotaError::InvalidPolicy(_)) => {
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                "invalid stream token quota policy",
+            ));
+        }
     }
 
     Ok((concurrency_guard, token.body))
@@ -26513,19 +28132,10 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
 
 #[cfg(feature = "app_api")]
 pub(crate) async fn handle_post_sorafs_storage_por_challenge(
-    State(state): State<SharedAppState>,
-    JsonOnly(req): JsonOnly<StoragePorChallengeDto>,
+    State(_state): State<SharedAppState>,
+    JsonOnly(_req): JsonOnly<StoragePorChallengeDto>,
 ) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return storage_disabled_response();
-    }
-    match decode_por_payload::<PorChallengeV1>(&req.challenge_b64, "challenge") {
-        Ok(challenge) => match state.sorafs_node.record_por_challenge(&challenge) {
-            Ok(()) => JsonBody(json_object(vec![json_entry("status", "accepted")])).into_response(),
-            Err(err) => por_tracker_error_response(err),
-        },
-        Err(err) => err.into_response(),
-    }
+    retired_storage_por_mutation_response("challenge")
 }
 
 #[cfg(feature = "app_api")]
@@ -26533,10 +28143,10 @@ pub(crate) fn manual_por_trigger_retired_response() -> Response {
     let response = json_object(vec![
         json_entry("error", "manual_por_trigger_retired"),
         json_entry("route_state", "retired"),
-        json_entry("replacement", "/v1/sorafs/capacity/por-challenge"),
+        json_entry("replacement", "trusted PoR coordinator scheduler"),
         json_entry(
             "message",
-            "manual PoR trigger requests are retired; submit governed PorChallengeV1 payloads through the capacity PoR challenge route or scheduler runtime",
+            "manual PoR trigger requests are retired; challenges are issued only by the trusted PoR coordinator scheduler",
         ),
     ]);
     (StatusCode::GONE, JsonBody(response)).into_response()
@@ -26544,43 +28154,74 @@ pub(crate) fn manual_por_trigger_retired_response() -> Response {
 
 #[cfg(feature = "app_api")]
 pub(crate) async fn handle_post_sorafs_storage_por_proof(
-    State(state): State<SharedAppState>,
-    JsonOnly(req): JsonOnly<StoragePorProofDto>,
+    State(_state): State<SharedAppState>,
+    JsonOnly(_req): JsonOnly<StoragePorProofDto>,
 ) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return storage_disabled_response();
-    }
-    match decode_por_payload::<PorProofV1>(&req.proof_b64, "proof") {
-        Ok(proof) => match state.sorafs_node.record_por_proof(&proof) {
-            Ok(()) => JsonBody(json_object(vec![json_entry("status", "accepted")])).into_response(),
-            Err(err) => por_tracker_error_response(err),
-        },
-        Err(err) => err.into_response(),
-    }
+    retired_storage_por_mutation_response("proof")
 }
 
 #[cfg(feature = "app_api")]
 pub(crate) async fn handle_post_sorafs_storage_por_verdict(
-    State(state): State<SharedAppState>,
-    JsonOnly(req): JsonOnly<StoragePorVerdictDto>,
+    State(_state): State<SharedAppState>,
+    JsonOnly(_req): JsonOnly<StoragePorVerdictDto>,
 ) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return storage_disabled_response();
-    }
-    match decode_por_payload::<AuditVerdictV1>(&req.verdict_b64, "verdict") {
-        Ok(verdict) => match state.sorafs_node.record_por_verdict(&verdict) {
-            Ok(verdict_stats) => {
-                let response = json_object(vec![
-                    json_entry("status", "accepted"),
-                    json_entry("success_samples", verdict_stats.stats.success_samples),
-                    json_entry("failed_samples", verdict_stats.stats.failed_samples),
-                ]);
-                JsonBody(response).into_response()
-            }
-            Err(err) => por_tracker_error_response(err),
-        },
-        Err(err) => err.into_response(),
-    }
+    retired_storage_por_mutation_response("verdict")
+}
+
+#[cfg(feature = "app_api")]
+fn retired_storage_por_mutation_response(kind: &str) -> Response {
+    let replacement = match kind {
+        "challenge" => "trusted PoR coordinator scheduler".to_owned(),
+        _ => format!("/v1/sorafs/capacity/por-{kind}"),
+    };
+    (
+        StatusCode::GONE,
+        JsonBody(json_object(vec![
+            json_entry("error", "storage_por_mutation_retired"),
+            json_entry("kind", kind),
+            json_entry(
+                "replacement",
+                replacement,
+            ),
+            json_entry(
+                "message",
+                "direct storage PoR mutation routes are retired; use the authenticated capacity PoR lifecycle",
+            ),
+        ])),
+    )
+    .into_response()
+}
+
+#[cfg(feature = "app_api")]
+/// Build a stable retirement response for unsafe legacy capacity PoR mutations.
+pub(crate) fn capacity_por_mutation_retired_response(kind: &str) -> Response {
+    let (error, replacement, message) = match kind {
+        "challenge" => (
+            "capacity_por_challenge_retired",
+            "trusted PoR coordinator scheduler",
+            "externally supplied PoR challenges are retired because beacon and VRF evidence must originate from the trusted coordinator scheduler",
+        ),
+        "observation" => (
+            "capacity_por_observation_retired",
+            "/v1/sorafs/capacity/por-proof and /v1/sorafs/capacity/por-verdict",
+            "manual PoR success/failure observations are retired; metering is derived from the authenticated proof and verdict lifecycle",
+        ),
+        _ => (
+            "capacity_por_mutation_retired",
+            "trusted PoR lifecycle",
+            "this PoR mutation route is retired",
+        ),
+    };
+    (
+        StatusCode::GONE,
+        JsonBody(json_object(vec![
+            json_entry("error", error),
+            json_entry("kind", kind),
+            json_entry("replacement", replacement),
+            json_entry("message", message),
+        ])),
+    )
+        .into_response()
 }
 
 fn header_value(value: impl AsRef<str>, name: &str) -> HeaderValue {
@@ -27189,48 +28830,6 @@ mod app_api_tests {
         assert_eq!(decoded, [0xAA; 32]);
     }
 }
-pub(crate) fn decode_por_payload<T>(payload_b64: &str, kind: &str) -> ApiResult<T>
-where
-    T: for<'de> norito::NoritoDeserialize<'de>,
-{
-    let bytes = match base64::engine::general_purpose::STANDARD.decode(payload_b64.as_bytes()) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            return Err(json_error(
-                StatusCode::BAD_REQUEST,
-                format!("invalid base64 in {kind}_b64: {err}"),
-            )
-            .into());
-        }
-    };
-
-    match norito::decode_from_bytes(&bytes) {
-        Ok(value) => Ok(value),
-        Err(err) => Err(json_error(
-            StatusCode::BAD_REQUEST,
-            format!("invalid {kind} payload: {err}"),
-        )
-        .into()),
-    }
-}
-
-pub(crate) fn por_tracker_error_response(err: PorTrackerError) -> Response {
-    let status = match err {
-        PorTrackerError::ChallengeInvalid(_)
-        | PorTrackerError::ProofInvalid(_)
-        | PorTrackerError::VerdictInvalid(_)
-        | PorTrackerError::MismatchManifest
-        | PorTrackerError::MismatchProvider
-        | PorTrackerError::SampleCountMismatch { .. }
-        | PorTrackerError::DuplicateProof
-        | PorTrackerError::ProofDigestMismatch => StatusCode::BAD_REQUEST,
-        PorTrackerError::ChallengeConflict => StatusCode::CONFLICT,
-        PorTrackerError::UnknownChallenge => StatusCode::NOT_FOUND,
-        PorTrackerError::RepairStore(_) => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    json_error(status, err.to_string())
-}
-
 fn advert_ingest_response(
     status: &str,
     fingerprint: &[u8; 32],
@@ -27948,7 +29547,32 @@ fn node_storage_error_response(err: NodeStorageError) -> Response {
     match err {
         NodeStorageError::Disabled => storage_disabled_response(),
         NodeStorageError::Storage(inner) => storage_backend_error(inner),
+        NodeStorageError::Scheduler(inner) => scheduler_admission_error_response(inner),
     }
+}
+
+fn scheduler_admission_error_response(
+    err: sorafs_node::scheduler::SchedulerAdmissionError,
+) -> Response {
+    use sorafs_node::scheduler::SchedulerAdmissionError;
+
+    let retry_after_secs = match err {
+        SchedulerAdmissionError::RateLimited { retry_after, .. } => {
+            u64::try_from(retry_after.as_millis().saturating_add(999) / 1_000)
+                .unwrap_or(u64::MAX)
+                .max(1)
+        }
+        _ => 1,
+    };
+    error!(?err, "SoraFS storage scheduler refused work");
+    let mut response = json_error(
+        StatusCode::TOO_MANY_REQUESTS,
+        "SoraFS storage scheduler is busy; retry later",
+    );
+    if let Ok(value) = HeaderValue::from_str(&retry_after_secs.to_string()) {
+        response.headers_mut().insert(RETRY_AFTER, value);
+    }
+    response
 }
 
 fn storage_backend_error(err: StorageBackendError) -> Response {
@@ -27963,7 +29587,7 @@ fn storage_backend_error(err: StorageBackendError) -> Response {
         } => json_error(
             StatusCode::BAD_REQUEST,
             format!(
-                "storage capacity exceeded (required {required} GiB, available {available} GiB)"
+                "storage capacity exceeded (required {required} bytes, available {available} bytes)"
             ),
         ),
         StorageBackendError::PinLimitReached { limit } => json_error(
@@ -28015,6 +29639,40 @@ fn storage_backend_error(err: StorageBackendError) -> Response {
             StatusCode::BAD_REQUEST,
             format!("retention metadata invalid: {err}"),
         ),
+        StorageBackendError::LayoutValueTooLarge { field, value, max } => json_error(
+            StatusCode::BAD_REQUEST,
+            format!("storage layout field {field} value {value} exceeds limit {max}"),
+        ),
+        StorageBackendError::InvalidFileLayout { reason } => json_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid storage file layout: {reason}"),
+        ),
+        StorageBackendError::StorageDirectoryInUse { .. } => json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "storage backend directory is already in use",
+        ),
+        durability_error @ (StorageBackendError::DurabilityUncertain { .. }
+        | StorageBackendError::DurabilityPoisoned { .. }) => {
+            error!(
+                ?durability_error,
+                "SoraFS storage backend fail-stopped after a durability failure"
+            );
+            json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "storage backend is unavailable pending durability recovery",
+            )
+        }
+        state_error @ (StorageBackendError::UnsupportedIndexVersion { .. }
+        | StorageBackendError::CorruptStorageState { .. }) => {
+            error!(
+                ?state_error,
+                "SoraFS storage backend state failed integrity validation"
+            );
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "storage backend state failed integrity validation",
+            )
+        }
         StorageBackendError::Io(err) => {
             error!(?err, "SoraFS storage backend I/O error");
             json_error(
@@ -28041,8 +29699,15 @@ fn storage_backend_error(err: StorageBackendError) -> Response {
 
 #[cfg(test)]
 mod storage_backend_error_tests {
-    use super::{StorageBackendError, storage_backend_error};
+    use std::time::Duration;
+
     use sorafs_manifest::retention::RetentionMetadataError;
+    use sorafs_node::scheduler::{FetchRateScope, SchedulerAdmissionError};
+
+    use super::{
+        NodeStorageError, RETRY_AFTER, StorageBackendError, node_storage_error_response,
+        storage_backend_error,
+    };
 
     #[test]
     fn retention_metadata_maps_to_bad_request() {
@@ -28051,6 +29716,64 @@ mod storage_backend_error_tests {
         });
         let response = storage_backend_error(err);
         assert_eq!(response.status(), super::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn storage_integrity_and_ownership_errors_map_to_server_failures() {
+        let corrupt = storage_backend_error(StorageBackendError::CorruptStorageState {
+            path: "/secret/storage/index.norito".to_owned(),
+            reason: "tampered".to_owned(),
+        });
+        assert_eq!(corrupt.status(), super::StatusCode::INTERNAL_SERVER_ERROR);
+
+        let in_use = storage_backend_error(StorageBackendError::StorageDirectoryInUse {
+            path: "/secret/storage/.storage.lock".to_owned(),
+        });
+        assert_eq!(in_use.status(), super::StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn oversized_storage_layout_maps_to_bad_request() {
+        let response = storage_backend_error(StorageBackendError::LayoutValueTooLarge {
+            field: "chunk_count",
+            value: usize::MAX,
+            max: u64::from(u32::MAX),
+        });
+        assert_eq!(response.status(), super::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn invalid_file_layout_maps_to_bad_request() {
+        let response = storage_backend_error(StorageBackendError::InvalidFileLayout {
+            reason: "out-of-bounds chunk range".to_owned(),
+        });
+        assert_eq!(response.status(), super::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn durability_fail_stop_maps_to_opaque_service_unavailable() {
+        let response = storage_backend_error(StorageBackendError::DurabilityPoisoned {
+            reason: "/secret/storage/index.norito: injected failure".to_owned(),
+        });
+        assert_eq!(response.status(), super::StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn scheduler_refusal_maps_to_retryable_rate_limit() {
+        let response = node_storage_error_response(NodeStorageError::Scheduler(
+            SchedulerAdmissionError::RateLimited {
+                scope: FetchRateScope::Global,
+                retry_after: Duration::from_millis(1_001),
+            },
+        ));
+        assert_eq!(response.status(), super::StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response
+                .headers()
+                .get(RETRY_AFTER)
+                .expect("Retry-After header"),
+            "2"
+        );
     }
 }
 
@@ -28078,6 +29801,10 @@ fn car_verification_refusal(
             "manifest_root_mismatch",
             "manifest root CID mismatch detected during verification",
         ),
+        CarVerifyError::BlockRootMismatch => (
+            "block_root_mismatch",
+            "block CAR root CID mismatch detected during range verification",
+        ),
         CarVerifyError::ManifestMultihashMismatch(_) => (
             "manifest_multihash_mismatch",
             "manifest multihash mismatch detected during verification",
@@ -28089,6 +29816,10 @@ fn car_verification_refusal(
         CarVerifyError::ExpectedRangeMismatch { .. } => (
             "range_expected_mismatch",
             "range verification failed: expected range mismatch",
+        ),
+        CarVerifyError::ExpectedRangeNotChunkAligned { .. } => (
+            "range_not_chunk_aligned",
+            "range verification failed: expected range is not chunk aligned",
         ),
         CarVerifyError::RangeExceedsContentLength { .. } => (
             "range_exceeds_content_length",
@@ -28118,6 +29849,10 @@ fn car_verification_refusal(
             "plan_content_length_mismatch",
             "plan content length mismatch detected during verification",
         ),
+        CarVerifyError::InvalidPlanChunkLength { .. } => (
+            "invalid_plan_chunk_length",
+            "proof plan contains a zero-length or oversized chunk",
+        ),
         CarVerifyError::UnknownChunkDigest { .. } => (
             "unknown_chunk_digest",
             "unknown chunk digest encountered during verification",
@@ -28129,6 +29864,10 @@ fn car_verification_refusal(
         CarVerifyError::NonContiguousChunkRange { .. } => (
             "non_contiguous_chunk_range",
             "non-contiguous chunk range detected in proof bundle",
+        ),
+        CarVerifyError::UnexpectedChunkOrder => (
+            "unexpected_chunk_order",
+            "chunk sections are not in canonical plan order",
         ),
         CarVerifyError::EmptyRange => (
             "empty_range",
@@ -28155,6 +29894,10 @@ fn car_verification_refusal(
             "invalid_index_offset",
             "invalid CAR index offset encountered",
         ),
+        CarVerifyError::NonCanonicalCar => (
+            "noncanonical_car",
+            "CAR DAG, index, header, or trailing bytes are not canonical",
+        ),
         CarVerifyError::TruncatedSection { .. }
         | CarVerifyError::TruncatedCid { .. }
         | CarVerifyError::Truncated
@@ -28162,7 +29905,10 @@ fn car_verification_refusal(
         | CarVerifyError::InvalidHeader
         | CarVerifyError::InvalidCarv1Header(_)
         | CarVerifyError::VarintOverflow
+        | CarVerifyError::NonCanonicalVarint
         | CarVerifyError::HeaderTruncated
+        | CarVerifyError::CanonicalCar(_)
+        | CarVerifyError::ChunkStore(_)
         | CarVerifyError::InternalInvariant(_) => (
             "car_parse_error",
             "CAR verification failed due to malformed payload",
@@ -28196,49 +29942,8 @@ fn car_verification_refusal(
 }
 
 pub(crate) fn chunk_profile_for_manifest(manifest: &ManifestV1) -> ApiResult<ChunkProfile> {
-    if manifest.chunking.profile_id.0 == 0 {
-        if manifest.chunking.min_size == 0
-            || manifest.chunking.target_size == 0
-            || manifest.chunking.max_size == 0
-            || manifest.chunking.min_size > manifest.chunking.target_size
-            || manifest.chunking.target_size > manifest.chunking.max_size
-        {
-            return Err(json_error(
-                StatusCode::BAD_REQUEST,
-                "manifest inline chunker profile has invalid chunk size bounds",
-            )
-            .into());
-        }
-        return Ok(ChunkProfile {
-            min_size: manifest.chunking.min_size as usize,
-            target_size: manifest.chunking.target_size as usize,
-            max_size: manifest.chunking.max_size as usize,
-            break_mask: manifest.chunking.break_mask as u64,
-        });
-    }
-
-    if let Some(descriptor) = chunker_registry::lookup(manifest.chunking.profile_id) {
-        if descriptor.multihash_code != manifest.chunking.multihash_code {
-            return Err(json_error(
-                StatusCode::BAD_REQUEST,
-                format!(
-                    "manifest multihash code {} does not match registry descriptor {}",
-                    manifest.chunking.multihash_code, descriptor.multihash_code
-                ),
-            )
-            .into());
-        }
-        Ok(descriptor.profile)
-    } else {
-        Err(json_error(
-            StatusCode::BAD_REQUEST,
-            format!(
-                "manifest chunker profile id {} is not registered",
-                manifest.chunking.profile_id.0
-            ),
-        )
-        .into())
-    }
+    chunk_profile_from_manifest_descriptor(manifest)
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err).into())
 }
 
 #[cfg(test)]
@@ -28725,9 +30430,13 @@ fn admission_error_reason(err: &AdvertError) -> &'static str {
     match err {
         AdvertError::Decode(_) => "decode",
         AdvertError::Validation(AdvertValidationError::Expired { .. }) => "stale",
+        AdvertError::Validation(AdvertValidationError::IssuedInFuture { .. }) => "future_issued",
         AdvertError::Validation(_) => "policy_violation",
         AdvertError::UnsupportedSignature(_) => "unsupported_signature",
         AdvertError::Signature(_) => "signature",
+        AdvertError::SignaturePolicyDisabled => "signature_policy_disabled",
+        AdvertError::NonMonotonicIssuedAt { .. } => "non_monotonic_issued_at",
+        AdvertError::ReplayCheckpoint(_) => "replay_checkpoint",
         AdvertError::UnknownCapabilities { .. } => "unknown_capabilities",
         AdvertError::AdmissionMissing { .. } => "admission_missing",
         AdvertError::AdmissionFailed { error, .. } => match error {
@@ -28744,12 +30453,27 @@ pub(crate) fn init_cache(
     enabled: bool,
     capabilities: Vec<sorafs_manifest::CapabilityType>,
     admission: std::sync::Arc<AdmissionRegistry>,
+    replay_checkpoint_path: std::path::PathBuf,
+    replay_checkpoint_max_entries: std::num::NonZeroUsize,
 ) -> Option<std::sync::Arc<RwLock<ProviderAdvertCache>>> {
     if !enabled {
         return None;
     }
-    let cache = ProviderAdvertCache::new(capabilities, admission);
-    Some(std::sync::Arc::new(RwLock::new(cache)))
+    match ProviderAdvertCache::new_persistent(
+        capabilities,
+        admission,
+        replay_checkpoint_path,
+        replay_checkpoint_max_entries,
+    ) {
+        Ok(cache) => Some(std::sync::Arc::new(RwLock::new(cache))),
+        Err(err) => {
+            iroha_logger::error!(
+                %err,
+                "SoraFS discovery cache disabled: provider advert replay checkpoint failed closed"
+            );
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -28825,8 +30549,9 @@ mod advert_tests {
         CouncilSignature, DagCodecId, ENDPOINT_ATTESTATION_VERSION_V1, EndpointAdmissionV1,
         EndpointAttestationKind, EndpointAttestationV1, EndpointKind, EndpointMetadata,
         EndpointMetadataKey, MAX_ADVERT_TTL_SECS, ManifestBuilder, PROVIDER_ADVERT_VERSION_V1,
-        PathDiversityPolicy, PinPolicy, ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1,
-        ProviderAdvertBodyV1, ProviderAdvertV1, QosHints, REPUTATION_PROVIDER_INPUT_VERSION_V1,
+        PathDiversityPolicy, PinPolicy, ProviderAdmissionCouncilPolicy,
+        ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1, ProviderAdvertBodyV1,
+        ProviderAdvertV1, QosHints, REPUTATION_PROVIDER_INPUT_VERSION_V1,
         REPUTATION_PROVIDER_METRICS_VERSION_V1, RendezvousTopic, ReputationProviderInputV1,
         ReputationProviderMetricsV1, ReputationReserveStageV1, ReputationWeightsV1,
         SETTLEMENT_RECEIPT_VERSION_V1, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1, SignatureAlgorithm,
@@ -28834,7 +30559,8 @@ mod advert_tests {
         SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
         SoraFsAppealFinanceWeeklyRollupV1, StakePointer, build_reputation_snapshot,
         capacity::{CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, ChunkerCommitmentV1},
-        chunker_registry, compute_advert_body_digest, compute_proposal_digest,
+        chunker_registry, compute_advert_body_digest, compute_envelope_authorization_digest,
+        compute_proposal_digest,
         pin_registry::{
             AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
         },
@@ -28847,10 +30573,7 @@ mod advert_tests {
         proof_stream::ProofStreamTier,
     };
     use sorafs_node::config::StorageConfig;
-    use std::{
-        collections::{BTreeMap, HashSet},
-        sync::{LazyLock, Mutex, MutexGuard},
-    };
+    use std::collections::{BTreeMap, HashSet};
     use tempfile::{NamedTempFile, TempDir};
     use tokio::net::TcpListener;
 
@@ -34797,8 +36520,7 @@ mod advert_tests {
     }
 
     fn orderbook_provider_advert_cache(fixture: &ProviderFixture) -> ProviderAdvertCache {
-        let admission =
-            AdmissionRegistry::from_envelopes([fixture.envelope.clone()]).expect("valid envelope");
+        let admission = fixture_admission_registry([&fixture.envelope]);
         let mut cache = ProviderAdvertCache::new(
             vec![
                 CapabilityType::ToriiGateway,
@@ -34902,18 +36624,20 @@ mod advert_tests {
         price_micro: u128,
         owner: &OrderbookAccountFixture,
     ) -> OrderRequestV1 {
+        let owner_account = orderbook_owner_bytes(owner);
+        let nonce = u64::from(id);
         sign_orderbook_order(
             OrderRequestV1 {
                 version: sorafs_manifest::ORDERBOOK_ORDER_VERSION_V1,
-                order_id: [id; 32],
+                order_id: derive_orderbook_order_id_v1(&owner_account, nonce),
                 side,
                 tier: OrderTierV1::Hot,
                 price_per_gib: sorafs_manifest::deal::XorAmount::from_micro(price_micro),
                 quantity_gib: 4,
                 remaining_gib: 4,
-                owner_account: orderbook_owner_bytes(owner),
+                owner_account,
                 expiry_unix: unix_timestamp_now().saturating_add(300),
-                nonce: u64::from(id),
+                nonce,
                 maker_fee_bps: 10,
                 taker_fee_bps: 20,
                 signature: orderbook_signature_fixture(),
@@ -34922,17 +36646,24 @@ mod advert_tests {
         )
     }
 
-    fn orderbook_cancel_fixture(id: u8, owner: &OrderbookAccountFixture) -> OrderCancelV1 {
+    fn orderbook_cancel_fixture(
+        id: u8,
+        order_owner: &OrderbookAccountFixture,
+        cancel_owner: &OrderbookAccountFixture,
+    ) -> OrderCancelV1 {
         sign_orderbook_cancel(
             OrderCancelV1 {
                 version: sorafs_manifest::ORDERBOOK_CANCEL_VERSION_V1,
-                order_id: [id; 32],
-                owner_account: orderbook_owner_bytes(owner),
+                order_id: derive_orderbook_order_id_v1(
+                    &orderbook_owner_bytes(order_owner),
+                    u64::from(id),
+                ),
+                owner_account: orderbook_owner_bytes(cancel_owner),
                 reason: OrderCancelReasonV1::OwnerRequested,
                 nonce: u64::from(id).saturating_add(100),
                 signature: orderbook_signature_fixture(),
             },
-            &owner.keypair,
+            &cancel_owner.keypair,
         )
     }
 
@@ -36636,7 +38367,7 @@ mod advert_tests {
         let order = sign_orderbook_order(
             OrderRequestV1 {
                 version: sorafs_manifest::ORDERBOOK_ORDER_VERSION_V1,
-                order_id: [42; 32],
+                order_id: derive_orderbook_order_id_v1(&orderbook_owner_bytes(&auth.buyer), 42),
                 side: OrderSideV1::Bid,
                 tier: OrderTierV1::Hot,
                 price_per_gib: sorafs_manifest::deal::XorAmount::from_micro(1_600_000),
@@ -42267,7 +43998,7 @@ mod advert_tests {
         let response = post_orderbook_cancel(
             app.clone(),
             &auth.buyer,
-            orderbook_cancel_body(orderbook_cancel_fixture(3, &auth.buyer)),
+            orderbook_cancel_body(orderbook_cancel_fixture(3, &auth.provider, &auth.buyer)),
         )
         .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -42275,7 +44006,7 @@ mod advert_tests {
         let response = post_orderbook_cancel(
             app.clone(),
             &auth.provider,
-            orderbook_cancel_body(orderbook_cancel_fixture(3, &auth.provider)),
+            orderbook_cancel_body(orderbook_cancel_fixture(3, &auth.provider, &auth.provider)),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -43557,7 +45288,7 @@ mod advert_tests {
                 CapabilityType::ToriiGateway,
                 CapabilityType::ChunkRangeFetch,
             ],
-            &[AdvertWarning::SignatureNotStrict],
+            &[AdvertWarning::MissingTransportHints],
         )
         .expect("advert serialises");
 
@@ -43663,38 +45394,17 @@ mod advert_tests {
         }
     }
 
-    fn site_bindings_override_test_lock() -> &'static Mutex<()> {
-        // Site-binding overrides use a single global path, so tests that mutate
-        // it must not run concurrently.
-        static LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-        &LOCK
-    }
-
-    struct SiteBindingsOverrideGuard(MutexGuard<'static, ()>);
-
-    impl SiteBindingsOverrideGuard {
-        fn set(path: &std::path::Path) -> Self {
-            let lock = site_bindings_override_test_lock()
-                .lock()
-                .expect("site bindings override test lock poisoned");
-            crate::sorafs::site::set_site_bindings_file_override_for_tests(Some(
-                path.to_path_buf(),
-            ));
-            Self(lock)
-        }
-    }
-
-    impl Drop for SiteBindingsOverrideGuard {
-        fn drop(&mut self) {
-            crate::sorafs::site::set_site_bindings_file_override_for_tests(None);
-        }
-    }
-
     fn stream_token_issuer_for_tests(dir: &TempDir) -> StreamTokenIssuer {
         use std::fs;
 
         let key_path = dir.path().join("token.sk");
         fs::write(&key_path, [0xAB; 32]).expect("write signing key");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))
+                .expect("restrict signing key permissions");
+        }
         let cfg = iroha_config::parameters::actual::SorafsTokenConfig {
             enabled: true,
             signing_key_path: Some(key_path),
@@ -43721,6 +45431,11 @@ mod advert_tests {
         let manifest_id = node
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest manifest");
+        let chunker_handle = format!(
+            "{}.{}@{}",
+            manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
+        );
+        seed_capacity_declaration(&node, [0x66; 32], &chunker_handle);
 
         let issuer = stream_token_issuer_for_tests(&temp_dir);
         inner.sorafs_node = node;
@@ -43795,8 +45510,7 @@ mod advert_tests {
     }
 
     fn capability_token_context(fixture: &ProviderFixture, payload: Vec<u8>) -> TokenTestContext {
-        let admission =
-            AdmissionRegistry::from_envelopes([fixture.envelope.clone()]).expect("valid envelope");
+        let admission = fixture_admission_registry([&fixture.envelope]);
         let mut cache = ProviderAdvertCache::new(
             vec![
                 CapabilityType::ToriiGateway,
@@ -44048,6 +45762,21 @@ mod advert_tests {
             .to_string()
     }
 
+    fn signed_test_token(body: StreamTokenBodyV1) -> String {
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0x51; 32]);
+        let token = StreamTokenV1::sign(body, &signing_key).expect("sign stream token fixture");
+        encode_token_base64(&token).expect("encode stream token fixture")
+    }
+
+    fn enforcement_headers(token_base64: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
+            header_value(token_base64, "X-SoraFS-Stream-Token"),
+        );
+        headers
+    }
+
     fn sample_por_artifacts() -> (PorChallengeV1, PorProofV1, AuditVerdictV1) {
         let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
         let chunker_handle = format!(
@@ -44077,9 +45806,9 @@ mod advert_tests {
             epoch_id,
             drand_round,
             drand_randomness,
-            drand_signature: vec![0xF1; 96],
+            drand_signature: [0xF1; 48],
             vrf_output: Some(vrf_output),
-            vrf_proof: Some(vec![0xF2; 80]),
+            vrf_proof: Some(iroha_crypto::vrf::VrfProof::SigInG1([0xF2; 48])),
             forced: false,
             chunking_profile: chunker_handle,
             seed,
@@ -44143,6 +45872,29 @@ mod advert_tests {
             expires_at: 10,
         });
         assert_eq!(admission_error_reason(&expired), "stale",);
+        let future = AdvertError::Validation(AdvertValidationError::IssuedInFuture {
+            now: 10,
+            issued_at: 11,
+        });
+        assert_eq!(admission_error_reason(&future), "future_issued");
+        assert_eq!(
+            admission_error_reason(&AdvertError::SignaturePolicyDisabled),
+            "signature_policy_disabled"
+        );
+        assert_eq!(
+            admission_error_reason(&AdvertError::NonMonotonicIssuedAt {
+                provider_id,
+                current_issued_at: 11,
+                incoming_issued_at: 10,
+            }),
+            "non_monotonic_issued_at"
+        );
+        assert_eq!(
+            admission_error_reason(&AdvertError::ReplayCheckpoint(
+                crate::sorafs::ReplayCheckpointError::CapacityExceeded { maximum: 1 }
+            )),
+            "replay_checkpoint"
+        );
     }
 
     #[test]
@@ -45523,24 +47275,22 @@ mod advert_tests {
         node.ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest site payload");
 
-        let bindings_file = NamedTempFile::new().expect("site bindings file");
-        fs::write(
-            bindings_file.path(),
-            norito::json::to_vec(&crate::sorafs::site::SiteBindingsDocument {
-                version: Some(1),
-                sites: vec![crate::sorafs::site::SiteBinding {
-                    hostname: "taira.sora.org".to_owned(),
-                    manifest_digest_hex,
-                    index_document: None,
-                    spa_fallback: Some(true),
-                }],
-            })
-            .expect("encode site bindings"),
-        )
-        .expect("write site bindings");
-        let _env_guard = SiteBindingsOverrideGuard::set(bindings_file.path());
-
         inner.sorafs_node = node;
+        inner.sorafs_site_bindings = Some(Arc::new(crate::sorafs::site::SiteBindingsDocument {
+            version: 1,
+            sites: vec![crate::sorafs::site::SiteBinding {
+                hostname: "taira.sora.org".to_owned(),
+                manifest_digest_hex,
+                index_document: None,
+                spa_fallback: Some(true),
+            }],
+        }));
+        inner.sorafs_gateway_config.untrusted_hosting.enabled = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .cid_host_suffixes
+            .taira = "sorafs.taira.sora.org".to_owned();
         let state = Arc::new(inner);
 
         let mut root_headers = HeaderMap::new();
@@ -45669,6 +47419,28 @@ mod advert_tests {
             .expect("read asset body");
         assert_eq!(asset_body, &asset_bytes[..]);
 
+        let mut range_headers = HeaderMap::new();
+        range_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
+        range_headers.insert(header::RANGE, HeaderValue::from_static("bytes=1-4"));
+        let range_response = handle_get_sorafs_site_path(
+            State(state.clone()),
+            range_headers,
+            Path("assets/app.js".to_owned()),
+        )
+        .await;
+        assert_eq!(range_response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            range_response.headers().get(header::CONTENT_RANGE),
+            Some(
+                &HeaderValue::from_str(&format!("bytes 1-4/{}", asset_bytes.len()))
+                    .expect("content range")
+            )
+        );
+        let range_body = body::to_bytes(range_response.into_body(), usize::MAX)
+            .await
+            .expect("read ranged asset body");
+        assert_eq!(range_body, &asset_bytes[1..=4]);
+
         let cid_lookup = handle_get_sorafs_cid_lookup(
             State(state.clone()),
             Path(content_cid.clone()),
@@ -45745,9 +47517,15 @@ mod advert_tests {
             Some(true)
         );
 
+        let mut cid_headers = HeaderMap::new();
+        cid_headers.insert(
+            header::HOST,
+            HeaderValue::from_str(&format!("{content_cid}.sorafs.taira.sora.org"))
+                .expect("CID host"),
+        );
         let cid_root = handle_get_sorafs_cid_root(
             State(state.clone()),
-            HeaderMap::new(),
+            cid_headers.clone(),
             format!("/sorafs/cid/{content_cid}/")
                 .parse::<Uri>()
                 .expect("cid root uri"),
@@ -45762,7 +47540,7 @@ mod advert_tests {
 
         let cid_asset = handle_get_sorafs_cid_path(
             State(state.clone()),
-            HeaderMap::new(),
+            cid_headers,
             format!("/sorafs/cid/{content_cid}/assets/app.js")
                 .parse::<Uri>()
                 .expect("cid asset uri"),
@@ -45831,22 +47609,15 @@ mod advert_tests {
         node.ingest_manifest(&new_manifest, &new_plan, &mut new_reader)
             .expect("ingest new site payload");
 
-        let bindings_file = NamedTempFile::new().expect("site bindings file");
-        fs::write(
-            bindings_file.path(),
-            norito::json::to_vec(&crate::sorafs::site::SiteBindingsDocument {
-                version: Some(1),
-                sites: vec![crate::sorafs::site::SiteBinding {
-                    hostname: "taira.sora.org".to_owned(),
-                    manifest_digest_hex: old_manifest_digest_hex,
-                    index_document: None,
-                    spa_fallback: Some(true),
-                }],
-            })
-            .expect("encode site bindings"),
-        )
-        .expect("write site bindings");
-        let _env_guard = SiteBindingsOverrideGuard::set(bindings_file.path());
+        let site_bindings = Arc::new(crate::sorafs::site::SiteBindingsDocument {
+            version: 1,
+            sites: vec![crate::sorafs::site::SiteBinding {
+                hostname: "taira.sora.org".to_owned(),
+                manifest_digest_hex: old_manifest_digest_hex,
+                index_document: None,
+                spa_fallback: Some(true),
+            }],
+        });
 
         let mut world = World::new();
         let bundle = fixture_public_service_bundle("2026.04.0", "taira.sora.org");
@@ -45906,6 +47677,7 @@ mod advert_tests {
         let app = mk_app_state_for_tests_with_world(world);
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
         inner.sorafs_node = node;
+        inner.sorafs_site_bindings = Some(site_bindings);
         let state = Arc::new(inner);
 
         let mut root_headers = HeaderMap::new();
@@ -45977,22 +47749,15 @@ mod advert_tests {
         node.ingest_manifest(&new_manifest, &new_plan, &mut new_reader)
             .expect("ingest new site payload");
 
-        let bindings_file = NamedTempFile::new().expect("site bindings file");
-        fs::write(
-            bindings_file.path(),
-            norito::json::to_vec(&crate::sorafs::site::SiteBindingsDocument {
-                version: Some(1),
-                sites: vec![crate::sorafs::site::SiteBinding {
-                    hostname: "taira.sora.org".to_owned(),
-                    manifest_digest_hex: old_manifest_digest_hex,
-                    index_document: None,
-                    spa_fallback: Some(true),
-                }],
-            })
-            .expect("encode site bindings"),
-        )
-        .expect("write site bindings");
-        let _env_guard = SiteBindingsOverrideGuard::set(bindings_file.path());
+        let site_bindings = Arc::new(crate::sorafs::site::SiteBindingsDocument {
+            version: 1,
+            sites: vec![crate::sorafs::site::SiteBinding {
+                hostname: "taira.sora.org".to_owned(),
+                manifest_digest_hex: old_manifest_digest_hex,
+                index_document: None,
+                spa_fallback: Some(true),
+            }],
+        });
 
         let mut world = World::new();
         let bundle = fixture_public_service_bundle("2026.04.1", "taira.sora.org");
@@ -46032,6 +47797,7 @@ mod advert_tests {
         let app = mk_app_state_for_tests_with_world(world);
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
         inner.sorafs_node = node;
+        inner.sorafs_site_bindings = Some(site_bindings);
         let state = Arc::new(inner);
 
         let mut root_headers = HeaderMap::new();
@@ -46269,17 +48035,22 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn cid_path_gateway_non_browser_request_stays_on_path_gateway() {
+    async fn cid_path_gateway_redirects_active_non_browser_content_to_isolated_origin() {
         let app = mk_app_state_for_tests();
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
         let (node, _dir) = sorafs_node_with_temp_storage();
 
         let asset_bytes = b"console.log('path-gateway');";
+        let png_bytes = b"\x89PNG\r\n\x1a\npassive";
         let (plan, payload) = CarBuildPlan::from_files_with_profile(
             vec![
                 FileEntry {
                     path: vec!["assets".to_owned(), "app.js".to_owned()],
                     data: asset_bytes.to_vec(),
+                },
+                FileEntry {
+                    path: vec!["assets".to_owned(), "logo.png".to_owned()],
+                    data: png_bytes.to_vec(),
                 },
                 FileEntry {
                     path: vec!["index.html".to_owned()],
@@ -46316,20 +48087,44 @@ mod advert_tests {
         headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
         headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
         let response = handle_get_sorafs_cid_path(
-            State(state),
-            headers,
+            State(state.clone()),
+            headers.clone(),
             format!("/sorafs/cid/{content_cid}/assets/app.js")
                 .parse::<Uri>()
                 .expect("non-browser uri"),
             Path((content_cid.clone(), "assets/app.js".to_owned())),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        assert!(response.headers().get(header::LOCATION).is_none());
-        let body = body::to_bytes(response.into_body(), usize::MAX)
+        assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(
+            response.headers().get(header::LOCATION),
+            Some(
+                &HeaderValue::from_str(&format!(
+                    "https://{content_cid}.sorafs.taira.sora.org/assets/app.js"
+                ))
+                .expect("redirect header")
+            )
+        );
+
+        let passive = handle_get_sorafs_cid_path(
+            State(state),
+            headers,
+            format!("/sorafs/cid/{content_cid}/assets/logo.png")
+                .parse::<Uri>()
+                .expect("passive asset uri"),
+            Path((content_cid, "assets/logo.png".to_owned())),
+        )
+        .await;
+        assert_eq!(passive.status(), StatusCode::OK);
+        assert!(passive.headers().get(header::LOCATION).is_none());
+        assert_eq!(
+            passive.headers().get("x-content-type-options"),
+            Some(&HeaderValue::from_static("nosniff"))
+        );
+        let passive_body = body::to_bytes(passive.into_body(), usize::MAX)
             .await
-            .expect("read path gateway asset body");
-        assert_eq!(body, &asset_bytes[..]);
+            .expect("read passive asset body");
+        assert_eq!(passive_body, &png_bytes[..]);
     }
 
     #[tokio::test]
@@ -46366,6 +48161,12 @@ mod advert_tests {
             .expect("ingest blob manifest");
 
         inner.sorafs_node = node;
+        inner.sorafs_gateway_config.untrusted_hosting.enabled = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .cid_host_suffixes
+            .taira = "sorafs.taira.sora.org".to_owned();
         let state = Arc::new(inner);
         seed_paid_pin_record_for_plan(&state, &site_manifest, &site_plan);
 
@@ -46397,9 +48198,15 @@ mod advert_tests {
         .await;
         assert_eq!(response.status(), StatusCode::OK);
 
+        let mut cid_headers = HeaderMap::new();
+        cid_headers.insert(
+            header::HOST,
+            HeaderValue::from_str(&format!("{content_cid}.sorafs.taira.sora.org"))
+                .expect("CID host"),
+        );
         let cid_root = handle_get_sorafs_cid_root(
             State(state.clone()),
-            HeaderMap::new(),
+            cid_headers,
             format!("/sorafs/cid/{content_cid}/")
                 .parse::<Uri>()
                 .expect("preferred cid root uri"),
@@ -46588,7 +48395,7 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn cid_gateway_fetches_and_caches_remote_site_on_miss() {
+    async fn cid_gateway_transport_hook_hydrates_verified_bundle_without_weakening_https_policy() {
         let index_bytes = b"<!doctype html><title>Gateway</title>";
         let asset_bytes = b"console.log('gateway-cache');";
         let (plan, payload) = CarBuildPlan::from_files_with_profile(
@@ -46613,7 +48420,8 @@ mod advert_tests {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind remote storage listener");
-        let remote_origin = format!("http://{}", listener.local_addr().expect("listener addr"));
+        let remote_addr = listener.local_addr().expect("listener addr");
+        let remote_origin = format!("http://{remote_addr}");
         let manifest_requests = Arc::new(AtomicUsize::new(0));
         let fetch_requests = Arc::new(AtomicUsize::new(0));
         let remote_provider_id_hex = hex::encode([0x11; 32]);
@@ -46705,7 +48513,7 @@ mod advert_tests {
 
         let fixture = make_signed_advert_with_host(&remote_origin);
         let app = app_state_with_seeded_cache(&fixture);
-        let inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
         seed_registry_manifest_for_gateway(&inner.state, &manifest, fixture.provider_id());
         assert!(
             inner
@@ -46714,6 +48522,12 @@ mod advert_tests {
                 .is_err(),
             "test node should start without the requested CID cached locally"
         );
+        inner.sorafs_gateway_config.untrusted_hosting.enabled = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .cid_host_suffixes
+            .taira = "sorafs.taira.sora.org".to_owned();
         let state = Arc::new(inner);
 
         let cid_root = handle_get_sorafs_cid_root(
@@ -46725,51 +48539,93 @@ mod advert_tests {
             Path(content_cid.clone()),
         )
         .await;
-        assert_eq!(cid_root.status(), StatusCode::OK);
-        let cid_root_body = body::to_bytes(cid_root.into_body(), usize::MAX)
-            .await
-            .expect("read cid root body");
-        assert_eq!(cid_root_body, &index_bytes[..]);
-        assert_eq!(manifest_requests.load(Ordering::SeqCst), 1);
-        assert_eq!(fetch_requests.load(Ordering::SeqCst), 1);
-
-        let cid_asset = handle_get_sorafs_cid_path(
-            State(state.clone()),
-            HeaderMap::new(),
-            format!("/sorafs/cid/{content_cid}/assets/app.js")
-                .parse::<Uri>()
-                .expect("remote cid asset uri"),
-            Path((content_cid.clone(), "assets/app.js".to_owned())),
-        )
-        .await;
-        assert_eq!(cid_asset.status(), StatusCode::OK);
-        let cid_asset_body = body::to_bytes(cid_asset.into_body(), usize::MAX)
-            .await
-            .expect("read cid asset body");
-        assert_eq!(cid_asset_body, &asset_bytes[..]);
-        assert_eq!(
-            manifest_requests.load(Ordering::SeqCst),
-            1,
-            "second request should hit the local cache instead of re-fetching manifest metadata",
-        );
-        assert_eq!(
-            fetch_requests.load(Ordering::SeqCst),
-            1,
-            "second request should hit the local cache instead of re-fetching payload bytes",
-        );
+        assert_eq!(cid_root.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(manifest_requests.load(Ordering::SeqCst), 0);
+        assert_eq!(fetch_requests.load(Ordering::SeqCst), 0);
         assert!(
             state
                 .sorafs_node
                 .manifest_metadata_by_digest(&manifest_digest)
-                .is_ok(),
-            "CID gateway miss should hydrate local storage from a remote provider",
+                .is_err(),
+            "an insecure provider must not populate the local cache",
         );
+
+        let invalid_tls_client = reqwest::Client::builder()
+            .https_only(true)
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .resolve("provider.invalid", remote_addr)
+            .timeout(Duration::from_secs(2))
+            .build()
+            .expect("strict TLS test client");
+        let tls_error = invalid_tls_client
+            .get(format!("https://provider.invalid:{}/", remote_addr.port()))
+            .send()
+            .await
+            .expect_err("plaintext endpoint must fail the TLS handshake");
+        assert!(tls_error.is_connect() || tls_error.is_request() || tls_error.is_timeout());
+        assert_eq!(manifest_requests.load(Ordering::SeqCst), 0);
+        assert_eq!(fetch_requests.load(Ordering::SeqCst), 0);
+
+        // Deterministic transport injection exercises the complete remote protocol and
+        // verification path without permitting HTTP in production discovery. The production
+        // wrapper above already proved that the same advertised URL is refused before connect.
+        let test_source = RemoteCidSource {
+            manifest_digest_hex: manifest_id_hex,
+            provider_id_hex: remote_provider_id_hex,
+            torii_base_url: reqwest::Url::parse(&format!("{remote_origin}/"))
+                .expect("test source URL"),
+            pinned_addrs: vec![remote_addr],
+        };
+        let test_client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(5))
+            .build()
+            .expect("deterministic transport client");
+        let cid_bytes = decode_canonical_content_cid(&content_cid).expect("canonical content CID");
+        let bundle = fetch_remote_site_bundle_from_source_with_client(
+            &state,
+            &test_client,
+            &test_source,
+            &cid_bytes,
+        )
+        .await
+        .unwrap_or_else(|err| match err {
+            RemoteFetchError::Source(err) => panic!("verified transport fetch failed: {err}"),
+            RemoteFetchError::Denylisted(_) => panic!("fixture unexpectedly denylisted"),
+        });
+        let stored = cache_remote_site_bundle(&state, bundle).expect("cache verified bundle");
+        assert_eq!(stored.manifest_digest(), &manifest_digest);
+        assert_eq!(manifest_requests.load(Ordering::SeqCst), 1);
+        assert_eq!(fetch_requests.load(Ordering::SeqCst), 1);
+
+        let mut isolated_headers = HeaderMap::new();
+        isolated_headers.insert(
+            header::HOST,
+            HeaderValue::from_str(&format!("{content_cid}.sorafs.taira.sora.org"))
+                .expect("isolated CID host"),
+        );
+        let cached_root = handle_get_sorafs_cid_root(
+            State(state.clone()),
+            isolated_headers,
+            format!("/sorafs/cid/{content_cid}/")
+                .parse::<Uri>()
+                .expect("cached CID root URI"),
+            Path(content_cid),
+        )
+        .await;
+        assert_eq!(cached_root.status(), StatusCode::OK);
+        let cached_root_body = body::to_bytes(cached_root.into_body(), usize::MAX)
+            .await
+            .expect("read cached CID root");
+        assert_eq!(cached_root_body, &index_bytes[..]);
 
         remote_server.abort();
     }
 
     #[tokio::test]
-    async fn app_api_cid_manifest_fetches_and_caches_remote_manifest_on_miss() {
+    async fn app_api_cid_manifest_rejects_insecure_remote_provider_without_caching() {
         let app_api_manifest_bytes = br#"{
   "schema_version": 1,
   "app_id": "soraswap.trader",
@@ -46907,42 +48763,15 @@ mod advert_tests {
             Path(content_cid.clone()),
         )
         .await;
-        assert_eq!(manifest_response.status(), StatusCode::OK);
-        let manifest_body = body::to_bytes(manifest_response.into_body(), usize::MAX)
-            .await
-            .expect("read app api manifest body");
-        let manifest_value: Value =
-            norito::json::from_slice(&manifest_body).expect("decode app api manifest response");
-        assert_eq!(
-            manifest_value.get("app_id").and_then(Value::as_str),
-            Some("soraswap.trader")
-        );
-        assert_eq!(
-            manifest_value.get("content_cid").and_then(Value::as_str),
-            Some(content_cid.as_str())
-        );
-        assert_eq!(manifest_requests.load(Ordering::SeqCst), 1);
-        assert_eq!(fetch_requests.load(Ordering::SeqCst), 1);
+        assert_eq!(manifest_response.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(manifest_requests.load(Ordering::SeqCst), 0);
+        assert_eq!(fetch_requests.load(Ordering::SeqCst), 0);
         assert!(
             state
                 .sorafs_node
                 .manifest_metadata_by_digest(&manifest_digest)
-                .is_ok(),
-            "app api CID miss should hydrate local storage from a remote provider",
-        );
-
-        let manifest_response =
-            crate::app_api::handle_get_app_api_cid_manifest(State(state), Path(content_cid)).await;
-        assert_eq!(manifest_response.status(), StatusCode::OK);
-        assert_eq!(
-            manifest_requests.load(Ordering::SeqCst),
-            1,
-            "second request should hit the local cache instead of re-fetching manifest metadata",
-        );
-        assert_eq!(
-            fetch_requests.load(Ordering::SeqCst),
-            1,
-            "second request should hit the local cache instead of re-fetching payload bytes",
+                .is_err(),
+            "an insecure provider must not populate the app API cache",
         );
 
         remote_server.abort();
@@ -47563,12 +49392,31 @@ mod advert_tests {
         );
         assert_eq!(
             value.get("replacement").and_then(Value::as_str),
-            Some("/v1/sorafs/capacity/por-challenge")
+            Some("trusted PoR coordinator scheduler")
         );
     }
 
     #[tokio::test]
-    async fn storage_por_pipeline_records_success() {
+    async fn capacity_challenge_and_manual_observation_routes_are_retired() {
+        for (kind, expected_error) in [
+            ("challenge", "capacity_por_challenge_retired"),
+            ("observation", "capacity_por_observation_retired"),
+        ] {
+            let response = capacity_por_mutation_retired_response(kind);
+            assert_eq!(response.status(), StatusCode::GONE);
+            let body = body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("retirement response body");
+            let value: Value = norito::json::from_slice(&body).expect("decode retirement response");
+            assert_eq!(
+                value.get("error").and_then(Value::as_str),
+                Some(expected_error)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn storage_por_mutation_routes_are_retired_without_side_effects() {
         let (challenge, proof, verdict) = sample_por_artifacts();
 
         let app = mk_app_state_for_tests();
@@ -47578,27 +49426,21 @@ mod advert_tests {
         inner.sorafs_node = node;
         let state = Arc::new(inner);
 
-        seed_capacity_declaration(
-            &state.sorafs_node,
-            challenge.provider_id,
-            &challenge.chunking_profile,
-        );
-
         let challenge_b64 = base64::engine::general_purpose::STANDARD
             .encode(norito::to_bytes(&challenge).expect("encode challenge"));
         let challenge_req = StoragePorChallengeDto { challenge_b64 };
         let challenge_resp =
             handle_post_sorafs_storage_por_challenge(State(state.clone()), JsonOnly(challenge_req))
                 .await;
-        assert_eq!(challenge_resp.status(), StatusCode::OK);
+        assert_eq!(challenge_resp.status(), StatusCode::GONE);
         let challenge_body = body::to_bytes(challenge_resp.into_body(), usize::MAX)
             .await
             .expect("body bytes");
         let challenge_json: Value =
             norito::json::from_slice(&challenge_body).expect("challenge response");
         assert_eq!(
-            challenge_json.get("status").and_then(Value::as_str),
-            Some("accepted")
+            challenge_json.get("error").and_then(Value::as_str),
+            Some("storage_por_mutation_retired")
         );
 
         let proof_b64 = base64::engine::general_purpose::STANDARD
@@ -47606,14 +49448,14 @@ mod advert_tests {
         let proof_req = StoragePorProofDto { proof_b64 };
         let proof_resp =
             handle_post_sorafs_storage_por_proof(State(state.clone()), JsonOnly(proof_req)).await;
-        assert_eq!(proof_resp.status(), StatusCode::OK);
+        assert_eq!(proof_resp.status(), StatusCode::GONE);
         let proof_body = body::to_bytes(proof_resp.into_body(), usize::MAX)
             .await
             .expect("body bytes");
         let proof_json: Value = norito::json::from_slice(&proof_body).expect("proof response");
         assert_eq!(
-            proof_json.get("status").and_then(Value::as_str),
-            Some("accepted")
+            proof_json.get("replacement").and_then(Value::as_str),
+            Some("/v1/sorafs/capacity/por-proof")
         );
 
         let verdict_b64 = base64::engine::general_purpose::STANDARD
@@ -47622,20 +49464,21 @@ mod advert_tests {
         let verdict_resp =
             handle_post_sorafs_storage_por_verdict(State(state.clone()), JsonOnly(verdict_req))
                 .await;
-        assert_eq!(verdict_resp.status(), StatusCode::OK);
+        assert_eq!(verdict_resp.status(), StatusCode::GONE);
         let verdict_body = body::to_bytes(verdict_resp.into_body(), usize::MAX)
             .await
             .expect("body bytes");
         let verdict_json: Value =
             norito::json::from_slice(&verdict_body).expect("verdict response");
         assert_eq!(
-            verdict_json.get("status").and_then(Value::as_str),
-            Some("accepted")
+            verdict_json.get("replacement").and_then(Value::as_str),
+            Some("/v1/sorafs/capacity/por-verdict")
         );
 
         let snapshot = node_view.metering_snapshot();
-        assert_eq!(snapshot.por_samples_success, 1);
-        assert_eq!(snapshot.por_samples_total, 1);
+        assert_eq!(snapshot.por_samples_success, 0);
+        assert_eq!(snapshot.por_samples_total, 0);
+        assert!(node_view.por_ingestion_overview().is_empty());
     }
 
     #[tokio::test]
@@ -47702,7 +49545,7 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn storage_por_challenge_rejects_invalid_base64() {
+    async fn retired_storage_por_challenge_does_not_parse_or_mutate_payload() {
         let app = mk_app_state_for_tests();
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
         let (node, _dir) = sorafs_node_with_temp_storage();
@@ -47713,8 +49556,8 @@ mod advert_tests {
             challenge_b64: "!!not_base64!!".to_owned(),
         };
         let response =
-            handle_post_sorafs_storage_por_challenge(State(state), JsonOnly(request)).await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            handle_post_sorafs_storage_por_challenge(State(state.clone()), JsonOnly(request)).await;
+        assert_eq!(response.status(), StatusCode::GONE);
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("collect body");
@@ -47723,10 +49566,8 @@ mod advert_tests {
             .get("error")
             .and_then(Value::as_str)
             .expect("error string");
-        assert!(
-            error_msg.contains("invalid base64"),
-            "unexpected error message: {error_msg}"
-        );
+        assert_eq!(error_msg, "storage_por_mutation_retired");
+        assert!(state.sorafs_node.por_ingestion_overview().is_empty());
     }
 
     #[tokio::test]
@@ -48144,6 +49985,237 @@ mod advert_tests {
             error_message.contains("missing X-SoraFS-Nonce"),
             "unexpected error message: {error_message}"
         );
+    }
+
+    #[tokio::test]
+    async fn storage_token_rejects_noncanonical_or_oversized_request_fields() {
+        let context = token_test_context();
+        let request = || StreamTokenRequestDto {
+            manifest_id_hex: context.manifest_id_hex.clone(),
+            provider_id_hex: context.provider_id_hex.clone(),
+            ttl_secs: None,
+            max_streams: None,
+            rate_limit_bytes: None,
+            requests_per_minute: None,
+        };
+
+        for (name, value) in [
+            (HEADER_SORA_CLIENT, "x".repeat(MAX_CLIENT_ID_BYTES + 1)),
+            (HEADER_SORA_CLIENT, "client with spaces".to_string()),
+            (HEADER_SORA_NONCE, "x".repeat(MAX_NONCE_BYTES + 1)),
+            (HEADER_SORA_NONCE, "nonce with spaces".to_string()),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::HeaderName::from_static(HEADER_SORA_CLIENT),
+                HeaderValue::from_static("client-a"),
+            );
+            headers.insert(
+                header::HeaderName::from_static(HEADER_SORA_NONCE),
+                HeaderValue::from_static("nonce-a"),
+            );
+            headers.insert(
+                header::HeaderName::from_static(name),
+                HeaderValue::from_str(&value).expect("test header"),
+            );
+            let response = handle_post_sorafs_storage_token(
+                State(context.app.clone()),
+                headers,
+                JsonOnly(request()),
+            )
+            .await;
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "value={value:?}"
+            );
+        }
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::HeaderName::from_static(HEADER_SORA_CLIENT),
+            HeaderValue::from_static("client-a"),
+        );
+        headers.insert(
+            header::HeaderName::from_static(HEADER_SORA_NONCE),
+            HeaderValue::from_static("nonce-a"),
+        );
+        let mut noncanonical_manifest = request();
+        noncanonical_manifest.manifest_id_hex.push('A');
+        let response = handle_post_sorafs_storage_token(
+            State(context.app.clone()),
+            headers.clone(),
+            JsonOnly(noncanonical_manifest),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let mut noncanonical_provider = request();
+        noncanonical_provider.provider_id_hex.make_ascii_uppercase();
+        let response = handle_post_sorafs_storage_token(
+            State(context.app.clone()),
+            headers,
+            JsonOnly(noncanonical_provider),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn storage_token_rejects_provider_mismatch_and_unsafe_overrides() {
+        let context = token_test_context();
+        let headers = || {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::HeaderName::from_static(HEADER_SORA_CLIENT),
+                HeaderValue::from_static("client-a"),
+            );
+            headers.insert(
+                header::HeaderName::from_static(HEADER_SORA_NONCE),
+                HeaderValue::from_static("nonce-a"),
+            );
+            headers
+        };
+        let request = |provider_id_hex: String, overrides: TokenOverrides| StreamTokenRequestDto {
+            manifest_id_hex: context.manifest_id_hex.clone(),
+            provider_id_hex,
+            ttl_secs: overrides.ttl_secs,
+            max_streams: overrides.max_streams,
+            rate_limit_bytes: overrides.rate_limit_bytes,
+            requests_per_minute: overrides.requests_per_minute,
+        };
+
+        for provider in [[0_u8; 32], [0xAC; 32]] {
+            let response = handle_post_sorafs_storage_token(
+                State(context.app.clone()),
+                headers(),
+                JsonOnly(request(hex::encode(provider), TokenOverrides::default())),
+            )
+            .await;
+            assert!(
+                matches!(
+                    response.status(),
+                    StatusCode::BAD_REQUEST | StatusCode::FORBIDDEN
+                ),
+                "unexpected provider-binding status: {}",
+                response.status()
+            );
+        }
+
+        for overrides in [
+            TokenOverrides {
+                ttl_secs: Some(0),
+                ..TokenOverrides::default()
+            },
+            TokenOverrides {
+                max_streams: Some(0),
+                ..TokenOverrides::default()
+            },
+            TokenOverrides {
+                rate_limit_bytes: Some(0),
+                ..TokenOverrides::default()
+            },
+            TokenOverrides {
+                requests_per_minute: Some(0),
+                ..TokenOverrides::default()
+            },
+            TokenOverrides {
+                requests_per_minute: Some(4),
+                ..TokenOverrides::default()
+            },
+        ] {
+            let response = handle_post_sorafs_storage_token(
+                State(context.app.clone()),
+                headers(),
+                JsonOnly(request(context.provider_id_hex.clone(), overrides)),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_token_enforcement_rejects_temporal_policy_and_binding_attacks() {
+        let context = token_test_context();
+        let manifest = context
+            .app
+            .sorafs_node
+            .manifest_metadata(&context.manifest_id_hex)
+            .expect("manifest");
+        let valid_encoded = issue_token_base64(&context, TokenOverrides::default()).await;
+        let valid = decode_token_base64(&valid_encoded).expect("decode issued token");
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_secs();
+
+        let mut cases = Vec::new();
+        let mut body = valid.body.clone();
+        body.issued_at = now + MAX_TOKEN_FUTURE_SKEW_SECS + 10;
+        body.ttl_epoch = body.issued_at + 60;
+        cases.push((body, StatusCode::UNAUTHORIZED));
+        let mut body = valid.body.clone();
+        body.issued_at = now.saturating_sub(60);
+        body.ttl_epoch = now;
+        cases.push((body, StatusCode::UNAUTHORIZED));
+        let mut body = valid.body.clone();
+        body.ttl_epoch = body.issued_at;
+        cases.push((body, StatusCode::BAD_REQUEST));
+        let mut body = valid.body.clone();
+        body.max_streams = 0;
+        cases.push((body, StatusCode::BAD_REQUEST));
+        let mut body = valid.body.clone();
+        body.token_pk_version += 1;
+        cases.push((body, StatusCode::UNAUTHORIZED));
+        let mut body = valid.body.clone();
+        body.provider_id = [0xAC; 32];
+        cases.push((body, StatusCode::FORBIDDEN));
+
+        for (body, expected_status) in cases {
+            let encoded = signed_test_token(body);
+            let response = enforce_stream_token_for_request(
+                &context.app,
+                &enforcement_headers(&encoded),
+                &manifest,
+                1,
+            )
+            .expect_err("adversarial token must be rejected");
+            assert_eq!(response.status(), expected_status);
+        }
+
+        let mut tampered = valid;
+        tampered.signature[0] ^= 0x80;
+        let tampered = encode_token_base64(&tampered).expect("encode tampered token");
+        let response = enforce_stream_token_for_request(
+            &context.app,
+            &enforcement_headers(&tampered),
+            &manifest,
+            1,
+        )
+        .expect_err("tampered signature rejected");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let oversized = "A".repeat(MAX_STREAM_TOKEN_BASE64_BYTES + 1);
+        let response = enforce_stream_token_for_request(
+            &context.app,
+            &enforcement_headers(&oversized),
+            &manifest,
+            1,
+        )
+        .expect_err("oversized token header rejected");
+        assert_eq!(
+            response.status(),
+            StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE
+        );
+
+        let response = enforce_stream_token_for_request(
+            &context.app,
+            &enforcement_headers("not-base64"),
+            &manifest,
+            1,
+        )
+        .expect_err("malformed token header rejected");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -48760,9 +50832,9 @@ mod advert_tests {
             manifest_id_hex: manifest_id,
             provider_id_hex: hex::encode([0x66; 32]),
             ttl_secs: Some(900),
-            max_streams: Some(7),
+            max_streams: Some(3),
             rate_limit_bytes: Some(1_048_576),
-            requests_per_minute: Some(60),
+            requests_per_minute: Some(2),
         };
 
         let response =
@@ -48799,7 +50871,7 @@ mod advert_tests {
             headers
                 .get(HEADER_SORA_CLIENT_QUOTA_REMAINING)
                 .and_then(|value| value.to_str().ok()),
-            Some("59")
+            Some("2")
         );
         assert_eq!(
             headers
@@ -49085,7 +51157,7 @@ mod advert_tests {
             &manifest_v1,
             &full_plan,
             &car_bytes,
-            Some(expected_range.clone()),
+            expected_range.clone(),
         )
         .expect("CAR verification");
 
@@ -49192,7 +51264,7 @@ mod advert_tests {
             &manifest_v1,
             &full_plan,
             &car_bytes,
-            Some(requested_range.clone()),
+            requested_range.clone(),
         )
         .expect("middle CAR verification");
 
@@ -51770,6 +53842,25 @@ mod advert_tests {
         }
     }
 
+    fn fixture_admission_registry<'a, I>(envelopes: I) -> AdmissionRegistry
+    where
+        I: IntoIterator<Item = &'a ProviderAdmissionEnvelopeV1>,
+    {
+        let envelopes = envelopes.into_iter().cloned().collect::<Vec<_>>();
+        let trusted_signers = envelopes
+            .iter()
+            .flat_map(|envelope| {
+                envelope
+                    .council_signatures
+                    .iter()
+                    .map(|signature| signature.signer)
+            })
+            .collect::<HashSet<_>>();
+        let policy = ProviderAdmissionCouncilPolicy::new(trusted_signers, 1)
+            .expect("fixture admission council policy");
+        AdmissionRegistry::from_envelopes(policy, envelopes).expect("fixture envelopes validate")
+    }
+
     fn app_state_with_cache(fixture: &ProviderFixture) -> SharedAppState {
         app_state_with_cache_inner(fixture, false)
     }
@@ -51783,10 +53874,8 @@ mod advert_tests {
             !fixtures.is_empty(),
             "at least one provider fixture required"
         );
-        let admission = AdmissionRegistry::from_envelopes(
-            fixtures.iter().map(|fixture| fixture.envelope.clone()),
-        )
-        .expect("fixture envelopes must validate");
+        let admission =
+            fixture_admission_registry(fixtures.iter().map(|fixture| &fixture.envelope));
         let mut cache = ProviderAdvertCache::new(
             vec![
                 CapabilityType::ToriiGateway,
@@ -51816,8 +53905,7 @@ mod advert_tests {
     }
 
     fn app_state_with_cache_inner(fixture: &ProviderFixture, seed_fixture: bool) -> SharedAppState {
-        let admission = AdmissionRegistry::from_envelopes([fixture.envelope.clone()])
-            .expect("fixture envelope must validate");
+        let admission = fixture_admission_registry([&fixture.envelope]);
         let mut cache = ProviderAdvertCache::new(
             vec![
                 CapabilityType::ToriiGateway,
@@ -51934,9 +54022,7 @@ mod advert_tests {
         body.validate().expect("fixture body must validate");
         let body_clone = body.clone();
 
-        let body_bytes = norito::to_bytes(&body).expect("serialize body");
-        let signature = signing_key.sign(&body_bytes);
-        let advert = ProviderAdvertV1 {
+        let mut advert = ProviderAdvertV1 {
             version: PROVIDER_ADVERT_VERSION_V1,
             issued_at,
             expires_at,
@@ -51944,11 +54030,15 @@ mod advert_tests {
             signature: sorafs_manifest::AdvertSignature {
                 algorithm: SignatureAlgorithm::Ed25519,
                 public_key: signing_key.verifying_key().to_bytes().to_vec(),
-                signature: signature.to_bytes().to_vec(),
+                signature: vec![0; 64],
             },
             signature_strict: true,
             allow_unknown_capabilities: false,
         };
+        let signature_payload = advert
+            .signature_payload_bytes()
+            .expect("serialize advert signature envelope");
+        advert.signature.signature = signing_key.sign(&signature_payload).to_bytes().to_vec();
 
         let attestation = EndpointAttestationV1 {
             version: ENDPOINT_ATTESTATION_VERSION_V1,
@@ -51960,6 +54050,11 @@ mod advert_tests {
             alpn_ids: vec!["h2".to_owned()],
             report: Vec::new(),
         };
+        let (vrf_public, vrf_private) = iroha_crypto::BlsNormal::keypair(
+            iroha_crypto::KeyGenOption::UseSeed(provider_id.to_vec()),
+        )
+        .expect("derive provider VRF fixture key");
+        let vrf_pair: iroha_crypto::KeyPair = (vrf_public, vrf_private).into();
 
         let proposal = ProviderAdmissionProposalV1 {
             version: sorafs_manifest::PROVIDER_ADMISSION_PROPOSAL_VERSION_V1,
@@ -51973,6 +54068,14 @@ mod advert_tests {
                 attestation,
             }],
             advert_key: signing_key.verifying_key().to_bytes(),
+            por_vrf_key: sorafs_manifest::ProviderVrfPublicKeyV1::BlsNormal(
+                vrf_pair
+                    .public_key()
+                    .to_bytes()
+                    .1
+                    .try_into()
+                    .expect("Normal BLS public key is 48 bytes"),
+            ),
             jurisdiction_code: "US".to_owned(),
             contact_uri: Some("mailto:ops@example.test".to_owned()),
             stream_budget: Some(StreamBudgetV1 {
@@ -51991,8 +54094,7 @@ mod advert_tests {
             compute_advert_body_digest(&body_clone).expect("advert body digest");
 
         let council_key = SigningKey::from_bytes(&[0x42; 32]);
-        let council_signature = council_key.sign(&proposal_digest);
-        let envelope = ProviderAdmissionEnvelopeV1 {
+        let mut envelope = ProviderAdmissionEnvelopeV1 {
             version: sorafs_manifest::PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
             proposal,
             proposal_digest,
@@ -52000,12 +54102,16 @@ mod advert_tests {
             advert_body_digest,
             issued_at,
             retention_epoch: expires_at + 600,
-            council_signatures: vec![CouncilSignature {
-                signer: council_key.verifying_key().to_bytes(),
-                signature: council_signature.to_bytes().to_vec(),
-            }],
+            council_signatures: Vec::new(),
             notes: None,
         };
+        let authorization_digest = compute_envelope_authorization_digest(&envelope)
+            .expect("envelope authorization digest");
+        let council_signature = council_key.sign(&authorization_digest);
+        envelope.council_signatures.push(CouncilSignature {
+            signer: council_key.verifying_key().to_bytes(),
+            signature: council_signature.to_bytes().to_vec(),
+        });
 
         ProviderFixture { advert, envelope }
     }

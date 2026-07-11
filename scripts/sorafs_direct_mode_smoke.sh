@@ -81,9 +81,89 @@ prepare_output_file_path() {
   validate_output_file_path "$label" "$target"
 }
 
+validate_provider_spec() {
+  local spec="$1"
+  local name=""
+  local provider_id=""
+  local gateway_key=""
+  local base_url=""
+  local stream_token=""
+  local pair key value
+  local -a fields=()
+
+  IFS=',' read -r -a fields <<< "$spec"
+  for pair in "${fields[@]}"; do
+    if [[ "$pair" != *"="* ]]; then
+      echo "error: --provider entries must be comma-separated key=value pairs" >&2
+      exit 1
+    fi
+    key="${pair%%=*}"
+    value="${pair#*=}"
+    case "$key" in
+      name) name="$value" ;;
+      provider-id|provider_id) provider_id="$value" ;;
+      gateway-key|gateway_key|gateway-public-key|gateway_public_key) gateway_key="$value" ;;
+      base-url|base_url) base_url="$value" ;;
+      stream-token|stream_token) stream_token="$value" ;;
+      *) ;;
+    esac
+  done
+
+  if [[ -z "$name" ]]; then
+    echo "error: --provider requires name=<alias>" >&2
+    exit 1
+  fi
+  if [[ ! "$provider_id" =~ ^[0-9A-Fa-f]{64}$ ]]; then
+    echo "error: --provider provider-id must be 32-byte hex" >&2
+    exit 1
+  fi
+  if [[ ! "$gateway_key" =~ ^[0-9A-Fa-f]{64}$ ]]; then
+    echo "error: --provider requires gateway-key=<32-byte Ed25519 public key hex>" >&2
+    exit 1
+  fi
+  if [[ -z "$stream_token" ]]; then
+    echo "error: --provider requires stream-token=<base64>" >&2
+    exit 1
+  fi
+  if [[ "$base_url" != https://* ]]; then
+    echo "error: --provider base-url must use https://" >&2
+    exit 1
+  fi
+  if [[ "$base_url" == *"@"* || "$base_url" == *"?"* || "$base_url" == *"#"* ]]; then
+    echo "error: --provider base-url must not contain credentials, a query, or a fragment" >&2
+    exit 1
+  fi
+  local authority_and_path="${base_url#https://}"
+  if [[ -z "$authority_and_path" ]]; then
+    echo "error: --provider base-url must include a host" >&2
+    exit 1
+  fi
+  if [[ "$authority_and_path" == */* && "${authority_and_path#*/}" != "" ]]; then
+    echo "error: --provider base-url must use the root path" >&2
+    exit 1
+  fi
+}
+
+redact_provider_spec() {
+  local spec="$1"
+  local pair
+  local -a fields=()
+  local -a redacted=()
+  IFS=',' read -r -a fields <<< "$spec"
+  for pair in "${fields[@]}"; do
+    case "$pair" in
+      stream-token=*|stream_token=*) redacted+=("stream-token=<redacted>") ;;
+      *) redacted+=("$pair") ;;
+    esac
+  done
+  local joined
+  joined="$(IFS=,; printf '%s' "${redacted[*]}")"
+  printf '%s\n' "$joined"
+}
+
 usage() {
   cat <<'USAGE'
-sorafs_direct_mode_smoke.sh [--plan PATH] [--manifest-id HEX] --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [...]
+sorafs_direct_mode_smoke.sh [--plan PATH] [--manifest-id HEX] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=HTTPS_URL,stream-token=BASE64 [...]
 
 Runs a direct-mode fetch against Torii gateways using `sorafs_cli fetch`. The helper wires the
 direct-mode orchestrator policy JSON, captures the summary, and ensures scoreboard persistence for
@@ -94,7 +174,7 @@ Required:
   --plan PATH                     Chunk plan JSON consumed by sorafs_cli fetch.
   --manifest-id HEX               32-byte manifest hash in lowercase hex.
   --provider SPEC                 Provider advert (may be repeated). Format:
-                                  name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64
+                                  name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=HTTPS_URL,stream-token=BASE64
 
 Optional:
   --config PATH                   Config file with key=value entries (plan, manifest_id, provider,
@@ -114,7 +194,7 @@ Optional:
 Config file format:
   plan=relative/or/absolute/path.json
   manifest_id=hexstring
-  provider=name=...,provider-id=...,base-url=...,stream-token=...
+  provider=name=...,provider-id=...,gateway-key=...,base-url=https://gateway.example/,stream-token=...
   policy=docs/examples/sorafs_direct_mode_policy.json
   output=artifacts/sorafs_direct_mode/payload.bin
   summary=artifacts/sorafs_direct_mode/fetch_summary.json
@@ -311,6 +391,9 @@ if [[ "${#providers[@]}" -eq 0 ]]; then
   echo "error: at least one --provider specification is required" >&2
   exit 1
 fi
+for provider in "${providers[@]}"; do
+  validate_provider_spec "$provider"
+done
 if [[ -n "$min_providers_override" ]]; then
   if [[ ! "$min_providers_override" =~ ^[0-9]+$ || "$min_providers_override" -lt 1 ]]; then
     echo "error: --min-providers must be a positive integer" >&2
@@ -470,7 +553,7 @@ echo " plan:      ${plan_path}"
 echo " manifest:  ${manifest_id}"
 echo " policy:    ${policy_path}"
 for provider in "${providers[@]}"; do
-  echo " provider:  ${provider}"
+  echo " provider:  $(redact_provider_spec "$provider")"
 done
 echo " output:    ${output_path}"
 echo " summary:   ${summary_path}"

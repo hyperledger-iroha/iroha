@@ -260,6 +260,22 @@ def test_live_ton_api_url_rejects_hidden_request_state():
         def __repr__(self):
             raise AssertionError("secret-token TON API URL label was repr'd")
 
+    class HostileTonApiHost(str):
+        def __new__(cls):
+            return str.__new__(cls, "localhost")
+
+        def __str__(self):
+            raise AssertionError("secret-token TON API host was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token TON API host was repr'd")
+
+        def strip(self, *_args):
+            raise AssertionError("secret-token TON API host was stripped")
+
+        def lower(self):
+            raise AssertionError("secret-token TON API host was lowered")
+
     assert module._account_states_url("https://toncenter.example") == (
         "https://toncenter.example/api/v3/accountStates"
     )
@@ -269,6 +285,9 @@ def test_live_ton_api_url_rejects_hidden_request_state():
     assert module._account_states_url("http://127.0.0.1:8080") == (
         "http://127.0.0.1:8080/api/v3/accountStates"
     )
+    hostile_host = HostileTonApiHost()
+    assert module._api_host_is_loopback(hostile_host) is False
+    assert module._api_host_is_non_public_dns(hostile_host) is True
 
     for api_url, expected_error in (
         ("https://token@toncenter.example", "credentials"),
@@ -400,6 +419,35 @@ def test_live_ton_account_states_json_rejects_duplicate_keys():
         assert exc.__suppress_context__ is True
     else:
         raise AssertionError("duplicate-key TON accountStates JSON was accepted")
+
+
+def test_live_ton_json_object_rejects_key_subclasses_without_hooks():
+    module = load_live_module()
+
+    class HostileJsonKey(str):
+        def __new__(cls):
+            return str.__new__(cls, "secret-token-value")
+
+        def __hash__(self):
+            raise AssertionError("secret-token TON JSON key was hashed")
+
+        def __eq__(self, _other):
+            raise AssertionError("secret-token TON JSON key was compared")
+
+        def __str__(self):
+            raise AssertionError("secret-token TON JSON key was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token TON JSON key was repr'd")
+
+    try:
+        module._json_object_without_duplicate_keys([(HostileJsonKey(), None)])
+    except ValueError as exc:
+        message = str(exc)
+        assert message == "TON accountStates returned duplicate JSON keys"
+        assert "secret-token" not in message
+    else:
+        raise AssertionError("hostile TON JSON key subclass was accepted")
 
 
 def test_live_ton_account_states_redacts_transport_and_error_response_details():
@@ -1892,6 +1940,35 @@ def test_live_ton_direct_api_rejects_forged_live_metadata():
         raise AssertionError("TON live TOML accepted forged account status")
 
 
+def test_live_ton_summary_rejects_hostile_account_status_without_hooks():
+    module = load_live_module()
+    fake = fake_ton_opener(module)
+    live = module.collect_live_evidence(
+        "https://toncenter.example",
+        verifier_contract_address=TON_VERIFIER_CONTRACT_ADDRESS,
+        opener=fake.opener,
+        timeout=3.0,
+    )
+    args = live_args(
+        module,
+        code_hash=fake.code_hash,
+        account_state_hash=fake.account_state_hash,
+    )
+    forged = dict(live)
+    forged["account_status"] = HostileTonLiveString("active")
+
+    try:
+        module._summary(args, forged)
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "account_status must be an exact non-empty string"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("TON live summary accepted hostile account status")
+
+
 def test_live_ton_summary_requires_boolean_destination_readiness(monkeypatch):
     module = load_live_module()
     fake = fake_ton_opener(module)
@@ -2135,6 +2212,36 @@ def test_ton_live_api_key_file_rejects_unreadable_file_shapes(tmp_path):
 
         def __fspath__(self):
             raise AssertionError("secret-token TON API key path-like fspath ran")
+
+    # Source-inventory marker: live runtime text file native path helpers reject path-like inputs.
+    for hidden_file in (
+        str(outside_token_file),
+        HostileApiKeyFile(),
+        HostileApiKeyPathLike(),
+    ):
+        try:
+            module._read_runtime_text_file(
+                hidden_file,
+                error_message="--api-key-file cannot be read",
+            )
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "--api-key-file cannot be read"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError("TON live runtime text helper accepted hostile path")
+
+        try:
+            module._reject_runtime_file_symlink_path(hidden_file)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "runtime file cannot be read"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("TON live runtime symlink helper accepted hostile path")
 
     for hidden_file in (
         outside_token_file,

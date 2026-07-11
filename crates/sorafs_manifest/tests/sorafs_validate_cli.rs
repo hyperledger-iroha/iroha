@@ -1,6 +1,9 @@
 //! CLI coverage for the SoraFS reference validator.
 
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use ed25519_dalek::{Signer, SigningKey};
@@ -1332,6 +1335,118 @@ fn sorafs_validate_sign_advert_writes_valid_signed_norito() {
         validate_outcome.get("status").and_then(Value::as_str),
         Some("Ok")
     );
+}
+
+#[test]
+fn sorafs_validate_sign_advert_rejects_noncanonical_operator_inputs_before_output() {
+    let fixture = workspace_fixture("fixtures/sorafs_manifest/provider_admission/advert_v1.to");
+    let canonical_key = "a5".repeat(32);
+
+    let run_case = |output_path: &Path, key_hex: &str, now: &str, generated_at: &str| {
+        cargo_bin_cmd!("sorafs-validate")
+            .args([
+                "sign",
+                "--kind",
+                "advert",
+                "--input",
+                fixture.to_str().expect("fixture path is utf-8"),
+                "--out",
+                output_path.to_str().expect("output path is utf-8"),
+                "--key-hex",
+                key_hex,
+                "--now",
+                now,
+                "--generated-at",
+                generated_at,
+                "--format",
+                "json",
+            ])
+            .output()
+            .expect("run sorafs-validate sign")
+    };
+
+    for (key_hex, now, generated_at, expected) in [
+        (
+            canonical_key.as_str(),
+            "0120",
+            "123",
+            "canonical unsigned decimal",
+        ),
+        (
+            canonical_key.as_str(),
+            "+120",
+            "123",
+            "canonical unsigned decimal",
+        ),
+        (
+            canonical_key.as_str(),
+            "120",
+            "123 ",
+            "canonical unsigned decimal",
+        ),
+    ] {
+        let temp = tempdir().expect("tempdir");
+        let output_path = temp.path().join("signed-advert.to");
+        let output = run_case(&output_path, key_hex, now, generated_at);
+
+        assert!(
+            !output.status.success(),
+            "noncanonical timestamp unexpectedly succeeded"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(expected),
+            "expected {expected:?}, got: {stderr}"
+        );
+        assert!(
+            !output_path.exists(),
+            "signing must fail before writing {}",
+            output_path.display()
+        );
+    }
+
+    for (key_hex, expected) in [
+        (
+            format!("ed25519:{canonical_key}"),
+            "lowercase hex without prefixes or whitespace",
+        ),
+        (
+            format!("0x{canonical_key}"),
+            "lowercase hex without prefixes or whitespace",
+        ),
+        (
+            canonical_key.to_uppercase(),
+            "lowercase hex without prefixes or whitespace",
+        ),
+        (
+            format!(" {canonical_key}"),
+            "lowercase hex without prefixes or whitespace",
+        ),
+        (
+            "a5".repeat(31),
+            "lowercase hex without prefixes or whitespace",
+        ),
+        ("00".repeat(32), "must not be all zero"),
+    ] {
+        let temp = tempdir().expect("tempdir");
+        let output_path = temp.path().join("signed-advert.to");
+        let output = run_case(&output_path, &key_hex, "120", "123");
+
+        assert!(
+            !output.status.success(),
+            "noncanonical key unexpectedly succeeded"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(expected),
+            "expected {expected:?}, got: {stderr}"
+        );
+        assert!(
+            !output_path.exists(),
+            "signing must fail before writing {}",
+            output_path.display()
+        );
+    }
 }
 
 #[test]
