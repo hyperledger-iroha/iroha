@@ -30,8 +30,8 @@ use norito::codec::{Decode, Encode};
 use super::{
     AUTONOMOUS_LANE_BLOCKS_DATA_FILE, AUTONOMOUS_LANE_BLOCKS_INDEX_FILE,
     AutonomousLaneBlockArtifact, BlockStore, CERTIFIED_LANE_BLOCKS_DATA_FILE,
-    CERTIFIED_LANE_BLOCKS_INDEX_FILE, CertifiedLaneBlockArtifact, Error, Kura,
-    LANE_ARTIFACTS_DATA_FILE, LANE_ARTIFACTS_DIR_NAME, LANE_ARTIFACTS_INDEX_FILE,
+    CERTIFIED_LANE_BLOCKS_INDEX_FILE, Error, Kura, LANE_ARTIFACTS_DATA_FILE,
+    LANE_ARTIFACTS_DIR_NAME, LANE_ARTIFACTS_INDEX_FILE,
     LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE, LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE,
     LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE, LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE,
     LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE, LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE,
@@ -4280,6 +4280,7 @@ mod tests {
     use super::*;
     use crate::{
         block::BlockBuilder,
+        kura::CertifiedLaneBlockArtifact,
         lane_consensus::{
             CommittedLaneBlockSession, LaneBlockVoteV1, aggregate_lane_block_votes_to_qc,
         },

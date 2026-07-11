@@ -35,9 +35,8 @@ use iroha_data_model::{
         OfflineAndroidAppAttestationPolicy, OfflineDeviceAttestationPolicy,
         OfflineDeviceAttestationRegistration, OfflineDeviceAttestationTrustedRoot,
         OfflineIosAppAttestationPolicy, OfflineNoteAuditOutputClaim, OfflineNoteIssuedClaim,
-        KagemushaRecursiveSpendBranchPathV2, KagemushaRecursiveSpendLineageModeV2,
-        KagemushaRecursiveSpendTopUpAnchorV2, KagemushaRequestAuthorizationV2,
-        OfflineNoteKeyCertificate, OfflineNoteRecursiveProof,
+        KagemushaRecursiveSpendBranchPathV2, KagemushaRecursiveSpendTopUpAnchorV2,
+        KagemushaRequestAuthorizationV2, OfflineNoteKeyCertificate, OfflineNoteRecursiveProof,
         offline_note_recursive_public_inputs_schema_hash,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
@@ -5744,7 +5743,7 @@ pub mod isi {
                 "Kagemusha V2 top-up transfer proof has no verifier commitment",
             )
         })?;
-        let finalized_tx_hash: [u8; 32] = state_transaction
+        let finalized_tx_hash = *state_transaction
             .current_tx_hash
             .as_ref()
             .ok_or_else(|| {
@@ -5753,14 +5752,7 @@ pub mod isi {
                     "current signed transaction hash is unavailable for Kagemusha V2 top-up",
                 )
             })?
-            .as_ref()
-            .try_into()
-            .map_err(|_| {
-                labeled_invariant(
-                    "topup_anchor_invalid",
-                    "current signed transaction hash has an unexpected length",
-                )
-            })?;
+            .as_ref();
         let anchor = KagemushaRecursiveSpendTopUpAnchorV2 {
             version: 2,
             chain_id: request.init_request.current_note.chain_id.clone(),
@@ -6046,7 +6038,7 @@ pub mod isi {
                 .world
                 .zk_assets
                 .get(request.asset.definition())
-                .and_then(|state| state.root_history.back().copied())
+                .and_then(|state| state.root_history.last().copied())
                 .ok_or_else(|| {
                     labeled_invariant(
                         "topup_anchor_invalid",
@@ -6078,6 +6070,19 @@ pub mod isi {
             persist_kagemusha_v2_topup_anchor(&anchor, state_transaction)?;
             commit_kagemusha_v2_replay_markers(replay_markers, state_transaction);
             Ok(())
+        }
+    }
+
+    // TODO: Replace this fail-closed stub when the V2 redeem proof backend is enabled.
+    impl Execute for RedeemKagemushaRecursiveV2 {
+        fn execute(
+            self,
+            _authority: &AccountId,
+            _state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            self.request
+                .ensure_proof_backend_available()
+                .map_err(|err| labeled_invariant("proof_backend_unavailable", err.to_string()))
         }
     }
 
@@ -6391,6 +6396,13 @@ pub mod isi {
                 KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
                 "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
             );
+        }
+
+        #[test]
+        fn kagemusha_v2_redeem_implements_execute() {
+            fn assert_execute<T: Execute>() {}
+
+            assert_execute::<RedeemKagemushaRecursiveV2>();
         }
 
         #[test]
