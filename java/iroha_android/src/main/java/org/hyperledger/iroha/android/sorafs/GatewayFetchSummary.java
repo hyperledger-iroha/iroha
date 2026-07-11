@@ -83,9 +83,11 @@ public final class GatewayFetchSummary {
   private static GatewayFetchSummary fromJsonObject(final Map<String, Object> root) {
     final Builder builder = new Builder();
     builder.manifestIdHex =
-        SorafsInputValidator.normalizeHexBytes(
+        SorafsInputValidator.requireCanonicalHexBytes(
             requireString(root, "manifest_id_hex"), "manifest_id_hex", 32);
-    builder.chunkerHandle = requireString(root, "chunker_handle");
+    builder.chunkerHandle =
+        SorafsInputValidator.requireCanonicalChunkerHandle(
+            requireString(root, "chunker_handle"), "chunker_handle");
     builder.clientId = optionalString(root, "client_id");
     builder.chunkCount = requireLong(root, "chunk_count");
     builder.contentLength = requireLong(root, "content_length");

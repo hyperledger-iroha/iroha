@@ -6,8 +6,18 @@ deployment.
 
 ## Network identity
 
-- Public chain ID: `809574f5-fee7-5e69-bfcf-52451e42d50f`
+- Public Sumeragi-v2 chain ID: `fc56984b-2be7-431d-840e-21514d1883f0`
+- Archived pre-v2 chain ID: `809574f5-fee7-5e69-bfcf-52451e42d50f`
 - Address chain discriminant: `369` (this is what drives canonical I105 literals such as `testu...`)
+- Consensus protocol: Sumeragi v2 only (`wire_proto_versions = [2]`)
+- Timing profile: 1,000 ms block cadence and one absolute 10,000 ms round deadline
+- Candidate bounds: 96 transactions, 16 MiB canonical body, and a four-times bounded queue scan
+- Role/mode boundary: each validator config says `role = "validator"`; NPoS mode and DA/chunk
+  geometry come from signed genesis, not a mutable local mode or RBC selector
+
+The v2 chain is a fresh-genesis reset. Never point a v2 validator at the archived chain's Kura,
+queue journal, or RBC session directories, and never attempt a mixed v1/v2 rolling upgrade. Keep
+the archived chain data read-only for incident analysis.
 
 ## Public API contract
 
@@ -54,16 +64,17 @@ config rather than wrapper-local defaults:
   only and intentionally does not carry runtime-only private keys.
 - `validator_roster.example.toml`: copy-me roster template for all validator
   public addresses, public keys, and PoPs. Keep the populated file user-local.
-- `validator_secrets.example.toml`: copy-me secret template for per-validator
-  private keys plus the shared onboarding/faucet authority and streaming
-  identity key material. Keep the populated file user-local.
+- `validator_secrets.example.toml`: copy-me runtime template for per-validator
+  private keys, shared onboarding/faucet authority and streaming identity key
+  material, plus the public SoraFS admission-council roots and quorum. Keep the
+  populated file user-local.
 - `genesis.json`: NPoS genesis with DA enabled.
 - `dns_records.json`: DNS targets for the convenience host, explorer host, and
   direct per-validator Torii hostnames.
 - `explorer.runtime-config.json`: runtime config example for the Explorer
   frontend; point it at the explicit public Torii base URL you want the UI to
   query.
-- `sorafs_sites.json`: optional host-to-manifest bindings for Torii-served static sites. Keep `taira.sora.org` out of this file.
+- `sorafs_sites.json`: optional host-to-manifest bindings for Torii-served static sites. Keep `taira.sora.org` out of this file. Enable it only through the rendered validator config's `[sorafs.gateway.site_bindings]` table; Torii reads, validates, and caches the document once at startup.
 - `sorafs_gateway_denylist.catalog.json`: default-on SoraFS denylist pack catalog.
 - `sorafs_gateway_denylist.global-core.json`: baseline governance-backed illegal-content pack.
 - `sorafs_gateway_denylist.global-emergency.json`: emergency-response denylist pack.
@@ -138,16 +149,30 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
 3. Fill in every validator's real `public_key`, `pop_hex`, and
    `public_address` plus its own direct `torii_public_address` in the public
    roster, then put the matching validator `private_key` values and the shared
-   `torii_onboarding_*`, `torii_faucet_*`, and `streaming_identity_*` values
-   in the secrets file.
+   `torii_onboarding_*`, `torii_faucet_*`, `streaming_identity_*`,
+   `sorafs_council_public_keys`, and `sorafs_council_signature_threshold`
+   values in the runtime file. SoraFS council roots must be canonical Ed25519
+   governance keys; never substitute validator, node identity, or provider
+   advert keys.
 3. Render the per-validator bundle:
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
 4. Point each validator host at its own generated
    `dist/taira-validators/<validator-slug>/config.toml`.
 
+The bundle also contains one shared unsigned `genesis.json` whose dedicated
+topology transaction is rebuilt from the public roster and PoPs, plus
+`genesis-signing-command.txt`. Set `TAIRA_GENESIS_PRIVATE_KEY` only in the
+operator shell and run that command. `kagami genesis sign --config` executes
+genesis in a disposable state block, replaces the template Nexus/AMX context
+hash with the exact staged value, recomputes the consensus fingerprint, and
+then writes `genesis.signed.nrt`. Never copy the genesis signer or validator
+private keys into the checked-in template or rendered genesis JSON.
+
 The renderer rewrites the checked-in peer-1 baseline with the full
 `trusted_peers` / `trusted_peers_pop` roster so every validator starts from the
-same bootstrap source of truth. It now requires explicit per-validator
+same bootstrap source of truth. It refuses to emit a config while the SoraFS
+council placeholder remains or the configured quorum is zero, duplicated, or
+larger than the trusted set. It also requires explicit per-validator
 `torii_public_address` values so direct public Torii hostnames are part of the
 checked operator input instead of a hard-coded shared edge default.
 
@@ -433,6 +458,25 @@ Named host bindings in `sorafs_sites.json` remain available as an optional
 alias layer, but they are no longer the primary deployment path. Reserve
 `taira.sora.org` for Torii itself and serve apps from `/sorafs/cid/<cid>/` or
 `<cid>.sorafs.taira.sora.org`.
+
+Named bindings are production configuration, not a runtime environment
+override. Add the following to each rendered validator config and restart
+Torii after changing the document:
+
+```toml
+[sorafs.gateway.site_bindings]
+path = "/config/sorafs_sites.json"
+max_bytes = 1048576
+max_sites = 1024
+```
+
+The file must be a regular, single-link file owned by the Torii user or root,
+must not be group/world writable, and neither it nor an ancestor may be a
+symbolic link; ancestor directories must not be group/world writable. Version
+1 requires canonical lowercase DNS names, 64-character lowercase manifest
+digests, unique hosts, and safe single-component index file names. Invalid
+configuration aborts startup instead of falling back to stale or partially
+parsed bindings.
 
 Soracloud runtime apps use the SoraDNS/Soracloud alias route instead of SoraFS
 CID hosts. For clients without native SoraDNS resolution, the public browser
@@ -802,8 +846,9 @@ Optional container overrides:
   `docker-compose.validator.yml`, then set `TAIRA_GENESIS_PATH=...` in
   `/etc/default/taira-validator-container.compose.env`
 - if the validator host should serve named SoraFS host bindings directly from
-  the container, uncomment the matching `IROHA_SORAFS_SITE_BINDINGS_FILE` and
-  volume lines, then set `TAIRA_SORAFS_SITE_BINDINGS_PATH=...`
+  the container, set `[sorafs.gateway.site_bindings].path =
+  "/config/sorafs_sites.json"` in the rendered validator config, uncomment the
+  matching volume line, then set `TAIRA_SORAFS_SITE_BINDINGS_PATH=...`
 
 ## Bare-metal validator deployment
 
@@ -833,8 +878,9 @@ away from the shipped MCP-enabled config:
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
    - `validator_secrets.local.toml` must include both the validator private
      keys and the shared `torii_onboarding_*`, `torii_faucet_*`, and
-     `streaming_identity_*` fields because the checked-in template intentionally
-     leaves those runtime-only values blank
+     `streaming_identity_*`, `sorafs_council_public_keys`, and
+     `sorafs_council_signature_threshold` fields because the checked-in template
+     intentionally leaves those deployment values as fail-closed placeholders
    - `sudo install -d -o iroha -g iroha /etc/iroha/taira-validator-1`
    - `sudo cp dist/taira-validators/taira-validator-1/config.toml /etc/iroha/taira-validator-1/config.toml`
 4. Install the newly built binaries plus the sample systemd unit from
@@ -973,8 +1019,9 @@ From `../iroha2-block-explorer-web`:
      script patches them from `configs/soranexus/taira/config.toml`, but a
      stale bundle can still bring the old default back.
    - confirm those peer configs also retain the Taira `[sumeragi.block]`
-     transaction caps, especially `fast_finality_max_transactions`, before
-     running public write canaries or scenario sweeps.
+     `max_transactions = 96`, `max_payload_bytes = 16777216`, and
+     `proposal_queue_scan_multiplier = 4` bounds before running public write
+     canaries or scenario sweeps. Fast-finality caps are retired in v2.
    - keep `[sorafs.quota] storage_pin_max_events = 64` in the Taira profile and
      served peer configs; otherwise a handful of failed storage-pin probes can
      exhaust the default `4 requests / 3600s` window before a real

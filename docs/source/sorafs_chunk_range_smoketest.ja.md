@@ -23,7 +23,7 @@ translation_last_reviewed: 2026-01-22
 1. 組み込み CLI (`iroha app sorafs storage token issue`) を使ってストリームトークンを発行し、
    `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --json-out manifest_report.json`
    を実行してマニフェストのチャンク計画を出力する（レポートには `chunk_fetch_specs` が含まれる）。
-2. `iroha app sorafs fetch --manifest manifest.to --plan manifest_report.json --manifest-id <manifest_digest_hex> --gateway-provider "name=primary,provider-id=<hex32>,base-url=https://gateway.example,stream-token=<base64>" --max-peers 4 --retry-budget 3` を実行する。
+2. `iroha app sorafs fetch --manifest manifest.to --plan manifest_report.json --manifest-id <manifest_digest_hex> --gateway-provider "name=primary,provider-id=<hex32>,gateway-key=<ed25519-public-key-hex>,base-url=https://gateway.example,stream-token=<base64>" --max-peers 4 --retry-budget 3` を実行する。
 3. CLI はチャンクと証明を検証し、サマリーメトリクスを記録し、必要なら組み立て済みペイロード（`--output`）や JSON レポート（`--json-out`）を出力する。
 4. 期待されるダイジェスト／メトリクスしきい値と照合する。
 

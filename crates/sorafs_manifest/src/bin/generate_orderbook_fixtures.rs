@@ -15,26 +15,29 @@ use sorafs_manifest::{
     ByteRangeV1, ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_VERSION_V1,
     ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1, ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderBookEntryV1,
     OrderCancelReasonV1, OrderCancelV1, OrderRequestV1, OrderSideV1, OrderTierV1,
-    OrderbookRuntimeSnapshotV1, OrderbookSignatureV1, SETTLEMENT_RECEIPT_VERSION_V1,
-    SettlementChannelStatusV1, SettlementChannelV1, SettlementReceiptV1, SignatureAlgorithm,
-    TradeEventV1, XorAmount, apply_settlement_receipt_v1, open_settlement_channel_for_trade_v1,
+    OrderbookOwnerNonceHighWaterV1, OrderbookRuntimeSnapshotV1, OrderbookSignatureV1,
+    SETTLEMENT_RECEIPT_VERSION_V1, SettlementChannelStatusV1, SettlementChannelV1,
+    SettlementReceiptV1, SignatureAlgorithm, TradeEventV1, XorAmount, apply_settlement_receipt_v1,
+    derive_orderbook_order_id_v1, open_settlement_channel_for_trade_v1,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
     let fixture_dir = PathBuf::from("fixtures/sorafs_manifest/orderbook");
     fs::create_dir_all(&fixture_dir)?;
 
+    let order_owner = b"buyer@sora".to_vec();
+    let order_nonce = 7;
     let order = OrderRequestV1 {
         version: ORDERBOOK_ORDER_VERSION_V1,
-        order_id: id(0x71),
+        order_id: derive_orderbook_order_id_v1(&order_owner, order_nonce),
         side: OrderSideV1::Bid,
         tier: OrderTierV1::Hot,
         price_per_gib: XorAmount::from_micro(1_250_000),
         quantity_gib: 64,
         remaining_gib: 64,
-        owner_account: b"buyer@sora".to_vec(),
+        owner_account: order_owner,
         expiry_unix: 1_800_000_000,
-        nonce: 7,
+        nonce: order_nonce,
         maker_fee_bps: 10,
         taker_fee_bps: 15,
         signature: signature(),
@@ -92,17 +95,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
     receipt.validate()?;
 
+    let snapshot_owner = b"provider@sora".to_vec();
+    let snapshot_nonce = 9;
     let snapshot_open_order = OrderRequestV1 {
         version: ORDERBOOK_ORDER_VERSION_V1,
-        order_id: id(0x73),
+        order_id: derive_orderbook_order_id_v1(&snapshot_owner, snapshot_nonce),
         side: OrderSideV1::Ask,
         tier: OrderTierV1::Hot,
         price_per_gib: XorAmount::from_micro(1_300_000),
         quantity_gib: 32,
         remaining_gib: 24,
-        owner_account: b"provider@sora".to_vec(),
+        owner_account: snapshot_owner,
         expiry_unix: 1_800_000_100,
-        nonce: 9,
+        nonce: snapshot_nonce,
         maker_fee_bps: 10,
         taker_fee_bps: 15,
         signature: signature(),
@@ -114,6 +119,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         version: ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
         next_sequence: 4,
         generated_at_unix: 1_700_000_130,
+        owner_nonce_high_waters: vec![OrderbookOwnerNonceHighWaterV1 {
+            owner_account: snapshot_open_order.owner_account.clone(),
+            highest_nonce: snapshot_open_order.nonce,
+        }],
         open_orders: vec![OrderBookEntryV1 {
             order: snapshot_open_order,
             sequence: 3,
@@ -342,6 +351,20 @@ fn runtime_snapshot_json(snapshot: &OrderbookRuntimeSnapshotV1) -> Value {
         Value::from(snapshot.generated_at_unix),
     );
     map.insert(
+        "owner_nonce_high_water_count".into(),
+        Value::from(snapshot.owner_nonce_high_waters.len() as u64),
+    );
+    map.insert(
+        "owner_nonce_high_waters".into(),
+        Value::Array(
+            snapshot
+                .owner_nonce_high_waters
+                .iter()
+                .map(owner_nonce_high_water_json)
+                .collect(),
+        ),
+    );
+    map.insert(
         "open_order_count".into(),
         Value::from(snapshot.open_orders.len() as u64),
     );
@@ -397,6 +420,16 @@ fn runtime_snapshot_json(snapshot: &OrderbookRuntimeSnapshotV1) -> Value {
         "expired_order_ids_hex".into(),
         bytes32_array_json(snapshot.expired_order_ids.iter().copied()),
     );
+    Value::Object(map)
+}
+
+fn owner_nonce_high_water_json(entry: &OrderbookOwnerNonceHighWaterV1) -> Value {
+    let mut map = Map::new();
+    map.insert(
+        "owner_account".into(),
+        Value::from(String::from_utf8_lossy(&entry.owner_account).to_string()),
+    );
+    map.insert("highest_nonce".into(), Value::from(entry.highest_nonce));
     Value::Object(map)
 }
 

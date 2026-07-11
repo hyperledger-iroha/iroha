@@ -320,6 +320,14 @@ def test_receipt_rpc_scalar_parsers_reject_string_subclasses_without_hooks():
             lambda: module._rpc_hex_data(hostile_hex, method="eth_getBlockReceipts"),
             "eth_getBlockReceipts returned non-canonical lowercase 0x hex data",
         ),
+        (
+            lambda: module._rpc_exact_string_literal(
+                hostile_quantity,
+                "0x1",
+                message="receipt.status must be 0x1",
+            ),
+            "receipt.status must be 0x1",
+        ),
     )
 
     for parser, expected_message in cases:
@@ -1342,6 +1350,35 @@ def test_collect_receipt_proof_rejects_duplicate_json_receipt_fields():
     assert calls == ["eth_chainId", "eth_getTransactionReceipt"]
 
 
+def test_receipt_json_object_rejects_key_subclasses_without_hooks():
+    module = load_module()
+
+    class HostileJsonKey(str):
+        def __new__(cls):
+            return str.__new__(cls, "secret-token-result")
+
+        def __hash__(self):
+            raise AssertionError("secret-token receipt JSON key was hashed")
+
+        def __eq__(self, _other):
+            raise AssertionError("secret-token receipt JSON key was compared")
+
+        def __str__(self):
+            raise AssertionError("secret-token receipt JSON key was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token receipt JSON key was repr'd")
+
+    try:
+        module._json_object_without_duplicate_keys([(HostileJsonKey(), "0x1")])
+    except ValueError as exc:
+        message = str(exc)
+        assert message == "JSON-RPC returned duplicate JSON keys"
+        assert "secret-token" not in message
+    else:
+        raise AssertionError("hostile receipt JSON key subclass was accepted")
+
+
 def test_receipt_json_rpc_redacts_invalid_json_parser_details():
     module = load_module()
 
@@ -1400,6 +1437,22 @@ def test_receipt_json_rpc_url_rejects_hidden_request_state():
         def __repr__(self):
             raise AssertionError("secret-token receipt RPC URL label was repr'd")
 
+    class HostileReceiptRpcHost(str):
+        def __new__(cls):
+            return str.__new__(cls, "localhost")
+
+        def __str__(self):
+            raise AssertionError("secret-token receipt RPC host was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token receipt RPC host was repr'd")
+
+        def strip(self, *_args):
+            raise AssertionError("secret-token receipt RPC host was stripped")
+
+        def lower(self):
+            raise AssertionError("secret-token receipt RPC host was lowered")
+
     assert module._normalize_evm_rpc_url("https://rpc.example") == (
         "https://rpc.example"
     )
@@ -1409,6 +1462,9 @@ def test_receipt_json_rpc_url_rejects_hidden_request_state():
     assert module._normalize_evm_rpc_url("http://127.0.0.1:8545") == (
         "http://127.0.0.1:8545"
     )
+    hostile_host = HostileReceiptRpcHost()
+    assert module._evm_rpc_host_is_loopback(hostile_host) is False
+    assert module._evm_rpc_host_is_non_public_dns(hostile_host) is True
 
     def forbidden_opener(_request, timeout=15.0):
         raise AssertionError("malformed receipt RPC URL reached the opener")
@@ -1564,6 +1620,37 @@ def test_receipt_json_rpc_rejects_envelope_drift():
         else:
             raise AssertionError(failure)
 
+    original_json_loads = module.json.loads
+
+    def hostile_json_loads(*args, **kwargs):
+        decoded = original_json_loads(*args, **kwargs)
+        if type(decoded) is dict and decoded.get("jsonrpc") == "2.0":
+            decoded["jsonrpc"] = HostileReceiptString("2.0")
+        return decoded
+
+    def opener(_request, timeout=15.0):
+        del timeout
+        return FakeResponse({"jsonrpc": "2.0", "id": 1, "result": "0x1"})
+
+    module.json.loads = hostile_json_loads
+    try:
+        try:
+            module._json_rpc(
+                "https://rpc.example",
+                "eth_chainId",
+                [],
+                opener=opener,
+                timeout=3.0,
+            )
+        except RuntimeError as exc:
+            rendered = str(exc)
+            assert "protocol version" in rendered
+            assert "secret-token" not in rendered
+        else:
+            raise AssertionError("hostile receipt JSON-RPC protocol version was accepted")
+    finally:
+        module.json.loads = original_json_loads
+
 
 def test_collect_receipt_proof_rejects_failed_receipt():
     module = load_module()
@@ -1582,6 +1669,38 @@ def test_collect_receipt_proof_rejects_failed_receipt():
         assert "receipt.status must be 0x1" in str(exc)
     else:
         raise AssertionError("failed receipt was accepted")
+
+
+def test_collect_receipt_proof_rejects_hostile_receipt_status_without_hooks():
+    module = load_module()
+    opener = fake_opener_for(module)
+    original_json_loads = module.json.loads
+
+    def hostile_json_loads(*args, **kwargs):
+        decoded = original_json_loads(*args, **kwargs)
+        result = decoded.get("result") if type(decoded) is dict else None
+        if type(result) is dict and result.get("status") == "0x1":
+            result["status"] = HostileReceiptString("0x1")
+        return decoded
+
+    module.json.loads = hostile_json_loads
+    try:
+        try:
+            module.collect_receipt_proof_evidence(
+                "https://rpc.example",
+                domain=module.SCCP_DOMAIN_ETH,
+                transaction_hash=bytes.fromhex("11" * 32),
+                source_bridge_address=bytes.fromhex("33" * 20),
+                opener=opener,
+            )
+        except RuntimeError as exc:
+            rendered = str(exc)
+            assert rendered == "receipt.status must be 0x1"
+            assert "secret-token" not in rendered
+        else:
+            raise AssertionError("hostile receipt status was accepted")
+    finally:
+        module.json.loads = original_json_loads
 
 
 def test_collect_receipt_proof_rejects_receipts_root_mismatch():
@@ -1806,6 +1925,29 @@ def test_collect_receipt_proof_rejects_source_event_non_empty_data():
         assert "source event log data must be 0x" in str(exc)
     else:
         raise AssertionError("source event log with non-empty data was accepted")
+
+
+def test_source_event_digest_rejects_hostile_log_data_without_hooks():
+    module = load_module()
+    try:
+        module._source_event_digest_from_receipt(
+            receipt(
+                module,
+                index=0,
+                tx_byte=0x11,
+                logs=source_log(module, data=HostileReceiptString("0x")),
+            ),
+            source_bridge_address=bytes.fromhex("33" * 20),
+            transaction_hash=bytes.fromhex("11" * 32),
+            block_hash=bytes.fromhex("aa" * 32),
+            block_number=0x1234,
+        )
+    except RuntimeError as exc:
+        rendered = str(exc)
+        assert rendered == "SCCP source event log data must be 0x"
+        assert "secret-token" not in rendered
+    else:
+        raise AssertionError("hostile source-event log data was accepted")
 
 
 def test_collect_receipt_proof_rejects_zero_source_event_digest():

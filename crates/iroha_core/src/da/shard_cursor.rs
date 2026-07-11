@@ -115,7 +115,7 @@ pub enum DaShardCursorError {
 pub struct DaShardCursorIndex {
     mapping: BTreeMap<LaneId, ShardId>,
     cursors: BTreeMap<u32, DaShardCursor>,
-    reset_heights: BTreeMap<LaneId, u64>,
+    canonical_reset_heights: BTreeMap<LaneId, u64>,
 }
 
 impl DaShardCursorIndex {
@@ -161,9 +161,9 @@ impl DaShardCursorIndex {
 
     /// Remember that lane-scoped DA history at or before `reset_height` belongs
     /// to an earlier lane incarnation.
-    pub fn mark_lanes_reset(&mut self, lanes: &BTreeSet<LaneId>, reset_height: u64) {
+    pub fn mark_lanes_canonically_reset(&mut self, lanes: &BTreeSet<LaneId>, reset_height: u64) {
         for lane_id in lanes {
-            self.reset_heights
+            self.canonical_reset_heights
                 .entry(*lane_id)
                 .and_modify(|height| *height = (*height).max(reset_height))
                 .or_insert(reset_height);
@@ -171,9 +171,12 @@ impl DaShardCursorIndex {
     }
 
     /// Replace reset watermarks, preserving any newer in-memory watermark.
-    pub fn merge_reset_heights(&mut self, reset_heights: &BTreeMap<LaneId, u64>) {
-        for (lane_id, reset_height) in reset_heights {
-            self.reset_heights
+    pub fn merge_canonical_reset_heights(
+        &mut self,
+        canonical_reset_heights: &BTreeMap<LaneId, u64>,
+    ) {
+        for (lane_id, reset_height) in canonical_reset_heights {
+            self.canonical_reset_heights
                 .entry(*lane_id)
                 .and_modify(|height| *height = (*height).max(*reset_height))
                 .or_insert(*reset_height);
@@ -182,14 +185,14 @@ impl DaShardCursorIndex {
 
     /// Return the last reset height recorded for a lane.
     #[must_use]
-    pub fn reset_height_for_lane(&self, lane_id: LaneId) -> Option<u64> {
-        self.reset_heights.get(&lane_id).copied()
+    pub fn canonical_reset_height_for_lane(&self, lane_id: LaneId) -> Option<u64> {
+        self.canonical_reset_heights.get(&lane_id).copied()
     }
 
     /// Return all lane reset watermarks.
     #[must_use]
-    pub fn reset_heights(&self) -> &BTreeMap<LaneId, u64> {
-        &self.reset_heights
+    pub fn canonical_reset_heights(&self) -> &BTreeMap<LaneId, u64> {
+        &self.canonical_reset_heights
     }
 
     /// Advance the shard cursor using the supplied commitment.
@@ -376,7 +379,7 @@ struct PersistedShardCursors {
     /// Per-lane reset watermarks. Records at or before the watermark belong to
     /// an earlier lane incarnation and must not rehydrate active DA indexes.
     #[norito(default)]
-    reset_heights: BTreeMap<LaneId, u64>,
+    canonical_reset_heights: BTreeMap<LaneId, u64>,
     /// Stored cursor entries.
     entries: Vec<LaneShardCursor>,
 }
@@ -473,7 +476,7 @@ pub enum ShardCursorJournalError {
 pub struct DaShardCursorJournal {
     mapping: BTreeMap<LaneId, ShardId>,
     cursors: BTreeMap<(ShardId, LaneId), LaneShardCursor>,
-    reset_heights: BTreeMap<LaneId, u64>,
+    canonical_reset_heights: BTreeMap<LaneId, u64>,
     path: PathBuf,
 }
 
@@ -494,7 +497,7 @@ impl DaShardCursorJournal {
         Self {
             mapping: lane_config.shard_mapping(),
             cursors: BTreeMap::new(),
-            reset_heights: BTreeMap::new(),
+            canonical_reset_heights: BTreeMap::new(),
             path: path.into(),
         }
     }
@@ -592,7 +595,7 @@ impl DaShardCursorJournal {
         };
 
         if let Some(persisted) = persisted {
-            journal.merge_reset_heights(&persisted.reset_heights);
+            journal.merge_canonical_reset_heights(&persisted.canonical_reset_heights);
             for entry in persisted.entries {
                 let Some(expected) = journal.mapping.get(&entry.lane_id).copied() else {
                     warn!(
@@ -718,20 +721,23 @@ impl DaShardCursorJournal {
 
     /// Return the last reset height recorded for a lane.
     #[must_use]
-    pub fn reset_height_for_lane(&self, lane_id: LaneId) -> Option<u64> {
-        self.reset_heights.get(&lane_id).copied()
+    pub fn canonical_reset_height_for_lane(&self, lane_id: LaneId) -> Option<u64> {
+        self.canonical_reset_heights.get(&lane_id).copied()
     }
 
     /// Return all persisted lane reset watermarks.
     #[must_use]
-    pub fn reset_heights(&self) -> &BTreeMap<LaneId, u64> {
-        &self.reset_heights
+    pub fn canonical_reset_heights(&self) -> &BTreeMap<LaneId, u64> {
+        &self.canonical_reset_heights
     }
 
     /// Merge reset watermarks, preserving the highest known height per lane.
-    pub fn merge_reset_heights(&mut self, reset_heights: &BTreeMap<LaneId, u64>) {
-        for (lane_id, reset_height) in reset_heights {
-            self.reset_heights
+    pub fn merge_canonical_reset_heights(
+        &mut self,
+        canonical_reset_heights: &BTreeMap<LaneId, u64>,
+    ) {
+        for (lane_id, reset_height) in canonical_reset_heights {
+            self.canonical_reset_heights
                 .entry(*lane_id)
                 .and_modify(|height| *height = (*height).max(*reset_height))
                 .or_insert(*reset_height);
@@ -759,7 +765,7 @@ impl DaShardCursorJournal {
         let entries: Vec<_> = self.cursors.values().copied().collect();
         let payload = PersistedShardCursors {
             version: Self::JOURNAL_VERSION,
-            reset_heights: self.reset_heights.clone(),
+            canonical_reset_heights: self.canonical_reset_heights.clone(),
             entries,
         };
         let bytes = to_bytes(&payload).map_err(ShardCursorJournalError::Encode)?;
@@ -826,7 +832,7 @@ impl DaShardCursorJournal {
         path: impl Into<PathBuf>,
     ) -> Self {
         let mut journal = Self::new(lane_config, path);
-        journal.merge_reset_heights(index.reset_heights());
+        journal.merge_canonical_reset_heights(index.canonical_reset_heights());
         let mapping = journal.mapping.clone();
         for (lane_id, shard_id) in mapping {
             if let Some(cursor) = index.get(shard_id.as_u32()) {
@@ -1070,9 +1076,9 @@ impl DaShardCursorJournal {
         let mut ahead = false;
         let mut behind = false;
 
-        Self::compare_reset_heights(
-            &current.reset_heights,
-            &candidate.reset_heights,
+        Self::compare_canonical_reset_heights(
+            &current.canonical_reset_heights,
+            &candidate.canonical_reset_heights,
             &mut ahead,
             &mut behind,
         );
@@ -1101,7 +1107,7 @@ impl DaShardCursorJournal {
         }
     }
 
-    fn compare_reset_heights(
+    fn compare_canonical_reset_heights(
         current: &BTreeMap<LaneId, u64>,
         candidate: &BTreeMap<LaneId, u64>,
         ahead: &mut bool,
@@ -1288,7 +1294,7 @@ mod tests {
     fn write_journal_payload(path: &Path, entries: Vec<LaneShardCursor>) {
         let payload = PersistedShardCursors {
             version: DaShardCursorJournal::JOURNAL_VERSION,
-            reset_heights: BTreeMap::new(),
+            canonical_reset_heights: BTreeMap::new(),
             entries,
         };
         fs::write(path, to_bytes(&payload).expect("encode cursor journal"))
@@ -1581,8 +1587,8 @@ mod tests {
             journal
                 .record_commitment(1, &record)
                 .expect("record commitment");
-            journal.merge_reset_heights(&BTreeMap::from([(LaneId::new(0), 7)]));
-            journal.merge_reset_heights(&BTreeMap::from([(LaneId::new(0), 5)]));
+            journal.merge_canonical_reset_heights(&BTreeMap::from([(LaneId::new(0), 7)]));
+            journal.merge_canonical_reset_heights(&BTreeMap::from([(LaneId::new(0), 5)]));
             journal.persist().expect("persist");
         }
 
@@ -1591,7 +1597,10 @@ mod tests {
         assert_eq!(cursor.shard_id, ShardId::new(0));
         assert_eq!(cursor.epoch, 1);
         assert_eq!(cursor.sequence, 2);
-        assert_eq!(loaded.reset_height_for_lane(LaneId::new(0)), Some(7));
+        assert_eq!(
+            loaded.canonical_reset_height_for_lane(LaneId::new(0)),
+            Some(7)
+        );
     }
 
     #[test]
@@ -2277,7 +2286,7 @@ mod tests {
         let config = ConfigLaneConfig::from_catalog(&catalog);
         let payload = PersistedShardCursors {
             version: DaShardCursorJournal::JOURNAL_VERSION + 1,
-            reset_heights: BTreeMap::new(),
+            canonical_reset_heights: BTreeMap::new(),
             entries: Vec::new(),
         };
 

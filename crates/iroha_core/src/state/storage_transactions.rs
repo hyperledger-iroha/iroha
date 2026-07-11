@@ -279,6 +279,11 @@ mod block {
     }
 
     impl TransactionsBlock<'_> {
+        /// Return whether a canonical block membership update was staged.
+        pub(crate) fn has_staged_block(&self) -> bool {
+            self.current_block.is_some()
+        }
+
         /// Register transactions belonging to the block.
         ///
         /// This method **must** be called before [`commit`].

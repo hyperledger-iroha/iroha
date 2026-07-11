@@ -52,9 +52,12 @@ and operator commands in one place.
 | CLI tooling | Extend `sorafs_manifest_stub` with subcommands: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | Tooling WG | ✅ |
 
 The CLI flow now accepts intermediate certificate bundles (`--endpoint-attestation-intermediate`), emits
-canonical proposal/envelope bytes, and validates council signatures during `sign`/`verify`. Operators can
-provide advert bodies directly, or reuse signed adverts, and signature files may be supplied by pairing
-`--council-signature-public-key` with `--council-signature-file` for automation friendliness.
+canonical proposal/envelope bytes, and validates council signatures during `sign`/`verify`. Council
+signatures use the domain-separated authorization digest of the complete unsigned envelope—not merely
+the proposal digest—so retention bounds, advert routing/QoS fields, and governance notes cannot be
+rewritten after approval. Operators can provide advert bodies directly, or reuse signed adverts, and
+signature files may be supplied by pairing `--council-signature-public-key` with
+`--council-signature-file` for automation friendliness.
 
 ### CLI Reference
 
@@ -80,9 +83,11 @@ Run each command via `cargo run -p sorafs_car --bin sorafs_manifest_stub -- prov
   - Produces a validated envelope (`--envelope-out`) and JSON report indicating digest bindings,
     signer count, and input paths.
 - `verify`
-  - Validates an existing envelope (`--envelope`), optionally checking the matching proposal,
-    advert, or advert body. The JSON report highlights digest values, signature verification status,
-    and which optional artefacts matched.
+  - Validates an existing envelope (`--envelope`) against explicit trust roots supplied as repeated
+    `--trusted-council-key=<hex32>` flags and a non-zero `--signature-threshold=<count>`, optionally
+    checking the matching proposal, advert, or advert body. The JSON report highlights digest values,
+    trusted-quorum verification status, and which optional artefacts matched. Embedded signer keys are
+    never promoted to trust roots.
 - `renewal`
   - Links a newly approved envelope to the previously ratified digest. Requires
     `--previous-envelope=<path>` and the successor `--envelope=<path>` (both Norito payloads).
@@ -96,7 +101,7 @@ Run each command via `cargo run -p sorafs_car --bin sorafs_manifest_stub -- prov
     revocation digest, writes the Norito payload via `--revocation-out`, and prints a JSON report
     capturing the digest and signature count.
 | Verification | Implement shared verifier used by Torii, gateways, and `sorafs-node`. Provide unit + CLI integration tests.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 | Networking TL / Storage | ✅ Completed |
-| Torii integration | Thread verifier into Torii advertisement ingestion, reject out-of-policy adverts, emit telemetry. | Networking TL | ✅ Completed | Torii now loads governance envelopes (`torii.sorafs.admission_envelopes_dir`), verifies digest/signature matches during ingestion, and surfaces admission telemetry.【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.rs#L1】 |
+| Torii integration | Thread verifier into Torii advertisement ingestion, reject out-of-policy adverts, emit telemetry. | Networking TL | ✅ Completed | Torii loads canonical governance envelopes from `sorafs.discovery.admission.envelopes_dir` only after validating the configured Ed25519 `trusted_council_keys` and `signature_threshold`; missing policy, malformed entries, symlinks, corrupt state, and unsatisfied quorum abort startup instead of creating a permissive cache.【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.rs#L1】 |
 | Renewal | Add renewal / revocation schema + CLI helpers, publish lifecycle guide in docs (see runbook below and CLI commands in `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md:120】 | Storage / Governance | ✅ Completed |
 | Telemetry | Define `provider_admission` dashboards & alerts (missing renewal, envelope expiry). | Observability | ✅ Completed | `dashboards/grafana/sorafs_provider_admission.json` charts accepted/warning/rejected rates, stale refresh debt, and missing envelopes; `dashboards/alerts/sorafs_provider_admission_rules.yml` alerts on `admission_missing`, `stale`, policy-reject spikes, and downgrade warnings. |
 ### Renewal & Revocation Runbook

@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.client;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import java.nio.ByteBuffer;
@@ -126,7 +127,7 @@ public final class AndroidClientFactoryTests {
   }
 
   @Test
-  public void sorafsUsesOkHttpExecutor() throws Exception {
+  public void sorafsFactoryRejectsInsecureLoopbackOrigin() throws Exception {
     try (MockWebServer server = new MockWebServer()) {
       server.enqueue(
           new MockResponse()
@@ -139,36 +140,11 @@ public final class AndroidClientFactoryTests {
 
       final TelemetryCaptureSink sink = new TelemetryCaptureSink(1, 1);
       final ClientConfig config = clientConfig(server, sink);
-      final SorafsGatewayClient gateway = factory.createSorafsGatewayClient(config);
-      final GatewayFetchRequest fetchRequest =
-          GatewayFetchRequest.builder()
-              .setManifestIdHex("feed".repeat(16))
-              .setChunkerHandle("chunker-1")
-              .addProvider(
-                  GatewayProvider.builder()
-                      .setName("provider-a")
-                      .setProviderIdHex("01".repeat(32))
-                      .setBaseUrl(server.url("/storage").toString())
-                      .setStreamTokenBase64("dG9rZW4=")
-                      .build())
-              .build();
-
-      final ClientResponse fetchResponse = gateway.fetch(fetchRequest).get(2, TimeUnit.SECONDS);
-      assertEquals(200, fetchResponse.statusCode());
-      assertArrayEquals("{\"ok\":true}".getBytes(StandardCharsets.UTF_8), fetchResponse.body());
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> factory.createSorafsGatewayClient(config));
       assertTrue(factory.httpExecutor() instanceof OkHttpTransportExecutor);
-
-      assertTrue(sink.await());
-      assertEquals(1, sink.requests.size());
-      assertEquals(1, sink.responses.size());
-
-      final RecordedRequest gatewayRequest = server.takeRequest(1, TimeUnit.SECONDS);
-      assertNotNull(gatewayRequest);
-      assertEquals("/v1/sorafs/gateway/fetch", gatewayRequest.getPath());
-      final Buffer body = gatewayRequest.getBody();
-      final String payload = body.readUtf8();
-      assertTrue(payload.contains("manifest_id_hex"));
-      assertTrue(payload.contains("provider-a"));
+      assertEquals(0, server.getRequestCount());
     }
   }
 

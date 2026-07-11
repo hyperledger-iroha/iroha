@@ -61,8 +61,10 @@ Key modules:
 - **Chunk Storage**: disk-backed `ChunkStore` implementation that ingests
   signed manifests, materialises chunk plans using `ChunkProfile::DEFAULT`, and
   persists chunks under a deterministic layout. Each chunk is associated with a
-  content fingerprint and PoR metadata so sampling can re-validate without
-  re-reading the entire file.
+  content fingerprint and PoR metadata. The first-release backend verifies the
+  complete chunk from a no-follow file descriptor before serving bytes or using
+  them in a PoR proof, so same-length bit flips and symlink replacement fail
+  closed instead of being served under an immutable CID.
 - **Quota/Scheduler**: enforces operator-configured limits (maximum disk bytes,
   maximum outstanding pins, maximum parallel fetches, chunk TTL) and coordinates
   IO so the node's ledger duties are not starved. The scheduler is also
@@ -81,6 +83,12 @@ max_parallel_fetches = 32
 max_pins = 10_000
 por_sample_interval_secs = 600
 alias = "tenant.alpha"            # optional human friendly tag
+
+[sorafs.storage.runtime]
+event_history_limit = 4_096
+state_entry_limit = 65_536
+checkpoint_max_bytes = "64 MiB"
+
 adverts:
   stake_pointer = "stake.pool.v1:0x1234"
   availability = "hot"
@@ -107,6 +115,26 @@ adverts:
   Manual Torii `/v1/sorafs/storage/por-sample` probes reject `count` values
   outside `1..=500` before manifest lookup, then cap returned samples by the
   stored manifest leaf count.
+- `runtime.event_history_limit`: per-stream replay ceiling. Repair, reputation,
+  orderbook, and moderation histories retain the newest events while keeping a
+  separate monotonic high-water sequence. Gap-aware replay reports when a
+  cursor predates retained history instead of silently pretending the stream
+  is complete.
+- `runtime.state_entry_limit`: hard ceiling for each auxiliary PoR,
+  reputation, transparency, privacy, processed-cycle, reserve, deal, capacity,
+  and orderbook index. This includes deal ticket replay IDs, outstanding
+  replication orders, and retained orderbook trades/channels/receipts. New
+  authoritative entries are refused at the ceiling; published source events
+  are pruned only after their governance publication succeeds.
+  Moderation applies the ceiling independently to model manifests, corpora,
+  screening/quarantine records, encrypted-object index entries, evidence-viewer
+  sessions/access events, and the global ballot, juror, commit, reveal, and
+  challenge counts. Idempotent replay and updates to existing moderation keys
+  remain available at capacity. Torii maps a new-key refusal to HTTP `429 Too
+  Many Requests`; conflicts remain `409` and malformed snapshots remain `400`.
+- `runtime.checkpoint_max_bytes`: maximum canonical Norito checkpoint size.
+  Oversize, corrupt, symlinked, or non-regular checkpoints fail startup rather
+  than resetting durable replay or penalty state.
 - `adverts`: structure used by the provider advert generator to fill
   `ProviderAdvertV1` fields (stake pointer, QoS hints, topics). If omitted the
   node uses defaults from the governance registry.
@@ -169,8 +197,29 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
 
 1. **Startup**:
    - If storage is enabled the node initialises the chunk store with the
-     configured directory and capacity. This includes verifying or creating the
-     PoR manifest database and replaying pinned manifests to warm caches.
+   configured directory and capacity. This includes verifying or creating the
+   PoR manifest database and replaying pinned manifests to warm caches.
+   - Restore bounded auxiliary runtime state from
+     `runtime-state/auxiliary-snapshot.to`. The checkpoint retains PoR penalty
+     high-water state, replay sequences, reputation snapshots, reserve
+     lifecycle/custody records, deal balances and ticket replay IDs, capacity
+     declarations and outstanding reservations, unpublished
+     transparency/privacy inputs, and processed publication cycles. Capacity
+     restore recomputes per-profile/lane allocations and rebuilds metering
+     gauges; deal restore recomputes locked collateral from retained deals.
+     Reads are no-follow and size-bounded; writes use create-new staging, file
+     fsync, atomic rename, and parent-directory fsync.
+   - Moderation ballot mutations commit the ballot record and its sequenced
+     event in one checkpoint transaction. Event-lock failure, sequence
+     exhaustion, or a pre-rename checkpoint error restores both in-memory
+     snapshots and returns an explicit error. Live broadcast, transparency,
+     and Governance DAG publication occur only after that checkpoint commits.
+   - Restore `repair/repair_state.to` under the same configured entry and byte
+     ceilings. Repair tasks, PoR failure history, and auditor nonce high-water
+     marks are authoritative: corrupt, oversize, symlinked, or duplicate-filled
+     snapshots stop startup. The node never archives a corrupt store and starts
+     with an empty replacement, and it refuses new records at the ceiling
+     rather than evicting replay or audit state.
    - Register the SoraFS gateway routes (Norito JSON POST/GET endpoints for pin,
      fetch, PoR sample, telemetry).
    - Spawn the PoR sampling worker and quota monitor.
@@ -229,6 +278,52 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
   scheduler internals.【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
 
 ### Integrations & Operational Hardening
+
+The persisted storage boundary is fail-closed in v1:
+
+- the backend holds an operating-system exclusive lock for the configured data
+  directory for its full lifetime, so a second node process cannot mutate the
+  same index or manifest tree concurrently. The lock is opened without
+  following symlinks and the opened file identity is rechecked against the
+  path before and after locking, closing replacement races;
+- same-manifest ingestion has a single in-flight owner and writes into a unique
+  attempt directory before publishing the completed directory atomically;
+  rejected or failed attempts can clean only their own staging state;
+- startup resolves interrupted transactions deterministically: it restores a
+  manifest moved to GC while the old index is still authoritative, purges GC
+  data after the new index is authoritative, and removes stale staging or
+  unindexed ingest directories. Unknown transaction names and symlinked
+  transaction directories fail startup instead of being traversed;
+- atomic index and metadata replacement syncs both the file and its parent
+  directory after rename, so a reported commit survives a host crash rather
+  than depending on an unflushed directory entry. If rename succeeds but the
+  directory sync fails, the backend records the uncertain commit, refuses all
+  subsequent reads and mutations, and requires restart recovery; it never
+  guesses whether the old or new state is authoritative;
+- metadata updates are copy-on-write in memory and on disk. A failure before
+  rename leaves the live descriptor unchanged, while an uncertain post-rename
+  result installs the committed descriptor and immediately fail-stops the
+  backend;
+- each stored manifest carries a shared I/O lease: fetch, PoR, and manifest
+  reads hold a read lease, while metadata mutation and eviction require the
+  exclusive lease, preventing deletion or rewrite from racing an active read;
+- pin, fetch, and PoR admission is fail-fast at the configured concurrency and
+  byte-rate ceilings. Saturated Torii requests receive `429` with
+  `Retry-After`; no request thread sleeps or waits on an unbounded scheduler
+  queue;
+- startup rejects unsupported index versions, duplicate or noncanonical
+  manifest IDs, traversal-bearing chunk/file names, inconsistent index,
+  manifest, file-layout, chunk, or PoR geometry, and corrupt chunk digests;
+- ingest rejects empty inventories, duplicate or non-portable logical paths,
+  overflowing or out-of-bounds file/chunk ranges, and layouts whose file bytes
+  do not align exactly with the canonical chunk plan;
+- index, manifest, and metadata reads open regular files without following the
+  leaf symlink and enforce structural byte ceilings before allocation (64 MiB
+  for the index and per-manifest metadata, 16 MiB for a manifest envelope);
+- byte accounting and chunk reference counts are recomputed with checked
+  arithmetic during recovery rather than trusting stale persisted totals, and
+  in-memory layout indices must fit their exact on-disk `u32` representation
+  instead of being truncated.
 
 - **Governance**: extend `sorafs_pin_registry_tracker.md` with storage telemetry
   (PoR success rate, disk utilisation). Admission policies can require minimum

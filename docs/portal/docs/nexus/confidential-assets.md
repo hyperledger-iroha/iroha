@@ -182,7 +182,7 @@ New networks that start with confidentiality enabled encode the desired policy d
 - `ConfidentialConfig` (new config section) with enablement flag, `assume_valid`, gas/limit knobs, anchor window, verifier backend.
 - `ConfidentialNote`, `ConfidentialTransfer`, and `ConfidentialMint` Norito schemas with explicit version byte (`CONFIDENTIAL_ASSET_V1 = 0x01`).
 - `ConfidentialEncryptedPayload` wraps AEAD memo bytes with `{ version, ephemeral_pubkey, nonce, ciphertext }`, defaulting to `version = CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1` for the XChaCha20-Poly1305 layout.
-- Canonical key-derivation vectors live in `docs/source/confidential_key_vectors.json`; both the CLI and Torii endpoint regress against these fixtures.
+- Canonical positive key-derivation vectors for nonzero spend keys live in `docs/source/confidential_key_vectors.json`; both the CLI and Torii endpoint regress against these fixtures, while `fixtures/confidential/keyset_derivation_v1.json` also covers all-zero spend-key rejection.
 - `asset::AssetDefinition` gains `confidential_policy: AssetConfidentialPolicy { mode, vk_set_hash, poseidon_params_id, pedersen_params_id, pending_transition }`.
 - `ZkAssetState` persists the `(backend, name, commitment)` binding for transfer/unshield verifiers; execution rejects proofs whose referenced verifying key fails to match the registered commitment.
 - `CommitmentTree` (per asset with frontier checkpoints), `NullifierSet` keyed by `(chain_id, asset_id, nullifier)`, `ZkVerifierEntry`, `PedersenParams`, `PoseidonParams` stored in world state.

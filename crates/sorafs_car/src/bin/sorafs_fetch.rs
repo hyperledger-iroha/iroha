@@ -53,7 +53,8 @@ use sorafs_manifest::{
     TransportHintV1, TransportProtocol,
     hybrid_envelope::{HYBRID_PAYLOAD_ENVELOPE_VERSION_V1, HybridPayloadEnvelopeV1},
     provider_admission::{
-        AdmissionRecord, ProviderAdmissionEnvelopeV1, verify_advert_against_record,
+        AdmissionRecord, ProviderAdmissionCouncilPolicy, ProviderAdmissionEnvelopeV1,
+        verify_advert_against_record,
     },
     provider_advert::ProviderCapabilitySoranetPqV1,
 };
@@ -123,6 +124,8 @@ fn run() -> Result<(), String> {
     let mut gateway_specs: Vec<GatewayProviderSpec> = Vec::new();
     let mut provider_advert_paths: HashMap<String, PathBuf> = HashMap::new();
     let mut admission_dir: Option<PathBuf> = None;
+    let mut admission_trusted_council_keys: Vec<[u8; 32]> = Vec::new();
+    let mut admission_signature_threshold: Option<usize> = None;
     let mut assume_now: Option<u64> = None;
     let mut max_parallel: Option<usize> = None;
     let mut max_peers: Option<usize> = None;
@@ -233,13 +236,10 @@ fn run() -> Result<(), String> {
                 return Err(format!("duplicate --deny-provider for provider '{rest}'"));
             }
         } else if let Some(rest) = arg.strip_prefix("--boost-provider=") {
-            let (name, delta_str) = rest
-                .split_once(':')
-                .ok_or_else(|| "--boost-provider expects name:delta".to_string())?;
-            let delta: i64 = delta_str
-                .parse()
-                .map_err(|err| format!("invalid boost delta '{delta_str}': {err}"))?;
-            boost_providers.insert(name.to_string(), delta);
+            let (name, delta) = parse_boost_provider(rest)?;
+            if boost_providers.insert(name.clone(), delta).is_some() {
+                return Err(format!("duplicate --boost-provider for provider '{name}'"));
+            }
         } else if let Some(rest) = arg.strip_prefix("--max-parallel=") {
             max_parallel = Some(parse_usize(rest, "--max-parallel")?);
         } else if let Some(rest) = arg.strip_prefix("--max-peers=") {
@@ -271,6 +271,14 @@ fn run() -> Result<(), String> {
             failure_threshold = Some(parse_usize(rest, "--provider-failure-threshold")?);
         } else if let Some(rest) = arg.strip_prefix("--admission-dir=") {
             admission_dir = Some(PathBuf::from(rest));
+        } else if let Some(rest) = arg.strip_prefix("--admission-trusted-council-key=") {
+            admission_trusted_council_keys.push(
+                parse_digest_hex(rest)
+                    .map_err(|err| format!("invalid --admission-trusted-council-key: {err}"))?,
+            );
+        } else if let Some(rest) = arg.strip_prefix("--admission-signature-threshold=") {
+            admission_signature_threshold =
+                Some(parse_usize(rest, "--admission-signature-threshold")?);
         } else if let Some(rest) = arg.strip_prefix("--manifest-report=") {
             if rest == "-" {
                 if matches!(plan_source, Some(JsonSource::Stdin))
@@ -308,15 +316,9 @@ fn run() -> Result<(), String> {
         } else if let Some(rest) = arg.strip_prefix("--expect-payload-digest=") {
             expect_payload_digest = Some(parse_digest_hex(rest).map_err(|err| err.to_string())?);
         } else if let Some(rest) = arg.strip_prefix("--expect-payload-len=") {
-            expect_payload_len = Some(
-                parse_u64_value(rest)
-                    .map_err(|err| format!("invalid --expect-payload-len value: {err}"))?,
-            );
+            expect_payload_len = Some(parse_u64_value(rest, "--expect-payload-len")?);
         } else if let Some(rest) = arg.strip_prefix("--assume-now=") {
-            assume_now = Some(
-                parse_u64_value(rest)
-                    .map_err(|err| format!("invalid --assume-now value: {err}"))?,
-            );
+            assume_now = Some(parse_u64_value(rest, "--assume-now")?);
         } else if let Some(rest) = arg.strip_prefix("--gateway-manifest-id=") {
             gateway_manifest_id = Some(rest.trim().to_string());
         } else if let Some(rest) = arg.strip_prefix("--gateway-manifest-envelope=") {
@@ -374,7 +376,7 @@ fn run() -> Result<(), String> {
 
     if provider_specs.is_empty() && gateway_specs.is_empty() {
         return Err(
-            "specify at least one --provider=name=/path/to/payload[#concurrency] or --gateway-provider=name=...,provider-id=...,base-url=...,stream-token=..."
+            "specify at least one --provider=name=/path/to/payload[#concurrency] or --gateway-provider=name=...,provider-id=...,gateway-key=...,base-url=...,stream-token=..."
                 .into(),
         );
     }
@@ -542,6 +544,7 @@ fn run() -> Result<(), String> {
             .map(|spec| GatewayProviderInput {
                 name: spec.name.clone(),
                 provider_id_hex: spec.provider_id_hex.clone(),
+                gateway_public_key_hex: spec.gateway_public_key_hex.clone(),
                 base_url: spec.base_url.clone(),
                 stream_token_b64: spec.stream_token_b64.clone(),
                 privacy_events_url: spec.privacy_events_url.clone(),
@@ -552,10 +555,25 @@ fn run() -> Result<(), String> {
         gateway_fetcher_opt = Some(context.fetcher());
     }
 
-    let admission_registry = if let Some(dir) = admission_dir.as_ref() {
-        Some(load_admission_registry(dir)?)
-    } else {
-        None
+    let admission_registry = match admission_dir.as_ref() {
+        Some(dir) => {
+            let threshold = admission_signature_threshold.ok_or_else(|| {
+                "--admission-dir requires --admission-signature-threshold".to_string()
+            })?;
+            let policy = ProviderAdmissionCouncilPolicy::new(
+                admission_trusted_council_keys.iter().copied(),
+                threshold,
+            )
+            .map_err(|err| format!("invalid provider admission council policy: {err}"))?;
+            Some(load_admission_registry(dir, &policy)?)
+        }
+        None => {
+            if admission_signature_threshold.is_some() || !admission_trusted_council_keys.is_empty()
+            {
+                return Err("admission council policy options require --admission-dir".to_string());
+            }
+            None
+        }
     };
 
     let mut advert_data: HashMap<String, AdvertMetadata> = HashMap::new();
@@ -870,8 +888,9 @@ fn run() -> Result<(), String> {
         let digest = blake3::hash(&payload);
         let mut bytes = [0u8; 32];
         bytes.copy_from_slice(digest.as_bytes());
+        let payload_len = payload.len() as u64;
         payload_vec = Some(payload);
-        (payload_vec.as_ref().unwrap().len() as u64, bytes)
+        (payload_len, bytes)
     };
 
     if let Some((_, digest)) = streamed_stats {
@@ -995,12 +1014,14 @@ const USAGE: &str = concat!(
      --plan=chunk_fetch_specs.json|- \
      --provider=name=/path/to/payload[#concurrency] \
      [--provider=name=/path/to/payload[#concurrency][@weight] ...] \
-     [--gateway-provider=name=alias,provider-id=hex,base-url=https://...,stream-token=base64 ...] \
+     [--gateway-provider=name=alias,provider-id=hex,gateway-key=hex,base-url=https://...,stream-token=base64 ...] \
      [--gateway-manifest-id=hex] [--gateway-manifest-envelope=base64] \
      [--gateway-client-id=string] [--gateway-chunker-handle=profile] \
      [--gateway-manifest-cid=hex] \
      [--provider-advert=name=/path/to/advert.norito ...] \
      [--admission-dir=governance/envelopes/] \
+     [--admission-trusted-council-key=hex32 ...] \
+     [--admission-signature-threshold=count] \
      [--manifest-report=report.json|-] \
      [--manifest=manifest.to|-] \
      [--output=assembled.bin] \
@@ -1258,12 +1279,7 @@ fn parse_provider_spec(value: &str) -> Result<ProviderSpec, String> {
         if suffix.len() <= 1 {
             return Err("provider weight must follow '@'".to_string());
         }
-        let parsed_weight = suffix[1..]
-            .parse::<u32>()
-            .map_err(|err| format!("invalid provider weight '{suffix}': {err}"))?;
-        let nz_weight = NonZeroU32::new(parsed_weight)
-            .ok_or_else(|| "provider weight must be greater than zero".to_string())?;
-        weight = Some(nz_weight);
+        weight = Some(parse_nonzero_u32_decimal(&suffix[1..], "provider weight")?);
         path_segment = prefix;
     }
 
@@ -1272,9 +1288,7 @@ fn parse_provider_spec(value: &str) -> Result<ProviderSpec, String> {
         if conc_part.len() <= 1 {
             return Err("provider concurrency must follow '#'".to_string());
         }
-        let conc_value = conc_part[1..]
-            .parse::<usize>()
-            .map_err(|err| format!("invalid provider concurrency '{conc_part}': {err}"))?;
+        let conc_value = parse_nonzero_usize_decimal(&conc_part[1..], "provider concurrency")?;
         (path_part, Some(conc_value))
     } else {
         (path_segment, None)
@@ -1285,9 +1299,8 @@ fn parse_provider_spec(value: &str) -> Result<ProviderSpec, String> {
     }
 
     let concurrency_explicit = concurrency.is_some();
-    let max_concurrent = concurrency
-        .and_then(NonZeroUsize::new)
-        .unwrap_or_else(|| NonZeroUsize::new(2).expect("constant non-zero"));
+    let max_concurrent =
+        concurrency.unwrap_or_else(|| NonZeroUsize::new(2).expect("constant non-zero"));
 
     let weight_explicit = weight.is_some();
     let weight = weight.unwrap_or_else(|| NonZeroU32::new(1).expect("constant non-zero"));
@@ -1305,6 +1318,7 @@ fn parse_provider_spec(value: &str) -> Result<ProviderSpec, String> {
 fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, String> {
     let mut name: Option<String> = None;
     let mut provider_id: Option<String> = None;
+    let mut gateway_public_key: Option<String> = None;
     let mut base_url: Option<String> = None;
     let mut stream_token: Option<String> = None;
     let mut privacy_events_url: Option<String> = None;
@@ -1331,6 +1345,12 @@ fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, Strin
                 }
                 provider_id = Some(val.to_ascii_lowercase());
             }
+            "gateway-key" | "gateway_key" | "gateway-public-key" | "gateway_public_key" => {
+                if val.len() != 64 || !val.chars().all(|c| c.is_ascii_hexdigit()) {
+                    return Err("--gateway-provider gateway-key must be 32-byte hex".into());
+                }
+                gateway_public_key = Some(val.to_ascii_lowercase());
+            }
             "base-url" | "base_url" => {
                 if val.is_empty() {
                     return Err("--gateway-provider base-url must not be empty".into());
@@ -1351,7 +1371,7 @@ fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, Strin
             }
             other => {
                 return Err(format!(
-                    "unknown --gateway-provider key '{other}'. expected name, provider-id, base-url, stream-token, privacy-url"
+                    "unknown --gateway-provider key '{other}'. expected name, provider-id, gateway-key, base-url, stream-token, privacy-url"
                 ));
             }
         }
@@ -1360,6 +1380,8 @@ fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, Strin
     let name = name.ok_or_else(|| "--gateway-provider requires name=<alias>".to_string())?;
     let provider_id_hex =
         provider_id.ok_or_else(|| "--gateway-provider requires provider-id=<hex>".to_string())?;
+    let gateway_public_key_hex = gateway_public_key
+        .ok_or_else(|| "--gateway-provider requires gateway-key=<hex>".to_string())?;
     let base_url =
         base_url.ok_or_else(|| "--gateway-provider requires base-url=<https://...>".to_string())?;
     let stream_token_b64 = stream_token
@@ -1368,6 +1390,7 @@ fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, Strin
     Ok(GatewayProviderSpec {
         name,
         provider_id_hex,
+        gateway_public_key_hex,
         base_url,
         stream_token_b64,
         privacy_events_url,
@@ -1375,20 +1398,93 @@ fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, Strin
 }
 
 fn parse_usize(input: &str, flag: &str) -> Result<usize, String> {
-    input
-        .parse::<usize>()
-        .map_err(|err| format!("invalid value for {flag}: {err}"))
-        .and_then(|value| {
-            if value == 0 {
-                Err(format!("{flag} must be at least 1"))
-            } else {
-                Ok(value)
-            }
-        })
+    let value = parse_canonical_usize(input, flag)?;
+    if value == 0 {
+        Err(format!("{flag} must be at least 1"))
+    } else {
+        Ok(value)
+    }
 }
 
-fn parse_u64_value(input: &str) -> Result<u64, std::num::ParseIntError> {
-    input.parse::<u64>()
+fn parse_boost_provider(input: &str) -> Result<(String, i64), String> {
+    let (name, delta_str) = input
+        .split_once(':')
+        .ok_or_else(|| "--boost-provider expects name:delta".to_string())?;
+    if name.is_empty() {
+        return Err("--boost-provider name must not be empty".to_string());
+    }
+    let delta = parse_canonical_i64(delta_str, "boost delta")?;
+    Ok((name.to_string(), delta))
+}
+
+fn parse_nonzero_usize_decimal(input: &str, label: &str) -> Result<NonZeroUsize, String> {
+    let value = parse_canonical_usize(input, label)?;
+    NonZeroUsize::new(value).ok_or_else(|| format!("{label} must be greater than zero"))
+}
+
+fn parse_nonzero_u32_decimal(input: &str, label: &str) -> Result<NonZeroU32, String> {
+    let value = parse_canonical_u32(input, label)?;
+    NonZeroU32::new(value).ok_or_else(|| format!("{label} must be greater than zero"))
+}
+
+fn parse_canonical_usize(input: &str, label: &str) -> Result<usize, String> {
+    require_canonical_unsigned_decimal(input, label)?;
+    input
+        .parse::<usize>()
+        .map_err(|err| format!("invalid {label} '{input}': {err}"))
+}
+
+fn parse_canonical_u32(input: &str, label: &str) -> Result<u32, String> {
+    require_canonical_unsigned_decimal(input, label)?;
+    input
+        .parse::<u32>()
+        .map_err(|err| format!("invalid {label} '{input}': {err}"))
+}
+
+fn parse_canonical_u64(input: &str, label: &str) -> Result<u64, String> {
+    require_canonical_unsigned_decimal(input, label)?;
+    input
+        .parse::<u64>()
+        .map_err(|err| format!("invalid {label} '{input}': {err}"))
+}
+
+fn parse_canonical_i64(input: &str, label: &str) -> Result<i64, String> {
+    if !is_canonical_signed_decimal(input) {
+        return Err(format!(
+            "{label} must be a canonical signed decimal integer"
+        ));
+    }
+    input
+        .parse::<i64>()
+        .map_err(|err| format!("invalid {label} '{input}': {err}"))
+}
+
+fn require_canonical_unsigned_decimal(input: &str, label: &str) -> Result<(), String> {
+    if is_canonical_unsigned_decimal(input) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{label} must be a canonical unsigned decimal integer"
+        ))
+    }
+}
+
+fn is_canonical_unsigned_decimal(input: &str) -> bool {
+    let bytes = input.as_bytes();
+    !bytes.is_empty()
+        && bytes.iter().all(u8::is_ascii_digit)
+        && (bytes.len() == 1 || bytes[0] != b'0')
+}
+
+fn is_canonical_signed_decimal(input: &str) -> bool {
+    let Some(digits) = input.strip_prefix('-') else {
+        return is_canonical_unsigned_decimal(input);
+    };
+    is_canonical_unsigned_decimal(digits) && digits != "0"
+}
+
+fn parse_u64_value(input: &str, flag: &str) -> Result<u64, String> {
+    parse_canonical_u64(input, flag)
 }
 
 fn build_provider_sources(specs: &[ProviderSpec]) -> Result<Vec<ProviderSource>, String> {
@@ -1819,7 +1915,10 @@ fn provider_advert_to_metadata(advert: ProviderAdvertV1) -> Result<AdvertMetadat
     })
 }
 
-fn load_admission_registry(dir: &Path) -> Result<HashMap<[u8; 32], AdmissionRecord>, String> {
+fn load_admission_registry(
+    dir: &Path,
+    policy: &ProviderAdmissionCouncilPolicy,
+) -> Result<HashMap<[u8; 32], AdmissionRecord>, String> {
     if !dir.is_dir() {
         return Err(format!(
             "admission directory {dir:?} does not exist or is not a directory"
@@ -1845,7 +1944,7 @@ fn load_admission_registry(dir: &Path) -> Result<HashMap<[u8; 32], AdmissionReco
         let bytes = fs::read(&path)
             .map_err(|err| format!("failed to read admission envelope {path:?}: {err}"))?;
         let envelope = decode_admission_envelope(&bytes, &path)?;
-        let record = AdmissionRecord::new(envelope)
+        let record = AdmissionRecord::new(envelope, policy)
             .map_err(|err| format!("invalid admission envelope {path:?}: {err}"))?;
         let provider_id = *record.provider_id();
         if registry.insert(provider_id, record).is_some() {
@@ -2598,6 +2697,7 @@ fn format_multi_source_error(error: MultiSourceError) -> Result<String, String> 
 struct GatewayProviderSpec {
     name: String,
     provider_id_hex: String,
+    gateway_public_key_hex: String,
     base_url: String,
     stream_token_b64: String,
     privacy_events_url: Option<String>,
@@ -2807,7 +2907,7 @@ fn telemetry_from_entries(entries: Vec<Value>) -> Result<TelemetrySnapshot, Stri
 }
 
 fn parse_f64(value: &Value, field: &str, idx: usize) -> Result<f64, String> {
-    match value {
+    let parsed = match value {
         Value::Number(num) => num
             .as_f64()
             .ok_or_else(|| format!("telemetry entry {idx} field '{field}' is not a finite number")),
@@ -2817,6 +2917,13 @@ fn parse_f64(value: &Value, field: &str, idx: usize) -> Result<f64, String> {
         other => Err(format!(
             "telemetry entry {idx} field '{field}' must be a number, got {other:?}"
         )),
+    }?;
+    if parsed.is_finite() {
+        Ok(parsed)
+    } else {
+        Err(format!(
+            "telemetry entry {idx} field '{field}' is not a finite number"
+        ))
     }
 }
 
@@ -2836,10 +2943,8 @@ fn parse_u64(value: &Value, field: &str, idx: usize) -> Result<u64, String> {
                 "telemetry entry {idx} field '{field}' must be an unsigned integer, got {num:?}"
             )
         }),
-        Value::String(text) => text.parse::<u64>().map_err(|err| {
-            format!(
-                "telemetry entry {idx} field '{field}' could not be parsed as unsigned integer: {err}"
-            )
+        Value::String(text) => parse_canonical_u64(text, field).map_err(|err| {
+            format!("telemetry entry {idx} field '{field}' could not be parsed as unsigned integer: {err}")
         }),
         other => Err(format!(
             "telemetry entry {idx} field '{field}' must be an unsigned integer, got {other:?}"
@@ -3020,6 +3125,33 @@ mod tests {
         }
     }
 
+    fn signed_provider_advert(
+        body: ProviderAdvertBodyV1,
+        signing_key: &SigningKey,
+        issued_at: u64,
+        expires_at: u64,
+        allow_unknown_capabilities: bool,
+    ) -> ProviderAdvertV1 {
+        let mut advert = ProviderAdvertV1 {
+            version: PROVIDER_ADVERT_VERSION_V1,
+            issued_at,
+            expires_at,
+            body,
+            signature: AdvertSignature {
+                algorithm: SignatureAlgorithm::Ed25519,
+                public_key: signing_key.verifying_key().to_bytes().to_vec(),
+                signature: vec![0; 64],
+            },
+            signature_strict: true,
+            allow_unknown_capabilities,
+        };
+        let payload = advert
+            .signature_payload_bytes()
+            .expect("serialize advert signature envelope");
+        advert.signature.signature = signing_key.sign(&payload).to_bytes().to_vec();
+        advert
+    }
+
     fn default_profile_aliases() -> Vec<String> {
         chunker_registry::default_descriptor()
             .aliases
@@ -3107,21 +3239,13 @@ mod tests {
             transport_hints: None,
         };
         let signing_key = SigningKey::from_bytes(&[0xAB; 32]);
-        let body_bytes = to_bytes(&advert_body).expect("serialize body");
-        let signature = signing_key.sign(&body_bytes);
-        let mut advert = ProviderAdvertV1 {
-            version: PROVIDER_ADVERT_VERSION_V1,
-            issued_at: 1_700_000_000,
-            expires_at: 1_700_003_600,
-            body: advert_body,
-            signature: AdvertSignature {
-                algorithm: SignatureAlgorithm::Ed25519,
-                public_key: signing_key.verifying_key().to_bytes().to_vec(),
-                signature: signature.to_bytes().to_vec(),
-            },
-            signature_strict: true,
-            allow_unknown_capabilities: false,
-        };
+        let mut advert = signed_provider_advert(
+            advert_body,
+            &signing_key,
+            1_700_000_000,
+            1_700_003_600,
+            false,
+        );
         advert.signature.signature.fill(0);
 
         let err = verify_provider_advert_signature(&advert)
@@ -3754,6 +3878,166 @@ mod tests {
     }
 
     #[test]
+    fn parse_provider_rejects_noncanonical_concurrency() {
+        for value in [
+            "alpha=/tmp/payload#0",
+            "alpha=/tmp/payload#04",
+            "alpha=/tmp/payload#+4",
+            "alpha=/tmp/payload# 4",
+            "alpha=/tmp/payload#4 ",
+            "alpha=/tmp/payload#1844674407370955161618446744073709551616",
+        ] {
+            let err = parse_provider_spec(value).expect_err("invalid concurrency must fail");
+            assert!(
+                err.contains("provider concurrency"),
+                "unexpected error for {value}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_provider_rejects_noncanonical_weight() {
+        for value in [
+            "alpha=/tmp/payload@0",
+            "alpha=/tmp/payload@03",
+            "alpha=/tmp/payload@+3",
+            "alpha=/tmp/payload@ 3",
+            "alpha=/tmp/payload@3 ",
+            "alpha=/tmp/payload@4294967296",
+        ] {
+            let err = parse_provider_spec(value).expect_err("invalid weight must fail");
+            assert!(
+                err.contains("provider weight"),
+                "unexpected error for {value}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_usize_rejects_noncanonical_limit_tokens() {
+        assert_eq!(parse_usize("1", "--max-peers").expect("canonical one"), 1);
+        assert_eq!(
+            parse_usize("42", "--max-parallel").expect("canonical value"),
+            42
+        );
+
+        for value in [
+            "0",
+            "00",
+            "01",
+            "+1",
+            "1 ",
+            " 1",
+            "1844674407370955161618446744073709551616",
+        ] {
+            let err = parse_usize(value, "--retry-budget").expect_err("invalid limit must fail");
+            assert!(
+                err.contains("--retry-budget"),
+                "unexpected error for {value}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_u64_value_rejects_noncanonical_unsigned_tokens() {
+        assert_eq!(
+            parse_u64_value("0", "--assume-now").expect("canonical zero"),
+            0
+        );
+        assert_eq!(
+            parse_u64_value("42", "--expect-payload-len").expect("canonical length"),
+            42
+        );
+
+        for value in ["", "00", "01", "+1", "1 ", " 1", "18446744073709551616"] {
+            let err =
+                parse_u64_value(value, "--assume-now").expect_err("invalid u64 token must fail");
+            assert!(
+                err.contains("--assume-now"),
+                "unexpected error for {value:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_boost_provider_rejects_noncanonical_delta() {
+        assert_eq!(
+            parse_boost_provider("alpha:0").expect("canonical zero"),
+            ("alpha".to_string(), 0)
+        );
+        assert_eq!(
+            parse_boost_provider("alpha:-3").expect("canonical negative"),
+            ("alpha".to_string(), -3)
+        );
+        assert_eq!(
+            parse_boost_provider("alpha:7").expect("canonical positive"),
+            ("alpha".to_string(), 7)
+        );
+
+        for value in [
+            "alpha",
+            ":1",
+            "alpha:",
+            "alpha:+1",
+            "alpha:-0",
+            "alpha:-01",
+            "alpha:01",
+            "alpha:1 ",
+            "alpha: 1",
+            "alpha:9223372036854775808",
+            "alpha:-9223372036854775809",
+        ] {
+            parse_boost_provider(value).expect_err("invalid boost provider must fail");
+        }
+    }
+
+    #[test]
+    fn telemetry_json_rejects_noncanonical_unsigned_string_fields() {
+        let mut last_updated = Map::new();
+        last_updated.insert("provider_id".into(), Value::String("provider-a".into()));
+        last_updated.insert("last_updated_unix".into(), Value::String("01".into()));
+        let err = telemetry_from_value(Value::Array(vec![Value::Object(last_updated)]))
+            .expect_err("noncanonical timestamp string should fail");
+        assert!(
+            err.contains("last_updated_unix") && err.contains("canonical unsigned"),
+            "unexpected timestamp error: {err}"
+        );
+
+        let mut reputation = Map::new();
+        reputation.insert("provider_id".into(), Value::String("provider-a".into()));
+        reputation.insert("reputation_score_bps".into(), Value::String("+9200".into()));
+        let err = telemetry_from_value(Value::Array(vec![Value::Object(reputation)]))
+            .expect_err("noncanonical reputation string should fail");
+        assert!(
+            err.contains("reputation_score_bps") && err.contains("canonical unsigned"),
+            "unexpected reputation error: {err}"
+        );
+    }
+
+    #[test]
+    fn telemetry_json_rejects_nonfinite_metric_strings() {
+        for field in [
+            "qos_score",
+            "latency_p95_ms",
+            "failure_rate_ewma",
+            "token_health",
+            "staking_weight",
+        ] {
+            for value in ["NaN", "inf", "-inf", "Infinity"] {
+                let mut telemetry_entry = Map::new();
+                telemetry_entry.insert("provider_id".into(), Value::String("provider-a".into()));
+                telemetry_entry.insert(field.into(), Value::String(value.into()));
+                let err = telemetry_from_value(Value::Array(vec![Value::Object(telemetry_entry)]))
+                    .expect_err("non-finite telemetry string should fail");
+                assert!(
+                    err.contains(field) && err.contains("finite"),
+                    "unexpected telemetry error for {field}={value}: {err}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn fetch_cli_applies_provider_advert() {
         let (_tempdir, temp_path) = canonical_tempdir();
         let payload_path = temp_path.join("payload.bin");
@@ -3832,21 +4116,7 @@ mod tests {
             transport_hints: Some(sample_transport_hints()),
         };
         let signing_key = SigningKey::from_bytes(&[0xAB; 32]);
-        let body_bytes = to_bytes(&advert_body).expect("serialize body");
-        let signature = signing_key.sign(&body_bytes);
-        let advert = ProviderAdvertV1 {
-            version: PROVIDER_ADVERT_VERSION_V1,
-            issued_at: now,
-            expires_at: now + 3_600,
-            body: advert_body,
-            signature: AdvertSignature {
-                algorithm: SignatureAlgorithm::Ed25519,
-                public_key: signing_key.verifying_key().to_bytes().to_vec(),
-                signature: signature.to_bytes().to_vec(),
-            },
-            signature_strict: true,
-            allow_unknown_capabilities: false,
-        };
+        let advert = signed_provider_advert(advert_body, &signing_key, now, now + 3_600, false);
         let advert_bytes = to_bytes(&advert).expect("serialize advert");
         fs::write(&advert_path, advert_bytes).expect("write advert");
 
@@ -4036,21 +4306,7 @@ mod tests {
             transport_hints: Some(sample_transport_hints()),
         };
         let signing_key = SigningKey::from_bytes(&[0x9F; 32]);
-        let body_bytes = to_bytes(&advert_body).expect("serialize body");
-        let signature = signing_key.sign(&body_bytes);
-        let advert = ProviderAdvertV1 {
-            version: PROVIDER_ADVERT_VERSION_V1,
-            issued_at: now,
-            expires_at: now + 3_600,
-            body: advert_body,
-            signature: AdvertSignature {
-                algorithm: SignatureAlgorithm::Ed25519,
-                public_key: signing_key.verifying_key().to_bytes().to_vec(),
-                signature: signature.to_bytes().to_vec(),
-            },
-            signature_strict: true,
-            allow_unknown_capabilities: false,
-        };
+        let advert = signed_provider_advert(advert_body, &signing_key, now, now + 3_600, false);
         let advert_bytes = to_bytes(&advert).expect("serialize advert");
         fs::write(&advert_path, advert_bytes).expect("write advert");
 
@@ -4233,21 +4489,7 @@ mod tests {
             (advert_beta, &advert_path_beta, 0xB2u8),
         ] {
             let signing_key = SigningKey::from_bytes(&[key_byte; 32]);
-            let body_bytes = to_bytes(&body).expect("serialize body");
-            let signature = signing_key.sign(&body_bytes);
-            let advert = ProviderAdvertV1 {
-                version: PROVIDER_ADVERT_VERSION_V1,
-                issued_at: now,
-                expires_at: now + 3_600,
-                body,
-                signature: AdvertSignature {
-                    algorithm: SignatureAlgorithm::Ed25519,
-                    public_key: signing_key.verifying_key().to_bytes().to_vec(),
-                    signature: signature.to_bytes().to_vec(),
-                },
-                signature_strict: true,
-                allow_unknown_capabilities: false,
-            };
+            let advert = signed_provider_advert(body, &signing_key, now, now + 3_600, false);
             let advert_bytes = to_bytes(&advert).expect("serialize advert");
             fs::write(path, advert_bytes).expect("write advert");
         }
@@ -4384,21 +4626,7 @@ mod tests {
             transport_hints: None,
         };
         let signing_key = SigningKey::from_bytes(&[0x01; 32]);
-        let body_bytes = to_bytes(&advert_body).expect("serialize body");
-        let signature = signing_key.sign(&body_bytes);
-        let advert = ProviderAdvertV1 {
-            version: PROVIDER_ADVERT_VERSION_V1,
-            issued_at: now,
-            expires_at: now + 3_600,
-            body: advert_body,
-            signature: AdvertSignature {
-                algorithm: SignatureAlgorithm::Ed25519,
-                public_key: signing_key.verifying_key().to_bytes().to_vec(),
-                signature: signature.to_bytes().to_vec(),
-            },
-            signature_strict: true,
-            allow_unknown_capabilities: false,
-        };
+        let advert = signed_provider_advert(advert_body, &signing_key, now, now + 3_600, false);
         let advert_bytes = to_bytes(&advert).expect("serialize advert");
         let advert_path = temp_path.join("provider.advert");
         fs::write(&advert_path, advert_bytes).expect("write advert");
@@ -4760,21 +4988,7 @@ mod tests {
             transport_hints: Some(sample_transport_hints()),
         };
         let signing_key = SigningKey::from_bytes(&[0x55; 32]);
-        let body_bytes = to_bytes(&advert_body).expect("serialize body");
-        let signature = signing_key.sign(&body_bytes);
-        let advert = ProviderAdvertV1 {
-            version: PROVIDER_ADVERT_VERSION_V1,
-            issued_at: now,
-            expires_at: now + 6_000,
-            body: advert_body,
-            signature: AdvertSignature {
-                algorithm: SignatureAlgorithm::Ed25519,
-                public_key: signing_key.verifying_key().to_bytes().to_vec(),
-                signature: signature.to_bytes().to_vec(),
-            },
-            signature_strict: true,
-            allow_unknown_capabilities: false,
-        };
+        let advert = signed_provider_advert(advert_body, &signing_key, now, now + 6_000, false);
         let advert_bytes = to_bytes(&advert).expect("serialize advert");
         let advert_path = temp_path.join("provider.advert");
         fs::write(&advert_path, advert_bytes).expect("write advert");
@@ -4868,21 +5082,7 @@ mod tests {
             transport_hints: Some(sample_transport_hints()),
         };
         let signing_key = SigningKey::from_bytes(&[0x77; 32]);
-        let body_bytes = to_bytes(&advert_body).expect("serialize body");
-        let signature = signing_key.sign(&body_bytes);
-        let advert = ProviderAdvertV1 {
-            version: PROVIDER_ADVERT_VERSION_V1,
-            issued_at: now,
-            expires_at: now + 7_200,
-            body: advert_body,
-            signature: AdvertSignature {
-                algorithm: SignatureAlgorithm::Ed25519,
-                public_key: signing_key.verifying_key().to_bytes().to_vec(),
-                signature: signature.to_bytes().to_vec(),
-            },
-            signature_strict: true,
-            allow_unknown_capabilities: true,
-        };
+        let advert = signed_provider_advert(advert_body, &signing_key, now, now + 7_200, true);
         let advert_bytes = to_bytes(&advert).expect("serialize advert");
         let advert_path = temp_path.join("provider.advert");
         fs::write(&advert_path, advert_bytes).expect("write advert");
@@ -5004,21 +5204,7 @@ mod tests {
             transport_hints: Some(sample_transport_hints()),
         };
         let signing_key = SigningKey::from_bytes(&[0x66; 32]);
-        let body_bytes = to_bytes(&advert_body).expect("serialize body");
-        let signature = signing_key.sign(&body_bytes);
-        let advert = ProviderAdvertV1 {
-            version: PROVIDER_ADVERT_VERSION_V1,
-            issued_at: now,
-            expires_at: now + 7_200,
-            body: advert_body,
-            signature: AdvertSignature {
-                algorithm: SignatureAlgorithm::Ed25519,
-                public_key: signing_key.verifying_key().to_bytes().to_vec(),
-                signature: signature.to_bytes().to_vec(),
-            },
-            signature_strict: true,
-            allow_unknown_capabilities: false,
-        };
+        let advert = signed_provider_advert(advert_body, &signing_key, now, now + 7_200, false);
         let advert_bytes = to_bytes(&advert).expect("serialize advert");
         let advert_path = temp_path.join("provider.advert");
         fs::write(&advert_path, advert_bytes).expect("write advert");
@@ -5140,21 +5326,13 @@ mod tests {
             transport_hints: Some(sample_transport_hints()),
         };
         let signing_key = SigningKey::from_bytes(&[0x91; 32]);
-        let body_bytes = to_bytes(&advert_body).expect("serialize body");
-        let signature = signing_key.sign(&body_bytes);
-        let advert = ProviderAdvertV1 {
-            version: PROVIDER_ADVERT_VERSION_V1,
+        let advert = signed_provider_advert(
+            advert_body,
+            &signing_key,
             issued_at,
-            expires_at: issued_at + 24 * 3_600,
-            body: advert_body,
-            signature: AdvertSignature {
-                algorithm: SignatureAlgorithm::Ed25519,
-                public_key: signing_key.verifying_key().to_bytes().to_vec(),
-                signature: signature.to_bytes().to_vec(),
-            },
-            signature_strict: true,
-            allow_unknown_capabilities: false,
-        };
+            issued_at + 24 * 3_600,
+            false,
+        );
         let advert_bytes = to_bytes(&advert).expect("serialize advert");
         let advert_path = temp_path.join("provider.advert");
         fs::write(&advert_path, advert_bytes).expect("write advert");

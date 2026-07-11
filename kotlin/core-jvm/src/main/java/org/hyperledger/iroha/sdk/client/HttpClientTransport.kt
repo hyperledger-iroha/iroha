@@ -51,9 +51,15 @@ class HttpClientTransport(
     private val config: ClientConfig
 ) : IrohaClient {
 
-    private val sorafsGatewayClient: SorafsGatewayClient = SorafsGatewayClient(
-        executor = executor, baseUri = config.sorafsGatewayUri(), timeout = config.requestTimeout(),
-        defaultHeaders = config.defaultHeaders(), observers = config.observers())
+    private val sorafsGatewayClient: SorafsGatewayClient by lazy {
+        SorafsGatewayClient(
+            baseUri = config.sorafsGatewayUri(),
+            executor = executor,
+            timeout = config.requestTimeout(),
+            defaultHeaders = config.defaultHeaders(),
+            observers = config.observers(),
+        )
+    }
     private val deviceProfileEmitted = AtomicBoolean(false)
     private val lazyScheduler = lazy {
         Executors.newSingleThreadScheduledExecutor { r ->

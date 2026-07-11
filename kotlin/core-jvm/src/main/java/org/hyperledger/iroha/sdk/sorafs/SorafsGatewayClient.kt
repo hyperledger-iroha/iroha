@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.sorafs
 
+import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.net.URI
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
@@ -10,25 +12,44 @@ import org.hyperledger.iroha.sdk.client.HttpTransportExecutor
 import org.hyperledger.iroha.sdk.client.PlatformHttpTransportExecutor
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
+import org.hyperledger.iroha.sdk.client.transport.StreamingTransportExecutor
+import org.hyperledger.iroha.sdk.client.transport.TransportStreamResponse
 
 private const val DEFAULT_PATH = "/v1/sorafs/gateway/fetch"
+private const val MAX_GATEWAY_REQUEST_BYTES = 32 * 1024 * 1024
+private const val MAX_GATEWAY_RESPONSE_BYTES = 16 * 1024 * 1024
 
 /**
  * Minimal HTTP client that posts orchestrator fetch requests to a SoraFS gateway endpoint.
  *
  * The client mirrors the CLI/SDK JSON schema and routes requests through `HttpTransportExecutor`
  * so tests can provide deterministic transport fakes. Responses surface the raw HTTP payload allowing
- * callers to parse orchestrator summaries or binary artefacts as needed.
+ * callers to parse orchestrator summaries or binary artefacts as needed. A zero timeout is valid;
+ * negative durations are rejected instead of being rewritten.
+ *
+ * Host syntax and literal addresses are validated here. A transport implementation resolving DNS
+ * names must additionally reject non-public answers and pin the approved answer for the request;
+ * the generic executor interface cannot enforce that resolver-level DNS-rebinding boundary.
  */
 class SorafsGatewayClient(
+    baseUri: URI,
     val executor: HttpTransportExecutor = PlatformHttpTransportExecutor.createDefault(),
-    val baseUri: URI = URI.create("http://localhost:8080"),
     timeout: Duration? = Duration.ofSeconds(15),
     defaultHeaders: Map<String, String> = emptyMap(),
     observers: List<ClientObserver> = emptyList(),
-    val fetchPath: String = DEFAULT_PATH,
+    fetchPath: String = DEFAULT_PATH,
 ) {
-    val timeout: Duration? = timeout?.let { if (it.isNegative) Duration.ZERO else it }
+    /** Canonical public HTTPS origin used for every gateway request. */
+    val baseUri: URI =
+        SorafsInputValidator.requireCanonicalGatewayBaseUri(baseUri, "baseUri")
+
+    /** Canonical path resolved only against [baseUri]; absolute URL overrides are forbidden. */
+    val fetchPath: String =
+        SorafsInputValidator.requireCanonicalGatewayFetchPath(fetchPath, "fetchPath")
+
+    val timeout: Duration? = timeout?.also {
+        require(!it.isNegative) { "timeout must be non-negative" }
+    }
     private val _defaultHeaders: Map<String, String> = LinkedHashMap(defaultHeaders)
     private val _observers: List<ClientObserver> = observers.toList()
 
@@ -46,13 +67,21 @@ class SorafsGatewayClient(
         val httpRequest = buildRequest(request)
         notifyRequest(httpRequest)
         val result = CompletableFuture<ClientResponse>()
-        executor.execute(httpRequest).whenComplete { response, throwable ->
+        executeBounded(httpRequest).whenComplete { response, throwable ->
             if (throwable != null) {
                 val cause = if (throwable is CompletionException) throwable.cause else throwable
                 val error = if (cause == null)
                     SorafsStorageException("SoraFS gateway fetch request failed")
                 else
                     SorafsStorageException("SoraFS gateway fetch request failed", cause)
+                notifyFailure(httpRequest, error)
+                result.completeExceptionally(error)
+                return@whenComplete
+            }
+            if (response.body.size > MAX_GATEWAY_RESPONSE_BYTES) {
+                val error = SorafsStorageException(
+                    "SoraFS gateway response exceeds the $MAX_GATEWAY_RESPONSE_BYTES-byte limit",
+                )
                 notifyFailure(httpRequest, error)
                 result.completeExceptionally(error)
                 return@whenComplete
@@ -86,22 +115,92 @@ class SorafsGatewayClient(
             .setUri(target)
             .setMethod("POST")
             .setTimeout(timeout)
-        if (timeout != null && timeout.isNegative) {
-            builder.setTimeout(null)
-        }
         mergeHeaders().forEach { (name, value) -> builder.addHeader(name, value) }
-        builder.setBody(encodeRequestPayload(request))
+        val body = encodeRequestPayload(request)
+        require(body.size <= MAX_GATEWAY_REQUEST_BYTES) {
+            "SoraFS gateway request exceeds the $MAX_GATEWAY_REQUEST_BYTES-byte limit"
+        }
+        builder.setBody(body)
         return builder.build()
     }
 
-    private fun resolvePath(path: String?): URI {
-        if (path.isNullOrBlank()) return baseUri
-        if (path.startsWith("http://") || path.startsWith("https://")) return URI.create(path)
-        val normalised = if (path.startsWith("/")) path.substring(1) else path
-        val base = baseUri.toString()
-        val joined = if (base.endsWith("/")) "$base$normalised" else "$base/$normalised"
-        return URI.create(joined)
+    private fun executeBounded(request: TransportRequest): CompletableFuture<TransportResponse> {
+        val streaming = executor as? StreamingTransportExecutor
+        if (streaming == null) {
+            // Injected transports that cannot stream must enforce the same network-read ceiling.
+            // The post-materialisation check in fetch() still prevents oversized parsing/use.
+            return executor.execute(request)
+        }
+        return streaming.openStream(request).thenApply { response ->
+            response.use {
+                val declaredLength = canonicalContentLength(response)
+                if (declaredLength != null && declaredLength > MAX_GATEWAY_RESPONSE_BYTES.toLong()) {
+                    throw IOException(
+                        "SoraFS gateway declared a response larger than " +
+                            "$MAX_GATEWAY_RESPONSE_BYTES bytes",
+                    )
+                }
+                val initialCapacity = declaredLength
+                    ?.coerceAtMost(MAX_GATEWAY_RESPONSE_BYTES.toLong())
+                    ?.toInt()
+                    ?: 8_192
+                val output = ByteArrayOutputStream(initialCapacity)
+                val chunk = ByteArray(8_192)
+                var total = 0
+                while (true) {
+                    val read = response.body.read(chunk)
+                    if (read == -1) break
+                    if (read == 0) {
+                        throw IOException("SoraFS gateway response stream made no progress")
+                    }
+                    total = try {
+                        Math.addExact(total, read)
+                    } catch (ex: ArithmeticException) {
+                        throw IOException("SoraFS gateway response length overflow", ex)
+                    }
+                    if (total > MAX_GATEWAY_RESPONSE_BYTES) {
+                        throw IOException(
+                            "SoraFS gateway response exceeds the " +
+                                "$MAX_GATEWAY_RESPONSE_BYTES-byte limit",
+                        )
+                    }
+                    output.write(chunk, 0, read)
+                }
+                if (declaredLength != null && declaredLength != total.toLong()) {
+                    throw IOException("SoraFS gateway response length does not match Content-Length")
+                }
+                TransportResponse(
+                    response.statusCode,
+                    output.toByteArray(),
+                    response.message,
+                    response.headers,
+                )
+            }
+        }
     }
+
+    private fun canonicalContentLength(response: TransportStreamResponse): Long? {
+        val matching = response.headers.entries
+            .filter { it.key.equals("Content-Length", ignoreCase = true) }
+        if (matching.isEmpty()) return null
+        if (matching.size != 1) {
+            throw IOException("SoraFS gateway returned ambiguous Content-Length headers")
+        }
+        val values = matching[0].value
+        if (values.size != 1) {
+            throw IOException("SoraFS gateway returned ambiguous Content-Length headers")
+        }
+        val value = values[0]
+        if (value.isEmpty() || value.any { it !in '0'..'9' } ||
+            (value.length > 1 && value.startsWith('0'))
+        ) {
+            throw IOException("SoraFS gateway returned a noncanonical Content-Length")
+        }
+        return value.toLongOrNull()
+            ?: throw IOException("SoraFS gateway returned an overflowing Content-Length")
+    }
+
+    private fun resolvePath(path: String): URI = baseUri.resolve(path)
 
     private fun mergeHeaders(): Map<String, String> {
         val headers = LinkedHashMap(_defaultHeaders)

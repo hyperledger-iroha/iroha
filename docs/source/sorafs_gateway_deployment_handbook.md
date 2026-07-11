@@ -18,7 +18,7 @@ This handbook gives infra teams a single playbook for shipping and running Torii
 |-------------|-------|
 | Torii build ≥ `2026-02-18` | Must include stream-token enforcement and `torii.sorafs_gateway` config surface. |
 | GAR admission artefacts | Gateway admission envelope + manifest signed via governance tooling. |
-| Stream token signing key | Stored at `sorafs_gateway_secrets/token_signing_sk`. Rotate quarterly (see §5.4). |
+| Stream token signing key | Stored at `sorafs_gateway_secrets/token_signing_sk`; distribute its Ed25519 public key through authenticated provider inventory. Rotate as described in §5.4. |
 | Observability stack | Prometheus + Grafana dashboards (`grafana_sorafs_gateway_*`) shipped in `docs/source/`. |
 | Smoke tooling | Latest `sorafs-fetch` CLI (`cargo run -p sorafs_fetch -- --help`) with the gateway options described below. |
 
@@ -38,6 +38,51 @@ This handbook gives infra teams a single playbook for shipping and running Torii
 2. Ensure TLS automation controller is active (`tls_automation` section) so the `X-Sora-TLS-State` header is populated.
 3. Configure observability exporters (Prometheus scrape of `torii_metrics` endpoint). Dashboards referenced in §4 expect metric names `torii_sorafs_chunk_range_requests_total`, `torii_sorafs_stream_token_denials_total{reason=…}`, etc.
 
+The signing-key path must name one regular, non-symlink, single-link file. On
+Unix it must grant no group or other permissions (`0400` or `0600` are the
+recommended modes). The file is read with `O_NOFOLLOW`, bounded to 65 bytes,
+and must contain either exactly 32 raw seed bytes or 64 lowercase hexadecimal
+characters with an optional final newline. Startup fails closed for permissive
+permissions, all-zero material, path replacement during the read, hard links,
+or non-canonical key text. Configure positive token defaults only: zero no
+longer means unlimited, TTL is capped at one hour, and request overrides may
+only reduce these defaults.
+
+### 3.1 CID cache hydration and origin isolation
+
+Torii treats every provider-advertised hydration route as untrusted input. A
+provider Torii endpoint must resolve to a clean HTTPS origin: credentials,
+queries, fragments, non-root base paths, redirects, and HTTP endpoints are
+rejected. Torii resolves the hostname once, rejects the entire answer when any
+address is loopback, private, link-local, multicast, documentation, transition,
+or otherwise reserved, and pins the validated addresses into the request client.
+This prevents a later DNS answer from rebinding the request to an internal
+service. Rustls certificate-chain and hostname verification remain mandatory;
+there is no insecure-certificate override or plaintext fallback. Operators must
+therefore publish public, directly reachable Torii
+origins in provider adverts; split-horizon or RFC 1918 routes are intentionally
+not supported by public CID hydration.
+
+Remote manifest and payload responses are streamed into bounded buffers. Torii
+caps provider attempts, DNS answers, response headers, metadata, file entries,
+payload bytes, and concurrent distinct CID hydrations. Declared lengths are
+checked before allocation and streamed lengths are checked again. Canonical
+base64/Norito, manifest policy and digest bindings, exact fetch ranges, payload
+and chunk-plan digests, file layout, local free capacity, and the active denylist
+must all pass before anything is persisted. Redirects are never followed. A
+`429` with `Retry-After` means the bounded hydration single-flight table is full;
+a `502` means every approved route failed transport or integrity checks.
+
+The `/sorafs/cid/<cid>/…` path gateway is not an execution origin. HTML, CSS,
+JavaScript, SVG, XML, PDF, WebAssembly, and other explicitly active formats are
+redirected to the configured `<cid>.sorafs…` isolated origin, even for
+non-navigation requests. If Torii cannot derive an approved CID origin it
+returns `421` instead of serving the bytes on the API origin. Passive assets may
+remain on the path gateway, always with `X-Content-Type-Options: nosniff`; unknown
+media types are forced to download with `Content-Disposition: attachment`.
+Individual responses are limited to 8 MiB; larger objects require one HTTP byte
+range of at most 8 MiB and receive `206` plus `Content-Range`.
+
 ## 4. Blue/Green Rollout Procedure
 
 ### 4.1 Pre-flight Validation
@@ -54,7 +99,7 @@ This handbook gives infra teams a single playbook for shipping and running Torii
    ```bash
    sorafs-fetch \
      --plan=plan.json \
-     --gateway-provider=name=stage-gw,provider-id=<hex>,base-url=https://stage-gw.example/,stream-token=<base64> \
+     --gateway-provider=name=stage-gw,provider-id=<hex>,gateway-key=<ed25519-public-key-hex>,base-url=https://stage-gw.example/,stream-token=<base64> \
      --gateway-manifest-id=<manifest_id_hex> \
      --gateway-chunker-handle=sorafs.sf1@1.0.0 \
      --gateway-client-id=stage-orchestrator \
@@ -88,7 +133,7 @@ and stream-token entries before running):
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
-  --provider name=green-1,provider-id=<hex>,base-url=https://gw-green.example/direct/,stream-token=<base64>
+  --provider name=green-1,provider-id=<hex>,gateway-key=<ed25519-public-key-hex>,base-url=https://gw-green.example/,stream-token=<base64>
 ```
 
 The wrapper persists the scoreboard declared in
@@ -119,7 +164,7 @@ Recommended alerts:
 
 | Incident | Detection | Immediate Action | Follow-up |
 |----------|-----------|------------------|-----------|
-| Stream token exhaustion | Alert: `rate_limited` denials | Issue new token with higher `max_streams` via `/token`; adjust orchestrator concurrency. | Review client budget; update `torii.sorafs_gateway.stream_tokens.default_max_streams`. |
+| Stream token exhaustion | Alert: `rate_limited` denials | Issue a token with `max_streams` no greater than the configured ceiling; adjust orchestrator concurrency. | Review client budget; update `torii.sorafs_gateway.stream_tokens.default_max_streams` through the controlled configuration rollout if the ceiling is too low. |
 | GAR mismatch / provider not admitted | Policy denial metric spikes | Verify admission registry sync; run `iroha_cli app sorafs direct-mode status`. | Re-sign manifest/envelope; document in governance log. |
 | TLS automation failure | `X-Sora-TLS-State` transitions to `degraded` | Trigger manual ACME renewal (`sorafs-gateway tls renew`); fall back to stored cert. | File incident report with cert timeline. |
 | Denylist hit / governance takedown | `gateway_policy_denials_total{reason="denylisted"}` | Confirm request metadata, inform governance, block offending provider/alias. | Update denylist documentation; retain logs for compliance. |
@@ -132,10 +177,24 @@ Recommended alerts:
 
 ### 5.4 Key Rotation
 
-1. Run `sorafs-gateway key rotate --kind token-signing`.
-2. Update admission manifest (`gateway.token_signing_pk`) and publish envelope.
-3. Notify orchestrators via telemetry topic `sorafs.gateway.token_pk_update`.
-4. Keep old key for 24h, then purge from secrets store.
+1. Generate a fresh non-zero Ed25519 seed in the approved KMS/HSM workflow and
+   install it at the configured `sorafs.storage.stream_tokens.signing_key_path`.
+   Increment `key_version` before issuing tokens from the new key.
+2. Publish the new 32-byte public key in the authenticated provider deployment
+   inventory and bind it to the same admitted provider ID. The token endpoint's
+   `X-SoraFS-Verifying-Key` header is useful for comparison but is not a trust
+   anchor by itself.
+3. Stage a new provider descriptor containing the new `gateway-key` and a token
+   signed by that key. A descriptor pins exactly one key; never pair a new key
+   with an old token or silently fall back to a key carried beside a failed
+   token.
+4. Switch consumers atomically after the inventory update is visible. If an
+   overlap window is required, use separately named old/new descriptors so each
+   token remains bound to its own pinned key, then remove the old descriptor no
+   later than its final token expiry.
+5. Revoke and destroy the old secret, retain the public-key fingerprint,
+   `token_pk_version`, activation time, final expiry, and change approval in the
+   audit evidence, and run negative probes proving old-key tokens are rejected.
 
 ### 5.5 WAF Policy Pack
 
@@ -154,8 +213,8 @@ Gateway rollouts must include the shared WAF/rate pack emitted under `configs/so
 ```
 sorafs-fetch \
   --plan=chunk_fetch_plan.json \
-  --gateway-provider=name=gw-a,provider-id=e1ab...,base-url=https://gw-a.example/,stream-token=<b64> \
-  --gateway-provider=name=gw-b,provider-id=f2cd...,base-url=https://gw-b.example/,stream-token=<b64> \
+  --gateway-provider=name=gw-a,provider-id=e1ab...,gateway-key=<ed25519-public-key-hex>,base-url=https://gw-a.example/,stream-token=<b64> \
+  --gateway-provider=name=gw-b,provider-id=f2cd...,gateway-key=<ed25519-public-key-hex>,base-url=https://gw-b.example/,stream-token=<b64> \
   --gateway-manifest-id=<manifest_id_hex> \
   --gateway-chunker-handle=sorafs.sf1@1.0.0 \
   --gateway-client-id=stage-orchestrator \

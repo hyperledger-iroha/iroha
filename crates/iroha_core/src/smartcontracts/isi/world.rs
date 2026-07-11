@@ -16682,6 +16682,29 @@ pub mod isi {
             _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            if let Parameter::Custom(custom) = self.inner() {
+                match iroha_data_model::nexus::LaneLifecycleParameterV1::from_custom_parameter(
+                    custom,
+                ) {
+                    Ok(Some(payload)) => state_transaction
+                        .stage_consensus_lane_lifecycle(&payload)
+                        .map_err(|err| {
+                            InstructionExecutionError::InvalidParameter(
+                                InvalidParameterError::SmartContract(format!(
+                                    "invalid Nexus lane lifecycle transition: {err}"
+                                )),
+                            )
+                        })?,
+                    Ok(None) => {}
+                    Err(err) => {
+                        return Err(InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(format!(
+                                "invalid Nexus lane lifecycle parameter payload: {err}"
+                            )),
+                        ));
+                    }
+                }
+            }
             // Handle scheduling parameters specially since they are optional in WSV
             // and are not listed by `Parameters::parameters()` iterator.
             match self.inner().clone() {
@@ -20083,6 +20106,7 @@ pub mod isi {
             let settlement_commitment = iroha_data_model::block::consensus::LaneBlockCommitment {
                 block_height: block_header.height().get(),
                 lane_id: LaneId::new(4),
+                lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
                 dataspace_id: DataSpaceId::new(12),
                 tx_count: 1,
                 total_local_micro: 1,

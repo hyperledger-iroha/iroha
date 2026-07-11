@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.sorafs;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertThrows;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -19,31 +20,34 @@ import org.junit.Test;
 public final class SorafsGatewayClientOkHttpTests {
 
   @Test
-  public void fetchSummaryUsesOkHttpTransportAndParsesResponse() throws Exception {
+  public void insecureLoopbackMockServerIsRejectedBeforeOkHttpDispatch() throws Exception {
     try (MockWebServer server = new MockWebServer()) {
       final String summaryJson = JsonWriter.encode(buildSummaryPayload());
       server.enqueue(new MockResponse().setResponseCode(200).setBody(summaryJson));
       server.start();
 
-      final SorafsGatewayClient client =
-          SorafsGatewayClient.builder()
-              .setExecutor(new OkHttpTransportExecutor(new OkHttpClient()))
-              .setBaseUri(server.url("/").uri())
-              .setTimeout(Duration.ofSeconds(2))
-              .setDefaultHeaders(Map.of("X-Test", "ok"))
-              .build();
+      assertThrows(
+          IllegalArgumentException.class,
+          () ->
+              SorafsGatewayClient.builder()
+                  .setExecutor(new OkHttpTransportExecutor(new OkHttpClient()))
+                  .setBaseUri(server.url("/").uri())
+                  .setTimeout(Duration.ofSeconds(2))
+                  .setDefaultHeaders(Map.of("X-Test", "ok"))
+                  .build());
 
       final GatewayProvider provider =
           GatewayProvider.builder()
               .setName("p1")
               .setProviderIdHex("aa11".repeat(16))
+              .setGatewayPublicKeyHex("bb22".repeat(16))
               .setBaseUrl("https://provider.example")
               .setStreamTokenBase64("c3RyZWFt")
               .build();
       final GatewayFetchRequest request =
           GatewayFetchRequest.builder()
               .setManifestIdHex("feedbeef".repeat(8))
-              .setChunkerHandle("chunker-1")
+              .setChunkerHandle("sorafs.sf1@1.0.0")
               .setOptions(
                   GatewayFetchOptions.builder()
                       .setClientId("client-1")
@@ -52,22 +56,7 @@ public final class SorafsGatewayClientOkHttpTests {
               .addProvider(provider)
               .build();
 
-      final GatewayFetchSummary summary = client.fetchSummary(request).get(2, TimeUnit.SECONDS);
-      assertEquals("feedbeef".repeat(8), summary.manifestIdHex());
-      assertEquals("chunker-1", summary.chunkerHandle());
-      assertEquals("client-1", summary.clientId());
-      assertEquals(2, summary.chunkCount());
-      assertEquals(1, summary.providerReports().size());
-      assertEquals("p1", summary.providerReports().get(0).provider());
-
-      final RecordedRequest recorded = server.takeRequest(1, TimeUnit.SECONDS);
-      assertNotNull(recorded);
-      assertEquals("/v1/sorafs/gateway/fetch", recorded.getPath());
-      assertEquals("POST", recorded.getMethod());
-      assertEquals("application/json", recorded.getHeader("Content-Type"));
-      assertEquals("application/json", recorded.getHeader("Accept"));
-      assertEquals("ok", recorded.getHeader("X-Test"));
-      assertEquals(request.toJsonString(), recorded.getBody().readUtf8());
+      assertEquals(0, server.getRequestCount());
     }
   }
 

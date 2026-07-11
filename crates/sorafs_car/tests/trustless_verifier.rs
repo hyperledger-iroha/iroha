@@ -1,3 +1,5 @@
+//! CLI regressions for the SoraNet trustless verifier.
+
 use std::{env, fs, path::PathBuf};
 
 use assert_cmd::cargo::cargo_bin_cmd;
@@ -187,6 +189,82 @@ fn validation_outcome_rejects_pin_record_flag_explicitly() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("--validation-outcome emits manifest/CAR replay outcomes"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn validation_outcome_rejects_noncanonical_generated_at() {
+    let manifest = workspace_path("fixtures/sorafs_gateway/1.0.0/manifest_v1.to");
+    let car = workspace_path("fixtures/sorafs_gateway/1.0.0/gateway.car");
+    let config = workspace_path("configs/soranet/gateway_m0/gateway_trustless_verifier.toml");
+
+    for (value, expected) in [
+        ("0", "greater than zero"),
+        ("0123", "leading zeros"),
+        ("+123", "unsigned decimal"),
+        ("123 ", "whitespace"),
+        ("18446744073709551616", "invalid --generated-at"),
+    ] {
+        let temp = tempdir().expect("tempdir");
+        let outcome_path = temp.path().join("validation_outcome.json");
+        let output = cargo_bin_cmd!("soranet_trustless_verifier")
+            .args([
+                "--manifest",
+                manifest.to_str().expect("manifest path is utf-8"),
+                "--car",
+                car.to_str().expect("CAR path is utf-8"),
+                "--config",
+                config.to_str().expect("config path is utf-8"),
+                "--validation-outcome",
+                "--generated-at",
+                value,
+                "--json-out",
+                outcome_path.to_str().expect("outcome path is utf-8"),
+            ])
+            .output()
+            .expect("run trustless verifier");
+
+        assert!(
+            !output.status.success(),
+            "generated_at={value:?} unexpectedly succeeded"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(expected),
+            "generated_at={value:?} stderr did not contain {expected:?}: {stderr}"
+        );
+        assert!(
+            !outcome_path.exists(),
+            "generated_at={value:?} must fail before writing validation outcome"
+        );
+    }
+}
+
+#[test]
+fn generated_at_requires_validation_outcome_mode() {
+    let manifest = workspace_path("fixtures/sorafs_gateway/1.0.0/manifest_v1.to");
+    let car = workspace_path("fixtures/sorafs_gateway/1.0.0/gateway.car");
+    let config = workspace_path("configs/soranet/gateway_m0/gateway_trustless_verifier.toml");
+
+    let output = cargo_bin_cmd!("soranet_trustless_verifier")
+        .args([
+            "--manifest",
+            manifest.to_str().expect("manifest path is utf-8"),
+            "--car",
+            car.to_str().expect("CAR path is utf-8"),
+            "--config",
+            config.to_str().expect("config path is utf-8"),
+            "--generated-at",
+            "123",
+        ])
+        .output()
+        .expect("run trustless verifier");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--generated-at only applies with --validation-outcome"),
         "stderr: {stderr}"
     );
 }

@@ -1160,6 +1160,9 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 
 def _decoded_public_blocker_text(value: str) -> str:
+    # Source-inventory marker: lane public blocker decode helpers use exact strings.
+    if type(value) is not str:
+        return ""
     decoded = value
     for _decode_pass in range(max(1, len(value))):
         next_decoded = unquote(html_unescape(decoded))
@@ -1170,6 +1173,8 @@ def _decoded_public_blocker_text(value: str) -> str:
 
 
 def _decoded_cli_error_text_issue(value: str) -> bool:
+    if type(value) is not str:
+        return True
     decoded = _decoded_public_blocker_text(value)
     if any(ord(character) < 0x20 or ord(character) == 0x7F for character in decoded):
         return True
@@ -1181,7 +1186,10 @@ def _decoded_cli_error_text_issue(value: str) -> bool:
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     if isinstance(exc, (OSError, SystemExit)):
         return fallback
-    text = str(exc)
+    try:
+        text = str(exc)
+    except Exception:
+        return fallback
     if not text:
         return fallback
     if not text.isascii():

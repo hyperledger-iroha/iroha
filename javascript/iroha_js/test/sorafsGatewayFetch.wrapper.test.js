@@ -5,9 +5,7 @@ import { test as baseTest } from "node:test";
 import assert from "node:assert/strict";
 
 import { SorafsGatewayFetchError, sorafsGatewayFetch } from "../src/sorafs.js";
-import { makeNativeTest } from "./helpers/native.js";
-
-const test = makeNativeTest(baseTest);
+const test = baseTest;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -15,6 +13,7 @@ const __dirname = path.dirname(__filename);
 const MANIFEST_HEX = "aa".repeat(32);
 const PROVIDER_ID_HEX = "bb".repeat(32);
 const SECOND_PROVIDER_ID_HEX = "cc".repeat(32);
+const GATEWAY_PUBLIC_KEY_HEX = "dd".repeat(32);
 
 function createStubResult() {
   return {
@@ -109,13 +108,15 @@ test("sorafsGatewayFetch normalises native gateway bindings", (_t) => {
     {
       name: "alpha",
       providerIdHex: PROVIDER_ID_HEX,
+      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
       baseUrl: "https://gateway.test/",
       streamTokenB64: "dG9rZW4=",
-      privacyEventsUrl: "https://gateway.test/privacy",
+      privacyEventsUrl: "https://gateway.test/privacy/events",
     },
     {
       name: "beta",
       providerIdHex: SECOND_PROVIDER_ID_HEX,
+      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
       baseUrl: "https://beta-gateway.test/",
       streamTokenB64: "bWV0cmljc19hY2Nlc3M=",
     },
@@ -211,8 +212,10 @@ test("sorafsGatewayFetch normalises native gateway bindings", (_t) => {
   assert.equal(handleArg, "sorafs.sf1@1.0.0");
   assert.equal(planArg, "[]");
   assert.equal(providerArgs.length, 2);
-  assert.equal(providerArgs[0].provider_id_hex, PROVIDER_ID_HEX.toLowerCase());
-  assert.equal(providerArgs[1].provider_id_hex, SECOND_PROVIDER_ID_HEX.toLowerCase());
+  assert.equal(providerArgs[0].provider_id_hex, PROVIDER_ID_HEX);
+  assert.equal(providerArgs[0].gateway_public_key_hex, GATEWAY_PUBLIC_KEY_HEX);
+  assert.equal(providerArgs[0].privacy_events_url, "https://gateway.test/privacy/events");
+  assert.equal(providerArgs[1].provider_id_hex, SECOND_PROVIDER_ID_HEX);
   assert.equal(optionArg.telemetry_region, "ci-region");
   assert(optionArg.local_proxy);
   assert.equal(optionArg.local_proxy.kaigi_bridge.spool_dir, "/tmp/kaigi");
@@ -251,6 +254,7 @@ test("sorafsGatewayFetch rejects non-hex provider ids", () => {
     {
       name: "alpha",
       providerIdHex: "zz".repeat(32),
+      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
       baseUrl: "https://gateway.test/",
       streamTokenB64: "dG9rZW4=",
     },
@@ -264,9 +268,91 @@ test("sorafsGatewayFetch rejects non-hex provider ids", () => {
         providers,
         { __nativeBinding: stubBinding },
       ),
-    /provider\.providerIdHex must be a 32-byte hex string/,
+    /provider\.providerIdHex must be non-zero canonical lowercase 32-byte hex/,
   );
   assert.equal(calls, 0);
+});
+
+baseTest("sorafsGatewayFetch requires a canonical gateway trust key", () => {
+  const stubBinding = {
+    sorafsGatewayFetch: () => {
+      throw new Error("native binding must not be called");
+    },
+  };
+  const provider = {
+    name: "alpha",
+    providerIdHex: PROVIDER_ID_HEX,
+    gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
+    baseUrl: "https://gateway.test/",
+    streamTokenB64: "dG9rZW4=",
+  };
+  for (const gatewayPublicKeyHex of [
+    undefined,
+    "00".repeat(32),
+    "DD".repeat(32),
+    `0x${GATEWAY_PUBLIC_KEY_HEX}`,
+    ` ${GATEWAY_PUBLIC_KEY_HEX}`,
+    GATEWAY_PUBLIC_KEY_HEX.slice(2),
+  ]) {
+    assert.throws(
+      () =>
+        sorafsGatewayFetch(
+          MANIFEST_HEX,
+          "sorafs.sf1@1.0.0",
+          "[]",
+          [{ ...provider, gatewayPublicKeyHex }],
+          { __nativeBinding: stubBinding },
+        ),
+      /gatewayPublicKeyHex must be non-zero canonical lowercase 32-byte hex/,
+    );
+  }
+});
+
+baseTest("sorafsGatewayFetch rejects noncanonical and non-public gateway URLs", () => {
+  const stubBinding = {
+    sorafsGatewayFetch: () => {
+      throw new Error("native binding must not be called");
+    },
+  };
+  const provider = {
+    name: "alpha",
+    providerIdHex: PROVIDER_ID_HEX,
+    gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
+    baseUrl: "https://gateway.test/",
+    streamTokenB64: "dG9rZW4=",
+  };
+  for (const baseUrl of [
+    "http://gateway.test/",
+    "https://user@gateway.test/",
+    "https://gateway.test:443/",
+    "https://gateway.test:444/",
+    "https://gateway.test/path",
+    "https://gateway.test/?query=1",
+    "https://gateway.test/#fragment",
+    "https://localhost/",
+    "https://node.localhost/",
+    "https://node.local/",
+    "https://node.internal/",
+    "https://node.lan/",
+    "https://127.0.0.1/",
+    "https://10.0.0.1/",
+    "https://192.0.2.1/",
+    "https://[::1]/",
+    "https://[2001:db8::1]/",
+  ]) {
+    assert.throws(
+      () =>
+        sorafsGatewayFetch(
+          MANIFEST_HEX,
+          "sorafs.sf1@1.0.0",
+          "[]",
+          [{ ...provider, baseUrl }],
+          { __nativeBinding: stubBinding },
+        ),
+      /provider\.baseUrl must be/,
+      baseUrl,
+    );
+  }
 });
 
 test("sorafsGatewayFetch rejects invalid manifest ids", () => {
@@ -281,6 +367,7 @@ test("sorafsGatewayFetch rejects invalid manifest ids", () => {
     {
       name: "alpha",
       providerIdHex: PROVIDER_ID_HEX,
+      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
       baseUrl: "https://gateway.test/",
       streamTokenB64: "dG9rZW4=",
     },
@@ -311,12 +398,14 @@ test("sorafsGatewayFetch rejects invalid manifest envelopes", () => {
     {
       name: "alpha",
       providerIdHex: PROVIDER_ID_HEX,
+      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
       baseUrl: "https://gateway.test/",
       streamTokenB64: "dG9rZW4=",
     },
     {
       name: "beta",
       providerIdHex: SECOND_PROVIDER_ID_HEX,
+      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
       baseUrl: "https://beta-gateway.test/",
       streamTokenB64: "bWV0cmljc19hY2Nlc3M=",
     },
@@ -347,12 +436,14 @@ test("sorafsGatewayFetch rejects fractional maxPeers", () => {
     {
       name: "alpha",
       providerIdHex: PROVIDER_ID_HEX,
+      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
       baseUrl: "https://gateway.test/",
       streamTokenB64: "dG9rZW4=",
     },
     {
       name: "beta",
       providerIdHex: SECOND_PROVIDER_ID_HEX,
+      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
       baseUrl: "https://beta-gateway.test/",
       streamTokenB64: "bWV0cmljc19hY2Nlc3M=",
     },
@@ -371,7 +462,7 @@ test("sorafsGatewayFetch rejects fractional maxPeers", () => {
   assert.equal(calls, 0);
 });
 
-test("sorafsGatewayFetch rejects invalid stream tokens", () => {
+test("sorafsGatewayFetch rejects invalid or oversized stream tokens", () => {
   let calls = 0;
   const stubBinding = {
     sorafsGatewayFetch: () => {
@@ -379,26 +470,75 @@ test("sorafsGatewayFetch rejects invalid stream tokens", () => {
       return createStubResult();
     },
   };
-  const providers = [
-    {
-      name: "alpha",
-      providerIdHex: PROVIDER_ID_HEX,
-      baseUrl: "https://gateway.test/",
-      streamTokenB64: "not-base64!!",
-    },
-  ];
+  for (const streamTokenB64 of [
+    "not-base64!!",
+    "A".repeat(4 * 1024 + 1),
+    Buffer.alloc(2 * 1024 + 1).toString("base64"),
+  ]) {
+    const providers = [
+      {
+        name: "alpha",
+        providerIdHex: PROVIDER_ID_HEX,
+        gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
+        baseUrl: "https://gateway.test/",
+        streamTokenB64,
+      },
+    ];
+    assert.throws(
+      () =>
+        sorafsGatewayFetch(
+          MANIFEST_HEX,
+          "sorafs.sf1@1.0.0",
+          "[]",
+          providers,
+          { __nativeBinding: stubBinding },
+        ),
+      /streamTokenB64 must be exact canonical standard base64/i,
+    );
+  }
+  assert.equal(calls, 0);
+});
+
+test("sorafsGatewayFetch accepts the exact stream-token wire ceiling", () => {
+  let calls = 0;
+  const providers = [PROVIDER_ID_HEX, SECOND_PROVIDER_ID_HEX].map(
+    (providerIdHex, index) => ({
+      name: `provider-${index}`,
+      providerIdHex,
+      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
+      baseUrl: `https://gateway-${index}.test/`,
+      streamTokenB64: Buffer.alloc(2 * 1024).toString("base64"),
+    }),
+  );
+  sorafsGatewayFetch(
+    MANIFEST_HEX,
+    "sorafs.sf1@1.0.0",
+    "[]",
+    providers,
+    { __nativeBinding: { sorafsGatewayFetch: () => { calls += 1; return createStubResult(); } } },
+  );
+  assert.equal(calls, 1);
+});
+
+test("sorafsGatewayFetch rejects provider lists above the protocol ceiling", () => {
+  const provider = {
+    name: "alpha",
+    providerIdHex: PROVIDER_ID_HEX,
+    gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
+    baseUrl: "https://gateway.test/",
+    streamTokenB64: "dG9rZW4=",
+  };
   assert.throws(
     () =>
       sorafsGatewayFetch(
         MANIFEST_HEX,
         "sorafs.sf1@1.0.0",
         "[]",
-        providers,
-        { __nativeBinding: stubBinding },
+        Array.from({ length: 257 }, () => provider),
+        { __nativeBinding: { sorafsGatewayFetch: () => createStubResult() } },
       ),
-    /streamTokenB64 must be a valid base64/i,
+    /at most 256 entries/,
   );
-  assert.equal(calls, 0);
 });
 
 test("sorafsGatewayFetch rejects fractional scoreboardNowUnixSecs", () => {
@@ -413,12 +553,14 @@ test("sorafsGatewayFetch rejects fractional scoreboardNowUnixSecs", () => {
     {
       name: "alpha",
       providerIdHex: PROVIDER_ID_HEX,
+      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
       baseUrl: "https://gateway.test/",
       streamTokenB64: "dG9rZW4=",
     },
     {
       name: "beta",
       providerIdHex: SECOND_PROVIDER_ID_HEX,
+      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
       baseUrl: "https://beta-gateway.test/",
       streamTokenB64: "bWV0cmljc19hY2Nlc3M=",
     },
@@ -449,12 +591,14 @@ test("sorafsGatewayFetch rejects fractional taikai cache burst multipliers", () 
     {
       name: "alpha",
       providerIdHex: PROVIDER_ID_HEX,
+      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
       baseUrl: "https://gateway.test/",
       streamTokenB64: "dG9rZW4=",
     },
     {
       name: "beta",
       providerIdHex: SECOND_PROVIDER_ID_HEX,
+      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
       baseUrl: "https://beta-gateway.test/",
       streamTokenB64: "bWV0cmljc19hY2Nlc3M=",
     },
@@ -502,12 +646,14 @@ test("sorafsGatewayFetch forwards retryBudget zero to disable cap", () => {
     {
       name: "alpha",
       providerIdHex: PROVIDER_ID_HEX,
+      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
       baseUrl: "https://gateway.test/",
       streamTokenB64: "dG9rZW4=",
     },
     {
       name: "beta",
       providerIdHex: SECOND_PROVIDER_ID_HEX,
+      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
       baseUrl: "https://beta-gateway.test/",
       streamTokenB64: "YmltZXRyaWNz",
     },
@@ -540,12 +686,14 @@ test("sorafsGatewayFetch surfaces structured multi-source errors", () => {
     {
       name: "alpha",
       providerIdHex: PROVIDER_ID_HEX,
+      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
       baseUrl: "https://gateway.test/",
       streamTokenB64: "dG9rZW4=",
     },
     {
       name: "beta",
       providerIdHex: SECOND_PROVIDER_ID_HEX,
+      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
       baseUrl: "https://beta-gateway.test/",
       streamTokenB64: "Y2hhbm5lbA==",
     },
@@ -575,12 +723,14 @@ test("sorafsGatewayFetch validates Taikai cache options", () => {
     {
       name: "alpha",
       providerIdHex: PROVIDER_ID_HEX,
+      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
       baseUrl: "https://gateway.test/",
       streamTokenB64: "dG9rZW4=",
     },
     {
       name: "beta",
       providerIdHex: SECOND_PROVIDER_ID_HEX,
+      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
       baseUrl: "https://beta-gateway.test/",
       streamTokenB64: "Z2FsbG9w",
     },
@@ -621,6 +771,7 @@ test("sorafsGatewayFetch rejects single-provider sessions without override", () 
           {
             name: "alpha",
             providerIdHex: PROVIDER_ID_HEX,
+            gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
             baseUrl: "https://gateway.test/",
             streamTokenB64: "dG9rZW4=",
           },
@@ -636,12 +787,14 @@ test("sorafsGatewayFetch validates option types", () => {
     {
       name: "alpha",
       providerIdHex: PROVIDER_ID_HEX,
+      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
       baseUrl: "https://gateway.test/",
       streamTokenB64: "dG9rZW4=",
     },
     {
       name: "beta",
       providerIdHex: SECOND_PROVIDER_ID_HEX,
+      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
       baseUrl: "https://beta-gateway.test/",
       streamTokenB64: "bWV0YQ==",
     },

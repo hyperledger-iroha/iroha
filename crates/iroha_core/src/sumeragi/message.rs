@@ -3,7 +3,10 @@ use std::{io::Write, sync::Arc};
 
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
-    block::{BlockHeader, BlockSignature, SignedBlock, consensus::SumeragiMembershipStatus},
+    block::{
+        BlockHeader, BlockSignature, SignedBlock, consensus::SumeragiMembershipStatus,
+        consensus_v2::ConsensusMessageV2,
+    },
     peer::PeerId,
 };
 use iroha_logger::prelude::*;
@@ -65,6 +68,18 @@ pub enum BlockMessage {
     Proposal(#[skip_try_from] super::consensus::Proposal),
     /// Standalone lane-local block proposal.
     LaneBlockProposal(#[skip_try_from] super::consensus::LaneBlockProposalV1),
+    /// Producer-authenticated executable payload for a standalone lane block.
+    LaneExecutablePayload(#[skip_try_from] crate::lane_consensus::LaneExecutablePayloadV1),
+    /// Global-proposer handoff of exact payload bytes to the selected lane committee.
+    LaneExecutablePayloadHandoff(
+        #[skip_try_from] crate::lane_consensus::LaneExecutablePayloadHandoffV1,
+    ),
+    /// Individual lane-committee vote authorizing the next lane-local view.
+    LaneBlockNewViewVote(#[skip_try_from] crate::lane_consensus::LaneBlockNewViewVoteV1),
+    /// Aggregate lane-committee certificate authorizing the next lane-local view.
+    LaneBlockNewViewCertificate(
+        #[skip_try_from] crate::lane_consensus::LaneBlockNewViewCertificateV1,
+    ),
     /// Commit vote (Prepare/Commit/NewView) carrying a BLS signature.
     QcVote(#[skip_try_from] super::consensus::QcVote),
     /// Commit certificate (Prepare/Commit/NewView) aggregating BLS signatures.
@@ -73,6 +88,12 @@ pub enum BlockMessage {
     LaneBlockVote(#[skip_try_from] crate::lane_consensus::LaneBlockVoteV1),
     /// Standalone lane-local block QC aggregating lane-validator BLS signatures.
     LaneBlockQc(#[skip_try_from] super::consensus::LaneBlockQcV1),
+    /// Explicitly versioned global Sumeragi v2 message.
+    ///
+    /// This variant is appended so legacy v1 discriminants remain stable for
+    /// archival decoding. Live protocol-v2 consensus rejects the legacy global
+    /// Proposal/QC/RBC variants above.
+    V2(#[skip_try_from] ConsensusMessageV2),
 }
 
 impl BlockMessage {
@@ -87,6 +108,51 @@ impl BlockMessage {
         match self {
             Self::RbcChunkCompact(chunk) => Self::RbcChunk(chunk.into_chunk()),
             other => other,
+        }
+    }
+
+    /// Return whether queue saturation must never drop this consensus message.
+    ///
+    /// Callers on asynchronous network workers should offload blocking enqueue
+    /// operations before forwarding messages in this class.  The match is
+    /// intentionally exhaustive so every newly introduced wire variant must
+    /// make an explicit liveness decision.
+    #[must_use]
+    pub fn requires_blocking_ingress(&self) -> bool {
+        match self {
+            Self::BlockCreated(_)
+            | Self::BlockSyncUpdate(_)
+            | Self::FetchBlockBody(_)
+            | Self::BlockBodyResponse(_)
+            | Self::CertifiedBlockFetch(_)
+            | Self::VrfCommit(_)
+            | Self::VrfReveal(_)
+            | Self::RbcInitRequest(_)
+            | Self::RbcChunkRequest(_)
+            | Self::RbcInit(_)
+            | Self::RbcChunk(_)
+            | Self::RbcChunkCompact(_)
+            | Self::RbcReady(_)
+            | Self::RbcDeliver(_)
+            | Self::Proposal(_)
+            | Self::LaneBlockProposal(_)
+            | Self::LaneExecutablePayload(_)
+            | Self::LaneExecutablePayloadHandoff(_)
+            | Self::LaneBlockNewViewVote(_)
+            | Self::LaneBlockNewViewCertificate(_)
+            | Self::QcVote(_)
+            | Self::Qc(_)
+            | Self::LaneBlockVote(_)
+            | Self::LaneBlockQc(_)
+            | Self::V2(_) => true,
+            Self::FetchPendingBlock(request) => {
+                request.priority == Some(FetchPendingBlockPriority::Consensus)
+                    || request.commit_qc_only == Some(true)
+            }
+            Self::ConsensusParams(_)
+            | Self::ExecWitness(_)
+            | Self::KuraReplicaAdvert(_)
+            | Self::ProposalHint(_) => false,
         }
     }
 
@@ -899,6 +965,7 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
     use iroha_data_model::{
         AccountId, ChainId, Level,
+        block::consensus_v2::{ConsensusMessageV2Payload, PayloadChunk},
         consensus::{
             PreviousRosterEvidence, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint,
         },
@@ -1118,6 +1185,7 @@ mod tests {
         let mut descriptor = consensus::LaneBlockDescriptorV1 {
             lane_id: LaneId::new(u32::from(seed % 11) + 1),
             dataspace_id: DataSpaceId::new(u64::from(seed % 13) + 1),
+            lane_incarnation: Hash::new(format!("message-lane-incarnation-{seed}").as_bytes()),
             proposal_height: u64::from(seed).saturating_add(1),
             previous_lane_block_height: 0,
             previous_lane_block_descriptor_hash: None,
@@ -1151,6 +1219,7 @@ mod tests {
             .expect("sign lane-block fixture vote");
         let vote = crate::lane_consensus::LaneBlockVoteV1 {
             body: body.clone(),
+            payload_availability_vote: None,
             signer: validator,
             bls_signature: signature.payload().to_vec(),
         };
@@ -1161,6 +1230,7 @@ mod tests {
             validator_set,
             signers_bitmap: vec![1],
             bls_aggregate_signature: vote.bls_signature.clone(),
+            payload_availability_qc: None,
         };
         (proposal, vote, qc)
     }
@@ -1488,6 +1558,67 @@ mod tests {
             commit_qc_only: None,
         });
         assert_eq!(fetch.priority(), iroha_p2p::Priority::High);
+    }
+
+    #[test]
+    fn blocking_ingress_policy_handles_recovery_flags_and_malformed_v2_fail_closed() {
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x7A; 32]));
+        let requester = checked_random_peer_id();
+        let background = FetchPendingBlock {
+            requester: requester.clone(),
+            block_hash,
+            height: 7,
+            view: 2,
+            priority: None,
+            requester_roster_proof_known: Some(false),
+            commit_qc_only: Some(false),
+        };
+        assert!(
+            !BlockMessage::FetchPendingBlock(background.clone()).requires_blocking_ingress(),
+            "ordinary repair traffic may use the bounded non-blocking queue"
+        );
+
+        let mut consensus_priority = background.clone();
+        consensus_priority.priority = Some(FetchPendingBlockPriority::Consensus);
+        assert!(
+            BlockMessage::FetchPendingBlock(consensus_priority).requires_blocking_ingress(),
+            "consensus-priority repair must not be dropped under saturation"
+        );
+
+        let mut commit_qc_only = background;
+        commit_qc_only.commit_qc_only = Some(true);
+        assert!(
+            BlockMessage::FetchPendingBlock(commit_qc_only).requires_blocking_ingress(),
+            "commit-QC recovery must not be dropped under saturation"
+        );
+
+        assert!(
+            BlockMessage::RbcInitRequest(sample_rbc_init_request(0x7B)).requires_blocking_ingress(),
+            "RBC repair requests are liveness-critical"
+        );
+
+        let malformed_v2 = BlockMessage::V2(ConsensusMessageV2::new(
+            ConsensusMessageV2Payload::PayloadChunk(PayloadChunk {
+                manifest_hash: HashOf::from_untyped_unchecked(Hash::new(b"malformed-v2-manifest")),
+                index: u32::MAX,
+                bytes: Vec::new(),
+                sender: u32::MAX,
+                signature: Vec::new(),
+            }),
+        ));
+        assert!(
+            malformed_v2.requires_blocking_ingress(),
+            "validation must reject malformed v2 traffic after it reaches the authoritative ingress"
+        );
+
+        assert!(
+            !BlockMessage::ConsensusParams(ConsensusParamsAdvert {
+                collectors_k: 1,
+                redundant_send_r: 1,
+                membership: None,
+            })
+            .requires_blocking_ingress()
+        );
     }
 
     #[test]

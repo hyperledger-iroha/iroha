@@ -718,6 +718,7 @@ fn build_relay_artifacts(
     let settlement_commitment = LaneBlockCommitment {
         block_height,
         lane_id,
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
         tx_count: 1,
         total_local_micro: u128::try_from(effect_binding.source_amount_i64.unwrap_or(1).max(1))

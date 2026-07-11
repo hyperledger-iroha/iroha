@@ -2,22 +2,34 @@
 
 use std::{
     collections::HashMap,
-    fs,
+    fs::{self, OpenOptions},
+    io::Read as _,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+
 use iroha_logger::{trace, warn};
 pub use sorafs_manifest::ProviderAdmissionAdvertError as AdmissionCheckError;
 use sorafs_manifest::{
-    AdmissionRecord, ProviderAdmissionEnvelopeError, ProviderAdmissionEnvelopeV1, ProviderAdvertV1,
+    AdmissionRecord, ProviderAdmissionCouncilPolicy, ProviderAdmissionEnvelopeError,
+    ProviderAdmissionEnvelopeV1, ProviderAdmissionRenewalError, ProviderAdmissionRenewalV1,
+    ProviderAdmissionRevocationError, ProviderAdmissionRevocationV1, ProviderAdvertV1,
     verify_advert_against_record,
 };
 use thiserror::Error;
 
+/// Maximum number of admission envelopes loaded from one registry directory.
+pub const MAX_ADMISSION_ENVELOPES: usize = 4_096;
+/// Maximum canonical Norito size of one admission envelope (1 MiB).
+pub const MAX_ADMISSION_ENVELOPE_BYTES: u64 = 1024 * 1024;
+
 /// Admission registry loaded from governance envelopes.
 #[derive(Debug, Clone)]
 pub struct AdmissionRegistry {
+    policy: Option<Arc<ProviderAdmissionCouncilPolicy>>,
     by_provider: HashMap<[u8; 32], Arc<AdmissionRecord>>,
 }
 
@@ -26,6 +38,16 @@ impl AdmissionRegistry {
     #[must_use]
     pub fn empty() -> Self {
         Self {
+            policy: None,
+            by_provider: HashMap::new(),
+        }
+    }
+
+    /// Construct an empty registry capable of accepting records under `policy`.
+    #[must_use]
+    pub fn with_policy(policy: ProviderAdmissionCouncilPolicy) -> Self {
+        Self {
+            policy: Some(Arc::new(policy)),
             by_provider: HashMap::new(),
         }
     }
@@ -36,18 +58,24 @@ impl AdmissionRegistry {
     ///
     /// Returns a [`SingleEnvelopeError`] when any envelope is invalid or when
     /// multiple envelopes declare the same provider identifier.
-    pub fn from_envelopes<I>(envelopes: I) -> Result<Self, SingleEnvelopeError>
+    pub fn from_envelopes<I>(
+        policy: ProviderAdmissionCouncilPolicy,
+        envelopes: I,
+    ) -> Result<Self, SingleEnvelopeError>
     where
         I: IntoIterator<Item = ProviderAdmissionEnvelopeV1>,
     {
         let mut by_provider = HashMap::new();
         for envelope in envelopes {
-            let (provider_id, record) = prepare_entry(envelope)?;
+            let (provider_id, record) = prepare_entry(envelope, &policy)?;
             if by_provider.insert(provider_id, Arc::new(record)).is_some() {
                 return Err(SingleEnvelopeError::DuplicateProvider { provider_id });
             }
         }
-        Ok(Self { by_provider })
+        Ok(Self {
+            policy: Some(Arc::new(policy)),
+            by_provider,
+        })
     }
 
     /// Populate the registry from the provided directory.
@@ -57,23 +85,55 @@ impl AdmissionRegistry {
     /// Returns an [`AdmissionRegistryError`] when the directory cannot be read,
     /// an envelope fails to decode, or multiple envelopes declare the same
     /// provider identifier.
-    pub fn load_from_dir(dir: &Path) -> Result<Self, AdmissionRegistryError> {
+    pub fn load_from_dir(
+        dir: &Path,
+        policy: ProviderAdmissionCouncilPolicy,
+    ) -> Result<Self, AdmissionRegistryError> {
         let mut by_provider = HashMap::new();
+        let directory_metadata =
+            fs::symlink_metadata(dir).map_err(|err| AdmissionRegistryError::DirectoryMetadata {
+                dir: dir.into(),
+                err,
+            })?;
+        if directory_metadata.file_type().is_symlink() {
+            return Err(AdmissionRegistryError::SymlinkDirectory { dir: dir.into() });
+        }
+        if !directory_metadata.file_type().is_dir() {
+            return Err(AdmissionRegistryError::NotDirectory { dir: dir.into() });
+        }
         let read_dir = fs::read_dir(dir).map_err(|err| AdmissionRegistryError::ReadDir {
             dir: dir.into(),
             err,
         })?;
-
+        let mut paths = Vec::new();
         for entry in read_dir {
             let entry = entry.map_err(|err| AdmissionRegistryError::ReadDirEntry {
                 dir: dir.into(),
                 err,
             })?;
-            if !entry.path().is_file() {
+            if paths.len() == MAX_ADMISSION_ENVELOPES.saturating_add(1) {
+                return Err(AdmissionRegistryError::TooManyEntries {
+                    dir: dir.into(),
+                    limit: MAX_ADMISSION_ENVELOPES,
+                });
+            }
+            paths.push(entry.path());
+        }
+        paths.sort_unstable();
+
+        let mut envelope_count = 0_usize;
+        for path in paths {
+            if !validate_registry_entry(&path)? {
                 continue;
             }
-            let path = entry.path();
-            match load_single_envelope(&path) {
+            if envelope_count == MAX_ADMISSION_ENVELOPES {
+                return Err(AdmissionRegistryError::TooManyEntries {
+                    dir: dir.into(),
+                    limit: MAX_ADMISSION_ENVELOPES,
+                });
+            }
+            envelope_count += 1;
+            match load_single_envelope(&path, &policy) {
                 Ok((provider_id, record)) => {
                     trace!(?path, "loaded provider admission envelope");
                     if by_provider.insert(provider_id, Arc::new(record)).is_some() {
@@ -96,7 +156,106 @@ impl AdmissionRegistry {
             );
         }
 
-        Ok(Self { by_provider })
+        Ok(Self {
+            policy: Some(Arc::new(policy)),
+            by_provider,
+        })
+    }
+
+    /// Atomically replace this registry with a freshly loaded trust store and council policy.
+    ///
+    /// The current registry remains untouched unless every directory entry decodes canonically
+    /// and satisfies the replacement policy. This permits deliberate council-key rotation without
+    /// exposing a partially reloaded registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdmissionRegistryError`] on any directory, decoding, canonical-encoding,
+    /// signature, trust, quorum, or duplicate-provider failure.
+    pub fn reload_from_dir(
+        &mut self,
+        dir: &Path,
+        policy: ProviderAdmissionCouncilPolicy,
+    ) -> Result<(), AdmissionRegistryError> {
+        let replacement = Self::load_from_dir(dir, policy)?;
+        *self = replacement;
+        Ok(())
+    }
+
+    /// Register a newly approved envelope under this registry's council policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdmissionRegistryUpdateError`] when the registry is a deny-all registry without
+    /// a trust policy, the envelope is invalid or untrusted, or the provider already exists.
+    pub fn register(
+        &mut self,
+        envelope: ProviderAdmissionEnvelopeV1,
+    ) -> Result<(), AdmissionRegistryUpdateError> {
+        let policy = self
+            .policy
+            .as_deref()
+            .ok_or(AdmissionRegistryUpdateError::PolicyUnavailable)?;
+        let (provider_id, record) =
+            prepare_entry(envelope, policy).map_err(AdmissionRegistryUpdateError::Envelope)?;
+        if self.by_provider.contains_key(&provider_id) {
+            return Err(AdmissionRegistryUpdateError::DuplicateProvider { provider_id });
+        }
+        self.by_provider.insert(provider_id, Arc::new(record));
+        Ok(())
+    }
+
+    /// Apply a council-approved renewal atomically to an existing provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdmissionRegistryUpdateError`] when policy is unavailable, the provider is not
+    /// admitted, or the renewal fails its chain, invariant, trust, or quorum checks.
+    pub fn apply_renewal(
+        &mut self,
+        renewal: &ProviderAdmissionRenewalV1,
+    ) -> Result<(), AdmissionRegistryUpdateError> {
+        let policy = self
+            .policy
+            .as_deref()
+            .ok_or(AdmissionRegistryUpdateError::PolicyUnavailable)?;
+        let provider_id = *renewal.provider_id();
+        let current = self
+            .by_provider
+            .get(&provider_id)
+            .ok_or(AdmissionRegistryUpdateError::UnknownProvider { provider_id })?;
+        let updated = current
+            .apply_renewal(renewal, policy)
+            .map_err(AdmissionRegistryUpdateError::Renewal)?;
+        self.by_provider.insert(provider_id, Arc::new(updated));
+        Ok(())
+    }
+
+    /// Verify and apply a council-approved revocation atomically.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdmissionRegistryUpdateError`] when policy is unavailable, the provider is not
+    /// admitted, or the revocation fails its binding, trust, or quorum checks.
+    pub fn revoke(
+        &mut self,
+        revocation: &ProviderAdmissionRevocationV1,
+    ) -> Result<Arc<AdmissionRecord>, AdmissionRegistryUpdateError> {
+        let policy = self
+            .policy
+            .as_deref()
+            .ok_or(AdmissionRegistryUpdateError::PolicyUnavailable)?;
+        let provider_id = revocation.provider_id;
+        let current = self
+            .by_provider
+            .get(&provider_id)
+            .ok_or(AdmissionRegistryUpdateError::UnknownProvider { provider_id })?;
+        current
+            .verify_revocation(revocation, policy)
+            .map_err(AdmissionRegistryUpdateError::Revocation)?;
+        self.by_provider
+            .remove(&provider_id)
+            .ok_or(AdmissionRegistryUpdateError::UnknownProvider { provider_id })
     }
 
     /// Look up an admission entry for the given provider identifier.
@@ -104,18 +263,109 @@ impl AdmissionRegistry {
     pub fn entry(&self, provider_id: &[u8; 32]) -> Option<Arc<AdmissionRecord>> {
         self.by_provider.get(provider_id).cloned()
     }
+
+    /// Return the number of governance-admitted provider identities.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.by_provider.len()
+    }
+
+    /// Return whether the registry contains no governance-admitted providers.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.by_provider.is_empty()
+    }
 }
 
-fn load_single_envelope(path: &Path) -> Result<([u8; 32], AdmissionRecord), SingleEnvelopeError> {
-    let bytes = fs::read(path).map_err(|err| SingleEnvelopeError::Read { err })?;
+fn load_single_envelope(
+    path: &Path,
+    policy: &ProviderAdmissionCouncilPolicy,
+) -> Result<([u8; 32], AdmissionRecord), SingleEnvelopeError> {
+    let bytes = read_bounded_envelope(path)?;
     let envelope = decode_envelope(&bytes).map_err(SingleEnvelopeError::Decode)?;
-    prepare_entry(envelope)
+    let canonical = norito::to_bytes(&envelope)
+        .map_err(|source| SingleEnvelopeError::CanonicalEncoding { source })?;
+    if canonical != bytes {
+        return Err(SingleEnvelopeError::NonCanonicalEncoding);
+    }
+    prepare_entry(envelope, policy)
+}
+
+fn validate_registry_entry(path: &Path) -> Result<bool, AdmissionRegistryError> {
+    let metadata = fs::symlink_metadata(path).map_err(|err| AdmissionRegistryError::Metadata {
+        path: path.into(),
+        err,
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(AdmissionRegistryError::SymlinkEntry { path: path.into() });
+    }
+    if !metadata.file_type().is_file() {
+        return Err(AdmissionRegistryError::NonRegularEntry { path: path.into() });
+    }
+    if path.file_name().and_then(std::ffi::OsStr::to_str) == Some("README.md") {
+        return Ok(false);
+    }
+    if path.extension().and_then(std::ffi::OsStr::to_str) != Some("to") {
+        return Err(AdmissionRegistryError::UnexpectedEntry { path: path.into() });
+    }
+    Ok(true)
+}
+
+fn read_bounded_envelope(path: &Path) -> Result<Vec<u8>, SingleEnvelopeError> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let mut file = options
+        .open(path)
+        .map_err(|err| SingleEnvelopeError::Open { err })?;
+    let opened_metadata = file
+        .metadata()
+        .map_err(|err| SingleEnvelopeError::Metadata { err })?;
+    if !opened_metadata.file_type().is_file() {
+        return Err(SingleEnvelopeError::NotRegularFile);
+    }
+    if opened_metadata.len() > MAX_ADMISSION_ENVELOPE_BYTES {
+        return Err(SingleEnvelopeError::TooLarge {
+            size: opened_metadata.len(),
+            limit: MAX_ADMISSION_ENVELOPE_BYTES,
+        });
+    }
+
+    #[cfg(unix)]
+    {
+        let path_metadata =
+            fs::symlink_metadata(path).map_err(|err| SingleEnvelopeError::Metadata { err })?;
+        if path_metadata.dev() != opened_metadata.dev()
+            || path_metadata.ino() != opened_metadata.ino()
+        {
+            return Err(SingleEnvelopeError::EntryChangedDuringLoad);
+        }
+    }
+
+    let allocation = usize::try_from(opened_metadata.len())
+        .unwrap_or(usize::MAX)
+        .min(usize::try_from(MAX_ADMISSION_ENVELOPE_BYTES).unwrap_or(usize::MAX));
+    let mut bytes = Vec::with_capacity(allocation);
+    file.by_ref()
+        .take(MAX_ADMISSION_ENVELOPE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|err| SingleEnvelopeError::Read { err })?;
+    let observed_size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if observed_size > MAX_ADMISSION_ENVELOPE_BYTES {
+        return Err(SingleEnvelopeError::TooLarge {
+            size: observed_size,
+            limit: MAX_ADMISSION_ENVELOPE_BYTES,
+        });
+    }
+    Ok(bytes)
 }
 
 fn prepare_entry(
     envelope: ProviderAdmissionEnvelopeV1,
+    policy: &ProviderAdmissionCouncilPolicy,
 ) -> Result<([u8; 32], AdmissionRecord), SingleEnvelopeError> {
-    let record = AdmissionRecord::new(envelope).map_err(SingleEnvelopeError::Verify)?;
+    let record = AdmissionRecord::new(envelope, policy).map_err(SingleEnvelopeError::Verify)?;
     let provider_id = *record.provider_id();
     Ok((provider_id, record))
 }
@@ -140,6 +390,26 @@ fn decode_envelope(bytes: &[u8]) -> Result<ProviderAdmissionEnvelopeV1, Envelope
 /// Errors raised while constructing the admission registry.
 #[derive(Debug, Error)]
 pub enum AdmissionRegistryError {
+    /// Inspecting the configured trust-store directory failed.
+    #[error("failed to inspect admission directory {dir:?}: {err}")]
+    DirectoryMetadata {
+        /// Configured registry directory.
+        dir: PathBuf,
+        /// Underlying I/O error.
+        err: std::io::Error,
+    },
+    /// A symbolic-link root could redirect the complete trust store.
+    #[error("provider admission directory {dir:?} must not be a symbolic link")]
+    SymlinkDirectory {
+        /// Rejected registry directory.
+        dir: PathBuf,
+    },
+    /// The configured trust-store root is not a directory.
+    #[error("provider admission path {dir:?} is not a directory")]
+    NotDirectory {
+        /// Rejected registry path.
+        dir: PathBuf,
+    },
     /// Reading the admission directory failed.
     #[error("failed to read admission directory {dir:?}: {err}")]
     ReadDir {
@@ -155,6 +425,42 @@ pub enum AdmissionRegistryError {
         dir: PathBuf,
         /// Underlying I/O error.
         err: std::io::Error,
+    },
+    /// The directory contains more entries than the bounded startup loader accepts.
+    #[error("provider admission directory {dir:?} exceeds the {limit}-entry limit")]
+    TooManyEntries {
+        /// Registry directory.
+        dir: PathBuf,
+        /// Configured hard limit.
+        limit: usize,
+    },
+    /// Entry metadata could not be inspected without following links.
+    #[error("failed to inspect provider admission entry {path:?}: {err}")]
+    Metadata {
+        /// Rejected entry path.
+        path: PathBuf,
+        /// Underlying I/O error.
+        err: std::io::Error,
+    },
+    /// Symbolic links are forbidden in the trust store.
+    #[error("provider admission entry {path:?} is a symbolic link")]
+    SymlinkEntry {
+        /// Rejected entry path.
+        path: PathBuf,
+    },
+    /// Directories, devices, sockets, and other non-regular entries are forbidden.
+    #[error("provider admission entry {path:?} is not a regular file")]
+    NonRegularEntry {
+        /// Rejected entry path.
+        path: PathBuf,
+    },
+    /// Only canonical `.to` envelope files and the documented README may appear in the directory.
+    #[error(
+        "unexpected provider admission registry entry {path:?}; only .to files and README.md are allowed"
+    )]
+    UnexpectedEntry {
+        /// Rejected entry path.
+        path: PathBuf,
     },
     /// A second envelope for the same provider was encountered.
     #[error("duplicate provider admission envelope for {provider_id:?} at {path:?}")]
@@ -174,10 +480,65 @@ pub enum AdmissionRegistryError {
     },
 }
 
+/// Errors raised while mutating an in-memory provider admission registry.
+#[derive(Debug, Error)]
+pub enum AdmissionRegistryUpdateError {
+    /// The registry was created as deny-all and therefore has no trust roots.
+    #[error("provider admission council policy is unavailable")]
+    PolicyUnavailable,
+    /// A new envelope failed structural, cryptographic, trust, or quorum verification.
+    #[error("provider admission envelope rejected: {0}")]
+    Envelope(SingleEnvelopeError),
+    /// A provider cannot be registered twice.
+    #[error("duplicate provider admission envelope for {provider_id:02x?}")]
+    DuplicateProvider {
+        /// Identifier already present in the registry.
+        provider_id: [u8; 32],
+    },
+    /// A renewal or revocation referenced a provider absent from the registry.
+    #[error("provider {provider_id:02x?} is not present in the admission registry")]
+    UnknownProvider {
+        /// Missing provider identifier.
+        provider_id: [u8; 32],
+    },
+    /// A renewal failed its chain, invariant, signature, trust, or quorum checks.
+    #[error("provider admission renewal rejected: {0}")]
+    Renewal(ProviderAdmissionRenewalError),
+    /// A revocation failed its binding, signature, trust, or quorum checks.
+    #[error("provider admission revocation rejected: {0}")]
+    Revocation(ProviderAdmissionRevocationError),
+}
+
 /// Errors emitted while loading a single envelope.
 #[derive(Debug, Error)]
 pub enum SingleEnvelopeError {
-    /// Failed to read the envelope file.
+    /// Failed to open the envelope without following symbolic links.
+    #[error("failed to open envelope: {err}")]
+    Open {
+        /// Underlying I/O error.
+        err: std::io::Error,
+    },
+    /// Failed to inspect the opened envelope.
+    #[error("failed to inspect opened envelope: {err}")]
+    Metadata {
+        /// Underlying I/O error.
+        err: std::io::Error,
+    },
+    /// The opened entry was not a regular file.
+    #[error("opened envelope is not a regular file")]
+    NotRegularFile,
+    /// The directory entry was replaced between inspection and opening.
+    #[error("provider admission entry changed while it was being loaded")]
+    EntryChangedDuringLoad,
+    /// The envelope exceeds the bounded startup allocation.
+    #[error("provider admission envelope is {size} bytes, exceeding the {limit}-byte limit")]
+    TooLarge {
+        /// Observed size.
+        size: u64,
+        /// Hard byte limit.
+        limit: u64,
+    },
+    /// Failed to read the bounded envelope file.
     #[error("failed to read envelope: {err}")]
     Read {
         /// Underlying I/O error.
@@ -186,6 +547,15 @@ pub enum SingleEnvelopeError {
     /// Envelope contents could not be decoded.
     #[error("failed to decode envelope: {0}")]
     Decode(EnvelopeDecodeError),
+    /// A decoded envelope could not be encoded canonically.
+    #[error("failed to compute canonical envelope encoding: {source}")]
+    CanonicalEncoding {
+        /// Norito encoding failure.
+        source: norito::core::Error,
+    },
+    /// Input bytes had trailing, alternate, or otherwise non-canonical encoding.
+    #[error("provider admission envelope is not canonically encoded")]
+    NonCanonicalEncoding,
     /// Envelope verification failed.
     #[error("envelope verification failed: {0}")]
     Verify(ProviderAdmissionEnvelopeError),
@@ -203,4 +573,253 @@ pub enum EnvelopeDecodeError {
     /// Decoding the envelope with the Norito codec failed.
     #[error("failed to decode provider admission envelope: {0}")]
     Norito(#[from] norito::core::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs::File, path::Path};
+
+    use ed25519_dalek::{Signer as _, SigningKey};
+    use sorafs_manifest::{
+        CouncilSignature, ProviderAdmissionEnvelopeV1, ProviderAdmissionRenewalV1,
+        ProviderAdmissionRevocationV1, ProviderAdmissionSignatureError,
+        compute_envelope_authorization_digest,
+    };
+    use tempfile::TempDir;
+
+    use super::*;
+
+    fn fixture_bytes(name: &str) -> Vec<u8> {
+        fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../fixtures/sorafs_manifest/provider_admission")
+                .join(name),
+        )
+        .expect("read provider admission fixture")
+    }
+
+    fn fixture_envelope() -> ProviderAdmissionEnvelopeV1 {
+        norito::decode_from_bytes(&fixture_bytes("envelope_v1.to"))
+            .expect("decode provider admission fixture")
+    }
+
+    fn fixture_policy() -> ProviderAdmissionCouncilPolicy {
+        let key = SigningKey::from_bytes(&[0x45; 32]);
+        ProviderAdmissionCouncilPolicy::new([*key.verifying_key().as_bytes()], 1)
+            .expect("valid fixture policy")
+    }
+
+    fn write_fixture(dir: &Path, name: &str) {
+        fs::write(dir.join(name), fixture_bytes("envelope_v1.to"))
+            .expect("write provider admission fixture");
+    }
+
+    #[test]
+    fn registry_loads_canonical_envelope_under_explicit_policy() {
+        let temp = TempDir::new().expect("temp directory");
+        let envelope = fixture_envelope();
+        let policy = fixture_policy();
+        write_fixture(temp.path(), "provider.to");
+
+        let registry =
+            AdmissionRegistry::load_from_dir(temp.path(), policy).expect("load registry");
+        assert_eq!(registry.len(), 1);
+        assert!(registry.entry(&envelope.proposal.provider_id).is_some());
+    }
+
+    #[test]
+    fn registry_rejects_duplicate_and_corrupt_entries_fail_closed() {
+        let policy = fixture_policy();
+        let duplicates = TempDir::new().expect("temp directory");
+        write_fixture(duplicates.path(), "a.to");
+        write_fixture(duplicates.path(), "b.to");
+        assert!(matches!(
+            AdmissionRegistry::load_from_dir(duplicates.path(), policy.clone()),
+            Err(AdmissionRegistryError::DuplicateProvider { .. })
+        ));
+
+        let corrupt = TempDir::new().expect("temp directory");
+        write_fixture(corrupt.path(), "a.to");
+        fs::write(corrupt.path().join("b.to"), b"not-norito").expect("write corrupt entry");
+        assert!(matches!(
+            AdmissionRegistry::load_from_dir(corrupt.path(), policy),
+            Err(AdmissionRegistryError::LoadEnvelope { .. })
+        ));
+    }
+
+    #[test]
+    fn registry_rejects_unknown_nonregular_and_oversized_entries() {
+        let policy = fixture_policy();
+
+        let unknown = TempDir::new().expect("temp directory");
+        fs::write(
+            unknown.path().join("unexpected.json"),
+            b"ignored trust roots are unsafe",
+        )
+        .expect("write unknown entry");
+        assert!(matches!(
+            AdmissionRegistry::load_from_dir(unknown.path(), policy.clone()),
+            Err(AdmissionRegistryError::UnexpectedEntry { .. })
+        ));
+
+        let nonregular = TempDir::new().expect("temp directory");
+        fs::create_dir(nonregular.path().join("nested.to")).expect("create nested directory");
+        assert!(matches!(
+            AdmissionRegistry::load_from_dir(nonregular.path(), policy.clone()),
+            Err(AdmissionRegistryError::NonRegularEntry { .. })
+        ));
+
+        let oversized = TempDir::new().expect("temp directory");
+        let file = File::create(oversized.path().join("oversized.to")).expect("create envelope");
+        file.set_len(MAX_ADMISSION_ENVELOPE_BYTES + 1)
+            .expect("extend envelope");
+        assert!(matches!(
+            AdmissionRegistry::load_from_dir(oversized.path(), policy),
+            Err(AdmissionRegistryError::LoadEnvelope {
+                source: SingleEnvelopeError::TooLarge { .. },
+                ..
+            })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn registry_rejects_symlinked_envelope() {
+        use std::os::unix::fs::symlink;
+
+        let policy = fixture_policy();
+        let temp = TempDir::new().expect("temp directory");
+        let target = temp.path().join("target.bin");
+        fs::write(&target, fixture_bytes("envelope_v1.to")).expect("write target");
+        symlink(&target, temp.path().join("provider.to")).expect("create symlink");
+
+        assert!(matches!(
+            AdmissionRegistry::load_from_dir(temp.path(), policy),
+            Err(AdmissionRegistryError::SymlinkEntry { .. })
+        ));
+
+        let root_parent = TempDir::new().expect("root parent");
+        let registry_target = root_parent.path().join("registry-target");
+        fs::create_dir(&registry_target).expect("create target directory");
+        let registry_link = root_parent.path().join("registry-link");
+        symlink(&registry_target, &registry_link).expect("create directory symlink");
+        let policy = fixture_policy();
+        assert!(matches!(
+            AdmissionRegistry::load_from_dir(&registry_link, policy),
+            Err(AdmissionRegistryError::SymlinkDirectory { .. })
+        ));
+    }
+
+    #[test]
+    fn registry_bounds_entry_count_before_decoding() {
+        let policy = fixture_policy();
+        let temp = TempDir::new().expect("temp directory");
+        for index in 0..=MAX_ADMISSION_ENVELOPES {
+            File::create(temp.path().join(format!("{index:04}.to"))).expect("create entry");
+        }
+
+        assert!(matches!(
+            AdmissionRegistry::load_from_dir(temp.path(), policy),
+            Err(AdmissionRegistryError::TooManyEntries { .. })
+        ));
+    }
+
+    #[test]
+    fn registry_mutations_require_policy_and_verify_renewal_and_revocation() {
+        let envelope = fixture_envelope();
+        let policy = fixture_policy();
+        let mut deny_all = AdmissionRegistry::empty();
+        assert!(matches!(
+            deny_all.register(envelope.clone()),
+            Err(AdmissionRegistryUpdateError::PolicyUnavailable)
+        ));
+
+        let renewal: ProviderAdmissionRenewalV1 =
+            norito::decode_from_bytes(&fixture_bytes("renewal_v1.to")).expect("decode renewal");
+        let mut renewal_registry =
+            AdmissionRegistry::from_envelopes(policy.clone(), [envelope.clone()])
+                .expect("build registry");
+        renewal_registry
+            .apply_renewal(&renewal)
+            .expect("apply trusted renewal");
+        assert_eq!(
+            renewal_registry
+                .entry(&envelope.proposal.provider_id)
+                .expect("renewed entry")
+                .envelope_digest(),
+            &renewal.envelope_digest
+        );
+
+        let revocation: ProviderAdmissionRevocationV1 =
+            norito::decode_from_bytes(&fixture_bytes("revocation_v1.to"))
+                .expect("decode revocation");
+        let mut revocation_registry =
+            AdmissionRegistry::from_envelopes(policy, [envelope.clone()]).expect("build registry");
+        revocation_registry
+            .revoke(&revocation)
+            .expect("apply trusted revocation");
+        assert!(revocation_registry.is_empty());
+    }
+
+    #[test]
+    fn registry_reload_is_atomic_and_supports_explicit_council_rotation() {
+        let envelope = fixture_envelope();
+        let provider_id = envelope.proposal.provider_id;
+        let mut registry = AdmissionRegistry::from_envelopes(fixture_policy(), [envelope.clone()])
+            .expect("build initial registry");
+        let initial_digest = *registry
+            .entry(&provider_id)
+            .expect("initial entry")
+            .envelope_digest();
+        let replacement = SigningKey::from_bytes(&[0xa6; 32]);
+        let rotated_policy =
+            ProviderAdmissionCouncilPolicy::new([*replacement.verifying_key().as_bytes()], 1)
+                .expect("replacement policy");
+        let temp = TempDir::new().expect("temp directory");
+        write_fixture(temp.path(), "provider.to");
+
+        let error = registry
+            .reload_from_dir(temp.path(), rotated_policy.clone())
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            AdmissionRegistryError::LoadEnvelope {
+                source: SingleEnvelopeError::Verify(ProviderAdmissionEnvelopeError::Signature(
+                    ProviderAdmissionSignatureError::UntrustedSigner { .. }
+                )),
+                ..
+            }
+        ));
+        assert_eq!(
+            registry
+                .entry(&provider_id)
+                .expect("failed reload preserves initial entry")
+                .envelope_digest(),
+            &initial_digest
+        );
+
+        let mut rotated_envelope = envelope;
+        rotated_envelope.council_signatures.clear();
+        let digest = compute_envelope_authorization_digest(&rotated_envelope)
+            .expect("compute rotated authorization digest");
+        rotated_envelope.council_signatures.push(CouncilSignature {
+            signer: *replacement.verifying_key().as_bytes(),
+            signature: replacement.sign(&digest).to_bytes().to_vec(),
+        });
+        fs::write(
+            temp.path().join("provider.to"),
+            norito::to_bytes(&rotated_envelope).expect("encode rotated envelope"),
+        )
+        .expect("write rotated envelope");
+
+        registry
+            .reload_from_dir(temp.path(), rotated_policy)
+            .expect("reload explicitly rotated trust store");
+        let rotated_record = registry.entry(&provider_id).expect("rotated entry");
+        assert_eq!(
+            rotated_record.envelope.council_signatures[0].signer,
+            *replacement.verifying_key().as_bytes()
+        );
+        assert_ne!(rotated_record.envelope_digest(), &initial_digest);
+    }
 }

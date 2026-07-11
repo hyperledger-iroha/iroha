@@ -24,7 +24,7 @@ summary: Quick validation workflow for chunk-range endpoints and orchestrator in
 ## Workflow Outline
 
 1. Generate a stream token via the built-in CLI (`iroha app sorafs storage token issue`) and export the manifest chunk plan by running `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --json-out manifest_report.json` (the report includes `chunk_fetch_specs`).
-2. Run `iroha app sorafs fetch --manifest manifest.to --plan manifest_report.json --manifest-id <manifest_digest_hex> --gateway-provider "name=primary,provider-id=<hex32>,base-url=https://gateway.example,stream-token=<base64>" --max-peers 4 --retry-budget 3`.
+2. Run `iroha app sorafs fetch --manifest manifest.to --plan manifest_report.json --manifest-id <manifest_digest_hex> --gateway-provider "name=primary,provider-id=<hex32>,gateway-key=<ed25519-public-key-hex>,base-url=https://gateway.example,stream-token=<base64>" --max-peers 4 --retry-budget 3`.
 3. CLI verifies chunks + proofs, records summary metrics and (optionally) writes the assembled payload (`--output`) / JSON report (`--json-out`).
 4. Compare results with expected digest/metrics thresholds.
 

@@ -6,6 +6,7 @@ use std::{
     collections::{HashMap, VecDeque},
     future::Future,
     io::Cursor,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     num::{NonZeroU32, NonZeroUsize},
     pin::Pin,
     str::FromStr,
@@ -16,6 +17,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use futures::future::join_all;
 use iroha_core::prelude::Hash;
 use iroha_data_model::{
     name::Name,
@@ -32,7 +34,7 @@ use iroha_telemetry::{
 };
 use norito::json;
 use rand::{rand_core::TryCryptoRng, rngs::OsRng};
-use reqwest::{Client, StatusCode, Url};
+use reqwest::{Client, Response, StatusCode, Url, redirect};
 use sorafs_car::{
     CarBuildPlan, CarVerifier, CarWriteStats, CarWriter, TaikaiSegmentHint,
     gateway::{
@@ -51,10 +53,12 @@ use sorafs_manifest::{
 };
 use thiserror::Error;
 use tokio::{
+    net::lookup_host,
     sync::{Mutex as AsyncMutex, Notify},
     task::JoinHandle,
     time::sleep,
 };
+use url::Host;
 
 pub mod appeals;
 pub mod compliance;
@@ -67,6 +71,244 @@ pub mod treasury;
 pub(crate) const SORANET_PQ_RANK_STEP_WEIGHT: u32 = 250;
 pub(crate) const SORANET_PQ_CERTIFICATE_BONUS: u32 = 500;
 pub(crate) const SORANET_BANDWIDTH_UNIT_BYTES: u64 = 256 * 1024; // 256 KiB per weight step.
+const DEFAULT_MAX_PROVIDERS: usize = 64;
+const HARD_MAX_PROVIDERS: usize = 256;
+const DEFAULT_GLOBAL_PARALLEL_LIMIT: usize = 32;
+const HARD_MAX_GLOBAL_PARALLEL_LIMIT: usize = 256;
+const HARD_MAX_PROVIDER_PARALLEL_LIMIT: usize = 32;
+const HARD_MAX_RETRIES_PER_CHUNK: usize = 16;
+const HARD_MAX_PROVIDER_ID_BYTES: usize = 256;
+const HARD_MAX_PROVIDER_METADATA_ITEMS: usize = 64;
+const HARD_MAX_PROVIDER_TRANSPORT_HINTS: usize = 16;
+const HARD_MAX_PROVIDER_METADATA_TEXT_BYTES: usize = 1024;
+const HARD_MAX_PRIVACY_ENDPOINTS: usize = 64;
+const HARD_MAX_PRIVACY_URL_BYTES: usize = 2048;
+const HARD_MAX_PRIVACY_ALIAS_BYTES: usize = 256;
+const HARD_MAX_PRIVACY_RESPONSE_BYTES: usize = 1024 * 1024;
+const HARD_MAX_PRIVACY_PAYLOAD_LINES: usize = 4096;
+const HARD_MAX_PRIVACY_LINE_BYTES: usize = 16 * 1024;
+const HARD_MAX_DNS_ANSWERS: usize = 16;
+const OUTBOUND_DNS_TIMEOUT: Duration = Duration::from_secs(10);
+const MIN_PRIVACY_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const MAX_PRIVACY_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const MIN_PRIVACY_REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
+const MAX_PRIVACY_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+
+#[derive(Clone, Copy)]
+struct OutboundNetworkPolicy {
+    require_https: bool,
+    allow_non_public: bool,
+}
+
+impl OutboundNetworkPolicy {
+    const PRODUCTION: Self = Self {
+        require_https: true,
+        allow_non_public: false,
+    };
+
+    #[cfg(test)]
+    const LOCAL_TEST: Self = Self {
+        require_https: false,
+        allow_non_public: true,
+    };
+}
+
+#[derive(Debug, Error)]
+enum OutboundTargetError {
+    #[error("URL exceeds the {HARD_MAX_PRIVACY_URL_BYTES}-byte limit")]
+    UrlTooLong,
+    #[error("only HTTPS endpoints are permitted")]
+    UnsafeScheme,
+    #[error("URL credentials are not permitted")]
+    Credentials,
+    #[error("URL query strings are not permitted")]
+    Query,
+    #[error("URL fragments are not permitted")]
+    Fragment,
+    #[error("endpoint does not contain a valid host")]
+    MissingHost,
+    #[error("endpoint host `{0}` is not a canonical public DNS name")]
+    UnsafeHost(String),
+    #[error("endpoint IP `{0}` is not publicly routable")]
+    UnsafeIp(IpAddr),
+    #[error("endpoint port is missing or invalid")]
+    InvalidPort,
+    #[error("DNS lookup for `{host}` failed: {reason}")]
+    Dns { host: String, reason: String },
+    #[error("DNS lookup for `{0}` timed out")]
+    DnsTimeout(String),
+    #[error("DNS lookup for `{0}` returned no addresses")]
+    NoDnsAnswers(String),
+    #[error("DNS lookup returned more than {HARD_MAX_DNS_ANSWERS} addresses")]
+    TooManyDnsAnswers,
+}
+
+fn is_public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => is_public_ipv4(ip),
+        IpAddr::V6(ip) => is_public_ipv6(ip),
+    }
+}
+
+fn is_public_ipv4(ip: Ipv4Addr) -> bool {
+    let [a, b, c, _] = ip.octets();
+    match (a, b, c) {
+        (0, _, _)
+        | (10, _, _)
+        | (127, _, _)
+        | (169, 254, _)
+        | (192, 0, 0)
+        | (192, 0, 2)
+        | (192, 88, 99)
+        | (192, 168, _)
+        | (198, 18 | 19, _)
+        | (198, 51, 100)
+        | (203, 0, 113)
+        | (224..=255, _, _) => false,
+        (100, 64..=127, _) | (172, 16..=31, _) => false,
+        _ => true,
+    }
+}
+
+fn is_public_ipv6(ip: Ipv6Addr) -> bool {
+    if let Some(mapped) = ip.to_ipv4_mapped() {
+        return is_public_ipv4(mapped);
+    }
+    if ip.is_unspecified() || ip.is_loopback() || ip.is_multicast() {
+        return false;
+    }
+    let segments = ip.segments();
+    if segments[0] & 0xe000 != 0x2000
+        || segments[0] & 0xfe00 == 0xfc00
+        || segments[0] & 0xffc0 == 0xfe80
+        || segments[0] == 0x2002
+        || (segments[0] == 0x0064 && segments[1] == 0xff9b)
+        || (segments[0] == 0x0100 && segments[1] == 0)
+        || (segments[0] == 0x2001 && (segments[1] <= 0x01ff || segments[1] == 0x0db8))
+        || (segments[0] == 0x3fff && segments[1] & 0xf000 == 0)
+    {
+        return false;
+    }
+    true
+}
+
+fn validate_public_dns_name(host: &str) -> Result<(), OutboundTargetError> {
+    if host.is_empty()
+        || host.len() > 253
+        || host.ends_with('.')
+        || !host.contains('.')
+        || host.eq_ignore_ascii_case("localhost")
+        || host.to_ascii_lowercase().ends_with(".localhost")
+        || host.to_ascii_lowercase().ends_with(".local")
+        || host.to_ascii_lowercase().ends_with(".internal")
+        || host.to_ascii_lowercase().ends_with(".home.arpa")
+        || host.to_ascii_lowercase().ends_with(".invalid")
+        || host.to_ascii_lowercase().ends_with(".test")
+        || host.to_ascii_lowercase().ends_with(".example")
+    {
+        return Err(OutboundTargetError::UnsafeHost(host.to_owned()));
+    }
+    if host.split('.').any(|label| {
+        label.is_empty()
+            || label.len() > 63
+            || label.starts_with('-')
+            || label.ends_with('-')
+            || !label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    }) {
+        return Err(OutboundTargetError::UnsafeHost(host.to_owned()));
+    }
+    Ok(())
+}
+
+fn validate_outbound_url(
+    url: &Url,
+    policy: OutboundNetworkPolicy,
+) -> Result<(String, u16), OutboundTargetError> {
+    if url.as_str().len() > HARD_MAX_PRIVACY_URL_BYTES {
+        return Err(OutboundTargetError::UrlTooLong);
+    }
+    if policy.require_https && url.scheme() != "https" {
+        return Err(OutboundTargetError::UnsafeScheme);
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(OutboundTargetError::Credentials);
+    }
+    if url.query().is_some() {
+        return Err(OutboundTargetError::Query);
+    }
+    if url.fragment().is_some() {
+        return Err(OutboundTargetError::Fragment);
+    }
+    let host = match url.host().ok_or(OutboundTargetError::MissingHost)? {
+        Host::Ipv4(ip) => {
+            let ip = IpAddr::V4(ip);
+            if !policy.allow_non_public && !is_public_ip(ip) {
+                return Err(OutboundTargetError::UnsafeIp(ip));
+            }
+            ip.to_string()
+        }
+        Host::Ipv6(ip) => {
+            let ip = IpAddr::V6(ip);
+            if !policy.allow_non_public && !is_public_ip(ip) {
+                return Err(OutboundTargetError::UnsafeIp(ip));
+            }
+            ip.to_string()
+        }
+        Host::Domain(host) => {
+            validate_public_dns_name(host)?;
+            host.to_ascii_lowercase()
+        }
+    };
+    let port = url
+        .port_or_known_default()
+        .filter(|port| *port != 0)
+        .ok_or(OutboundTargetError::InvalidPort)?;
+    Ok((host, port))
+}
+
+fn validate_resolved_addresses(
+    host: &str,
+    addresses: impl IntoIterator<Item = SocketAddr>,
+    policy: OutboundNetworkPolicy,
+) -> Result<Vec<SocketAddr>, OutboundTargetError> {
+    let mut addresses = addresses.into_iter().collect::<Vec<_>>();
+    addresses.sort_unstable();
+    addresses.dedup();
+    if addresses.is_empty() {
+        return Err(OutboundTargetError::NoDnsAnswers(host.to_owned()));
+    }
+    if addresses.len() > HARD_MAX_DNS_ANSWERS {
+        return Err(OutboundTargetError::TooManyDnsAnswers);
+    }
+    if !policy.allow_non_public {
+        for address in &addresses {
+            if !is_public_ip(address.ip()) {
+                return Err(OutboundTargetError::UnsafeIp(address.ip()));
+            }
+        }
+    }
+    Ok(addresses)
+}
+
+async fn resolve_and_validate_host(
+    host: &str,
+    port: u16,
+    policy: OutboundNetworkPolicy,
+) -> Result<Vec<SocketAddr>, OutboundTargetError> {
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return validate_resolved_addresses(host, [SocketAddr::new(ip, port)], policy);
+    }
+    let addresses = tokio::time::timeout(OUTBOUND_DNS_TIMEOUT, lookup_host((host, port)))
+        .await
+        .map_err(|_| OutboundTargetError::DnsTimeout(host.to_owned()))?
+        .map_err(|error| OutboundTargetError::Dns {
+            host: host.to_owned(),
+            reason: error.to_string(),
+        })?;
+    validate_resolved_addresses(host, addresses, policy)
+}
 use compliance::{CompliancePolicy, ComplianceReason};
 use soranet::{
     CircuitEvent, CircuitId, CircuitInfo, CircuitManager, CircuitManagerConfig,
@@ -349,6 +591,15 @@ pub enum OrchestratorError {
     /// Job id generation failed before fetch telemetry could be emitted.
     #[error("failed to generate SoraFS fetch job id: {0}")]
     JobIdRandomness(String),
+    /// Provider advertisements exceeded the production resource envelope.
+    #[error("provider advertisement set contains {provided} entries; maximum is {maximum}")]
+    TooManyProviders { provided: usize, maximum: usize },
+    /// Provider-controlled metadata exceeded a bounded field or collection limit.
+    #[error("provider advertisement {index} is invalid: {reason}")]
+    InvalidProviderMetadata { index: usize, reason: &'static str },
+    /// Programmatic fetch configuration requested an unbounded or excessive limit.
+    #[error("unsafe SoraFS fetch resource configuration: {0}")]
+    UnsafeResourceConfig(&'static str),
 }
 
 /// Transport policy applied when selecting providers.
@@ -785,11 +1036,13 @@ impl OrchestratorConfig {
 
 impl Default for OrchestratorConfig {
     fn default() -> Self {
+        let mut fetch = FetchOptions::default();
+        fetch.global_parallel_limit = Some(DEFAULT_GLOBAL_PARALLEL_LIMIT);
         Self {
             scoreboard: ScoreboardConfig::default(),
-            fetch: FetchOptions::default(),
+            fetch,
             telemetry_region: None,
-            max_providers: None,
+            max_providers: NonZeroUsize::new(DEFAULT_MAX_PROVIDERS),
             transport_policy: TransportPolicy::default(),
             rollout_phase: RolloutPhase::default(),
             anonymity_policy: RolloutPhase::default().default_anonymity_policy(),
@@ -1166,37 +1419,44 @@ pub mod bindings {
                 let retries = retry_budget.as_u64().ok_or_else(|| {
                     ConfigJsonError::new("fetch.retry_budget must be a positive integer")
                 })?;
-                if retries == 0 {
-                    config.fetch.per_chunk_retry_limit = Some(1);
-                } else {
-                    config.fetch.per_chunk_retry_limit =
-                        Some(usize::try_from(retries).map_err(|_| {
-                            ConfigJsonError::new("fetch.retry_budget exceeds usize::MAX")
-                        })?);
+                let retries = usize::try_from(retries)
+                    .map_err(|_| ConfigJsonError::new("fetch.retry_budget exceeds usize::MAX"))?;
+                if retries == 0 || retries > HARD_MAX_RETRIES_PER_CHUNK {
+                    return Err(ConfigJsonError::new(format!(
+                        "fetch.retry_budget must be between 1 and {HARD_MAX_RETRIES_PER_CHUNK}"
+                    )));
                 }
+                config.fetch.per_chunk_retry_limit = Some(retries);
             }
 
             if let Some(provider_threshold) = fetch.get("provider_failure_threshold") {
                 let value = provider_threshold.as_u64().ok_or_else(|| {
                     ConfigJsonError::new("fetch.provider_failure_threshold must be u64")
                 })?;
-                config.fetch.provider_failure_threshold = usize::try_from(value).map_err(|_| {
+                let value = usize::try_from(value).map_err(|_| {
                     ConfigJsonError::new("fetch.provider_failure_threshold exceeds usize::MAX")
                 })?;
+                if value == 0 || value > HARD_MAX_RETRIES_PER_CHUNK {
+                    return Err(ConfigJsonError::new(format!(
+                        "fetch.provider_failure_threshold must be between 1 and {HARD_MAX_RETRIES_PER_CHUNK}"
+                    )));
+                }
+                config.fetch.provider_failure_threshold = value;
             }
 
             if let Some(global_limit) = fetch.get("global_parallel_limit") {
                 let limit = global_limit.as_u64().ok_or_else(|| {
                     ConfigJsonError::new("fetch.global_parallel_limit must be a positive integer")
                 })?;
-                if limit == 0 {
-                    config.fetch.global_parallel_limit = Some(1);
-                } else {
-                    config.fetch.global_parallel_limit =
-                        Some(usize::try_from(limit).map_err(|_| {
-                            ConfigJsonError::new("fetch.global_parallel_limit exceeds usize::MAX")
-                        })?);
+                let limit = usize::try_from(limit).map_err(|_| {
+                    ConfigJsonError::new("fetch.global_parallel_limit exceeds usize::MAX")
+                })?;
+                if limit == 0 || limit > HARD_MAX_GLOBAL_PARALLEL_LIMIT {
+                    return Err(ConfigJsonError::new(format!(
+                        "fetch.global_parallel_limit must be between 1 and {HARD_MAX_GLOBAL_PARALLEL_LIMIT}"
+                    )));
                 }
+                config.fetch.global_parallel_limit = Some(limit);
             }
         }
 
@@ -1215,13 +1475,14 @@ pub mod bindings {
             let limit = max_providers
                 .as_u64()
                 .ok_or_else(|| ConfigJsonError::new("max_providers must be a positive integer"))?;
-            if limit == 0 {
-                config.max_providers = Some(NonZeroUsize::new(1).expect("non-zero constant"));
-            } else {
-                let limit_usize = usize::try_from(limit)
-                    .map_err(|_| ConfigJsonError::new("max_providers exceeds usize::MAX"))?;
-                config.max_providers = NonZeroUsize::new(limit_usize);
+            let limit_usize = usize::try_from(limit)
+                .map_err(|_| ConfigJsonError::new("max_providers exceeds usize::MAX"))?;
+            if limit_usize == 0 || limit_usize > HARD_MAX_PROVIDERS {
+                return Err(ConfigJsonError::new(format!(
+                    "max_providers must be between 1 and {HARD_MAX_PROVIDERS}"
+                )));
             }
+            config.max_providers = NonZeroUsize::new(limit_usize);
         }
 
         if let Some(hints_value) = root.get("relay_path_hints") {
@@ -1688,9 +1949,9 @@ pub mod bindings {
                             "privacy_events.poll_interval_secs must be a positive integer",
                         )
                     })?;
-                    if secs == 0 {
+                    if secs == 0 || secs > MAX_PRIVACY_POLL_INTERVAL.as_secs() {
                         return Err(ConfigJsonError::new(
-                            "privacy_events.poll_interval_secs must be at least 1 second",
+                            "privacy_events.poll_interval_secs must be between 1 and 3600",
                         ));
                     }
                     privacy_config.poll_interval = Duration::from_secs(secs);
@@ -1702,9 +1963,9 @@ pub mod bindings {
                             "privacy_events.request_timeout_secs must be a positive integer",
                         )
                     })?;
-                    if secs == 0 {
+                    if secs == 0 || secs > MAX_PRIVACY_REQUEST_TIMEOUT.as_secs() {
                         return Err(ConfigJsonError::new(
-                            "privacy_events.request_timeout_secs must be at least 1 second",
+                            "privacy_events.request_timeout_secs must be between 1 and 60",
                         ));
                     }
                     privacy_config.request_timeout = Duration::from_secs(secs);
@@ -1764,6 +2025,11 @@ pub mod bindings {
                                 "privacy_events.bucket.max_completed_buckets exceeds usize::MAX",
                             )
                         })?;
+                        if bucket.max_completed_buckets > 4096 {
+                            return Err(ConfigJsonError::new(
+                                "privacy_events.bucket.max_completed_buckets exceeds hard limit 4096",
+                            ));
+                        }
                     }
 
                     if let Some(expected) = bucket_obj.get("expected_shares") {
@@ -2250,6 +2516,89 @@ pub mod bindings {
     }
 }
 
+fn validate_provider_metadata_bounds(metadata: &ProviderMetadata) -> Result<(), &'static str> {
+    for value in [
+        metadata.provider_id.as_deref(),
+        metadata.profile_id.as_deref(),
+        metadata.availability.as_deref(),
+        metadata.stake_amount.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if value.len() > HARD_MAX_PROVIDER_ID_BYTES || value.chars().any(char::is_control) {
+            return Err("identity field exceeds 256 bytes or contains control characters");
+        }
+    }
+    if metadata.notes.as_deref().is_some_and(|notes| {
+        notes.len() > HARD_MAX_PROVIDER_METADATA_TEXT_BYTES || notes.chars().any(char::is_control)
+    }) {
+        return Err("notes field exceeds 1024 bytes or contains control characters");
+    }
+    if metadata.privacy_events_url.as_deref().is_some_and(|url| {
+        url.len() > HARD_MAX_PRIVACY_URL_BYTES || url.chars().any(char::is_control)
+    }) {
+        return Err("privacy events URL exceeds 2048 bytes or contains control characters");
+    }
+    for items in [
+        &metadata.profile_aliases,
+        &metadata.capability_names,
+        &metadata.rendezvous_topics,
+    ] {
+        if items.len() > HARD_MAX_PROVIDER_METADATA_ITEMS {
+            return Err("provider metadata collection exceeds 64 entries");
+        }
+        if items.iter().any(|item| {
+            item.len() > HARD_MAX_PROVIDER_METADATA_TEXT_BYTES || item.chars().any(char::is_control)
+        }) {
+            return Err("provider metadata entry is oversized or contains control characters");
+        }
+    }
+    if metadata.transport_hints.len() > HARD_MAX_PROVIDER_TRANSPORT_HINTS {
+        return Err("transport hint collection exceeds 16 entries");
+    }
+    if metadata.transport_hints.iter().any(|hint| {
+        hint.protocol.len() > HARD_MAX_PROVIDER_ID_BYTES
+            || hint.protocol.chars().any(char::is_control)
+    }) {
+        return Err("transport hint label is oversized or contains control characters");
+    }
+    Ok(())
+}
+
+fn bounded_fetch_options(options: &FetchOptions) -> Result<FetchOptions, OrchestratorError> {
+    let retry_limit =
+        options
+            .per_chunk_retry_limit
+            .ok_or(OrchestratorError::UnsafeResourceConfig(
+                "per-chunk retry limit must be finite",
+            ))?;
+    if retry_limit == 0 || retry_limit > HARD_MAX_RETRIES_PER_CHUNK {
+        return Err(OrchestratorError::UnsafeResourceConfig(
+            "per-chunk retry limit must be between 1 and 16",
+        ));
+    }
+    if options.provider_failure_threshold == 0
+        || options.provider_failure_threshold > HARD_MAX_RETRIES_PER_CHUNK
+    {
+        return Err(OrchestratorError::UnsafeResourceConfig(
+            "provider failure threshold must be between 1 and 16",
+        ));
+    }
+    let global_limit =
+        options
+            .global_parallel_limit
+            .ok_or(OrchestratorError::UnsafeResourceConfig(
+                "global parallel limit must be finite",
+            ))?;
+    if global_limit == 0 || global_limit > HARD_MAX_GLOBAL_PARALLEL_LIMIT {
+        return Err(OrchestratorError::UnsafeResourceConfig(
+            "global parallel limit must be between 1 and 256",
+        ));
+    }
+    Ok(options.clone())
+}
+
 /// Primary entry point for SoraFS orchestrator operations.
 pub struct Orchestrator {
     config: OrchestratorConfig,
@@ -2623,6 +2972,16 @@ impl Orchestrator {
         adverts: &[ProviderMetadata],
         telemetry: &TelemetrySnapshot,
     ) -> Result<Scoreboard, OrchestratorError> {
+        if adverts.len() > HARD_MAX_PROVIDERS {
+            return Err(OrchestratorError::TooManyProviders {
+                provided: adverts.len(),
+                maximum: HARD_MAX_PROVIDERS,
+            });
+        }
+        for (index, metadata) in adverts.iter().enumerate() {
+            validate_provider_metadata_bounds(metadata)
+                .map_err(|reason| OrchestratorError::InvalidProviderMetadata { index, reason })?;
+        }
         scoreboard::build_scoreboard(plan, adverts, telemetry, &self.config.scoreboard)
             .map_err(OrchestratorError::Scoreboard)
     }
@@ -2690,6 +3049,7 @@ impl Orchestrator {
         Fut: std::future::Future<Output = Result<ChunkResponse, E>> + Send + 'static,
         E: std::error::Error + Send + Sync + 'static,
     {
+        let fetch_options = bounded_fetch_options(&self.config.fetch)?;
         let mut base_transport = self.config.transport_policy;
         let mut base_anonymity = self.config.anonymity_policy;
         if let Some(policy) = self.config.policy_override.transport_policy {
@@ -2735,7 +3095,7 @@ impl Orchestrator {
             region,
             &providers,
             &summary,
-            &self.config.fetch,
+            &fetch_options,
             &self.config.scoreboard,
             self.config.write_mode,
         )?;
@@ -2758,7 +3118,9 @@ impl Orchestrator {
                     privacy_cfg,
                     global_or_default(),
                     self.downgrade_remediator.clone(),
-                ) {
+                )
+                .await
+                {
                     Ok(Some(collector)) => Some(collector),
                     Ok(None) => None,
                     Err(error) => {
@@ -2783,12 +3145,11 @@ impl Orchestrator {
                 plan,
                 providers,
                 wrapped_fetcher,
-                self.config.fetch.clone(),
+                fetch_options.clone(),
             )
             .await
         } else {
-            multi_fetch::fetch_plan_parallel(plan, providers, fetcher, self.config.fetch.clone())
-                .await
+            multi_fetch::fetch_plan_parallel(plan, providers, fetcher, fetch_options).await
         };
 
         let session = match result {
@@ -2835,6 +3196,7 @@ impl Orchestrator {
         E: std::error::Error + Send + Sync + 'static,
         O: ChunkObserver + 'static,
     {
+        let fetch_options = bounded_fetch_options(&self.config.fetch)?;
         let mut base_transport = self.config.transport_policy;
         let mut base_anonymity = self.config.anonymity_policy;
         if let Some(policy) = self.config.policy_override.transport_policy {
@@ -2880,7 +3242,7 @@ impl Orchestrator {
             region,
             &providers,
             &summary,
-            &self.config.fetch,
+            &fetch_options,
             &self.config.scoreboard,
             self.config.write_mode,
         )?;
@@ -2903,7 +3265,9 @@ impl Orchestrator {
                     privacy_cfg,
                     global_or_default(),
                     self.downgrade_remediator.clone(),
-                ) {
+                )
+                .await
+                {
                     Ok(Some(collector)) => Some(collector),
                     Ok(None) => None,
                     Err(error) => {
@@ -2928,7 +3292,7 @@ impl Orchestrator {
                 plan,
                 providers,
                 wrapped_fetcher,
-                self.config.fetch.clone(),
+                fetch_options.clone(),
                 observer,
             )
             .await
@@ -2937,7 +3301,7 @@ impl Orchestrator {
                 plan,
                 providers,
                 fetcher,
-                self.config.fetch.clone(),
+                fetch_options,
                 observer,
             )
             .await
@@ -3396,6 +3760,9 @@ impl<'a> From<&'a GatewayFetchedManifest> for ManifestVerificationContext<'a> {
 /// Errors surfaced while validating a fetched payload against a manifest.
 #[derive(Debug, Error)]
 pub enum ManifestVerificationError {
+    /// Gateway payload digest metadata does not match the locally derived fetch plan.
+    #[error("gateway payload digest {actual} does not match fetch plan ({expected})")]
+    PayloadDigestMismatch { actual: String, expected: String },
     /// Manifest content length does not match the fetch plan.
     #[error("manifest content length {actual} does not match fetch plan ({expected})")]
     ContentLengthMismatch { actual: u64, expected: u64 },
@@ -3437,6 +3804,7 @@ fn verify_fetch_against_manifest(
     outcome: &FetchOutcome,
     context: ManifestVerificationContext<'_>,
 ) -> Result<GatewayCarVerification, ManifestVerificationError> {
+    verify_gateway_payload_digest(plan, context.payload_digest)?;
     if context.content_length != plan.content_length {
         return Err(ManifestVerificationError::ContentLengthMismatch {
             actual: context.content_length,
@@ -3483,6 +3851,19 @@ fn verify_fetch_against_manifest(
         car_stats,
         por_leaf_count,
     })
+}
+
+fn verify_gateway_payload_digest(
+    plan: &CarBuildPlan,
+    actual: blake3::Hash,
+) -> Result<(), ManifestVerificationError> {
+    if actual != plan.payload_digest {
+        return Err(ManifestVerificationError::PayloadDigestMismatch {
+            actual: hex::encode(actual.as_bytes()),
+            expected: hex::encode(plan.payload_digest.as_bytes()),
+        });
+    }
+    Ok(())
 }
 
 impl PqSupport {
@@ -4078,6 +4459,10 @@ fn eligible_providers(
     relay_directory: Option<&RelayDirectory>,
     skip_policy_fallback: bool,
 ) -> SelectionOutcome {
+    let effective_limit = limit
+        .map(NonZeroUsize::get)
+        .unwrap_or(DEFAULT_MAX_PROVIDERS)
+        .min(HARD_MAX_PROVIDERS);
     let mut soranet_candidates = Vec::new();
     let mut quic = Vec::new();
     let mut torii = Vec::new();
@@ -4087,21 +4472,40 @@ fn eligible_providers(
         directory
             .entries()
             .iter()
+            .take(HARD_MAX_PROVIDERS)
             .map(|descriptor| (descriptor.relay_id, descriptor))
             .collect::<HashMap<[u8; 32], &RelayDescriptor>>()
     });
     let guard_record_index = guard_set.map(|set| {
         set.iter()
+            .take(HARD_MAX_PROVIDERS)
             .map(|record| (record.relay_id, record))
             .collect::<HashMap<[u8; 32], &GuardRecord>>()
     });
 
-    for entry in scoreboard.entries() {
+    for entry in scoreboard.entries().iter().take(HARD_MAX_PROVIDERS) {
         if !matches!(entry.eligibility, Eligibility::Eligible) {
             continue;
         }
 
-        let provider = entry.provider.clone();
+        if entry.provider.id().as_str().len() > HARD_MAX_PROVIDER_ID_BYTES
+            || entry.provider.id().as_str().chars().any(char::is_control)
+            || entry
+                .provider
+                .metadata()
+                .is_some_and(|metadata| validate_provider_metadata_bounds(metadata).is_err())
+        {
+            continue;
+        }
+        let provider = entry.provider.clone().with_max_concurrent_chunks(
+            NonZeroUsize::new(
+                entry
+                    .provider
+                    .max_concurrent_chunks()
+                    .min(HARD_MAX_PROVIDER_PARALLEL_LIMIT),
+            )
+            .expect("bounded provider parallel limit remains non-zero"),
+        );
         let support = TransportSupport::from_provider(&provider);
         let pq_support = PqSupport::from_provider(&provider);
         let provider_id = provider.id().as_str().to_string();
@@ -4169,9 +4573,7 @@ fn eligible_providers(
             providers = reorder_by_guard_set(providers, guards);
         }
 
-        if let Some(cap) = limit {
-            providers.truncate(cap.get());
-        }
+        providers.truncate(effective_limit);
 
         providers
     };
@@ -4996,8 +5398,55 @@ impl FetchTelemetryCtx {
 enum PrivacyCollectorError {
     #[error("invalid privacy bucket configuration: {0}")]
     InvalidBucket(#[from] PrivacyConfigError),
-    #[error("failed to construct privacy polling client: {0}")]
-    HttpClient(#[from] reqwest::Error),
+    #[error("privacy endpoint set contains {provided} entries; maximum is {maximum}")]
+    TooManyEndpoints { provided: usize, maximum: usize },
+    #[error("privacy bucket history exceeds hard limit 4096")]
+    BucketHistoryTooLarge,
+    #[error("privacy polling interval or timeout is outside the production resource envelope")]
+    InvalidTiming,
+}
+
+struct PreparedPrivacyEndpoint {
+    alias: String,
+    url: Url,
+    client: Arc<Client>,
+}
+
+async fn prepare_privacy_endpoint(
+    alias: String,
+    url: Url,
+    request_timeout: Duration,
+    policy: OutboundNetworkPolicy,
+) -> Result<PreparedPrivacyEndpoint, String> {
+    if alias.is_empty()
+        || alias.len() > HARD_MAX_PRIVACY_ALIAS_BYTES
+        || alias.chars().any(char::is_control)
+    {
+        return Err("provider alias is empty, oversized, or contains control characters".into());
+    }
+    let (host, port) = validate_outbound_url(&url, policy).map_err(|error| error.to_string())?;
+    let addresses = resolve_and_validate_host(&host, port, policy)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let mut builder = Client::builder()
+        .timeout(request_timeout)
+        .connect_timeout(request_timeout)
+        .redirect(redirect::Policy::none())
+        .referer(false)
+        .no_proxy()
+        .no_gzip()
+        .no_brotli()
+        .no_deflate()
+        .no_zstd()
+        .retry(reqwest::retry::never())
+        .pool_max_idle_per_host(1)
+        .resolve_to_addrs(&host, &addresses);
+    if policy.require_https {
+        builder = builder.https_only(true);
+    }
+    let client = Arc::new(builder.build().map_err(|error| error.to_string())?);
+    Ok(PreparedPrivacyEndpoint { alias, url, client })
 }
 
 struct PrivacyCollector {
@@ -5010,36 +5459,81 @@ struct PrivacyCollector {
 }
 
 impl PrivacyCollector {
-    fn spawn(
+    async fn spawn(
         endpoints: Vec<(String, Url)>,
         config: &PrivacyEventsConfig,
         metrics: Arc<iroha_telemetry::metrics::Metrics>,
         remediation: Option<Arc<DowngradeRemediator>>,
     ) -> Result<Option<Self>, PrivacyCollectorError> {
+        Self::spawn_with_policy(
+            endpoints,
+            config,
+            metrics,
+            remediation,
+            OutboundNetworkPolicy::PRODUCTION,
+        )
+        .await
+    }
+
+    async fn spawn_with_policy(
+        endpoints: Vec<(String, Url)>,
+        config: &PrivacyEventsConfig,
+        metrics: Arc<iroha_telemetry::metrics::Metrics>,
+        remediation: Option<Arc<DowngradeRemediator>>,
+        policy: OutboundNetworkPolicy,
+    ) -> Result<Option<Self>, PrivacyCollectorError> {
         if endpoints.is_empty() {
             metrics.set_soranet_privacy_collector_enabled(false);
             return Ok(None);
         }
+        if endpoints.len() > HARD_MAX_PRIVACY_ENDPOINTS {
+            return Err(PrivacyCollectorError::TooManyEndpoints {
+                provided: endpoints.len(),
+                maximum: HARD_MAX_PRIVACY_ENDPOINTS,
+            });
+        }
+        if config.bucket.max_completed_buckets > 4096 {
+            return Err(PrivacyCollectorError::BucketHistoryTooLarge);
+        }
+        if !(MIN_PRIVACY_POLL_INTERVAL..=MAX_PRIVACY_POLL_INTERVAL).contains(&config.poll_interval)
+            || !(MIN_PRIVACY_REQUEST_TIMEOUT..=MAX_PRIVACY_REQUEST_TIMEOUT)
+                .contains(&config.request_timeout)
+        {
+            return Err(PrivacyCollectorError::InvalidTiming);
+        }
 
         let aggregator = Arc::new(SoranetSecureAggregator::new(config.bucket)?);
-        let client = Arc::new(Client::builder().timeout(config.request_timeout).build()?);
         let stop = Arc::new(AtomicBool::new(false));
         let notify = Arc::new(Notify::new());
         let mut handles = Vec::with_capacity(endpoints.len());
+        let prepared_endpoints = join_all(endpoints.into_iter().map(|(alias, url)| {
+            prepare_privacy_endpoint(alias, url, config.request_timeout, policy)
+        }))
+        .await;
 
-        for (alias, url) in endpoints {
+        for prepared in prepared_endpoints {
+            let endpoint = match prepared {
+                Ok(endpoint) => endpoint,
+                Err(error) => {
+                    warn!(
+                        target: "telemetry::sorafs.privacy",
+                        %error,
+                        "skipping unsafe privacy events endpoint"
+                    );
+                    continue;
+                }
+            };
             let aggregator = Arc::clone(&aggregator);
             let metrics = Arc::clone(&metrics);
             let stop = Arc::clone(&stop);
             let notify = Arc::clone(&notify);
             let remediation = remediation.clone();
-            let client = Arc::clone(&client);
             let interval = config.poll_interval;
             handles.push(tokio::spawn(async move {
                 poll_privacy_endpoint(
-                    alias,
-                    url,
-                    client,
+                    endpoint.alias,
+                    endpoint.url,
+                    endpoint.client,
                     aggregator,
                     metrics,
                     remediation,
@@ -5049,6 +5543,11 @@ impl PrivacyCollector {
                 )
                 .await;
             }));
+        }
+
+        if handles.is_empty() {
+            metrics.set_soranet_privacy_collector_enabled(false);
+            return Ok(None);
         }
 
         debug!(
@@ -5066,6 +5565,23 @@ impl PrivacyCollector {
             stop,
             notify,
         }))
+    }
+
+    #[cfg(test)]
+    async fn spawn_for_local_test(
+        endpoints: Vec<(String, Url)>,
+        config: &PrivacyEventsConfig,
+        metrics: Arc<iroha_telemetry::metrics::Metrics>,
+        remediation: Option<Arc<DowngradeRemediator>>,
+    ) -> Result<Option<Self>, PrivacyCollectorError> {
+        Self::spawn_with_policy(
+            endpoints,
+            config,
+            metrics,
+            remediation,
+            OutboundNetworkPolicy::LOCAL_TEST,
+        )
+        .await
     }
 
     async fn shutdown(self) {
@@ -5113,12 +5629,77 @@ impl PrivacyCollector {
     }
 }
 
+#[derive(Debug, Error)]
+enum PrivacyResponseError {
+    #[error("privacy response declares {length} bytes; maximum is {maximum}")]
+    ContentLength { length: u64, maximum: usize },
+    #[error("privacy response exceeds {0} bytes")]
+    BodyTooLarge(usize),
+    #[error("failed to read privacy response body: {0}")]
+    Read(#[from] reqwest::Error),
+    #[error("privacy response is not valid UTF-8")]
+    Utf8,
+}
+
+async fn read_bounded_privacy_response(
+    mut response: Response,
+) -> Result<String, PrivacyResponseError> {
+    if let Some(length) = response.content_length()
+        && length > HARD_MAX_PRIVACY_RESPONSE_BYTES as u64
+    {
+        return Err(PrivacyResponseError::ContentLength {
+            length,
+            maximum: HARD_MAX_PRIVACY_RESPONSE_BYTES,
+        });
+    }
+    let mut body = Vec::with_capacity(
+        response
+            .content_length()
+            .and_then(|length| usize::try_from(length).ok())
+            .unwrap_or(0)
+            .min(HARD_MAX_PRIVACY_RESPONSE_BYTES),
+    );
+    while let Some(chunk) = response.chunk().await? {
+        let next_len =
+            body.len()
+                .checked_add(chunk.len())
+                .ok_or(PrivacyResponseError::BodyTooLarge(
+                    HARD_MAX_PRIVACY_RESPONSE_BYTES,
+                ))?;
+        if next_len > HARD_MAX_PRIVACY_RESPONSE_BYTES {
+            return Err(PrivacyResponseError::BodyTooLarge(
+                HARD_MAX_PRIVACY_RESPONSE_BYTES,
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    String::from_utf8(body).map_err(|_| PrivacyResponseError::Utf8)
+}
+
+fn privacy_payload_shape_is_bounded(payload: &str) -> bool {
+    payload.len() <= HARD_MAX_PRIVACY_RESPONSE_BYTES
+        && payload
+            .lines()
+            .take(HARD_MAX_PRIVACY_PAYLOAD_LINES + 1)
+            .enumerate()
+            .all(|(index, line)| {
+                index < HARD_MAX_PRIVACY_PAYLOAD_LINES && line.len() <= HARD_MAX_PRIVACY_LINE_BYTES
+            })
+}
+
 fn ingest_privacy_payload(
     aggregator: &SoranetSecureAggregator,
     metrics: &Arc<iroha_telemetry::metrics::Metrics>,
     payload: &str,
     alias: &str,
 ) -> (usize, usize, bool) {
+    if !privacy_payload_shape_is_bounded(payload) {
+        metrics
+            .soranet_privacy_poll_errors_total
+            .with_label_values(&[alias])
+            .inc();
+        return (0, 0, true);
+    }
     let mut events_ingested = 0usize;
     let mut shares_ingested = 0usize;
     let mut had_error = false;
@@ -5199,7 +5780,7 @@ async fn poll_privacy_endpoint(
             Ok(response) => {
                 let mut poll_succeeded = false;
                 if response.status().is_success() {
-                    match response.text().await {
+                    match read_bounded_privacy_response(response).await {
                         Ok(body) => {
                             if body.trim().is_empty() {
                                 poll_succeeded = true;
@@ -5285,44 +5866,56 @@ async fn poll_privacy_endpoint(
             {
                 Ok(response) => {
                     if response.status().is_success() {
-                        match response.text().await {
+                        match read_bounded_privacy_response(response).await {
                             Ok(body) => {
                                 if !body.trim().is_empty() {
-                                    for (idx, line) in body.lines().enumerate() {
-                                        let trimmed = line.trim();
-                                        if trimmed.is_empty() {
-                                            continue;
-                                        }
-                                        match json::from_str::<SoranetPrivacyEventV1>(trimmed) {
-                                            Ok(event) => {
-                                                if let SoranetPrivacyEventKindV1::HandshakeFailure(
-                                                    failure,
-                                                ) = &event.kind
-                                                    && matches!(
-                                                        failure.reason,
-                                                        SoranetPrivacyHandshakeFailureV1::Downgrade
-                                                    )
-                                                {
-                                                    remediator
-                                                        .observe_handshake_downgrade(
-                                                            event.timestamp_unix,
-                                                            event.mode,
-                                                        )
-                                                        .await;
-                                                }
+                                    if !privacy_payload_shape_is_bounded(&body) {
+                                        warn!(
+                                            target: "telemetry::sorafs.privacy",
+                                            provider = %alias,
+                                            "proxy policy payload exceeded record bounds"
+                                        );
+                                        metrics
+                                            .soranet_privacy_poll_errors_total
+                                            .with_label_values(&[alias_label])
+                                            .inc();
+                                    } else {
+                                        for (idx, line) in body.lines().enumerate() {
+                                            let trimmed = line.trim();
+                                            if trimmed.is_empty() {
+                                                continue;
                                             }
-                                            Err(error) => {
-                                                warn!(
-                                                    target: "telemetry::sorafs.privacy",
-                                                    provider = %alias,
-                                                    line = idx + 1,
-                                                    ?error,
-                                                    "failed to decode proxy policy downgrade payload"
-                                                );
-                                                metrics
-                                                    .soranet_privacy_poll_errors_total
-                                                    .with_label_values(&[alias_label])
-                                                    .inc();
+                                            match json::from_str::<SoranetPrivacyEventV1>(trimmed) {
+                                                Ok(event) => {
+                                                    if let SoranetPrivacyEventKindV1::HandshakeFailure(
+                                                        failure,
+                                                    ) = &event.kind
+                                                        && matches!(
+                                                            failure.reason,
+                                                            SoranetPrivacyHandshakeFailureV1::Downgrade
+                                                        )
+                                                    {
+                                                        remediator
+                                                            .observe_handshake_downgrade(
+                                                                event.timestamp_unix,
+                                                                event.mode,
+                                                            )
+                                                            .await;
+                                                    }
+                                                }
+                                                Err(error) => {
+                                                    warn!(
+                                                        target: "telemetry::sorafs.privacy",
+                                                        provider = %alias,
+                                                        line = idx + 1,
+                                                        ?error,
+                                                        "failed to decode proxy policy downgrade payload"
+                                                    );
+                                                    metrics
+                                                        .soranet_privacy_poll_errors_total
+                                                        .with_label_values(&[alias_label])
+                                                        .inc();
+                                                }
                                             }
                                         }
                                     }
@@ -5388,18 +5981,31 @@ fn flush_privacy_buckets(
 }
 
 fn privacy_endpoints_from_providers(providers: &[FetchProvider]) -> Vec<(String, Url)> {
-    let mut endpoints = Vec::new();
-    for provider in providers {
+    let mut endpoints = Vec::with_capacity(providers.len().min(HARD_MAX_PRIVACY_ENDPOINTS));
+    for provider in providers.iter().take(HARD_MAX_PRIVACY_ENDPOINTS) {
         let alias = provider.id().as_str().to_string();
+        if alias.is_empty()
+            || alias.len() > HARD_MAX_PRIVACY_ALIAS_BYTES
+            || alias.chars().any(char::is_control)
+        {
+            continue;
+        }
         if let Some(metadata) = provider.metadata()
             && let Some(raw) = metadata.privacy_events_url.as_ref()
         {
             match Url::parse(raw) {
-                Ok(url) => endpoints.push((alias.clone(), url)),
+                Ok(url) => match validate_outbound_url(&url, OutboundNetworkPolicy::PRODUCTION) {
+                    Ok(_) => endpoints.push((alias.clone(), url)),
+                    Err(error) => warn!(
+                        target: "telemetry::sorafs.privacy",
+                        provider = %alias,
+                        %error,
+                        "skipping unsafe privacy events URL"
+                    ),
+                },
                 Err(error) => warn!(
                     target: "telemetry::sorafs.privacy",
                     provider = %alias,
-                    url = raw,
                     %error,
                     "skipping invalid privacy events URL"
                 ),
@@ -6357,6 +6963,245 @@ mod tests {
             }
         });
         Ok((url, handle))
+    }
+
+    fn spawn_single_privacy_response(
+        status_line: &'static str,
+        extra_headers: String,
+    ) -> std::io::Result<(Url, thread::JoinHandle<()>)> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let url = Url::parse(&format!(
+            "http://127.0.0.1:{}/privacy/events",
+            address.port()
+        ))
+        .expect("construct local response URL");
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept privacy request");
+            let mut buffer = [0u8; 4096];
+            let mut request = Vec::new();
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = stream.read(&mut buffer).expect("read privacy request");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                assert!(request.len() <= 16 * 1024, "request headers are bounded");
+            }
+            let response =
+                format!("HTTP/1.1 {status_line}\r\nConnection: close\r\n{extra_headers}\r\n");
+            stream
+                .write_all(response.as_bytes())
+                .expect("write privacy response");
+        });
+        Ok((url, handle))
+    }
+
+    #[test]
+    fn outbound_url_policy_rejects_ssrf_shapes() {
+        for raw in [
+            "http://privacy.example.org/events",
+            "https://user:secret@privacy.example.org/events",
+            "https://privacy.example.org/events?cursor=1",
+            "https://privacy.example.org/events#fragment",
+            "https://localhost/events",
+            "https://relay.local/events",
+            "https://127.0.0.1/events",
+            "https://127.1/events",
+            "https://2130706433/events",
+            "https://0x7f000001/events",
+            "https://10.1.2.3/events",
+            "https://169.254.169.254/latest/meta-data",
+            "https://[::1]/events",
+            "https://[::ffff:127.0.0.1]/events",
+            "https://[fe80::1]/events",
+            "https://[fc00::1]/events",
+            "https://[3fff::1]/events",
+            "https://[4000::1]/events",
+        ] {
+            let url = Url::parse(raw).expect("URL fixture parses");
+            assert!(
+                validate_outbound_url(&url, OutboundNetworkPolicy::PRODUCTION).is_err(),
+                "unsafe URL was accepted: {raw}"
+            );
+        }
+
+        for raw in [
+            "https://privacy.example.org/events",
+            "https://93.184.216.34/events",
+            "https://[2001:4860:4860::8888]/events",
+        ] {
+            let url = Url::parse(raw).expect("URL fixture parses");
+            validate_outbound_url(&url, OutboundNetworkPolicy::PRODUCTION)
+                .unwrap_or_else(|error| panic!("public URL {raw} was rejected: {error}"));
+        }
+    }
+
+    #[test]
+    fn dns_validation_rejects_mixed_private_answers_and_rebinding() {
+        let public: SocketAddr = "93.184.216.34:443".parse().expect("public address");
+        let private: SocketAddr = "10.0.0.8:443".parse().expect("private address");
+        assert!(
+            validate_resolved_addresses(
+                "privacy.example.org",
+                [public, private],
+                OutboundNetworkPolicy::PRODUCTION,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            validate_resolved_addresses(
+                "privacy.example.org",
+                [public, public],
+                OutboundNetworkPolicy::PRODUCTION,
+            )
+            .expect("public address set")
+            .as_slice(),
+            &[public]
+        );
+
+        let excessive = (1..=HARD_MAX_DNS_ANSWERS + 1).map(|suffix| {
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(93, 184, 216, suffix as u8)), 443)
+        });
+        assert!(matches!(
+            validate_resolved_addresses(
+                "privacy.example.org",
+                excessive,
+                OutboundNetworkPolicy::PRODUCTION,
+            ),
+            Err(OutboundTargetError::TooManyDnsAnswers)
+        ));
+    }
+
+    #[test]
+    fn privacy_endpoint_extraction_only_accepts_bounded_https_urls() {
+        let mut safe = ProviderMetadata::new();
+        safe.privacy_events_url = Some("https://privacy.example.org/events".into());
+        let mut unsafe_http = ProviderMetadata::new();
+        unsafe_http.privacy_events_url = Some("http://93.184.216.34/events".into());
+        let providers = vec![
+            FetchProvider::new("safe").with_metadata(safe),
+            FetchProvider::new("unsafe").with_metadata(unsafe_http),
+        ];
+        let endpoints = privacy_endpoints_from_providers(&providers);
+        assert_eq!(endpoints.len(), 1);
+        assert_eq!(endpoints[0].0, "safe");
+    }
+
+    #[test]
+    fn fetch_resource_envelope_rejects_unbounded_and_excessive_values() {
+        let mut options = FetchOptions::default();
+        options.global_parallel_limit = Some(DEFAULT_GLOBAL_PARALLEL_LIMIT);
+        assert!(bounded_fetch_options(&options).is_ok());
+
+        options.per_chunk_retry_limit = None;
+        assert!(bounded_fetch_options(&options).is_err());
+        options.per_chunk_retry_limit = Some(HARD_MAX_RETRIES_PER_CHUNK + 1);
+        assert!(bounded_fetch_options(&options).is_err());
+        options.per_chunk_retry_limit = Some(1);
+        options.provider_failure_threshold = 0;
+        assert!(bounded_fetch_options(&options).is_err());
+        options.provider_failure_threshold = HARD_MAX_RETRIES_PER_CHUNK + 1;
+        assert!(bounded_fetch_options(&options).is_err());
+        options.provider_failure_threshold = 1;
+        options.global_parallel_limit = Some(HARD_MAX_GLOBAL_PARALLEL_LIMIT + 1);
+        assert!(bounded_fetch_options(&options).is_err());
+    }
+
+    #[test]
+    fn privacy_payload_rejects_excessive_records_and_line_lengths() {
+        let too_many_lines = "{}\n".repeat(HARD_MAX_PRIVACY_PAYLOAD_LINES + 1);
+        assert!(!privacy_payload_shape_is_bounded(&too_many_lines));
+
+        let oversized_line = "x".repeat(HARD_MAX_PRIVACY_LINE_BYTES + 1);
+        assert!(!privacy_payload_shape_is_bounded(&oversized_line));
+    }
+
+    #[test]
+    fn provider_metadata_bounds_reject_attacker_controlled_growth() {
+        let mut metadata = ProviderMetadata::new();
+        metadata.capability_names = (0..=HARD_MAX_PROVIDER_METADATA_ITEMS)
+            .map(|index| format!("capability-{index}"))
+            .collect();
+        assert!(validate_provider_metadata_bounds(&metadata).is_err());
+
+        let mut metadata = ProviderMetadata::new();
+        metadata.transport_hints = (0..=HARD_MAX_PROVIDER_TRANSPORT_HINTS)
+            .map(|index| TransportHint {
+                protocol: format!("transport-{index}"),
+                protocol_id: 255,
+                priority: 1,
+            })
+            .collect();
+        assert!(validate_provider_metadata_bounds(&metadata).is_err());
+
+        let mut metadata = ProviderMetadata::new();
+        metadata.provider_id = Some("provider\nforged-log-line".into());
+        assert!(validate_provider_metadata_bounds(&metadata).is_err());
+
+        let mut metadata = ProviderMetadata::new();
+        metadata.privacy_events_url = Some("https://privacy.example.org/events\n".into());
+        assert!(validate_provider_metadata_bounds(&metadata).is_err());
+    }
+
+    #[tokio::test]
+    async fn privacy_http_client_disables_redirects() {
+        let (url, handle) = match spawn_single_privacy_response(
+            "302 Found",
+            "Location: http://127.0.0.1:1/private\r\nContent-Length: 0\r\n".into(),
+        ) {
+            Ok(server) => server,
+            Err(error) if should_skip_socket_permission(&error.to_string()) => return,
+            Err(error) => panic!("spawn redirect server: {error}"),
+        };
+        let endpoint = prepare_privacy_endpoint(
+            "redirect-test".into(),
+            url.clone(),
+            Duration::from_secs(2),
+            OutboundNetworkPolicy::LOCAL_TEST,
+        )
+        .await
+        .expect("prepare local endpoint");
+        let response = endpoint
+            .client
+            .get(url)
+            .send()
+            .await
+            .expect("receive redirect response");
+        assert_eq!(response.status(), StatusCode::FOUND);
+        handle.join().expect("redirect server exits");
+    }
+
+    #[tokio::test]
+    async fn privacy_response_rejects_oversized_declared_length_before_body() {
+        let declared = HARD_MAX_PRIVACY_RESPONSE_BYTES + 1;
+        let (url, handle) = match spawn_single_privacy_response(
+            "200 OK",
+            format!("Content-Length: {declared}\r\nContent-Type: application/x-ndjson\r\n"),
+        ) {
+            Ok(server) => server,
+            Err(error) if should_skip_socket_permission(&error.to_string()) => return,
+            Err(error) => panic!("spawn oversized response server: {error}"),
+        };
+        let endpoint = prepare_privacy_endpoint(
+            "oversize-test".into(),
+            url.clone(),
+            Duration::from_secs(2),
+            OutboundNetworkPolicy::LOCAL_TEST,
+        )
+        .await
+        .expect("prepare local endpoint");
+        let response = endpoint
+            .client
+            .get(url)
+            .send()
+            .await
+            .expect("receive oversized response headers");
+        assert!(matches!(
+            read_bounded_privacy_response(response).await,
+            Err(PrivacyResponseError::ContentLength { .. })
+        ));
+        handle.join().expect("oversized response server exits");
     }
 
     #[test]
@@ -8174,8 +9019,21 @@ mod tests {
         assert!(config.fetch.verify_lengths);
     }
 
+    #[test]
+    fn gateway_manifest_payload_digest_is_bound_to_fetch_plan() {
+        let plan = CarBuildPlan::single_file(&sample_payload(4_096)).expect("plan");
+        verify_gateway_payload_digest(&plan, plan.payload_digest)
+            .expect("canonical payload digest");
+
+        let forged = blake3::hash(b"forged gateway payload metadata");
+        assert!(matches!(
+            verify_gateway_payload_digest(&plan, forged),
+            Err(ManifestVerificationError::PayloadDigestMismatch { .. })
+        ));
+    }
+
     #[tokio::test(flavor = "multi_thread")]
-    async fn fetch_via_gateway_considers_all_providers_before_limiting() {
+    async fn fetch_via_gateway_rejects_insecure_provider_urls_before_selection() {
         test_logger();
 
         let payload = sample_payload(4096);
@@ -8201,6 +9059,7 @@ mod tests {
             GatewayProviderInput {
                 name: "alpha".to_string(),
                 provider_id_hex: provider_alpha_id_hex.clone(),
+                gateway_public_key_hex: gateway_public_key_hex(),
                 base_url: "http://127.0.0.1:9/".to_string(),
                 stream_token_b64: stream_token_b64(
                     &manifest_id_hex,
@@ -8213,6 +9072,7 @@ mod tests {
             GatewayProviderInput {
                 name: "beta".to_string(),
                 provider_id_hex: provider_beta_id_hex.clone(),
+                gateway_public_key_hex: gateway_public_key_hex(),
                 base_url: "http://127.0.0.1:9/".to_string(),
                 stream_token_b64: stream_token_b64(
                     &manifest_id_hex,
@@ -8240,12 +9100,13 @@ mod tests {
             Some(1),
         )
         .await
-        .expect_err("fetch should fail due to missing listener");
+        .expect_err("insecure gateway URLs must fail before provider selection");
 
         assert!(
-            matches!(err, GatewayOrchestratorError::Orchestrator(_)),
-            "expected late eligible providers to keep the fetch from failing early, got {err:?}"
+            matches!(err, GatewayOrchestratorError::Build(_)),
+            "expected gateway URL validation failure, got {err:?}"
         );
+        assert!(err.to_string().contains("HTTPS"));
     }
 
     #[test]
@@ -9208,6 +10069,75 @@ mod tests {
         }
     }
 
+    #[test]
+    fn config_json_rejects_values_outside_resource_envelope() {
+        for (field, value) in [
+            ("retry_budget", 0_u64),
+            ("retry_budget", (HARD_MAX_RETRIES_PER_CHUNK + 1) as u64),
+            ("provider_failure_threshold", 0),
+            (
+                "provider_failure_threshold",
+                (HARD_MAX_RETRIES_PER_CHUNK + 1) as u64,
+            ),
+            ("global_parallel_limit", 0),
+            (
+                "global_parallel_limit",
+                (HARD_MAX_GLOBAL_PARALLEL_LIMIT + 1) as u64,
+            ),
+        ] {
+            let mut config = bindings::config_to_json(&OrchestratorConfig::default());
+            config
+                .as_object_mut()
+                .expect("config object")
+                .get_mut("fetch")
+                .expect("fetch object")
+                .as_object_mut()
+                .expect("fetch map")
+                .insert(field.into(), Value::from(value));
+            assert!(
+                bindings::config_from_json(&config).is_err(),
+                "unsafe fetch resource value was accepted: {field}={value}"
+            );
+        }
+
+        for value in [0_u64, (HARD_MAX_PROVIDERS + 1) as u64] {
+            let mut config = bindings::config_to_json(&OrchestratorConfig::default());
+            config
+                .as_object_mut()
+                .expect("config object")
+                .insert("max_providers".into(), Value::from(value));
+            assert!(
+                bindings::config_from_json(&config).is_err(),
+                "unsafe provider limit was accepted: {value}"
+            );
+        }
+
+        for (field, value) in [
+            ("poll_interval_secs", 0_u64),
+            (
+                "poll_interval_secs",
+                MAX_PRIVACY_POLL_INTERVAL.as_secs() + 1,
+            ),
+            ("request_timeout_secs", 0),
+            (
+                "request_timeout_secs",
+                MAX_PRIVACY_REQUEST_TIMEOUT.as_secs() + 1,
+            ),
+        ] {
+            let mut config = bindings::config_to_json(&OrchestratorConfig::default());
+            let mut privacy = Map::new();
+            privacy.insert(field.into(), Value::from(value));
+            config
+                .as_object_mut()
+                .expect("config object")
+                .insert("privacy_events".into(), Value::Object(privacy));
+            assert!(
+                bindings::config_from_json(&config).is_err(),
+                "unsafe privacy resource value was accepted: {field}={value}"
+            );
+        }
+    }
+
     #[cfg(feature = "local-quic-proxy")]
     #[tokio::test(flavor = "multi_thread")]
     async fn privacy_collector_ingests_ndjson_and_updates_metrics() {
@@ -9353,12 +10283,13 @@ mod tests {
             remediation_cfg,
             Arc::clone(&metrics),
         ));
-        let collector = PrivacyCollector::spawn(
+        let collector = PrivacyCollector::spawn_for_local_test(
             vec![("relay-alpha".to_string(), url)],
             &config,
             Arc::clone(&metrics),
             Some(Arc::clone(&remediator)),
         )
+        .await
         .expect("privacy collector spawn")
         .expect("privacy collector created");
 
@@ -9464,12 +10395,13 @@ mod tests {
         };
 
         let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
-        let collector = PrivacyCollector::spawn(
+        let collector = PrivacyCollector::spawn_for_local_test(
             vec![("relay-beta".to_string(), url)],
             &config,
             Arc::clone(&metrics),
             None,
         )
+        .await
         .expect("privacy collector spawn")
         .expect("privacy collector created");
         let aggregator = Arc::clone(&collector.aggregator);
@@ -9576,12 +10508,13 @@ mod tests {
         };
 
         let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
-        let collector = PrivacyCollector::spawn(
+        let collector = PrivacyCollector::spawn_for_local_test(
             vec![("relay-prio".to_string(), url)],
             &config,
             Arc::clone(&metrics),
             None,
         )
+        .await
         .expect("privacy collector spawn")
         .expect("privacy collector created");
 
@@ -9679,12 +10612,13 @@ mod tests {
         };
 
         let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
-        let collector = PrivacyCollector::spawn(
+        let collector = PrivacyCollector::spawn_for_local_test(
             vec![("relay-prio".to_string(), url)],
             &config,
             Arc::clone(&metrics),
             None,
         )
+        .await
         .expect("privacy collector spawn")
         .expect("privacy collector created");
 
@@ -9768,8 +10702,8 @@ mod tests {
         let mut provider_id = [0u8; 32];
         let decoded = hex::decode(provider_id_hex).expect("provider hex");
         provider_id.copy_from_slice(&decoded);
-        let token = StreamTokenV1 {
-            body: StreamTokenBodyV1 {
+        let token = StreamTokenV1::sign_with_seed(
+            StreamTokenBodyV1 {
                 token_id: "01J9TK3GR0XM6YQF7WQXA9Z2SF".to_owned(),
                 manifest_cid: hex::decode(manifest_cid_hex).expect("manifest cid"),
                 provider_id,
@@ -9781,10 +10715,19 @@ mod tests {
                 requests_per_minute: 120,
                 token_pk_version: 1,
             },
-            signature: vec![0; 64],
-        };
+            [0x42; 32],
+        )
+        .expect("sign stream token fixture");
         let bytes = norito::to_bytes(&token).expect("encode token");
         BASE64_STANDARD.encode(bytes)
+    }
+
+    fn gateway_public_key_hex() -> String {
+        hex::encode(
+            ed25519_dalek::SigningKey::from_bytes(&[0x42; 32])
+                .verifying_key()
+                .to_bytes(),
+        )
     }
 
     struct MockGateway {
@@ -9938,6 +10881,7 @@ mod tests {
         let provider_input = GatewayProviderInput {
             name: "alpha".to_string(),
             provider_id_hex: provider_id_hex.clone(),
+            gateway_public_key_hex: gateway_public_key_hex(),
             base_url: gateway.base_url().to_string(),
             stream_token_b64: token_b64,
             privacy_events_url: None,

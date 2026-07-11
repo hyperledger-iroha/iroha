@@ -1683,6 +1683,7 @@ const session = await torii.fetchDaPayloadViaGateway({
     {
       name: "alpha",
       providerIdHex: process.env.SORAFS_PROVIDER_ID,
+      gatewayPublicKeyHex: process.env.SORAFS_GATEWAY_PUBLIC_KEY,
       baseUrl: "https://gateway.example.com/",
       streamTokenB64: process.env.SORAFS_STREAM_TOKEN,
     },
@@ -1739,12 +1740,14 @@ const proveResult = await torii.proveDaAvailabilityToDir({
     {
       name: "alpha",
       providerIdHex: process.env.SORAFS_PROVIDER_ID,
+      gatewayPublicKeyHex: process.env.SORAFS_GATEWAY_PUBLIC_KEY,
       baseUrl: "https://gateway.example.com/",
       streamTokenB64: process.env.SORAFS_STREAM_TOKEN,
     },
     {
       name: "beta",
       providerIdHex: process.env.SORAFS_SECOND_PROVIDER_ID,
+      gatewayPublicKeyHex: process.env.SORAFS_SECOND_GATEWAY_PUBLIC_KEY,
       baseUrl: "https://gateway-two.example.com/",
       streamTokenB64: process.env.SORAFS_SECOND_STREAM_TOKEN,
     },
@@ -3174,7 +3177,7 @@ without provisioning infrastructure.
 - `IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_ENABLED` — set to `1` (alongside `IROHA_TORII_INTEGRATION_MUTATE=1`) to run the Space Directory manifest publish/revoke smoke tests. Supply a manifest JSON path via `IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_MANIFEST` (absolute or relative to the repo root; for example `fixtures/space_directory/capability/retail_dapp_access.manifest.json`). Optional overrides: `IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_REVOKE_EPOCH=<epoch>` to force the revoke call to use a specific epoch when your fixture omits `expiry_epoch`.
 - `IROHA_TORII_INTEGRATION_DA_ENABLED` — set to `1` (and enable `IROHA_TORII_INTEGRATION_MUTATE=1`) to exercise the data-availability ingest smoke test (`submitDaBlob` + manifest polling). Leave unset when the DA ingest pipeline is disabled on the target Torii deployment.
 - `IROHA_TORII_INTEGRATION_DA_TICKET` — optional hex-encoded storage ticket used to fetch an existing manifest bundle when DA endpoints are read-only or when you want to validate a production capture without submitting a new blob.
-- `IROHA_TORII_INTEGRATION_DA_GATEWAYS` — optional JSON array describing the gateway providers used by `fetchDaPayloadViaGateway` (for example `[{"name":"gw-a","providerIdHex":"…","baseUrl":"https://gw-a.example","streamTokenB64":"..."}]`). Supply this alongside `IROHA_TORII_INTEGRATION_DA_TICKET` to stream proofs through the multi-source orchestrator.
+- `IROHA_TORII_INTEGRATION_DA_GATEWAYS` — optional JSON array describing the gateway providers used by `fetchDaPayloadViaGateway` (for example `[{"name":"gw-a","providerIdHex":"…","gatewayPublicKeyHex":"…","baseUrl":"https://gw-a.example","streamTokenB64":"..."}]`). Supply this alongside `IROHA_TORII_INTEGRATION_DA_TICKET` to stream proofs through the multi-source orchestrator.
 
 Example invocation:
 

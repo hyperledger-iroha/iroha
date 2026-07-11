@@ -124,6 +124,29 @@ class HostileAllLanesMatchingText(str):
         raise AssertionError("secret-token all-lanes matching text was compared")
 
 
+class HostileAllLanesHexText(str):
+    def __new__(cls, value: str):
+        return str.__new__(cls, value)
+
+    def __str__(self):
+        raise AssertionError("secret-token all-lanes hex text was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token all-lanes hex text was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token all-lanes hex text was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token all-lanes hex text was compared")
+
+    def lower(self):
+        raise AssertionError("secret-token all-lanes hex text lower ran")
+
+    def startswith(self, _prefix):
+        raise AssertionError("secret-token all-lanes hex text startswith ran")
+
+
 class HostileAllLanesBlockerText(str):
     def __new__(cls):
         return str.__new__(cls, "safe public blocker")
@@ -136,6 +159,9 @@ class HostileAllLanesBlockerText(str):
 
     def __iter__(self):
         raise AssertionError("secret-token all-lanes blocker was iterated")
+
+    def __len__(self):
+        raise AssertionError("secret-token all-lanes blocker length was read")
 
     def __eq__(self, _other):
         raise AssertionError("secret-token all-lanes blocker was compared")
@@ -154,6 +180,9 @@ class HostileAllLanesBlockerText(str):
 
     def casefold(self):
         raise AssertionError("secret-token all-lanes blocker was casefolded")
+
+    def translate(self, _table):
+        raise AssertionError("secret-token all-lanes blocker was translated")
 
 
 class HostileAllLanesChecklistText(str):
@@ -2622,6 +2651,21 @@ def test_all_lanes_minimal_toml_sensitive_helpers_cover_marker_families():
     ) == "source adapter gate audit hashes contains unexpected field: public_operator_field"
 
 
+def test_all_lanes_minimal_toml_diagnostic_helpers_reject_string_subclasses_without_hooks():
+    module = load_evidence_module()
+    hostile = HostileAllLanesFieldName("secret-token-diagnostic-helper")
+
+    assert module._minimal_toml_duplicate_key_detail(hostile) == (
+        "duplicate key with malformed name"
+    )
+    assert module._toml_unsupported_section_detail(hostile) == (
+        "unsupported zk section with malformed name"
+    )
+    assert module._evidence_unsupported_section_detail(hostile) == (
+        "unsupported evidence section with malformed name"
+    )
+
+
 def test_all_lanes_minimal_toml_parser_redacts_unsupported_section_names():
     module = load_evidence_module()
     original_tomllib = module.tomllib
@@ -2819,6 +2863,39 @@ def test_all_lanes_minimal_toml_rejects_string_subclasses_without_hooks():
         module.tomllib = original_tomllib
 
 
+def test_all_lanes_strip_0x_rejects_string_subclasses_without_hooks():
+    module = load_evidence_module()
+
+    try:
+        module._strip_0x(HostileAllLanesHexText("0x" + "11" * 32))
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "0x text must be an exact string"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+    else:
+        raise AssertionError("all-lanes strip-0x helper accepted hostile text")
+
+
+def test_all_lanes_canonical_text_helpers_reject_string_subclasses_without_hooks():
+    module = load_evidence_module()
+
+    assert module._canonical_hex_text(HostileAllLanesHexText("0x" + "11" * 32)) is None
+
+    try:
+        module._decode_canonical_base64(
+            HostileAllLanesHexText("QUJD"),
+            label="source gate audit hash",
+        )
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "source gate audit hash must be base64"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+    else:
+        raise AssertionError("all-lanes base64 helper accepted hostile text")
+
+
 def test_all_lanes_metadata_comment_redacts_json_exception_causes():
     module = load_evidence_module()
 
@@ -2966,6 +3043,59 @@ def test_all_lanes_load_evidence_rejects_unreadable_file_shapes(tmp_path):
         assert "secret-token" not in message
         assert "IsADirectoryError" not in message
         assert "FileNotFoundError" not in message
+
+
+def test_all_lanes_load_evidence_rejects_pathlike_subclasses_without_hooks(tmp_path):
+    module = load_evidence_module()
+    evidence = tmp_path / "complete.toml"
+    evidence.write_text(
+        "\n".join(
+            [
+                "[[zk.sccp_source_verifier_materials]]",
+                "version = 1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    evidence_text = str(evidence)
+
+    class HostileEvidencePathString(str):
+        def __new__(cls):
+            return str.__new__(cls, evidence_text)
+
+        def __str__(self):
+            raise AssertionError("secret-token all-lanes evidence path was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token all-lanes evidence path was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token all-lanes evidence path was coerced")
+
+    class HostileEvidencePathLike:
+        def __str__(self):
+            raise AssertionError(
+                "secret-token all-lanes evidence path-like was stringified"
+            )
+
+        def __repr__(self):
+            raise AssertionError("secret-token all-lanes evidence path-like was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError(
+                "secret-token all-lanes evidence path-like was coerced"
+            )
+
+    for path in (HostileEvidencePathString(), HostileEvidencePathLike()):
+        for loader in (
+            lambda candidate: module.load_evidence_bundle([candidate]),
+            module._load_evidence_text,
+        ):
+            with pytest.raises(OSError) as exc_info:
+                loader(path)
+            message = str(exc_info.value)
+            assert message == "evidence input cannot be read"
+            assert "secret-token" not in message
 
 
 def test_all_lanes_load_evidence_rejects_container_subclasses_without_leaking(
@@ -4986,6 +5116,26 @@ def test_all_lanes_evm_source_live_metadata_uses_exact_keys():
         assert "secret-token" not in blockers
         assert "__str__" not in blockers
         assert "__eq__" not in blockers
+
+
+def test_all_lanes_evm_source_receipt_status_rejects_string_subclasses_without_hooks():
+    module = load_evidence_module()
+    eth_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_ETH)
+    records = complete_bundle(module)
+    material = records["sccp_source_verifier_materials"][eth_index]
+    material["_comment_evm_source_deployment_receipt_status"] = (
+        HostileAllLanesMatchingText("0x1")
+    )
+
+    summary = module.validate_evidence_bundle(records)
+    blockers = "\n".join(summary["blockers"])
+
+    assert summary["production_ready"] is False
+    assert "EVM source deployment receipt status metadata must be 0x1" in blockers
+    assert "secret-token" not in blockers
+    assert "all-lanes matching text" not in blockers
+    assert "__eq__" not in blockers
+    assert "__ne__" not in blockers
 
 
 def test_all_lanes_rejects_evm_live_block_tag_drift():
@@ -9649,6 +9799,29 @@ def test_all_lanes_route_canary_common_metadata_uses_exact_keys():
     )
 
 
+def test_all_lanes_route_canary_status_rejects_string_subclasses_without_hooks():
+    # Source-inventory marker: all-lanes route canary status uses exact strings.
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    sol_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_SOL)
+    route = records["sccp_route_allowlists"][sol_index]
+    route["_comment_route_canary_status"] = HostileAllLanesMatchingText("passed")
+
+    summary = module.validate_evidence_bundle(records)
+    blockers = "\n".join(summary["blockers"])
+    sol_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_SOL
+    )
+
+    assert summary["production_ready"] is False
+    assert "domain 3 (sol): route canary status metadata must be passed" in blockers
+    assert sol_lane["route_allowlist"]["route_canary"]["status"] is None
+    assert "secret-token" not in blockers
+    assert "all-lanes matching text" not in blockers
+    assert "__eq__" not in blockers
+    assert "__ne__" not in blockers
+
+
 def test_all_lanes_evm_route_canary_metadata_uses_exact_keys():
     module = load_evidence_module()
     assert_route_canary_exact_key_cases(
@@ -11199,6 +11372,20 @@ def test_all_lanes_cli_error_detail_treats_system_exit_as_opaque():
     assert safe_message not in detail
 
 
+def test_all_lanes_cli_error_detail_redacts_unstringifiable_exceptions():
+    module = load_evidence_module()
+    fallback = "SCCP all-lanes evidence validation failed"
+
+    class HostileCliException(RuntimeError):
+        def __str__(self):
+            raise AssertionError("secret-token all-lanes CLI exception was stringified")
+
+    detail = module._cli_error_detail(HostileCliException(), fallback=fallback)
+
+    assert detail == fallback
+    assert "secret-token" not in detail
+
+
 def test_all_lanes_cli_rejects_duplicate_public_blockers_without_leaking(capsys):
     module = load_evidence_module()
     original_load = module.load_evidence_bundle
@@ -11349,6 +11536,19 @@ def test_all_lanes_public_blocker_helpers_reject_string_subclasses_without_norma
         "all-lanes root blockers[0] must be a non-empty canonical string"
         in unresolved_blockers
     )
+
+
+def test_all_lanes_public_blocker_decode_helpers_reject_string_subclasses_without_hooks():
+    """Decoded public blocker helpers must reject str subclasses before hooks."""
+
+    module = load_evidence_module()
+    blocker = HostileAllLanesBlockerText()
+
+    assert module._decoded_public_blocker_text(blocker) == ""
+    assert module._decoded_sensitive_public_marker_text(blocker) == ""
+    assert module._decoded_public_blocker_text_issue(blocker) == "non-string value"
+    assert module._decoded_public_nested_value_issue(blocker) == "non-string value"
+    assert module._canonical_public_blocker_key(blocker) == ""
 
 
 def test_all_lanes_cli_rejects_unknown_summary_fields_without_leaking(capsys):

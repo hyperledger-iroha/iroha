@@ -66,7 +66,7 @@ Vous pouvez créer un espace de travail en amont, en utilisant `status.md` et en
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
-  --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
+  --provider name=gw-regulated,provider-id=001122...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64
 ```- Utilisez la CLI et la clé = valeur pour (راجع `docs/examples/sorafs_direct_mode_smoke.conf`). املأ digest الخاص بالـ manifest ومدخلات annonces للموفّر بقيم الإنتاج قبل التشغيل.
 - `--policy` remplace `docs/examples/sorafs_direct_mode_policy.json`, ce qui signifie que JSON est compatible avec `sorafs_orchestrator::bindings::config_to_json`. يقبل CLI السياسة عبر `--orchestrator-config=PATH` لتمكين تشغيلات قابلة لإعادة الإنتاج دون ضبط الأعلام يدويا.
 - Utilisez le `sorafs_cli` pour `PATH`, utilisez la caisse `sorafs_orchestrator` (libération complète) pour fumer de la fumée مسار الوضع المباشر المرسل.

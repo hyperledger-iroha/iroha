@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 /// Errors surfaced by the Swift orchestrator wrapper.
 public enum SorafsOrchestratorError: Error {
@@ -6,6 +11,8 @@ public enum SorafsOrchestratorError: Error {
     case bridgeUnavailable
     /// The native bridge returned a report that could not be decoded as JSON.
     case reportDecodingFailed(Error)
+    /// Typed gateway requests must contain between one and 256 providers.
+    case invalidProviderCount
 }
 
 extension SorafsOrchestratorClient: SorafsGatewayFetching {
@@ -15,7 +22,10 @@ extension SorafsOrchestratorClient: SorafsGatewayFetching {
         options: SorafsGatewayFetchOptions?,
         cancellationHandler: (@Sendable () -> Void)?
     ) async throws -> SorafsGatewayFetchResult {
-        try await fetch(
+        guard !providers.isEmpty, providers.count <= 256 else {
+            throw SorafsOrchestratorError.invalidProviderCount
+        }
+        return try await fetch(
             plan: plan,
             providers: providers,
             options: options,
@@ -197,47 +207,184 @@ public struct SorafsGatewayFetchReport: Codable, Sendable {
 
 /// Gateway descriptors consumed by the orchestrator helper.
 public struct SorafsGatewayProvider: Encodable, Sendable, Equatable {
+    private static let maximumStreamTokenEncodedBytes = 4 * 1_024
+    private static let maximumStreamTokenDecodedBytes = 2 * 1_024
+
     public enum Error: Swift.Error {
+        case invalidName
         case invalidProviderIdHex
+        case invalidGatewayPublicKeyHex
+        case invalidBaseURL
         case invalidStreamToken
     }
 
     public let name: String
     public let providerIdHex: String
+    public let gatewayPublicKeyHex: String
     public let baseURL: URL
     public let streamTokenB64: String
     public let privacyEventsURL: URL?
 
     public init(name: String,
                 providerIdHex: String,
+                gatewayPublicKeyHex: String,
                 baseURL: URL,
                 streamTokenB64: String,
                 privacyEventsURL: URL? = nil) throws {
-        let normalizedId = SorafsGatewayProvider.normalizeHex(providerIdHex)
-        guard normalizedId.count == 64, Data(hexString: normalizedId) != nil else {
+        guard !name.isEmpty,
+              name.utf8.count <= 128,
+              name.utf8.allSatisfy({ byte in
+                  (byte >= 48 && byte <= 57) ||
+                  (byte >= 65 && byte <= 90) ||
+                  (byte >= 97 && byte <= 122) ||
+                  byte == 45 || byte == 46 || byte == 58 || byte == 95
+              }) else {
+            throw Error.invalidName
+        }
+        guard SorafsGatewayProvider.isCanonicalHex32(providerIdHex) else {
             throw Error.invalidProviderIdHex
         }
-        guard Data(base64Encoded: streamTokenB64) != nil else {
+        guard SorafsGatewayProvider.isCanonicalHex32(gatewayPublicKeyHex) else {
+            throw Error.invalidGatewayPublicKeyHex
+        }
+        guard SorafsGatewayProvider.isCanonicalGatewayURL(baseURL, path: "/"),
+              privacyEventsURL.map({
+                  SorafsGatewayProvider.isCanonicalGatewayURL($0, path: "/privacy/events")
+              }) ?? true else {
+            throw Error.invalidBaseURL
+        }
+        guard streamTokenB64.utf8.count <= Self.maximumStreamTokenEncodedBytes,
+              let token = Data(base64Encoded: streamTokenB64),
+              !token.isEmpty,
+              token.count <= Self.maximumStreamTokenDecodedBytes,
+              token.base64EncodedString() == streamTokenB64 else {
             throw Error.invalidStreamToken
         }
         self.name = name
-        self.providerIdHex = normalizedId
+        self.providerIdHex = providerIdHex
+        self.gatewayPublicKeyHex = gatewayPublicKeyHex
         self.baseURL = baseURL
         self.streamTokenB64 = streamTokenB64
         self.privacyEventsURL = privacyEventsURL
     }
 
-    private static func normalizeHex(_ value: String) -> String {
-        var trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
-            trimmed = String(trimmed.dropFirst(2))
+    private static func isCanonicalHex32(_ value: String) -> Bool {
+        value.utf8.count == 64 &&
+            value.utf8.contains(where: { $0 != 48 }) &&
+            value.utf8.allSatisfy { byte in
+                (byte >= 48 && byte <= 57) || (byte >= 97 && byte <= 102)
+            }
+    }
+
+    private static func isCanonicalGatewayURL(_ url: URL, path: String) -> Bool {
+        guard let host = url.host,
+              url.absoluteString.utf8.count <= 2_048,
+              url.scheme == "https",
+              url.user == nil,
+              url.password == nil,
+              url.query == nil,
+              url.fragment == nil,
+              url.port == nil,
+              host == host.lowercased(),
+              isPublicGatewayHost(host) else {
+            return false
         }
-        return trimmed.lowercased()
+        let authorityHost = host.contains(":") ? "[\(host)]" : host
+        let origin = "https://\(authorityHost)"
+        if path == "/" {
+            return url.absoluteString == origin || url.absoluteString == origin + "/"
+        }
+        return url.absoluteString == origin + path
+    }
+
+    private static func isPublicGatewayHost(_ host: String) -> Bool {
+        if let octets = parseCanonicalIPv4(host) {
+            return isPublicIPv4(octets)
+        }
+        if host.allSatisfy({ $0.isNumber || $0 == "." }) {
+            return false
+        }
+        if host.contains(":") {
+            return isPublicIPv6Literal(host)
+        }
+        if host == "localhost" || host.hasSuffix(".localhost") ||
+            host.hasSuffix(".local") || host.hasSuffix(".internal") ||
+            host.hasSuffix(".lan") || host.hasSuffix(".") || host.utf8.count > 253 {
+            return false
+        }
+        return host.split(separator: ".", omittingEmptySubsequences: false).allSatisfy { label in
+            guard !label.isEmpty, label.utf8.count <= 63,
+                  let first = label.utf8.first, let last = label.utf8.last,
+                  isASCIILowerAlphanumeric(first), isASCIILowerAlphanumeric(last) else {
+                return false
+            }
+            return label.utf8.allSatisfy { isASCIILowerAlphanumeric($0) || $0 == 45 }
+        }
+    }
+
+    private static func parseCanonicalIPv4(_ host: String) -> [UInt8]? {
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return nil }
+        var octets: [UInt8] = []
+        octets.reserveCapacity(4)
+        for part in parts {
+            guard !part.isEmpty,
+                  part.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
+                  part.count == 1 || part.first != "0",
+                  let value = UInt8(String(part)) else {
+                return nil
+            }
+            octets.append(value)
+        }
+        return octets
+    }
+
+    private static func isPublicIPv4(_ octets: [UInt8]) -> Bool {
+        guard octets.count == 4 else { return false }
+        let first = octets[0]
+        let second = octets[1]
+        let third = octets[2]
+        let fourth = octets[3]
+        return first != 0 && first != 10 && first != 127 && first < 224 &&
+            !(first == 100 && second >= 64 && second <= 127) &&
+            !(first == 169 && second == 254) &&
+            !(first == 172 && second >= 16 && second <= 31) &&
+            !(first == 192 && second == 0 && third == 0) &&
+            !(first == 192 && second == 0 && third == 2) &&
+            !(first == 192 && second == 88 && third == 99) &&
+            !(first == 192 && second == 168) &&
+            !(first == 198 && (second == 18 || second == 19)) &&
+            !(first == 198 && second == 51 && third == 100) &&
+            !(first == 203 && second == 0 && third == 113) &&
+            !(first == 255 && second == 255 && third == 255 && fourth == 255)
+    }
+
+    private static func isPublicIPv6Literal(_ host: String) -> Bool {
+        #if canImport(Darwin) || canImport(Glibc)
+        var address = in6_addr()
+        let parsed = host.withCString { inet_pton(AF_INET6, $0, &address) }
+        guard parsed == 1 else { return false }
+        let bytes = withUnsafeBytes(of: address) { Array($0) }
+        let first = (UInt16(bytes[0]) << 8) | UInt16(bytes[1])
+        let second = (UInt16(bytes[2]) << 8) | UInt16(bytes[3])
+        let globalUnicast = first & 0xe000 == 0x2000
+        let documentation = (first == 0x2001 && second == 0x0db8) ||
+            (first == 0x3fff && second & 0xf000 == 0)
+        let specialPurpose = first == 0x2001 && second <= 0x01ff
+        return globalUnicast && !documentation && !specialPurpose && first != 0x2002
+        #else
+        return false
+        #endif
+    }
+
+    private static func isASCIILowerAlphanumeric(_ byte: UInt8) -> Bool {
+        (byte >= 48 && byte <= 57) || (byte >= 97 && byte <= 122)
     }
 
     enum CodingKeys: String, CodingKey {
         case name
         case providerIdHex = "provider_id_hex"
+        case gatewayPublicKeyHex = "gateway_public_key_hex"
         case baseURL = "base_url"
         case streamTokenB64 = "stream_token_b64"
         case privacyEventsURL = "privacy_events_url"
@@ -247,6 +394,7 @@ public struct SorafsGatewayProvider: Encodable, Sendable, Equatable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(name, forKey: .name)
         try container.encode(providerIdHex, forKey: .providerIdHex)
+        try container.encode(gatewayPublicKeyHex, forKey: .gatewayPublicKeyHex)
         try container.encode(baseURL.absoluteString, forKey: .baseURL)
         try container.encode(streamTokenB64, forKey: .streamTokenB64)
         if let privacyEventsURL {

@@ -3716,7 +3716,7 @@ expected-failure configs as Apalache.
 commit-pipeline status recorder exactness aggregate.
 
 `SumeragiAutoscaleTransitionGate.tla` captures deterministic autoscale queue
-reconfiguration after commit:
+reconfiguration and elastic-lane lifecycle after commit:
 - `autoscale_transition_committed_at(...)` returns true only when Nexus
   autoscale is enabled and `last_transition_height` exactly equals the
   committed pending height,
@@ -3724,10 +3724,33 @@ reconfiguration after commit:
   true,
 - failed commits, disabled autoscale, and off-by-one transition heights do not
   reconfigure the queue,
-- the reconfiguration status/log context keeps the committed pending height.
+- the reconfiguration status/log context keeps the committed pending height,
+- configured baseline lanes remain immutable while elastic capacity stays
+  within the configured bounds,
+- create/retire geometry is journaled and restart-reconciled against the
+  consensus catalog,
+- recreated lanes receive a fresh incarnation and activation height, and
+- stale-incarnation artifacts, undrained retirement, and non-consensus catalog
+  writes fail closed.
 
-Its TLC cross-check independently exhausts the same nine expected-failure
-configs as Apalache.
+Its TLC cross-check independently exhausts the same sixteen expected-failure
+configs as Apalache. The recreate mutation uses depth 15 so the checker reaches
+the complete create → retire → recreate witness.
+
+`SumeragiMergeExecutionOrder.tla` captures the execution barrier between
+independently arriving lane certificates and shared state:
+- replicas may receive certified lane payloads in opposite orders,
+- no payload executes before an authenticated merge certificate fixes a total
+  order,
+- write-ahead recovery applies only the next certified item,
+- duplicate/restart replay cannot apply an epoch twice, and
+- replicas that finish the same merge batch converge despite delivery and
+  restart interleavings.
+
+The lane effects are deliberately non-commutative, so arrival-order execution
+would fork immediately. TLC exhausts the complete bounded state graph, while
+Apalache rejects arrival-order, pre-certificate, duplicate, restart-double,
+torn-commit, and wrong-payload mutations.
 
 `SumeragiCommitQuorumSignersGate.tla` captures commit-QC signer quorum gating:
 - missing QC signer metadata never counts as a quorum, even at a zero
@@ -8829,7 +8852,10 @@ verification, and full networking details.
 - `SumeragiCommitPipelineStatusGate_bug_*.cfg`: expected-failure last-field, EMA, non-EMA, snapshot, and reset mutations.
 - `SumeragiAutoscaleTransitionGate.tla`: autoscale transition commit gate model.
 - `SumeragiAutoscaleTransitionGate_fast.cfg`: CI-friendly direct autoscale transition commit gate check.
-- `SumeragiAutoscaleTransitionGate_bug_*.cfg`: expected-failure enabled, height-match, success-path, and reported-height mutations.
+- `SumeragiAutoscaleTransitionGate_bug_*.cfg`: expected-failure commit-gate, stale-artifact, early-activation, baseline/catalog mutation, crash-geometry, undrained-retire, and incarnation-reuse mutations.
+- `SumeragiMergeExecutionOrder.tla`: merge-certified lane execution ordering and restart model.
+- `SumeragiMergeExecutionOrder_fast.cfg`: CI-friendly merge execution ordering correctness-envelope check.
+- `SumeragiMergeExecutionOrder_bug_*.cfg`: expected-failure arrival-order, pre-certificate, duplicate, restart-double, torn-commit, and wrong-payload mutations.
 - `SumeragiCommitQuorumSignersGate.tla`: commit-QC signer quorum helper model.
 - `SumeragiCommitQuorumSignersGate_fast.cfg`: CI-friendly commit-QC signer quorum correctness-envelope check.
 - `SumeragiCommitQuorumSignersGate_bug_*.cfg`: expected-failure missing metadata, zero-threshold, threshold-boundary, and failed-branch mutations.
@@ -16013,7 +16039,7 @@ implementation surfaces it abstracts:
 
 | Model concept | Implementation surface |
 | --- | --- |
-| mode/domain projection | `compute_consensus_handshake_caps_from_world(...)` derives `PERMISSIONED_TAG` plus `bls-iroha2:permissioned-sumeragi:v1` for permissioned mode, and `NPOS_TAG` plus `bls-iroha2:npos-sumeragi:v1` for NPoS mode. |
+| mode/domain projection | `compute_consensus_handshake_caps_from_world(...)` derives `PERMISSIONED_TAG` plus `bls-iroha2:permissioned-sumeragi:v2` for permissioned mode, and `NPOS_TAG` plus `bls-iroha2:npos-sumeragi:v2` for NPoS mode. |
 | caps and fingerprint binding | The returned handshake caps copy `PROTO_VERSION` and configured transport caps, and `compute_consensus_fingerprint_from_params(...)` binds mode tag, protocol version, chain id, and `Norito(ConsensusGenesisParams)`. |
 | canonical params | `consensus_genesis_params_from_parameters(...)` preserves block timing, collector config, block transaction cap, DA flag, BLS domain, and mode-specific NPoS fields in the canonical fingerprint payload. |
 | permissioned payload | Permissioned mode carries `npos = None` and `epoch_length_blocks = 0`, keeping NPoS-only parameters out of permissioned fingerprints. |
@@ -16988,6 +17014,20 @@ bash scripts/formal/sumeragi_apalache.sh commit-drain-summary-fast
 bash scripts/formal/sumeragi_apalache.sh commit-pipeline-sample-fast
 bash scripts/formal/sumeragi_apalache.sh commit-pipeline-status-fast
 bash scripts/formal/sumeragi_apalache.sh autoscale-transition-fast
+bash scripts/formal/sumeragi_apalache.sh merge-execution-order-fast
+bash scripts/formal/sumeragi_apalache.sh autoscale-transition-bug-accept-stale-artifact
+bash scripts/formal/sumeragi_apalache.sh autoscale-transition-bug-activate-early
+bash scripts/formal/sumeragi_apalache.sh autoscale-transition-bug-mutate-baseline
+bash scripts/formal/sumeragi_apalache.sh autoscale-transition-bug-non-consensus-catalog-write
+bash scripts/formal/sumeragi_apalache.sh autoscale-transition-bug-restart-geometry-drift
+bash scripts/formal/sumeragi_apalache.sh autoscale-transition-bug-retire-undrained
+bash scripts/formal/sumeragi_apalache.sh autoscale-transition-bug-reuse-incarnation
+bash scripts/formal/sumeragi_apalache.sh merge-execution-order-bug-arrival-order
+bash scripts/formal/sumeragi_apalache.sh merge-execution-order-bug-apply-before-certificate
+bash scripts/formal/sumeragi_apalache.sh merge-execution-order-bug-duplicate-apply
+bash scripts/formal/sumeragi_apalache.sh merge-execution-order-bug-restart-replays-applied
+bash scripts/formal/sumeragi_apalache.sh merge-execution-order-bug-torn-commit
+bash scripts/formal/sumeragi_apalache.sh merge-execution-order-bug-wrong-payload
 bash scripts/formal/sumeragi_apalache.sh commit-quorum-signers-fast
 bash scripts/formal/sumeragi_apalache.sh signature-index-recovery-fast
 bash scripts/formal/sumeragi_apalache.sh commit-qc-lookup-fast
@@ -17793,6 +17833,13 @@ bash scripts/formal/sumeragi_tlc.sh commit-drain-summary-fast
 bash scripts/formal/sumeragi_tlc.sh commit-pipeline-sample-fast
 bash scripts/formal/sumeragi_tlc.sh commit-pipeline-status-fast
 bash scripts/formal/sumeragi_tlc.sh autoscale-transition-fast
+bash scripts/formal/sumeragi_tlc.sh merge-execution-order-fast
+bash scripts/formal/sumeragi_tlc.sh merge-execution-order-bug-arrival-order
+bash scripts/formal/sumeragi_tlc.sh merge-execution-order-bug-apply-before-certificate
+bash scripts/formal/sumeragi_tlc.sh merge-execution-order-bug-duplicate-apply
+bash scripts/formal/sumeragi_tlc.sh merge-execution-order-bug-restart-replays-applied
+bash scripts/formal/sumeragi_tlc.sh merge-execution-order-bug-torn-commit
+bash scripts/formal/sumeragi_tlc.sh merge-execution-order-bug-wrong-payload
 bash scripts/formal/sumeragi_tlc.sh signature-index-recovery-fast
 bash scripts/formal/sumeragi_tlc.sh embedded-qc-roster-fast
 bash scripts/formal/sumeragi_tlc.sh roster-validation-memo-fast
@@ -18075,7 +18122,8 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `commit-drain-summary-fast` | 1 | CI commit-drain summary aggregation correctness-envelope check |
 | `commit-pipeline-sample-fast` | 1 | CI direct commit-pipeline timing sample helper check |
 | `commit-pipeline-status-fast` | 1 | CI commit-pipeline status recorder correctness-envelope check |
-| `autoscale-transition-fast` | 1 | CI autoscale transition commit gate correctness-envelope check |
+| `autoscale-transition-fast` | 10 | CI autoscale lifecycle, incarnation, activation, and crash-geometry correctness-envelope check |
+| `merge-execution-order-fast` | 8 | CI merge-certified lane execution order and restart correctness-envelope check |
 | `commit-quorum-signers-fast` | 1 | CI commit-QC signer quorum correctness-envelope check |
 | `signature-index-recovery-fast` | 1 | CI direct commit signature-index recovery helper correctness-envelope check |
 | `commit-qc-lookup-fast` | 1 | CI direct commit-QC cache/history lookup correctness-envelope check |
@@ -32099,22 +32147,32 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   action/static aggregate branches, multi-hop module-alias-wrapped all-static,
   action/static, static/temporal, guarded nested-static, and guarded nested
   action/static aggregate branches, local helper cycles, boolean helper-wrapper
-  cycles, direct and boolean invalid helper references, module-alias helper
-  cycles, multi-hop module-alias helper cycles, onward action aliases,
+  cycles, direct, boolean, and multi-hop action-helper cycles, direct and
+  boolean invalid helper references, module-alias helper cycles, multi-hop
+  module-alias helper cycles, onward action aliases,
   fair-action definitions aliasing different imported reviewed fair actions,
   direct and multi-hop cyclic fair-action aliases, onward helper-alias
   resolution failures, multi-hop helper-alias recursive helper bad targets,
   helper aliases, direct and transitive fair-action helper aliases, boolean
   direct/transitive fair-action helper aliases, boolean helper aliases, helper
-  wrappers, and helper actions composing other fair actions, direct references to and direct,
+  wrappers, and direct and multi-hop helper actions composing other fair
+  actions, direct references to, direct and multi-hop helper-wrapper references to, and direct,
   boolean-hidden, action-shaped wrapper, and boolean-operand helper-wrapper
   compositions of other fair actions, module-alias conjunct fair-action composition plus direct,
-  boolean-helper, and transitive fair-action conjunct operands, module-alias
-  boolean fair-action composition plus direct, helper, and transitive
-  fair-action boolean operands, multi-hop module-alias operand cycles,
-  multi-hop recursive helper failures behind module-alias conjunct and
-  boolean operands, module-alias helper resolution failures, and
-  module-alias imported/target-local mixed action witnesses.
+  boolean-helper, transitive, and multi-hop static-wrapper fair-action
+  conjunct operands, module-alias boolean fair-action composition plus direct, helper,
+  transitive, and multi-hop static-wrapper fair-action boolean operands,
+  multi-hop module-alias operand cycles,
+  mixed module-alias operand cycles, module-alias operand resolution
+  failures, mixed module-alias operand resolution failures, multi-hop
+  recursive helper failures behind module-alias conjunct and boolean
+  operands, mixed multi-hop recursive helper failures behind module-alias
+  operands, mixed onward helper-target failures and mixed invalid helper
+  references behind module-alias operands, boolean
+  and conjunct mixed fair-action composition/error pairings behind
+  module-alias operands,
+  helper-alias resolution failures, module-alias helper resolution failures,
+  and module-alias imported/target-local mixed action witnesses.
   Progress transition aliases must resolve through named local INSTANCE declarations,
   so imported `Next` wrappers cannot rely on implicit or misspelled module
   aliases, including onward aliases inside imported transition targets.

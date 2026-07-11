@@ -4226,7 +4226,7 @@ public final class TonSccpProverTests {
     assert "0x7d35b186e3d49aed31693e33d33355fa8fa9032160c929f2c7fe260094f6ccdf"
         .equals(request.sourceAdapterDeploymentBindingHash())
         : "TON deployment binding hash must match other SDKs";
-    assert "0xf0a1c6d7b987392d9956a2e291552287d063dea146772d1f16909a79e0afe5ca"
+    assert "0x6548be874ada8df7dc4e05cb5d66bf02534d337e369bacc146b3f6cc866c29da"
         .equals(request.requestHash())
         : "TON proof request hash must match other SDKs";
     final TonSccpProver.ProofResult proofResult =
@@ -4235,7 +4235,7 @@ public final class TonSccpProverTests {
               (byte) 0x91, (byte) 0x92, (byte) 0x93, (byte) 0x94, (byte) 0x95
             },
             request);
-    assert "0x09df47e8a2509f4e7fbb6cf4b0b271bb87fd8c1d76b37823332d08ee2c062e5e"
+    assert "0x635f99bd9a9af1446398f53578acf8bf7158b83a25628adb6671e1b16fcf306b"
         .equals(proofResult.envelopeHash())
         : "TON proof envelope hash must match other SDKs";
   }
@@ -4748,7 +4748,7 @@ public final class TonSccpProverTests {
     writeTestNoritoField(encoder, child -> child.writeUInt(0, 64));
     writeTestNoritoField(
         encoder,
-        child -> writeTestNoritoString(child, "iroha2-consensus::permissioned-sumeragi@v1"));
+        child -> writeTestNoritoString(child, "iroha2-consensus::permissioned-sumeragi@v2"));
     writeTestNoritoField(
         encoder, child -> child.writeBytes(hexBytes(stripHex(value.finalityBlockHash))));
     writeTestNoritoField(encoder, child -> child.writeBytes(new byte[32]));

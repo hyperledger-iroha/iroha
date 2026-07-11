@@ -55,10 +55,13 @@ import {
   buildSubmitBallotTransaction,
   buildFinalizeElectionTransaction,
   hashSignedTransaction,
+  hashSignedTransactionPayload,
+  hashInstructionBatch,
 } from "../src/transaction.js";
 import {
   buildMintAssetInstruction,
   buildRegisterDomainInstruction,
+  buildSetAccountKeyValueInstruction,
   buildTransferAssetInstruction,
 } from "../src/instructionBuilders.js";
 import { AccountAddress } from "../src/address.js";
@@ -309,6 +312,59 @@ test("buildRegisterDomainTransaction returns canonical hash", () => {
     encoding: "buffer",
   });
   assert.deepEqual(recomputed, built.hash);
+});
+
+test("hashSignedTransactionPayload returns the detached scaffold preimage", () => {
+  const first = buildSampleRegisterDomain();
+  const firstPayloadHash = hashSignedTransactionPayload(
+    first.signedTransaction,
+    { encoding: "buffer" },
+  );
+  const signatureMutated = Buffer.from(first.signedTransaction);
+  // This byte is inside the canonical fixture's signature payload. The archive
+  // remains structurally decodable, but its full signed-transaction hash changes.
+  signatureMutated[13] ^= 0x01;
+  const mutatedPayloadHash = hashSignedTransactionPayload(
+    signatureMutated,
+    { encoding: "buffer" },
+  );
+
+  assert.equal(firstPayloadHash.length, 32);
+  assert.deepEqual(firstPayloadHash, mutatedPayloadHash);
+  assert.notDeepEqual(
+    first.hash,
+    hashSignedTransaction(signatureMutated, { encoding: "buffer" }),
+  );
+});
+
+test("hashInstructionBatch binds a settlement batch to its source marker", () => {
+  const transfer = buildTransferAssetInstruction({
+    sourceAssetHoldingId: CANONICAL_ASSET_ID_INPUT,
+    quantity: "2800",
+    destinationAccountId: RELAY_ACCOUNT_ID_INPUT,
+  });
+  const batchFor = (sourceTxHash) => [
+    buildSetAccountKeyValueInstruction({
+      accountId: AUTHORITY_ID_INPUT,
+      key: `pk_cbuae_settlement_${sourceTxHash}`,
+      value: {
+        protocol: "pk-cbuae-settlement",
+        version: 1,
+        source_tx_hash: sourceTxHash,
+      },
+    }),
+    transfer,
+  ];
+  const first = hashInstructionBatch(batchFor("a".repeat(64)), {
+    encoding: "buffer",
+  });
+  const second = hashInstructionBatch(batchFor("b".repeat(64)), {
+    encoding: "buffer",
+  });
+
+  assert.equal(first.length, 32);
+  assert.equal(second.length, 32);
+  assert.notDeepEqual(first, second);
 });
 
 test("buildRegisterDomainTransaction accepts metadata JSON strings", () => {

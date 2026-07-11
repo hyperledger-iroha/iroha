@@ -87,6 +87,18 @@ require_directory() {
     fi
 }
 
+config_declares_container_site_bindings() {
+    awk '
+        /^[[:space:]]*\[/ {
+            in_site_bindings = ($0 ~ /^[[:space:]]*\[sorafs\.gateway\.site_bindings\][[:space:]]*$/)
+        }
+        in_site_bindings && /^[[:space:]]*path[[:space:]]*=[[:space:]]*"\/config\/sorafs_sites\.json"[[:space:]]*$/ {
+            found = 1
+        }
+        END { exit(found ? 0 : 1) }
+    ' "$TAIRA_CONFIG_PATH"
+}
+
 docker_cmd=(docker)
 
 build_run_args() {
@@ -136,8 +148,12 @@ build_run_args() {
 
     if [[ -n "$TAIRA_SORAFS_SITE_BINDINGS_PATH" ]]; then
         require_file "$TAIRA_SORAFS_SITE_BINDINGS_PATH" "Taira SoraFS site bindings"
+        if ! config_declares_container_site_bindings; then
+            printf '%s\n' \
+                'Taira config must set [sorafs.gateway.site_bindings].path = "/config/sorafs_sites.json" before mounting site bindings' >&2
+            exit 1
+        fi
         docker_run_args+=(
-            -e "IROHA_SORAFS_SITE_BINDINGS_FILE=/config/sorafs_sites.json"
             -v "${TAIRA_SORAFS_SITE_BINDINGS_PATH}:/config/sorafs_sites.json:ro"
         )
     fi

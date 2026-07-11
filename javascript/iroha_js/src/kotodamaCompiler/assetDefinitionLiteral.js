@@ -1,4 +1,4 @@
-import { blake3 } from '@noble/hashes/blake3.js';
+import { blake3 } from "@noble/hashes/blake3";
 import { normalizeAccountIdLiteral } from './accountLiteral.js';
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]+$/;

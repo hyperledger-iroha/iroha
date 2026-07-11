@@ -65,6 +65,7 @@ fn validate_consensus_manifest(
     manifest: &RawGenesisTransaction,
     build_line: iroha_version::BuildLine,
 ) -> color_eyre::Result<()> {
+    super::require_v2_wire_protocol_only(manifest)?;
     let consensus_mode = manifest.consensus_mode().ok_or_else(|| {
         eyre!(
             "genesis manifest missing consensus_mode; regenerate with `kagami genesis generate --consensus-mode <mode>`"
@@ -197,6 +198,46 @@ mod tests {
 
     use super::*;
 
+    fn manifest_file_with_protocols(versions: &[u32]) -> NamedTempFile {
+        let manifest = GenesisBuilder::new_without_executor(ChainId::from("v2-only"), ".")
+            .build_raw()
+            .with_consensus_mode(SumeragiConsensusMode::Permissioned)
+            .with_consensus_meta();
+        let mut value = norito::json::value::to_value(&manifest).expect("serialize manifest");
+        value
+            .as_object_mut()
+            .expect("manifest serializes as object")
+            .insert(
+                "wire_proto_versions".to_owned(),
+                norito::json::value::to_value(&versions.to_vec()).expect("serialize protocol list"),
+            );
+        let file = NamedTempFile::new().expect("create genesis fixture");
+        fs::write(
+            file.path(),
+            norito::json::to_json_pretty(&value).expect("serialize manifest JSON"),
+        )
+        .expect("write genesis fixture");
+        file
+    }
+
+    #[test]
+    fn validation_rejects_legacy_mixed_empty_and_duplicate_protocol_lists() {
+        for versions in [Vec::new(), vec![1], vec![1, 2], vec![2, 1], vec![2, 2]] {
+            let file = manifest_file_with_protocols(&versions);
+            let error = Args {
+                genesis_file: file.path().to_owned(),
+            }
+            .run(&mut BufWriter::new(Vec::<u8>::new()))
+            .expect_err("non-canonical protocol list must fail validation");
+            assert!(
+                error
+                    .to_string()
+                    .contains("exactly wire_proto_versions = [2]"),
+                "unexpected error for {versions:?}: {error}"
+            );
+        }
+    }
+
     #[test]
     fn detects_invalid_custom_parameter_key() {
         let json = norito::json!({
@@ -278,7 +319,8 @@ mod tests {
     fn run_accepts_permissioned_on_iroha3() {
         let manifest = GenesisBuilder::new_without_executor(ChainId::from("0"), PathBuf::from("."))
             .build_raw()
-            .with_consensus_mode(SumeragiConsensusMode::Permissioned);
+            .with_consensus_mode(SumeragiConsensusMode::Permissioned)
+            .with_consensus_meta();
         let manifest = norito::json::to_json_pretty(&manifest).expect("serialize manifest");
 
         let temp = NamedTempFile::new().expect("create temp file");
@@ -309,7 +351,8 @@ mod tests {
             SumeragiParameter::ModeActivationHeight(5),
         ))
         .build_raw()
-        .with_consensus_mode(SumeragiConsensusMode::Npos);
+        .with_consensus_mode(SumeragiConsensusMode::Npos)
+        .with_consensus_meta();
         let json = norito::json::to_json_pretty(&manifest).expect("serialize manifest");
 
         let temp = NamedTempFile::new().expect("create temp file");

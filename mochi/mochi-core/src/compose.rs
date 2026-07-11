@@ -70,12 +70,14 @@ pub enum InstructionPermission {
     RevokeRole,
     /// Propose multisig transactions.
     MultisigPropose,
+    /// Set chain parameters, including Nexus lane lifecycle topology.
+    SetParameters,
 }
 
 impl InstructionPermission {
     /// Return a static list containing every permission variant.
     #[must_use]
-    pub const fn all() -> [Self; 12] {
+    pub const fn all() -> [Self; 13] {
         [
             Self::MintAsset,
             Self::BurnAsset,
@@ -89,6 +91,7 @@ impl InstructionPermission {
             Self::GrantRole,
             Self::RevokeRole,
             Self::MultisigPropose,
+            Self::SetParameters,
         ]
     }
 
@@ -108,6 +111,7 @@ impl InstructionPermission {
             Self::GrantRole => "grant roles",
             Self::RevokeRole => "revoke roles",
             Self::MultisigPropose => "propose multisig transactions",
+            Self::SetParameters => "set chain parameters",
         }
     }
 
@@ -127,6 +131,7 @@ impl InstructionPermission {
             Self::GrantRole => "grant_role",
             Self::RevokeRole => "revoke_role",
             Self::MultisigPropose => "multisig_propose",
+            Self::SetParameters => "set_parameters",
         }
     }
 
@@ -146,6 +151,7 @@ impl InstructionPermission {
             "grant_role" => Some(Self::GrantRole),
             "revoke_role" => Some(Self::RevokeRole),
             "multisig_propose" => Some(Self::MultisigPropose),
+            "set_parameters" => Some(Self::SetParameters),
             _ => None,
         }
     }

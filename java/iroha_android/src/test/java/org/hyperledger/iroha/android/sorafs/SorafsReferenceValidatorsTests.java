@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.sorafs;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -15,10 +16,12 @@ public final class SorafsReferenceValidatorsTests {
     rejectsBlankLabelBeforeNativeDispatch();
     rejectsRuntimeSnapshotSigningBeforeNativeDispatch();
     rejectsBadSigningKeyBeforeNativeDispatch();
+    rejectsInvalidOrderIdDerivationInputsBeforeNativeDispatch();
     rejectsOrderbookOrderRequestFieldsBeforeNativeDispatch();
     rejectsOrderbookSettlementReceiptFieldsBeforeNativeDispatch();
     validatesOrderbookFixtureWhenNativeBridgeIsAvailable();
     signsOrderbookFixtureWhenNativeBridgeIsAvailable();
+    derivesCanonicalOrderIdWhenNativeBridgeIsAvailable();
     System.out.println("[IrohaAndroid] SoraFS reference validator tests passed.");
   }
 
@@ -37,7 +40,9 @@ public final class SorafsReferenceValidatorsTests {
     assert SorafsOrderbookSide.BID.bridgeCode() == 1;
     assert SorafsOrderbookTier.ARCHIVE.bridgeCode() == 3;
     assert SorafsOrderbookCancelReason.REPLACED.bridgeCode() == 4;
-    assert SorafsReferenceValidators.REQUIRED_BRIDGE_ABI_VERSION == 12;
+    assert SorafsReferenceValidators.REQUIRED_BRIDGE_ABI_VERSION == 16;
+    assert !SorafsReferenceValidators.isBridgeAbiSupported(15);
+    assert SorafsReferenceValidators.isBridgeAbiSupported(16);
   }
 
   private static void rejectsGeneratedAtBeforeNativeDispatch() {
@@ -82,6 +87,24 @@ public final class SorafsReferenceValidatorsTests {
       threw = ex.getMessage() != null && ex.getMessage().contains("privateKey");
     }
     assert threw : "bad signing keys should be rejected before native dispatch";
+  }
+
+  private static void rejectsInvalidOrderIdDerivationInputsBeforeNativeDispatch() {
+    boolean emptyOwnerThrew = false;
+    try {
+      SorafsReferenceValidators.deriveOrderbookOrderId(new byte[0], 7L);
+    } catch (final IllegalArgumentException ex) {
+      emptyOwnerThrew = ex.getMessage() != null && ex.getMessage().contains("ownerAccount");
+    }
+    assert emptyOwnerThrew : "empty owner must be rejected before native dispatch";
+
+    boolean zeroNonceThrew = false;
+    try {
+      SorafsReferenceValidators.deriveOrderbookOrderId(new byte[] {1}, 0L);
+    } catch (final IllegalArgumentException ex) {
+      zeroNonceThrew = ex.getMessage() != null && ex.getMessage().contains("nonce");
+    }
+    assert zeroNonceThrew : "zero nonce must be rejected before native dispatch";
   }
 
   private static void rejectsOrderbookOrderRequestFieldsBeforeNativeDispatch() {
@@ -153,6 +176,60 @@ public final class SorafsReferenceValidatorsTests {
     assert !java.util.Arrays.equals(signed, payload) : "signature should change encoded payload";
   }
 
+  private static void derivesCanonicalOrderIdWhenNativeBridgeIsAvailable() {
+    if (!SorafsReferenceValidators.isNativeAvailable()) {
+      return;
+    }
+    final byte[] owner = "buyer@sora".getBytes(StandardCharsets.UTF_8);
+    final byte[] orderId = SorafsReferenceValidators.deriveOrderbookOrderId(owner, 7L);
+    assert "9d91ad7700ca0c4762e031f9231aa38dd4502c6048c6ffa31d365e3c4e080b69"
+        .equals(toHex(orderId));
+    assert !java.util.Arrays.equals(
+        orderId, SorafsReferenceValidators.deriveOrderbookOrderId(owner, 8L));
+    assert !java.util.Arrays.equals(
+        orderId,
+        SorafsReferenceValidators.deriveOrderbookOrderId(
+            "provider@sora".getBytes(StandardCharsets.UTF_8), 7L));
+
+    final byte[] signed =
+        SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+            SorafsOrderbookSide.BID,
+            SorafsOrderbookTier.HOT,
+            "1250000",
+            64L,
+            owner,
+            1_800_000_000L,
+            7L,
+            10,
+            15,
+            repeatedKey(0xB7));
+    final String outcome =
+        SorafsReferenceValidators.validateOrderbookPayloadJson(
+            SorafsOrderbookPayloadKind.ORDER_REQUEST, signed, null, 123L);
+    assert outcome.contains("\"status\": \"Ok\"") : outcome;
+
+    boolean threw = false;
+    try {
+      SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+          repeated(0x11),
+          SorafsOrderbookSide.BID,
+          SorafsOrderbookTier.HOT,
+          "1250000",
+          64L,
+          owner,
+          1_800_000_000L,
+          7L,
+          10,
+          15,
+          repeatedKey(0xB7));
+    } catch (final IllegalArgumentException error) {
+      threw =
+          error.getMessage() != null
+              && error.getMessage().contains("canonical owner-and-nonce derivation");
+    }
+    assert threw : "noncanonical explicit order id must be rejected";
+  }
+
   private static byte[] repeatedKey(final int value) {
     return repeated(value);
   }
@@ -161,6 +238,17 @@ public final class SorafsReferenceValidatorsTests {
     final byte[] key = new byte[32];
     java.util.Arrays.fill(key, (byte) value);
     return key;
+  }
+
+  private static String toHex(final byte[] bytes) {
+    final char[] alphabet = "0123456789abcdef".toCharArray();
+    final char[] output = new char[bytes.length * 2];
+    for (int index = 0; index < bytes.length; index++) {
+      final int value = bytes[index] & 0xFF;
+      output[index * 2] = alphabet[value >>> 4];
+      output[index * 2 + 1] = alphabet[value & 0x0F];
+    }
+    return new String(output);
   }
 
   private static byte[] fixture(final String... parts) throws IOException {

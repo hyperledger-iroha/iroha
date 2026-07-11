@@ -5,16 +5,26 @@ use std::{
     num::NonZeroUsize,
 };
 
-use iroha_crypto::{Algorithm, Hash, HashOf, Signature};
+use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature};
 use iroha_data_model::{
-    block::consensus::{NativeAmxAttestationBodyV1, NativeAmxAttestationQcV1, NativeAmxPhase},
+    block::consensus::{
+        LaneBlockProposalV1, NativeAmxAttestationBodyV2, NativeAmxAttestationQcV2, NativeAmxPhase,
+    },
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
     peer::PeerId,
 };
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
+use crate::queue::{RoutingPlan, RoutingPlan::NativeAmx};
+
 const DEFAULT_SESSION_BODY_BUCKET_MAX: usize = 256;
+/// Hard protocol cap for a coordinator plus all native AMX participant legs.
+pub(crate) const MAX_NATIVE_AMX_PLAN_LEGS: usize = 256;
+/// Hard protocol cap for one native AMX participant committee.
+pub(crate) const MAX_NATIVE_AMX_VALIDATORS: usize = 128;
+/// Canonical compressed BLS-normal signature/proof size.
+pub(crate) const NATIVE_AMX_BLS_PROOF_BYTES: usize = 96;
 
 /// Native AMX session key scoped to one source transaction and routing plan.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode)]
@@ -28,7 +38,7 @@ pub struct NativeAmxSessionKey {
 impl NativeAmxSessionKey {
     /// Construct a session key from an attestation body.
     #[must_use]
-    pub fn from_body(body: &NativeAmxAttestationBodyV1) -> Self {
+    pub fn from_body(body: &NativeAmxAttestationBodyV2) -> Self {
         Self {
             source_id: body.source_id,
             plan_digest: body.plan_digest,
@@ -38,12 +48,12 @@ impl NativeAmxSessionKey {
 
 /// Individual native AMX vote before participant committee aggregation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct NativeAmxVoteV1 {
+pub struct NativeAmxVoteV2 {
     /// Body signed by the participant validator.
-    pub body: NativeAmxAttestationBodyV1,
+    pub body: NativeAmxAttestationBodyV2,
     /// Validator that produced the vote.
     pub signer: PeerId,
-    /// BLS signature over [`NativeAmxAttestationBodyV1::signature_preimage`].
+    /// BLS signature over [`NativeAmxAttestationBodyV2::signature_preimage`].
     pub bls_signature: Vec<u8>,
 }
 
@@ -53,7 +63,7 @@ fn peer_uses_bls_normal(peer: &PeerId) -> bool {
         .is_ok_and(|algorithm| algorithm == Algorithm::BlsNormal)
 }
 
-impl NativeAmxVoteV1 {
+impl NativeAmxVoteV2 {
     /// Validate phase, transport signer binding, BLS-normal identity, and vote signature.
     ///
     /// This is the stateless ingress prefilter. Callers that know the current world state must
@@ -79,6 +89,9 @@ impl NativeAmxVoteV1 {
         {
             return Err(NativeAmxVoteIngressError::SenderMismatch);
         }
+        if self.bls_signature.len() != NATIVE_AMX_BLS_PROOF_BYTES {
+            return Err(NativeAmxVoteIngressError::InvalidSignature);
+        }
         if !peer_uses_bls_normal(&self.signer) {
             return Err(NativeAmxVoteIngressError::SignerNotBlsNormal);
         }
@@ -93,13 +106,58 @@ impl NativeAmxVoteV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum NativeAmxMessage {
     /// Coordinator asks a participant dataspace committee to prepare a leg.
-    PrepareRequest(NativeAmxAttestationBodyV1),
+    PrepareRequest(NativeAmxAttestationBodyV2),
     /// Participant validator prepare vote.
-    PrepareVote(NativeAmxVoteV1),
-    /// Coordinator asks a participant dataspace committee to commit a prepared leg.
-    CommitRequest(NativeAmxAttestationBodyV1),
+    PrepareVote(NativeAmxVoteV2),
+    /// Coordinator asks a participant committee to commit after proving Prepare.
+    CommitRequest(NativeAmxCommitRequestV2),
     /// Participant validator commit vote.
-    CommitVote(NativeAmxVoteV1),
+    CommitVote(NativeAmxVoteV2),
+}
+
+/// Context-bound native AMX Commit request carrying the prerequisite PrepareQC.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct NativeAmxCommitRequestV2 {
+    /// Commit-phase body requested from the participant committee.
+    pub body: NativeAmxAttestationBodyV2,
+    /// Prepare certificate for the same context, transaction, plan, and leg.
+    pub prepare_qc: NativeAmxAttestationQcV2,
+}
+
+impl NativeAmxCommitRequestV2 {
+    /// Validate that the request advances exactly one certified participant leg
+    /// from Prepare to Commit.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NativeAmxCommitRequestError`] if either phase is wrong or any
+    /// signed context, transaction, plan, route, or height field differs.
+    pub fn validate_shape(&self) -> Result<(), NativeAmxCommitRequestError> {
+        if self.body.phase != NativeAmxPhase::Commit {
+            return Err(NativeAmxCommitRequestError::CommitPhaseMismatch);
+        }
+        if self.prepare_qc.body.phase != NativeAmxPhase::Prepare {
+            return Err(NativeAmxCommitRequestError::PreparePhaseMismatch);
+        }
+        if !native_amx_bodies_match_leg(&self.body, &self.prepare_qc.body) {
+            return Err(NativeAmxCommitRequestError::LegMismatch);
+        }
+        Ok(())
+    }
+}
+
+/// Structural failure in a native AMX v2 Commit request.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum NativeAmxCommitRequestError {
+    /// requested body is not a Commit body
+    #[error("native AMX commit request body is not in Commit phase")]
+    CommitPhaseMismatch,
+    /// prerequisite certificate is not a PrepareQC
+    #[error("native AMX commit request prerequisite is not a PrepareQC")]
+    PreparePhaseMismatch,
+    /// PrepareQC and Commit body describe different context or participant work
+    #[error("native AMX commit request changes its prepared participant leg")]
+    LegMismatch,
 }
 
 /// Failure while validating a native AMX vote before session-cache insertion.
@@ -141,6 +199,9 @@ pub enum NativeAmxQcBuildError {
     /// no votes were supplied for the requested native AMX phase
     #[error("no votes were supplied for the requested native AMX phase")]
     EmptyVotes,
+    /// participant committee is empty, oversized, duplicated, or non-canonical
+    #[error("native AMX participant validator set is malformed")]
+    InvalidValidatorSet,
     /// a vote signed a different native AMX attestation body
     #[error("a vote signed a different native AMX attestation body")]
     BodyMismatch,
@@ -164,6 +225,255 @@ pub enum NativeAmxQcBuildError {
     SignatureAggregate,
 }
 
+/// Failure while validating an aggregated native AMX v2 certificate.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum NativeAmxQcValidationError {
+    /// certificate body differs from the exact expected body
+    #[error("native AMX QC body mismatch")]
+    BodyMismatch,
+    /// authoritative participant committee is empty, oversized, duplicated, or non-canonical
+    #[error("native AMX QC validator set is malformed")]
+    InvalidValidatorSet,
+    /// certificate validator set differs from the authoritative committee
+    #[error("native AMX QC validator set mismatch")]
+    ValidatorSetMismatch,
+    /// validator-set hash metadata is malformed
+    #[error("native AMX QC validator-set hash mismatch")]
+    ValidatorSetHashMismatch,
+    /// signer bitmap has the wrong length or an out-of-range bit
+    #[error("native AMX QC signer bitmap is malformed")]
+    InvalidSignerBitmap,
+    /// signer bitmap is below the required committee quorum
+    #[error("native AMX QC quorum is not met")]
+    QuorumNotMet,
+    /// selected signer is not a BLS-normal identity
+    #[error("native AMX QC signer is not BLS-normal")]
+    SignerNotBlsNormal,
+    /// selected signer has no valid proof of possession
+    #[error("native AMX QC signer proof of possession is missing or invalid")]
+    InvalidProofOfPossession,
+    /// aggregate signature is empty or does not verify
+    #[error("native AMX QC aggregate signature is invalid")]
+    InvalidAggregateSignature,
+}
+
+/// Validate one exact context-bound native AMX certificate against the frozen
+/// participant committee and its proof-of-possession map.
+///
+/// # Errors
+///
+/// Returns [`NativeAmxQcValidationError`] for body, committee, quorum, PoP, or
+/// aggregate-signature drift.
+pub fn validate_native_amx_qc(
+    qc: &NativeAmxAttestationQcV2,
+    expected_body: &NativeAmxAttestationBodyV2,
+    validator_set: &[PeerId],
+    min_signers: usize,
+    pops: &BTreeMap<PublicKey, Vec<u8>>,
+) -> Result<(), NativeAmxQcValidationError> {
+    if &qc.body != expected_body {
+        return Err(NativeAmxQcValidationError::BodyMismatch);
+    }
+    let expected_quorum =
+        crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()).max(1);
+    if validator_set.is_empty()
+        || validator_set.len() > MAX_NATIVE_AMX_VALIDATORS
+        || validator_set.windows(2).any(|pair| pair[0] >= pair[1])
+        || min_signers != expected_quorum
+    {
+        return Err(NativeAmxQcValidationError::InvalidValidatorSet);
+    }
+    if qc.validator_set != validator_set {
+        return Err(NativeAmxQcValidationError::ValidatorSetMismatch);
+    }
+    if qc.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
+        || qc.validator_set_hash != HashOf::new(&validator_set.to_vec())
+    {
+        return Err(NativeAmxQcValidationError::ValidatorSetHashMismatch);
+    }
+    let expected_bitmap_len = validator_set.len().div_ceil(8);
+    if qc.signers_bitmap.len() != expected_bitmap_len
+        || qc.bls_aggregate_signature.len() != NATIVE_AMX_BLS_PROOF_BYTES
+    {
+        return Err(
+            if qc.bls_aggregate_signature.len() != NATIVE_AMX_BLS_PROOF_BYTES {
+                NativeAmxQcValidationError::InvalidAggregateSignature
+            } else {
+                NativeAmxQcValidationError::InvalidSignerBitmap
+            },
+        );
+    }
+
+    for validator in validator_set {
+        if !peer_uses_bls_normal(validator) {
+            return Err(NativeAmxQcValidationError::SignerNotBlsNormal);
+        }
+        let pop = pops
+            .get(validator.public_key())
+            .filter(|pop| pop.len() == NATIVE_AMX_BLS_PROOF_BYTES)
+            .ok_or(NativeAmxQcValidationError::InvalidProofOfPossession)?;
+        iroha_crypto::bls_normal_pop_verify(validator.public_key(), pop)
+            .map_err(|_| NativeAmxQcValidationError::InvalidProofOfPossession)?;
+    }
+
+    let mut signer_keys = Vec::new();
+    let mut signer_pops = Vec::new();
+    for (byte_index, byte) in qc.signers_bitmap.iter().copied().enumerate() {
+        for bit in 0..8 {
+            if byte & (1_u8 << bit) == 0 {
+                continue;
+            }
+            let index = byte_index * 8 + bit;
+            let Some(signer) = validator_set.get(index) else {
+                return Err(NativeAmxQcValidationError::InvalidSignerBitmap);
+            };
+            let pop = pops
+                .get(signer.public_key())
+                .ok_or(NativeAmxQcValidationError::InvalidProofOfPossession)?;
+            signer_keys.push(signer.public_key());
+            signer_pops.push(pop.as_slice());
+        }
+    }
+    if signer_keys.len() < min_signers {
+        return Err(NativeAmxQcValidationError::QuorumNotMet);
+    }
+    iroha_crypto::bls_normal_verify_preaggregated_same_message(
+        &expected_body.signature_preimage(),
+        &qc.bls_aggregate_signature,
+        &signer_keys,
+        &signer_pops,
+    )
+    .map_err(|_| NativeAmxQcValidationError::InvalidAggregateSignature)
+}
+
+/// Validate the bounded, producer-hashable shape of an aligned native AMX v2 receipt.
+///
+/// This deliberately performs no aggregate cryptography or state lookup. Block
+/// admission and merge pre-execution additionally validate the historical route,
+/// committee authority, proofs of possession, and aggregate signatures.
+#[must_use]
+pub(crate) fn receipt_shape_matches_coordinator_payload(
+    receipt: Option<&iroha_data_model::block::consensus::NativeAmxReceipt>,
+    routing_plan: &RoutingPlan,
+    expected_source_id: &[u8],
+    expected_entrypoint_hash: Hash,
+    expected_chain_id_hash: Hash,
+    coordinator_proposal: &LaneBlockProposalV1,
+) -> bool {
+    let NativeAmx(native_plan) = routing_plan else {
+        return receipt.is_none();
+    };
+    if native_plan.participants.is_empty()
+        || native_plan.participants.len() >= MAX_NATIVE_AMX_PLAN_LEGS
+    {
+        return false;
+    }
+    let Some(receipt) = receipt else {
+        return false;
+    };
+    let descriptor = &coordinator_proposal.descriptor;
+    if receipt.version != 2
+        || receipt.source_id.as_slice() != expected_source_id
+        || receipt.source_id.as_slice() != expected_entrypoint_hash.as_ref()
+        || receipt.chain_id_hash != expected_chain_id_hash
+        || receipt.plan_digest != routing_plan.digest()
+        || receipt.lane_id != descriptor.lane_id
+        || receipt.dataspace_id != descriptor.dataspace_id
+        || receipt.lane_incarnation != descriptor.lane_incarnation
+        || receipt.authority_context_height != descriptor.proposal_height
+        || receipt.lane_block_height != descriptor.lane_block_height
+        || receipt.lane_block_view != descriptor.lane_block_view
+        || receipt.coordinator_proposal_hash != coordinator_proposal.proposal_hash
+        || receipt.legs.len() != native_plan.participants.len()
+        || receipt.legs.len() >= MAX_NATIVE_AMX_PLAN_LEGS
+    {
+        return false;
+    }
+    let Some(first_leg) = receipt.legs.first() else {
+        return false;
+    };
+    let expected_round = first_leg.prepare_qc.body.round;
+    let expected_epoch = first_leg.prepare_qc.body.epoch;
+
+    receipt
+        .legs
+        .iter()
+        .zip(&native_plan.participants)
+        .all(|(leg, planned)| {
+            if leg.lane_id != planned.route.lane_id
+                || leg.dataspace_id != planned.route.dataspace_id
+            {
+                return false;
+            }
+            let prepare = &leg.prepare_qc;
+            let commit = &leg.commit_qc;
+            let common_qc_shape = |qc: &NativeAmxAttestationQcV2, phase: NativeAmxPhase| {
+                let body = &qc.body;
+                let validator_count = qc.validator_set.len();
+                let expected_quorum =
+                    crate::sumeragi::network_topology::commit_quorum_from_len(validator_count)
+                        .max(1);
+                let signer_count = qc
+                    .signers_bitmap
+                    .iter()
+                    .map(|byte| byte.count_ones() as usize)
+                    .sum::<usize>();
+                let trailing_bits_clear = qc.signers_bitmap.last().is_none_or(|last| {
+                    let used = validator_count % 8;
+                    used == 0 || *last & !((1_u8 << used) - 1) == 0
+                });
+                body.round == expected_round
+                    && body.round.height == receipt.authority_context_height
+                    && body.epoch == expected_epoch
+                    && body.source_id == receipt.source_id
+                    && Hash::from(body.tx_entrypoint_hash) == expected_entrypoint_hash
+                    && body.plan_digest == receipt.plan_digest
+                    && body.phase == phase
+                    && body.coordinator_lane_id == descriptor.lane_id
+                    && body.coordinator_dataspace_id == descriptor.dataspace_id
+                    && body.participant_lane_id == leg.lane_id
+                    && body.participant_dataspace_id == leg.dataspace_id
+                    && body.planned_coordinator_block_height == descriptor.lane_block_height
+                    && validator_count > 0
+                    && validator_count <= MAX_NATIVE_AMX_VALIDATORS
+                    && qc.validator_set_hash_version == VALIDATOR_SET_HASH_VERSION_V1
+                    && qc.validator_set_hash == HashOf::new(&qc.validator_set)
+                    && qc.validator_set.windows(2).all(|pair| pair[0] < pair[1])
+                    && qc.validator_set.iter().all(peer_uses_bls_normal)
+                    && qc.signers_bitmap.len() == validator_count.div_ceil(8)
+                    && trailing_bits_clear
+                    && signer_count >= expected_quorum
+                    && qc.bls_aggregate_signature.len() == NATIVE_AMX_BLS_PROOF_BYTES
+            };
+            if !common_qc_shape(prepare, NativeAmxPhase::Prepare)
+                || !common_qc_shape(commit, NativeAmxPhase::Commit)
+                || prepare.validator_set != commit.validator_set
+                || prepare.validator_set_hash != commit.validator_set_hash
+            {
+                return false;
+            }
+            let mut expected_commit_body = prepare.body;
+            expected_commit_body.phase = NativeAmxPhase::Commit;
+            commit.body == expected_commit_body
+        })
+}
+
+fn native_amx_bodies_match_leg(
+    left: &NativeAmxAttestationBodyV2,
+    right: &NativeAmxAttestationBodyV2,
+) -> bool {
+    left.round == right.round
+        && left.epoch == right.epoch
+        && left.source_id == right.source_id
+        && left.tx_entrypoint_hash == right.tx_entrypoint_hash
+        && left.plan_digest == right.plan_digest
+        && left.coordinator_lane_id == right.coordinator_lane_id
+        && left.coordinator_dataspace_id == right.coordinator_dataspace_id
+        && left.participant_lane_id == right.participant_lane_id
+        && left.participant_dataspace_id == right.participant_dataspace_id
+        && left.planned_coordinator_block_height == right.planned_coordinator_block_height
+}
+
 /// Build a native AMX attestation QC from sorted or unsorted participant votes.
 ///
 /// The resulting bitmap and aggregate signature are deterministic because votes are projected into
@@ -173,13 +483,21 @@ pub enum NativeAmxQcBuildError {
 /// Returns an error when votes do not match `body`, include duplicate or unknown signers, fail to
 /// meet `min_signers`, or cannot be aggregated as BLS-normal signatures.
 pub fn aggregate_votes_to_qc(
-    body: NativeAmxAttestationBodyV1,
+    body: NativeAmxAttestationBodyV2,
     validator_set: Vec<PeerId>,
-    votes: &[NativeAmxVoteV1],
+    votes: &[NativeAmxVoteV2],
     min_signers: usize,
-) -> Result<NativeAmxAttestationQcV1, NativeAmxQcBuildError> {
+) -> Result<NativeAmxAttestationQcV2, NativeAmxQcBuildError> {
     if votes.is_empty() {
         return Err(NativeAmxQcBuildError::EmptyVotes);
+    }
+    if validator_set.is_empty()
+        || validator_set.len() > MAX_NATIVE_AMX_VALIDATORS
+        || validator_set.windows(2).any(|pair| pair[0] >= pair[1])
+        || min_signers == 0
+        || min_signers > validator_set.len()
+    {
+        return Err(NativeAmxQcBuildError::InvalidValidatorSet);
     }
 
     let mut indexed_signatures: BTreeMap<usize, Vec<u8>> = BTreeMap::new();
@@ -201,6 +519,9 @@ pub fn aggregate_votes_to_qc(
         }
         if !peer_uses_bls_normal(&vote.signer) {
             return Err(NativeAmxQcBuildError::SignerNotBlsNormal);
+        }
+        if vote.bls_signature.len() != NATIVE_AMX_BLS_PROOF_BYTES {
+            return Err(NativeAmxQcBuildError::InvalidSignature);
         }
         let signature = Signature::try_from_bytes(&vote.bls_signature)
             .map_err(|_| NativeAmxQcBuildError::InvalidSignature)?;
@@ -231,7 +552,7 @@ pub fn aggregate_votes_to_qc(
     let bls_aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
         .map_err(|_| NativeAmxQcBuildError::SignatureAggregate)?;
 
-    Ok(NativeAmxAttestationQcV1 {
+    Ok(NativeAmxAttestationQcV2 {
         body,
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
         validator_set_hash: HashOf::new(&validator_set),
@@ -244,16 +565,16 @@ pub fn aggregate_votes_to_qc(
 #[derive(Default)]
 struct NativeAmxSession {
     order: VecDeque<NativeAmxVoteBucket>,
-    votes: BTreeMap<NativeAmxVoteBucket, BTreeMap<PeerId, NativeAmxVoteV1>>,
+    votes: BTreeMap<NativeAmxVoteBucket, BTreeMap<PeerId, NativeAmxVoteV2>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct NativeAmxVoteBucket {
-    body: NativeAmxAttestationBodyV1,
+    body: NativeAmxAttestationBodyV2,
 }
 
 impl NativeAmxVoteBucket {
-    const fn from_body(body: &NativeAmxAttestationBodyV1) -> Self {
+    const fn from_body(body: &NativeAmxAttestationBodyV2) -> Self {
         Self { body: *body }
     }
 }
@@ -261,7 +582,7 @@ impl NativeAmxVoteBucket {
 impl NativeAmxSession {
     fn insert_vote(
         &mut self,
-        vote: NativeAmxVoteV1,
+        vote: NativeAmxVoteV2,
         max_body_buckets: NonZeroUsize,
     ) -> Result<(), NativeAmxSessionError> {
         let bucket = NativeAmxVoteBucket::from_body(&vote.body);
@@ -282,7 +603,7 @@ impl NativeAmxSession {
         Ok(())
     }
 
-    fn votes_for_body(&self, body: &NativeAmxAttestationBodyV1) -> Vec<NativeAmxVoteV1> {
+    fn votes_for_body(&self, body: &NativeAmxAttestationBodyV2) -> Vec<NativeAmxVoteV2> {
         self.votes
             .get(&NativeAmxVoteBucket::from_body(body))
             .map(|source| source.values().cloned().collect())
@@ -328,7 +649,7 @@ impl NativeAmxSessionCache {
     ///
     /// # Errors
     /// Returns [`NativeAmxSessionError::DuplicateSigner`] when a signer votes twice for one body.
-    pub fn insert_vote(&mut self, vote: NativeAmxVoteV1) -> Result<(), NativeAmxSessionError> {
+    pub fn insert_vote(&mut self, vote: NativeAmxVoteV2) -> Result<(), NativeAmxSessionError> {
         let key = NativeAmxSessionKey::from_body(&vote.body);
         if !self.sessions.contains_key(&key) {
             while self.sessions.len() >= self.max_sessions.get() {
@@ -351,7 +672,7 @@ impl NativeAmxSessionCache {
         &self,
         key: NativeAmxSessionKey,
         phase: NativeAmxPhase,
-    ) -> Vec<NativeAmxVoteV1> {
+    ) -> Vec<NativeAmxVoteV2> {
         self.sessions
             .get(&key)
             .map(|session| {
@@ -370,8 +691,8 @@ impl NativeAmxSessionCache {
     pub fn sorted_votes_for_body(
         &self,
         key: NativeAmxSessionKey,
-        body: &NativeAmxAttestationBodyV1,
-    ) -> Vec<NativeAmxVoteV1> {
+        body: &NativeAmxAttestationBodyV2,
+    ) -> Vec<NativeAmxVoteV2> {
         self.sessions
             .get(&key)
             .map(|session| session.votes_for_body(body))
@@ -383,9 +704,9 @@ impl NativeAmxSessionCache {
     pub fn sorted_votes_for_body_from(
         &self,
         key: NativeAmxSessionKey,
-        body: &NativeAmxAttestationBodyV1,
+        body: &NativeAmxAttestationBodyV2,
         validator_set: &[PeerId],
-    ) -> Vec<NativeAmxVoteV1> {
+    ) -> Vec<NativeAmxVoteV2> {
         self.sorted_votes_for_body(key, body)
             .into_iter()
             .filter(|vote| {
@@ -403,7 +724,10 @@ mod tests {
 
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
-        block::consensus::NativeAmxAttestationBodyV1,
+        block::{
+            consensus::NativeAmxAttestationBodyV2,
+            consensus_v2::{ConsensusRound, HeightContext, HeightContextId},
+        },
         nexus::{DataSpaceId, LaneId},
         peer::PeerId,
         transaction::TransactionEntrypoint,
@@ -430,8 +754,16 @@ mod tests {
         signature.payload().to_vec()
     }
 
-    fn body(phase: NativeAmxPhase) -> NativeAmxAttestationBodyV1 {
-        NativeAmxAttestationBodyV1 {
+    fn body(phase: NativeAmxPhase) -> NativeAmxAttestationBodyV2 {
+        NativeAmxAttestationBodyV2 {
+            round: ConsensusRound {
+                context_id: HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
+                    Hash::new(b"native-amx-v2-test-context"),
+                )),
+                height: 42,
+                view: 3,
+            },
+            epoch: 7,
             source_id: [0xAB; iroha_crypto::Hash::LENGTH],
             tx_entrypoint_hash:
                 iroha_crypto::HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
@@ -447,9 +779,9 @@ mod tests {
         }
     }
 
-    fn vote(phase: NativeAmxPhase) -> NativeAmxVoteV1 {
+    fn vote(phase: NativeAmxPhase) -> NativeAmxVoteV2 {
         let keypair = checked_random_ed25519_keypair();
-        NativeAmxVoteV1 {
+        NativeAmxVoteV2 {
             body: body(phase),
             signer: PeerId::new(keypair.public_key().clone()),
             bls_signature: vec![0xA5; 96],
@@ -524,12 +856,12 @@ mod tests {
         let allowed = PeerId::new(allowed_keypair.public_key().clone());
         let unknown = PeerId::new(unknown_keypair.public_key().clone());
         let body = body(NativeAmxPhase::Prepare);
-        let allowed_vote = NativeAmxVoteV1 {
+        let allowed_vote = NativeAmxVoteV2 {
             body,
             signer: allowed.clone(),
             bls_signature: vec![1],
         };
-        let unknown_vote = NativeAmxVoteV1 {
+        let unknown_vote = NativeAmxVoteV2 {
             body,
             signer: unknown,
             bls_signature: vec![2],
@@ -600,9 +932,9 @@ mod tests {
         assert_eq!(cache.sorted_votes(key, NativeAmxPhase::Prepare).len(), 2);
     }
 
-    fn signed_vote(body: &NativeAmxAttestationBodyV1, keypair: &KeyPair) -> NativeAmxVoteV1 {
-        NativeAmxVoteV1 {
-            body: body.clone(),
+    fn signed_vote(body: &NativeAmxAttestationBodyV2, keypair: &KeyPair) -> NativeAmxVoteV2 {
+        NativeAmxVoteV2 {
+            body: *body,
             signer: PeerId::new(keypair.public_key().clone()),
             bls_signature: checked_bls_signature_payload(keypair, &body.signature_preimage()),
         }
@@ -652,7 +984,7 @@ mod tests {
                 .expect("checked Ed25519 fixture signature")
                 .payload()
                 .to_vec();
-        let ed25519_vote = NativeAmxVoteV1 {
+        let ed25519_vote = NativeAmxVoteV2 {
             body,
             signer: PeerId::new(ed25519_keypair.public_key().clone()),
             bls_signature: ed25519_signature,
@@ -680,10 +1012,11 @@ mod tests {
             checked_bls_keypair(0xB2),
             checked_bls_keypair(0xC3),
         ];
-        let validator_set = keypairs
+        let mut validator_set = keypairs
             .iter()
             .map(|keypair| PeerId::new(keypair.public_key().clone()))
             .collect::<Vec<_>>();
+        validator_set.sort();
         let body = body(NativeAmxPhase::Commit);
         let votes = vec![
             signed_vote(&body, &keypairs[2]),
@@ -695,7 +1028,16 @@ mod tests {
 
         assert_eq!(qc.body, body);
         assert_eq!(qc.validator_set, validator_set);
-        assert_eq!(qc.signers_bitmap, vec![0b0000_0101]);
+        let mut expected_bitmap = vec![0_u8; validator_set.len().div_ceil(8)];
+        for keypair in [&keypairs[2], &keypairs[0]] {
+            let signer = PeerId::new(keypair.public_key().clone());
+            let index = validator_set
+                .iter()
+                .position(|validator| validator == &signer)
+                .expect("vote signer belongs to fixture committee");
+            expected_bitmap[index / 8] |= 1_u8 << (index % 8);
+        }
+        assert_eq!(qc.signers_bitmap, expected_bitmap);
         let individual_signatures = [
             signed_vote(&body, &keypairs[0]).bls_signature,
             signed_vote(&body, &keypairs[2]).bls_signature,
@@ -712,10 +1054,11 @@ mod tests {
     #[test]
     fn aggregate_votes_to_qc_rejects_bad_vote_sets() {
         let keypairs = [checked_bls_keypair(0xD1), checked_bls_keypair(0xD2)];
-        let validator_set = keypairs
+        let mut validator_set = keypairs
             .iter()
             .map(|keypair| PeerId::new(keypair.public_key().clone()))
             .collect::<Vec<_>>();
+        validator_set.sort();
         let body = body(NativeAmxPhase::Prepare);
         let vote = signed_vote(&body, &keypairs[0]);
 
@@ -750,7 +1093,7 @@ mod tests {
 
         let ed25519_keypair = checked_random_ed25519_keypair();
         let ed25519_signer = PeerId::new(ed25519_keypair.public_key().clone());
-        let ed25519_vote = NativeAmxVoteV1 {
+        let ed25519_vote = NativeAmxVoteV2 {
             body: body.clone(),
             signer: ed25519_signer.clone(),
             bls_signature: Signature::try_new(
@@ -783,6 +1126,95 @@ mod tests {
         assert_eq!(
             aggregate_votes_to_qc(body, validator_set, &[wrong_body_vote], 1),
             Err(NativeAmxQcBuildError::BodyMismatch)
+        );
+    }
+
+    #[test]
+    fn commit_request_shape_binds_the_exact_round_and_epoch() {
+        let keys = [checked_bls_keypair(0x41), checked_bls_keypair(0x42)];
+        let mut validators = keys
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        validators.sort();
+        let prepare_body = body(NativeAmxPhase::Prepare);
+        let votes = keys
+            .iter()
+            .map(|key| signed_vote(&prepare_body, key))
+            .collect::<Vec<_>>();
+        let prepare_qc =
+            aggregate_votes_to_qc(prepare_body, validators, &votes, 2).expect("prepare QC");
+        let commit_body = NativeAmxAttestationBodyV2 {
+            phase: NativeAmxPhase::Commit,
+            ..prepare_body
+        };
+        let request = NativeAmxCommitRequestV2 {
+            body: commit_body,
+            prepare_qc: prepare_qc.clone(),
+        };
+        assert_eq!(request.validate_shape(), Ok(()));
+
+        let mut replayed_view = request.clone();
+        replayed_view.body.round.view = replayed_view.body.round.view.saturating_add(1);
+        assert_eq!(
+            replayed_view.validate_shape(),
+            Err(NativeAmxCommitRequestError::LegMismatch)
+        );
+        let mut replayed_epoch = request;
+        replayed_epoch.body.epoch = replayed_epoch.body.epoch.saturating_add(1);
+        assert_eq!(
+            replayed_epoch.validate_shape(),
+            Err(NativeAmxCommitRequestError::LegMismatch)
+        );
+    }
+
+    #[test]
+    fn qc_validation_rejects_context_replay_and_missing_pop() {
+        let keys = [
+            checked_bls_keypair(0x51),
+            checked_bls_keypair(0x52),
+            checked_bls_keypair(0x53),
+        ];
+        let mut validators = keys
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        validators.sort();
+        let body = body(NativeAmxPhase::Prepare);
+        let votes = keys
+            .iter()
+            .map(|key| signed_vote(&body, key))
+            .collect::<Vec<_>>();
+        let qc =
+            aggregate_votes_to_qc(body, validators.clone(), &votes, 3).expect("aggregate exact QC");
+        let pops = keys
+            .iter()
+            .map(|key| {
+                (
+                    key.public_key().clone(),
+                    iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("prove PoP"),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            validate_native_amx_qc(&qc, &body, &validators, 3, &pops),
+            Ok(())
+        );
+
+        let mut another_context = body;
+        another_context.round.context_id = HeightContextId(
+            HashOf::<HeightContext>::from_untyped_unchecked(Hash::new(b"replayed-context")),
+        );
+        assert_eq!(
+            validate_native_amx_qc(&qc, &another_context, &validators, 3, &pops),
+            Err(NativeAmxQcValidationError::BodyMismatch)
+        );
+
+        let mut missing_pop = pops;
+        missing_pop.remove(keys[0].public_key());
+        assert_eq!(
+            validate_native_amx_qc(&qc, &body, &validators, 3, &missing_pop),
+            Err(NativeAmxQcValidationError::InvalidProofOfPossession)
         );
     }
 }

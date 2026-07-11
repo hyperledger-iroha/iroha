@@ -69,7 +69,7 @@ Exemplo de uso:
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
-  --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
+  --provider name=gw-regulated,provider-id=001122...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64
 ```- یہ sinalizadores CLI de script e arquivos de configuração key=value دونوں کو respeito کرتا ہے (دیکھیں `docs/examples/sorafs_direct_mode_smoke.conf`)۔ چلانے سے پہلے resumo do manifesto e entradas de anúncio do provedor کو valores de produção سے preencher کریں۔
 - `--policy` padrão para `docs/examples/sorafs_direct_mode_policy.json` ہے، مگر `sorafs_orchestrator::bindings::config_to_json` سے بننے والا کوئی بھی orquestrador JSON دیا جا سکتا ہے۔ Política de CLI کو `--orchestrator-config=PATH` کے ذریعے قبول کرتا ہے, جس سے execuções reproduzíveis ممکن ہوتی ہیں بغیر sinalizadores ہاتھ سے melodia کیے۔
 - جب `sorafs_cli` `PATH` میں نہ ہو تو ajudante اسے `sorafs_orchestrator` caixa سے (perfil de liberação) construir کرتا ہے تاکہ fumaça é enviada encanamento de modo direto کو exercício کریں۔

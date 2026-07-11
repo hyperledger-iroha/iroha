@@ -38,6 +38,7 @@ TON_VERIFIER_BACKEND_FAMILY_CODE = 3
 TON_DESTINATION_ANCHOR_ID = "sccp:ton:destination-anchor:ton-mainnet:v1"
 TON_ROUTE_ALLOWLIST_ID = "sccp:ton:route-allowlist:ton-mainnet:v1"
 TON_BOC_MAGIC = bytes.fromhex("b5ee9c72")
+CODE_BOC_FILE_PATH_TYPE = type(Path())
 TON_MAX_BOC_BYTES = 64 * 1024
 TON_MAX_BOC_CELLS = 4096
 TON_MAX_REFS = 4
@@ -73,6 +74,9 @@ class TonBocComputedCell(NamedTuple):
 
 
 def _strip_lower_0x_hex(value: str, *, label: str) -> str:
+    # Source-inventory marker: TON destination fixed-hex strip helper uses exact strings.
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be canonical lowercase 0x hex")
     if value.startswith("0X"):
         raise argparse.ArgumentTypeError(f"{label} must use lowercase 0x prefix")
     if not value.startswith("0x"):
@@ -169,11 +173,16 @@ def parse_code_boc_base64(value: str, *, label: str) -> bytes:
 
 
 def _reject_code_boc_file_symlink_path(path: Path) -> None:
+    # Source-inventory marker: code BoC file helpers use native paths.
+    if type(path) is not CODE_BOC_FILE_PATH_TYPE:
+        raise argparse.ArgumentTypeError("code BoC file cannot be read")
     if first_symlinked_existing_path_component(path) is not None:
         raise argparse.ArgumentTypeError("code BoC file must not be a symlink")
 
 
 def _read_code_boc_file(path: Path, *, label: str) -> bytes:
+    if type(path) is not CODE_BOC_FILE_PATH_TYPE:
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
     try:
         _reject_code_boc_file_symlink_path(path)
     except (OSError, argparse.ArgumentTypeError):
@@ -254,6 +263,9 @@ def parse_account_status(value: str, *, label: str) -> str:
 
 
 def _parse_canonical_i32_decimal(value: str, *, label: str) -> int:
+    # Source-inventory marker: TON destination workchain parser uses exact strings.
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} workchain must be canonical i32")
     if not value or value.startswith("+"):
         raise argparse.ArgumentTypeError(f"{label} workchain must be canonical i32")
     digits = value[1:] if value.startswith("-") else value
@@ -1868,6 +1880,9 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 
 def _decoded_public_blocker_text(value: str) -> str:
+    # Source-inventory marker: lane public blocker decode helpers use exact strings.
+    if type(value) is not str:
+        return ""
     decoded = value
     for _decode_pass in range(max(1, len(value))):
         next_decoded = unquote(html_unescape(decoded))
@@ -1878,6 +1893,8 @@ def _decoded_public_blocker_text(value: str) -> str:
 
 
 def _decoded_cli_error_text_issue(value: str) -> bool:
+    if type(value) is not str:
+        return True
     decoded = _decoded_public_blocker_text(value)
     if any(ord(character) < 0x20 or ord(character) == 0x7F for character in decoded):
         return True
@@ -1889,7 +1906,10 @@ def _decoded_cli_error_text_issue(value: str) -> bool:
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     if isinstance(exc, (OSError, SystemExit)):
         return fallback
-    text = str(exc)
+    try:
+        text = str(exc)
+    except Exception:
+        return fallback
     if not text:
         return fallback
     if not text.isascii():

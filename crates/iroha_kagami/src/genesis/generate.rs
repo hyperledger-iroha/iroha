@@ -813,6 +813,11 @@ pub fn generate_default(
 
     let mut parameters = Parameters::default();
     if let Some(defaults) = profile_defaults {
+        parameters.sumeragi.block_time_ms = defaults.block_cadence_ms;
+        parameters.sumeragi.commit_time_ms = parameters
+            .sumeragi
+            .commit_time_ms
+            .max(defaults.block_cadence_ms);
         parameters.sumeragi.collectors_k = defaults.collectors_k;
         parameters.sumeragi.collectors_redundant_send_r = defaults.collectors_redundant_send_r;
     }
@@ -1149,6 +1154,29 @@ mod da_tests {
             .try_into_any::<u64>()
             .expect("gas limit should be a u64");
         assert_eq!(limit, 1_680_000);
+    }
+
+    #[test]
+    fn taira_profile_pins_one_second_cadence() {
+        let defaults = profile_defaults(GenesisProfile::Iroha3Taira);
+        let builder =
+            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from("."));
+        let manifest = generate_default(
+            builder,
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
+            None,
+            SumeragiConsensusMode::Npos,
+            None,
+            None,
+            Some(&defaults),
+            Some([7_u8; 32]),
+            BuildLine::Iroha3,
+        )
+        .expect("generate Taira profile");
+
+        let params = manifest.effective_parameters();
+        assert_eq!(params.sumeragi().block_time_ms(), 1_000);
+        assert_eq!(params.sumeragi().commit_time_ms(), 1_000);
     }
 }
 
@@ -1914,18 +1942,21 @@ mod tests {
         let dev = profile_defaults(GenesisProfile::Iroha3Dev);
         assert_eq!(dev.chain_id, ChainId::from("iroha3-dev.local"));
         assert_eq!(dev.chain_discriminant, None);
+        assert_eq!(dev.block_cadence_ms, 100);
         assert_eq!(dev.collectors_k, 1);
         assert_eq!(dev.collectors_redundant_send_r, 1);
 
         let taira = profile_defaults(GenesisProfile::Iroha3Taira);
         assert_eq!(taira.chain_id, ChainId::from("iroha3-taira"));
         assert_eq!(taira.chain_discriminant, Some(369));
+        assert_eq!(taira.block_cadence_ms, 1_000);
         assert_eq!(taira.collectors_k, 3);
         assert_eq!(taira.collectors_redundant_send_r, 3);
 
         let nexus = profile_defaults(GenesisProfile::Iroha3Nexus);
         assert_eq!(nexus.chain_id, ChainId::from("iroha3-nexus"));
         assert_eq!(nexus.chain_discriminant, Some(753));
+        assert_eq!(nexus.block_cadence_ms, 100);
         assert_eq!(nexus.collectors_k, 5);
         assert_eq!(nexus.collectors_redundant_send_r, 3);
     }

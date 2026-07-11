@@ -25,7 +25,7 @@ generation, and dashboard assets are implemented in this checkout.
   - Emit Norito-signed attestation reports using the signing hook defined in `sorafs_gateway_conformance.md`.
 - **Dependencies**
   - Fixture index (`fixtures/sorafs_gateway/index.norito.json`).
-  - Token schema helpers from `sorafs_token_schema`.
+  - Token schema helpers from `sorafs_manifest::{StreamTokenBodyV1, StreamTokenV1}`.
 - **Deliverables**
   - Harness module `integration_tests::sorafs_gateway_conformance`.
   - Golden fixture and regression tests (`cargo test -p integration_tests --test nexus_and_streaming sorafs_gateway_conformance`).

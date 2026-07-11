@@ -24105,6 +24105,113 @@ def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_iden
     )
 
 
+def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_identity_gated_module_alias_transition_disjunct_imported_fair_action_target_body_mixed_module_alias_operand_cycles(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    imported_action = "RbcReady"
+    root_kind = "projected commit progress"
+    other_actions = tuple(
+        action
+        for action in module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+        if action != imported_action
+    )
+
+    def write_module(name: str, lines: list[str]) -> Path:
+        path = tmp_path / f"{name}.tla"
+        path.write_text(
+            "\n".join([f"---- MODULE {name} ----", "VARIABLES vars", *lines, "===="]),
+            encoding="utf-8",
+        )
+        return path
+
+    def fairness_action_line(tla: Path) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if "WF_vars" in line and imported_action in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {imported_action}")
+
+    conjunct = write_module(
+        "SumeragiFalseGatedIdentityProjectedFairActionMixedOperandCycleConjunct",
+        [
+            "Start == LocalBranch",
+            "LocalBranch == Start",
+        ],
+    )
+    boolean = write_module(
+        "SumeragiFalseGatedIdentityProjectedFairActionMixedOperandCycleBoolean",
+        [
+            "Start == LocalBranch",
+            "LocalBranch == Start",
+        ],
+    )
+    target = write_module(
+        "SumeragiFalseGatedIdentityProjectedFairActionMixedOperandCycleTarget",
+        [
+            f"Conjunct == INSTANCE {conjunct.stem}",
+            f"Bool == INSTANCE {boolean.stem}",
+            f"{imported_action} == UNCHANGED vars /\\ Conjunct!Start /\\ (FALSE \\/ Bool!Start)",
+        ],
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateFalseGatedIdentityFairActionMixedOperandCycle.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[f"Interleaving == INSTANCE {target.stem}"],
+            next_lines=[
+                "Next ==",
+                "  \\/ FALSE",
+                f"  \\/ TRUE /\\ Interleaving!{imported_action}",
+                *(f"  \\/ {action}" for action in other_actions),
+            ],
+            action_definition_overrides={
+                imported_action: f"{imported_action} == Interleaving!{imported_action}",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    signatures = module.tla_operator_signatures(tla)
+    target_signatures = module.tla_operator_signatures(target)
+    conjunct_signatures = module.tla_operator_signatures(conjunct)
+    boolean_signatures = module.tla_operator_signatures(boolean)
+    fairness_line = definitions["ProjectedCommitProgressFairness"][0]
+    action_line = signatures[imported_action][0]
+    wf_line = fairness_action_line(tla)
+    target_line = target_signatures[imported_action][0]
+    conjunct_cycle_line = conjunct_signatures["Start"][0]
+    boolean_cycle_line = boolean_signatures["Start"][0]
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{conjunct}:{conjunct_cycle_line} defines {root_kind} transition "
+        "helper Start, but transition helper resolution cycles at Start; "
+        f"{root_kind} transition helper wrappers must be acyclic and resolve "
+        "to inspectable transition operators",
+        f"{tla}:{fairness_line} defines ProjectedCommitProgressFairness, but "
+        f"references WF_vars action {imported_action} at line {wf_line} "
+        f"whose definition at line {action_line} aliases "
+        f"Interleaving!{imported_action}, but target {target}:"
+        f"{target_line} uses module-alias conjunct Conjunct!Start, but "
+        f"module-alias conjunct resolution cycles at {conjunct}:"
+        f"{conjunct_cycle_line} Start; {root_kind} fairness action aliases "
+        "must resolve through acyclic module-alias conjuncts",
+        f"{tla}:{fairness_line} defines ProjectedCommitProgressFairness, but "
+        f"references WF_vars action {imported_action} at line {wf_line} "
+        f"whose definition at line {action_line} aliases "
+        f"Interleaving!{imported_action}, but target {target}:"
+        f"{target_line} uses module-alias boolean operand Bool!Start, but "
+        f"module-alias boolean operand resolution cycles at {boolean}:"
+        f"{boolean_cycle_line} Start; {root_kind} fairness action aliases "
+        "must resolve through acyclic module-alias boolean operands",
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_identity_gated_module_alias_transition_disjunct_imported_fair_action_target_body_module_alias_operand_multi_hop_cycles(
     tmp_path: Path,
 ) -> None:
@@ -25648,6 +25755,354 @@ def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_iden
     ]
 
 
+def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_identity_gated_module_alias_transition_disjunct_imported_fair_action_target_body_action_helper_cycles(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    imported_action = "RbcReady"
+    root_kind = "projected commit progress"
+    other_actions = tuple(
+        action
+        for action in module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+        if action != imported_action
+    )
+
+    def fairness_action_line(tla: Path) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if "WF_vars" in line and imported_action in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {imported_action}")
+
+    target = (
+        tmp_path
+        / "SumeragiFalseGatedIdentityProjectedFairActionActionHelperCycleTarget.tla"
+    )
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFalseGatedIdentityProjectedFairActionActionHelperCycleTarget ----",
+                "VARIABLES vars",
+                f"{imported_action} == HiddenAction",
+                "HiddenAction == UNCHANGED vars /\\ HiddenAction",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateFalseGatedIdentityFairActionActionHelperCycleTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[f"Interleaving == INSTANCE {target.stem}"],
+            next_lines=[
+                "Next ==",
+                "  \\/ FALSE",
+                f"  \\/ TRUE /\\ Interleaving!{imported_action}",
+                *(f"  \\/ {action}" for action in other_actions),
+            ],
+            action_definition_overrides={
+                imported_action: f"{imported_action} == Interleaving!{imported_action}",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    target_definitions = module.tla_single_expression_operator_definitions(target)
+    target_signatures = module.tla_operator_signatures(target)
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    signatures = module.tla_operator_signatures(tla)
+    target_line = target_signatures[imported_action][0]
+    helper_line = target_definitions["HiddenAction"][0]
+    next_line = signatures["Next"][0]
+    fairness_line = definitions["ProjectedCommitProgressFairness"][0]
+    action_line = signatures[imported_action][0]
+    wf_line = fairness_action_line(tla)
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:{next_line} defines {root_kind} transition operator Next, "
+        "but direct transition disjunct FALSE does not resolve to a named "
+        f"action-shaped operator; {root_kind} transition disjuncts must "
+        "resolve to named zero-arity action-shaped operators",
+        f"{tla}:{next_line} defines {root_kind} transition operator Next, "
+        f"but direct transition disjunct TRUE /\\ "
+        f"Interleaving!{imported_action} mixes multiple action witnesses "
+        "HiddenAction, Interleaving!HiddenAction; guarded transition "
+        "disjuncts must not mix multiple action witnesses",
+        f"{tla}:{fairness_line} defines ProjectedCommitProgressFairness, "
+        f"but references WF_vars action {imported_action} at line {wf_line} "
+        f"whose definition at line {action_line} aliases "
+        f"Interleaving!{imported_action}, but target {target}:"
+        f"{target_line} reaches helper HiddenAction at {target}:"
+        f"{helper_line}, but fairness action alias helper action resolution "
+        f"cycles at HiddenAction; {root_kind} fairness action aliases must "
+        "resolve through acyclic helper actions",
+        f"{tla}:{fairness_line} defines ProjectedCommitProgressFairness, "
+        f"but references WF_vars action {imported_action} at line {wf_line} "
+        f"whose definition at line {action_line} aliases "
+        f"Interleaving!{imported_action}, but target {target}:"
+        f"{target_line} is not action-shaped; {root_kind} fairness action "
+        "aliases must resolve to transition definitions that mention "
+        "next-state updates or UNCHANGED",
+    ]
+
+    boolean_target = (
+        tmp_path
+        / "SumeragiFalseGatedIdentityProjectedFairActionBooleanActionHelperCycleTarget.tla"
+    )
+    boolean_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFalseGatedIdentityProjectedFairActionBooleanActionHelperCycleTarget ----",
+                "VARIABLES vars",
+                f"{imported_action} == HiddenAction",
+                "HiddenAction == FALSE \\/ (UNCHANGED vars /\\ HiddenAction)",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    boolean_tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateFalseGatedIdentityFairActionBooleanActionHelperCycleTarget.tla"
+    )
+    boolean_tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[f"Interleaving == INSTANCE {boolean_target.stem}"],
+            next_lines=[
+                "Next ==",
+                "  \\/ FALSE",
+                f"  \\/ TRUE /\\ Interleaving!{imported_action}",
+                *(f"  \\/ {action}" for action in other_actions),
+            ],
+            action_definition_overrides={
+                imported_action: f"{imported_action} == Interleaving!{imported_action}",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    boolean_definitions = module.tla_single_expression_operator_definitions(
+        boolean_tla
+    )
+    boolean_signatures = module.tla_operator_signatures(boolean_tla)
+    boolean_target_definitions = module.tla_single_expression_operator_definitions(
+        boolean_target
+    )
+    boolean_target_signatures = module.tla_operator_signatures(boolean_target)
+    boolean_target_line = boolean_target_signatures[imported_action][0]
+    boolean_helper_line = boolean_target_definitions["HiddenAction"][0]
+    boolean_fairness_line = boolean_definitions["ProjectedCommitProgressFairness"][0]
+    boolean_action_line = boolean_signatures[imported_action][0]
+    boolean_wf_line = fairness_action_line(boolean_tla)
+    assert module.projected_commit_progress_spec_contract_errors(boolean_tla) == [
+        f"{boolean_target}:{boolean_helper_line} defines {root_kind} "
+        "transition operator HiddenAction, but direct transition disjunct "
+        f"FALSE does not resolve to a named action-shaped operator; "
+        f"{root_kind} transition disjuncts must resolve to named zero-arity "
+        "action-shaped operators",
+        f"{boolean_target}:{boolean_helper_line} defines {root_kind} "
+        "transition helper HiddenAction, but transition helper resolution "
+        f"cycles at HiddenAction; {root_kind} transition helper wrappers "
+        "must be acyclic and resolve to inspectable transition operators",
+        f"{boolean_tla}:{boolean_fairness_line} defines "
+        "ProjectedCommitProgressFairness, but references WF_vars action "
+        f"{imported_action} at line {boolean_wf_line} whose definition at "
+        f"line {boolean_action_line} aliases Interleaving!{imported_action}, "
+        f"but target {boolean_target}:{boolean_target_line} reaches helper "
+        f"HiddenAction at {boolean_target}:{boolean_helper_line}, but "
+        "fairness action alias helper action resolution cycles at "
+        f"HiddenAction; {root_kind} fairness action aliases must resolve "
+        "through acyclic helper actions",
+        f"{boolean_tla}:{boolean_fairness_line} defines "
+        "ProjectedCommitProgressFairness, but references WF_vars action "
+        f"{imported_action} at line {boolean_wf_line} whose definition at "
+        f"line {boolean_action_line} aliases Interleaving!{imported_action}, "
+        f"but target {boolean_target}:{boolean_target_line} is not "
+        f"action-shaped; {root_kind} fairness action aliases must resolve "
+        "to transition definitions that mention next-state updates or "
+        "UNCHANGED",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_identity_gated_module_alias_transition_disjunct_imported_fair_action_target_body_action_helper_multi_hop_cycles(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    imported_action = "RbcReady"
+    root_kind = "projected commit progress"
+    other_actions = tuple(
+        action
+        for action in module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+        if action != imported_action
+    )
+
+    def fairness_action_line(tla: Path) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if "WF_vars" in line and imported_action in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {imported_action}")
+
+    target = (
+        tmp_path
+        / "SumeragiFalseGatedIdentityProjectedFairActionMultiHopActionHelperCycleTarget.tla"
+    )
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFalseGatedIdentityProjectedFairActionMultiHopActionHelperCycleTarget ----",
+                "VARIABLES vars",
+                f"{imported_action} == HiddenAction",
+                "HiddenAction == UNCHANGED vars /\\ NestedAction",
+                "NestedAction == UNCHANGED vars /\\ HiddenAction",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateFalseGatedIdentityFairActionMultiHopActionHelperCycleTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[f"Interleaving == INSTANCE {target.stem}"],
+            next_lines=[
+                "Next ==",
+                "  \\/ FALSE",
+                f"  \\/ TRUE /\\ Interleaving!{imported_action}",
+                *(f"  \\/ {action}" for action in other_actions),
+            ],
+            action_definition_overrides={
+                imported_action: f"{imported_action} == Interleaving!{imported_action}",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    target_definitions = module.tla_single_expression_operator_definitions(target)
+    target_signatures = module.tla_operator_signatures(target)
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    signatures = module.tla_operator_signatures(tla)
+    target_line = target_signatures[imported_action][0]
+    helper_line = target_definitions["HiddenAction"][0]
+    next_line = signatures["Next"][0]
+    fairness_line = definitions["ProjectedCommitProgressFairness"][0]
+    action_line = signatures[imported_action][0]
+    wf_line = fairness_action_line(tla)
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:{next_line} defines {root_kind} transition operator Next, "
+        "but direct transition disjunct FALSE does not resolve to a named "
+        f"action-shaped operator; {root_kind} transition disjuncts must "
+        "resolve to named zero-arity action-shaped operators",
+        f"{tla}:{next_line} defines {root_kind} transition operator Next, "
+        f"but direct transition disjunct TRUE /\\ "
+        f"Interleaving!{imported_action} mixes multiple action witnesses "
+        "HiddenAction, Interleaving!HiddenAction; guarded transition "
+        "disjuncts must not mix multiple action witnesses",
+        f"{tla}:{fairness_line} defines ProjectedCommitProgressFairness, "
+        f"but references WF_vars action {imported_action} at line {wf_line} "
+        f"whose definition at line {action_line} aliases "
+        f"Interleaving!{imported_action}, but target {target}:"
+        f"{target_line} reaches helper HiddenAction at {target}:"
+        f"{helper_line}, but fairness action alias helper action resolution "
+        f"cycles at HiddenAction; {root_kind} fairness action aliases must "
+        "resolve through acyclic helper actions",
+        f"{tla}:{fairness_line} defines ProjectedCommitProgressFairness, "
+        f"but references WF_vars action {imported_action} at line {wf_line} "
+        f"whose definition at line {action_line} aliases "
+        f"Interleaving!{imported_action}, but target {target}:"
+        f"{target_line} is not action-shaped; {root_kind} fairness action "
+        "aliases must resolve to transition definitions that mention "
+        "next-state updates or UNCHANGED",
+    ]
+
+    boolean_target = (
+        tmp_path
+        / "SumeragiFalseGatedIdentityProjectedFairActionBooleanMultiHopActionHelperCycleTarget.tla"
+    )
+    boolean_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFalseGatedIdentityProjectedFairActionBooleanMultiHopActionHelperCycleTarget ----",
+                "VARIABLES vars",
+                f"{imported_action} == HiddenAction",
+                "HiddenAction == FALSE \\/ NestedAction",
+                "NestedAction == UNCHANGED vars /\\ HiddenAction",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    boolean_tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateFalseGatedIdentityFairActionBooleanMultiHopActionHelperCycleTarget.tla"
+    )
+    boolean_tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[f"Interleaving == INSTANCE {boolean_target.stem}"],
+            next_lines=[
+                "Next ==",
+                "  \\/ FALSE",
+                f"  \\/ TRUE /\\ Interleaving!{imported_action}",
+                *(f"  \\/ {action}" for action in other_actions),
+            ],
+            action_definition_overrides={
+                imported_action: f"{imported_action} == Interleaving!{imported_action}",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    boolean_definitions = module.tla_single_expression_operator_definitions(
+        boolean_tla
+    )
+    boolean_signatures = module.tla_operator_signatures(boolean_tla)
+    boolean_target_definitions = module.tla_single_expression_operator_definitions(
+        boolean_target
+    )
+    boolean_target_signatures = module.tla_operator_signatures(boolean_target)
+    boolean_target_line = boolean_target_signatures[imported_action][0]
+    boolean_helper_line = boolean_target_definitions["HiddenAction"][0]
+    boolean_fairness_line = boolean_definitions["ProjectedCommitProgressFairness"][0]
+    boolean_action_line = boolean_signatures[imported_action][0]
+    boolean_wf_line = fairness_action_line(boolean_tla)
+    assert module.projected_commit_progress_spec_contract_errors(boolean_tla) == [
+        f"{boolean_target}:{boolean_helper_line} defines {root_kind} "
+        "transition operator HiddenAction, but direct transition disjunct "
+        f"FALSE does not resolve to a named action-shaped operator; "
+        f"{root_kind} transition disjuncts must resolve to named zero-arity "
+        "action-shaped operators",
+        f"{boolean_tla}:{boolean_fairness_line} defines "
+        "ProjectedCommitProgressFairness, but references WF_vars action "
+        f"{imported_action} at line {boolean_wf_line} whose definition at "
+        f"line {boolean_action_line} aliases Interleaving!{imported_action}, "
+        f"but target {boolean_target}:{boolean_target_line} reaches helper "
+        f"HiddenAction at {boolean_target}:{boolean_helper_line}, but "
+        "fairness action alias helper action resolution cycles at "
+        f"HiddenAction; {root_kind} fairness action aliases must resolve "
+        "through acyclic helper actions",
+        f"{boolean_tla}:{boolean_fairness_line} defines "
+        "ProjectedCommitProgressFairness, but references WF_vars action "
+        f"{imported_action} at line {boolean_wf_line} whose definition at "
+        f"line {boolean_action_line} aliases Interleaving!{imported_action}, "
+        f"but target {boolean_target}:{boolean_target_line} is not "
+        f"action-shaped; {root_kind} fairness action aliases must resolve "
+        "to transition definitions that mention next-state updates or "
+        "UNCHANGED",
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_identity_gated_module_alias_transition_disjunct_imported_fair_action_target_body_invalid_helper_references(
     tmp_path: Path,
 ) -> None:
@@ -26137,6 +26592,226 @@ def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_iden
         [
             "Inner == INSTANCE {inner}",
             f"{imported_action} == HiddenHelper",
+            "HiddenHelper == Inner!Tail",
+        ],
+        ["Tail =="],
+        lambda _target, inner: (
+            f"aliases Inner!Tail, but target {inner}:3 is not an inspectable "
+            f"single-expression definition; {root_kind} transition "
+            "module-alias helper wrappers must resolve to inspectable "
+            "transition operators"
+        ),
+        lambda _target, _helper_line, inner: (
+            f"reaches helper Tail at {inner}:3, but helper is not an "
+            "inspectable single-expression definition; "
+            f"{root_kind} fairness action aliases must resolve helper-alias "
+            "helper references to inspectable helper definitions"
+        ),
+    )
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_identity_gated_module_alias_transition_disjunct_imported_fair_action_target_body_boolean_helper_alias_resolution_errors(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    imported_action = "RbcReady"
+    root_kind = "projected commit progress"
+    other_actions = tuple(
+        action
+        for action in module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+        if action != imported_action
+    )
+
+    def fairness_action_line(tla: Path) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if "WF_vars" in line and imported_action in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {imported_action}")
+
+    def assert_boolean_resolution_case(
+        label: str,
+        target_lines: list[str],
+        inner_lines: list[str] | None,
+        transition_problem,
+        fairness_problem,
+    ) -> None:
+        inner = None
+        inner_name = (
+            f"SumeragiFalseGatedIdentityProjectedFairAction{label}"
+            "BooleanHelperAliasInner"
+        )
+        if inner_lines is not None:
+            inner = tmp_path / f"{inner_name}.tla"
+            inner.write_text(
+                "\n".join(
+                    [
+                        f"---- MODULE {inner_name} ----",
+                        "VARIABLES vars",
+                        *inner_lines,
+                        "====",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+        target = (
+            tmp_path
+            / (
+                f"SumeragiFalseGatedIdentityProjectedFairAction{label}"
+                "BooleanHelperAliasTarget.tla"
+            )
+        )
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target.stem} ----",
+                    "VARIABLES vars",
+                    *(line.format(inner=inner_name) for line in target_lines),
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        tla = (
+            tmp_path
+            / (
+                "SumeragiByzantineCommitProjectionGateFalseGatedIdentityFairAction"
+                f"{label}BooleanHelperAliasTarget.tla"
+            )
+        )
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target.stem}"],
+                next_lines=[
+                    "Next ==",
+                    "  \\/ FALSE",
+                    f"  \\/ TRUE /\\ Interleaving!{imported_action}",
+                    *(f"  \\/ {action}" for action in other_actions),
+                ],
+                action_definition_overrides={
+                    imported_action: f"{imported_action} == Interleaving!{imported_action}",
+                },
+            ),
+            encoding="utf-8",
+        )
+
+        target_signatures = module.tla_operator_signatures(target)
+        target_definitions = module.tla_single_expression_operator_definitions(target)
+        definitions = module.tla_single_expression_operator_definitions(tla)
+        signatures = module.tla_operator_signatures(tla)
+        target_line = target_signatures[imported_action][0]
+        helper_line = target_definitions["HiddenHelper"][0]
+        fairness_line = definitions["ProjectedCommitProgressFairness"][0]
+        action_line = signatures[imported_action][0]
+        wf_line = fairness_action_line(tla)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{target}:{target_line} defines {root_kind} transition operator "
+            f"{imported_action}, but direct transition disjunct UNCHANGED vars "
+            f"does not resolve to a named action-shaped operator; {root_kind} "
+            "transition disjuncts must resolve to named zero-arity "
+            "action-shaped operators",
+            f"{target}:{helper_line} defines {root_kind} transition helper "
+            f"HiddenHelper, but {transition_problem(target, inner)}",
+            f"{tla}:{fairness_line} defines ProjectedCommitProgressFairness, "
+            f"but references WF_vars action {imported_action} at line {wf_line} "
+            f"whose definition at line {action_line} aliases "
+            f"Interleaving!{imported_action}, but target {target}:"
+            f"{target_line} {fairness_problem(target, helper_line, inner)}",
+        ]
+
+    base_target_lines = [
+        f"{imported_action} == UNCHANGED vars \\/ HiddenHelper",
+    ]
+    assert_boolean_resolution_case(
+        "MissingInstance",
+        [
+            *base_target_lines,
+            "HiddenHelper == Missing!Tail",
+        ],
+        None,
+        lambda _target, _inner: (
+            "aliases Missing!Tail without a named INSTANCE alias Missing; "
+            f"{root_kind} transition module-alias helper wrappers must "
+            "resolve through named local INSTANCE declarations"
+        ),
+        lambda target, helper_line, _inner: (
+            f"reaches helper HiddenHelper at {target}:{helper_line} aliasing "
+            "Missing!Tail without a named INSTANCE alias Missing; "
+            f"{root_kind} fairness action aliases must resolve helper aliases "
+            "through named local INSTANCE declarations"
+        ),
+    )
+    assert_boolean_resolution_case(
+        "MissingModule",
+        [
+            "Inner == INSTANCE MissingTailModule",
+            *base_target_lines,
+            "HiddenHelper == Inner!Tail",
+        ],
+        None,
+        lambda target, _inner: (
+            "aliases Inner!Tail, but target module "
+            f"{target.with_name('MissingTailModule.tla')} does not exist; "
+            f"{root_kind} transition module-alias helper wrappers must "
+            "resolve to local modules with defined zero-arity transition "
+            "operators"
+        ),
+        lambda target, helper_line, _inner: (
+            f"reaches helper HiddenHelper at {target}:{helper_line} aliasing "
+            "Inner!Tail, but target module "
+            f"{target.with_name('MissingTailModule.tla')} does not exist; "
+            f"{root_kind} fairness action aliases must resolve helper aliases "
+            "to local action modules"
+        ),
+    )
+    assert_boolean_resolution_case(
+        "Undefined",
+        [
+            "Inner == INSTANCE {inner}",
+            *base_target_lines,
+            "HiddenHelper == Inner!Tail",
+        ],
+        ["Other == UNCHANGED vars"],
+        lambda _target, inner: (
+            f"aliases Inner!Tail, but target {inner} does not define Tail; "
+            f"{root_kind} transition module-alias helper wrappers must "
+            "resolve to defined zero-arity transition operators"
+        ),
+        lambda target, helper_line, inner: (
+            f"reaches helper HiddenHelper at {target}:{helper_line} aliasing "
+            f"Inner!Tail, but target {inner} does not define Tail; "
+            f"{root_kind} fairness action aliases must resolve helper aliases "
+            "to defined zero-arity actions"
+        ),
+    )
+    assert_boolean_resolution_case(
+        "Parameterized",
+        [
+            "Inner == INSTANCE {inner}",
+            *base_target_lines,
+            "HiddenHelper == Inner!Tail",
+        ],
+        ["Tail(value) == UNCHANGED vars"],
+        lambda _target, inner: (
+            f"aliases Inner!Tail, but target {inner}:3 has arity 1; "
+            f"{root_kind} transition module-alias helper wrappers must "
+            "resolve to defined zero-arity transition operators"
+        ),
+        lambda target, helper_line, inner: (
+            f"reaches helper HiddenHelper at {target}:{helper_line} aliasing "
+            f"Inner!Tail, but target {inner}:3 has arity 1; {root_kind} "
+            "fairness action aliases must resolve helper aliases to defined "
+            "zero-arity actions"
+        ),
+    )
+    assert_boolean_resolution_case(
+        "Noninspectable",
+        [
+            "Inner == INSTANCE {inner}",
+            *base_target_lines,
             "HiddenHelper == Inner!Tail",
         ],
         ["Tail =="],
@@ -27185,6 +27860,106 @@ def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_iden
     ]
 
 
+def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_identity_gated_module_alias_transition_disjunct_imported_fair_action_target_body_helper_wrapper_multi_hop_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    imported_action = "RbcReady"
+    nested_action = "RbcDeliver"
+    root_kind = "projected commit progress"
+    other_actions = tuple(
+        action
+        for action in module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+        if action != imported_action
+    )
+
+    def fairness_action_line(tla: Path) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if "WF_vars" in line and imported_action in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {imported_action}")
+
+    target = (
+        tmp_path
+        / "SumeragiFalseGatedIdentityProjectedFairActionHelperWrapperMultiHopFairActionTarget.tla"
+    )
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFalseGatedIdentityProjectedFairActionHelperWrapperMultiHopFairActionTarget ----",
+                "VARIABLES vars",
+                f"{imported_action} == FirstWrapper",
+                "FirstWrapper == SecondWrapper",
+                "SecondWrapper == TailWrapper",
+                f"TailWrapper == FALSE \\/ {nested_action}",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / (
+            "SumeragiByzantineCommitProjectionGateFalseGatedIdentityFairAction"
+            "HelperWrapperMultiHopFairActionTarget.tla"
+        )
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[f"Interleaving == INSTANCE {target.stem}"],
+            next_lines=[
+                "Next ==",
+                "  \\/ FALSE",
+                f"  \\/ TRUE /\\ Interleaving!{imported_action}",
+                *(f"  \\/ {action}" for action in other_actions),
+            ],
+            action_definition_overrides={
+                imported_action: f"{imported_action} == Interleaving!{imported_action}",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    target_signatures = module.tla_operator_signatures(target)
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    signatures = module.tla_operator_signatures(tla)
+    target_line = target_signatures[imported_action][0]
+    tail_line = target_signatures["TailWrapper"][0]
+    fairness_line = definitions["ProjectedCommitProgressFairness"][0]
+    action_line = signatures[imported_action][0]
+    wf_line = fairness_action_line(tla)
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:{tail_line} defines {root_kind} transition operator "
+        "TailWrapper, but direct transition disjunct FALSE does not resolve "
+        f"to a named action-shaped operator; {root_kind} transition "
+        "disjuncts must resolve to named zero-arity action-shaped operators",
+        f"{target}:{tail_line} defines {root_kind} transition operator "
+        f"TailWrapper, but direct transition disjunct {nested_action} does "
+        f"not resolve to a named action-shaped operator; {root_kind} "
+        "transition disjuncts must resolve to named zero-arity "
+        "action-shaped operators",
+        f"{tla}:{fairness_line} defines ProjectedCommitProgressFairness, "
+        f"but references WF_vars action {imported_action} at line {wf_line} "
+        f"whose definition at line {action_line} aliases "
+        f"Interleaving!{imported_action}, but target {target}:"
+        f"{target_line} reaches fair action(s) {nested_action} through "
+        f"static helper wrapper(s); {root_kind} fairness action aliases "
+        "must not resolve through helper wrappers that compose other fair "
+        "actions",
+        f"{tla}:{fairness_line} defines ProjectedCommitProgressFairness, "
+        f"but references WF_vars action {imported_action} at line {wf_line} "
+        f"whose definition at line {action_line} aliases "
+        f"Interleaving!{imported_action}, but target {target}:"
+        f"{target_line} is not action-shaped; {root_kind} fairness action "
+        "aliases must resolve to transition definitions that mention "
+        "next-state updates or UNCHANGED",
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_identity_gated_module_alias_transition_disjunct_imported_fair_action_target_body_helper_action_fair_action_composition(
     tmp_path: Path,
 ) -> None:
@@ -27256,6 +28031,93 @@ def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_iden
         f"{target}:{target_line} defines {root_kind} transition operator "
         f"{imported_action}, but direct transition disjunct UNCHANGED vars "
         f"/\\ HiddenAction is not a bare named action or aggregate "
+        f"reference; {root_kind} transition disjuncts must stay bare named "
+        "action or aggregate references",
+        f"{tla}:{fairness_line} defines ProjectedCommitProgressFairness, "
+        f"but references WF_vars action {imported_action} at line {wf_line} "
+        f"whose definition at line {action_line} aliases "
+        f"Interleaving!{imported_action}, but target {target}:"
+        f"{target_line} reaches fair action(s) {nested_action} through "
+        f"action helper(s); {root_kind} fairness action aliases must not "
+        "resolve through helper actions that compose other fair actions",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_identity_gated_module_alias_transition_disjunct_imported_fair_action_target_body_helper_action_multi_hop_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    imported_action = "RbcReady"
+    nested_action = "RbcDeliver"
+    root_kind = "projected commit progress"
+    other_actions = tuple(
+        action
+        for action in module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+        if action != imported_action
+    )
+
+    def fairness_action_line(tla: Path) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if "WF_vars" in line and imported_action in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {imported_action}")
+
+    target = (
+        tmp_path
+        / "SumeragiFalseGatedIdentityProjectedFairActionHelperActionMultiHopFairActionTarget.tla"
+    )
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFalseGatedIdentityProjectedFairActionHelperActionMultiHopFairActionTarget ----",
+                "VARIABLES vars",
+                f"{imported_action} == UNCHANGED vars /\\ FirstActionHelper",
+                "FirstActionHelper == UNCHANGED vars /\\ SecondActionHelper",
+                "SecondActionHelper == FALSE \\/ TailActionHelper",
+                f"TailActionHelper == UNCHANGED vars /\\ {nested_action}",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / (
+            "SumeragiByzantineCommitProjectionGateFalseGatedIdentityFairAction"
+            "HelperActionMultiHopFairActionTarget.tla"
+        )
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[f"Interleaving == INSTANCE {target.stem}"],
+            next_lines=[
+                "Next ==",
+                "  \\/ FALSE",
+                f"  \\/ TRUE /\\ Interleaving!{imported_action}",
+                *(f"  \\/ {action}" for action in other_actions),
+            ],
+            action_definition_overrides={
+                imported_action: f"{imported_action} == Interleaving!{imported_action}",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    target_signatures = module.tla_operator_signatures(target)
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    signatures = module.tla_operator_signatures(tla)
+    target_line = target_signatures[imported_action][0]
+    fairness_line = definitions["ProjectedCommitProgressFairness"][0]
+    action_line = signatures[imported_action][0]
+    wf_line = fairness_action_line(tla)
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:{target_line} defines {root_kind} transition operator "
+        f"{imported_action}, but direct transition disjunct UNCHANGED vars "
+        f"/\\ FirstActionHelper is not a bare named action or aggregate "
         f"reference; {root_kind} transition disjuncts must stay bare named "
         "action or aggregate references",
         f"{tla}:{fairness_line} defines ProjectedCommitProgressFairness, "
@@ -27615,6 +28477,131 @@ def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_iden
     assert_module_alias_conjunct_transitive_case()
 
 
+def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_identity_gated_module_alias_transition_disjunct_imported_fair_action_target_body_module_alias_conjunct_multi_hop_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    imported_action = "RbcReady"
+    nested_action = "RbcDeliver"
+    root_kind = "projected commit progress"
+    other_actions = tuple(
+        action
+        for action in module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+        if action != imported_action
+    )
+
+    def fairness_action_line(tla: Path) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if "WF_vars" in line and imported_action in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {imported_action}")
+
+    leaf = (
+        tmp_path
+        / "SumeragiFalseGatedIdentityProjectedFairActionModuleAliasConjunctMultiHopFairActionLeaf.tla"
+    )
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFalseGatedIdentityProjectedFairActionModuleAliasConjunctMultiHopFairActionLeaf ----",
+                "VARIABLES vars",
+                "FirstWrapper == SecondWrapper",
+                "SecondWrapper == TailWrapper",
+                f"TailWrapper == FALSE \\/ {nested_action}",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    mid = (
+        tmp_path
+        / "SumeragiFalseGatedIdentityProjectedFairActionModuleAliasConjunctMultiHopFairActionMid.tla"
+    )
+    mid.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFalseGatedIdentityProjectedFairActionModuleAliasConjunctMultiHopFairActionMid ----",
+                "VARIABLES vars",
+                f"Leaf == INSTANCE {leaf.stem}",
+                "Hidden == Leaf!FirstWrapper",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = (
+        tmp_path
+        / "SumeragiFalseGatedIdentityProjectedFairActionModuleAliasConjunctMultiHopFairActionTarget.tla"
+    )
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFalseGatedIdentityProjectedFairActionModuleAliasConjunctMultiHopFairActionTarget ----",
+                "VARIABLES vars",
+                f"Nested == INSTANCE {mid.stem}",
+                f"{imported_action} == UNCHANGED vars /\\ Nested!Hidden",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / (
+            "SumeragiByzantineCommitProjectionGateFalseGatedIdentityFairAction"
+            "ModuleAliasConjunctMultiHopFairActionTarget.tla"
+        )
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[f"Interleaving == INSTANCE {target.stem}"],
+            next_lines=[
+                "Next ==",
+                "  \\/ FALSE",
+                f"  \\/ TRUE /\\ Interleaving!{imported_action}",
+                *(f"  \\/ {action}" for action in other_actions),
+            ],
+            action_definition_overrides={
+                imported_action: f"{imported_action} == Interleaving!{imported_action}",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    leaf_signatures = module.tla_operator_signatures(leaf)
+    target_signatures = module.tla_operator_signatures(target)
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    signatures = module.tla_operator_signatures(tla)
+    tail_line = leaf_signatures["TailWrapper"][0]
+    target_line = target_signatures[imported_action][0]
+    fairness_line = definitions["ProjectedCommitProgressFairness"][0]
+    action_line = signatures[imported_action][0]
+    wf_line = fairness_action_line(tla)
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{leaf}:{tail_line} defines {root_kind} transition operator "
+        "TailWrapper, but direct transition disjunct FALSE does not resolve "
+        f"to a named action-shaped operator; {root_kind} transition "
+        "disjuncts must resolve to named zero-arity action-shaped operators",
+        f"{leaf}:{tail_line} defines {root_kind} transition operator "
+        f"TailWrapper, but direct transition disjunct {nested_action} does "
+        f"not resolve to a named action-shaped operator; {root_kind} "
+        "transition disjuncts must resolve to named zero-arity "
+        "action-shaped operators",
+        f"{tla}:{fairness_line} defines ProjectedCommitProgressFairness, "
+        f"but references WF_vars action {imported_action} at line {wf_line} "
+        f"whose definition at line {action_line} aliases "
+        f"Interleaving!{imported_action}, but target {target}:"
+        f"{target_line} reaches fair action(s) {nested_action} through "
+        f"module-alias conjunct(s); {root_kind} fairness action aliases "
+        "must not resolve through module-alias conjuncts that compose other "
+        "fair actions",
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_identity_gated_module_alias_transition_disjunct_imported_fair_action_target_body_module_alias_boolean_fair_action_composition(
     tmp_path: Path,
 ) -> None:
@@ -27928,6 +28915,1257 @@ def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_iden
         ],
         extra_modules=[(inner_name, [f"{nested_action} == UNCHANGED vars"])],
     )
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_identity_gated_module_alias_transition_disjunct_imported_fair_action_target_body_module_alias_boolean_multi_hop_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    imported_action = "RbcReady"
+    nested_action = "RbcDeliver"
+    root_kind = "projected commit progress"
+    other_actions = tuple(
+        action
+        for action in module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+        if action != imported_action
+    )
+
+    def fairness_action_line(tla: Path) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if "WF_vars" in line and imported_action in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {imported_action}")
+
+    leaf = (
+        tmp_path
+        / "SumeragiFalseGatedIdentityProjectedFairActionModuleAliasBooleanMultiHopFairActionLeaf.tla"
+    )
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFalseGatedIdentityProjectedFairActionModuleAliasBooleanMultiHopFairActionLeaf ----",
+                "VARIABLES vars",
+                "FirstWrapper == SecondWrapper",
+                "SecondWrapper == TailWrapper",
+                f"TailWrapper == FALSE \\/ {nested_action}",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    mid = (
+        tmp_path
+        / "SumeragiFalseGatedIdentityProjectedFairActionModuleAliasBooleanMultiHopFairActionMid.tla"
+    )
+    mid.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFalseGatedIdentityProjectedFairActionModuleAliasBooleanMultiHopFairActionMid ----",
+                "VARIABLES vars",
+                f"Leaf == INSTANCE {leaf.stem}",
+                "Hidden == Leaf!FirstWrapper",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = (
+        tmp_path
+        / "SumeragiFalseGatedIdentityProjectedFairActionModuleAliasBooleanMultiHopFairActionTarget.tla"
+    )
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFalseGatedIdentityProjectedFairActionModuleAliasBooleanMultiHopFairActionTarget ----",
+                "VARIABLES vars",
+                f"Nested == INSTANCE {mid.stem}",
+                f"{imported_action} == UNCHANGED vars \\/ Nested!Hidden",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / (
+            "SumeragiByzantineCommitProjectionGateFalseGatedIdentityFairAction"
+            "ModuleAliasBooleanMultiHopFairActionTarget.tla"
+        )
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[f"Interleaving == INSTANCE {target.stem}"],
+            next_lines=[
+                "Next ==",
+                "  \\/ FALSE",
+                f"  \\/ TRUE /\\ Interleaving!{imported_action}",
+                *(f"  \\/ {action}" for action in other_actions),
+            ],
+            action_definition_overrides={
+                imported_action: f"{imported_action} == Interleaving!{imported_action}",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    leaf_signatures = module.tla_operator_signatures(leaf)
+    target_signatures = module.tla_operator_signatures(target)
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    signatures = module.tla_operator_signatures(tla)
+    tail_line = leaf_signatures["TailWrapper"][0]
+    target_line = target_signatures[imported_action][0]
+    fairness_line = definitions["ProjectedCommitProgressFairness"][0]
+    action_line = signatures[imported_action][0]
+    wf_line = fairness_action_line(tla)
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:{target_line} defines {root_kind} transition operator "
+        f"{imported_action}, but direct transition disjunct UNCHANGED vars "
+        f"does not resolve to a named action-shaped operator; {root_kind} "
+        "transition disjuncts must resolve to named zero-arity "
+        "action-shaped operators",
+        f"{leaf}:{tail_line} defines {root_kind} transition operator "
+        "TailWrapper, but direct transition disjunct FALSE does not resolve "
+        f"to a named action-shaped operator; {root_kind} transition "
+        "disjuncts must resolve to named zero-arity action-shaped operators",
+        f"{leaf}:{tail_line} defines {root_kind} transition operator "
+        f"TailWrapper, but direct transition disjunct {nested_action} does "
+        f"not resolve to a named action-shaped operator; {root_kind} "
+        "transition disjuncts must resolve to named zero-arity "
+        "action-shaped operators",
+        f"{tla}:{fairness_line} defines ProjectedCommitProgressFairness, "
+        f"but references WF_vars action {imported_action} at line {wf_line} "
+        f"whose definition at line {action_line} aliases "
+        f"Interleaving!{imported_action}, but target {target}:"
+        f"{target_line} reaches fair action(s) {nested_action} through "
+        f"module-alias boolean operand(s); {root_kind} fairness action "
+        "aliases must not resolve through module-alias boolean operands "
+        "that compose other fair actions",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_identity_gated_module_alias_transition_disjunct_imported_fair_action_target_body_module_alias_operand_resolution_errors(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    imported_action = "RbcReady"
+    root_kind = "projected commit progress"
+    other_actions = tuple(
+        action
+        for action in module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+        if action != imported_action
+    )
+
+    def fairness_action_line(tla: Path) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if "WF_vars" in line and imported_action in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {imported_action}")
+
+    def assert_operand_resolution_case(
+        label: str,
+        connector: str,
+        target_lines: list[str],
+        inner_lines: list[str] | None,
+        transition_problem,
+        fairness_problem,
+    ) -> None:
+        inner = None
+        inner_name = (
+            f"SumeragiFalseGatedIdentityProjectedFairAction{label}"
+            "ModuleAliasOperandInner"
+        )
+        if inner_lines is not None:
+            inner = tmp_path / f"{inner_name}.tla"
+            inner.write_text(
+                "\n".join(
+                    [
+                        f"---- MODULE {inner_name} ----",
+                        "VARIABLES vars",
+                        *inner_lines,
+                        "====",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+        target = (
+            tmp_path
+            / (
+                f"SumeragiFalseGatedIdentityProjectedFairAction{label}"
+                "ModuleAliasOperandTarget.tla"
+            )
+        )
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target.stem} ----",
+                    "VARIABLES vars",
+                    *(line.format(inner=inner_name) for line in target_lines),
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        tla = (
+            tmp_path
+            / (
+                "SumeragiByzantineCommitProjectionGateFalseGatedIdentityFairAction"
+                f"{label}ModuleAliasOperandTarget.tla"
+            )
+        )
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target.stem}"],
+                next_lines=[
+                    "Next ==",
+                    "  \\/ FALSE",
+                    f"  \\/ TRUE /\\ Interleaving!{imported_action}",
+                    *(f"  \\/ {action}" for action in other_actions),
+                ],
+                action_definition_overrides={
+                    imported_action: f"{imported_action} == Interleaving!{imported_action}",
+                },
+            ),
+            encoding="utf-8",
+        )
+
+        target_signatures = module.tla_operator_signatures(target)
+        definitions = module.tla_single_expression_operator_definitions(tla)
+        signatures = module.tla_operator_signatures(tla)
+        target_line = target_signatures[imported_action][0]
+        fairness_line = definitions["ProjectedCommitProgressFairness"][0]
+        action_line = signatures[imported_action][0]
+        wf_line = fairness_action_line(tla)
+        transition_prefix = (
+            f"{target}:{target_line} defines {root_kind} transition operator "
+            f"{imported_action}, but direct transition disjunct "
+        )
+        if connector == "/\\":
+            expected_errors = [
+                transition_prefix
+                + f"UNCHANGED vars /\\ {transition_problem(target, inner)}",
+            ]
+        else:
+            expected_errors = [
+                transition_prefix
+                + "UNCHANGED vars does not resolve to a named action-shaped "
+                f"operator; {root_kind} transition disjuncts must resolve to "
+                "named zero-arity action-shaped operators",
+                transition_prefix + transition_problem(target, inner),
+            ]
+        expected_errors.append(
+            f"{tla}:{fairness_line} defines ProjectedCommitProgressFairness, "
+            f"but references WF_vars action {imported_action} at line {wf_line} "
+            f"whose definition at line {action_line} aliases "
+            f"Interleaving!{imported_action}, but target {target}:"
+            f"{target_line} {fairness_problem(target, inner)}"
+        )
+        assert module.projected_commit_progress_spec_contract_errors(tla) == (
+            expected_errors
+        )
+
+    cases = (
+        (
+            "MissingInstance",
+            None,
+            ["{action} == UNCHANGED vars {connector} Missing!Tail"],
+            lambda _target, _inner, connector: (
+                "Missing!Tail aliases Missing!Tail without a named INSTANCE "
+                f"alias Missing; {root_kind} transition module-alias "
+                "disjuncts must resolve through named local INSTANCE "
+                "declarations"
+                if connector == "\\/"
+                else "Missing!Tail aliases Missing!Tail without a named "
+                f"INSTANCE alias Missing; {root_kind} transition "
+                "module-alias disjuncts must resolve through named local "
+                "INSTANCE declarations"
+            ),
+            lambda _target, _inner, kind: (
+                f"uses module-alias {kind} Missing!Tail without a named "
+                f"INSTANCE alias Missing; {root_kind} fairness action aliases "
+                f"must resolve module-alias {kind}s through named local "
+                "INSTANCE declarations"
+            ),
+        ),
+        (
+            "MissingModule",
+            None,
+            [
+                "MissingMod == INSTANCE MissingTailModule",
+                "{action} == UNCHANGED vars {connector} MissingMod!Tail",
+            ],
+            lambda target, _inner, _connector: (
+                "MissingMod!Tail aliases MissingMod!Tail, but target module "
+                f"{target.with_name('MissingTailModule.tla')} does not exist; "
+                f"{root_kind} transition module-alias disjuncts must resolve "
+                "to local modules with defined zero-arity transition operators"
+            ),
+            lambda target, _inner, kind: (
+                f"uses module-alias {kind} MissingMod!Tail, but target module "
+                f"{target.with_name('MissingTailModule.tla')} does not exist; "
+                f"{root_kind} fairness action aliases must resolve "
+                f"module-alias {kind}s to local action modules"
+            ),
+        ),
+        (
+            "Undefined",
+            ["Other == UNCHANGED vars"],
+            [
+                "Inner == INSTANCE {inner}",
+                "{action} == UNCHANGED vars {connector} Inner!Tail",
+            ],
+            lambda _target, inner, _connector: (
+                f"Inner!Tail aliases Inner!Tail, but target {inner} does not "
+                f"define Tail; {root_kind} transition module-alias disjuncts "
+                "must resolve to defined zero-arity transition operators"
+            ),
+            lambda _target, inner, kind: (
+                f"uses module-alias {kind} Inner!Tail, but target {inner} "
+                f"does not define Tail; {root_kind} fairness action aliases "
+                f"must resolve module-alias {kind}s to defined zero-arity "
+                "actions"
+            ),
+        ),
+        (
+            "Parameterized",
+            ["Tail(peer) == UNCHANGED vars"],
+            [
+                "Inner == INSTANCE {inner}",
+                "{action} == UNCHANGED vars {connector} Inner!Tail",
+            ],
+            lambda _target, inner, _connector: (
+                f"Inner!Tail aliases Inner!Tail, but target {inner}:3 has "
+                f"arity 1; {root_kind} transition module-alias disjuncts "
+                "must resolve to defined zero-arity transition operators"
+            ),
+            lambda _target, inner, kind: (
+                f"uses module-alias {kind} Inner!Tail, but target {inner}:3 "
+                f"has arity 1; {root_kind} fairness action aliases must "
+                f"resolve module-alias {kind}s to defined zero-arity actions"
+            ),
+        ),
+        (
+            "Noninspectable",
+            ["Tail =="],
+            [
+                "Inner == INSTANCE {inner}",
+                "{action} == UNCHANGED vars {connector} Inner!Tail",
+            ],
+            lambda _target, inner, _connector: (
+                f"Inner!Tail aliases Inner!Tail, but target {inner}:3 is not "
+                f"an inspectable single-expression definition; {root_kind} "
+                "transition module-alias disjuncts must resolve to inspectable "
+                "transition operators"
+            ),
+            lambda _target, inner, kind: (
+                f"uses module-alias {kind} Inner!Tail, but target {inner}:3 "
+                f"is not an inspectable single-expression definition; "
+                f"{root_kind} fairness action aliases must resolve "
+                f"module-alias {kind}s to inspectable action definitions"
+            ),
+        ),
+    )
+
+    for suffix, connector, kind in (
+        ("Conjunct", "/\\", "conjunct"),
+        ("Boolean", "\\/", "boolean operand"),
+    ):
+        for (
+            case_label,
+            inner_lines,
+            raw_target_lines,
+            transition_problem,
+            fairness_problem,
+        ) in cases:
+            target_lines = [
+                line.replace("{action}", imported_action).replace(
+                    "{connector}",
+                    connector,
+                )
+                for line in raw_target_lines
+            ]
+            assert_operand_resolution_case(
+                f"{suffix}{case_label}",
+                connector,
+                target_lines,
+                inner_lines,
+                lambda target, inner, problem=transition_problem: problem(
+                    target,
+                    inner,
+                    connector,
+                ),
+                lambda target, inner, problem=fairness_problem: problem(
+                    target,
+                    inner,
+                    kind,
+                ),
+            )
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_identity_gated_module_alias_transition_disjunct_imported_fair_action_target_body_mixed_module_alias_operand_resolution_errors(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    imported_action = "RbcReady"
+    root_kind = "projected commit progress"
+    other_actions = tuple(
+        action
+        for action in module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+        if action != imported_action
+    )
+
+    def write_projection(suffix: str, target_name: str) -> Path:
+        tla = (
+            tmp_path
+            / (
+                "SumeragiByzantineCommitProjectionGateFalseGatedIdentityFairAction"
+                f"Mixed{suffix}ModuleAliasOperandTarget.tla"
+            )
+        )
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                next_lines=[
+                    "Next ==",
+                    "  \\/ FALSE",
+                    f"  \\/ TRUE /\\ Interleaving!{imported_action}",
+                    *(f"  \\/ {action}" for action in other_actions),
+                ],
+                action_definition_overrides={
+                    imported_action: f"{imported_action} == Interleaving!{imported_action}",
+                },
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def fairness_action_line(tla: Path) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if "WF_vars" in line and imported_action in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {imported_action}")
+
+    def write_module(path: Path, lines: list[str] | None) -> None:
+        if lines is None:
+            return
+        path.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {path.stem} ----",
+                    "VARIABLES vars",
+                    *lines,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def assert_mixed_resolution_case(
+        suffix: str,
+        conjunct_lines: list[str] | None,
+        boolean_lines: list[str] | None,
+        expected_errors_for_case,
+    ) -> None:
+        base = f"SumeragiFalseGatedIdentityProjectedFairActionMixed{suffix}"
+        missing = tmp_path / f"{base}Missing.tla"
+        conjunct = tmp_path / f"{base}Conjunct.tla"
+        boolean = tmp_path / f"{base}Boolean.tla"
+        target = tmp_path / f"{base}Target.tla"
+        missing_name = missing.stem
+        conjunct_materialized = (
+            [line.format(missing=missing_name) for line in conjunct_lines]
+            if conjunct_lines is not None
+            else None
+        )
+        boolean_materialized = (
+            [line.format(missing=missing_name) for line in boolean_lines]
+            if boolean_lines is not None
+            else None
+        )
+        write_module(conjunct, conjunct_materialized)
+        write_module(boolean, boolean_materialized)
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target.stem} ----",
+                    "VARIABLES vars",
+                    f"Conjunct == INSTANCE {conjunct.stem}",
+                    f"Bool == INSTANCE {boolean.stem}",
+                    f"{imported_action} == UNCHANGED vars /\\ Conjunct!Tail /\\ (FALSE \\/ Bool!Tail)",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        tla = write_projection(suffix, target.stem)
+
+        target_signatures = module.tla_operator_signatures(target)
+        definitions = module.tla_single_expression_operator_definitions(tla)
+        signatures = module.tla_operator_signatures(tla)
+        conjunct_signatures = (
+            module.tla_operator_signatures(conjunct) if conjunct.exists() else {}
+        )
+        boolean_signatures = (
+            module.tla_operator_signatures(boolean) if boolean.exists() else {}
+        )
+        target_line = target_signatures[imported_action][0]
+        fairness_line = definitions["ProjectedCommitProgressFairness"][0]
+        action_line = signatures[imported_action][0]
+        wf_line = fairness_action_line(tla)
+        full_disjunct = (
+            "UNCHANGED vars /\\ Conjunct!Tail /\\ (FALSE \\/ Bool!Tail)"
+        )
+        transition_prefix = (
+            f"{target}:{target_line} defines {root_kind} transition operator "
+            f"{imported_action}, but direct transition disjunct {full_disjunct} "
+        )
+        fairness_prefix = (
+            f"{tla}:{fairness_line} defines ProjectedCommitProgressFairness, "
+            f"but references WF_vars action {imported_action} at line {wf_line} "
+            f"whose definition at line {action_line} aliases "
+            f"Interleaving!{imported_action}, but target {target}:"
+            f"{target_line} "
+        )
+        context = {
+            "boolean": boolean,
+            "boolean_tail_line": boolean_signatures.get("Tail", (None,))[0],
+            "conjunct": conjunct,
+            "conjunct_tail_line": conjunct_signatures.get("Tail", (None,))[0],
+            "fairness_prefix": fairness_prefix,
+            "missing": missing,
+            "transition_prefix": transition_prefix,
+        }
+        assert module.projected_commit_progress_spec_contract_errors(tla) == (
+            expected_errors_for_case(context)
+        )
+
+    def missing_target_errors(context) -> list[str]:
+        transition_prefix = context["transition_prefix"]
+        fairness_prefix = context["fairness_prefix"]
+        conjunct = context["conjunct"]
+        boolean = context["boolean"]
+        return [
+            f"{transition_prefix}aliases Conjunct!Tail, but target module "
+            f"{conjunct} does not exist; {root_kind} transition "
+            "module-alias disjuncts must resolve to local modules with "
+            "defined zero-arity transition operators",
+            f"{transition_prefix}aliases Bool!Tail, but target module "
+            f"{boolean} does not exist; {root_kind} transition "
+            "module-alias disjuncts must resolve to local modules with "
+            "defined zero-arity transition operators",
+            f"{fairness_prefix}uses module-alias conjunct Conjunct!Tail, but "
+            f"target module {conjunct} does not exist; {root_kind} fairness "
+            "action aliases must resolve module-alias conjuncts to local "
+            "action modules",
+            f"{fairness_prefix}uses module-alias boolean operand Bool!Tail, "
+            f"but target module {boolean} does not exist; {root_kind} "
+            "fairness action aliases must resolve module-alias boolean "
+            "operands to local action modules",
+        ]
+
+    def target_shape_errors(context) -> list[str]:
+        transition_prefix = context["transition_prefix"]
+        fairness_prefix = context["fairness_prefix"]
+        conjunct = context["conjunct"]
+        boolean = context["boolean"]
+        boolean_tail_line = context["boolean_tail_line"]
+        return [
+            f"{transition_prefix}aliases Conjunct!Tail, but target "
+            f"{conjunct} does not define Tail; {root_kind} transition "
+            "module-alias disjuncts must resolve to defined zero-arity "
+            "transition operators",
+            f"{transition_prefix}aliases Bool!Tail, but target {boolean}:"
+            f"{boolean_tail_line} has arity 1; {root_kind} transition "
+            "module-alias disjuncts must resolve to defined zero-arity "
+            "transition operators",
+            f"{fairness_prefix}uses module-alias conjunct Conjunct!Tail, but "
+            f"target {conjunct} does not define Tail; {root_kind} fairness "
+            "action aliases must resolve module-alias conjuncts to defined "
+            "zero-arity actions",
+            f"{fairness_prefix}uses module-alias boolean operand Bool!Tail, "
+            f"but target {boolean}:{boolean_tail_line} has arity 1; "
+            f"{root_kind} fairness action aliases must resolve module-alias "
+            "boolean operands to defined zero-arity actions",
+        ]
+
+    def noninspectable_target_errors(context) -> list[str]:
+        transition_prefix = context["transition_prefix"]
+        fairness_prefix = context["fairness_prefix"]
+        conjunct = context["conjunct"]
+        boolean = context["boolean"]
+        conjunct_tail_line = context["conjunct_tail_line"]
+        boolean_tail_line = context["boolean_tail_line"]
+        return [
+            f"{transition_prefix}aliases Conjunct!Tail, but target "
+            f"{conjunct}:{conjunct_tail_line} is not an inspectable "
+            f"single-expression definition; {root_kind} transition "
+            "module-alias disjuncts must resolve to inspectable transition "
+            "operators",
+            f"{transition_prefix}aliases Bool!Tail, but target {boolean}:"
+            f"{boolean_tail_line} is not an inspectable single-expression "
+            f"definition; {root_kind} transition module-alias disjuncts must "
+            "resolve to inspectable transition operators",
+            f"{fairness_prefix}uses module-alias conjunct Conjunct!Tail, but "
+            f"target {conjunct}:{conjunct_tail_line} is not an inspectable "
+            f"single-expression definition; {root_kind} fairness action "
+            "aliases must resolve module-alias conjuncts to inspectable "
+            "action definitions",
+            f"{fairness_prefix}uses module-alias boolean operand Bool!Tail, "
+            f"but target {boolean}:{boolean_tail_line} is not an inspectable "
+            f"single-expression definition; {root_kind} fairness action "
+            "aliases must resolve module-alias boolean operands to "
+            "inspectable action definitions",
+        ]
+
+    def helper_alias_errors(context) -> list[str]:
+        fairness_prefix = context["fairness_prefix"]
+        conjunct = context["conjunct"]
+        boolean = context["boolean"]
+        missing = context["missing"]
+        conjunct_tail_line = context["conjunct_tail_line"]
+        boolean_tail_line = context["boolean_tail_line"]
+        return [
+            f"{conjunct}:{conjunct_tail_line} defines {root_kind} transition "
+            "helper Tail, but aliases Missing!Action without a named INSTANCE "
+            f"alias Missing; {root_kind} transition module-alias helper "
+            "wrappers must resolve through named local INSTANCE declarations",
+            f"{fairness_prefix}uses module-alias conjunct Conjunct!Tail, but "
+            f"helper Tail at {conjunct}:{conjunct_tail_line} aliases "
+            f"Missing!Action without a named INSTANCE alias Missing; "
+            f"{root_kind} fairness action aliases must resolve module-alias "
+            "conjuncts through named local INSTANCE declarations",
+            f"{fairness_prefix}uses module-alias boolean operand Bool!Tail, "
+            f"but helper Tail at {boolean}:{boolean_tail_line} aliases "
+            f"Absent!Action, but target module {missing} does not exist; "
+            f"{root_kind} fairness action aliases must resolve module-alias "
+            "boolean operands to local action modules",
+        ]
+
+    assert_mixed_resolution_case("MissingTargets", None, None, missing_target_errors)
+    assert_mixed_resolution_case(
+        "TargetShapes",
+        ["Other == UNCHANGED vars"],
+        ["Tail(peer) == UNCHANGED vars"],
+        target_shape_errors,
+    )
+    assert_mixed_resolution_case(
+        "NoninspectableTargets",
+        ["Tail =="],
+        ["Tail =="],
+        noninspectable_target_errors,
+    )
+    assert_mixed_resolution_case(
+        "HelperAliasResolution",
+        ["Tail == Missing!Action"],
+        ["Absent == INSTANCE {missing}", "Tail == Absent!Action"],
+        helper_alias_errors,
+    )
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_identity_gated_module_alias_transition_disjunct_imported_fair_action_target_body_mixed_module_alias_operand_multi_hop_recursive_helper_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    imported_action = "RbcReady"
+    root_kind = "projected commit progress"
+    other_actions = tuple(
+        action
+        for action in module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+        if action != imported_action
+    )
+
+    def write_module(name: str, lines: list[str]) -> Path:
+        path = tmp_path / f"{name}.tla"
+        path.write_text(
+            "\n".join([f"---- MODULE {name} ----", "VARIABLES vars", *lines, "===="]),
+            encoding="utf-8",
+        )
+        return path
+
+    def fairness_action_line(tla: Path) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if "WF_vars" in line and imported_action in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {imported_action}")
+
+    conjunct = write_module(
+        "SumeragiFalseGatedIdentityProjectedFairActionMixedModuleAliasOperandMultiHopConjunct",
+        [
+            "Start == LocalBranch",
+            "LocalBranch == ParameterizedHelper /\\ TRUE",
+            "ParameterizedHelper(peer) == UNCHANGED vars",
+        ],
+    )
+    boolean = write_module(
+        "SumeragiFalseGatedIdentityProjectedFairActionMixedModuleAliasOperandMultiHopBoolean",
+        [
+            "Start == FALSE \\/ LocalBranch",
+            "LocalBranch == OpaqueHelper",
+            "OpaqueHelper ==",
+        ],
+    )
+    target = write_module(
+        "SumeragiFalseGatedIdentityProjectedFairActionMixedModuleAliasOperandMultiHopTarget",
+        [
+            f"Conjunct == INSTANCE {conjunct.stem}",
+            f"Bool == INSTANCE {boolean.stem}",
+            f"{imported_action} == UNCHANGED vars /\\ Conjunct!Start /\\ (FALSE \\/ Bool!Start)",
+        ],
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateFalseGatedIdentityFairActionMixedModuleAliasOperandMultiHop.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[f"Interleaving == INSTANCE {target.stem}"],
+            next_lines=[
+                "Next ==",
+                "  \\/ FALSE",
+                f"  \\/ TRUE /\\ Interleaving!{imported_action}",
+                *(f"  \\/ {action}" for action in other_actions),
+            ],
+            action_definition_overrides={
+                imported_action: f"{imported_action} == Interleaving!{imported_action}",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    signatures = module.tla_operator_signatures(tla)
+    target_signatures = module.tla_operator_signatures(target)
+    conjunct_signatures = module.tla_operator_signatures(conjunct)
+    boolean_signatures = module.tla_operator_signatures(boolean)
+    next_line = signatures["Next"][0]
+    fairness_line = definitions["ProjectedCommitProgressFairness"][0]
+    action_line = signatures[imported_action][0]
+    wf_line = fairness_action_line(tla)
+    target_line = target_signatures[imported_action][0]
+    parameterized_line = conjunct_signatures["ParameterizedHelper"][0]
+    opaque_line = boolean_signatures["OpaqueHelper"][0]
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:{next_line} defines {root_kind} transition operator Next, "
+        "but direct transition disjunct FALSE does not resolve to a named "
+        f"action-shaped operator; {root_kind} transition disjuncts must "
+        "resolve to named zero-arity action-shaped operators",
+        f"{tla}:{next_line} defines {root_kind} transition operator Next, "
+        f"but direct transition disjunct TRUE /\\ "
+        f"Interleaving!{imported_action} mixes multiple action witnesses "
+        f"Interleaving!{imported_action}, {imported_action}; guarded "
+        "transition disjuncts must not mix multiple action witnesses",
+        f"{tla}:{fairness_line} defines ProjectedCommitProgressFairness, but "
+        f"references WF_vars action {imported_action} at line {wf_line} "
+        f"whose definition at line {action_line} aliases "
+        f"Interleaving!{imported_action}, but target {target}:"
+        f"{target_line} uses module-alias conjunct Conjunct!Start, but "
+        f"helper ParameterizedHelper at {conjunct}:{parameterized_line} "
+        f"has arity 1; {root_kind} fairness action aliases must resolve "
+        "module-alias conjuncts to defined zero-arity actions",
+        f"{tla}:{fairness_line} defines ProjectedCommitProgressFairness, but "
+        f"references WF_vars action {imported_action} at line {wf_line} "
+        f"whose definition at line {action_line} aliases "
+        f"Interleaving!{imported_action}, but target {target}:"
+        f"{target_line} uses module-alias boolean operand Bool!Start, but "
+        f"helper OpaqueHelper at {boolean}:{opaque_line} is not an "
+        f"inspectable single-expression definition; {root_kind} fairness "
+        "action aliases must resolve module-alias boolean operands to "
+        "inspectable action definitions",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_identity_gated_module_alias_transition_disjunct_imported_fair_action_target_body_mixed_module_alias_operand_onward_helper_target_errors(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    imported_action = "RbcReady"
+    root_kind = "projected commit progress"
+    other_actions = tuple(
+        action
+        for action in module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+        if action != imported_action
+    )
+
+    def write_module(path: Path, lines: list[str] | None) -> None:
+        if lines is None:
+            return
+        path.write_text(
+            "\n".join(
+                [f"---- MODULE {path.stem} ----", "VARIABLES vars", *lines, "===="]
+            ),
+            encoding="utf-8",
+        )
+
+    def fairness_action_line(tla: Path) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if "WF_vars" in line and imported_action in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {imported_action}")
+
+    def assert_onward_case(
+        suffix: str,
+        conjunct_inner_lines: list[str] | None,
+        boolean_inner_lines: list[str],
+        transition_problem,
+        conjunct_fairness_problem,
+        boolean_fairness_problem,
+    ) -> None:
+        base = (
+            f"SumeragiFalseGatedIdentityProjectedFairActionMixedOperandOnward{suffix}"
+        )
+        conjunct_inner = tmp_path / f"{base}ConjunctInner.tla"
+        boolean_inner = tmp_path / f"{base}BooleanInner.tla"
+        conjunct = tmp_path / f"{base}Conjunct.tla"
+        boolean = tmp_path / f"{base}Boolean.tla"
+        target = tmp_path / f"{base}Target.tla"
+        write_module(conjunct_inner, conjunct_inner_lines)
+        write_module(boolean_inner, boolean_inner_lines)
+        write_module(
+            conjunct,
+            [
+                f"Inner == INSTANCE {conjunct_inner.stem}",
+                "Start == LocalBranch",
+                "LocalBranch == Inner!BadAction",
+            ],
+        )
+        write_module(
+            boolean,
+            [
+                f"Inner == INSTANCE {boolean_inner.stem}",
+                "Start == FALSE \\/ LocalBranch",
+                "LocalBranch == Inner!BadAction",
+            ],
+        )
+        write_module(
+            target,
+            [
+                f"Conjunct == INSTANCE {conjunct.stem}",
+                f"Bool == INSTANCE {boolean.stem}",
+                f"{imported_action} == UNCHANGED vars /\\ Conjunct!Start /\\ (FALSE \\/ Bool!Start)",
+            ],
+        )
+        tla = (
+            tmp_path
+            / (
+                "SumeragiByzantineCommitProjectionGateFalseGatedIdentityFairAction"
+                f"MixedOperandOnward{suffix}.tla"
+            )
+        )
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target.stem}"],
+                next_lines=[
+                    "Next ==",
+                    "  \\/ FALSE",
+                    f"  \\/ TRUE /\\ Interleaving!{imported_action}",
+                    *(f"  \\/ {action}" for action in other_actions),
+                ],
+                action_definition_overrides={
+                    imported_action: f"{imported_action} == Interleaving!{imported_action}",
+                },
+            ),
+            encoding="utf-8",
+        )
+
+        definitions = module.tla_single_expression_operator_definitions(tla)
+        signatures = module.tla_operator_signatures(tla)
+        target_signatures = module.tla_operator_signatures(target)
+        conjunct_signatures = module.tla_operator_signatures(conjunct)
+        boolean_signatures = module.tla_operator_signatures(boolean)
+        conjunct_inner_signatures = (
+            module.tla_operator_signatures(conjunct_inner)
+            if conjunct_inner.exists()
+            else {}
+        )
+        boolean_inner_signatures = module.tla_operator_signatures(boolean_inner)
+        fairness_line = definitions["ProjectedCommitProgressFairness"][0]
+        action_line = signatures[imported_action][0]
+        wf_line = fairness_action_line(tla)
+        target_line = target_signatures[imported_action][0]
+        conjunct_local_line = conjunct_signatures["LocalBranch"][0]
+        boolean_local_line = boolean_signatures["LocalBranch"][0]
+        context = {
+            "boolean": boolean,
+            "boolean_inner": boolean_inner,
+            "boolean_inner_bad_action_line": boolean_inner_signatures.get(
+                "BadAction", (None,)
+            )[0],
+            "boolean_local_line": boolean_local_line,
+            "conjunct": conjunct,
+            "conjunct_inner": conjunct_inner,
+            "conjunct_inner_bad_action_line": conjunct_inner_signatures.get(
+                "BadAction", (None,)
+            )[0],
+            "conjunct_local_line": conjunct_local_line,
+        }
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{conjunct}:{conjunct_local_line} defines {root_kind} "
+            "transition helper LocalBranch, but "
+            f"{transition_problem(context)}",
+            f"{tla}:{fairness_line} defines ProjectedCommitProgressFairness, "
+            f"but references WF_vars action {imported_action} at line "
+            f"{wf_line} whose definition at line {action_line} aliases "
+            f"Interleaving!{imported_action}, but target {target}:"
+            f"{target_line} uses module-alias conjunct Conjunct!Start, but "
+            f"{conjunct_fairness_problem(context)}",
+            f"{tla}:{fairness_line} defines ProjectedCommitProgressFairness, "
+            f"but references WF_vars action {imported_action} at line "
+            f"{wf_line} whose definition at line {action_line} aliases "
+            f"Interleaving!{imported_action}, but target {target}:"
+            f"{target_line} uses module-alias boolean operand Bool!Start, "
+            f"but {boolean_fairness_problem(context)}",
+        ]
+
+    assert_onward_case(
+        "MissingUndefined",
+        None,
+        ["Other == UNCHANGED vars"],
+        lambda context: (
+            "aliases Inner!BadAction, but target module "
+            f"{context['conjunct_inner']} does not exist; {root_kind} "
+            "transition module-alias helper wrappers must resolve to local "
+            "modules with defined zero-arity transition operators"
+        ),
+        lambda context: (
+            f"helper LocalBranch at {context['conjunct']}:"
+            f"{context['conjunct_local_line']} aliases Inner!BadAction, but "
+            f"target module {context['conjunct_inner']} does not exist; "
+            f"{root_kind} fairness action aliases must resolve module-alias "
+            "conjuncts to local action modules"
+        ),
+        lambda context: (
+            f"helper LocalBranch at {context['boolean']}:"
+            f"{context['boolean_local_line']} aliases Inner!BadAction, but "
+            f"target {context['boolean_inner']} does not define BadAction; "
+            f"{root_kind} fairness action aliases must resolve module-alias "
+            "boolean operands to defined zero-arity actions"
+        ),
+    )
+    assert_onward_case(
+        "ParameterizedNoninspectable",
+        ["BadAction(peer) == UNCHANGED vars"],
+        ["BadAction =="],
+        lambda context: (
+            "aliases Inner!BadAction, but target "
+            f"{context['conjunct_inner']}:"
+            f"{context['conjunct_inner_bad_action_line']} has arity 1; "
+            f"{root_kind} transition module-alias helper wrappers must "
+            "resolve to defined zero-arity transition operators"
+        ),
+        lambda context: (
+            f"helper LocalBranch at {context['conjunct']}:"
+            f"{context['conjunct_local_line']} aliases Inner!BadAction, but "
+            f"target {context['conjunct_inner']}:"
+            f"{context['conjunct_inner_bad_action_line']} has arity 1; "
+            f"{root_kind} fairness action aliases must resolve module-alias "
+            "conjuncts to defined zero-arity actions"
+        ),
+        lambda context: (
+            f"helper BadAction at {context['boolean_inner']}:"
+            f"{context['boolean_inner_bad_action_line']} is not an "
+            f"inspectable single-expression definition; {root_kind} "
+            "fairness action aliases must resolve module-alias boolean "
+            "operands to inspectable action definitions"
+        ),
+    )
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_identity_gated_module_alias_transition_disjunct_imported_fair_action_target_body_mixed_module_alias_operand_error_and_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    imported_action = "RbcReady"
+    nested_action = "RbcDeliver"
+    root_kind = "projected commit progress"
+    other_actions = tuple(
+        action
+        for action in module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+        if action != imported_action
+    )
+
+    def write_module(path: Path, lines: list[str]) -> None:
+        path.write_text(
+            "\n".join(
+                [f"---- MODULE {path.stem} ----", "VARIABLES vars", *lines, "===="]
+            ),
+            encoding="utf-8",
+        )
+
+    def fairness_action_line(tla: Path) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if "WF_vars" in line and imported_action in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {imported_action}")
+
+    def assert_mixed_composition_case(
+        suffix: str,
+        conjunct_lines: list[str],
+        boolean_lines: list[str],
+        parameterized_module: str,
+        error_operand_text: str,
+        error_requirement: str,
+        composition_kind: str,
+    ) -> None:
+        conjunct = (
+            tmp_path
+            / f"SumeragiFalseGatedIdentityProjectedFairActionMixedComposition{suffix}Conjunct.tla"
+        )
+        boolean = (
+            tmp_path
+            / f"SumeragiFalseGatedIdentityProjectedFairActionMixedComposition{suffix}Boolean.tla"
+        )
+        target = (
+            tmp_path
+            / f"SumeragiFalseGatedIdentityProjectedFairActionMixedComposition{suffix}Target.tla"
+        )
+        write_module(conjunct, conjunct_lines)
+        write_module(boolean, boolean_lines)
+        write_module(
+            target,
+            [
+                f"Conjunct == INSTANCE {conjunct.stem}",
+                f"Bool == INSTANCE {boolean.stem}",
+                f"{imported_action} == UNCHANGED vars /\\ Conjunct!Start /\\ (FALSE \\/ Bool!Start)",
+            ],
+        )
+        tla = (
+            tmp_path
+            / (
+                "SumeragiByzantineCommitProjectionGateFalseGatedIdentityFairAction"
+                f"MixedComposition{suffix}.tla"
+            )
+        )
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target.stem}"],
+                next_lines=[
+                    "Next ==",
+                    "  \\/ FALSE",
+                    f"  \\/ TRUE /\\ Interleaving!{imported_action}",
+                    *(f"  \\/ {action}" for action in other_actions),
+                ],
+                action_definition_overrides={
+                    imported_action: f"{imported_action} == Interleaving!{imported_action}",
+                },
+            ),
+            encoding="utf-8",
+        )
+
+        definitions = module.tla_single_expression_operator_definitions(tla)
+        signatures = module.tla_operator_signatures(tla)
+        target_signatures = module.tla_operator_signatures(target)
+        error_module = conjunct if parameterized_module == "conjunct" else boolean
+        error_signatures = module.tla_operator_signatures(error_module)
+        next_line = signatures["Next"][0]
+        fairness_line = definitions["ProjectedCommitProgressFairness"][0]
+        action_line = signatures[imported_action][0]
+        wf_line = fairness_action_line(tla)
+        target_line = target_signatures[imported_action][0]
+        parameterized_line = error_signatures["ParameterizedHelper"][0]
+        expected_error = (
+            f"{tla}:{fairness_line} defines ProjectedCommitProgressFairness, "
+            f"but references WF_vars action {imported_action} at line {wf_line} "
+            f"whose definition at line {action_line} aliases "
+            f"Interleaving!{imported_action}, but target {target}:"
+            f"{target_line} uses module-alias {error_operand_text}, but helper "
+            f"ParameterizedHelper at {error_module}:{parameterized_line} "
+            f"has arity 1; {root_kind} fairness action aliases must resolve "
+            f"{error_requirement} to defined zero-arity actions"
+        )
+        expected_composition = (
+            f"{tla}:{fairness_line} defines ProjectedCommitProgressFairness, "
+            f"but references WF_vars action {imported_action} at line {wf_line} "
+            f"whose definition at line {action_line} aliases "
+            f"Interleaving!{imported_action}, but target {target}:"
+            f"{target_line} reaches fair action(s) {nested_action} through "
+            f"module-alias {composition_kind}(s); {root_kind} fairness "
+            f"action aliases must not resolve through module-alias "
+            f"{composition_kind}s that compose other fair actions"
+        )
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{tla}:{next_line} defines {root_kind} transition operator Next, "
+            "but direct transition disjunct FALSE does not resolve to a named "
+            f"action-shaped operator; {root_kind} transition disjuncts must "
+            "resolve to named zero-arity action-shaped operators",
+            f"{tla}:{next_line} defines {root_kind} transition operator Next, "
+            f"but direct transition disjunct TRUE /\\ "
+            f"Interleaving!{imported_action} mixes multiple action witnesses "
+            f"Interleaving!{imported_action}, {imported_action}; guarded "
+            "transition disjuncts must not mix multiple action witnesses",
+            expected_error,
+            expected_composition,
+        ]
+
+    assert_mixed_composition_case(
+        "ConjunctErrorBooleanFair",
+        [
+            "Start == ParameterizedHelper /\\ TRUE",
+            "ParameterizedHelper(peer) == UNCHANGED vars",
+        ],
+        [f"Start == {nested_action}"],
+        "conjunct",
+        "conjunct Conjunct!Start",
+        "module-alias conjuncts",
+        "boolean operand",
+    )
+    assert_mixed_composition_case(
+        "ConjunctFairBooleanError",
+        [f"Start == {nested_action}"],
+        [
+            "Start == FALSE \\/ ParameterizedHelper",
+            "ParameterizedHelper(peer) == UNCHANGED vars",
+        ],
+        "boolean",
+        "boolean operand Bool!Start",
+        "module-alias boolean operands",
+        "conjunct",
+    )
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_identity_gated_module_alias_transition_disjunct_imported_fair_action_target_body_mixed_module_alias_operand_invalid_helper_references(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    imported_action = "RbcReady"
+    root_kind = "projected commit progress"
+    other_actions = tuple(
+        action
+        for action in module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+        if action != imported_action
+    )
+
+    def write_module(path: Path, lines: list[str]) -> None:
+        path.write_text(
+            "\n".join(
+                [f"---- MODULE {path.stem} ----", "VARIABLES vars", *lines, "===="]
+            ),
+            encoding="utf-8",
+        )
+
+    def fairness_action_line(tla: Path) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if "WF_vars" in line and imported_action in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {imported_action}")
+
+    conjunct = (
+        tmp_path
+        / "SumeragiFalseGatedIdentityProjectedFairActionMixedInvalidHelperConjunct.tla"
+    )
+    boolean = (
+        tmp_path
+        / "SumeragiFalseGatedIdentityProjectedFairActionMixedInvalidHelperBoolean.tla"
+    )
+    target = (
+        tmp_path
+        / "SumeragiFalseGatedIdentityProjectedFairActionMixedInvalidHelperTarget.tla"
+    )
+    write_module(
+        conjunct,
+        [
+            "Tail == ParameterizedHelper /\\ TRUE",
+            "ParameterizedHelper(peer) == UNCHANGED vars",
+        ],
+    )
+    write_module(boolean, ["Tail == FALSE \\/ OpaqueHelper", "OpaqueHelper =="])
+    write_module(
+        target,
+        [
+            f"Conjunct == INSTANCE {conjunct.stem}",
+            f"Bool == INSTANCE {boolean.stem}",
+            f"{imported_action} == UNCHANGED vars /\\ Conjunct!Tail /\\ (FALSE \\/ Bool!Tail)",
+        ],
+    )
+    tla = (
+        tmp_path
+        / (
+            "SumeragiByzantineCommitProjectionGateFalseGatedIdentityFairAction"
+            "MixedInvalidHelper.tla"
+        )
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[f"Interleaving == INSTANCE {target.stem}"],
+            next_lines=[
+                "Next ==",
+                "  \\/ FALSE",
+                f"  \\/ TRUE /\\ Interleaving!{imported_action}",
+                *(f"  \\/ {action}" for action in other_actions),
+            ],
+            action_definition_overrides={
+                imported_action: f"{imported_action} == Interleaving!{imported_action}",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    signatures = module.tla_operator_signatures(tla)
+    target_signatures = module.tla_operator_signatures(target)
+    conjunct_signatures = module.tla_operator_signatures(conjunct)
+    boolean_signatures = module.tla_operator_signatures(boolean)
+    next_line = signatures["Next"][0]
+    fairness_line = definitions["ProjectedCommitProgressFairness"][0]
+    action_line = signatures[imported_action][0]
+    wf_line = fairness_action_line(tla)
+    target_line = target_signatures[imported_action][0]
+    parameterized_line = conjunct_signatures["ParameterizedHelper"][0]
+    opaque_line = boolean_signatures["OpaqueHelper"][0]
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:{next_line} defines {root_kind} transition operator Next, "
+        "but direct transition disjunct FALSE does not resolve to a named "
+        f"action-shaped operator; {root_kind} transition disjuncts must "
+        "resolve to named zero-arity action-shaped operators",
+        f"{tla}:{next_line} defines {root_kind} transition operator Next, "
+        f"but direct transition disjunct TRUE /\\ "
+        f"Interleaving!{imported_action} mixes multiple action witnesses "
+        f"Interleaving!{imported_action}, {imported_action}; guarded "
+        "transition disjuncts must not mix multiple action witnesses",
+        f"{tla}:{fairness_line} defines ProjectedCommitProgressFairness, "
+        f"but references WF_vars action {imported_action} at line {wf_line} "
+        f"whose definition at line {action_line} aliases "
+        f"Interleaving!{imported_action}, but target {target}:"
+        f"{target_line} uses module-alias conjunct Conjunct!Tail, but "
+        f"helper ParameterizedHelper at {conjunct}:{parameterized_line} has "
+        f"arity 1; {root_kind} fairness action aliases must resolve "
+        "module-alias conjuncts to defined zero-arity actions",
+        f"{tla}:{fairness_line} defines ProjectedCommitProgressFairness, "
+        f"but references WF_vars action {imported_action} at line {wf_line} "
+        f"whose definition at line {action_line} aliases "
+        f"Interleaving!{imported_action}, but target {target}:"
+        f"{target_line} uses module-alias boolean operand Bool!Tail, but "
+        f"helper OpaqueHelper at {boolean}:{opaque_line} is not an "
+        f"inspectable single-expression definition; {root_kind} fairness "
+        "action aliases must resolve module-alias boolean operands to "
+        "inspectable action definitions",
+    ]
 
 
 def test_projected_commit_progress_spec_contract_errors_rejects_false_gated_identity_gated_module_alias_transition_disjunct_imported_fair_action_target_body_module_alias_operand_multi_hop_recursive_helper_bad_targets(
@@ -89457,6 +91695,190 @@ def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject
     )
 
 
+def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject_false_gated_identity_gated_module_alias_next_disjunct_imported_fair_action_target_body_mixed_module_alias_operand_cycles(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def write_module(name: str, lines: list[str]) -> Path:
+        path = tmp_path / f"{name}.tla"
+        path.write_text(
+            "\n".join([f"---- MODULE {name} ----", "VARIABLES vars", *lines, "===="]),
+            encoding="utf-8",
+        )
+        return path
+
+    def write_spec(
+        role: str,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        action: str,
+    ) -> Path:
+        next_operator = next_operator_from_closure(next_closure)
+        other_actions = tuple(
+            fair_action for fair_action in fairness_actions if fair_action != action
+        )
+        tla = (
+            tmp_path
+            / f"Sumeragi{role}FalseGatedIdentityFairActionMixedOperandCycle.tla"
+        )
+        tla.write_text(
+            commit_progress_spec_contract_text(
+                spec_operator=spec_operator,
+                fairness_operator=fairness_operator,
+                next_closure=next_closure,
+                fairness_actions=fairness_actions,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                next_lines=[
+                    f"{next_operator} ==",
+                    "  \\/ FALSE",
+                    f"  \\/ TRUE /\\ Interleaving!{action}",
+                    *(f"  \\/ {fair_action}" for fair_action in other_actions),
+                ],
+                action_definition_overrides={
+                    action: f"{action} == Interleaving!{action}",
+                },
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def fairness_action_line(tla: Path, action: str) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if f"WF_vars({action})" in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {action}")
+
+    def assert_mixed_cycle_case(
+        role: str,
+        errors_fn,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        root_kind: str,
+    ) -> None:
+        action = fairness_actions[0]
+        conjunct = write_module(
+            f"SumeragiFalseGatedIdentity{role}FairActionMixedOperandCycleConjunct",
+            [
+                "Start == LocalBranch",
+                "LocalBranch == Start",
+            ],
+        )
+        boolean = write_module(
+            f"SumeragiFalseGatedIdentity{role}FairActionMixedOperandCycleBoolean",
+            [
+                "Start == LocalBranch",
+                "LocalBranch == Start",
+            ],
+        )
+        target = write_module(
+            f"SumeragiFalseGatedIdentity{role}FairActionMixedOperandCycleTarget",
+            [
+                f"Conjunct == INSTANCE {conjunct.stem}",
+                f"Bool == INSTANCE {boolean.stem}",
+                f"{action} == UNCHANGED vars /\\ Conjunct!Start /\\ (FALSE \\/ Bool!Start)",
+            ],
+        )
+        tla = write_spec(
+            role,
+            target.stem,
+            spec_operator,
+            fairness_operator,
+            next_closure,
+            fairness_actions,
+            action,
+        )
+
+        definitions = module.tla_single_expression_operator_definitions(tla)
+        signatures = module.tla_operator_signatures(tla)
+        target_signatures = module.tla_operator_signatures(target)
+        conjunct_signatures = module.tla_operator_signatures(conjunct)
+        boolean_signatures = module.tla_operator_signatures(boolean)
+        fairness_line = definitions[fairness_operator][0]
+        action_line = signatures[action][0]
+        wf_line = fairness_action_line(tla, action)
+        target_line = target_signatures[action][0]
+        conjunct_cycle_line = conjunct_signatures["Start"][0]
+        boolean_cycle_line = boolean_signatures["Start"][0]
+        assert errors_fn(
+            (
+                (
+                    tla,
+                    spec_operator,
+                    fairness_operator,
+                    next_closure,
+                    fairness_actions,
+                    root_kind,
+                ),
+            )
+        ) == [
+            f"{conjunct}:{conjunct_cycle_line} defines {root_kind} "
+            "transition helper Start, but transition helper resolution cycles "
+            f"at Start; {root_kind} transition helper wrappers must be "
+            "acyclic and resolve to inspectable transition operators",
+            f"{tla}:{fairness_line} defines {fairness_operator}, but "
+            f"references WF_vars action {action} at line {wf_line} whose "
+            f"definition at line {action_line} aliases Interleaving!{action}, "
+            f"but target {target}:{target_line} uses module-alias conjunct "
+            f"Conjunct!Start, but module-alias conjunct resolution cycles at "
+            f"{conjunct}:{conjunct_cycle_line} Start; {root_kind} fairness "
+            "action aliases must resolve through acyclic module-alias "
+            "conjuncts",
+            f"{tla}:{fairness_line} defines {fairness_operator}, but "
+            f"references WF_vars action {action} at line {wf_line} whose "
+            f"definition at line {action_line} aliases Interleaving!{action}, "
+            f"but target {target}:{target_line} uses module-alias boolean "
+            f"operand Bool!Start, but module-alias boolean operand resolution "
+            f"cycles at {boolean}:{boolean_cycle_line} Start; {root_kind} "
+            "fairness action aliases must resolve through acyclic "
+            "module-alias boolean operands",
+        ]
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    assert_mixed_cycle_case(
+        "Source",
+        module.source_commit_progress_spec_contract_errors,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    assert_mixed_cycle_case(
+        "Top",
+        module.top_level_commit_spec_contract_errors,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    )
+
+
 def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject_false_gated_identity_gated_module_alias_next_disjunct_imported_fair_action_target_body_module_alias_operand_multi_hop_cycles(
     tmp_path: Path,
 ) -> None:
@@ -92184,6 +94606,509 @@ def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject
     )
 
 
+def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject_false_gated_identity_gated_module_alias_next_disjunct_imported_fair_action_target_body_action_helper_cycles(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def write_spec(
+        role: str,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        action: str,
+    ) -> Path:
+        next_operator = next_operator_from_closure(next_closure)
+        other_actions = tuple(
+            fair_action for fair_action in fairness_actions if fair_action != action
+        )
+        tla = (
+            tmp_path
+            / f"Sumeragi{role}FalseGatedIdentityFairAction{target_name}Spec.tla"
+        )
+        tla.write_text(
+            commit_progress_spec_contract_text(
+                spec_operator=spec_operator,
+                fairness_operator=fairness_operator,
+                next_closure=next_closure,
+                fairness_actions=fairness_actions,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                next_lines=[
+                    f"{next_operator} ==",
+                    "  \\/ FALSE",
+                    f"  \\/ TRUE /\\ Interleaving!{action}",
+                    *(f"  \\/ {fair_action}" for fair_action in other_actions),
+                ],
+                action_definition_overrides={
+                    action: f"{action} == Interleaving!{action}",
+                },
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def fairness_action_line(tla: Path, action: str) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if f"WF_vars({action})" in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {action}")
+
+    def assert_action_helper_cycle_case(
+        role: str,
+        errors_fn,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        root_kind: str,
+    ) -> None:
+        action = fairness_actions[0]
+        next_operator = next_operator_from_closure(next_closure)
+        target = (
+            tmp_path
+            / f"SumeragiFalseGatedIdentity{role}FairActionActionHelperCycleTarget.tla"
+        )
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE SumeragiFalseGatedIdentity{role}FairActionActionHelperCycleTarget ----",
+                    "VARIABLES vars",
+                    f"{action} == HiddenAction",
+                    "HiddenAction == UNCHANGED vars /\\ HiddenAction",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        tla = write_spec(
+            role,
+            target.stem,
+            spec_operator,
+            fairness_operator,
+            next_closure,
+            fairness_actions,
+            action,
+        )
+
+        target_definitions = module.tla_single_expression_operator_definitions(target)
+        target_signatures = module.tla_operator_signatures(target)
+        definitions = module.tla_single_expression_operator_definitions(tla)
+        signatures = module.tla_operator_signatures(tla)
+        target_line = target_signatures[action][0]
+        helper_line = target_definitions["HiddenAction"][0]
+        next_line = signatures[next_operator][0]
+        fairness_line = definitions[fairness_operator][0]
+        action_line = signatures[action][0]
+        wf_line = fairness_action_line(tla, action)
+        assert errors_fn(
+            (
+                (
+                    tla,
+                    spec_operator,
+                    fairness_operator,
+                    next_closure,
+                    fairness_actions,
+                    root_kind,
+                ),
+            )
+        ) == [
+            f"{tla}:{next_line} defines {root_kind} transition operator "
+            f"{next_operator}, but direct transition disjunct FALSE does not "
+            f"resolve to a named action-shaped operator; {root_kind} "
+            "transition disjuncts must resolve to named zero-arity "
+            "action-shaped operators",
+            f"{tla}:{next_line} defines {root_kind} transition operator "
+            f"{next_operator}, but direct transition disjunct TRUE /\\ "
+            f"Interleaving!{action} mixes multiple action witnesses "
+            "HiddenAction, Interleaving!HiddenAction; guarded transition "
+            "disjuncts must not mix multiple action witnesses",
+            f"{tla}:{fairness_line} defines {fairness_operator}, but "
+            f"references WF_vars action {action} at line {wf_line} whose "
+            f"definition at line {action_line} aliases Interleaving!{action}, "
+            f"but target {target}:{target_line} reaches helper HiddenAction "
+            f"at {target}:{helper_line}, but fairness action alias helper "
+            f"action resolution cycles at HiddenAction; {root_kind} fairness "
+            "action aliases must resolve through acyclic helper actions",
+            f"{tla}:{fairness_line} defines {fairness_operator}, but "
+            f"references WF_vars action {action} at line {wf_line} whose "
+            f"definition at line {action_line} aliases Interleaving!{action}, "
+            f"but target {target}:{target_line} is not action-shaped; "
+            f"{root_kind} fairness action aliases must resolve to transition "
+            "definitions that mention next-state updates or UNCHANGED",
+        ]
+
+        boolean_target = (
+            tmp_path
+            / f"SumeragiFalseGatedIdentity{role}FairActionBooleanActionHelperCycleTarget.tla"
+        )
+        boolean_target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE SumeragiFalseGatedIdentity{role}FairActionBooleanActionHelperCycleTarget ----",
+                    "VARIABLES vars",
+                    f"{action} == HiddenAction",
+                    "HiddenAction == FALSE \\/ (UNCHANGED vars /\\ HiddenAction)",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        boolean_tla = write_spec(
+            role,
+            boolean_target.stem,
+            spec_operator,
+            fairness_operator,
+            next_closure,
+            fairness_actions,
+            action,
+        )
+
+        boolean_definitions = module.tla_single_expression_operator_definitions(
+            boolean_tla
+        )
+        boolean_signatures = module.tla_operator_signatures(boolean_tla)
+        boolean_target_definitions = (
+            module.tla_single_expression_operator_definitions(boolean_target)
+        )
+        boolean_target_signatures = module.tla_operator_signatures(boolean_target)
+        boolean_target_line = boolean_target_signatures[action][0]
+        boolean_helper_line = boolean_target_definitions["HiddenAction"][0]
+        boolean_fairness_line = boolean_definitions[fairness_operator][0]
+        boolean_action_line = boolean_signatures[action][0]
+        boolean_wf_line = fairness_action_line(boolean_tla, action)
+        assert errors_fn(
+            (
+                (
+                    boolean_tla,
+                    spec_operator,
+                    fairness_operator,
+                    next_closure,
+                    fairness_actions,
+                    root_kind,
+                ),
+            )
+        ) == [
+            f"{boolean_target}:{boolean_helper_line} defines {root_kind} "
+            "transition operator HiddenAction, but direct transition "
+            "disjunct FALSE does not resolve to a named action-shaped "
+            f"operator; {root_kind} transition disjuncts must resolve to "
+            "named zero-arity action-shaped operators",
+            f"{boolean_target}:{boolean_helper_line} defines {root_kind} "
+            "transition helper HiddenAction, but transition helper "
+            f"resolution cycles at HiddenAction; {root_kind} transition "
+            "helper wrappers must be acyclic and resolve to inspectable "
+            "transition operators",
+            f"{boolean_tla}:{boolean_fairness_line} defines "
+            f"{fairness_operator}, but references WF_vars action {action} "
+            f"at line {boolean_wf_line} whose definition at line "
+            f"{boolean_action_line} aliases Interleaving!{action}, but "
+            f"target {boolean_target}:{boolean_target_line} reaches helper "
+            f"HiddenAction at {boolean_target}:{boolean_helper_line}, but "
+            "fairness action alias helper action resolution cycles at "
+            f"HiddenAction; {root_kind} fairness action aliases must resolve "
+            "through acyclic helper actions",
+            f"{boolean_tla}:{boolean_fairness_line} defines "
+            f"{fairness_operator}, but references WF_vars action {action} "
+            f"at line {boolean_wf_line} whose definition at line "
+            f"{boolean_action_line} aliases Interleaving!{action}, but "
+            f"target {boolean_target}:{boolean_target_line} is not "
+            f"action-shaped; {root_kind} fairness action aliases must "
+            "resolve to transition definitions that mention next-state "
+            "updates or UNCHANGED",
+        ]
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    assert_action_helper_cycle_case(
+        "Source",
+        module.source_commit_progress_spec_contract_errors,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    assert_action_helper_cycle_case(
+        "Top",
+        module.top_level_commit_spec_contract_errors,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    )
+
+
+def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject_false_gated_identity_gated_module_alias_next_disjunct_imported_fair_action_target_body_action_helper_multi_hop_cycles(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def write_spec(
+        role: str,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        action: str,
+    ) -> Path:
+        next_operator = next_operator_from_closure(next_closure)
+        other_actions = tuple(
+            fair_action for fair_action in fairness_actions if fair_action != action
+        )
+        tla = (
+            tmp_path
+            / f"Sumeragi{role}FalseGatedIdentityFairAction{target_name}Spec.tla"
+        )
+        tla.write_text(
+            commit_progress_spec_contract_text(
+                spec_operator=spec_operator,
+                fairness_operator=fairness_operator,
+                next_closure=next_closure,
+                fairness_actions=fairness_actions,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                next_lines=[
+                    f"{next_operator} ==",
+                    "  \\/ FALSE",
+                    f"  \\/ TRUE /\\ Interleaving!{action}",
+                    *(f"  \\/ {fair_action}" for fair_action in other_actions),
+                ],
+                action_definition_overrides={
+                    action: f"{action} == Interleaving!{action}",
+                },
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def fairness_action_line(tla: Path, action: str) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if f"WF_vars({action})" in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {action}")
+
+    def assert_multi_hop_action_helper_cycle_case(
+        role: str,
+        errors_fn,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        root_kind: str,
+    ) -> None:
+        action = fairness_actions[0]
+        next_operator = next_operator_from_closure(next_closure)
+        target = (
+            tmp_path
+            / f"SumeragiFalseGatedIdentity{role}FairActionMultiHopActionHelperCycleTarget.tla"
+        )
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE SumeragiFalseGatedIdentity{role}FairActionMultiHopActionHelperCycleTarget ----",
+                    "VARIABLES vars",
+                    f"{action} == HiddenAction",
+                    "HiddenAction == UNCHANGED vars /\\ NestedAction",
+                    "NestedAction == UNCHANGED vars /\\ HiddenAction",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        tla = write_spec(
+            role,
+            target.stem,
+            spec_operator,
+            fairness_operator,
+            next_closure,
+            fairness_actions,
+            action,
+        )
+
+        target_definitions = module.tla_single_expression_operator_definitions(target)
+        target_signatures = module.tla_operator_signatures(target)
+        definitions = module.tla_single_expression_operator_definitions(tla)
+        signatures = module.tla_operator_signatures(tla)
+        target_line = target_signatures[action][0]
+        helper_line = target_definitions["HiddenAction"][0]
+        next_line = signatures[next_operator][0]
+        fairness_line = definitions[fairness_operator][0]
+        action_line = signatures[action][0]
+        wf_line = fairness_action_line(tla, action)
+        assert errors_fn(
+            (
+                (
+                    tla,
+                    spec_operator,
+                    fairness_operator,
+                    next_closure,
+                    fairness_actions,
+                    root_kind,
+                ),
+            )
+        ) == [
+            f"{tla}:{next_line} defines {root_kind} transition operator "
+            f"{next_operator}, but direct transition disjunct FALSE does not "
+            f"resolve to a named action-shaped operator; {root_kind} "
+            "transition disjuncts must resolve to named zero-arity "
+            "action-shaped operators",
+            f"{tla}:{next_line} defines {root_kind} transition operator "
+            f"{next_operator}, but direct transition disjunct TRUE /\\ "
+            f"Interleaving!{action} mixes multiple action witnesses "
+            "HiddenAction, Interleaving!HiddenAction; guarded transition "
+            "disjuncts must not mix multiple action witnesses",
+            f"{tla}:{fairness_line} defines {fairness_operator}, but "
+            f"references WF_vars action {action} at line {wf_line} whose "
+            f"definition at line {action_line} aliases Interleaving!{action}, "
+            f"but target {target}:{target_line} reaches helper HiddenAction "
+            f"at {target}:{helper_line}, but fairness action alias helper "
+            f"action resolution cycles at HiddenAction; {root_kind} fairness "
+            "action aliases must resolve through acyclic helper actions",
+            f"{tla}:{fairness_line} defines {fairness_operator}, but "
+            f"references WF_vars action {action} at line {wf_line} whose "
+            f"definition at line {action_line} aliases Interleaving!{action}, "
+            f"but target {target}:{target_line} is not action-shaped; "
+            f"{root_kind} fairness action aliases must resolve to transition "
+            "definitions that mention next-state updates or UNCHANGED",
+        ]
+
+        boolean_target = (
+            tmp_path
+            / f"SumeragiFalseGatedIdentity{role}FairActionBooleanMultiHopActionHelperCycleTarget.tla"
+        )
+        boolean_target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE SumeragiFalseGatedIdentity{role}FairActionBooleanMultiHopActionHelperCycleTarget ----",
+                    "VARIABLES vars",
+                    f"{action} == HiddenAction",
+                    "HiddenAction == FALSE \\/ NestedAction",
+                    "NestedAction == UNCHANGED vars /\\ HiddenAction",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        boolean_tla = write_spec(
+            role,
+            boolean_target.stem,
+            spec_operator,
+            fairness_operator,
+            next_closure,
+            fairness_actions,
+            action,
+        )
+
+        boolean_definitions = module.tla_single_expression_operator_definitions(
+            boolean_tla
+        )
+        boolean_signatures = module.tla_operator_signatures(boolean_tla)
+        boolean_target_definitions = (
+            module.tla_single_expression_operator_definitions(boolean_target)
+        )
+        boolean_target_signatures = module.tla_operator_signatures(boolean_target)
+        boolean_target_line = boolean_target_signatures[action][0]
+        boolean_helper_line = boolean_target_definitions["HiddenAction"][0]
+        boolean_fairness_line = boolean_definitions[fairness_operator][0]
+        boolean_action_line = boolean_signatures[action][0]
+        boolean_wf_line = fairness_action_line(boolean_tla, action)
+        assert errors_fn(
+            (
+                (
+                    boolean_tla,
+                    spec_operator,
+                    fairness_operator,
+                    next_closure,
+                    fairness_actions,
+                    root_kind,
+                ),
+            )
+        ) == [
+            f"{boolean_target}:{boolean_helper_line} defines {root_kind} "
+            "transition operator HiddenAction, but direct transition "
+            "disjunct FALSE does not resolve to a named action-shaped "
+            f"operator; {root_kind} transition disjuncts must resolve to "
+            "named zero-arity action-shaped operators",
+            f"{boolean_tla}:{boolean_fairness_line} defines "
+            f"{fairness_operator}, but references WF_vars action {action} "
+            f"at line {boolean_wf_line} whose definition at line "
+            f"{boolean_action_line} aliases Interleaving!{action}, but "
+            f"target {boolean_target}:{boolean_target_line} reaches helper "
+            f"HiddenAction at {boolean_target}:{boolean_helper_line}, but "
+            "fairness action alias helper action resolution cycles at "
+            f"HiddenAction; {root_kind} fairness action aliases must resolve "
+            "through acyclic helper actions",
+            f"{boolean_tla}:{boolean_fairness_line} defines "
+            f"{fairness_operator}, but references WF_vars action {action} "
+            f"at line {boolean_wf_line} whose definition at line "
+            f"{boolean_action_line} aliases Interleaving!{action}, but "
+            f"target {boolean_target}:{boolean_target_line} is not "
+            f"action-shaped; {root_kind} fairness action aliases must "
+            "resolve to transition definitions that mention next-state "
+            "updates or UNCHANGED",
+        ]
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    assert_multi_hop_action_helper_cycle_case(
+        "Source",
+        module.source_commit_progress_spec_contract_errors,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    assert_multi_hop_action_helper_cycle_case(
+        "Top",
+        module.top_level_commit_spec_contract_errors,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    )
+
+
 def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject_false_gated_identity_gated_module_alias_next_disjunct_imported_fair_action_target_body_invalid_helper_references(
     tmp_path: Path,
 ) -> None:
@@ -92935,6 +95860,302 @@ def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject
                 line.replace("{action}", action) for line in raw_target_lines
             ]
             assert_resolution_case(
+                role,
+                label,
+                target_lines,
+                inner_lines,
+                transition_problem,
+                fairness_problem,
+                errors_fn,
+                spec_operator,
+                fairness_operator,
+                next_closure,
+                fairness_actions,
+                root_kind,
+            )
+
+
+def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject_false_gated_identity_gated_module_alias_next_disjunct_imported_fair_action_target_body_boolean_helper_alias_resolution_errors(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def write_spec(
+        role: str,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        action: str,
+    ) -> Path:
+        next_operator = next_operator_from_closure(next_closure)
+        other_actions = tuple(
+            fair_action for fair_action in fairness_actions if fair_action != action
+        )
+        tla = tmp_path / f"Sumeragi{role}{target_name}Spec.tla"
+        tla.write_text(
+            commit_progress_spec_contract_text(
+                spec_operator=spec_operator,
+                fairness_operator=fairness_operator,
+                next_closure=next_closure,
+                fairness_actions=fairness_actions,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                next_lines=[
+                    f"{next_operator} ==",
+                    "  \\/ FALSE",
+                    f"  \\/ TRUE /\\ Interleaving!{action}",
+                    *(f"  \\/ {fair_action}" for fair_action in other_actions),
+                ],
+                action_definition_overrides={
+                    action: f"{action} == Interleaving!{action}",
+                },
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def fairness_action_line(tla: Path, action: str) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if f"WF_vars({action})" in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {action}")
+
+    def assert_boolean_resolution_case(
+        role: str,
+        label: str,
+        target_lines: list[str],
+        inner_lines: list[str] | None,
+        transition_problem,
+        fairness_problem,
+        errors_fn,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        root_kind: str,
+    ) -> None:
+        action = fairness_actions[0]
+        inner = None
+        inner_name = (
+            f"SumeragiFalseGatedIdentity{role}FairAction{label}"
+            "BooleanHelperAliasInner"
+        )
+        if inner_lines is not None:
+            inner = tmp_path / f"{inner_name}.tla"
+            inner.write_text(
+                "\n".join(
+                    [
+                        f"---- MODULE {inner_name} ----",
+                        "VARIABLES vars",
+                        *inner_lines,
+                        "====",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+        target = (
+            tmp_path
+            / (
+                f"SumeragiFalseGatedIdentity{role}FairAction{label}"
+                "BooleanHelperAliasTarget.tla"
+            )
+        )
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target.stem} ----",
+                    "VARIABLES vars",
+                    *(line.format(inner=inner_name) for line in target_lines),
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        tla = write_spec(
+            role,
+            target.stem,
+            spec_operator,
+            fairness_operator,
+            next_closure,
+            fairness_actions,
+            action,
+        )
+
+        target_signatures = module.tla_operator_signatures(target)
+        target_definitions = module.tla_single_expression_operator_definitions(target)
+        definitions = module.tla_single_expression_operator_definitions(tla)
+        signatures = module.tla_operator_signatures(tla)
+        target_line = target_signatures[action][0]
+        helper_line = target_definitions["HiddenHelper"][0]
+        fairness_line = definitions[fairness_operator][0]
+        action_line = signatures[action][0]
+        wf_line = fairness_action_line(tla, action)
+        assert errors_fn(
+            (
+                (
+                    tla,
+                    spec_operator,
+                    fairness_operator,
+                    next_closure,
+                    fairness_actions,
+                    root_kind,
+                ),
+            )
+        ) == [
+            f"{target}:{target_line} defines {root_kind} transition operator "
+            f"{action}, but direct transition disjunct UNCHANGED vars does "
+            f"not resolve to a named action-shaped operator; {root_kind} "
+            "transition disjuncts must resolve to named zero-arity "
+            "action-shaped operators",
+            f"{target}:{helper_line} defines {root_kind} transition helper "
+            f"HiddenHelper, but {transition_problem(target, inner, root_kind)}",
+            f"{tla}:{fairness_line} defines {fairness_operator}, but "
+            f"references WF_vars action {action} at line {wf_line} whose "
+            f"definition at line {action_line} aliases Interleaving!{action}, "
+            f"but target {target}:{target_line} "
+            f"{fairness_problem(target, helper_line, inner, root_kind)}",
+        ]
+
+    cases = (
+        (
+            "MissingInstance",
+            ["{action} == UNCHANGED vars \\/ HiddenHelper", "HiddenHelper == Missing!Tail"],
+            None,
+            lambda _target, _inner, root_kind: (
+                "aliases Missing!Tail without a named INSTANCE alias Missing; "
+                f"{root_kind} transition module-alias helper wrappers must "
+                "resolve through named local INSTANCE declarations"
+            ),
+            lambda target, helper_line, _inner, root_kind: (
+                f"reaches helper HiddenHelper at {target}:{helper_line} "
+                "aliasing Missing!Tail without a named INSTANCE alias Missing; "
+                f"{root_kind} fairness action aliases must resolve helper "
+                "aliases through named local INSTANCE declarations"
+            ),
+        ),
+        (
+            "MissingModule",
+            [
+                "Inner == INSTANCE MissingTailModule",
+                "{action} == UNCHANGED vars \\/ HiddenHelper",
+                "HiddenHelper == Inner!Tail",
+            ],
+            None,
+            lambda target, _inner, root_kind: (
+                "aliases Inner!Tail, but target module "
+                f"{target.with_name('MissingTailModule.tla')} does not exist; "
+                f"{root_kind} transition module-alias helper wrappers must "
+                "resolve to local modules with defined zero-arity transition "
+                "operators"
+            ),
+            lambda target, helper_line, _inner, root_kind: (
+                f"reaches helper HiddenHelper at {target}:{helper_line} "
+                "aliasing Inner!Tail, but target module "
+                f"{target.with_name('MissingTailModule.tla')} does not exist; "
+                f"{root_kind} fairness action aliases must resolve helper "
+                "aliases to local action modules"
+            ),
+        ),
+        (
+            "Undefined",
+            [
+                "Inner == INSTANCE {inner}",
+                "{action} == UNCHANGED vars \\/ HiddenHelper",
+                "HiddenHelper == Inner!Tail",
+            ],
+            ["Other == UNCHANGED vars"],
+            lambda _target, inner, root_kind: (
+                f"aliases Inner!Tail, but target {inner} does not define Tail; "
+                f"{root_kind} transition module-alias helper wrappers must "
+                "resolve to defined zero-arity transition operators"
+            ),
+            lambda target, helper_line, inner, root_kind: (
+                f"reaches helper HiddenHelper at {target}:{helper_line} "
+                f"aliasing Inner!Tail, but target {inner} does not define "
+                f"Tail; {root_kind} fairness action aliases must resolve "
+                "helper aliases to defined zero-arity actions"
+            ),
+        ),
+        (
+            "Parameterized",
+            [
+                "Inner == INSTANCE {inner}",
+                "{action} == UNCHANGED vars \\/ HiddenHelper",
+                "HiddenHelper == Inner!Tail",
+            ],
+            ["Tail(value) == UNCHANGED vars"],
+            lambda _target, inner, root_kind: (
+                f"aliases Inner!Tail, but target {inner}:3 has arity 1; "
+                f"{root_kind} transition module-alias helper wrappers must "
+                "resolve to defined zero-arity transition operators"
+            ),
+            lambda target, helper_line, inner, root_kind: (
+                f"reaches helper HiddenHelper at {target}:{helper_line} "
+                f"aliasing Inner!Tail, but target {inner}:3 has arity 1; "
+                f"{root_kind} fairness action aliases must resolve helper "
+                "aliases to defined zero-arity actions"
+            ),
+        ),
+        (
+            "Noninspectable",
+            [
+                "Inner == INSTANCE {inner}",
+                "{action} == UNCHANGED vars \\/ HiddenHelper",
+                "HiddenHelper == Inner!Tail",
+            ],
+            ["Tail =="],
+            lambda _target, inner, root_kind: (
+                f"aliases Inner!Tail, but target {inner}:3 is not an "
+                f"inspectable single-expression definition; {root_kind} "
+                "transition module-alias helper wrappers must resolve to "
+                "inspectable transition operators"
+            ),
+            lambda _target, _helper_line, inner, root_kind: (
+                f"reaches helper Tail at {inner}:3, but helper is not an "
+                f"inspectable single-expression definition; {root_kind} "
+                "fairness action aliases must resolve helper-alias helper "
+                "references to inspectable helper definitions"
+            ),
+        ),
+    )
+
+    contract_cases = (
+        (
+            "Source",
+            module.source_commit_progress_spec_contract_errors,
+            module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0],
+        ),
+        (
+            "Top",
+            module.top_level_commit_spec_contract_errors,
+            module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0],
+        ),
+    )
+    for role, errors_fn, contract in contract_cases:
+        (
+            _module_path,
+            spec_operator,
+            fairness_operator,
+            next_closure,
+            fairness_actions,
+            root_kind,
+        ) = contract
+        action = fairness_actions[0]
+        for (
+            label,
+            raw_target_lines,
+            inner_lines,
+            transition_problem,
+            fairness_problem,
+        ) in cases:
+            target_lines = [
+                line.replace("{action}", action) for line in raw_target_lines
+            ]
+            assert_boolean_resolution_case(
                 role,
                 label,
                 target_lines,
@@ -94605,6 +97826,179 @@ def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject
     )
 
 
+def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject_false_gated_identity_gated_module_alias_next_disjunct_imported_fair_action_target_body_helper_wrapper_multi_hop_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def write_spec(
+        role: str,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        action: str,
+    ) -> Path:
+        next_operator = next_operator_from_closure(next_closure)
+        other_actions = tuple(
+            fair_action for fair_action in fairness_actions if fair_action != action
+        )
+        tla = (
+            tmp_path
+            / f"Sumeragi{role}FalseGatedIdentityFairActionHelperWrapperMultiHopFairActionTarget.tla"
+        )
+        tla.write_text(
+            commit_progress_spec_contract_text(
+                spec_operator=spec_operator,
+                fairness_operator=fairness_operator,
+                next_closure=next_closure,
+                fairness_actions=fairness_actions,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                next_lines=[
+                    f"{next_operator} ==",
+                    "  \\/ FALSE",
+                    f"  \\/ TRUE /\\ Interleaving!{action}",
+                    *(f"  \\/ {fair_action}" for fair_action in other_actions),
+                ],
+                action_definition_overrides={
+                    action: f"{action} == Interleaving!{action}",
+                },
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def fairness_action_line(tla: Path, action: str) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if f"WF_vars({action})" in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {action}")
+
+    def assert_helper_wrapper_multi_hop_fair_action_case(
+        role: str,
+        errors_fn,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        root_kind: str,
+    ) -> None:
+        action = fairness_actions[0]
+        nested_action = fairness_actions[-1]
+        target = (
+            tmp_path
+            / f"SumeragiFalseGatedIdentity{role}FairActionHelperWrapperMultiHopFairActionTarget.tla"
+        )
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE SumeragiFalseGatedIdentity{role}FairActionHelperWrapperMultiHopFairActionTarget ----",
+                    "VARIABLES vars",
+                    f"{action} == FirstWrapper",
+                    "FirstWrapper == SecondWrapper",
+                    "SecondWrapper == TailWrapper",
+                    f"TailWrapper == FALSE \\/ {nested_action}",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        tla = write_spec(
+            role,
+            target.stem,
+            spec_operator,
+            fairness_operator,
+            next_closure,
+            fairness_actions,
+            action,
+        )
+
+        target_signatures = module.tla_operator_signatures(target)
+        definitions = module.tla_single_expression_operator_definitions(tla)
+        signatures = module.tla_operator_signatures(tla)
+        target_line = target_signatures[action][0]
+        tail_line = target_signatures["TailWrapper"][0]
+        fairness_line = definitions[fairness_operator][0]
+        action_line = signatures[action][0]
+        wf_line = fairness_action_line(tla, action)
+        assert errors_fn(
+            (
+                (
+                    tla,
+                    spec_operator,
+                    fairness_operator,
+                    next_closure,
+                    fairness_actions,
+                    root_kind,
+                ),
+            )
+        ) == [
+            f"{target}:{tail_line} defines {root_kind} transition operator "
+            f"TailWrapper, but direct transition disjunct FALSE does not "
+            f"resolve to a named action-shaped operator; {root_kind} "
+            "transition disjuncts must resolve to named zero-arity "
+            "action-shaped operators",
+            f"{target}:{tail_line} defines {root_kind} transition operator "
+            f"TailWrapper, but direct transition disjunct {nested_action} "
+            f"does not resolve to a named action-shaped operator; "
+            f"{root_kind} transition disjuncts must resolve to named "
+            "zero-arity action-shaped operators",
+            f"{tla}:{fairness_line} defines {fairness_operator}, but "
+            f"references WF_vars action {action} at line {wf_line} whose "
+            f"definition at line {action_line} aliases Interleaving!{action}, "
+            f"but target {target}:{target_line} reaches fair action(s) "
+            f"{nested_action} through static helper wrapper(s); {root_kind} "
+            "fairness action aliases must not resolve through helper "
+            "wrappers that compose other fair actions",
+            f"{tla}:{fairness_line} defines {fairness_operator}, but "
+            f"references WF_vars action {action} at line {wf_line} whose "
+            f"definition at line {action_line} aliases Interleaving!{action}, "
+            f"but target {target}:{target_line} is not action-shaped; "
+            f"{root_kind} fairness action aliases must resolve to transition "
+            "definitions that mention next-state updates or UNCHANGED",
+        ]
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[2]
+    assert_helper_wrapper_multi_hop_fair_action_case(
+        "Source",
+        module.source_commit_progress_spec_contract_errors,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    assert_helper_wrapper_multi_hop_fair_action_case(
+        "Top",
+        module.top_level_commit_spec_contract_errors,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    )
+
+
 def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject_false_gated_identity_gated_module_alias_next_disjunct_imported_fair_action_target_body_helper_action_fair_action_composition(
     tmp_path: Path,
 ) -> None:
@@ -94755,6 +98149,167 @@ def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject
         top_root_kind,
     ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
     assert_helper_action_fair_action_case(
+        "Top",
+        module.top_level_commit_spec_contract_errors,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    )
+
+
+def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject_false_gated_identity_gated_module_alias_next_disjunct_imported_fair_action_target_body_helper_action_multi_hop_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def write_spec(
+        role: str,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        action: str,
+    ) -> Path:
+        next_operator = next_operator_from_closure(next_closure)
+        other_actions = tuple(
+            fair_action for fair_action in fairness_actions if fair_action != action
+        )
+        tla = (
+            tmp_path
+            / f"Sumeragi{role}FalseGatedIdentityFairActionHelperActionMultiHopFairActionTarget.tla"
+        )
+        tla.write_text(
+            commit_progress_spec_contract_text(
+                spec_operator=spec_operator,
+                fairness_operator=fairness_operator,
+                next_closure=next_closure,
+                fairness_actions=fairness_actions,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                next_lines=[
+                    f"{next_operator} ==",
+                    "  \\/ FALSE",
+                    f"  \\/ TRUE /\\ Interleaving!{action}",
+                    *(f"  \\/ {fair_action}" for fair_action in other_actions),
+                ],
+                action_definition_overrides={
+                    action: f"{action} == Interleaving!{action}",
+                },
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def fairness_action_line(tla: Path, action: str) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if f"WF_vars({action})" in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {action}")
+
+    def assert_helper_action_multi_hop_fair_action_case(
+        role: str,
+        errors_fn,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        root_kind: str,
+    ) -> None:
+        action = fairness_actions[0]
+        nested_action = fairness_actions[-1]
+        target = (
+            tmp_path
+            / f"SumeragiFalseGatedIdentity{role}FairActionHelperActionMultiHopFairActionTarget.tla"
+        )
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE SumeragiFalseGatedIdentity{role}FairActionHelperActionMultiHopFairActionTarget ----",
+                    "VARIABLES vars",
+                    f"{action} == UNCHANGED vars /\\ FirstActionHelper",
+                    "FirstActionHelper == UNCHANGED vars /\\ SecondActionHelper",
+                    "SecondActionHelper == FALSE \\/ TailActionHelper",
+                    f"TailActionHelper == UNCHANGED vars /\\ {nested_action}",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        tla = write_spec(
+            role,
+            target.stem,
+            spec_operator,
+            fairness_operator,
+            next_closure,
+            fairness_actions,
+            action,
+        )
+
+        target_signatures = module.tla_operator_signatures(target)
+        definitions = module.tla_single_expression_operator_definitions(tla)
+        signatures = module.tla_operator_signatures(tla)
+        target_line = target_signatures[action][0]
+        fairness_line = definitions[fairness_operator][0]
+        action_line = signatures[action][0]
+        wf_line = fairness_action_line(tla, action)
+        assert errors_fn(
+            (
+                (
+                    tla,
+                    spec_operator,
+                    fairness_operator,
+                    next_closure,
+                    fairness_actions,
+                    root_kind,
+                ),
+            )
+        ) == [
+            f"{target}:{target_line} defines {root_kind} transition operator "
+            f"{action}, but direct transition disjunct UNCHANGED vars /\\ "
+            f"FirstActionHelper is not a bare named action or aggregate "
+            f"reference; {root_kind} transition disjuncts must stay bare "
+            "named action or aggregate references",
+            f"{tla}:{fairness_line} defines {fairness_operator}, but "
+            f"references WF_vars action {action} at line {wf_line} whose "
+            f"definition at line {action_line} aliases Interleaving!{action}, "
+            f"but target {target}:{target_line} reaches fair action(s) "
+            f"{nested_action} through action helper(s); {root_kind} fairness "
+            "action aliases must not resolve through helper actions that "
+            "compose other fair actions",
+        ]
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[2]
+    assert_helper_action_multi_hop_fair_action_case(
+        "Source",
+        module.source_commit_progress_spec_contract_errors,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    assert_helper_action_multi_hop_fair_action_case(
         "Top",
         module.top_level_commit_spec_contract_errors,
         top_spec,
@@ -95356,6 +98911,205 @@ def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject
     )
 
 
+def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject_false_gated_identity_gated_module_alias_next_disjunct_imported_fair_action_target_body_module_alias_conjunct_multi_hop_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def write_spec(
+        role: str,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        action: str,
+    ) -> Path:
+        next_operator = next_operator_from_closure(next_closure)
+        other_actions = tuple(
+            fair_action for fair_action in fairness_actions if fair_action != action
+        )
+        tla = (
+            tmp_path
+            / f"Sumeragi{role}FalseGatedIdentityFairActionModuleAliasConjunctMultiHopFairActionTarget.tla"
+        )
+        tla.write_text(
+            commit_progress_spec_contract_text(
+                spec_operator=spec_operator,
+                fairness_operator=fairness_operator,
+                next_closure=next_closure,
+                fairness_actions=fairness_actions,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                next_lines=[
+                    f"{next_operator} ==",
+                    "  \\/ FALSE",
+                    f"  \\/ TRUE /\\ Interleaving!{action}",
+                    *(f"  \\/ {fair_action}" for fair_action in other_actions),
+                ],
+                action_definition_overrides={
+                    action: f"{action} == Interleaving!{action}",
+                },
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def fairness_action_line(tla: Path, action: str) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if f"WF_vars({action})" in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {action}")
+
+    def assert_module_alias_conjunct_multi_hop_fair_action_case(
+        role: str,
+        errors_fn,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        root_kind: str,
+    ) -> None:
+        action = fairness_actions[0]
+        nested_action = fairness_actions[-1]
+        leaf = (
+            tmp_path
+            / f"SumeragiFalseGatedIdentity{role}FairActionModuleAliasConjunctMultiHopFairActionLeaf.tla"
+        )
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE SumeragiFalseGatedIdentity{role}FairActionModuleAliasConjunctMultiHopFairActionLeaf ----",
+                    "VARIABLES vars",
+                    "FirstWrapper == SecondWrapper",
+                    "SecondWrapper == TailWrapper",
+                    f"TailWrapper == FALSE \\/ {nested_action}",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        mid = (
+            tmp_path
+            / f"SumeragiFalseGatedIdentity{role}FairActionModuleAliasConjunctMultiHopFairActionMid.tla"
+        )
+        mid.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE SumeragiFalseGatedIdentity{role}FairActionModuleAliasConjunctMultiHopFairActionMid ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf.stem}",
+                    "Hidden == Leaf!FirstWrapper",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        target = (
+            tmp_path
+            / f"SumeragiFalseGatedIdentity{role}FairActionModuleAliasConjunctMultiHopFairActionTarget.tla"
+        )
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE SumeragiFalseGatedIdentity{role}FairActionModuleAliasConjunctMultiHopFairActionTarget ----",
+                    "VARIABLES vars",
+                    f"Nested == INSTANCE {mid.stem}",
+                    f"{action} == UNCHANGED vars /\\ Nested!Hidden",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        tla = write_spec(
+            role,
+            target.stem,
+            spec_operator,
+            fairness_operator,
+            next_closure,
+            fairness_actions,
+            action,
+        )
+
+        leaf_signatures = module.tla_operator_signatures(leaf)
+        target_signatures = module.tla_operator_signatures(target)
+        definitions = module.tla_single_expression_operator_definitions(tla)
+        signatures = module.tla_operator_signatures(tla)
+        tail_line = leaf_signatures["TailWrapper"][0]
+        target_line = target_signatures[action][0]
+        fairness_line = definitions[fairness_operator][0]
+        action_line = signatures[action][0]
+        wf_line = fairness_action_line(tla, action)
+        assert errors_fn(
+            (
+                (
+                    tla,
+                    spec_operator,
+                    fairness_operator,
+                    next_closure,
+                    fairness_actions,
+                    root_kind,
+                ),
+            )
+        ) == [
+            f"{leaf}:{tail_line} defines {root_kind} transition operator "
+            "TailWrapper, but direct transition disjunct FALSE does not "
+            f"resolve to a named action-shaped operator; {root_kind} "
+            "transition disjuncts must resolve to named zero-arity "
+            "action-shaped operators",
+            f"{leaf}:{tail_line} defines {root_kind} transition operator "
+            f"TailWrapper, but direct transition disjunct {nested_action} "
+            f"does not resolve to a named action-shaped operator; "
+            f"{root_kind} transition disjuncts must resolve to named "
+            "zero-arity action-shaped operators",
+            f"{tla}:{fairness_line} defines {fairness_operator}, but "
+            f"references WF_vars action {action} at line {wf_line} whose "
+            f"definition at line {action_line} aliases Interleaving!{action}, "
+            f"but target {target}:{target_line} reaches fair action(s) "
+            f"{nested_action} through module-alias conjunct(s); {root_kind} "
+            "fairness action aliases must not resolve through module-alias "
+            "conjuncts that compose other fair actions",
+        ]
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[2]
+    assert_module_alias_conjunct_multi_hop_fair_action_case(
+        "Source",
+        module.source_commit_progress_spec_contract_errors,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    assert_module_alias_conjunct_multi_hop_fair_action_case(
+        "Top",
+        module.top_level_commit_spec_contract_errors,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    )
+
+
 def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject_false_gated_identity_gated_module_alias_next_disjunct_imported_fair_action_target_body_module_alias_boolean_fair_action_composition(
     tmp_path: Path,
 ) -> None:
@@ -95871,6 +99625,1748 @@ def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject
         top_root_kind,
     ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
     assert_module_alias_boolean_cases(
+        "Top",
+        module.top_level_commit_spec_contract_errors,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    )
+
+
+def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject_false_gated_identity_gated_module_alias_next_disjunct_imported_fair_action_target_body_module_alias_boolean_multi_hop_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def write_spec(
+        role: str,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        action: str,
+    ) -> Path:
+        next_operator = next_operator_from_closure(next_closure)
+        other_actions = tuple(
+            fair_action for fair_action in fairness_actions if fair_action != action
+        )
+        tla = (
+            tmp_path
+            / f"Sumeragi{role}FalseGatedIdentityFairActionModuleAliasBooleanMultiHopFairActionTarget.tla"
+        )
+        tla.write_text(
+            commit_progress_spec_contract_text(
+                spec_operator=spec_operator,
+                fairness_operator=fairness_operator,
+                next_closure=next_closure,
+                fairness_actions=fairness_actions,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                next_lines=[
+                    f"{next_operator} ==",
+                    "  \\/ FALSE",
+                    f"  \\/ TRUE /\\ Interleaving!{action}",
+                    *(f"  \\/ {fair_action}" for fair_action in other_actions),
+                ],
+                action_definition_overrides={
+                    action: f"{action} == Interleaving!{action}",
+                },
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def fairness_action_line(tla: Path, action: str) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if f"WF_vars({action})" in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {action}")
+
+    def assert_module_alias_boolean_multi_hop_fair_action_case(
+        role: str,
+        errors_fn,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        root_kind: str,
+    ) -> None:
+        action = fairness_actions[0]
+        nested_action = fairness_actions[-1]
+        leaf = (
+            tmp_path
+            / f"SumeragiFalseGatedIdentity{role}FairActionModuleAliasBooleanMultiHopFairActionLeaf.tla"
+        )
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE SumeragiFalseGatedIdentity{role}FairActionModuleAliasBooleanMultiHopFairActionLeaf ----",
+                    "VARIABLES vars",
+                    "FirstWrapper == SecondWrapper",
+                    "SecondWrapper == TailWrapper",
+                    f"TailWrapper == FALSE \\/ {nested_action}",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        mid = (
+            tmp_path
+            / f"SumeragiFalseGatedIdentity{role}FairActionModuleAliasBooleanMultiHopFairActionMid.tla"
+        )
+        mid.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE SumeragiFalseGatedIdentity{role}FairActionModuleAliasBooleanMultiHopFairActionMid ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf.stem}",
+                    "Hidden == Leaf!FirstWrapper",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        target = (
+            tmp_path
+            / f"SumeragiFalseGatedIdentity{role}FairActionModuleAliasBooleanMultiHopFairActionTarget.tla"
+        )
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE SumeragiFalseGatedIdentity{role}FairActionModuleAliasBooleanMultiHopFairActionTarget ----",
+                    "VARIABLES vars",
+                    f"Nested == INSTANCE {mid.stem}",
+                    f"{action} == UNCHANGED vars \\/ Nested!Hidden",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        tla = write_spec(
+            role,
+            target.stem,
+            spec_operator,
+            fairness_operator,
+            next_closure,
+            fairness_actions,
+            action,
+        )
+
+        leaf_signatures = module.tla_operator_signatures(leaf)
+        target_signatures = module.tla_operator_signatures(target)
+        definitions = module.tla_single_expression_operator_definitions(tla)
+        signatures = module.tla_operator_signatures(tla)
+        tail_line = leaf_signatures["TailWrapper"][0]
+        target_line = target_signatures[action][0]
+        fairness_line = definitions[fairness_operator][0]
+        action_line = signatures[action][0]
+        wf_line = fairness_action_line(tla, action)
+        assert errors_fn(
+            (
+                (
+                    tla,
+                    spec_operator,
+                    fairness_operator,
+                    next_closure,
+                    fairness_actions,
+                    root_kind,
+                ),
+            )
+        ) == [
+            f"{target}:{target_line} defines {root_kind} transition operator "
+            f"{action}, but direct transition disjunct UNCHANGED vars does "
+            f"not resolve to a named action-shaped operator; {root_kind} "
+            "transition disjuncts must resolve to named zero-arity "
+            "action-shaped operators",
+            f"{leaf}:{tail_line} defines {root_kind} transition operator "
+            "TailWrapper, but direct transition disjunct FALSE does not "
+            f"resolve to a named action-shaped operator; {root_kind} "
+            "transition disjuncts must resolve to named zero-arity "
+            "action-shaped operators",
+            f"{leaf}:{tail_line} defines {root_kind} transition operator "
+            f"TailWrapper, but direct transition disjunct {nested_action} "
+            f"does not resolve to a named action-shaped operator; "
+            f"{root_kind} transition disjuncts must resolve to named "
+            "zero-arity action-shaped operators",
+            f"{tla}:{fairness_line} defines {fairness_operator}, but "
+            f"references WF_vars action {action} at line {wf_line} whose "
+            f"definition at line {action_line} aliases Interleaving!{action}, "
+            f"but target {target}:{target_line} reaches fair action(s) "
+            f"{nested_action} through module-alias boolean operand(s); "
+            f"{root_kind} fairness action aliases must not resolve through "
+            "module-alias boolean operands that compose other fair actions",
+        ]
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[2]
+    assert_module_alias_boolean_multi_hop_fair_action_case(
+        "Source",
+        module.source_commit_progress_spec_contract_errors,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    assert_module_alias_boolean_multi_hop_fair_action_case(
+        "Top",
+        module.top_level_commit_spec_contract_errors,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    )
+
+
+def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject_false_gated_identity_gated_module_alias_next_disjunct_imported_fair_action_target_body_module_alias_operand_resolution_errors(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def write_spec(
+        role: str,
+        suffix: str,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        action: str,
+    ) -> Path:
+        next_operator = next_operator_from_closure(next_closure)
+        other_actions = tuple(
+            fair_action for fair_action in fairness_actions if fair_action != action
+        )
+        tla = (
+            tmp_path
+            / f"Sumeragi{role}FalseGatedIdentityFairActionModuleAliasOperand{suffix}.tla"
+        )
+        tla.write_text(
+            commit_progress_spec_contract_text(
+                spec_operator=spec_operator,
+                fairness_operator=fairness_operator,
+                next_closure=next_closure,
+                fairness_actions=fairness_actions,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                next_lines=[
+                    f"{next_operator} ==",
+                    "  \\/ FALSE",
+                    f"  \\/ TRUE /\\ Interleaving!{action}",
+                    *(f"  \\/ {fair_action}" for fair_action in other_actions),
+                ],
+                action_definition_overrides={
+                    action: f"{action} == Interleaving!{action}",
+                },
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def fairness_action_line(tla: Path, action: str) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if f"WF_vars({action})" in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {action}")
+
+    def assert_operand_resolution_case(
+        role: str,
+        label: str,
+        connector: str,
+        target_lines: list[str],
+        inner_lines: list[str] | None,
+        transition_problem,
+        fairness_problem,
+        errors_fn,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        root_kind: str,
+    ) -> None:
+        action = fairness_actions[0]
+        inner = None
+        inner_name = (
+            f"SumeragiFalseGatedIdentity{role}FairAction{label}"
+            "ModuleAliasOperandInner"
+        )
+        if inner_lines is not None:
+            inner = tmp_path / f"{inner_name}.tla"
+            inner.write_text(
+                "\n".join(
+                    [
+                        f"---- MODULE {inner_name} ----",
+                        "VARIABLES vars",
+                        *inner_lines,
+                        "====",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+        target = (
+            tmp_path
+            / (
+                f"SumeragiFalseGatedIdentity{role}FairAction{label}"
+                "ModuleAliasOperandTarget.tla"
+            )
+        )
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target.stem} ----",
+                    "VARIABLES vars",
+                    *(line.format(inner=inner_name) for line in target_lines),
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        tla = write_spec(
+            role,
+            label,
+            target.stem,
+            spec_operator,
+            fairness_operator,
+            next_closure,
+            fairness_actions,
+            action,
+        )
+
+        target_signatures = module.tla_operator_signatures(target)
+        definitions = module.tla_single_expression_operator_definitions(tla)
+        signatures = module.tla_operator_signatures(tla)
+        target_line = target_signatures[action][0]
+        fairness_line = definitions[fairness_operator][0]
+        action_line = signatures[action][0]
+        wf_line = fairness_action_line(tla, action)
+        transition_prefix = (
+            f"{target}:{target_line} defines {root_kind} transition operator "
+            f"{action}, but direct transition disjunct "
+        )
+        if connector == "/\\":
+            expected_errors = [
+                transition_prefix
+                + f"UNCHANGED vars /\\ {transition_problem(target, inner, root_kind)}",
+            ]
+        else:
+            expected_errors = [
+                transition_prefix
+                + "UNCHANGED vars does not resolve to a named action-shaped "
+                f"operator; {root_kind} transition disjuncts must resolve to "
+                "named zero-arity action-shaped operators",
+                transition_prefix + transition_problem(target, inner, root_kind),
+            ]
+        expected_errors.append(
+            f"{tla}:{fairness_line} defines {fairness_operator}, but "
+            f"references WF_vars action {action} at line {wf_line} whose "
+            f"definition at line {action_line} aliases Interleaving!{action}, "
+            f"but target {target}:{target_line} "
+            f"{fairness_problem(target, inner, root_kind)}"
+        )
+        assert errors_fn(
+            (
+                (
+                    tla,
+                    spec_operator,
+                    fairness_operator,
+                    next_closure,
+                    fairness_actions,
+                    root_kind,
+                ),
+            )
+        ) == expected_errors
+
+    cases = (
+        (
+            "MissingInstance",
+            None,
+            ["{action} == UNCHANGED vars {connector} Missing!Tail"],
+            lambda _target, _inner, root_kind: (
+                "Missing!Tail aliases Missing!Tail without a named INSTANCE "
+                f"alias Missing; {root_kind} transition module-alias "
+                "disjuncts must resolve through named local INSTANCE "
+                "declarations"
+            ),
+            lambda _target, _inner, root_kind, kind: (
+                f"uses module-alias {kind} Missing!Tail without a named "
+                f"INSTANCE alias Missing; {root_kind} fairness action aliases "
+                f"must resolve module-alias {kind}s through named local "
+                "INSTANCE declarations"
+            ),
+        ),
+        (
+            "MissingModule",
+            None,
+            [
+                "MissingMod == INSTANCE MissingTailModule",
+                "{action} == UNCHANGED vars {connector} MissingMod!Tail",
+            ],
+            lambda target, _inner, root_kind: (
+                "MissingMod!Tail aliases MissingMod!Tail, but target module "
+                f"{target.with_name('MissingTailModule.tla')} does not exist; "
+                f"{root_kind} transition module-alias disjuncts must resolve "
+                "to local modules with defined zero-arity transition operators"
+            ),
+            lambda target, _inner, root_kind, kind: (
+                f"uses module-alias {kind} MissingMod!Tail, but target module "
+                f"{target.with_name('MissingTailModule.tla')} does not exist; "
+                f"{root_kind} fairness action aliases must resolve "
+                f"module-alias {kind}s to local action modules"
+            ),
+        ),
+        (
+            "Undefined",
+            ["Other == UNCHANGED vars"],
+            [
+                "Inner == INSTANCE {inner}",
+                "{action} == UNCHANGED vars {connector} Inner!Tail",
+            ],
+            lambda _target, inner, root_kind: (
+                f"Inner!Tail aliases Inner!Tail, but target {inner} does not "
+                f"define Tail; {root_kind} transition module-alias disjuncts "
+                "must resolve to defined zero-arity transition operators"
+            ),
+            lambda _target, inner, root_kind, kind: (
+                f"uses module-alias {kind} Inner!Tail, but target {inner} "
+                f"does not define Tail; {root_kind} fairness action aliases "
+                f"must resolve module-alias {kind}s to defined zero-arity "
+                "actions"
+            ),
+        ),
+        (
+            "Parameterized",
+            ["Tail(peer) == UNCHANGED vars"],
+            [
+                "Inner == INSTANCE {inner}",
+                "{action} == UNCHANGED vars {connector} Inner!Tail",
+            ],
+            lambda _target, inner, root_kind: (
+                f"Inner!Tail aliases Inner!Tail, but target {inner}:3 has "
+                f"arity 1; {root_kind} transition module-alias disjuncts "
+                "must resolve to defined zero-arity transition operators"
+            ),
+            lambda _target, inner, root_kind, kind: (
+                f"uses module-alias {kind} Inner!Tail, but target {inner}:3 "
+                f"has arity 1; {root_kind} fairness action aliases must "
+                f"resolve module-alias {kind}s to defined zero-arity actions"
+            ),
+        ),
+        (
+            "Noninspectable",
+            ["Tail =="],
+            [
+                "Inner == INSTANCE {inner}",
+                "{action} == UNCHANGED vars {connector} Inner!Tail",
+            ],
+            lambda _target, inner, root_kind: (
+                f"Inner!Tail aliases Inner!Tail, but target {inner}:3 is not "
+                f"an inspectable single-expression definition; {root_kind} "
+                "transition module-alias disjuncts must resolve to "
+                "inspectable transition operators"
+            ),
+            lambda _target, inner, root_kind, kind: (
+                f"uses module-alias {kind} Inner!Tail, but target {inner}:3 "
+                f"is not an inspectable single-expression definition; "
+                f"{root_kind} fairness action aliases must resolve "
+                f"module-alias {kind}s to inspectable action definitions"
+            ),
+        ),
+    )
+
+    contract_cases = (
+        (
+            "Source",
+            module.source_commit_progress_spec_contract_errors,
+            module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[2],
+        ),
+        (
+            "Top",
+            module.top_level_commit_spec_contract_errors,
+            module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0],
+        ),
+    )
+    for role, errors_fn, contract in contract_cases:
+        (
+            _module_path,
+            spec_operator,
+            fairness_operator,
+            next_closure,
+            fairness_actions,
+            root_kind,
+        ) = contract
+        action = fairness_actions[0]
+        for suffix, connector, kind in (
+            ("Conjunct", "/\\", "conjunct"),
+            ("Boolean", "\\/", "boolean operand"),
+        ):
+            for (
+                case_label,
+                inner_lines,
+                raw_target_lines,
+                transition_problem,
+                fairness_problem,
+            ) in cases:
+                target_lines = [
+                    line.replace("{action}", action).replace(
+                        "{connector}",
+                        connector,
+                    )
+                    for line in raw_target_lines
+                ]
+                assert_operand_resolution_case(
+                    role,
+                    f"{suffix}{case_label}",
+                    connector,
+                    target_lines,
+                    inner_lines,
+                    transition_problem,
+                    lambda target, inner, root, problem=fairness_problem: problem(
+                        target,
+                        inner,
+                        root,
+                        kind,
+                    ),
+                    errors_fn,
+                    spec_operator,
+                    fairness_operator,
+                    next_closure,
+                    fairness_actions,
+                    root_kind,
+                )
+
+
+def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject_false_gated_identity_gated_module_alias_next_disjunct_imported_fair_action_target_body_mixed_module_alias_operand_resolution_errors(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def write_spec(
+        role: str,
+        suffix: str,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        action: str,
+    ) -> Path:
+        next_operator = next_operator_from_closure(next_closure)
+        other_actions = tuple(
+            fair_action for fair_action in fairness_actions if fair_action != action
+        )
+        tla = (
+            tmp_path
+            / f"Sumeragi{role}FalseGatedIdentityFairActionMixed{suffix}ModuleAliasOperandTarget.tla"
+        )
+        tla.write_text(
+            commit_progress_spec_contract_text(
+                spec_operator=spec_operator,
+                fairness_operator=fairness_operator,
+                next_closure=next_closure,
+                fairness_actions=fairness_actions,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                next_lines=[
+                    f"{next_operator} ==",
+                    "  \\/ FALSE",
+                    f"  \\/ TRUE /\\ Interleaving!{action}",
+                    *(f"  \\/ {fair_action}" for fair_action in other_actions),
+                ],
+                action_definition_overrides={
+                    action: f"{action} == Interleaving!{action}",
+                },
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def fairness_action_line(tla: Path, action: str) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if f"WF_vars({action})" in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {action}")
+
+    def write_module(path: Path, lines: list[str] | None) -> None:
+        if lines is None:
+            return
+        path.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {path.stem} ----",
+                    "VARIABLES vars",
+                    *lines,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def assert_mixed_resolution_case(
+        role: str,
+        suffix: str,
+        conjunct_lines: list[str] | None,
+        boolean_lines: list[str] | None,
+        expected_errors_for_case,
+        errors_fn,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        root_kind: str,
+    ) -> None:
+        action = fairness_actions[0]
+        base = f"SumeragiFalseGatedIdentity{role}FairActionMixed{suffix}"
+        missing = tmp_path / f"{base}Missing.tla"
+        conjunct = tmp_path / f"{base}Conjunct.tla"
+        boolean = tmp_path / f"{base}Boolean.tla"
+        target = tmp_path / f"{base}Target.tla"
+        missing_name = missing.stem
+        conjunct_materialized = (
+            [line.format(missing=missing_name) for line in conjunct_lines]
+            if conjunct_lines is not None
+            else None
+        )
+        boolean_materialized = (
+            [line.format(missing=missing_name) for line in boolean_lines]
+            if boolean_lines is not None
+            else None
+        )
+        write_module(conjunct, conjunct_materialized)
+        write_module(boolean, boolean_materialized)
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target.stem} ----",
+                    "VARIABLES vars",
+                    f"Conjunct == INSTANCE {conjunct.stem}",
+                    f"Bool == INSTANCE {boolean.stem}",
+                    f"{action} == UNCHANGED vars /\\ Conjunct!Tail /\\ (FALSE \\/ Bool!Tail)",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        tla = write_spec(
+            role,
+            suffix,
+            target.stem,
+            spec_operator,
+            fairness_operator,
+            next_closure,
+            fairness_actions,
+            action,
+        )
+
+        target_signatures = module.tla_operator_signatures(target)
+        definitions = module.tla_single_expression_operator_definitions(tla)
+        signatures = module.tla_operator_signatures(tla)
+        conjunct_signatures = (
+            module.tla_operator_signatures(conjunct) if conjunct.exists() else {}
+        )
+        boolean_signatures = (
+            module.tla_operator_signatures(boolean) if boolean.exists() else {}
+        )
+        target_line = target_signatures[action][0]
+        fairness_line = definitions[fairness_operator][0]
+        action_line = signatures[action][0]
+        wf_line = fairness_action_line(tla, action)
+        full_disjunct = (
+            "UNCHANGED vars /\\ Conjunct!Tail /\\ (FALSE \\/ Bool!Tail)"
+        )
+        transition_prefix = (
+            f"{target}:{target_line} defines {root_kind} transition operator "
+            f"{action}, but direct transition disjunct {full_disjunct} "
+        )
+        fairness_prefix = (
+            f"{tla}:{fairness_line} defines {fairness_operator}, but "
+            f"references WF_vars action {action} at line {wf_line} whose "
+            f"definition at line {action_line} aliases Interleaving!{action}, "
+            f"but target {target}:{target_line} "
+        )
+        context = {
+            "boolean": boolean,
+            "boolean_tail_line": boolean_signatures.get("Tail", (None,))[0],
+            "conjunct": conjunct,
+            "conjunct_tail_line": conjunct_signatures.get("Tail", (None,))[0],
+            "fairness_prefix": fairness_prefix,
+            "missing": missing,
+            "root_kind": root_kind,
+            "transition_prefix": transition_prefix,
+        }
+        assert errors_fn(
+            (
+                (
+                    tla,
+                    spec_operator,
+                    fairness_operator,
+                    next_closure,
+                    fairness_actions,
+                    root_kind,
+                ),
+            )
+        ) == expected_errors_for_case(context)
+
+    def missing_target_errors(context) -> list[str]:
+        root_kind = context["root_kind"]
+        transition_prefix = context["transition_prefix"]
+        fairness_prefix = context["fairness_prefix"]
+        conjunct = context["conjunct"]
+        boolean = context["boolean"]
+        return [
+            f"{transition_prefix}aliases Conjunct!Tail, but target module "
+            f"{conjunct} does not exist; {root_kind} transition "
+            "module-alias disjuncts must resolve to local modules with "
+            "defined zero-arity transition operators",
+            f"{transition_prefix}aliases Bool!Tail, but target module "
+            f"{boolean} does not exist; {root_kind} transition "
+            "module-alias disjuncts must resolve to local modules with "
+            "defined zero-arity transition operators",
+            f"{fairness_prefix}uses module-alias conjunct Conjunct!Tail, but "
+            f"target module {conjunct} does not exist; {root_kind} fairness "
+            "action aliases must resolve module-alias conjuncts to local "
+            "action modules",
+            f"{fairness_prefix}uses module-alias boolean operand Bool!Tail, "
+            f"but target module {boolean} does not exist; {root_kind} "
+            "fairness action aliases must resolve module-alias boolean "
+            "operands to local action modules",
+        ]
+
+    def target_shape_errors(context) -> list[str]:
+        root_kind = context["root_kind"]
+        transition_prefix = context["transition_prefix"]
+        fairness_prefix = context["fairness_prefix"]
+        conjunct = context["conjunct"]
+        boolean = context["boolean"]
+        boolean_tail_line = context["boolean_tail_line"]
+        return [
+            f"{transition_prefix}aliases Conjunct!Tail, but target "
+            f"{conjunct} does not define Tail; {root_kind} transition "
+            "module-alias disjuncts must resolve to defined zero-arity "
+            "transition operators",
+            f"{transition_prefix}aliases Bool!Tail, but target {boolean}:"
+            f"{boolean_tail_line} has arity 1; {root_kind} transition "
+            "module-alias disjuncts must resolve to defined zero-arity "
+            "transition operators",
+            f"{fairness_prefix}uses module-alias conjunct Conjunct!Tail, but "
+            f"target {conjunct} does not define Tail; {root_kind} fairness "
+            "action aliases must resolve module-alias conjuncts to defined "
+            "zero-arity actions",
+            f"{fairness_prefix}uses module-alias boolean operand Bool!Tail, "
+            f"but target {boolean}:{boolean_tail_line} has arity 1; "
+            f"{root_kind} fairness action aliases must resolve module-alias "
+            "boolean operands to defined zero-arity actions",
+        ]
+
+    def noninspectable_target_errors(context) -> list[str]:
+        root_kind = context["root_kind"]
+        transition_prefix = context["transition_prefix"]
+        fairness_prefix = context["fairness_prefix"]
+        conjunct = context["conjunct"]
+        boolean = context["boolean"]
+        conjunct_tail_line = context["conjunct_tail_line"]
+        boolean_tail_line = context["boolean_tail_line"]
+        return [
+            f"{transition_prefix}aliases Conjunct!Tail, but target "
+            f"{conjunct}:{conjunct_tail_line} is not an inspectable "
+            f"single-expression definition; {root_kind} transition "
+            "module-alias disjuncts must resolve to inspectable transition "
+            "operators",
+            f"{transition_prefix}aliases Bool!Tail, but target {boolean}:"
+            f"{boolean_tail_line} is not an inspectable single-expression "
+            f"definition; {root_kind} transition module-alias disjuncts must "
+            "resolve to inspectable transition operators",
+            f"{fairness_prefix}uses module-alias conjunct Conjunct!Tail, but "
+            f"target {conjunct}:{conjunct_tail_line} is not an inspectable "
+            f"single-expression definition; {root_kind} fairness action "
+            "aliases must resolve module-alias conjuncts to inspectable "
+            "action definitions",
+            f"{fairness_prefix}uses module-alias boolean operand Bool!Tail, "
+            f"but target {boolean}:{boolean_tail_line} is not an inspectable "
+            f"single-expression definition; {root_kind} fairness action "
+            "aliases must resolve module-alias boolean operands to "
+            "inspectable action definitions",
+        ]
+
+    def helper_alias_errors(context) -> list[str]:
+        root_kind = context["root_kind"]
+        fairness_prefix = context["fairness_prefix"]
+        conjunct = context["conjunct"]
+        boolean = context["boolean"]
+        missing = context["missing"]
+        conjunct_tail_line = context["conjunct_tail_line"]
+        boolean_tail_line = context["boolean_tail_line"]
+        return [
+            f"{conjunct}:{conjunct_tail_line} defines {root_kind} transition "
+            "helper Tail, but aliases Missing!Action without a named INSTANCE "
+            f"alias Missing; {root_kind} transition module-alias helper "
+            "wrappers must resolve through named local INSTANCE declarations",
+            f"{fairness_prefix}uses module-alias conjunct Conjunct!Tail, but "
+            f"helper Tail at {conjunct}:{conjunct_tail_line} aliases "
+            f"Missing!Action without a named INSTANCE alias Missing; "
+            f"{root_kind} fairness action aliases must resolve module-alias "
+            "conjuncts through named local INSTANCE declarations",
+            f"{fairness_prefix}uses module-alias boolean operand Bool!Tail, "
+            f"but helper Tail at {boolean}:{boolean_tail_line} aliases "
+            f"Absent!Action, but target module {missing} does not exist; "
+            f"{root_kind} fairness action aliases must resolve module-alias "
+            "boolean operands to local action modules",
+        ]
+
+    cases = (
+        ("MissingTargets", None, None, missing_target_errors),
+        (
+            "TargetShapes",
+            ["Other == UNCHANGED vars"],
+            ["Tail(peer) == UNCHANGED vars"],
+            target_shape_errors,
+        ),
+        (
+            "NoninspectableTargets",
+            ["Tail =="],
+            ["Tail =="],
+            noninspectable_target_errors,
+        ),
+        (
+            "HelperAliasResolution",
+            ["Tail == Missing!Action"],
+            ["Absent == INSTANCE {missing}", "Tail == Absent!Action"],
+            helper_alias_errors,
+        ),
+    )
+    contract_cases = (
+        (
+            "Source",
+            module.source_commit_progress_spec_contract_errors,
+            module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[2],
+        ),
+        (
+            "Top",
+            module.top_level_commit_spec_contract_errors,
+            module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0],
+        ),
+    )
+    for role, errors_fn, contract in contract_cases:
+        (
+            _module_path,
+            spec_operator,
+            fairness_operator,
+            next_closure,
+            fairness_actions,
+            root_kind,
+        ) = contract
+        for suffix, conjunct_lines, boolean_lines, expected_errors in cases:
+            assert_mixed_resolution_case(
+                role,
+                suffix,
+                conjunct_lines,
+                boolean_lines,
+                expected_errors,
+                errors_fn,
+                spec_operator,
+                fairness_operator,
+                next_closure,
+                fairness_actions,
+                root_kind,
+            )
+
+
+def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject_false_gated_identity_gated_module_alias_next_disjunct_imported_fair_action_target_body_mixed_module_alias_operand_multi_hop_recursive_helper_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def write_module(name: str, lines: list[str]) -> Path:
+        path = tmp_path / f"{name}.tla"
+        path.write_text(
+            "\n".join([f"---- MODULE {name} ----", "VARIABLES vars", *lines, "===="]),
+            encoding="utf-8",
+        )
+        return path
+
+    def write_spec(
+        role: str,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        action: str,
+    ) -> Path:
+        next_operator = next_operator_from_closure(next_closure)
+        other_actions = tuple(
+            fair_action for fair_action in fairness_actions if fair_action != action
+        )
+        tla = (
+            tmp_path
+            / f"Sumeragi{role}FalseGatedIdentityFairActionMixedModuleAliasOperandMultiHop.tla"
+        )
+        tla.write_text(
+            commit_progress_spec_contract_text(
+                spec_operator=spec_operator,
+                fairness_operator=fairness_operator,
+                next_closure=next_closure,
+                fairness_actions=fairness_actions,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                next_lines=[
+                    f"{next_operator} ==",
+                    "  \\/ FALSE",
+                    f"  \\/ TRUE /\\ Interleaving!{action}",
+                    *(f"  \\/ {fair_action}" for fair_action in other_actions),
+                ],
+                action_definition_overrides={
+                    action: f"{action} == Interleaving!{action}",
+                },
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def fairness_action_line(tla: Path, action: str) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if f"WF_vars({action})" in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {action}")
+
+    def assert_mixed_multi_hop_case(
+        role: str,
+        errors_fn,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        root_kind: str,
+    ) -> None:
+        action = fairness_actions[0]
+        next_operator = next_operator_from_closure(next_closure)
+        conjunct = write_module(
+            f"SumeragiFalseGatedIdentity{role}FairActionMixedModuleAliasOperandMultiHopConjunct",
+            [
+                "Start == LocalBranch",
+                "LocalBranch == ParameterizedHelper /\\ TRUE",
+                "ParameterizedHelper(peer) == UNCHANGED vars",
+            ],
+        )
+        boolean = write_module(
+            f"SumeragiFalseGatedIdentity{role}FairActionMixedModuleAliasOperandMultiHopBoolean",
+            [
+                "Start == FALSE \\/ LocalBranch",
+                "LocalBranch == OpaqueHelper",
+                "OpaqueHelper ==",
+            ],
+        )
+        target = write_module(
+            f"SumeragiFalseGatedIdentity{role}FairActionMixedModuleAliasOperandMultiHopTarget",
+            [
+                f"Conjunct == INSTANCE {conjunct.stem}",
+                f"Bool == INSTANCE {boolean.stem}",
+                f"{action} == UNCHANGED vars /\\ Conjunct!Start /\\ (FALSE \\/ Bool!Start)",
+            ],
+        )
+        tla = write_spec(
+            role,
+            target.stem,
+            spec_operator,
+            fairness_operator,
+            next_closure,
+            fairness_actions,
+            action,
+        )
+
+        definitions = module.tla_single_expression_operator_definitions(tla)
+        signatures = module.tla_operator_signatures(tla)
+        target_signatures = module.tla_operator_signatures(target)
+        conjunct_signatures = module.tla_operator_signatures(conjunct)
+        boolean_signatures = module.tla_operator_signatures(boolean)
+        next_line = signatures[next_operator][0]
+        fairness_line = definitions[fairness_operator][0]
+        action_line = signatures[action][0]
+        wf_line = fairness_action_line(tla, action)
+        target_line = target_signatures[action][0]
+        parameterized_line = conjunct_signatures["ParameterizedHelper"][0]
+        opaque_line = boolean_signatures["OpaqueHelper"][0]
+        assert errors_fn(
+            (
+                (
+                    tla,
+                    spec_operator,
+                    fairness_operator,
+                    next_closure,
+                    fairness_actions,
+                    root_kind,
+                ),
+            )
+        ) == [
+            f"{tla}:{next_line} defines {root_kind} transition operator "
+            f"{next_operator}, but direct transition disjunct FALSE does not "
+            f"resolve to a named action-shaped operator; {root_kind} "
+            "transition disjuncts must resolve to named zero-arity "
+            "action-shaped operators",
+            f"{tla}:{next_line} defines {root_kind} transition operator "
+            f"{next_operator}, but direct transition disjunct TRUE /\\ "
+            f"Interleaving!{action} mixes multiple action witnesses {action}, "
+            f"Interleaving!{action}; guarded transition disjuncts must not "
+            "mix multiple action witnesses",
+            f"{tla}:{fairness_line} defines {fairness_operator}, but "
+            f"references WF_vars action {action} at line {wf_line} whose "
+            f"definition at line {action_line} aliases Interleaving!{action}, "
+            f"but target {target}:{target_line} uses module-alias conjunct "
+            f"Conjunct!Start, but helper ParameterizedHelper at {conjunct}:"
+            f"{parameterized_line} has arity 1; {root_kind} fairness action "
+            "aliases must resolve module-alias conjuncts to defined "
+            "zero-arity actions",
+            f"{tla}:{fairness_line} defines {fairness_operator}, but "
+            f"references WF_vars action {action} at line {wf_line} whose "
+            f"definition at line {action_line} aliases Interleaving!{action}, "
+            f"but target {target}:{target_line} uses module-alias boolean "
+            f"operand Bool!Start, but helper OpaqueHelper at {boolean}:"
+            f"{opaque_line} is not an inspectable single-expression "
+            f"definition; {root_kind} fairness action aliases must resolve "
+            "module-alias boolean operands to inspectable action definitions",
+        ]
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[2]
+    assert_mixed_multi_hop_case(
+        "Source",
+        module.source_commit_progress_spec_contract_errors,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    assert_mixed_multi_hop_case(
+        "Top",
+        module.top_level_commit_spec_contract_errors,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    )
+
+
+def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject_false_gated_identity_gated_module_alias_next_disjunct_imported_fair_action_target_body_mixed_module_alias_operand_onward_helper_target_errors(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def write_module(path: Path, lines: list[str] | None) -> None:
+        if lines is None:
+            return
+        path.write_text(
+            "\n".join(
+                [f"---- MODULE {path.stem} ----", "VARIABLES vars", *lines, "===="]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_spec(
+        role: str,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        action: str,
+    ) -> Path:
+        next_operator = next_operator_from_closure(next_closure)
+        other_actions = tuple(
+            fair_action for fair_action in fairness_actions if fair_action != action
+        )
+        tla = tmp_path / f"Sumeragi{role}FalseGatedIdentityFairActionMixedOperandOnward.tla"
+        tla.write_text(
+            commit_progress_spec_contract_text(
+                spec_operator=spec_operator,
+                fairness_operator=fairness_operator,
+                next_closure=next_closure,
+                fairness_actions=fairness_actions,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                next_lines=[
+                    f"{next_operator} ==",
+                    "  \\/ FALSE",
+                    f"  \\/ TRUE /\\ Interleaving!{action}",
+                    *(f"  \\/ {fair_action}" for fair_action in other_actions),
+                ],
+                action_definition_overrides={
+                    action: f"{action} == Interleaving!{action}",
+                },
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def fairness_action_line(tla: Path, action: str) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if f"WF_vars({action})" in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {action}")
+
+    def assert_onward_case(
+        role: str,
+        errors_fn,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        root_kind: str,
+        conjunct_inner_lines: list[str] | None,
+        boolean_inner_lines: list[str],
+        transition_problem,
+        conjunct_fairness_problem,
+        boolean_fairness_problem,
+    ) -> None:
+        action = fairness_actions[0]
+        base = f"SumeragiFalseGatedIdentity{role}FairActionMixedOperandOnward"
+        conjunct_inner = tmp_path / f"{base}ConjunctInner.tla"
+        boolean_inner = tmp_path / f"{base}BooleanInner.tla"
+        conjunct = tmp_path / f"{base}Conjunct.tla"
+        boolean = tmp_path / f"{base}Boolean.tla"
+        target = tmp_path / f"{base}Target.tla"
+        write_module(conjunct_inner, conjunct_inner_lines)
+        write_module(boolean_inner, boolean_inner_lines)
+        write_module(
+            conjunct,
+            [
+                f"Inner == INSTANCE {conjunct_inner.stem}",
+                "Start == LocalBranch",
+                "LocalBranch == Inner!BadAction",
+            ],
+        )
+        write_module(
+            boolean,
+            [
+                f"Inner == INSTANCE {boolean_inner.stem}",
+                "Start == FALSE \\/ LocalBranch",
+                "LocalBranch == Inner!BadAction",
+            ],
+        )
+        write_module(
+            target,
+            [
+                f"Conjunct == INSTANCE {conjunct.stem}",
+                f"Bool == INSTANCE {boolean.stem}",
+                f"{action} == UNCHANGED vars /\\ Conjunct!Start /\\ (FALSE \\/ Bool!Start)",
+            ],
+        )
+        tla = write_spec(
+            role,
+            target.stem,
+            spec_operator,
+            fairness_operator,
+            next_closure,
+            fairness_actions,
+            action,
+        )
+
+        definitions = module.tla_single_expression_operator_definitions(tla)
+        signatures = module.tla_operator_signatures(tla)
+        target_signatures = module.tla_operator_signatures(target)
+        conjunct_signatures = module.tla_operator_signatures(conjunct)
+        boolean_signatures = module.tla_operator_signatures(boolean)
+        conjunct_inner_signatures = (
+            module.tla_operator_signatures(conjunct_inner)
+            if conjunct_inner.exists()
+            else {}
+        )
+        boolean_inner_signatures = module.tla_operator_signatures(boolean_inner)
+        fairness_line = definitions[fairness_operator][0]
+        action_line = signatures[action][0]
+        wf_line = fairness_action_line(tla, action)
+        target_line = target_signatures[action][0]
+        conjunct_local_line = conjunct_signatures["LocalBranch"][0]
+        boolean_local_line = boolean_signatures["LocalBranch"][0]
+        context = {
+            "boolean": boolean,
+            "boolean_inner": boolean_inner,
+            "boolean_inner_bad_action_line": boolean_inner_signatures.get(
+                "BadAction", (None,)
+            )[0],
+            "boolean_local_line": boolean_local_line,
+            "conjunct": conjunct,
+            "conjunct_inner": conjunct_inner,
+            "conjunct_inner_bad_action_line": conjunct_inner_signatures.get(
+                "BadAction", (None,)
+            )[0],
+            "conjunct_local_line": conjunct_local_line,
+        }
+        assert errors_fn(
+            (
+                (
+                    tla,
+                    spec_operator,
+                    fairness_operator,
+                    next_closure,
+                    fairness_actions,
+                    root_kind,
+                ),
+            )
+        ) == [
+            f"{conjunct}:{conjunct_local_line} defines {root_kind} "
+            "transition helper LocalBranch, but "
+            f"{transition_problem(context, root_kind)}",
+            f"{tla}:{fairness_line} defines {fairness_operator}, but "
+            f"references WF_vars action {action} at line {wf_line} whose "
+            f"definition at line {action_line} aliases Interleaving!{action}, "
+            f"but target {target}:{target_line} uses module-alias conjunct "
+            f"Conjunct!Start, but {conjunct_fairness_problem(context, root_kind)}",
+            f"{tla}:{fairness_line} defines {fairness_operator}, but "
+            f"references WF_vars action {action} at line {wf_line} whose "
+            f"definition at line {action_line} aliases Interleaving!{action}, "
+            f"but target {target}:{target_line} uses module-alias boolean "
+            f"operand Bool!Start, but {boolean_fairness_problem(context, root_kind)}",
+        ]
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[2]
+    assert_onward_case(
+        "Source",
+        module.source_commit_progress_spec_contract_errors,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+        None,
+        ["Other == UNCHANGED vars"],
+        lambda context, root_kind: (
+            "aliases Inner!BadAction, but target module "
+            f"{context['conjunct_inner']} does not exist; {root_kind} "
+            "transition module-alias helper wrappers must resolve to local "
+            "modules with defined zero-arity transition operators"
+        ),
+        lambda context, root_kind: (
+            f"helper LocalBranch at {context['conjunct']}:"
+            f"{context['conjunct_local_line']} aliases Inner!BadAction, but "
+            f"target module {context['conjunct_inner']} does not exist; "
+            f"{root_kind} fairness action aliases must resolve module-alias "
+            "conjuncts to local action modules"
+        ),
+        lambda context, root_kind: (
+            f"helper LocalBranch at {context['boolean']}:"
+            f"{context['boolean_local_line']} aliases Inner!BadAction, but "
+            f"target {context['boolean_inner']} does not define BadAction; "
+            f"{root_kind} fairness action aliases must resolve module-alias "
+            "boolean operands to defined zero-arity actions"
+        ),
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    assert_onward_case(
+        "Top",
+        module.top_level_commit_spec_contract_errors,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+        ["BadAction(peer) == UNCHANGED vars"],
+        ["BadAction =="],
+        lambda context, root_kind: (
+            f"aliases Inner!BadAction, but target {context['conjunct_inner']}:"
+            f"{context['conjunct_inner_bad_action_line']} has arity 1; "
+            f"{root_kind} transition module-alias helper wrappers must "
+            "resolve to defined zero-arity transition operators"
+        ),
+        lambda context, root_kind: (
+            f"helper LocalBranch at {context['conjunct']}:"
+            f"{context['conjunct_local_line']} aliases Inner!BadAction, but "
+            f"target {context['conjunct_inner']}:"
+            f"{context['conjunct_inner_bad_action_line']} has arity 1; "
+            f"{root_kind} fairness action aliases must resolve module-alias "
+            "conjuncts to defined zero-arity actions"
+        ),
+        lambda context, root_kind: (
+            f"helper BadAction at {context['boolean_inner']}:"
+            f"{context['boolean_inner_bad_action_line']} is not an "
+            f"inspectable single-expression definition; {root_kind} "
+            "fairness action aliases must resolve module-alias boolean "
+            "operands to inspectable action definitions"
+        ),
+    )
+
+
+def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject_false_gated_identity_gated_module_alias_next_disjunct_imported_fair_action_target_body_mixed_module_alias_operand_error_and_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def write_module(path: Path, lines: list[str]) -> None:
+        path.write_text(
+            "\n".join(
+                [f"---- MODULE {path.stem} ----", "VARIABLES vars", *lines, "===="]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_spec(
+        role: str,
+        suffix: str,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        action: str,
+    ) -> Path:
+        next_operator = next_operator_from_closure(next_closure)
+        other_actions = tuple(
+            fair_action for fair_action in fairness_actions if fair_action != action
+        )
+        tla = (
+            tmp_path
+            / f"Sumeragi{role}FalseGatedIdentityFairActionMixedComposition{suffix}.tla"
+        )
+        tla.write_text(
+            commit_progress_spec_contract_text(
+                spec_operator=spec_operator,
+                fairness_operator=fairness_operator,
+                next_closure=next_closure,
+                fairness_actions=fairness_actions,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                next_lines=[
+                    f"{next_operator} ==",
+                    "  \\/ FALSE",
+                    f"  \\/ TRUE /\\ Interleaving!{action}",
+                    *(f"  \\/ {fair_action}" for fair_action in other_actions),
+                ],
+                action_definition_overrides={
+                    action: f"{action} == Interleaving!{action}",
+                },
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def fairness_action_line(tla: Path, action: str) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if f"WF_vars({action})" in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {action}")
+
+    def assert_mixed_composition_case(
+        role: str,
+        suffix: str,
+        errors_fn,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        root_kind: str,
+        nested_action: str,
+        conjunct_lines: list[str],
+        boolean_lines: list[str],
+        parameterized_module: str,
+        error_operand_text: str,
+        error_requirement: str,
+        composition_kind: str,
+    ) -> None:
+        action = fairness_actions[0]
+        next_operator = next_operator_from_closure(next_closure)
+        conjunct = (
+            tmp_path
+            / f"SumeragiFalseGatedIdentity{role}FairActionMixedComposition{suffix}Conjunct.tla"
+        )
+        boolean = (
+            tmp_path
+            / f"SumeragiFalseGatedIdentity{role}FairActionMixedComposition{suffix}Boolean.tla"
+        )
+        target = (
+            tmp_path
+            / f"SumeragiFalseGatedIdentity{role}FairActionMixedComposition{suffix}Target.tla"
+        )
+        write_module(conjunct, conjunct_lines)
+        write_module(boolean, boolean_lines)
+        write_module(
+            target,
+            [
+                f"Conjunct == INSTANCE {conjunct.stem}",
+                f"Bool == INSTANCE {boolean.stem}",
+                f"{action} == UNCHANGED vars /\\ Conjunct!Start /\\ (FALSE \\/ Bool!Start)",
+            ],
+        )
+        tla = write_spec(
+            role,
+            suffix,
+            target.stem,
+            spec_operator,
+            fairness_operator,
+            next_closure,
+            fairness_actions,
+            action,
+        )
+
+        definitions = module.tla_single_expression_operator_definitions(tla)
+        signatures = module.tla_operator_signatures(tla)
+        target_signatures = module.tla_operator_signatures(target)
+        error_module = conjunct if parameterized_module == "conjunct" else boolean
+        error_signatures = module.tla_operator_signatures(error_module)
+        next_line = signatures[next_operator][0]
+        fairness_line = definitions[fairness_operator][0]
+        action_line = signatures[action][0]
+        wf_line = fairness_action_line(tla, action)
+        target_line = target_signatures[action][0]
+        parameterized_line = error_signatures["ParameterizedHelper"][0]
+        expected_error = (
+            f"{tla}:{fairness_line} defines {fairness_operator}, but "
+            f"references WF_vars action {action} at line {wf_line} whose "
+            f"definition at line {action_line} aliases Interleaving!{action}, "
+            f"but target {target}:{target_line} uses module-alias "
+            f"{error_operand_text}, but helper ParameterizedHelper at "
+            f"{error_module}:{parameterized_line} has arity 1; {root_kind} "
+            f"fairness action aliases must resolve {error_requirement} to "
+            "defined zero-arity actions"
+        )
+        expected_composition = (
+            f"{tla}:{fairness_line} defines {fairness_operator}, but "
+            f"references WF_vars action {action} at line {wf_line} whose "
+            f"definition at line {action_line} aliases Interleaving!{action}, "
+            f"but target {target}:{target_line} reaches fair action(s) "
+            f"{nested_action} through module-alias {composition_kind}(s); "
+            f"{root_kind} fairness action aliases must not resolve through "
+            f"module-alias {composition_kind}s that compose other fair actions"
+        )
+        assert errors_fn(
+            (
+                (
+                    tla,
+                    spec_operator,
+                    fairness_operator,
+                    next_closure,
+                    fairness_actions,
+                    root_kind,
+                ),
+            )
+        ) == [
+            f"{tla}:{next_line} defines {root_kind} transition operator "
+            f"{next_operator}, but direct transition disjunct FALSE does not "
+            f"resolve to a named action-shaped operator; {root_kind} "
+            "transition disjuncts must resolve to named zero-arity "
+            "action-shaped operators",
+            f"{tla}:{next_line} defines {root_kind} transition operator "
+            f"{next_operator}, but direct transition disjunct TRUE /\\ "
+            f"Interleaving!{action} mixes multiple action witnesses {action}, "
+            f"Interleaving!{action}; guarded transition disjuncts must not "
+            "mix multiple action witnesses",
+            expected_error,
+            expected_composition,
+        ]
+
+    contract_cases = (
+        (
+            "Source",
+            module.source_commit_progress_spec_contract_errors,
+            module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[2],
+            module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[2][4][3],
+        ),
+        (
+            "Top",
+            module.top_level_commit_spec_contract_errors,
+            module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0],
+            module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0][4][5],
+        ),
+    )
+    for role, errors_fn, contract, nested_action in contract_cases:
+        (
+            _module_path,
+            spec_operator,
+            fairness_operator,
+            next_closure,
+            fairness_actions,
+            root_kind,
+        ) = contract
+        assert_mixed_composition_case(
+            role,
+            "ConjunctErrorBooleanFair",
+            errors_fn,
+            spec_operator,
+            fairness_operator,
+            next_closure,
+            fairness_actions,
+            root_kind,
+            nested_action,
+            [
+                "Start == ParameterizedHelper /\\ TRUE",
+                "ParameterizedHelper(peer) == UNCHANGED vars",
+            ],
+            [f"Start == {nested_action}"],
+            "conjunct",
+            "conjunct Conjunct!Start",
+            "module-alias conjuncts",
+            "boolean operand",
+        )
+        assert_mixed_composition_case(
+            role,
+            "ConjunctFairBooleanError",
+            errors_fn,
+            spec_operator,
+            fairness_operator,
+            next_closure,
+            fairness_actions,
+            root_kind,
+            nested_action,
+            [f"Start == {nested_action}"],
+            [
+                "Start == FALSE \\/ ParameterizedHelper",
+                "ParameterizedHelper(peer) == UNCHANGED vars",
+            ],
+            "boolean",
+            "boolean operand Bool!Start",
+            "module-alias boolean operands",
+            "conjunct",
+        )
+
+
+def test_source_commit_progress_and_top_level_commit_spec_contract_errors_reject_false_gated_identity_gated_module_alias_next_disjunct_imported_fair_action_target_body_mixed_module_alias_operand_invalid_helper_references(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def write_module(path: Path, lines: list[str]) -> None:
+        path.write_text(
+            "\n".join(
+                [f"---- MODULE {path.stem} ----", "VARIABLES vars", *lines, "===="]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_spec(
+        role: str,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        action: str,
+    ) -> Path:
+        next_operator = next_operator_from_closure(next_closure)
+        other_actions = tuple(
+            fair_action for fair_action in fairness_actions if fair_action != action
+        )
+        tla = (
+            tmp_path
+            / f"Sumeragi{role}FalseGatedIdentityFairActionMixedInvalidHelper.tla"
+        )
+        tla.write_text(
+            commit_progress_spec_contract_text(
+                spec_operator=spec_operator,
+                fairness_operator=fairness_operator,
+                next_closure=next_closure,
+                fairness_actions=fairness_actions,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                next_lines=[
+                    f"{next_operator} ==",
+                    "  \\/ FALSE",
+                    f"  \\/ TRUE /\\ Interleaving!{action}",
+                    *(f"  \\/ {fair_action}" for fair_action in other_actions),
+                ],
+                action_definition_overrides={
+                    action: f"{action} == Interleaving!{action}",
+                },
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def fairness_action_line(tla: Path, action: str) -> int:
+        for line_number, line in enumerate(
+            tla.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if f"WF_vars({action})" in line:
+                return line_number
+        raise AssertionError(f"missing WF_vars line for {action}")
+
+    def assert_mixed_invalid_helper_case(
+        role: str,
+        errors_fn,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        root_kind: str,
+    ) -> None:
+        action = fairness_actions[0]
+        next_operator = next_operator_from_closure(next_closure)
+        conjunct = (
+            tmp_path
+            / f"SumeragiFalseGatedIdentity{role}FairActionMixedInvalidHelperConjunct.tla"
+        )
+        boolean = (
+            tmp_path
+            / f"SumeragiFalseGatedIdentity{role}FairActionMixedInvalidHelperBoolean.tla"
+        )
+        target = (
+            tmp_path
+            / f"SumeragiFalseGatedIdentity{role}FairActionMixedInvalidHelperTarget.tla"
+        )
+        write_module(
+            conjunct,
+            [
+                "Tail == ParameterizedHelper /\\ TRUE",
+                "ParameterizedHelper(peer) == UNCHANGED vars",
+            ],
+        )
+        write_module(boolean, ["Tail == FALSE \\/ OpaqueHelper", "OpaqueHelper =="])
+        write_module(
+            target,
+            [
+                f"Conjunct == INSTANCE {conjunct.stem}",
+                f"Bool == INSTANCE {boolean.stem}",
+                f"{action} == UNCHANGED vars /\\ Conjunct!Tail /\\ (FALSE \\/ Bool!Tail)",
+            ],
+        )
+        tla = write_spec(
+            role,
+            target.stem,
+            spec_operator,
+            fairness_operator,
+            next_closure,
+            fairness_actions,
+            action,
+        )
+
+        definitions = module.tla_single_expression_operator_definitions(tla)
+        signatures = module.tla_operator_signatures(tla)
+        target_signatures = module.tla_operator_signatures(target)
+        conjunct_signatures = module.tla_operator_signatures(conjunct)
+        boolean_signatures = module.tla_operator_signatures(boolean)
+        next_line = signatures[next_operator][0]
+        fairness_line = definitions[fairness_operator][0]
+        action_line = signatures[action][0]
+        wf_line = fairness_action_line(tla, action)
+        target_line = target_signatures[action][0]
+        parameterized_line = conjunct_signatures["ParameterizedHelper"][0]
+        opaque_line = boolean_signatures["OpaqueHelper"][0]
+        assert errors_fn(
+            (
+                (
+                    tla,
+                    spec_operator,
+                    fairness_operator,
+                    next_closure,
+                    fairness_actions,
+                    root_kind,
+                ),
+            )
+        ) == [
+            f"{tla}:{next_line} defines {root_kind} transition operator "
+            f"{next_operator}, but direct transition disjunct FALSE does not "
+            f"resolve to a named action-shaped operator; {root_kind} "
+            "transition disjuncts must resolve to named zero-arity "
+            "action-shaped operators",
+            f"{tla}:{next_line} defines {root_kind} transition operator "
+            f"{next_operator}, but direct transition disjunct TRUE /\\ "
+            f"Interleaving!{action} mixes multiple action witnesses {action}, "
+            f"Interleaving!{action}; guarded transition disjuncts must not "
+            "mix multiple action witnesses",
+            f"{tla}:{fairness_line} defines {fairness_operator}, but "
+            f"references WF_vars action {action} at line {wf_line} whose "
+            f"definition at line {action_line} aliases Interleaving!{action}, "
+            f"but target {target}:{target_line} uses module-alias conjunct "
+            f"Conjunct!Tail, but helper ParameterizedHelper at {conjunct}:"
+            f"{parameterized_line} has arity 1; {root_kind} fairness action "
+            "aliases must resolve module-alias conjuncts to defined "
+            "zero-arity actions",
+            f"{tla}:{fairness_line} defines {fairness_operator}, but "
+            f"references WF_vars action {action} at line {wf_line} whose "
+            f"definition at line {action_line} aliases Interleaving!{action}, "
+            f"but target {target}:{target_line} uses module-alias boolean "
+            f"operand Bool!Tail, but helper OpaqueHelper at {boolean}:"
+            f"{opaque_line} is not an inspectable single-expression "
+            f"definition; {root_kind} fairness action aliases must resolve "
+            "module-alias boolean operands to inspectable action definitions",
+        ]
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[2]
+    assert_mixed_invalid_helper_case(
+        "Source",
+        module.source_commit_progress_spec_contract_errors,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    assert_mixed_invalid_helper_case(
         "Top",
         module.top_level_commit_spec_contract_errors,
         top_spec,

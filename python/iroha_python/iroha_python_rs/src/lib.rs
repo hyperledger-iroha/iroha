@@ -12,6 +12,7 @@ use std::{
     convert::{TryFrom, TryInto},
     fs::{self, File},
     io::{Read, Seek, SeekFrom},
+    net::IpAddr,
     path::PathBuf,
     str::FromStr,
     sync::Arc,
@@ -54,7 +55,7 @@ use iroha_data_model::{
     events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     isi::{
         Burn, ExecuteTrigger, Grant, InstructionBox, Mint, Register, RemoveKeyValue, Revoke,
-        SetKeyValue, Transfer, Unregister,
+        SetKeyValue, SetParameter, Transfer, Unregister,
         escrow::{CancelAssetLock, DrawdownAssetLock, ExpireAssetLock, OpenAssetLock},
         repo::{RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         settlement::{
@@ -71,9 +72,11 @@ use iroha_data_model::{
     name::Name,
     nexus::{
         DataSpaceId, FeeSponsorPolicy, FeeSponsorPolicyId, FeeSponsorRule, FeeSponsorRuleEffect,
-        LaneId, LanePrivacyProof, LaneRelayEnvelope, compute_settlement_hash,
+        LaneId, LaneLifecycleParameterV1, LaneLifecyclePlan, LaneLifecycleStatusV1,
+        LanePrivacyProof, LaneRelayEnvelope, compute_settlement_hash,
     },
     nft::NftId,
+    parameter::Parameter,
     peer::PeerId,
     permission::Permission,
     prelude::{AccountId, ChainId},
@@ -141,6 +144,7 @@ use sorafs_manifest::{
     build_signed_orderbook_order_request_bytes_ed25519_v1,
     build_signed_orderbook_settlement_receipt_bytes_ed25519_v1,
     capacity::ReplicationOrderV1,
+    derive_orderbook_order_id_v1,
     pin_registry::{
         AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
     },
@@ -161,6 +165,7 @@ use sorafs_orchestrator::{
     },
 };
 use tokio::runtime::Runtime;
+use url::{Host, Url};
 use x25519_dalek::StaticSecret;
 
 /// Raised when a non-Ed25519 key is passed to an Ed25519-only helper.
@@ -2917,9 +2922,163 @@ fn build_gateway_metadata_dict(
 struct PyGatewayProviderSpec {
     name: String,
     provider_id_hex: String,
+    gateway_public_key_hex: String,
     base_url: String,
     stream_token_b64: String,
     privacy_events_url: Option<String>,
+}
+
+const MAX_GATEWAY_PROVIDER_NAME_BYTES: usize = 128;
+const MAX_GATEWAY_URL_BYTES: usize = 2_048;
+const MAX_GATEWAY_TOKEN_BASE64_BYTES: usize = 90 * 1_024;
+const MAX_GATEWAY_TOKEN_BYTES: usize = 64 * 1_024;
+
+fn canonical_gateway_hex32(value: &str, field: &str) -> PyResult<String> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || value.bytes().all(|byte| byte == b'0')
+    {
+        return Err(PyValueError::new_err(format!(
+            "{field} must be non-zero canonical lowercase 32-byte hex"
+        )));
+    }
+    Ok(value.to_owned())
+}
+
+fn canonical_gateway_token(value: &str) -> PyResult<String> {
+    if value.is_empty() || value.len() > MAX_GATEWAY_TOKEN_BASE64_BYTES || value != value.trim() {
+        return Err(PyValueError::new_err(
+            "stream_token_b64 must be exact canonical standard base64",
+        ));
+    }
+    let bytes = BASE64.decode(value).map_err(|_| {
+        PyValueError::new_err("stream_token_b64 must be exact canonical standard base64")
+    })?;
+    if bytes.is_empty() || bytes.len() > MAX_GATEWAY_TOKEN_BYTES || BASE64.encode(bytes) != value {
+        return Err(PyValueError::new_err(
+            "stream_token_b64 must be exact canonical standard base64",
+        ));
+    }
+    Ok(value.to_owned())
+}
+
+fn canonical_gateway_url(value: &str, field: &str, expected_path: &str) -> PyResult<String> {
+    if value.is_empty()
+        || value.len() > MAX_GATEWAY_URL_BYTES
+        || value != value.trim()
+        || value.bytes().any(|byte| byte.is_ascii_control())
+    {
+        return Err(PyValueError::new_err(format!(
+            "{field} must be an exact canonical HTTPS URL"
+        )));
+    }
+    let url = Url::parse(value).map_err(|_| {
+        PyValueError::new_err(format!("{field} must be an exact canonical HTTPS URL"))
+    })?;
+    if url.scheme() != "https"
+        || url.port().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(PyValueError::new_err(format!(
+            "{field} must be an exact public HTTPS origin"
+        )));
+    }
+    let host = url
+        .host()
+        .ok_or_else(|| PyValueError::new_err(format!("{field} must contain a canonical host")))?;
+    let non_public = match host {
+        Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
+        Host::Ipv4(address) => !gateway_ip_is_public(IpAddr::V4(address)),
+        Host::Ipv6(address) => !gateway_ip_is_public(IpAddr::V6(address)),
+    };
+    if non_public {
+        return Err(PyValueError::new_err(format!(
+            "{field} must not target a non-public address"
+        )));
+    }
+    let origin = url.origin().ascii_serialization();
+    let exact = if expected_path == "/" {
+        value == origin || value == format!("{origin}/")
+    } else {
+        value == format!("{origin}{expected_path}")
+    };
+    if !exact || url.path() != expected_path {
+        return Err(PyValueError::new_err(format!(
+            "{field} must use the exact {expected_path} path"
+        )));
+    }
+    Ok(value.to_owned())
+}
+
+fn gateway_ip_is_public(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => {
+            let [first, second, third, _] = address.octets();
+            !address.is_private()
+                && !address.is_loopback()
+                && !address.is_link_local()
+                && !address.is_broadcast()
+                && !address.is_documentation()
+                && !address.is_unspecified()
+                && !address.is_multicast()
+                && first != 0
+                && !(first == 100 && (64..=127).contains(&second))
+                && !(first == 192 && second == 0 && third == 0)
+                && !(first == 192 && second == 88 && third == 99)
+                && !(first == 198 && (18..=19).contains(&second))
+                && first < 240
+        }
+        IpAddr::V6(address) => {
+            let segments = address.segments();
+            let global_unicast = segments[0] & 0xe000 == 0x2000;
+            let documentation = (segments[0] == 0x2001 && segments[1] == 0x0db8)
+                || (segments[0] == 0x3fff && segments[1] & 0xf000 == 0);
+            let special_purpose = segments[0] == 0x2001 && segments[1] <= 0x01ff;
+            global_unicast
+                && !documentation
+                && !special_purpose
+                && segments[0] != 0x2002
+                && !address.is_loopback()
+                && !address.is_unspecified()
+                && !address.is_multicast()
+        }
+    }
+}
+
+fn canonical_gateway_provider(spec: PyGatewayProviderSpec) -> PyResult<GatewayProviderInput> {
+    if spec.name.is_empty()
+        || spec.name.len() > MAX_GATEWAY_PROVIDER_NAME_BYTES
+        || !spec
+            .name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b':' | b'_'))
+    {
+        return Err(PyValueError::new_err(
+            "provider name must be canonical ASCII and at most 128 bytes",
+        ));
+    }
+    let provider_id_hex = canonical_gateway_hex32(&spec.provider_id_hex, "provider_id_hex")?;
+    let gateway_public_key_hex =
+        canonical_gateway_hex32(&spec.gateway_public_key_hex, "gateway_public_key_hex")?;
+    let base_url = canonical_gateway_url(&spec.base_url, "base_url", "/")?;
+    let stream_token_b64 = canonical_gateway_token(&spec.stream_token_b64)?;
+    let privacy_events_url = spec
+        .privacy_events_url
+        .map(|value| canonical_gateway_url(&value, "privacy_events_url", "/privacy/events"))
+        .transpose()?;
+    Ok(GatewayProviderInput {
+        name: spec.name,
+        provider_id_hex,
+        gateway_public_key_hex,
+        base_url,
+        stream_token_b64,
+        privacy_events_url,
+    })
 }
 
 #[derive(Clone, Default, FromPyObject)]
@@ -3841,37 +4000,7 @@ fn sorafs_gateway_fetch_py(
 
     let provider_inputs: Vec<GatewayProviderInput> = providers
         .into_iter()
-        .map(|spec| {
-            if spec.name.trim().is_empty() {
-                return Err(PyValueError::new_err("provider name must not be empty"));
-            }
-            let provider_id = spec.provider_id_hex.trim().to_ascii_lowercase();
-            if provider_id.len() != 64 || !provider_id.chars().all(|c| c.is_ascii_hexdigit()) {
-                return Err(PyValueError::new_err(format!(
-                    "provider '{}' has invalid provider_id_hex; expected 32-byte hex",
-                    spec.name
-                )));
-            }
-            if spec.base_url.trim().is_empty() {
-                return Err(PyValueError::new_err(format!(
-                    "provider '{}' base_url must not be empty",
-                    spec.name
-                )));
-            }
-            if spec.stream_token_b64.trim().is_empty() {
-                return Err(PyValueError::new_err(format!(
-                    "provider '{}' stream_token must not be empty",
-                    spec.name
-                )));
-            }
-            Ok(GatewayProviderInput {
-                name: spec.name,
-                provider_id_hex: provider_id,
-                base_url: spec.base_url,
-                stream_token_b64: spec.stream_token_b64,
-                privacy_events_url: spec.privacy_events_url,
-            })
-        })
+        .map(canonical_gateway_provider)
         .collect::<PyResult<_>>()?;
     let unique_gateway_providers = provider_inputs
         .iter()
@@ -4495,6 +4624,24 @@ fn sorafs_sign_orderbook_payload_py(
 }
 
 #[pyfunction]
+#[pyo3(name = "sorafs_derive_orderbook_order_id")]
+fn sorafs_derive_orderbook_order_id_py(
+    py: Python<'_>,
+    owner_account: &[u8],
+    nonce: &str,
+) -> PyResult<Py<PyBytes>> {
+    if owner_account.is_empty() {
+        return Err(PyValueError::new_err("owner_account must not be empty"));
+    }
+    let nonce = parse_sorafs_decimal_u64_text_py(nonce, "nonce")?;
+    if nonce == 0 {
+        return Err(PyValueError::new_err("nonce must be positive"));
+    }
+    let order_id = derive_orderbook_order_id_v1(owner_account, nonce);
+    Ok(Py::from(PyBytes::new(py, &order_id)))
+}
+
+#[pyfunction]
 #[pyo3(name = "sorafs_build_signed_orderbook_order_request")]
 #[allow(clippy::too_many_arguments)] // Python field-level constructor surface
 fn sorafs_build_signed_orderbook_order_request_py(
@@ -4513,8 +4660,22 @@ fn sorafs_build_signed_orderbook_order_request_py(
     private_key: &[u8],
 ) -> PyResult<Py<PyBytes>> {
     let quantity_gib = parse_sorafs_decimal_u64_text_py(quantity_gib, "quantity_gib")?;
+    if owner_account.is_empty() {
+        return Err(PyValueError::new_err("owner_account must not be empty"));
+    }
+    let nonce = parse_sorafs_decimal_u64_text_py(nonce, "nonce")?;
+    if nonce == 0 {
+        return Err(PyValueError::new_err("nonce must be positive"));
+    }
+    let supplied_order_id = sorafs_fixed32_from_bytes_py(order_id, "order_id")?;
+    let expected_order_id = derive_orderbook_order_id_v1(owner_account, nonce);
+    if supplied_order_id != expected_order_id {
+        return Err(PyValueError::new_err(format!(
+            "order_id must equal the canonical owner-and-nonce derivation {}",
+            hex::encode(expected_order_id)
+        )));
+    }
     let fields = OrderbookOrderRequestFieldsV1 {
-        order_id: sorafs_fixed32_from_bytes_py(order_id, "order_id")?,
         side: parse_sorafs_orderbook_side_py(side)?,
         tier: parse_sorafs_orderbook_tier_py(tier)?,
         price_per_gib_micro_xor: parse_sorafs_decimal_u128_text_py(
@@ -4528,7 +4689,7 @@ fn sorafs_build_signed_orderbook_order_request_py(
         },
         owner_account: owner_account.to_vec(),
         expiry_unix: parse_sorafs_decimal_u64_text_py(expiry_unix, "expiry_unix")?,
-        nonce: parse_sorafs_decimal_u64_text_py(nonce, "nonce")?,
+        nonce,
         maker_fee_bps: parse_sorafs_fee_bps_py(maker_fee_bps, "maker_fee_bps")?,
         taker_fee_bps: parse_sorafs_fee_bps_py(taker_fee_bps, "taker_fee_bps")?,
     };
@@ -6917,7 +7078,6 @@ mod tests {
     use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
     use ed25519_dalek::SigningKey;
     use http::StatusCode;
-    use httpmock::{MockServer, prelude::*};
     use iroha_core::zk::{ZK_BACKEND_HALO2_IPA, kagemusha_recursive_spend_bundle_instance_values};
     use iroha_data_model::offline::{
         KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
@@ -6948,11 +7108,7 @@ mod tests {
         types::{PyBytes, PyDict, PyList, PyString},
     };
     use sha2::{Digest, Sha256};
-    use sorafs_car::{CarWriter, multi_fetch::PolicyBlockEvidence};
-    use sorafs_manifest::{
-        BLAKE3_256_MULTIHASH_CODE, CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder,
-        PinPolicy, StreamTokenBodyV1, StreamTokenV1,
-    };
+    use sorafs_car::multi_fetch::PolicyBlockEvidence;
     use tempfile::tempdir;
 
     use super::*;
@@ -16924,6 +17080,7 @@ mod tests {
         let providers = vec![PyGatewayProviderSpec {
             name: "alpha".to_string(),
             provider_id_hex: "55".repeat(32),
+            gateway_public_key_hex: "11".repeat(32),
             base_url: "https://gateway.test".to_string(),
             stream_token_b64: "dG9rZW4=".to_string(),
             privacy_events_url: None,
@@ -16950,302 +17107,77 @@ mod tests {
     }
 
     #[test]
-    fn sorafs_gateway_fetch_py_streams_payload() {
+    fn canonical_gateway_provider_preserves_trust_inputs() {
         ensure_python();
-        let payload: Vec<u8> = (0..4096).map(|idx| (idx as u8).wrapping_mul(11)).collect();
-        let plan =
-            CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-        let plan_json =
-            sorafs_car::fetch_plan::chunk_fetch_specs_to_string(&plan.chunk_fetch_specs())
-                .expect("serialise plan");
+        let spec = PyGatewayProviderSpec {
+            name: "alpha_1".to_string(),
+            provider_id_hex: "55".repeat(32),
+            gateway_public_key_hex: "11".repeat(32),
+            base_url: "https://gateway.test/".to_string(),
+            stream_token_b64: "dG9rZW4=".to_string(),
+            privacy_events_url: Some("https://gateway.test/privacy/events".to_string()),
+        };
 
-        let mut car_bytes = Vec::new();
-        let stats = CarWriter::new(&plan, &payload)
-            .expect("car writer")
-            .write_to(&mut car_bytes)
-            .expect("car build");
-        let root_cid = stats
-            .root_cids
-            .first()
-            .cloned()
-            .expect("car must have one root");
-        let manifest = ManifestBuilder::new()
-            .root_cid(root_cid.clone())
-            .dag_codec(DagCodecId(stats.dag_codec))
-            .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
-            .content_length(plan.content_length)
-            .car_digest(*stats.car_archive_digest.as_bytes())
-            .car_size(stats.car_size)
-            .pin_policy(PinPolicy::default())
-            .governance(GovernanceProofs {
-                council_signatures: vec![CouncilSignature {
-                    signer: [0x11; 32],
-                    signature: vec![0x22; 64],
-                }],
-            })
-            .build()
-            .expect("manifest");
-        let manifest_bytes = manifest.encode().expect("manifest bytes");
-        let manifest_digest = manifest.digest().expect("manifest digest");
-        let manifest_id_hex = hex::encode(manifest_digest.as_bytes());
-        let chunk_profile_handle = format!(
-            "{}.{}@{}",
-            manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
+        let provider = canonical_gateway_provider(spec).expect("canonical provider");
+        assert_eq!(provider.provider_id_hex, "55".repeat(32));
+        assert_eq!(provider.gateway_public_key_hex, "11".repeat(32));
+        assert_eq!(provider.base_url, "https://gateway.test/");
+        assert_eq!(provider.stream_token_b64, "dG9rZW4=");
+        assert_eq!(
+            provider.privacy_events_url.as_deref(),
+            Some("https://gateway.test/privacy/events")
         );
-        let provider_id_bytes = [0x55u8; 32];
-        let provider_id_hex = hex::encode(provider_id_bytes);
-        let second_provider_id_bytes = [0x56u8; 32];
-        let second_provider_id_hex = hex::encode(second_provider_id_bytes);
+    }
 
-        let chunk_specs = plan.chunk_fetch_specs();
-        let server = MockServer::start();
-        let manifest_body = {
-            let mut obj = json::Map::new();
-            obj.insert(
-                "manifest_b64".into(),
-                json::Value::from(BASE64_STANDARD.encode(manifest_bytes)),
-            );
-            obj.insert(
-                "manifest_digest_hex".into(),
-                json::Value::from(manifest_id_hex.clone()),
-            );
-            obj.insert(
-                "payload_digest_hex".into(),
-                json::Value::from(hex::encode(plan.payload_digest.as_bytes())),
-            );
-            obj.insert(
-                "content_length".into(),
-                json::Value::from(plan.content_length),
-            );
-            obj.insert(
-                "chunk_count".into(),
-                json::Value::from(plan.chunks.len() as u64),
-            );
-            obj.insert(
-                "chunk_profile_handle".into(),
-                json::Value::from(chunk_profile_handle.clone()),
-            );
-            json::to_string(&json::Value::Object(obj)).expect("manifest response")
+    #[test]
+    fn canonical_gateway_provider_rejects_adversarial_trust_inputs() {
+        ensure_python();
+        let base = PyGatewayProviderSpec {
+            name: "alpha".to_string(),
+            provider_id_hex: "55".repeat(32),
+            gateway_public_key_hex: "11".repeat(32),
+            base_url: "https://gateway.test/".to_string(),
+            stream_token_b64: "dG9rZW4=".to_string(),
+            privacy_events_url: None,
         };
-        let manifest_id_clone = manifest_id_hex.clone();
-        let manifest_body_clone = manifest_body.clone();
-        let manifest_mock = server.mock(move |when, then| {
-            when.method(GET)
-                .path(format!("/v1/sorafs/storage/manifest/{manifest_id_clone}"));
-            then.status(200).body(manifest_body_clone.clone());
-        });
-        let mut mocks = Vec::with_capacity(chunk_specs.len());
-        for spec in &chunk_specs {
-            let digest_hex = hex::encode(spec.digest);
-            let start = spec.offset as usize;
-            let end = start + spec.length as usize;
-            let chunk_bytes = payload[start..end].to_vec();
-            let manifest_clone = manifest_id_hex.clone();
-            let mock = server.mock(move |when, then| {
-                when.method(GET).path(format!(
-                    "/v1/sorafs/storage/chunk/{manifest_clone}/{digest_hex}"
-                ));
-                then.status(200).body(chunk_bytes.clone());
-            });
-            mocks.push(mock);
+
+        for key in [
+            "00".repeat(32),
+            "AA".repeat(32),
+            format!("0x{}", "11".repeat(32)),
+            format!(" {}", "11".repeat(32)),
+            "11".repeat(31),
+        ] {
+            let mut spec = base.clone();
+            spec.gateway_public_key_hex = key;
+            assert!(canonical_gateway_provider(spec).is_err());
         }
-
-        let signing = SigningKey::from_bytes(&[0x7Bu8; 32]);
-        let make_stream_token = |token_id: &str, provider_id: [u8; 32]| {
-            let token_body = StreamTokenBodyV1 {
-                token_id: token_id.to_string(),
-                manifest_cid: root_cid.clone(),
-                provider_id,
-                profile_handle: chunk_profile_handle.clone(),
-                max_streams: 4,
-                ttl_epoch: 1_900_000_000,
-                rate_limit_bytes: 32 * 1024 * 1024,
-                issued_at: 1_800_000_000,
-                requests_per_minute: 180,
-                token_pk_version: 1,
-            };
-            let stream_token =
-                StreamTokenV1::sign(token_body, &signing).expect("sign gateway stream token");
-            BASE64_STANDARD.encode(to_bytes(&stream_token).expect("token bytes"))
-        };
-        let stream_token_b64 = make_stream_token("py-gateway-test-alpha", provider_id_bytes);
-        let second_stream_token_b64 =
-            make_stream_token("py-gateway-test-beta", second_provider_id_bytes);
-
-        let providers = vec![
-            PyGatewayProviderSpec {
-                name: "alpha".to_string(),
-                provider_id_hex: provider_id_hex.clone(),
-                base_url: server.base_url(),
-                stream_token_b64,
-                privacy_events_url: None,
-            },
-            PyGatewayProviderSpec {
-                name: "beta".to_string(),
-                provider_id_hex: second_provider_id_hex,
-                base_url: server.base_url(),
-                stream_token_b64: second_stream_token_b64,
-                privacy_events_url: None,
-            },
-        ];
-
-        Python::attach(|py| {
-            let options = PyGatewayFetchOptions {
-                telemetry_region: Some("test-region".to_string()),
-                scoreboard_telemetry_label: Some("ci-sdk-python".to_string()),
-                max_peers: Some(2),
-                retry_budget: Some(2),
-                local_proxy: Some(PyLocalProxyOptions {
-                    proxy_mode: Some("bridge".to_string()),
-                    emit_browser_manifest: Some(false),
-                    norito_bridge: Some(PyLocalProxyNoritoBridgeOptions {
-                        spool_dir: "/tmp/norito-spool".to_string(),
-                        extension: Some("norito".to_string()),
-                    }),
-                    kaigi_bridge: Some(PyLocalProxyKaigiBridgeOptions {
-                        spool_dir: "/tmp/kaigi-spool".to_string(),
-                        extension: Some("norito".to_string()),
-                        room_policy: Some("authenticated".to_string()),
-                    }),
-                    ..PyLocalProxyOptions::default()
-                }),
-                ..PyGatewayFetchOptions::default()
-            };
-            let result = sorafs_gateway_fetch_py(
-                py,
-                &manifest_id_hex,
-                &chunk_profile_handle,
-                &plan_json,
-                providers,
-                Some(options),
-            )
-            .expect("gateway fetch");
-
-            let dict = result.bind(py);
-            let chunk_count_obj = dict
-                .get_item("chunk_count")
-                .expect("chunk_count lookup failed")
-                .expect("chunk_count missing");
-            let chunk_count: usize = chunk_count_obj.extract().expect("chunk_count");
-            assert_eq!(chunk_count, chunk_specs.len());
-
-            let payload_obj = dict
-                .get_item("payload")
-                .expect("payload lookup failed")
-                .expect("payload missing");
-            let payload_value = payload_obj.cast::<PyBytes>().expect("payload bytes");
-            assert_eq!(payload_value.as_bytes(), payload.as_slice());
-
-            let reports_obj = dict
-                .get_item("provider_reports")
-                .expect("provider reports lookup failed")
-                .expect("provider reports missing");
-            let reports = reports_obj.cast::<PyList>().expect("provider reports");
-            assert_eq!(reports.len(), 1);
-            let report_obj = reports.get_item(0).expect("provider report entry");
-            let report = report_obj.cast::<PyDict>().expect("provider report dict");
-            assert_eq!(
-                report
-                    .get_item("provider")
-                    .expect("provider lookup failed")
-                    .expect("provider id")
-                    .extract::<String>()
-                    .expect("provider id"),
-                "alpha"
-            );
-            assert_eq!(
-                dict.get_item("local_proxy_mode")
-                    .expect("local_proxy_mode lookup failed")
-                    .expect("local_proxy_mode")
-                    .extract::<String>()
-                    .expect("local_proxy_mode"),
-                "bridge"
-            );
-            assert_eq!(
-                dict.get_item("local_proxy_norito_spool")
-                    .expect("local_proxy_norito_spool lookup failed")
-                    .expect("local_proxy_norito_spool")
-                    .extract::<String>()
-                    .expect("local_proxy_norito_spool"),
-                "/tmp/norito-spool"
-            );
-            assert_eq!(
-                dict.get_item("local_proxy_kaigi_spool")
-                    .expect("local_proxy_kaigi_spool lookup failed")
-                    .expect("local_proxy_kaigi_spool")
-                    .extract::<String>()
-                    .expect("local_proxy_kaigi_spool"),
-                "/tmp/kaigi-spool"
-            );
-            assert_eq!(
-                dict.get_item("local_proxy_kaigi_policy")
-                    .expect("local_proxy_kaigi_policy lookup failed")
-                    .expect("local_proxy_kaigi_policy")
-                    .extract::<String>()
-                    .expect("local_proxy_kaigi_policy"),
-                "authenticated"
-            );
-
-            let receipts_obj = dict
-                .get_item("chunk_receipts")
-                .expect("chunk receipts lookup failed")
-                .expect("chunk receipts missing");
-            let receipts = receipts_obj.cast::<PyList>().expect("chunk receipts");
-            assert_eq!(receipts.len(), chunk_specs.len());
-            let manifest_obj = dict
-                .get_item("local_proxy_manifest")
-                .expect("local proxy manifest lookup failed")
-                .expect("local proxy manifest missing");
-            assert!(
-                manifest_obj.is_none(),
-                "local proxy manifest should default to None when not configured"
-            );
-            assert_eq!(
-                dict.get_item("telemetry_region")
-                    .expect("telemetry region lookup failed")
-                    .expect("telemetry region")
-                    .extract::<String>()
-                    .expect("telemetry region"),
-                "test-region".to_string()
-            );
-            let metadata_obj = dict
-                .get_item("metadata")
-                .expect("metadata lookup failed")
-                .expect("metadata missing");
-            let metadata = metadata_obj.cast::<PyDict>().expect("metadata dict");
-            assert_eq!(
-                metadata
-                    .get_item("gateway_provider_count")
-                    .expect("gateway_provider_count lookup failed")
-                    .expect("gateway_provider_count")
-                    .extract::<u64>()
-                    .expect("gateway count"),
-                2
-            );
-            assert_eq!(
-                metadata
-                    .get_item("telemetry_region")
-                    .expect("metadata telemetry_region lookup failed")
-                    .expect("metadata telemetry region")
-                    .extract::<String>()
-                    .expect("metadata telemetry region"),
-                "test-region"
-            );
-            assert_eq!(
-                metadata
-                    .get_item("telemetry_source_label")
-                    .expect("metadata telemetry label lookup failed")
-                    .expect("metadata telemetry label")
-                    .extract::<String>()
-                    .expect("metadata telemetry label"),
-                "ci-sdk-python"
-            );
-        });
-
-        for mock in mocks {
-            mock.assert();
+        for url in [
+            "http://gateway.test/",
+            "https://user@gateway.test/",
+            "https://gateway.test:443/",
+            "https://gateway.test:444/",
+            "https://gateway.test/path",
+            "https://gateway.test/?query=1",
+            "https://localhost/",
+            "https://127.0.0.1/",
+            "https://10.0.0.1/",
+            "https://192.0.2.1/",
+            "https://[::1]/",
+            "https://[2001:db8::1]/",
+        ] {
+            let mut spec = base.clone();
+            spec.base_url = url.to_string();
+            assert!(canonical_gateway_provider(spec).is_err(), "{url}");
         }
-        manifest_mock.assert();
+        for token in ["", " dG9rZW4=", "dG9rZW4", "dG9rZW4=\n", "YR==", "-w=="] {
+            let mut spec = base.clone();
+            spec.stream_token_b64 = token.to_string();
+            assert!(canonical_gateway_provider(spec).is_err(), "{token:?}");
+        }
+        let mut invalid_privacy = base.clone();
+        invalid_privacy.privacy_events_url = Some("https://gateway.test/privacy".to_string());
+        assert!(canonical_gateway_provider(invalid_privacy).is_err());
     }
 
     #[test]
@@ -18894,6 +18826,46 @@ impl Instruction {
         let instruction = json::from_str::<InstructionBox>(payload)
             .map_err(|err| PyValueError::new_err(format!("invalid instruction JSON: {err}")))?;
         Ok(Instruction::new(instruction))
+    }
+
+    /// Construct the signed-transaction instruction for a Nexus lane lifecycle update.
+    ///
+    /// `status_json` must be an unmodified response from
+    /// `GET /v1/nexus/lifecycle`; its version, canonical catalog, and catalog
+    /// commitment are validated before the optimistic `SetParameter` payload is
+    /// constructed. `plan_json` is the JSON representation of
+    /// `LaneLifecyclePlan`.
+    #[classmethod]
+    fn nexus_lane_lifecycle(
+        _cls: &Bound<'_, PyType>,
+        status_json: &str,
+        plan_json: &str,
+    ) -> PyResult<Self> {
+        let status = json::from_str::<LaneLifecycleStatusV1>(status_json).map_err(|err| {
+            PyValueError::new_err(format!("invalid Nexus lane lifecycle status JSON: {err}"))
+        })?;
+        if !status.nexus_enabled {
+            return Err(PyValueError::new_err(
+                "Nexus lane lifecycle is disabled on the serving node",
+            ));
+        }
+        let catalog = status.validate().map_err(|err| {
+            PyValueError::new_err(format!("invalid Nexus lane lifecycle status: {err}"))
+        })?;
+        let plan = json::from_str::<LaneLifecyclePlan>(plan_json).map_err(|err| {
+            PyValueError::new_err(format!("invalid Nexus lane lifecycle plan JSON: {err}"))
+        })?;
+        catalog.apply_lifecycle(&plan).map_err(|err| {
+            PyValueError::new_err(format!("invalid Nexus lane lifecycle plan: {err}"))
+        })?;
+        let custom = LaneLifecycleParameterV1::new(&catalog, &status.incarnations, plan)
+            .map_err(|err| {
+                PyValueError::new_err(format!("invalid Nexus lane incarnation binding: {err}"))
+            })?
+            .into_custom_parameter();
+        Ok(Instruction::new(
+            SetParameter::new(Parameter::Custom(custom)).into(),
+        ))
     }
 
     fn to_json(&self) -> PyResult<String> {
@@ -21288,6 +21260,7 @@ fn lane_relay_envelope_fixture_py() -> PyResult<(Vec<u8>, Vec<u8>)> {
     let settlement = LaneBlockCommitment {
         block_height: 1,
         lane_id,
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
         tx_count: 1,
         total_local_micro: 10,
@@ -24176,6 +24149,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(sorafs_sign_orderbook_payload_py, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        sorafs_derive_orderbook_order_id_py,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(
         sorafs_build_signed_orderbook_order_request_py,
         module

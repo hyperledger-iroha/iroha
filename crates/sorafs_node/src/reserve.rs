@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use iroha_data_model::sorafs::reserve::{
     ReserveLedgerProjection, ReserveLifecycleProjection, ReserveLifecycleStage, ReserveQuote,
 };
+use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use sorafs_manifest::deal::XorAmount;
 use thiserror::Error;
 
@@ -19,6 +20,17 @@ pub enum ReserveLifecycleRuntimeError {
     /// Runtime event sequencing overflowed.
     #[error("reserve lifecycle event sequence overflow")]
     EventSequenceOverflow,
+    /// A configured authoritative-state ceiling was reached.
+    #[error("reserve lifecycle resource `{resource}` exhausted (limit {limit})")]
+    ResourceExhausted {
+        /// Bounded resource label.
+        resource: &'static str,
+        /// Configured entry ceiling.
+        limit: usize,
+    },
+    /// Durable checkpoint commit failed.
+    #[error("reserve lifecycle checkpoint failed: {0}")]
+    Checkpoint(String),
     /// The local reserve lifecycle runtime lock was poisoned.
     #[error("reserve lifecycle state lock poisoned")]
     StateLockPoisoned,
@@ -82,6 +94,17 @@ pub enum ReserveMovementRuntimeError {
     /// Arithmetic overflowed while applying the movement.
     #[error("reserve movement arithmetic failed: {0}")]
     ArithmeticFailed(String),
+    /// A configured authoritative-state ceiling was reached.
+    #[error("reserve movement resource `{resource}` exhausted (limit {limit})")]
+    ResourceExhausted {
+        /// Bounded resource label.
+        resource: &'static str,
+        /// Configured entry ceiling.
+        limit: usize,
+    },
+    /// Durable checkpoint commit failed.
+    #[error("reserve movement checkpoint failed: {0}")]
+    Checkpoint(String),
     /// The local reserve movement runtime lock was poisoned.
     #[error("reserve movement state lock poisoned")]
     StateLockPoisoned,
@@ -143,13 +166,24 @@ pub enum ReserveAppealRuntimeError {
     /// Runtime event sequencing overflowed.
     #[error("reserve appeal event sequence overflow")]
     EventSequenceOverflow,
+    /// A configured authoritative-state ceiling was reached.
+    #[error("reserve appeal resource `{resource}` exhausted (limit {limit})")]
+    ResourceExhausted {
+        /// Bounded resource label.
+        resource: &'static str,
+        /// Configured entry ceiling.
+        limit: usize,
+    },
+    /// Durable checkpoint commit failed.
+    #[error("reserve appeal checkpoint failed: {0}")]
+    Checkpoint(String),
     /// The local reserve appeal runtime lock was poisoned.
     #[error("reserve appeal state lock poisoned")]
     StateLockPoisoned,
 }
 
 /// Input used to update one provider's local reserve lifecycle state.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReserveLifecycleUpdate {
     /// Governance-controlled provider identifier.
     pub provider_id: [u8; 32],
@@ -168,7 +202,7 @@ pub struct ReserveLifecycleUpdate {
 }
 
 /// Provider reserve lifecycle summary stored by the local runtime.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReserveProviderLifecycleSummary {
     /// Governance-controlled provider identifier.
     pub provider_id: [u8; 32],
@@ -193,7 +227,7 @@ pub struct ReserveProviderLifecycleSummary {
 }
 
 /// Provider credit-line state derived from the latest accepted lifecycle update.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReserveProviderCreditLineState {
     /// Governance-controlled provider identifier.
     pub provider_id: [u8; 32],
@@ -226,7 +260,7 @@ pub struct ReserveProviderCreditLineState {
 }
 
 /// Point-in-time local reserve credit-line snapshot.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReserveCreditLineSnapshot {
     /// Unix timestamp used when the snapshot was produced.
     pub generated_at_unix: u64,
@@ -235,7 +269,7 @@ pub struct ReserveCreditLineSnapshot {
 }
 
 /// Local reserve movement kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum ReserveMovementKind {
     /// Provider adds funds to the reserve account.
     TopUp,
@@ -244,7 +278,7 @@ pub enum ReserveMovementKind {
 }
 
 /// Local chain-custody status for a reserve movement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum ReserveMovementCustodyStatus {
     /// The movement intent is recorded locally but no chain transaction evidence is attached.
     IntentRecorded,
@@ -274,7 +308,7 @@ impl ReserveMovementCustodyStatus {
 }
 
 /// Input used to record one local reserve movement.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReserveMovementRequest {
     /// Deterministic movement identifier derived from the signed request.
     pub movement_id: [u8; 32],
@@ -297,7 +331,7 @@ pub struct ReserveMovementRequest {
 }
 
 /// Input used to attach chain custody evidence to a recorded reserve movement.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReserveMovementCustodyUpdate {
     /// Deterministic movement identifier being reconciled.
     pub movement_id: [u8; 32],
@@ -310,7 +344,7 @@ pub struct ReserveMovementCustodyUpdate {
 }
 
 /// Provider reserve balance tracked by the local movement ledger.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReserveProviderBalance {
     /// Governance-controlled provider identifier.
     pub provider_id: [u8; 32],
@@ -329,7 +363,7 @@ pub struct ReserveProviderBalance {
 }
 
 /// Sequenced reserve movement record retained by the local ledger.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReserveMovementRecord {
     /// Monotonic local movement sequence.
     pub sequence: u64,
@@ -378,7 +412,7 @@ type RecomputedReserveMovementBalances = (
 );
 
 /// Local reserve appeal status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum ReserveAppealStatus {
     /// The provider appeal is open and awaiting a decision.
     Open,
@@ -441,7 +475,7 @@ pub struct ReserveAppealDecision {
 }
 
 /// Sequenced local reserve appeal record.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReserveAppealRecord {
     /// Monotonic local appeal sequence.
     pub sequence: u64,
@@ -492,7 +526,7 @@ pub struct ReserveAppealDecisionOutcome {
 }
 
 /// Point-in-time reserve appeal snapshot.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReserveAppealSnapshot {
     /// Next sequence that will be assigned to a reserve appeal.
     pub next_sequence: u64,
@@ -524,7 +558,7 @@ pub struct ReserveLifecyclePolicyUpdate {
 }
 
 /// Sequenced local reserve lifecycle policy record.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReserveLifecyclePolicyRecord {
     /// Monotonic local policy sequence.
     pub sequence: u64,
@@ -558,7 +592,7 @@ pub struct ReserveLifecyclePolicyOutcome {
 }
 
 /// Point-in-time reserve lifecycle policy snapshot.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReserveLifecyclePolicySnapshot {
     /// Next sequence that will be assigned to a reserve lifecycle policy record.
     pub next_sequence: u64,
@@ -571,7 +605,7 @@ pub struct ReserveLifecyclePolicySnapshot {
 }
 
 /// Point-in-time reserve movement ledger snapshot.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReserveMovementSnapshot {
     /// Next sequence that will be assigned to a reserve movement.
     pub next_sequence: u64,
@@ -584,7 +618,7 @@ pub struct ReserveMovementSnapshot {
 }
 
 /// Sequenced reserve lifecycle event retained for replay and future Torii streams.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReserveLifecycleEvent {
     /// Monotonic local event sequence.
     pub sequence: u64,
@@ -611,7 +645,7 @@ pub struct ReserveLifecycleEvent {
 }
 
 /// Point-in-time reserve lifecycle runtime snapshot.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReserveLifecycleSnapshot {
     /// Next sequence that will be assigned to a reserve lifecycle event.
     pub next_sequence: u64,
@@ -623,8 +657,24 @@ pub struct ReserveLifecycleSnapshot {
     pub events: Vec<ReserveLifecycleEvent>,
 }
 
+/// Canonical durable snapshot of the complete local reserve runtime.
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+pub(crate) struct ReserveRuntimeCheckpointV1 {
+    next_sequence: u64,
+    next_movement_sequence: u64,
+    next_appeal_sequence: u64,
+    next_policy_sequence: u64,
+    providers: Vec<ReserveProviderLifecycleSummary>,
+    events: Vec<ReserveLifecycleEvent>,
+    provider_balances: Vec<ReserveProviderBalance>,
+    provider_credit_lines: Vec<ReserveProviderCreditLineState>,
+    movements: Vec<ReserveMovementRecord>,
+    appeals: Vec<ReserveAppealRecord>,
+    lifecycle_policies: Vec<ReserveLifecyclePolicyRecord>,
+}
+
 /// In-memory reserve lifecycle runtime.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct ReserveLifecycleRuntime {
     next_sequence: u64,
     next_movement_sequence: u64,
@@ -640,9 +690,45 @@ pub(crate) struct ReserveLifecycleRuntime {
     appeals: Vec<ReserveAppealRecord>,
     lifecycle_policies_by_id: BTreeMap<[u8; 32], ReserveLifecyclePolicyRecord>,
     lifecycle_policies: Vec<ReserveLifecyclePolicyRecord>,
+    entry_limit: usize,
+    event_history_limit: usize,
+}
+
+impl Default for ReserveLifecycleRuntime {
+    fn default() -> Self {
+        Self::with_limits(65_536, 4_096)
+    }
 }
 
 impl ReserveLifecycleRuntime {
+    pub(crate) fn with_limits(entry_limit: usize, event_history_limit: usize) -> Self {
+        Self {
+            next_sequence: 0,
+            next_movement_sequence: 0,
+            next_appeal_sequence: 0,
+            next_policy_sequence: 0,
+            providers: BTreeMap::new(),
+            events: Vec::new(),
+            provider_balances: BTreeMap::new(),
+            provider_credit_lines: BTreeMap::new(),
+            movements_by_id: BTreeMap::new(),
+            movements: Vec::new(),
+            appeals_by_id: BTreeMap::new(),
+            appeals: Vec::new(),
+            lifecycle_policies_by_id: BTreeMap::new(),
+            lifecycle_policies: Vec::new(),
+            entry_limit: entry_limit.max(1),
+            event_history_limit: event_history_limit.max(1),
+        }
+    }
+
+    fn push_lifecycle_event(&mut self, event: ReserveLifecycleEvent) {
+        self.events.push(event);
+        if self.events.len() > self.event_history_limit {
+            let remove = self.events.len() - self.event_history_limit;
+            self.events.drain(..remove);
+        }
+    }
     /// Record a provider lifecycle update and append a replay event.
     pub(crate) fn record_update(
         &mut self,
@@ -676,6 +762,12 @@ impl ReserveLifecycleRuntime {
             .providers
             .get(&update.provider_id)
             .map(|summary| summary.lifecycle.stage);
+        if previous_stage.is_none() && self.providers.len() >= self.entry_limit {
+            return Err(ReserveLifecycleRuntimeError::ResourceExhausted {
+                resource: "providers",
+                limit: self.entry_limit,
+            });
+        }
         let sequence = self.next_sequence;
         self.next_sequence = self
             .next_sequence
@@ -719,7 +811,7 @@ impl ReserveLifecycleRuntime {
             applied_policy_id,
             applied_appeal_id,
         };
-        self.events.push(event.clone());
+        self.push_lifecycle_event(event.clone());
         Ok(event)
     }
 
@@ -807,7 +899,7 @@ impl ReserveLifecycleRuntime {
             };
             self.providers.insert(provider_id, updated_summary);
             self.provider_credit_lines.insert(provider_id, credit_line);
-            self.events.push(event.clone());
+            self.push_lifecycle_event(event.clone());
             advanced_events.push(event);
         }
         Ok(advanced_events)
@@ -879,6 +971,24 @@ impl ReserveLifecycleRuntime {
             .collect()
     }
 
+    /// Return gap metadata and retained lifecycle events after an optional cursor.
+    pub(crate) fn events_replay(
+        &self,
+        since_sequence: Option<u64>,
+        limit: usize,
+    ) -> (Option<u64>, Option<u64>, bool, Vec<ReserveLifecycleEvent>) {
+        let oldest = self.events.first().map(|event| event.sequence);
+        let latest = self.next_sequence.checked_sub(1);
+        let gap = since_sequence
+            .is_some_and(|cursor| oldest.is_some_and(|oldest| cursor.saturating_add(1) < oldest));
+        (
+            oldest,
+            latest,
+            gap,
+            self.events_since(since_sequence, limit),
+        )
+    }
+
     /// Return the latest retained event sequence.
     pub(crate) fn latest_event_sequence(&self) -> Option<u64> {
         self.events.last().map(|event| event.sequence)
@@ -919,6 +1029,20 @@ impl ReserveLifecycleRuntime {
             }
             return Err(ReserveMovementRuntimeError::MovementIdCollision {
                 movement_id_hex: hex::encode(request.movement_id),
+            });
+        }
+        if self.movements.len() >= self.entry_limit {
+            return Err(ReserveMovementRuntimeError::ResourceExhausted {
+                resource: "movements",
+                limit: self.entry_limit,
+            });
+        }
+        if !self.provider_balances.contains_key(&request.provider_id)
+            && self.provider_balances.len() >= self.entry_limit
+        {
+            return Err(ReserveMovementRuntimeError::ResourceExhausted {
+                resource: "provider_balances",
+                limit: self.entry_limit,
             });
         }
 
@@ -1109,6 +1233,12 @@ impl ReserveLifecycleRuntime {
                 appeal_id_hex: hex::encode(request.appeal_id),
             });
         }
+        if self.appeals.len() >= self.entry_limit {
+            return Err(ReserveAppealRuntimeError::ResourceExhausted {
+                resource: "appeals",
+                limit: self.entry_limit,
+            });
+        }
 
         let sequence = self.next_appeal_sequence;
         self.next_appeal_sequence = self
@@ -1262,7 +1392,7 @@ impl ReserveLifecycleRuntime {
         self.providers.insert(appeal.provider_id, updated_summary);
         self.provider_credit_lines
             .insert(appeal.provider_id, credit_line);
-        self.events.push(event.clone());
+        self.push_lifecycle_event(event.clone());
         Ok(Some(event))
     }
 
@@ -1298,6 +1428,12 @@ impl ReserveLifecycleRuntime {
             }
             return Err(ReserveAppealRuntimeError::PolicyIdCollision {
                 policy_id_hex: hex::encode(update.policy_id),
+            });
+        }
+        if self.lifecycle_policies.len() >= self.entry_limit {
+            return Err(ReserveAppealRuntimeError::ResourceExhausted {
+                resource: "lifecycle_policies",
+                limit: self.entry_limit,
             });
         }
 
@@ -1412,7 +1548,7 @@ impl ReserveLifecycleRuntime {
             };
             self.providers.insert(provider_id, updated_summary);
             self.provider_credit_lines.insert(provider_id, credit_line);
-            self.events.push(event.clone());
+            self.push_lifecycle_event(event.clone());
             reprojected_events.push(event);
         }
         Ok(reprojected_events)
@@ -1435,6 +1571,369 @@ impl ReserveLifecycleRuntime {
             policies: self.lifecycle_policies.clone(),
         }
     }
+
+    /// Export the complete authoritative reserve runtime for durable restart recovery.
+    pub(crate) fn checkpoint(&self) -> ReserveRuntimeCheckpointV1 {
+        ReserveRuntimeCheckpointV1 {
+            next_sequence: self.next_sequence,
+            next_movement_sequence: self.next_movement_sequence,
+            next_appeal_sequence: self.next_appeal_sequence,
+            next_policy_sequence: self.next_policy_sequence,
+            providers: self.providers.values().cloned().collect(),
+            events: self.events.clone(),
+            provider_balances: self.provider_balances.values().cloned().collect(),
+            provider_credit_lines: self.provider_credit_lines.values().cloned().collect(),
+            movements: self.movements.clone(),
+            appeals: self.appeals.clone(),
+            lifecycle_policies: self.lifecycle_policies.clone(),
+        }
+    }
+
+    /// Restore a previously exported reserve checkpoint after validating all indexes and
+    /// monotonic high-water marks.
+    pub(crate) fn restore_checkpoint(
+        &mut self,
+        checkpoint: ReserveRuntimeCheckpointV1,
+    ) -> Result<(), String> {
+        let ReserveRuntimeCheckpointV1 {
+            next_sequence,
+            next_movement_sequence,
+            next_appeal_sequence,
+            next_policy_sequence,
+            providers,
+            events,
+            provider_balances,
+            provider_credit_lines,
+            movements,
+            appeals,
+            lifecycle_policies,
+        } = checkpoint;
+
+        for (label, count, limit) in [
+            ("providers", providers.len(), self.entry_limit),
+            (
+                "provider balances",
+                provider_balances.len(),
+                self.entry_limit,
+            ),
+            (
+                "provider credit lines",
+                provider_credit_lines.len(),
+                self.entry_limit,
+            ),
+            ("movements", movements.len(), self.entry_limit),
+            ("appeals", appeals.len(), self.entry_limit),
+            (
+                "lifecycle policies",
+                lifecycle_policies.len(),
+                self.entry_limit,
+            ),
+            ("lifecycle events", events.len(), self.event_history_limit),
+        ] {
+            if count > limit {
+                return Err(format!(
+                    "reserve checkpoint {label} count {count} exceeds configured limit {limit}"
+                ));
+            }
+        }
+
+        validate_retained_sequence_suffix(
+            "reserve lifecycle event",
+            &events,
+            next_sequence,
+            |event| event.sequence,
+        )?;
+        validate_complete_sequence(
+            "reserve movement",
+            &movements,
+            next_movement_sequence,
+            |movement| movement.sequence,
+        )?;
+        validate_complete_sequence("reserve appeal", &appeals, next_appeal_sequence, |appeal| {
+            appeal.sequence
+        })?;
+        validate_complete_sequence(
+            "reserve lifecycle policy",
+            &lifecycle_policies,
+            next_policy_sequence,
+            |policy| policy.sequence,
+        )?;
+
+        let mut provider_index = BTreeMap::new();
+        for provider in providers {
+            if provider.grace_period_days >= provider.default_after_days {
+                return Err(format!(
+                    "reserve provider {} has an invalid lifecycle window",
+                    hex::encode(provider.provider_id)
+                ));
+            }
+            if provider_index
+                .insert(provider.provider_id, provider)
+                .is_some()
+            {
+                return Err("duplicate provider id in reserve checkpoint".to_owned());
+            }
+        }
+
+        let mut policy_index = BTreeMap::new();
+        for policy in &lifecycle_policies {
+            if policy.grace_period_days >= policy.default_after_days
+                || policy.reason.trim().is_empty()
+                || policy.idempotency_key.trim().is_empty()
+            {
+                return Err(format!(
+                    "reserve lifecycle policy {} is invalid",
+                    hex::encode(policy.policy_id)
+                ));
+            }
+            if policy_index
+                .insert(policy.policy_id, policy.clone())
+                .is_some()
+            {
+                return Err("duplicate lifecycle policy id in reserve checkpoint".to_owned());
+            }
+        }
+
+        let mut appeal_index = BTreeMap::new();
+        for appeal in &appeals {
+            if appeal.reason.trim().is_empty() || appeal.idempotency_key.trim().is_empty() {
+                return Err(format!(
+                    "reserve appeal {} contains an empty required field",
+                    hex::encode(appeal.appeal_id)
+                ));
+            }
+            let decision_complete = appeal.decision_account.is_some()
+                && appeal
+                    .decision_rationale
+                    .as_ref()
+                    .is_some_and(|value| !value.trim().is_empty())
+                && appeal.decided_at_unix.is_some();
+            let decision_empty = appeal.decision_account.is_none()
+                && appeal.decision_rationale.is_none()
+                && appeal.decided_at_unix.is_none();
+            if (appeal.status == ReserveAppealStatus::Open && !decision_empty)
+                || (appeal.status.is_terminal() && !decision_complete)
+            {
+                return Err(format!(
+                    "reserve appeal {} has inconsistent decision state",
+                    hex::encode(appeal.appeal_id)
+                ));
+            }
+            if appeal_index
+                .insert(appeal.appeal_id, appeal.clone())
+                .is_some()
+            {
+                return Err("duplicate appeal id in reserve checkpoint".to_owned());
+            }
+        }
+
+        for provider in provider_index.values() {
+            if provider
+                .applied_policy_id
+                .is_some_and(|policy_id| !policy_index.contains_key(&policy_id))
+            {
+                return Err(format!(
+                    "reserve provider {} references a missing lifecycle policy",
+                    hex::encode(provider.provider_id)
+                ));
+            }
+            if provider.applied_appeal_id.is_some_and(|appeal_id| {
+                appeal_index.get(&appeal_id).map_or(true, |appeal| {
+                    appeal.provider_id != provider.provider_id
+                        || appeal.status != ReserveAppealStatus::Accepted
+                })
+            }) {
+                return Err(format!(
+                    "reserve provider {} references an invalid accepted appeal",
+                    hex::encode(provider.provider_id)
+                ));
+            }
+        }
+
+        for event in &events {
+            if !provider_index.contains_key(&event.provider_id)
+                || event.current_stage != event.lifecycle.stage
+                || event.grace_period_days >= event.default_after_days
+                || event
+                    .applied_policy_id
+                    .is_some_and(|policy_id| !policy_index.contains_key(&policy_id))
+                || event.applied_appeal_id.is_some_and(|appeal_id| {
+                    appeal_index.get(&appeal_id).map_or(true, |appeal| {
+                        appeal.provider_id != event.provider_id
+                            || appeal.status != ReserveAppealStatus::Accepted
+                    })
+                })
+            {
+                return Err(format!(
+                    "reserve lifecycle event {} has inconsistent references or projection",
+                    event.sequence
+                ));
+            }
+        }
+
+        let mut credit_line_index = BTreeMap::new();
+        for credit_line in provider_credit_lines {
+            let Some(provider) = provider_index.get(&credit_line.provider_id) else {
+                return Err(format!(
+                    "reserve credit line references missing provider {}",
+                    hex::encode(credit_line.provider_id)
+                ));
+            };
+            if credit_line.lifecycle_event_sequence >= next_sequence {
+                return Err(format!(
+                    "reserve credit line for provider {} references an uncommitted event",
+                    hex::encode(credit_line.provider_id)
+                ));
+            }
+            let expected = reserve_credit_line_state_from_lifecycle(
+                credit_line.provider_id,
+                &provider.provider_account,
+                credit_line.lifecycle_event_sequence,
+                provider.lifecycle,
+                provider.applied_appeal_id,
+                provider.updated_at_unix,
+            );
+            if credit_line != expected {
+                return Err(format!(
+                    "reserve credit line for provider {} disagrees with its lifecycle projection",
+                    hex::encode(credit_line.provider_id)
+                ));
+            }
+            if credit_line_index
+                .insert(credit_line.provider_id, credit_line)
+                .is_some()
+            {
+                return Err("duplicate reserve credit-line provider id".to_owned());
+            }
+        }
+        if provider_index.keys().ne(credit_line_index.keys()) {
+            return Err("reserve provider and credit-line indexes disagree".to_owned());
+        }
+
+        let mut movement_index = BTreeMap::new();
+        for movement in &movements {
+            if movement.amount.is_zero() {
+                return Err(format!(
+                    "reserve movement {} has a zero amount",
+                    hex::encode(movement.movement_id)
+                ));
+            }
+            let custody_evidence_present = movement.custody_tx_hash_hex.is_some()
+                && movement.custody_updated_at_unix.is_some();
+            let custody_evidence_absent = movement.custody_tx_hash_hex.is_none()
+                && movement.custody_updated_at_unix.is_none();
+            if (movement.custody_status == ReserveMovementCustodyStatus::IntentRecorded
+                && !custody_evidence_absent)
+                || (movement.custody_status.is_terminal() && !custody_evidence_present)
+            {
+                return Err(format!(
+                    "reserve movement {} has inconsistent custody evidence",
+                    hex::encode(movement.movement_id)
+                ));
+            }
+            if movement_index
+                .insert(movement.movement_id, movement.clone())
+                .is_some()
+            {
+                return Err("duplicate movement id in reserve checkpoint".to_owned());
+            }
+        }
+        let (recomputed_balances, recomputed_movements) =
+            recompute_reserve_movement_balances(&movements)
+                .map_err(|err| format!("invalid reserve movement checkpoint arithmetic: {err}"))?;
+        if recomputed_movements != movements {
+            return Err("reserve movement running balances are inconsistent".to_owned());
+        }
+        let mut balance_index = BTreeMap::new();
+        for balance in provider_balances {
+            if balance_index.insert(balance.provider_id, balance).is_some() {
+                return Err("duplicate provider balance in reserve checkpoint".to_owned());
+            }
+        }
+        if balance_index != recomputed_balances {
+            return Err("reserve provider balances disagree with movement history".to_owned());
+        }
+
+        self.next_sequence = next_sequence;
+        self.next_movement_sequence = next_movement_sequence;
+        self.next_appeal_sequence = next_appeal_sequence;
+        self.next_policy_sequence = next_policy_sequence;
+        self.providers = provider_index;
+        self.events = events;
+        self.provider_balances = balance_index;
+        self.provider_credit_lines = credit_line_index;
+        self.movements_by_id = movement_index;
+        self.movements = movements;
+        self.appeals_by_id = appeal_index;
+        self.appeals = appeals;
+        self.lifecycle_policies_by_id = policy_index;
+        self.lifecycle_policies = lifecycle_policies;
+        Ok(())
+    }
+}
+
+fn validate_complete_sequence<T>(
+    label: &str,
+    records: &[T],
+    next_sequence: u64,
+    sequence_of: impl Fn(&T) -> u64,
+) -> Result<(), String> {
+    for (index, record) in records.iter().enumerate() {
+        let expected = u64::try_from(index)
+            .map_err(|_| format!("{label} checkpoint count does not fit u64"))?;
+        let actual = sequence_of(record);
+        if actual != expected {
+            return Err(format!(
+                "{label} checkpoint sequence {actual} does not match expected {expected}"
+            ));
+        }
+    }
+    let expected_next = u64::try_from(records.len())
+        .map_err(|_| format!("{label} checkpoint count does not fit u64"))?;
+    if next_sequence != expected_next {
+        return Err(format!(
+            "{label} next sequence {next_sequence} does not match expected {expected_next}"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_retained_sequence_suffix<T>(
+    label: &str,
+    records: &[T],
+    next_sequence: u64,
+    sequence_of: impl Fn(&T) -> u64,
+) -> Result<(), String> {
+    if records.is_empty() {
+        if next_sequence != 0 {
+            return Err(format!(
+                "{label} history is empty but next sequence is {next_sequence}"
+            ));
+        }
+        return Ok(());
+    }
+    for pair in records.windows(2) {
+        let previous = sequence_of(&pair[0]);
+        let actual = sequence_of(&pair[1]);
+        let expected = previous
+            .checked_add(1)
+            .ok_or_else(|| format!("{label} sequence overflow"))?;
+        if actual != expected {
+            return Err(format!(
+                "{label} checkpoint sequence {actual} does not match expected {expected}"
+            ));
+        }
+    }
+    let last = sequence_of(records.last().expect("non-empty checked above"));
+    let expected_next = last
+        .checked_add(1)
+        .ok_or_else(|| format!("{label} sequence overflow"))?;
+    if next_sequence != expected_next {
+        return Err(format!(
+            "{label} next sequence {next_sequence} does not follow retained high-water {last}"
+        ));
+    }
+    Ok(())
 }
 
 fn movement_record_matches_request(
@@ -2746,6 +3245,156 @@ mod tests {
         assert!(matches!(
             underflow,
             ReserveMovementRuntimeError::InsufficientBalance { .. }
+        ));
+    }
+
+    #[test]
+    fn runtime_checkpoint_roundtrip_preserves_complete_state_and_retained_suffix() {
+        let mut runtime = ReserveLifecycleRuntime::with_limits(8, 2);
+        runtime
+            .record_lifecycle_policy_update(lifecycle_policy_update(0x70))
+            .expect("record policy");
+        for days_past_due in 0..3 {
+            runtime
+                .record_update(update(0x71, days_past_due, XorAmount::zero()))
+                .expect("record lifecycle update");
+        }
+        runtime
+            .record_appeal(appeal_request(0x72, 0x71))
+            .expect("record appeal");
+        runtime
+            .record_movement(movement_request(
+                0x73,
+                0x71,
+                ReserveMovementKind::TopUp,
+                XorAmount::from_micro(100),
+            ))
+            .expect("record movement");
+
+        let checkpoint = runtime.checkpoint();
+        assert_eq!(checkpoint.events.len(), 2);
+        assert_eq!(checkpoint.events[0].sequence, 1);
+        let expected = norito::to_bytes(&checkpoint).expect("encode checkpoint");
+
+        let mut restored = ReserveLifecycleRuntime::with_limits(8, 2);
+        restored
+            .restore_checkpoint(checkpoint)
+            .expect("restore checkpoint");
+        assert_eq!(
+            norito::to_bytes(&restored.checkpoint()).expect("encode restored checkpoint"),
+            expected
+        );
+        assert_eq!(restored.latest_event_sequence(), Some(2));
+        assert!(restored.provider_balance([0x71; 32]).is_some());
+        assert!(restored.appeal([0x72; 32]).is_some());
+    }
+
+    #[test]
+    fn runtime_checkpoint_rejects_forged_sequences_duplicates_and_balances() {
+        let mut runtime = ReserveLifecycleRuntime::with_limits(8, 2);
+        runtime
+            .record_update(update(0x74, 0, XorAmount::zero()))
+            .expect("record lifecycle update");
+        runtime
+            .record_movement(movement_request(
+                0x75,
+                0x74,
+                ReserveMovementKind::TopUp,
+                XorAmount::from_micro(100),
+            ))
+            .expect("record movement");
+
+        let mut bad_sequence = runtime.checkpoint();
+        bad_sequence.events[0].sequence = 9;
+        assert!(
+            ReserveLifecycleRuntime::with_limits(8, 2)
+                .restore_checkpoint(bad_sequence)
+                .expect_err("forged event sequence must fail")
+                .contains("next sequence")
+        );
+
+        let mut duplicate = runtime.checkpoint();
+        duplicate.providers.push(duplicate.providers[0].clone());
+        assert!(
+            ReserveLifecycleRuntime::with_limits(8, 2)
+                .restore_checkpoint(duplicate)
+                .expect_err("duplicate provider must fail")
+                .contains("duplicate provider")
+        );
+
+        let mut bad_balance = runtime.checkpoint();
+        bad_balance.provider_balances[0].balance = XorAmount::from_micro(99);
+        assert!(
+            ReserveLifecycleRuntime::with_limits(8, 2)
+                .restore_checkpoint(bad_balance)
+                .expect_err("forged running balance must fail")
+                .contains("provider balances")
+        );
+    }
+
+    #[test]
+    fn runtime_refuses_new_authoritative_entries_at_configured_limits() {
+        let mut runtime = ReserveLifecycleRuntime::with_limits(1, 1);
+        runtime
+            .record_update(update(0x76, 0, XorAmount::zero()))
+            .expect("record first provider");
+        assert!(matches!(
+            runtime
+                .record_update(update(0x77, 0, XorAmount::zero()))
+                .expect_err("second provider must be refused"),
+            ReserveLifecycleRuntimeError::ResourceExhausted {
+                resource: "providers",
+                limit: 1
+            }
+        ));
+
+        runtime
+            .record_movement(movement_request(
+                0x78,
+                0x76,
+                ReserveMovementKind::TopUp,
+                XorAmount::from_micro(1),
+            ))
+            .expect("record first movement");
+        assert!(matches!(
+            runtime
+                .record_movement(movement_request(
+                    0x79,
+                    0x76,
+                    ReserveMovementKind::TopUp,
+                    XorAmount::from_micro(1),
+                ))
+                .expect_err("second movement must be refused"),
+            ReserveMovementRuntimeError::ResourceExhausted {
+                resource: "movements",
+                limit: 1
+            }
+        ));
+
+        runtime
+            .record_appeal(appeal_request(0x7A, 0x76))
+            .expect("record first appeal");
+        assert!(matches!(
+            runtime
+                .record_appeal(appeal_request(0x7B, 0x76))
+                .expect_err("second appeal must be refused"),
+            ReserveAppealRuntimeError::ResourceExhausted {
+                resource: "appeals",
+                limit: 1
+            }
+        ));
+
+        runtime
+            .record_lifecycle_policy_update(lifecycle_policy_update(0x7C))
+            .expect("record first policy");
+        assert!(matches!(
+            runtime
+                .record_lifecycle_policy_update(lifecycle_policy_update(0x7D))
+                .expect_err("second policy must be refused"),
+            ReserveAppealRuntimeError::ResourceExhausted {
+                resource: "lifecycle_policies",
+                limit: 1
+            }
         ));
     }
 }

@@ -45,6 +45,7 @@ sccp_client = load_sccp_module()
 
 
 Urlopen = Callable[..., Any]
+RUNTIME_TEXT_FILE_PATH_TYPE = type(Path())
 
 TRON_SOURCE_EVENT_ABI = b"SccpSourceEvent(bytes32)"
 TRON_SOURCE_EVENT_TOPIC = evidence._keccak_256(TRON_SOURCE_EVENT_ABI)
@@ -58,8 +59,12 @@ TRON_ROUTE_CANARY_EVIDENCE_LABEL = b"iroha:sccp:tron-route-canary-evidence:v3"
 TRON_SUBMIT_MESSAGE_PROOF_SELECTOR = bytes.fromhex("bd57826c")
 TRON_GROTH16_PROOF_VERSION = 1
 TRON_GROTH16_PROOF_ABI_BYTE_LENGTH = 32 * 12
+TRON_TRIGGER_SMART_CONTRACT_TYPE = "TriggerSmartContract"
 TRON_TRIGGER_SMART_CONTRACT_TYPE_URL = (
     b"type.googleapis.com/protocol.TriggerSmartContract"
+)
+TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_TEXT = TRON_TRIGGER_SMART_CONTRACT_TYPE_URL.decode(
+    "ascii"
 )
 SECP256K1_FIELD_MODULUS = int(
     "fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f",
@@ -175,6 +180,9 @@ def _unsupported_tron_fields_message(label: str, fields: set[Any]) -> str:
 
 
 def _strip_0x(value: str) -> str:
+    # Source-inventory marker: TRON live strip-0x helper uses exact strings.
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError("0x text must be an exact string")
     return value[2:] if value.lower().startswith("0x") else value
 
 
@@ -219,6 +227,13 @@ def _summary_exact_public_values_equal(left: Any, right: Any) -> bool:
     return False
 
 
+def _require_exact_string_literal(value: Any, expected: str, *, message: str) -> str:
+    if type(value) is not str or value != expected:
+        raise RuntimeError(message)
+    return value
+
+
+# Source-inventory marker: TRON live transaction parser uses exact strings.
 def _exact_summary_string(record: dict[Any, Any], field: str, *, label: str) -> str:
     value = _summary_get_exact_key(record, field)
     if type(value) is not str or not value or value != value.strip():
@@ -487,6 +502,9 @@ def _normalize_tron_node_url(base_url: str) -> str:
 
 
 def _tron_node_host_is_loopback(host: str) -> bool:
+    # Source-inventory marker: runtime URL host classifiers use exact strings.
+    if type(host) is not str:
+        return False
     normalized = host.strip("[]").lower()
     try:
         return ipaddress.ip_address(normalized).is_loopback
@@ -495,6 +513,8 @@ def _tron_node_host_is_loopback(host: str) -> bool:
 
 
 def _tron_node_host_is_non_public_dns(host: str) -> bool:
+    if type(host) is not str:
+        return True
     normalized = host.strip("[]").lower()
     try:
         ipaddress.ip_address(normalized)
@@ -542,6 +562,9 @@ def _tron_pro_api_key_token(value: Any, *, label: str) -> str:
 def _json_object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key, value in pairs:
+        # Source-inventory marker: live JSON duplicate-key helpers use exact strings.
+        if type(key) is not str:
+            raise ValueError("duplicate JSON keys")
         if key in out:
             raise ValueError("duplicate JSON keys")
         out[key] = value
@@ -1724,15 +1747,19 @@ def _source_event_result_bytes_are_success(result_bytes: bytes) -> bool:
 
 
 def _source_event_ret_code_is_success(value: Any) -> bool:
-    if type(value) is bool:
-        return False
-    return value in (0, "0", "SUCESS")
+    if type(value) is int and type(value) is not bool:
+        return value == 0
+    if type(value) is str:
+        return value in ("0", "SUCESS")
+    return False
 
 
 def _source_event_contract_ret_is_success(value: Any) -> bool:
-    if type(value) is bool:
-        return False
-    return value in (1, "1", "SUCCESS")
+    if type(value) is int and type(value) is not bool:
+        return value == 1
+    if type(value) is str:
+        return value in ("1", "SUCCESS")
+    return False
 
 
 def _tron_transaction_bytes_from_json(
@@ -3405,14 +3432,19 @@ def _source_event_trigger_contract_summary(
     contract = contracts[0]
     if type(contract) is not dict:
         raise RuntimeError("source-event transaction contract must be an object")
-    if contract.get("type") != "TriggerSmartContract":
-        raise RuntimeError("source-event transaction must be TriggerSmartContract")
+    contract_type = _require_exact_string_literal(
+        contract.get("type"),
+        TRON_TRIGGER_SMART_CONTRACT_TYPE,
+        message="source-event transaction must be TriggerSmartContract",
+    )
     parameter = contract.get("parameter")
     if type(parameter) is not dict:
         raise RuntimeError("source-event transaction contract parameter is missing")
-    type_url = parameter.get("type_url")
-    if type_url != "type.googleapis.com/protocol.TriggerSmartContract":
-        raise RuntimeError("source-event transaction TriggerSmartContract type_url mismatch")
+    type_url = _require_exact_string_literal(
+        parameter.get("type_url"),
+        TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_TEXT,
+        message="source-event transaction TriggerSmartContract type_url mismatch",
+    )
     value = parameter.get("value")
     if type(value) is not dict:
         raise RuntimeError("source-event transaction TriggerSmartContract value is missing")
@@ -3440,7 +3472,7 @@ def _source_event_trigger_contract_summary(
         **signature_summary,
         **transaction_bytes_summary,
         "contract_ret": contract_ret,
-        "contract_type": "TriggerSmartContract",
+        "contract_type": contract_type,
         "type_url": type_url,
         "owner_address": _hex(owner),
         "owner_base58": tron_base58check_from_payload(owner),
@@ -3464,9 +3496,11 @@ def _source_event_transaction_summary(
         label="source-event transaction info",
     )
     receipt = response.get("receipt")
-    receipt_status = receipt.get("result") if type(receipt) is dict else None
-    if receipt_status != "SUCCESS":
-        raise RuntimeError("source-event transaction receipt status must be SUCCESS")
+    receipt_status = _require_exact_string_literal(
+        receipt.get("result") if type(receipt) is dict else None,
+        "SUCCESS",
+        message="source-event transaction receipt status must be SUCCESS",
+    )
     logs = response.get("log")
     if type(logs) is not list:
         raise RuntimeError("source-event transaction info returned no log list")
@@ -4439,16 +4473,19 @@ def _route_canary_trigger_contract_summary(
     contract = contracts[0]
     if type(contract) is not dict:
         raise RuntimeError("route-canary transaction contract must be an object")
-    if contract.get("type") != "TriggerSmartContract":
-        raise RuntimeError("route-canary transaction must be TriggerSmartContract")
+    contract_type = _require_exact_string_literal(
+        contract.get("type"),
+        TRON_TRIGGER_SMART_CONTRACT_TYPE,
+        message="route-canary transaction must be TriggerSmartContract",
+    )
     parameter = contract.get("parameter")
     if type(parameter) is not dict:
         raise RuntimeError("route-canary transaction contract parameter is missing")
-    type_url = parameter.get("type_url")
-    if type_url != "type.googleapis.com/protocol.TriggerSmartContract":
-        raise RuntimeError(
-            "route-canary transaction TriggerSmartContract type_url mismatch"
-        )
+    type_url = _require_exact_string_literal(
+        parameter.get("type_url"),
+        TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_TEXT,
+        message="route-canary transaction TriggerSmartContract type_url mismatch",
+    )
     value = parameter.get("value")
     if type(value) is not dict:
         raise RuntimeError(
@@ -4506,7 +4543,7 @@ def _route_canary_trigger_contract_summary(
         "raw_data_call_matches": raw_data_summary["raw_data_submit_call_matches"],
         "raw_data_owner_matches_transaction": True,
         "contract_ret": "SUCCESS",
-        "contract_type": "TriggerSmartContract",
+        "contract_type": contract_type,
         "type_url": type_url,
         "owner_address": _hex(owner),
         "owner_base58": tron_base58check_from_payload(owner),
@@ -4530,9 +4567,11 @@ def _route_canary_transaction_summary(
         label="route-canary transaction info",
     )
     receipt = response.get("receipt")
-    receipt_status = receipt.get("result") if type(receipt) is dict else None
-    if receipt_status != "SUCCESS":
-        raise RuntimeError("route-canary transaction receipt status must be SUCCESS")
+    receipt_status = _require_exact_string_literal(
+        receipt.get("result") if type(receipt) is dict else None,
+        "SUCCESS",
+        message="route-canary transaction receipt status must be SUCCESS",
+    )
     verifier_payload = _parse_summary_tron_address(
         destination_verifier,
         "address",
@@ -5926,15 +5965,38 @@ def _source_event_trigger_request_verified(
         )
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         return False
+    try:
+        endpoint = _exact_summary_string(
+            trigger_request,
+            "endpoint",
+            label="source-event trigger endpoint",
+        )
+        function_selector = _exact_summary_string(
+            trigger_request,
+            "function_selector",
+            label="source-event trigger function selector",
+        )
+        parameter = _exact_summary_string(
+            trigger_request,
+            "parameter",
+            label="source-event trigger parameter",
+        )
+        call_value = _require_u32_value(
+            _summary_get_exact_key(trigger_request, "call_value"),
+            label="source-event trigger call value",
+        )
+    except (RuntimeError, TypeError, ValueError):
+        return False
+    # Source-inventory marker: TRON live source-event trigger request uses exact strings.
+    # Source-inventory marker: TRON live source-event trigger request uses exact integers.
     return (
-        trigger_request.get("endpoint") == "wallet/triggersmartcontract"
+        endpoint == "wallet/triggersmartcontract"
         and owner_address == owner_payload
         and contract_address == source_bridge_payload
-        and trigger_request.get("function_selector")
-        == evidence.TRON_SOURCE_MESSAGE_CALL_ABI.decode("ascii")
-        and trigger_request.get("parameter") == source_event_call_data[4:].hex()
+        and function_selector == evidence.TRON_SOURCE_MESSAGE_CALL_ABI.decode("ascii")
+        and parameter == source_event_call_data[4:].hex()
         and trigger_request.get("visible") is True
-        and trigger_request.get("call_value") == 0
+        and call_value == 0
     )
 
 
@@ -6026,30 +6088,108 @@ def _source_event_transaction_verified(
         return False
 
     for key, expected in {**raw_summary, **signature_summary}.items():
-        if trigger_contract.get(key) != expected:
+        if not _summary_exact_public_values_equal(
+            _summary_get_exact_key(trigger_contract, key),
+            expected,
+        ):
             return False
 
+    try:
+        receipt_status = _exact_summary_string(
+            transaction,
+            "receipt_status",
+            label="source-event receipt status",
+        )
+        log_index = _require_u32_value(
+            _summary_get_exact_key(transaction, "log_index"),
+            label="source-event log index",
+        )
+        event_address = _exact_summary_string(
+            transaction,
+            "event_address",
+            label="source-event address",
+        )
+        event_topic0 = _exact_summary_string(
+            transaction,
+            "event_topic0",
+            label="source-event topic0",
+        )
+        source_event_digest_text = _exact_summary_string(
+            transaction,
+            "source_event_digest",
+            label="source-event digest",
+        )
+        event_data = _exact_summary_string(
+            transaction,
+            "event_data",
+            label="source-event data",
+        )
+        trigger_transaction_id = _exact_summary_string(
+            trigger_contract,
+            "transaction_id",
+            label="source-event trigger transaction id",
+        )
+        contract_ret = _exact_summary_string(
+            trigger_contract,
+            "contract_ret",
+            label="source-event contract result",
+        )
+        contract_type = _exact_summary_string(
+            trigger_contract,
+            "contract_type",
+            label="source-event contract type",
+        )
+        type_url = _exact_summary_string(
+            trigger_contract,
+            "type_url",
+            label="source-event trigger type URL",
+        )
+        trigger_owner_address = _exact_summary_string(
+            trigger_contract,
+            "owner_address",
+            label="source-event trigger owner address",
+        )
+        trigger_contract_address = _exact_summary_string(
+            trigger_contract,
+            "contract_address",
+            label="source-event trigger contract address",
+        )
+        trigger_call_data = _exact_summary_string(
+            trigger_contract,
+            "call_data",
+            label="source-event trigger call data",
+        )
+        source_proof_transaction_bytes_text = _exact_summary_string(
+            trigger_contract,
+            "source_proof_transaction_bytes",
+            label="source-event source proof transaction bytes",
+        )
+        source_proof_transaction_hash_text = _exact_summary_string(
+            trigger_contract,
+            "source_proof_transaction_hash",
+            label="source-event source proof transaction hash",
+        )
+    except (RuntimeError, TypeError, ValueError):
+        return False
+    # Source-inventory marker: TRON live source-event transaction verifier uses exact strings.
+    # Source-inventory marker: TRON live source-event transaction verifier uses exact integers.
     return (
-        transaction.get("receipt_status") == "SUCCESS"
+        receipt_status == "SUCCESS"
         and transaction.get("event_matches") is True
-        and type(transaction.get("log_index")) is int
-        and transaction["log_index"] >= 0
-        and transaction.get("event_address") == _hex(source_bridge_payload[1:])
-        and transaction.get("event_topic0") == _hex(TRON_SOURCE_EVENT_TOPIC)
-        and transaction.get("source_event_digest") == _hex(source_event_digest)
-        and transaction.get("event_data") == "0x"
-        and trigger_contract.get("transaction_id") == _hex(transaction_id)
-        and trigger_contract.get("contract_ret") == "SUCCESS"
-        and trigger_contract.get("contract_type") == "TriggerSmartContract"
-        and trigger_contract.get("type_url")
-        == TRON_TRIGGER_SMART_CONTRACT_TYPE_URL.decode("ascii")
-        and trigger_contract.get("owner_address") == _hex(owner_payload)
-        and trigger_contract.get("contract_address") == _hex(source_bridge_payload)
-        and trigger_contract.get("call_data") == _hex(source_event_call_data)
-        and trigger_contract.get("source_proof_transaction_bytes")
-        == _hex(source_proof_transaction_bytes)
-        and trigger_contract.get("source_proof_transaction_hash")
-        == _hex(source_proof_transaction_hash)
+        and log_index >= 0
+        and event_address == _hex(source_bridge_payload[1:])
+        and event_topic0 == _hex(TRON_SOURCE_EVENT_TOPIC)
+        and source_event_digest_text == _hex(source_event_digest)
+        and event_data == "0x"
+        and trigger_transaction_id == _hex(transaction_id)
+        and contract_ret == "SUCCESS"
+        and contract_type == "TriggerSmartContract"
+        and type_url == TRON_TRIGGER_SMART_CONTRACT_TYPE_URL.decode("ascii")
+        and trigger_owner_address == _hex(owner_payload)
+        and trigger_contract_address == _hex(source_bridge_payload)
+        and trigger_call_data == _hex(source_event_call_data)
+        and source_proof_transaction_bytes_text == _hex(source_proof_transaction_bytes)
+        and source_proof_transaction_hash_text == _hex(source_proof_transaction_hash)
         and trigger_contract.get("source_proof_transaction_bytes_checked") is True
         and trigger_contract.get("transaction_merkle_branch_required") is True
     )
@@ -6417,21 +6557,131 @@ def _route_canary_transaction_verified(summary: dict[str, Any]) -> bool:
     ):
         return False
     for key, expected in {**raw_summary, **call_summary, **signature_summary}.items():
-        if _summary_get_exact_key(trigger_contract, key) != expected:
+        if not _summary_exact_public_values_equal(
+            _summary_get_exact_key(trigger_contract, key),
+            expected,
+        ):
             return False
+    try:
+        route_canary_evidence_source = _exact_summary_string(
+            route_canary,
+            "evidence_source",
+            label="route canary evidence source",
+        )
+        route_canary_hash = _exact_summary_string(
+            route_canary,
+            "evidence_hash",
+            label="route canary evidence hash",
+        )
+        transaction_canary_hash = _exact_summary_string(
+            transaction,
+            "route_canary_evidence_hash",
+            label="route canary transaction evidence hash",
+        )
+        receipt_status = _exact_summary_string(
+            transaction,
+            "receipt_status",
+            label="route canary receipt status",
+        )
+        event_topic0 = _exact_summary_string(
+            transaction,
+            "event_topic0",
+            label="route canary event topic0",
+        )
+        transaction_route_allowlist_hash = _exact_summary_string(
+            transaction,
+            "route_allowlist_hash",
+            label="route canary route allowlist hash",
+        )
+        function_selector = _exact_summary_string(
+            trigger_contract,
+            "function_selector",
+            label="route canary function selector",
+        )
+        function_signature = _exact_summary_string(
+            trigger_contract,
+            "function_signature",
+            label="route canary function signature",
+        )
+        public_inputs_message_id = _exact_summary_string(
+            trigger_contract,
+            "public_inputs_message_id",
+            label="route canary public input message id",
+        )
+        transaction_message_id = _exact_summary_string(
+            transaction,
+            "message_id",
+            label="route canary message id",
+        )
+        public_inputs_commitment_root = _exact_summary_string(
+            trigger_contract,
+            "public_inputs_commitment_root",
+            label="route canary public input commitment root",
+        )
+        transaction_commitment_root = _exact_summary_string(
+            transaction,
+            "commitment_root",
+            label="route canary commitment root",
+        )
+        trigger_statement_hash = _exact_summary_string(
+            trigger_contract,
+            "statement_hash",
+            label="route canary statement hash",
+        )
+        transaction_statement_hash_text = _exact_summary_string(
+            transaction,
+            "statement_hash",
+            label="route canary transaction statement hash",
+        )
+        trigger_owner_address = _exact_summary_string(
+            trigger_contract,
+            "owner_address",
+            label="route canary owner address",
+        )
+        trigger_raw_data_owner_address = _exact_summary_string(
+            trigger_contract,
+            "raw_data_owner_address",
+            label="route canary raw-data owner address",
+        )
+        trigger_signature_recovered_address = _exact_summary_string(
+            trigger_contract,
+            "signature_recovered_address",
+            label="route canary signature recovered address",
+        )
+        proof_bytes_length = _require_u32_value(
+            _summary_get_exact_key(trigger_contract, "proof_bytes_length"),
+            label="route canary proof bytes length",
+        )
+        proof_version = _require_u32_value(
+            _summary_get_exact_key(trigger_contract, "proof_version"),
+            label="route canary proof version",
+        )
+        proof_source_domain = _require_u32_value(
+            _summary_get_exact_key(trigger_contract, "proof_source_domain"),
+            label="route canary proof source domain",
+        )
+        public_inputs_target_domain = _require_u32_value(
+            _summary_get_exact_key(trigger_contract, "public_inputs_target_domain"),
+            label="route canary public input target domain",
+        )
+        signature_count = _require_u32_value(
+            _summary_get_exact_key(trigger_contract, "signature_count"),
+            label="route canary signature count",
+        )
+    except (RuntimeError, TypeError, ValueError):
+        return False
+    # Source-inventory marker: TRON live route-canary verifier uses exact strings.
+    # Source-inventory marker: TRON live route-canary verifier uses exact integers.
     return (
-        _summary_get_exact_key(route_canary, "evidence_source")
-        == "tron_message_proof_accepted_transaction"
+        route_canary_evidence_source == "tron_message_proof_accepted_transaction"
         and _summary_exact_public_values_equal(
             _summary_get_exact_key(route_canary, "transaction"),
             transaction,
         )
-        and _summary_get_exact_key(transaction, "receipt_status") == "SUCCESS"
+        and receipt_status == "SUCCESS"
         and _summary_get_exact_key(transaction, "event_matches") is True
-        and _summary_get_exact_key(transaction, "event_topic0")
-        == _hex(TRON_MESSAGE_PROOF_ACCEPTED_TOPIC)
-        and _summary_get_exact_key(transaction, "route_allowlist_hash")
-        == _hex(route_allowlist_hash)
+        and event_topic0 == _hex(TRON_MESSAGE_PROOF_ACCEPTED_TOPIC)
+        and transaction_route_allowlist_hash == _hex(route_allowlist_hash)
         and transaction_source_domain == destination_source_domain
         and transaction_destination_binding_hash == destination_binding_hash
         and transaction_verifier_backend_hash == destination_verifier_backend_hash
@@ -6439,12 +6689,9 @@ def _route_canary_transaction_verified(summary: dict[str, Any]) -> bool:
         and transaction_network_id == destination_network_id
         and _summary_get_exact_key(transaction, "used_message_proofs_checked") is True
         and _summary_get_exact_key(transaction, "message_proof_used") is True
-        and type(_summary_get_exact_key(route_canary, "evidence_hash")) is str
-        and _summary_get_exact_key(route_canary, "evidence_hash")
-        == _summary_get_exact_key(transaction, "route_canary_evidence_hash")
-        and _summary_get_exact_key(route_canary, "evidence_hash") == recomputed_hash
-        and _summary_get_exact_key(transaction, "route_canary_evidence_hash")
-        == recomputed_hash
+        and route_canary_hash == transaction_canary_hash
+        and route_canary_hash == recomputed_hash
+        and transaction_canary_hash == recomputed_hash
         and _summary_get_exact_key(trigger_contract, "call_matches") is True
         and _summary_get_exact_key(trigger_contract, "raw_data_call_matches") is True
         and _summary_get_exact_key(
@@ -6454,31 +6701,20 @@ def _route_canary_transaction_verified(summary: dict[str, Any]) -> bool:
         is True
         and _summary_get_exact_key(trigger_contract, "signature_recovers_to_owner") is True
         and _summary_get_exact_key(trigger_contract, "call_data_matches_event") is True
-        and _summary_get_exact_key(trigger_contract, "function_selector")
-        == _hex(TRON_SUBMIT_MESSAGE_PROOF_SELECTOR)
-        and _summary_get_exact_key(trigger_contract, "function_signature")
-        == "submitSccpMessageProof(bytes,bytes32[6],bytes32)"
-        and _summary_get_exact_key(trigger_contract, "proof_bytes_length")
-        == TRON_GROTH16_PROOF_ABI_BYTE_LENGTH
-        and _summary_get_exact_key(trigger_contract, "proof_version")
-        == TRON_GROTH16_PROOF_VERSION
-        and _summary_get_exact_key(trigger_contract, "proof_source_domain")
-        == transaction_source_domain
-        and _summary_get_exact_key(trigger_contract, "public_inputs_target_domain")
-        == _summary_get_exact_key(destination, "destination_target_domain")
-        and _summary_get_exact_key(trigger_contract, "public_inputs_message_id")
-        == _summary_get_exact_key(transaction, "message_id")
-        and _summary_get_exact_key(trigger_contract, "public_inputs_commitment_root")
-        == _summary_get_exact_key(transaction, "commitment_root")
-        and _summary_get_exact_key(trigger_contract, "statement_hash")
-        == _summary_get_exact_key(transaction, "statement_hash")
-        and _summary_get_exact_key(trigger_contract, "signature_count") == 1
-        and _summary_get_exact_key(trigger_contract, "owner_address") == _hex(owner_payload)
-        and _summary_get_exact_key(trigger_contract, "raw_data_owner_address")
-        == _hex(raw_data_owner_payload)
+        and function_selector == _hex(TRON_SUBMIT_MESSAGE_PROOF_SELECTOR)
+        and function_signature == "submitSccpMessageProof(bytes,bytes32[6],bytes32)"
+        and proof_bytes_length == TRON_GROTH16_PROOF_ABI_BYTE_LENGTH
+        and proof_version == TRON_GROTH16_PROOF_VERSION
+        and proof_source_domain == transaction_source_domain
+        and public_inputs_target_domain == destination_target_domain
+        and public_inputs_message_id == transaction_message_id
+        and public_inputs_commitment_root == transaction_commitment_root
+        and trigger_statement_hash == transaction_statement_hash_text
+        and signature_count == 1
+        and trigger_owner_address == _hex(owner_payload)
+        and trigger_raw_data_owner_address == _hex(raw_data_owner_payload)
         and raw_data_owner_payload == owner_payload
-        and _summary_get_exact_key(trigger_contract, "signature_recovered_address")
-        == _hex(signature_recovered_payload)
+        and trigger_signature_recovered_address == _hex(signature_recovered_payload)
         and signature_recovered_payload == owner_payload
     )
 
@@ -7179,11 +7415,16 @@ def _torii_destination_query_params(summary: dict[str, Any]) -> dict[str, str] |
 
 
 def _reject_runtime_file_symlink_path(path: Path) -> None:
+    # Source-inventory marker: live runtime text file helpers use native paths.
+    if type(path) is not RUNTIME_TEXT_FILE_PATH_TYPE:
+        raise ValueError("runtime file cannot be read")
     if first_symlinked_existing_path_component(path) is not None:
         raise ValueError("runtime file must not be a symlink")
 
 
 def _read_runtime_text_file(path: Path, *, error_message: str) -> str:
+    if type(path) is not RUNTIME_TEXT_FILE_PATH_TYPE:
+        raise ValueError(error_message) from None
     try:
         _reject_runtime_file_symlink_path(path)
     except (OSError, ValueError):
@@ -8364,6 +8605,9 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 
 def _decoded_public_blocker_text(value: str) -> str:
+    # Source-inventory marker: lane public blocker decode helpers use exact strings.
+    if type(value) is not str:
+        return ""
     decoded = value
     for _decode_pass in range(max(1, len(value))):
         next_decoded = unquote(html_unescape(decoded))
@@ -8374,6 +8618,8 @@ def _decoded_public_blocker_text(value: str) -> str:
 
 
 def _decoded_cli_error_text_issue(value: str) -> bool:
+    if type(value) is not str:
+        return True
     decoded = _decoded_public_blocker_text(value)
     if any(ord(character) < 0x20 or ord(character) == 0x7F for character in decoded):
         return True
@@ -8385,7 +8631,10 @@ def _decoded_cli_error_text_issue(value: str) -> bool:
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     if isinstance(exc, (OSError, SystemExit)):
         return fallback
-    text = str(exc)
+    try:
+        text = str(exc)
+    except Exception:
+        return fallback
     if not text:
         return fallback
     if not text.isascii():

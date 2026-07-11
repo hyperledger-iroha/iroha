@@ -49,16 +49,39 @@ const VRF_INPUT_HASH_SEPARATOR: &[u8] = b"|";
 const VRF_OUTPUT_HASH_DOMAIN: &[u8] = b"iroha:vrf:v1:output";
 
 /// VRF proof: variant-tagged, fixed-size BLS signature bytes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::Encode,
+    norito::Decode,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
+#[norito(tag = "variant", content = "proof")]
 pub enum VrfProof {
     /// Signature in G1 (48 bytes) — corresponds to `Small`/`sig_in_G1` variant.
+    #[norito(rename = "bls_small_g1")]
     SigInG1([u8; 48]),
     /// Signature in G2 (96 bytes) — corresponds to `Normal`/`sig_in_G2` variant.
+    #[norito(rename = "bls_normal_g2")]
     SigInG2([u8; 96]),
 }
 
 /// VRF output: 32-byte Blake2b digest.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::Encode,
+    norito::Decode,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct VrfOutput(pub [u8; 32]);
 
 /// VRF proof construction error.
@@ -206,6 +229,26 @@ pub fn verify_normal_with_chain(
     }
 }
 
+/// Verify a Normal-variant VRF proof using canonical compressed public-key bytes.
+///
+/// This is the wire-boundary counterpart to [`verify_normal_with_chain`]. It
+/// rejects malformed, non-canonical, wrong-subgroup, and identity public keys
+/// before performing the pairing check.
+#[must_use]
+pub fn verify_normal_bytes_with_chain(
+    public_key: &[u8],
+    chain_id: &[u8],
+    input: &[u8],
+    proof: &VrfProof,
+) -> Option<VrfOutput> {
+    let msg = prehash_input_with_chain(chain_id, input);
+    let VrfProof::SigInG2(signature) = proof else {
+        return None;
+    };
+    verify_vrf_normal_pairing_bytes(public_key, &msg, signature)
+        .then(|| output_from_sigma(signature))
+}
+
 /// Verify a VRF proof under the BLS Normal public key with an empty chain-id.
 /// Returns the derived output if proof verification succeeds; otherwise `None`.
 pub fn verify_normal(pk: &BlsNormalPublicKey, input: &[u8], proof: &VrfProof) -> Option<VrfOutput> {
@@ -226,6 +269,38 @@ pub fn verify_small_with_chain(
         }
         _ => None,
     }
+}
+
+/// Verify a Small-variant VRF proof using canonical compressed public-key bytes.
+///
+/// This is the wire-boundary counterpart to [`verify_small_with_chain`]. It
+/// rejects malformed, non-canonical, wrong-subgroup, and identity public keys
+/// before performing the pairing check.
+#[must_use]
+pub fn verify_small_bytes_with_chain(
+    public_key: &[u8],
+    chain_id: &[u8],
+    input: &[u8],
+    proof: &VrfProof,
+) -> Option<VrfOutput> {
+    let msg = prehash_input_with_chain(chain_id, input);
+    let VrfProof::SigInG1(signature) = proof else {
+        return None;
+    };
+    verify_vrf_small_pairing_bytes(public_key, &msg, signature)
+        .then(|| output_from_sigma(signature))
+}
+
+/// Return whether bytes encode a canonical, non-identity Normal VRF public key.
+#[must_use]
+pub fn is_valid_normal_public_key_bytes(public_key: &[u8]) -> bool {
+    canonical_g1(public_key).is_some()
+}
+
+/// Return whether bytes encode a canonical, non-identity Small VRF public key.
+#[must_use]
+pub fn is_valid_small_public_key_bytes(public_key: &[u8]) -> bool {
+    canonical_g2(public_key).is_some()
 }
 
 /// Verify a VRF proof under the BLS Small public key with an empty chain-id.
@@ -264,6 +339,28 @@ fn verify_vrf_normal_pairing(pk: &BlsNormalPublicKey, msg: &[u8], sig: &[u8; 96]
     gt.is_identity().into()
 }
 
+fn verify_vrf_normal_pairing_bytes(pk: &[u8], msg: &[u8], sig: &[u8; 96]) -> bool {
+    use blstrs::{G1Affine, G1Projective, G2Prepared};
+    use group::{Curve, Group as _, prime::PrimeCurveAffine};
+    use pairing::{MillerLoopResult as _, MultiMillerLoop as _};
+
+    let Some(pk) = canonical_g1(pk) else {
+        return false;
+    };
+    let Some(sig) = to_g2(sig) else {
+        return false;
+    };
+    let h = hash_msg_to_g2(msg);
+    let terms: [(&G1Affine, &G2Prepared); 2] = [
+        (&G1Affine::generator(), &G2Prepared::from(sig)),
+        (&(-G1Projective::from(pk)).to_affine(), &G2Prepared::from(h)),
+    ];
+    blstrs::Bls12::multi_miller_loop(&terms)
+        .final_exponentiation()
+        .is_identity()
+        .into()
+}
+
 fn verify_vrf_small_pairing(pk: &BlsSmallPublicKey, msg: &[u8], sig: &[u8; 48]) -> bool {
     use blstrs::{G1Affine, G1Projective, G2Affine, G2Prepared};
     use group::{Curve, Group as _, prime::PrimeCurveAffine};
@@ -284,6 +381,43 @@ fn verify_vrf_small_pairing(pk: &BlsSmallPublicKey, msg: &[u8], sig: &[u8; 48]) 
     ];
     let gt = blstrs::Bls12::multi_miller_loop(&terms).final_exponentiation();
     gt.is_identity().into()
+}
+
+fn verify_vrf_small_pairing_bytes(pk: &[u8], msg: &[u8], sig: &[u8; 48]) -> bool {
+    use blstrs::{G1Projective, G2Affine, G2Prepared};
+    use group::{Curve, Group as _, prime::PrimeCurveAffine};
+    use pairing::{MillerLoopResult as _, MultiMillerLoop as _};
+
+    let Some(pk) = canonical_g2(pk) else {
+        return false;
+    };
+    let Some(sig) = to_g1(sig) else {
+        return false;
+    };
+    let h = hash_msg_to_g1(msg);
+    let neg_h = (-G1Projective::from(h)).to_affine();
+    let terms = [
+        (&sig, &G2Prepared::from(G2Affine::generator())),
+        (&neg_h, &G2Prepared::from(pk)),
+    ];
+    blstrs::Bls12::multi_miller_loop(&terms)
+        .final_exponentiation()
+        .is_identity()
+        .into()
+}
+
+fn canonical_g1(bytes: &[u8]) -> Option<blstrs::G1Affine> {
+    use group::prime::PrimeCurveAffine as _;
+    let encoded: [u8; 48] = bytes.try_into().ok()?;
+    let point = blstrs::G1Affine::from_compressed(&encoded).into_option()?;
+    (!bool::from(point.is_identity()) && point.to_compressed() == encoded).then_some(point)
+}
+
+fn canonical_g2(bytes: &[u8]) -> Option<blstrs::G2Affine> {
+    use group::prime::PrimeCurveAffine as _;
+    let encoded: [u8; 96] = bytes.try_into().ok()?;
+    let point = blstrs::G2Affine::from_compressed(&encoded).into_option()?;
+    (!bool::from(point.is_identity()) && point.to_compressed() == encoded).then_some(point)
 }
 
 fn to_g1(bytes: &[u8]) -> Option<blstrs::G1Affine> {
@@ -369,6 +503,12 @@ mod tests {
         assert_eq!(y1, y2);
         // Output-only derivation is consistent
         assert_eq!(y1, output_from_proof(&pi));
+        assert_eq!(
+            verify_normal_bytes_with_chain(&pk2.to_bytes(), chain, input, &pi),
+            Some(y1)
+        );
+        assert!(is_valid_normal_public_key_bytes(&pk2.to_bytes()));
+        assert!(!is_valid_normal_public_key_bytes(&[0; 48]));
     }
 
     #[test]
@@ -383,6 +523,60 @@ mod tests {
         let y2 = verify_small_with_chain(&pk2, chain, input, &pi).expect("valid proof");
         assert_eq!(y1, y2);
         assert_eq!(y1, output_from_proof(&pi));
+        assert_eq!(
+            verify_small_bytes_with_chain(&pk2.to_bytes(), chain, input, &pi),
+            Some(y1)
+        );
+        assert!(is_valid_small_public_key_bytes(&pk2.to_bytes()));
+        assert!(!is_valid_small_public_key_bytes(&[0; 96]));
+    }
+
+    #[test]
+    fn raw_key_verifiers_reject_wrong_variant_key_and_binding() {
+        let (normal_pk, normal_sk) =
+            bls::BlsNormal::keypair(crate::KeyGenOption::UseSeed(vec![0x41; 32]))
+                .expect("normal keypair");
+        let (small_pk, _small_sk) =
+            bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![0x42; 32]))
+                .expect("small keypair");
+        let (output, proof) =
+            prove_normal_with_chain(&normal_sk, b"chain-a", b"bound-input").expect("normal proof");
+
+        assert_eq!(
+            verify_normal_bytes_with_chain(
+                &normal_pk.to_bytes(),
+                b"chain-a",
+                b"bound-input",
+                &proof,
+            ),
+            Some(output)
+        );
+        assert_eq!(
+            verify_normal_bytes_with_chain(
+                &normal_pk.to_bytes(),
+                b"chain-b",
+                b"bound-input",
+                &proof,
+            ),
+            None
+        );
+        assert_eq!(
+            verify_normal_bytes_with_chain(
+                &normal_pk.to_bytes(),
+                b"chain-a",
+                b"other-input",
+                &proof,
+            ),
+            None
+        );
+        assert_eq!(
+            verify_small_bytes_with_chain(&small_pk.to_bytes(), b"chain-a", b"bound-input", &proof,),
+            None
+        );
+        assert_eq!(
+            verify_normal_bytes_with_chain(&[0; 48], b"chain-a", b"bound-input", &proof),
+            None
+        );
     }
 
     #[test]

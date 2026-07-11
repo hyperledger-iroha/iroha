@@ -251,18 +251,19 @@ pub use manifest_capabilities::{
     ChunkProfileSummary, ManifestCapabilitySummary, detect_manifest_capabilities,
 };
 pub use orderbook::{
-    BYTES_PER_GIB, ByteRangeV1, ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_VERSION_V1,
-    ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1, ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderBookEntryV1,
-    OrderBookMatchOutcomeV1, OrderCancelReasonV1, OrderCancelV1, OrderFillOutcomeV1,
-    OrderRequestV1, OrderSideV1, OrderTierV1, OrderbookRuntimeSnapshotV1, OrderbookSignatureV1,
+    BYTES_PER_GIB, ByteRangeV1, ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_ID_DOMAIN_V1,
+    ORDERBOOK_ORDER_VERSION_V1, ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
+    ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderBookEntryV1, OrderBookMatchOutcomeV1,
+    OrderCancelReasonV1, OrderCancelV1, OrderFillOutcomeV1, OrderRequestV1, OrderSideV1,
+    OrderTierV1, OrderbookOwnerNonceHighWaterV1, OrderbookRuntimeSnapshotV1, OrderbookSignatureV1,
     OrderbookValidationError, SETTLEMENT_CHANNEL_VERSION_V1, SETTLEMENT_RECEIPT_VERSION_V1,
     SettlementChannelStatusV1, SettlementChannelV1, SettlementReceiptV1, TradeEventV1,
-    apply_settlement_receipt_v1, derive_orderbook_trade_id_v1, match_order_book_v1,
-    match_orders_v1, open_settlement_channel_for_trade_v1, order_cancel_signature_digest_v1,
-    order_request_signature_digest_v1, settlement_receipt_signature_digest_v1,
-    sign_order_cancel_ed25519_v1, sign_order_request_ed25519_v1,
-    sign_settlement_receipt_ed25519_v1, trade_escrow_requirement_v1, trade_gross_value_v1,
-    verify_order_cancel_signature_v1, verify_order_request_signature_v1,
+    apply_settlement_receipt_v1, derive_orderbook_order_id_v1, derive_orderbook_trade_id_v1,
+    match_order_book_v1, match_orders_v1, open_settlement_channel_for_trade_v1,
+    order_cancel_signature_digest_v1, order_request_signature_digest_v1,
+    settlement_receipt_signature_digest_v1, sign_order_cancel_ed25519_v1,
+    sign_order_request_ed25519_v1, sign_settlement_receipt_ed25519_v1, trade_escrow_requirement_v1,
+    trade_gross_value_v1, verify_order_cancel_signature_v1, verify_order_request_signature_v1,
     verify_settlement_receipt_signature_v1,
 };
 pub use pdp::{
@@ -295,12 +296,13 @@ pub use pop_credentials::{
 pub use por::{
     AUDIT_VERDICT_VERSION_V1, AuditOutcomeV1, AuditVerdictV1, AuditVerdictValidationError,
     MANUAL_POR_CHALLENGE_VERSION_V1, ManualPorChallengeV1, ManualPorChallengeValidationError,
-    POR_CHALLENGE_STATUS_VERSION_V1, POR_CHALLENGE_VERSION_V1, POR_PROOF_VERSION_V1,
-    POR_WEEKLY_REPORT_VERSION_V1, PorChallengeOutcome, PorChallengeOutcomeParseError,
-    PorChallengeStatusV1, PorChallengeStatusValidationError, PorChallengeV1,
-    PorChallengeValidationError, PorProofSampleV1, PorProofV1, PorProofValidationError,
-    PorProviderSummaryV1, PorProviderSummaryValidationError, PorReportIsoWeek,
-    PorReportIsoWeekValidationError, PorSlashingEventV1, PorSlashingEventValidationError,
+    POR_CHALLENGE_STATUS_VERSION_V1, POR_CHALLENGE_VERSION_V1, POR_PROOF_SIGNATURE_DOMAIN_V1,
+    POR_PROOF_VERSION_V1, POR_VERDICT_SIGNATURE_DOMAIN_V1, POR_WEEKLY_REPORT_VERSION_V1,
+    PorChallengeOutcome, PorChallengeOutcomeParseError, PorChallengeStatusV1,
+    PorChallengeStatusValidationError, PorChallengeV1, PorChallengeValidationError,
+    PorProofSampleV1, PorProofV1, PorProofValidationError, PorProviderSummaryV1,
+    PorProviderSummaryValidationError, PorReportIsoWeek, PorReportIsoWeekValidationError,
+    PorSignatureVerificationError, PorSlashingEventV1, PorSlashingEventValidationError,
     PorWeeklyReportV1, PorWeeklyReportValidationError,
 };
 pub use potr::{
@@ -321,21 +323,25 @@ pub use provider_admission::{
     EndpointAttestationError, EndpointAttestationKind, EndpointAttestationV1,
     PROVIDER_ADMISSION_ENVELOPE_VERSION_V1, PROVIDER_ADMISSION_PROPOSAL_VERSION_V1,
     PROVIDER_ADMISSION_RENEWAL_VERSION_V1, PROVIDER_ADMISSION_REVOCATION_VERSION_V1,
-    ProviderAdmissionAdvertError, ProviderAdmissionEnvelopeError, ProviderAdmissionEnvelopeV1,
-    ProviderAdmissionProposalV1, ProviderAdmissionRenewalError, ProviderAdmissionRenewalV1,
-    ProviderAdmissionRevocationError, ProviderAdmissionRevocationV1,
-    ProviderAdmissionSignatureError, ProviderAdmissionValidationError, compute_advert_body_digest,
-    compute_envelope_digest, compute_proposal_digest, verify_advert_against_record,
-    verify_envelope, verify_revocation_signatures,
+    ProviderAdmissionAdvertError, ProviderAdmissionCouncilPolicy,
+    ProviderAdmissionCouncilPolicyError, ProviderAdmissionEnvelopeError,
+    ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1, ProviderAdmissionRenewalError,
+    ProviderAdmissionRenewalV1, ProviderAdmissionRevocationError, ProviderAdmissionRevocationV1,
+    ProviderAdmissionSignatureError, ProviderAdmissionValidationError, ProviderVrfPublicKeyV1,
+    compute_advert_body_digest, compute_envelope_authorization_digest, compute_envelope_digest,
+    compute_proposal_digest, verify_advert_against_record, verify_envelope,
+    verify_envelope_untrusted_signers, verify_revocation_signatures,
+    verify_revocation_signatures_untrusted_signers,
 };
 pub use provider_advert::{
     AdvertEndpoint, AdvertSignature, AdvertSignatureError, AdvertValidationError, AvailabilityTier,
     CapabilityTlv, CapabilityType, EndpointKind, EndpointMetadata, EndpointMetadataKey,
-    MAX_ADVERT_TTL_SECS, PROVIDER_ADVERT_VERSION_V1, PathDiversityPolicy, ProviderAdvertBodyV1,
-    ProviderAdvertBuildError, ProviderAdvertBuilder, ProviderAdvertV1, ProviderCapabilityRangeV1,
-    QosHints, REFRESH_RECOMMENDATION_SECS, RangeCapabilityError, RendezvousTopic,
-    SignatureAlgorithm, StakePointer, StreamBudgetError, StreamBudgetV1, TransportHintError,
-    TransportHintV1, TransportProtocol,
+    MAX_ADVERT_TTL_SECS, PROVIDER_ADVERT_SIGNATURE_DOMAIN_V1, PROVIDER_ADVERT_VERSION_V1,
+    PathDiversityPolicy, ProviderAdvertBodyV1, ProviderAdvertBuildError, ProviderAdvertBuilder,
+    ProviderAdvertSignaturePayloadV1, ProviderAdvertV1, ProviderCapabilityRangeV1, QosHints,
+    REFRESH_RECOMMENDATION_SECS, RangeCapabilityError, RendezvousTopic, SignatureAlgorithm,
+    StakePointer, StreamBudgetError, StreamBudgetV1, TransportHintError, TransportHintV1,
+    TransportProtocol,
 };
 pub use reconciliation::{
     AppealFinanceReconciliationSummaryV1, ReconciliationValidationError,
@@ -390,7 +396,10 @@ pub use reputation::{
     build_reputation_snapshot, build_reputation_snapshot_with_trust_edges,
     compute_reputation_merkle_root, score_provider_reputation,
 };
-pub use token::{StreamTokenBodyV1, StreamTokenError, StreamTokenV1};
+pub use token::{
+    STREAM_TOKEN_MAX_BASE64_BYTES_V1, STREAM_TOKEN_MAX_TTL_SECS_V1, STREAM_TOKEN_MAX_WIRE_BYTES_V1,
+    StreamTokenBodyV1, StreamTokenError, StreamTokenV1,
+};
 pub use validation::{
     ManifestValidationError, PinPolicyConstraints, validate_chunker_handle, validate_manifest,
     validate_pin_policy,

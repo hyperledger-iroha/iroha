@@ -1,6 +1,9 @@
 //! Proof-of-Retrievability (PoR) challenge, proof, and audit verdict schemas.
 
+use std::collections::BTreeSet;
+
 use blake3::Hasher;
+use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
 
@@ -11,6 +14,14 @@ use crate::{
 
 const POR_CHALLENGE_SEED_DOMAIN: &[u8] = b"sorafs:por:seed:v1";
 const POR_CHALLENGE_ID_DOMAIN: &[u8] = b"sorafs:por:id:v1";
+/// Domain separator used by provider PoR proof signatures.
+pub const POR_PROOF_SIGNATURE_DOMAIN_V1: &str = "sorafs.por.proof.signature.v1";
+/// Domain separator used by auditor verdict signatures.
+pub const POR_VERDICT_SIGNATURE_DOMAIN_V1: &str = "sorafs.por.verdict.signature.v1";
+/// Domain separator used by provider VRF submission signatures.
+pub const POR_VRF_SUBMISSION_SIGNATURE_DOMAIN_V1: &str = "sorafs.por.vrf-submission.signature.v1";
+/// Domain separator mixed into the BLS VRF input before chain binding.
+pub const POR_VRF_INPUT_DOMAIN_V1: &[u8] = b"sorafs.por.provider-vrf.input.v1\0";
 
 /// Current PoR challenge schema version.
 pub const POR_CHALLENGE_VERSION_V1: u8 = 1;
@@ -22,8 +33,198 @@ pub const AUDIT_VERDICT_VERSION_V1: u8 = 1;
 pub const POR_CHALLENGE_STATUS_VERSION_V1: u8 = 1;
 /// Current weekly report schema version.
 pub const POR_WEEKLY_REPORT_VERSION_V1: u8 = 1;
+/// Maximum provider success rate expressed in basis points (100%).
+pub const POR_SUCCESS_RATE_BPS_MAX: u16 = 10_000;
 /// Current manual challenge schema version.
 pub const MANUAL_POR_CHALLENGE_VERSION_V1: u8 = 1;
+/// Current provider VRF submission schema version.
+pub const POR_VRF_SUBMISSION_VERSION_V1: u8 = 1;
+
+/// Build the canonical provider VRF input for one manifest and drand round.
+#[must_use]
+pub fn provider_vrf_input(
+    provider_id: &[u8; 32],
+    manifest_digest: &[u8; 32],
+    epoch_id: u64,
+    drand_round: u64,
+) -> Vec<u8> {
+    let mut input = Vec::with_capacity(POR_VRF_INPUT_DOMAIN_V1.len() + 32 + 32 + 8 + 8);
+    input.extend_from_slice(POR_VRF_INPUT_DOMAIN_V1);
+    input.extend_from_slice(provider_id);
+    input.extend_from_slice(manifest_digest);
+    input.extend_from_slice(&epoch_id.to_be_bytes());
+    input.extend_from_slice(&drand_round.to_be_bytes());
+    input
+}
+
+/// Authenticated provider submission carrying one admission-bound BLS VRF proof.
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+pub struct ProviderVrfSubmissionV1 {
+    /// Schema version (`POR_VRF_SUBMISSION_VERSION_V1`).
+    pub version: u8,
+    /// Governance-controlled provider identifier.
+    pub provider_id: [u8; 32],
+    /// Manifest digest for which the provider generated the proof.
+    pub manifest_digest: [u8; 32],
+    /// PoR epoch identifier.
+    pub epoch_id: u64,
+    /// Verified drand round mixed into the proof input.
+    pub drand_round: u64,
+    /// VRF output derived from `proof`.
+    pub output: [u8; 32],
+    /// Variant-tagged, fixed-size BLS VRF proof.
+    pub proof: iroha_crypto::vrf::VrfProof,
+    /// Strictly increasing provider sequence used for durable replay rejection.
+    pub sequence: u64,
+    /// Unix timestamp at which the provider signed this submission.
+    pub issued_at: u64,
+    /// Current admission-approved Ed25519 advert key signature.
+    pub signature: AdvertSignature,
+}
+
+#[derive(Debug, Clone, NoritoSerialize)]
+struct ProviderVrfSubmissionSigningPayloadV1 {
+    domain: String,
+    version: u8,
+    provider_id: [u8; 32],
+    manifest_digest: [u8; 32],
+    epoch_id: u64,
+    drand_round: u64,
+    output: [u8; 32],
+    proof: iroha_crypto::vrf::VrfProof,
+    sequence: u64,
+    issued_at: u64,
+}
+
+impl From<&ProviderVrfSubmissionV1> for ProviderVrfSubmissionSigningPayloadV1 {
+    fn from(submission: &ProviderVrfSubmissionV1) -> Self {
+        Self {
+            domain: POR_VRF_SUBMISSION_SIGNATURE_DOMAIN_V1.to_owned(),
+            version: submission.version,
+            provider_id: submission.provider_id,
+            manifest_digest: submission.manifest_digest,
+            epoch_id: submission.epoch_id,
+            drand_round: submission.drand_round,
+            output: submission.output,
+            proof: submission.proof,
+            sequence: submission.sequence,
+            issued_at: submission.issued_at,
+        }
+    }
+}
+
+impl ProviderVrfSubmissionV1 {
+    /// Validate bounded structural fields before admission and proof checks.
+    pub fn validate(&self) -> Result<(), ProviderVrfSubmissionValidationError> {
+        if self.version != POR_VRF_SUBMISSION_VERSION_V1 {
+            return Err(ProviderVrfSubmissionValidationError::UnsupportedVersion {
+                found: self.version,
+            });
+        }
+        if self.provider_id.iter().all(|byte| *byte == 0) {
+            return Err(ProviderVrfSubmissionValidationError::InvalidProviderId);
+        }
+        if self.manifest_digest.iter().all(|byte| *byte == 0) {
+            return Err(ProviderVrfSubmissionValidationError::InvalidManifestDigest);
+        }
+        if self.epoch_id == 0 {
+            return Err(ProviderVrfSubmissionValidationError::InvalidEpoch);
+        }
+        if self.drand_round == 0 {
+            return Err(ProviderVrfSubmissionValidationError::InvalidDrandRound);
+        }
+        if self.output.iter().all(|byte| *byte == 0) {
+            return Err(ProviderVrfSubmissionValidationError::InvalidOutput);
+        }
+        let proof_is_inert = match &self.proof {
+            iroha_crypto::vrf::VrfProof::SigInG1(bytes) => bytes.iter().all(|byte| *byte == 0),
+            iroha_crypto::vrf::VrfProof::SigInG2(bytes) => bytes.iter().all(|byte| *byte == 0),
+        };
+        if proof_is_inert {
+            return Err(ProviderVrfSubmissionValidationError::InvalidProof);
+        }
+        if self.sequence == 0 {
+            return Err(ProviderVrfSubmissionValidationError::InvalidSequence);
+        }
+        if self.issued_at == 0 {
+            return Err(ProviderVrfSubmissionValidationError::InvalidIssuedAt);
+        }
+        if self.signature.algorithm != SignatureAlgorithm::Ed25519
+            || self.signature.public_key.is_empty()
+            || self.signature.signature.is_empty()
+        {
+            return Err(ProviderVrfSubmissionValidationError::InvalidSignature);
+        }
+        Ok(())
+    }
+
+    /// Return canonical domain-separated bytes signed by the provider advert key.
+    pub fn signature_payload_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
+        norito::to_bytes(&ProviderVrfSubmissionSigningPayloadV1::from(self))
+    }
+
+    /// Verify the Ed25519 signature and bind it to the current admitted advert key.
+    pub fn verify_signature_for_provider(
+        &self,
+        admitted_provider_key: &[u8],
+    ) -> Result<(), PorSignatureVerificationError> {
+        if admitted_provider_key.len() != PUBLIC_KEY_LENGTH {
+            return Err(PorSignatureVerificationError::InvalidPublicKeyLength {
+                length: admitted_provider_key.len(),
+            });
+        }
+        if self.signature.public_key != admitted_provider_key {
+            return Err(PorSignatureVerificationError::ProviderSignerMismatch);
+        }
+        let admitted: [u8; PUBLIC_KEY_LENGTH] = admitted_provider_key
+            .try_into()
+            .expect("length checked above");
+        crate::checked_ed25519_verifying_key_from_bytes(&admitted)
+            .map_err(|reason| PorSignatureVerificationError::InvalidPublicKey { reason })?;
+        let payload = self.signature_payload_bytes().map_err(|error| {
+            PorSignatureVerificationError::PayloadEncoding {
+                reason: error.to_string(),
+            }
+        })?;
+        verify_ed25519_signature(&self.signature, &payload)?;
+        Ok(())
+    }
+}
+
+/// Structural validation failures for provider VRF submissions.
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderVrfSubmissionValidationError {
+    /// The submission version is unsupported.
+    #[error("unsupported provider VRF submission version {found}")]
+    UnsupportedVersion { found: u8 },
+    /// Provider identifier is inert.
+    #[error("provider VRF submission provider id must be non-zero")]
+    InvalidProviderId,
+    /// Manifest digest is inert.
+    #[error("provider VRF submission manifest digest must be non-zero")]
+    InvalidManifestDigest,
+    /// Epoch zero is reserved.
+    #[error("provider VRF submission epoch must be non-zero")]
+    InvalidEpoch,
+    /// Drand round zero is invalid.
+    #[error("provider VRF submission drand round must be non-zero")]
+    InvalidDrandRound,
+    /// Output is inert.
+    #[error("provider VRF submission output must be non-zero")]
+    InvalidOutput,
+    /// Proof is inert.
+    #[error("provider VRF submission proof must be non-zero")]
+    InvalidProof,
+    /// Sequence zero is reserved.
+    #[error("provider VRF submission sequence must be non-zero")]
+    InvalidSequence,
+    /// Issued timestamp is invalid.
+    #[error("provider VRF submission issued_at must be non-zero")]
+    InvalidIssuedAt,
+    /// Signature fields are missing or unsupported.
+    #[error("provider VRF submission signature must be Ed25519 and non-empty")]
+    InvalidSignature,
+}
 
 /// Derives the PoR challenge seed by mixing drand randomness, provider VRF output,
 /// manifest digest, and epoch identifier.
@@ -90,14 +291,13 @@ pub struct PorChallengeV1 {
     #[norito(default)]
     pub drand_randomness: [u8; 32],
     /// drand BLS signature covering the randomness.
-    #[norito(default)]
-    pub drand_signature: Vec<u8>,
+    pub drand_signature: [u8; iroha_crypto::drand::DRAND_SIGNATURE_BYTES],
     /// Provider VRF output for this manifest/epoch (optional when forced).
     #[norito(default)]
     pub vrf_output: Option<[u8; 32]>,
-    /// Provider VRF proof bytes (optional when forced).
+    /// Variant-tagged provider VRF proof (absent only when forced).
     #[norito(default)]
-    pub vrf_proof: Option<Vec<u8>>,
+    pub vrf_proof: Option<iroha_crypto::vrf::VrfProof>,
     /// Whether the coordinator forced the challenge due to missing VRF.
     #[norito(default)]
     pub forced: bool,
@@ -148,22 +348,36 @@ impl PorChallengeV1 {
         if self.drand_randomness.iter().all(|&byte| byte == 0) {
             return Err(PorChallengeValidationError::InvalidDrandRandomness);
         }
-        if self.drand_signature.is_empty() {
-            return Err(PorChallengeValidationError::MissingDrandSignature);
-        }
-        if crate::inert_bytes(&self.drand_signature) {
+        if self.drand_signature.iter().all(|byte| *byte == 0) {
             return Err(PorChallengeValidationError::InvalidDrandSignature);
         }
         match (&self.vrf_output, &self.vrf_proof, self.forced) {
-            (Some(output), proof_opt, _) => {
+            (Some(output), Some(proof), false) => {
                 if output.iter().all(|&byte| byte == 0) {
                     return Err(PorChallengeValidationError::InvalidVrfOutput);
                 }
-                if proof_opt.as_ref().is_none_or(|proof| proof.is_empty()) {
-                    return Err(PorChallengeValidationError::MissingVrfProof);
+                let inert = match proof {
+                    iroha_crypto::vrf::VrfProof::SigInG1(bytes) => {
+                        bytes.iter().all(|byte| *byte == 0)
+                    }
+                    iroha_crypto::vrf::VrfProof::SigInG2(bytes) => {
+                        bytes.iter().all(|byte| *byte == 0)
+                    }
+                };
+                if inert {
+                    return Err(PorChallengeValidationError::InvalidVrfProof);
                 }
             }
-            (None, _, true) => {}
+            (None, None, true) => {}
+            (Some(_), Some(_), true) => {
+                return Err(PorChallengeValidationError::ForcedWithVrf);
+            }
+            (None, Some(_), true) => {
+                return Err(PorChallengeValidationError::ForcedWithOrphanProof);
+            }
+            (Some(_), None, _) => {
+                return Err(PorChallengeValidationError::MissingVrfProof);
+            }
             (None, _, false) => {
                 return Err(PorChallengeValidationError::MissingVrfOutput);
             }
@@ -226,8 +440,6 @@ pub enum PorChallengeValidationError {
     MissingDrandRound,
     #[error("drand randomness must be non-zero")]
     InvalidDrandRandomness,
-    #[error("drand signature must be present")]
-    MissingDrandSignature,
     #[error("drand signature must not be all zero")]
     InvalidDrandSignature,
     #[error("provider VRF output required unless challenge marked forced")]
@@ -236,6 +448,12 @@ pub enum PorChallengeValidationError {
     InvalidVrfOutput,
     #[error("provider VRF proof required when VRF output supplied")]
     MissingVrfProof,
+    #[error("provider VRF proof must be a non-identity canonical proof")]
+    InvalidVrfProof,
+    #[error("forced challenge must not contain a provider VRF output/proof")]
+    ForcedWithVrf,
+    #[error("forced challenge must not contain an orphan provider VRF proof")]
+    ForcedWithOrphanProof,
     #[error("seed does not match deterministic derivation")]
     SeedMismatch,
     #[error("challenge id does not match deterministic derivation")]
@@ -303,10 +521,37 @@ pub struct PorProofV1 {
     pub samples: Vec<PorProofSampleV1>,
     /// Merkle authentication path covering the sampled leaves.
     pub auth_path: Vec<[u8; 32]>,
-    /// Provider signature over the canonical proof digest (`proof_digest`).
+    /// Provider signature over the canonical domain-separated unsigned proof payload.
     pub signature: AdvertSignature,
     /// Unix timestamp (seconds) when the proof was submitted.
     pub submitted_at: u64,
+}
+
+#[derive(Debug, Clone, NoritoSerialize)]
+struct PorProofSigningPayloadV1 {
+    domain: String,
+    version: u8,
+    challenge_id: [u8; 32],
+    manifest_digest: [u8; 32],
+    provider_id: [u8; 32],
+    samples: Vec<PorProofSampleV1>,
+    auth_path: Vec<[u8; 32]>,
+    submitted_at: u64,
+}
+
+impl From<&PorProofV1> for PorProofSigningPayloadV1 {
+    fn from(proof: &PorProofV1) -> Self {
+        Self {
+            domain: POR_PROOF_SIGNATURE_DOMAIN_V1.to_owned(),
+            version: proof.version,
+            challenge_id: proof.challenge_id,
+            manifest_digest: proof.manifest_digest,
+            provider_id: proof.provider_id,
+            samples: proof.samples.clone(),
+            auth_path: proof.auth_path.clone(),
+            submitted_at: proof.submitted_at,
+        }
+    }
 }
 
 impl PorProofV1 {
@@ -335,16 +580,63 @@ impl PorProofV1 {
         if self.auth_path.is_empty() {
             return Err(PorProofValidationError::MissingAuthPath);
         }
-        match self.signature.algorithm {
-            SignatureAlgorithm::Ed25519 | SignatureAlgorithm::MultiSig => {
-                if self.signature.public_key.is_empty()
-                    || self.signature.public_key.iter().all(|byte| *byte == 0)
-                    || self.signature.signature.is_empty()
-                    || self.signature.signature.iter().all(|byte| *byte == 0)
-                {
-                    return Err(PorProofValidationError::InvalidSignature);
-                }
+        if self.submitted_at == 0 {
+            return Err(PorProofValidationError::InvalidSubmittedAt);
+        }
+        if self.signature.algorithm != SignatureAlgorithm::Ed25519
+            || self.signature.public_key.is_empty()
+            || self.signature.public_key.iter().all(|byte| *byte == 0)
+            || self.signature.signature.is_empty()
+            || self.signature.signature.iter().all(|byte| *byte == 0)
+        {
+            return Err(PorProofValidationError::InvalidSignature);
+        }
+        Ok(())
+    }
+
+    /// Returns canonical, domain-separated bytes signed by the provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if the canonical payload cannot be
+    /// serialized.
+    pub fn signature_payload_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
+        norito::to_bytes(&PorProofSigningPayloadV1::from(self))
+    }
+
+    /// Cryptographically verifies the provider signature.
+    ///
+    /// Structural validation alone intentionally does not imply authenticity;
+    /// callers crossing a trust boundary must invoke this method as well.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PorSignatureVerificationError`] for unsupported algorithms,
+    /// malformed key/signature material, canonical encoding failures, or an
+    /// invalid signature.
+    pub fn verify_signature(&self) -> Result<(), PorSignatureVerificationError> {
+        let payload = self.signature_payload_bytes().map_err(|error| {
+            PorSignatureVerificationError::PayloadEncoding {
+                reason: error.to_string(),
             }
+        })?;
+        verify_ed25519_signature(&self.signature, &payload)
+    }
+
+    /// Verifies the proof signature and binds it to the admitted provider key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PorSignatureVerificationError`] when the signature is invalid
+    /// or its embedded key is not the trusted key supplied by provider
+    /// admission.
+    pub fn verify_signature_for_provider(
+        &self,
+        admitted_provider_key: &[u8],
+    ) -> Result<(), PorSignatureVerificationError> {
+        self.verify_signature()?;
+        if self.signature.public_key != admitted_provider_key {
+            return Err(PorSignatureVerificationError::ProviderSignerMismatch);
         }
         Ok(())
     }
@@ -353,8 +645,13 @@ impl PorProofV1 {
     #[must_use]
     pub fn proof_digest(&self) -> [u8; 32] {
         let mut hasher = Hasher::new();
+        hasher.update(POR_PROOF_SIGNATURE_DOMAIN_V1.as_bytes());
+        hasher.update(&[self.version]);
         hasher.update(&self.challenge_id);
         hasher.update(&self.manifest_digest);
+        hasher.update(&self.provider_id);
+        let sample_count = u64::try_from(self.samples.len()).unwrap_or(u64::MAX);
+        hasher.update(&sample_count.to_le_bytes());
         for sample in &self.samples {
             hasher.update(&sample.sample_index.to_be_bytes());
             hasher.update(&sample.chunk_offset.to_be_bytes());
@@ -362,9 +659,12 @@ impl PorProofV1 {
             hasher.update(&sample.chunk_digest);
             hasher.update(&sample.leaf_digest);
         }
+        let auth_path_count = u64::try_from(self.auth_path.len()).unwrap_or(u64::MAX);
+        hasher.update(&auth_path_count.to_le_bytes());
         for node in &self.auth_path {
             hasher.update(node);
         }
+        hasher.update(&self.submitted_at.to_le_bytes());
         hasher.finalize().into()
     }
 }
@@ -392,6 +692,8 @@ pub enum PorProofValidationError {
     InvalidLeafDigest { sample_index: u64 },
     #[error("signature must include algorithm-specific public key and signature bytes")]
     InvalidSignature,
+    #[error("proof submitted_at must be non-zero")]
+    InvalidSubmittedAt,
 }
 
 /// Outcome recorded after challenge verification.
@@ -427,11 +729,42 @@ pub struct AuditVerdictV1 {
     pub failure_reason: Option<String>,
     /// Unix timestamp (seconds) when the verdict was issued.
     pub decided_at: u64,
-    /// Auditor signatures attesting to the verdict.
+    /// Auditor signatures over the canonical domain-separated unsigned verdict payload.
     pub auditor_signatures: Vec<AdvertSignature>,
     /// Optional metadata entries for downstream systems.
     #[norito(default)]
     pub metadata: Vec<CapacityMetadataEntry>,
+}
+
+#[derive(Debug, Clone, NoritoSerialize)]
+struct AuditVerdictSigningPayloadV1 {
+    domain: String,
+    version: u8,
+    manifest_digest: [u8; 32],
+    provider_id: [u8; 32],
+    challenge_id: [u8; 32],
+    proof_digest: Option<[u8; 32]>,
+    outcome: AuditOutcomeV1,
+    failure_reason: Option<String>,
+    decided_at: u64,
+    metadata: Vec<CapacityMetadataEntry>,
+}
+
+impl From<&AuditVerdictV1> for AuditVerdictSigningPayloadV1 {
+    fn from(verdict: &AuditVerdictV1) -> Self {
+        Self {
+            domain: POR_VERDICT_SIGNATURE_DOMAIN_V1.to_owned(),
+            version: verdict.version,
+            manifest_digest: verdict.manifest_digest,
+            provider_id: verdict.provider_id,
+            challenge_id: verdict.challenge_id,
+            proof_digest: verdict.proof_digest,
+            outcome: verdict.outcome,
+            failure_reason: verdict.failure_reason.clone(),
+            decided_at: verdict.decided_at,
+            metadata: verdict.metadata.clone(),
+        }
+    }
 }
 
 impl AuditVerdictV1 {
@@ -450,6 +783,9 @@ impl AuditVerdictV1 {
         }
         if self.challenge_id.iter().all(|&byte| byte == 0) {
             return Err(AuditVerdictValidationError::InvalidChallengeId);
+        }
+        if self.decided_at == 0 {
+            return Err(AuditVerdictValidationError::InvalidDecidedAt);
         }
         match self.outcome {
             AuditOutcomeV1::Success => {
@@ -471,7 +807,8 @@ impl AuditVerdictV1 {
             return Err(AuditVerdictValidationError::MissingSignatures);
         }
         for signature in &self.auditor_signatures {
-            if signature.public_key.is_empty()
+            if signature.algorithm != SignatureAlgorithm::Ed25519
+                || signature.public_key.is_empty()
                 || signature.public_key.iter().all(|byte| *byte == 0)
                 || signature.signature.is_empty()
                 || signature.signature.iter().all(|byte| *byte == 0)
@@ -479,12 +816,19 @@ impl AuditVerdictV1 {
                 return Err(AuditVerdictValidationError::InvalidSignature);
             }
         }
+        let mut metadata_keys = BTreeSet::new();
         for (index, entry) in self.metadata.iter().enumerate() {
             let key_trimmed = entry.key.trim();
             if key_trimmed.is_empty() {
                 return Err(AuditVerdictValidationError::InvalidMetadata {
                     index,
                     reason: "metadata key must not be empty",
+                });
+            }
+            if key_trimmed != entry.key {
+                return Err(AuditVerdictValidationError::InvalidMetadata {
+                    index,
+                    reason: "metadata key must not contain surrounding whitespace",
                 });
             }
             if !key_trimmed.chars().all(|c| {
@@ -501,8 +845,108 @@ impl AuditVerdictV1 {
                     reason: "metadata value must not be empty",
                 });
             }
+            if entry.value.trim() != entry.value {
+                return Err(AuditVerdictValidationError::InvalidMetadata {
+                    index,
+                    reason: "metadata value must not contain surrounding whitespace",
+                });
+            }
+            if !metadata_keys.insert(entry.key.as_str()) {
+                return Err(AuditVerdictValidationError::InvalidMetadata {
+                    index,
+                    reason: "metadata keys must be unique",
+                });
+            }
         }
         Ok(())
+    }
+
+    /// Returns canonical, domain-separated bytes signed by every auditor.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if the canonical payload cannot be
+    /// serialized.
+    pub fn signature_payload_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
+        norito::to_bytes(&AuditVerdictSigningPayloadV1::from(self))
+    }
+
+    /// Cryptographically verifies every unique auditor signature.
+    ///
+    /// Duplicate signer keys are rejected so a single auditor cannot pad a
+    /// future threshold calculation by repeating the same signature.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PorSignatureVerificationError`] when encoding fails, signature
+    /// material is malformed, a signature is invalid, or a signer is repeated.
+    pub fn verify_signatures(&self) -> Result<(), PorSignatureVerificationError> {
+        let payload = self.signature_payload_bytes().map_err(|error| {
+            PorSignatureVerificationError::PayloadEncoding {
+                reason: error.to_string(),
+            }
+        })?;
+        let mut signers = BTreeSet::new();
+        for signature in &self.auditor_signatures {
+            if !signers.insert(signature.public_key.clone()) {
+                return Err(PorSignatureVerificationError::DuplicateSigner);
+            }
+            verify_ed25519_signature(signature, &payload)?;
+        }
+        Ok(())
+    }
+
+    /// Verifies that every verdict signer is trusted and that the configured
+    /// auditor threshold is met.
+    ///
+    /// All embedded signatures must belong to the trusted set. This prevents
+    /// an attacker from padding a threshold verdict with arbitrary self-signed
+    /// keys even when one trusted signer is present.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PorSignatureVerificationError`] when the trust policy is
+    /// empty or inconsistent, a signature is invalid, an untrusted signer is
+    /// present, or fewer than `threshold` unique trusted auditors signed.
+    pub fn verify_signatures_with_policy(
+        &self,
+        trusted_auditor_keys: &[Vec<u8>],
+        threshold: usize,
+    ) -> Result<(), PorSignatureVerificationError> {
+        let trusted: BTreeSet<&[u8]> = trusted_auditor_keys.iter().map(Vec::as_slice).collect();
+        if trusted.is_empty() {
+            return Err(PorSignatureVerificationError::EmptyTrustedAuditorSet);
+        }
+        if threshold == 0 || threshold > trusted.len() {
+            return Err(PorSignatureVerificationError::InvalidAuditorThreshold {
+                threshold,
+                trusted: trusted.len(),
+            });
+        }
+
+        self.verify_signatures()?;
+        for signature in &self.auditor_signatures {
+            if !trusted.contains(signature.public_key.as_slice()) {
+                return Err(PorSignatureVerificationError::UntrustedAuditorSigner);
+            }
+        }
+        if self.auditor_signatures.len() < threshold {
+            return Err(
+                PorSignatureVerificationError::InsufficientTrustedAuditorSignatures {
+                    actual: self.auditor_signatures.len(),
+                    required: threshold,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// Returns `true` when an auditor signature advertises `public_key`.
+    #[must_use]
+    pub fn has_signer(&self, public_key: &[u8]) -> bool {
+        self.auditor_signatures
+            .iter()
+            .any(|signature| signature.public_key == public_key)
     }
 }
 
@@ -517,6 +961,8 @@ pub enum AuditVerdictValidationError {
     InvalidProviderId,
     #[error("challenge id must be non-zero")]
     InvalidChallengeId,
+    #[error("verdict decided_at must be non-zero")]
+    InvalidDecidedAt,
     #[error("failure reason required for non-success outcomes")]
     MissingFailureReason,
     #[error("failure reason must be absent for success outcomes")]
@@ -527,6 +973,115 @@ pub enum AuditVerdictValidationError {
     InvalidSignature,
     #[error("metadata entry {index} invalid: {reason}")]
     InvalidMetadata { index: usize, reason: &'static str },
+}
+
+/// Errors raised while verifying PoR provider or auditor signatures.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum PorSignatureVerificationError {
+    /// Only Ed25519 is supported for first-release PoR artefacts.
+    #[error("unsupported PoR signature algorithm {0:?}")]
+    UnsupportedAlgorithm(SignatureAlgorithm),
+    /// Public key material has the wrong size.
+    #[error("invalid Ed25519 public key length {length}; expected 32")]
+    InvalidPublicKeyLength {
+        /// Actual public key length.
+        length: usize,
+    },
+    /// Signature material has the wrong size.
+    #[error("invalid Ed25519 signature length {length}; expected 64")]
+    InvalidSignatureLength {
+        /// Actual signature length.
+        length: usize,
+    },
+    /// Public key material is malformed, non-canonical, or weak.
+    #[error("invalid Ed25519 public key: {reason}")]
+    InvalidPublicKey {
+        /// Validation failure detail.
+        reason: String,
+    },
+    /// Signature material is malformed, non-canonical, or weak.
+    #[error("invalid Ed25519 signature: {reason}")]
+    InvalidSignature {
+        /// Validation failure detail.
+        reason: String,
+    },
+    /// Canonical signing payload encoding failed.
+    #[error("failed to encode PoR signature payload: {reason}")]
+    PayloadEncoding {
+        /// Encoding failure detail.
+        reason: String,
+    },
+    /// Cryptographic signature verification failed.
+    #[error("PoR signature verification failed: {reason}")]
+    Verification {
+        /// Verification failure detail.
+        reason: String,
+    },
+    /// An auditor key appeared more than once.
+    #[error("duplicate PoR auditor signer")]
+    DuplicateSigner,
+    /// The proof signer is not the key admitted for the provider.
+    #[error("PoR proof signer does not match the admitted provider key")]
+    ProviderSignerMismatch,
+    /// No trusted auditor keys were configured.
+    #[error("trusted PoR auditor set must not be empty")]
+    EmptyTrustedAuditorSet,
+    /// The configured threshold cannot be satisfied by the trusted set.
+    #[error("invalid PoR auditor threshold {threshold} for {trusted} trusted auditors")]
+    InvalidAuditorThreshold {
+        /// Requested number of signatures.
+        threshold: usize,
+        /// Number of unique trusted keys.
+        trusted: usize,
+    },
+    /// A cryptographically valid signature came from an untrusted key.
+    #[error("PoR verdict contains an untrusted auditor signer")]
+    UntrustedAuditorSigner,
+    /// Fewer trusted auditors signed than policy requires.
+    #[error("PoR verdict has {actual} trusted signatures; {required} required")]
+    InsufficientTrustedAuditorSignatures {
+        /// Unique trusted signatures present.
+        actual: usize,
+        /// Required unique signatures.
+        required: usize,
+    },
+}
+
+fn verify_ed25519_signature(
+    signature: &AdvertSignature,
+    payload: &[u8],
+) -> Result<(), PorSignatureVerificationError> {
+    if signature.algorithm != SignatureAlgorithm::Ed25519 {
+        return Err(PorSignatureVerificationError::UnsupportedAlgorithm(
+            signature.algorithm,
+        ));
+    }
+    if signature.public_key.len() != PUBLIC_KEY_LENGTH {
+        return Err(PorSignatureVerificationError::InvalidPublicKeyLength {
+            length: signature.public_key.len(),
+        });
+    }
+    if signature.signature.len() != SIGNATURE_LENGTH {
+        return Err(PorSignatureVerificationError::InvalidSignatureLength {
+            length: signature.signature.len(),
+        });
+    }
+
+    let mut public_key = [0_u8; PUBLIC_KEY_LENGTH];
+    public_key.copy_from_slice(&signature.public_key);
+    let verifying_key = crate::checked_ed25519_verifying_key_from_bytes(&public_key)
+        .map_err(|reason| PorSignatureVerificationError::InvalidPublicKey { reason })?;
+
+    let mut signature_bytes = [0_u8; SIGNATURE_LENGTH];
+    signature_bytes.copy_from_slice(&signature.signature);
+    let signature = crate::checked_ed25519_signature_from_bytes(&signature_bytes)
+        .map_err(|reason| PorSignatureVerificationError::InvalidSignature { reason })?;
+
+    verifying_key
+        .verify_strict(payload, &signature)
+        .map_err(|error| PorSignatureVerificationError::Verification {
+            reason: error.to_string(),
+        })
 }
 
 /// Lifecycle states emitted by the PoR coordinator.
@@ -833,7 +1388,7 @@ pub enum PorReportIsoWeekValidationError {
 }
 
 /// Aggregated provider summary used by weekly reports.
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PorProviderSummaryV1 {
     /// Provider identifier.
     pub provider_id: [u8; 32],
@@ -850,9 +1405,9 @@ pub struct PorProviderSummaryV1 {
     /// Number of forced challenges issued.
     #[norito(default)]
     pub forced: u32,
-    /// Success rate (0.0 - 1.0).
+    /// Success rate in basis points (`0..=10_000`).
     #[norito(default)]
-    pub success_rate: f64,
+    pub success_rate_bps: u16,
     /// ISO-8601 timestamp (seconds) when the first failure occurred.
     #[norito(default)]
     pub first_failure_at: Option<u64>,
@@ -876,9 +1431,15 @@ impl PorProviderSummaryV1 {
         if self.provider_id.iter().all(|&byte| byte == 0) {
             return Err(PorProviderSummaryValidationError::InvalidProviderId);
         }
-        if self.success_rate < 0.0 || self.success_rate > 1.0 {
-            return Err(PorProviderSummaryValidationError::InvalidSuccessRate {
-                rate: self.success_rate,
+        if self.manifest_count == 0 {
+            return Err(PorProviderSummaryValidationError::InvalidManifestCount);
+        }
+        if self.challenges == 0 {
+            return Err(PorProviderSummaryValidationError::InvalidChallengeCount);
+        }
+        if self.success_rate_bps > POR_SUCCESS_RATE_BPS_MAX {
+            return Err(PorProviderSummaryValidationError::InvalidSuccessRateBps {
+                rate: self.success_rate_bps,
             });
         }
         if self.successes > self.challenges {
@@ -887,8 +1448,21 @@ impl PorProviderSummaryV1 {
         if self.failures > self.challenges {
             return Err(PorProviderSummaryValidationError::InconsistentCounts);
         }
-        if (self.successes + self.failures + self.forced) > self.challenges {
+        if u64::from(self.successes) + u64::from(self.failures) + u64::from(self.forced)
+            > u64::from(self.challenges)
+        {
             return Err(PorProviderSummaryValidationError::InconsistentCounts);
+        }
+        let scaled = u64::from(self.successes) * u64::from(POR_SUCCESS_RATE_BPS_MAX);
+        let expected_success_rate_bps =
+            u16::try_from(scaled / u64::from(self.challenges)).unwrap_or(POR_SUCCESS_RATE_BPS_MAX);
+        if self.success_rate_bps != expected_success_rate_bps {
+            return Err(
+                PorProviderSummaryValidationError::InconsistentSuccessRateBps {
+                    expected: expected_success_rate_bps,
+                    actual: self.success_rate_bps,
+                },
+            );
         }
         if self
             .ticket_id
@@ -902,12 +1476,20 @@ impl PorProviderSummaryV1 {
 }
 
 /// Validation errors for [`PorProviderSummaryV1`].
-#[derive(Debug, Error, Clone, Copy, PartialEq)]
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum PorProviderSummaryValidationError {
     #[error("provider id must be non-zero")]
     InvalidProviderId,
-    #[error("success rate must be within [0,1], got {rate}")]
-    InvalidSuccessRate { rate: f64 },
+    #[error("provider summary must cover at least one manifest")]
+    InvalidManifestCount,
+    #[error("provider summary must cover at least one challenge")]
+    InvalidChallengeCount,
+    #[error("success rate must be within 0..=10,000 basis points, got {rate}")]
+    InvalidSuccessRateBps { rate: u16 },
+    #[error(
+        "success rate is inconsistent with challenge counts: expected {expected} bps, got {actual} bps"
+    )]
+    InconsistentSuccessRateBps { expected: u16, actual: u16 },
     #[error("challenge counts are inconsistent")]
     InconsistentCounts,
     #[error("ticket identifier must not be empty")]
@@ -963,7 +1545,7 @@ pub enum PorSlashingEventValidationError {
 }
 
 /// Weekly PoR health report produced by the coordinator.
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PorWeeklyReportV1 {
     /// Schema version (`POR_WEEKLY_REPORT_VERSION_V1`).
     pub version: u8,
@@ -989,10 +1571,10 @@ pub struct PorWeeklyReportV1 {
     pub repairs_completed: u32,
     /// Optional mean latency (milliseconds) across verified challenges.
     #[norito(default)]
-    pub mean_latency_ms: Option<f64>,
+    pub mean_latency_ms: Option<u64>,
     /// Optional P95 latency (milliseconds) across verified challenges.
     #[norito(default)]
-    pub p95_latency_ms: Option<f64>,
+    pub p95_latency_ms: Option<u64>,
     /// Slashing events recorded in the cycle.
     #[norito(default)]
     pub slashing_events: Vec<PorSlashingEventV1>,
@@ -1027,10 +1609,45 @@ impl PorWeeklyReportV1 {
         if verified + failed > total {
             return Err(PorWeeklyReportValidationError::InvalidChallengeTotals);
         }
+        if self.forced_challenges > self.challenges_total {
+            return Err(PorWeeklyReportValidationError::InvalidForcedChallengeTotal);
+        }
+        if self.repairs_completed > self.repairs_enqueued {
+            return Err(PorWeeklyReportValidationError::InvalidRepairTotals);
+        }
+        if self
+            .mean_latency_ms
+            .zip(self.p95_latency_ms)
+            .is_some_and(|(mean, p95)| p95 < mean)
+        {
+            return Err(PorWeeklyReportValidationError::InvalidLatencyOrder);
+        }
+        if self.top_offenders.len() > 10 {
+            return Err(PorWeeklyReportValidationError::TooManyTopOffenders {
+                count: self.top_offenders.len(),
+            });
+        }
         for (index, provider) in self.top_offenders.iter().enumerate() {
             provider.validate().map_err(|err| {
                 PorWeeklyReportValidationError::InvalidProviderSummary { index, source: err }
             })?;
+            if self.top_offenders[..index]
+                .iter()
+                .any(|prior| prior.provider_id == provider.provider_id)
+            {
+                return Err(PorWeeklyReportValidationError::DuplicateTopOffender { index });
+            }
+            if index > 0 {
+                let prior = &self.top_offenders[index - 1];
+                let out_of_order = prior.failures < provider.failures
+                    || (prior.failures == provider.failures && prior.forced < provider.forced)
+                    || (prior.failures == provider.failures
+                        && prior.forced == provider.forced
+                        && prior.provider_id >= provider.provider_id);
+                if out_of_order {
+                    return Err(PorWeeklyReportValidationError::UnsortedTopOffenders { index });
+                }
+            }
         }
         for (index, event) in self.slashing_events.iter().enumerate() {
             event.validate().map_err(|err| {
@@ -1040,6 +1657,9 @@ impl PorWeeklyReportV1 {
         for (index, provider) in self.providers_missing_vrf.iter().enumerate() {
             if provider.iter().all(|&byte| byte == 0) {
                 return Err(PorWeeklyReportValidationError::InvalidMissingVrfProvider { index });
+            }
+            if index > 0 && self.providers_missing_vrf[index - 1] >= *provider {
+                return Err(PorWeeklyReportValidationError::UnsortedMissingVrfProviders { index });
             }
         }
         if self
@@ -1054,7 +1674,7 @@ impl PorWeeklyReportV1 {
 }
 
 /// Validation errors for [`PorWeeklyReportV1`].
-#[derive(Debug, Error, Clone, Copy, PartialEq)]
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum PorWeeklyReportValidationError {
     #[error("unsupported weekly report version {found}")]
     UnsupportedVersion { found: u8 },
@@ -1064,11 +1684,23 @@ pub enum PorWeeklyReportValidationError {
     InvalidGeneratedAt,
     #[error("challenge totals are inconsistent")]
     InvalidChallengeTotals,
+    #[error("forced challenge total exceeds total challenges")]
+    InvalidForcedChallengeTotal,
+    #[error("completed repair total exceeds enqueued repairs")]
+    InvalidRepairTotals,
+    #[error("p95 latency must be greater than or equal to mean latency")]
+    InvalidLatencyOrder,
+    #[error("weekly report contains {count} top offenders; at most 10 are allowed")]
+    TooManyTopOffenders { count: usize },
     #[error("provider summary #{index} invalid: {source}")]
     InvalidProviderSummary {
         index: usize,
         source: PorProviderSummaryValidationError,
     },
+    #[error("top offender entry #{index} duplicates an earlier provider")]
+    DuplicateTopOffender { index: usize },
+    #[error("top offender entry #{index} is not in canonical order")]
+    UnsortedTopOffenders { index: usize },
     #[error("slashing event #{index} invalid: {source}")]
     InvalidSlashingEvent {
         index: usize,
@@ -1076,13 +1708,74 @@ pub enum PorWeeklyReportValidationError {
     },
     #[error("providers_missing_vrf entry #{index} must be non-zero")]
     InvalidMissingVrfProvider { index: usize },
+    #[error("providers_missing_vrf entry #{index} is duplicate or not in canonical order")]
+    UnsortedMissingVrfProviders { index: usize },
     #[error("notes field must not be empty when present")]
     InvalidNotes,
 }
 
 #[cfg(test)]
 mod tests {
+    use ed25519_dalek::{Signer as _, SigningKey};
+
     use super::*;
+
+    fn proof_fixture() -> PorProofV1 {
+        PorProofV1 {
+            version: POR_PROOF_VERSION_V1,
+            challenge_id: [1; 32],
+            manifest_digest: [2; 32],
+            provider_id: [3; 32],
+            samples: vec![PorProofSampleV1 {
+                sample_index: 10,
+                chunk_offset: 0,
+                chunk_size: 65_536,
+                chunk_digest: [4; 32],
+                leaf_digest: [5; 32],
+            }],
+            auth_path: vec![[6; 32], [7; 32]],
+            signature: AdvertSignature {
+                algorithm: SignatureAlgorithm::Ed25519,
+                public_key: vec![8; 32],
+                signature: vec![9; 64],
+            },
+            submitted_at: 1_700_000_100,
+        }
+    }
+
+    fn sign_proof(proof: &mut PorProofV1, signing_key: &SigningKey) {
+        proof.signature.public_key = signing_key.verifying_key().to_bytes().to_vec();
+        let payload = proof
+            .signature_payload_bytes()
+            .expect("encode proof signing payload");
+        proof.signature.signature = signing_key.sign(&payload).to_bytes().to_vec();
+    }
+
+    fn verdict_fixture() -> AuditVerdictV1 {
+        AuditVerdictV1 {
+            version: AUDIT_VERDICT_VERSION_V1,
+            manifest_digest: [1; 32],
+            provider_id: [2; 32],
+            challenge_id: [3; 32],
+            proof_digest: Some([4; 32]),
+            outcome: AuditOutcomeV1::Success,
+            failure_reason: None,
+            decided_at: 1_700_000_500,
+            auditor_signatures: Vec::new(),
+            metadata: Vec::new(),
+        }
+    }
+
+    fn add_verdict_signature(verdict: &mut AuditVerdictV1, signing_key: &SigningKey) {
+        let payload = verdict
+            .signature_payload_bytes()
+            .expect("encode verdict signing payload");
+        verdict.auditor_signatures.push(AdvertSignature {
+            algorithm: SignatureAlgorithm::Ed25519,
+            public_key: signing_key.verifying_key().to_bytes().to_vec(),
+            signature: signing_key.sign(&payload).to_bytes().to_vec(),
+        });
+    }
 
     #[test]
     fn seed_derivation_is_stable() {
@@ -1146,9 +1839,9 @@ mod tests {
             epoch_id,
             drand_round,
             drand_randomness,
-            drand_signature: vec![0x66; 96],
+            drand_signature: [0x66; 48],
             vrf_output: Some(vrf_output),
-            vrf_proof: Some(vec![0x77; 80]),
+            vrf_proof: Some(iroha_crypto::vrf::VrfProof::SigInG1([0x77; 48])),
             forced: false,
             chunking_profile: "sorafs.sf1@1.0.0".to_string(),
             seed,
@@ -1179,7 +1872,7 @@ mod tests {
             epoch_id,
             drand_round,
             drand_randomness,
-            drand_signature: vec![0xCD; 96],
+            drand_signature: [0xCD; 48],
             vrf_output: None,
             vrf_proof: None,
             forced: true,
@@ -1192,6 +1885,21 @@ mod tests {
             deadline_at: 1_700_000_600,
         };
         assert!(challenge.validate().is_ok());
+
+        let mut with_vrf = challenge.clone();
+        with_vrf.vrf_output = Some([0x31; 32]);
+        with_vrf.vrf_proof = Some(iroha_crypto::vrf::VrfProof::SigInG1([0x32; 48]));
+        assert_eq!(
+            with_vrf.validate(),
+            Err(PorChallengeValidationError::ForcedWithVrf)
+        );
+
+        let mut orphan_proof = challenge;
+        orphan_proof.vrf_proof = Some(iroha_crypto::vrf::VrfProof::SigInG1([0x33; 48]));
+        assert_eq!(
+            orphan_proof.validate(),
+            Err(PorChallengeValidationError::ForcedWithOrphanProof)
+        );
     }
 
     #[test]
@@ -1206,7 +1914,7 @@ mod tests {
             epoch_id: 0,
             drand_round: 0,
             drand_randomness: [0; 32],
-            drand_signature: Vec::new(),
+            drand_signature: [0; 48],
             vrf_output: None,
             vrf_proof: None,
             forced: true,
@@ -1238,39 +1946,88 @@ mod tests {
         challenge.drand_randomness = [1; 32];
         assert_eq!(
             challenge.validate(),
-            Err(PorChallengeValidationError::MissingDrandSignature)
-        );
-
-        challenge.drand_signature = vec![0; 96];
-        assert_eq!(
-            challenge.validate(),
             Err(PorChallengeValidationError::InvalidDrandSignature)
         );
     }
 
     #[test]
     fn proof_validation_succeeds() {
-        let proof = PorProofV1 {
-            version: POR_PROOF_VERSION_V1,
-            challenge_id: [1; 32],
-            manifest_digest: [2; 32],
-            provider_id: [3; 32],
-            samples: vec![PorProofSampleV1 {
-                sample_index: 10,
-                chunk_offset: 0,
-                chunk_size: 65_536,
-                chunk_digest: [4; 32],
-                leaf_digest: [5; 32],
-            }],
-            auth_path: vec![[6; 32], [7; 32]],
-            signature: AdvertSignature {
-                algorithm: SignatureAlgorithm::Ed25519,
-                public_key: vec![8; 32],
-                signature: vec![9; 64],
-            },
-            submitted_at: 1_700_000_100,
-        };
+        let proof = proof_fixture();
         assert!(proof.validate().is_ok());
+    }
+
+    #[test]
+    fn proof_signature_covers_provider_timestamp_and_payload() {
+        let signing_key = SigningKey::from_bytes(&[0x41; 32]);
+        let mut proof = proof_fixture();
+        sign_proof(&mut proof, &signing_key);
+        proof.verify_signature().expect("valid proof signature");
+        let original_digest = proof.proof_digest();
+
+        for mutation in 0..6 {
+            let mut tampered = proof.clone();
+            match mutation {
+                0 => tampered.provider_id[0] ^= 1,
+                1 => tampered.manifest_digest[0] ^= 1,
+                2 => tampered.challenge_id[0] ^= 1,
+                3 => tampered.samples[0].chunk_offset ^= 1,
+                4 => tampered.auth_path[0][0] ^= 1,
+                5 => tampered.submitted_at += 1,
+                _ => unreachable!(),
+            }
+            assert_ne!(tampered.proof_digest(), original_digest);
+            assert!(
+                matches!(
+                    tampered.verify_signature(),
+                    Err(PorSignatureVerificationError::Verification { .. })
+                ),
+                "mutation {mutation} must invalidate the signature"
+            );
+        }
+    }
+
+    #[test]
+    fn proof_signature_rejects_wrong_key_and_malformed_material() {
+        let signing_key = SigningKey::from_bytes(&[0x42; 32]);
+        let mut proof = proof_fixture();
+        sign_proof(&mut proof, &signing_key);
+
+        proof.signature.public_key = SigningKey::from_bytes(&[0x43; 32])
+            .verifying_key()
+            .to_bytes()
+            .to_vec();
+        assert!(matches!(
+            proof.verify_signature(),
+            Err(PorSignatureVerificationError::Verification { .. })
+        ));
+
+        proof.signature.public_key = vec![1; 31];
+        assert_eq!(
+            proof.verify_signature(),
+            Err(PorSignatureVerificationError::InvalidPublicKeyLength { length: 31 })
+        );
+        proof.signature.public_key = signing_key.verifying_key().to_bytes().to_vec();
+        proof.signature.signature = vec![1; 63];
+        assert_eq!(
+            proof.verify_signature(),
+            Err(PorSignatureVerificationError::InvalidSignatureLength { length: 63 })
+        );
+    }
+
+    #[test]
+    fn proof_signature_must_match_admitted_provider_key() {
+        let signing_key = SigningKey::from_bytes(&[0x44; 32]);
+        let other_key = SigningKey::from_bytes(&[0x45; 32]);
+        let mut proof = proof_fixture();
+        sign_proof(&mut proof, &signing_key);
+
+        proof
+            .verify_signature_for_provider(&signing_key.verifying_key().to_bytes())
+            .expect("admitted provider signature");
+        assert_eq!(
+            proof.verify_signature_for_provider(&other_key.verifying_key().to_bytes()),
+            Err(PorSignatureVerificationError::ProviderSignerMismatch)
+        );
     }
 
     #[test]
@@ -1329,6 +2086,113 @@ mod tests {
             metadata: Vec::new(),
         };
         assert!(verdict.validate().is_ok());
+    }
+
+    #[test]
+    fn verdict_signatures_cover_every_decision_field() {
+        let signing_key = SigningKey::from_bytes(&[0x51; 32]);
+        let mut verdict = verdict_fixture();
+        add_verdict_signature(&mut verdict, &signing_key);
+        verdict
+            .verify_signatures()
+            .expect("valid auditor signature");
+        assert!(verdict.has_signer(&signing_key.verifying_key().to_bytes()));
+
+        let mut tampered = verdict.clone();
+        tampered.outcome = AuditOutcomeV1::Failed;
+        tampered.failure_reason = Some("forged failure".to_owned());
+        assert!(matches!(
+            tampered.verify_signatures(),
+            Err(PorSignatureVerificationError::Verification { .. })
+        ));
+
+        let mut cross_provider = verdict.clone();
+        cross_provider.provider_id[0] ^= 1;
+        assert!(matches!(
+            cross_provider.verify_signatures(),
+            Err(PorSignatureVerificationError::Verification { .. })
+        ));
+
+        let mut metadata_tamper = verdict.clone();
+        metadata_tamper.metadata.push(CapacityMetadataEntry {
+            key: "audit.note".to_owned(),
+            value: "tampered".to_owned(),
+        });
+        assert!(matches!(
+            metadata_tamper.verify_signatures(),
+            Err(PorSignatureVerificationError::Verification { .. })
+        ));
+    }
+
+    #[test]
+    fn verdict_rejects_duplicate_auditor_signer() {
+        let signing_key = SigningKey::from_bytes(&[0x52; 32]);
+        let mut verdict = verdict_fixture();
+        add_verdict_signature(&mut verdict, &signing_key);
+        verdict
+            .auditor_signatures
+            .push(verdict.auditor_signatures[0].clone());
+        assert_eq!(
+            verdict.verify_signatures(),
+            Err(PorSignatureVerificationError::DuplicateSigner)
+        );
+    }
+
+    #[test]
+    fn verdict_policy_rejects_untrusted_padding_and_enforces_threshold() {
+        let first = SigningKey::from_bytes(&[0x53; 32]);
+        let second = SigningKey::from_bytes(&[0x54; 32]);
+        let attacker = SigningKey::from_bytes(&[0x55; 32]);
+        let trusted = vec![
+            first.verifying_key().to_bytes().to_vec(),
+            second.verifying_key().to_bytes().to_vec(),
+        ];
+
+        let mut one_signature = verdict_fixture();
+        add_verdict_signature(&mut one_signature, &first);
+        assert_eq!(
+            one_signature.verify_signatures_with_policy(&trusted, 2),
+            Err(
+                PorSignatureVerificationError::InsufficientTrustedAuditorSignatures {
+                    actual: 1,
+                    required: 2,
+                }
+            )
+        );
+
+        let mut threshold_verdict = verdict_fixture();
+        add_verdict_signature(&mut threshold_verdict, &first);
+        add_verdict_signature(&mut threshold_verdict, &second);
+        threshold_verdict
+            .verify_signatures_with_policy(&trusted, 2)
+            .expect("two trusted auditors satisfy threshold");
+
+        let mut padded = verdict_fixture();
+        add_verdict_signature(&mut padded, &first);
+        add_verdict_signature(&mut padded, &attacker);
+        assert_eq!(
+            padded.verify_signatures_with_policy(&trusted, 2),
+            Err(PorSignatureVerificationError::UntrustedAuditorSigner)
+        );
+
+        assert_eq!(
+            threshold_verdict.verify_signatures_with_policy(&[], 1),
+            Err(PorSignatureVerificationError::EmptyTrustedAuditorSet)
+        );
+        assert_eq!(
+            threshold_verdict.verify_signatures_with_policy(&trusted, 3),
+            Err(PorSignatureVerificationError::InvalidAuditorThreshold {
+                threshold: 3,
+                trusted: 2,
+            })
+        );
+        assert_eq!(
+            threshold_verdict.verify_signatures_with_policy(&trusted, 0),
+            Err(PorSignatureVerificationError::InvalidAuditorThreshold {
+                threshold: 0,
+                trusted: 2,
+            })
+        );
     }
 
     #[test]
@@ -1491,7 +2355,7 @@ mod tests {
             successes: 9,
             failures: 1,
             forced: 0,
-            success_rate: 0.9,
+            success_rate_bps: 9_000,
             first_failure_at: None,
             last_success_latency_ms_p95: Some(1_100),
             repair_dispatched: true,
@@ -1500,10 +2364,16 @@ mod tests {
         };
         assert!(summary.validate().is_ok());
 
-        summary.success_rate = 1.5;
+        summary.success_rate_bps = 10_001;
         assert!(matches!(
             summary.validate(),
-            Err(PorProviderSummaryValidationError::InvalidSuccessRate { .. })
+            Err(PorProviderSummaryValidationError::InvalidSuccessRateBps { .. })
+        ));
+
+        summary.success_rate_bps = 9_001;
+        assert!(matches!(
+            summary.validate(),
+            Err(PorProviderSummaryValidationError::InconsistentSuccessRateBps { .. })
         ));
     }
 
@@ -1519,6 +2389,149 @@ mod tests {
         assert!(event.validate().is_ok());
     }
 
+    fn canonical_weekly_report() -> PorWeeklyReportV1 {
+        let first = PorProviderSummaryV1 {
+            provider_id: [1; 32],
+            manifest_count: 2,
+            challenges: 10,
+            successes: 6,
+            failures: 3,
+            forced: 1,
+            success_rate_bps: 6_000,
+            first_failure_at: Some(1_700_000_100),
+            last_success_latency_ms_p95: Some(1_200),
+            repair_dispatched: true,
+            pending_repairs: 1,
+            ticket_id: None,
+        };
+        let second = PorProviderSummaryV1 {
+            provider_id: [2; 32],
+            manifest_count: 1,
+            challenges: 10,
+            successes: 7,
+            failures: 2,
+            forced: 1,
+            success_rate_bps: 7_000,
+            first_failure_at: Some(1_700_000_200),
+            last_success_latency_ms_p95: Some(1_300),
+            repair_dispatched: true,
+            pending_repairs: 0,
+            ticket_id: None,
+        };
+        PorWeeklyReportV1 {
+            version: POR_WEEKLY_REPORT_VERSION_V1,
+            cycle: PorReportIsoWeek {
+                year: 2025,
+                week: 12,
+            },
+            generated_at: 1_700_000_400,
+            challenges_total: 20,
+            challenges_verified: 13,
+            challenges_failed: 5,
+            forced_challenges: 2,
+            repairs_enqueued: 2,
+            repairs_completed: 1,
+            mean_latency_ms: Some(800),
+            p95_latency_ms: Some(1_400),
+            slashing_events: Vec::new(),
+            providers_missing_vrf: vec![[3; 32], [4; 32]],
+            top_offenders: vec![first, second],
+            notes: None,
+        }
+    }
+
+    #[test]
+    fn weekly_report_rejects_noncanonical_and_inconsistent_aggregates() {
+        let report = canonical_weekly_report();
+        assert!(report.validate().is_ok());
+
+        let mut invalid = report.clone();
+        invalid.providers_missing_vrf.reverse();
+        assert!(matches!(
+            invalid.validate(),
+            Err(PorWeeklyReportValidationError::UnsortedMissingVrfProviders { .. })
+        ));
+
+        let mut invalid = report.clone();
+        invalid.providers_missing_vrf[1] = invalid.providers_missing_vrf[0];
+        assert!(matches!(
+            invalid.validate(),
+            Err(PorWeeklyReportValidationError::UnsortedMissingVrfProviders { .. })
+        ));
+
+        let mut invalid = report.clone();
+        invalid.top_offenders.reverse();
+        assert!(matches!(
+            invalid.validate(),
+            Err(PorWeeklyReportValidationError::UnsortedTopOffenders { .. })
+        ));
+
+        let mut invalid = report.clone();
+        invalid.top_offenders[1].provider_id = invalid.top_offenders[0].provider_id;
+        assert!(matches!(
+            invalid.validate(),
+            Err(PorWeeklyReportValidationError::DuplicateTopOffender { .. })
+        ));
+
+        let mut invalid = report.clone();
+        invalid.p95_latency_ms = Some(799);
+        assert_eq!(
+            invalid.validate(),
+            Err(PorWeeklyReportValidationError::InvalidLatencyOrder)
+        );
+
+        let mut invalid = report.clone();
+        invalid.repairs_completed = invalid.repairs_enqueued + 1;
+        assert_eq!(
+            invalid.validate(),
+            Err(PorWeeklyReportValidationError::InvalidRepairTotals)
+        );
+
+        let mut invalid = report;
+        invalid.top_offenders = (1_u8..=11)
+            .map(|id| PorProviderSummaryV1 {
+                provider_id: [id; 32],
+                manifest_count: 1,
+                challenges: 1,
+                successes: 0,
+                failures: 1,
+                forced: 0,
+                success_rate_bps: 0,
+                first_failure_at: Some(1),
+                last_success_latency_ms_p95: None,
+                repair_dispatched: true,
+                pending_repairs: 0,
+                ticket_id: None,
+            })
+            .collect();
+        assert!(matches!(
+            invalid.validate(),
+            Err(PorWeeklyReportValidationError::TooManyTopOffenders { count: 11 })
+        ));
+    }
+
+    #[test]
+    fn provider_summary_count_validation_does_not_overflow() {
+        let summary = PorProviderSummaryV1 {
+            provider_id: [1; 32],
+            manifest_count: 1,
+            challenges: u32::MAX,
+            successes: u32::MAX,
+            failures: 1,
+            forced: 0,
+            success_rate_bps: POR_SUCCESS_RATE_BPS_MAX,
+            first_failure_at: None,
+            last_success_latency_ms_p95: None,
+            repair_dispatched: false,
+            pending_repairs: 0,
+            ticket_id: None,
+        };
+        assert_eq!(
+            summary.validate(),
+            Err(PorProviderSummaryValidationError::InconsistentCounts)
+        );
+    }
+
     #[test]
     fn weekly_report_validation_succeeds() {
         let provider_summary = PorProviderSummaryV1 {
@@ -1528,7 +2541,7 @@ mod tests {
             successes: 94,
             failures: 2,
             forced: 0,
-            success_rate: 0.979,
+            success_rate_bps: 9_791,
             first_failure_at: Some(1_700_000_300),
             last_success_latency_ms_p95: Some(1_800),
             repair_dispatched: true,
@@ -1555,8 +2568,8 @@ mod tests {
             forced_challenges: 2,
             repairs_enqueued: 4,
             repairs_completed: 3,
-            mean_latency_ms: Some(820.0),
-            p95_latency_ms: Some(1_950.0),
+            mean_latency_ms: Some(820),
+            p95_latency_ms: Some(1_950),
             slashing_events: vec![slashing],
             providers_missing_vrf: vec![[8; 32]],
             top_offenders: vec![provider_summary],

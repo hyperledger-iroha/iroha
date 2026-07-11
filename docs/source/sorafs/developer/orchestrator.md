@@ -109,8 +109,8 @@ the operational process is captured in the
 
 | Flag / Field | Effect |
 |--------------|--------|
-| `--max-peers` / `OrchestratorConfig::with_max_providers` | Limits how many providers survive the scoreboard filter. Set to `None` to use every eligible provider. |
-| `--retry-budget` / `FetchOptions::per_chunk_retry_limit` | Caps retries per chunk. Exceeding the limit raises `MultiSourceError::ExhaustedRetries`. |
+| `--max-peers` / `OrchestratorConfig::with_max_providers` | Limits how many providers survive the scoreboard filter. The production default is 64 and the hard maximum is 256; `None` is normalised to the finite default. |
+| `--retry-budget` / `FetchOptions::per_chunk_retry_limit` | Caps attempts per chunk to `1..=16`. Unbounded programmatic configurations fail closed; exhausting the limit raises `MultiSourceError::ExhaustedRetries`. |
 | `--telemetry-json` | Injects latency/failure/reputation snapshots into the scoreboard builder. Stale telemetry beyond `telemetry_grace_secs` marks providers ineligible. |
 | `--scoreboard-out` | Persists the computed scoreboard (eligible + ineligible providers) for post-run inspection. |
 | `--scoreboard-now` | Overrides the scoreboard timestamp (Unix seconds) so fixture captures remain deterministic. |
@@ -255,7 +255,21 @@ test `circuit_manager_latency_soak_remains_stable_across_rotations`
 across three guard rotations; see the accompanying report at
 `docs/source/soranet/reports/circuit_stability.md:1`.
 
-### 1.6 Local QUIC Proxy
+### 1.6 Relay privacy feed boundary
+
+Provider-advertised `privacy_events_url` values are untrusted network input. The
+collector accepts only canonical HTTPS URLs without credentials, query strings,
+or fragments. Literal and DNS-resolved loopback, private, link-local,
+unspecified, multicast, documentation, and reserved addresses are rejected; a
+mixed public/private DNS answer rejects the entire endpoint. Accepted DNS
+answers are pinned into a dedicated no-proxy client for the collector lifetime,
+redirects and implicit retries are disabled, and each response is capped at
+1 MiB, 4096 NDJSON records, and 16 KiB per record. At most 64 provider feeds run
+for a fetch session. These checks also apply to the derived
+`/policy/proxy-toggle` request because it reuses the validated host and pinned
+client.
+
+### 1.7 Local QUIC Proxy
 
 The orchestrator can optionally spawn a local QUIC proxy so browser extensions
 and SDK adapters do not have to manage certificates or guard cache keys. The
@@ -304,7 +318,8 @@ Enable the proxy through the new `local_proxy` block in the orchestrator JSON:
   workstation should expose the manifest without relaying streams.
 - `prewarm_circuits`, `max_streams_per_circuit`, and `circuit_ttl_hint_secs`
   surface additional hints to the browser so it can budget parallel streams and
-  understand how aggressively the proxy reuses circuits.
+  understand how aggressively the proxy reuses circuits. The stream limit is
+  enforced by QUIC and must be within `1..=256`; it is no longer advisory.
 - `car_bridge` (optional) points at a local CAR archive cache. The `extension`
   field controls the suffix appended when the stream target omits `*.car`; set
   `allow_zst = true` to serve pre-compressed `*.car.zst` payloads directly.
@@ -321,7 +336,13 @@ Enable the proxy through the new `local_proxy` block in the orchestrator JSON:
   the proxy reverts to `resume_mode` after `cooldown_secs`. Use the `modes`
   array to scope the trigger to specific relay roles (defaults to entry relays).
 
-When the proxy runs in bridge mode it serves two application services:
+When the proxy runs in bridge mode it serves four application services:
+
+- **`tcp`** – accepts only a canonical public `host:port` authority. The proxy
+  resolves the name once, rejects any private/reserved or mixed DNS answer, and
+  connects directly to the pinned address set. This prevents the loopback-bound
+  listener from becoming an SSRF tunnel into localhost, cloud metadata, or the
+  operator LAN.
 
 - **`norito`** – the client’s stream target is resolved relative to
   `norito_bridge.spool_dir`. Targets are sanitised (no traversal, no absolute
@@ -331,11 +352,23 @@ When the proxy runs in bridge mode it serves two application services:
   configured default extension, and reject compressed payloads unless
   `allow_zst` is set. Successful bridges reply with `STREAM_ACK_OK` before
   transferring the archive bytes so clients can pipeline verification.
+- **`kaigi`** – streams an authenticated/public room spool using the same
+  filesystem rules as `norito` while reporting the configured room policy.
+
+All filesystem services canonicalise a non-symlink root at startup, reject
+symlink components and non-regular files, cap payloads at 1 GiB, and stream
+exactly the opened file length with backpressure. Inode, length, and timestamp
+identity is checked before and after transfer so replacement or truncation
+closes the stream. Client errors never disclose the resolved host filesystem
+path.
 
 Protocol guardrails for the first release:
 
-- Handshake and stream-open frames are capped at 1 MiB and rejected when the
+- Handshake and stream-open frames are capped at 64 KiB and rejected when the
   length prefix exceeds the limit.
+- Control fields are capped at 1024 bytes, 0-RTT is disabled, at most 128
+  connections are serviced concurrently, connects time out after 10 seconds,
+  and a stream is terminated after the five-minute transfer ceiling.
 - Handshake frames must set `version = 1`; mismatches return a rejected ack.
 - Stream-open frames must set `version = 1`; mismatches return
   `STREAM_ACK_UNSUPPORTED_VERSION`.

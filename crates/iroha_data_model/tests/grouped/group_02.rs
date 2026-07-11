@@ -2,6 +2,8 @@
 
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
+#[path = "../kagemusha_topup_kotlin_fixture.rs"]
+mod kagemusha_topup_kotlin_fixture;
 #[path = "../model_parser.rs"]
 mod model_parser;
 #[path = "../mutators.rs"]
@@ -44,6 +46,8 @@ mod sm_norito_roundtrip;
 mod soracloud_manifest_fixtures;
 #[path = "../streaming_events_roundtrip.rs"]
 mod streaming_events_roundtrip;
+#[path = "../sumeragi_v2_cross_sdk_fixtures.rs"]
+mod sumeragi_v2_cross_sdk_fixtures;
 #[path = "../symlink_handling.rs"]
 mod symlink_handling;
 #[path = "../trait_objects.rs"]

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use iroha_config::parameters::{actual::Root as ActualConfig, user::Root as UserConfig};
 use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+use iroha_data_model::nexus::LaneId;
 
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
@@ -219,6 +220,150 @@ metadata = {}
         message.contains("reserved autoscale elastic lane id range [1, 2)")
             && message.contains("manual lanes outside"),
         "error should identify manual lanes inside the autoscale elastic range: {message}"
+    );
+}
+
+#[test]
+fn autoscale_accepts_sparse_manual_catalog_around_elastic_id_range() {
+    let config = parse_actual_config(
+        r#"
+[nexus]
+enabled = true
+lane_count = 8
+
+[nexus.autoscale]
+enabled = true
+min_lanes = 3
+max_lanes = 6
+
+[[nexus.lane_catalog]]
+index = 0
+alias = "default"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 2
+alias = "manual-below-range"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 6
+alias = "manual-at-exclusive-upper-bound"
+metadata = {}
+"#,
+    )
+    .expect("sparse manual lanes outside the elastic id range should parse");
+
+    let autoscale = config.nexus.autoscale;
+    assert!(!autoscale.contains_elastic_lane_id(LaneId::new(2)));
+    assert!(autoscale.contains_elastic_lane_id(LaneId::new(3)));
+    assert!(autoscale.contains_elastic_lane_id(LaneId::new(5)));
+    assert!(!autoscale.contains_elastic_lane_id(LaneId::new(6)));
+    assert_eq!(
+        config
+            .nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| lane.id)
+            .collect::<Vec<_>>(),
+        vec![LaneId::new(0), LaneId::new(2), LaneId::new(6)],
+        "lane_count and autoscale bounds must not be reinterpreted as active-lane counts"
+    );
+}
+
+#[test]
+fn autoscale_accepts_elastic_id_range_above_initial_catalog_namespace() {
+    let config = parse_actual_config(
+        r#"
+[nexus]
+enabled = true
+lane_count = 4
+
+[nexus.autoscale]
+enabled = true
+min_lanes = 4
+max_lanes = 5
+
+[[nexus.lane_catalog]]
+index = 0
+alias = "core"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 1
+alias = "governance"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 2
+alias = "zk"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 3
+alias = "reserved-base"
+metadata = {}
+"#,
+    )
+    .expect("the elastic range may reserve the next id for lifecycle expansion");
+
+    assert_eq!(config.nexus.lane_catalog.lane_count().get(), 4);
+    assert!(
+        config
+            .nexus
+            .autoscale
+            .contains_elastic_lane_id(LaneId::new(4))
+    );
+    assert!(
+        config
+            .nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .all(|lane| lane.id != LaneId::new(4)),
+        "an elastic id is reserved for deterministic creation, not required to be active at startup"
+    );
+}
+
+#[test]
+fn autoscale_rejects_manual_lane_in_sparse_elastic_id_gap() {
+    let message = autoscale_config_error(
+        r#"
+[nexus]
+enabled = true
+lane_count = 8
+
+[nexus.autoscale]
+enabled = true
+min_lanes = 3
+max_lanes = 6
+
+[[nexus.lane_catalog]]
+index = 0
+alias = "default"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 2
+alias = "manual-below-range"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 5
+alias = "manual-in-sparse-gap"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 6
+alias = "manual-at-exclusive-upper-bound"
+metadata = {}
+"#,
+    );
+
+    assert!(
+        message.contains("lane 5 is inside reserved autoscale elastic lane id range [3, 6)"),
+        "a sparse catalog must not hide a manual occupant of the reserved id range: {message}"
     );
 }
 

@@ -346,6 +346,9 @@ def _source_arg_runtime_bytes(args: Any) -> bytes:
 def _json_object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     decoded: dict[str, Any] = {}
     for key, value in pairs:
+        # Source-inventory marker: live JSON duplicate-key helpers use exact strings.
+        if type(key) is not str:
+            raise ValueError("JSON-RPC returned duplicate JSON keys")
         if key in decoded:
             raise ValueError("JSON-RPC returned duplicate JSON keys")
         decoded[key] = value
@@ -377,6 +380,9 @@ def _normalize_evm_rpc_url(rpc_url: str) -> str:
 
 
 def _evm_rpc_host_is_loopback(host: str) -> bool:
+    # Source-inventory marker: runtime URL host classifiers use exact strings.
+    if type(host) is not str:
+        return False
     normalized = host.strip("[]").lower()
     try:
         return ipaddress.ip_address(normalized).is_loopback
@@ -385,6 +391,8 @@ def _evm_rpc_host_is_loopback(host: str) -> bool:
 
 
 def _evm_rpc_host_is_non_public_dns(host: str) -> bool:
+    if type(host) is not str:
+        return True
     normalized = host.strip("[]").lower()
     try:
         ipaddress.ip_address(normalized)
@@ -456,7 +464,9 @@ def _json_rpc(
         raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from None
     if type(decoded) is not dict:
         raise RuntimeError(f"JSON-RPC {method} returned a non-object response")
-    if decoded.get("jsonrpc") != "2.0":
+    protocol_version = decoded.get("jsonrpc")
+    # Source-inventory marker: EVM source-live JSON-RPC protocol version uses exact strings.
+    if type(protocol_version) is not str or protocol_version != "2.0":
         raise RuntimeError(f"JSON-RPC {method} returned an invalid protocol version")
     response_id = decoded.get("id")
     if type(response_id) is not int or response_id != 1:
@@ -593,7 +603,8 @@ def _receipt_summary(
             "deployment transaction"
         )
     status = result.get("status")
-    if status != "0x1":
+    # Source-inventory marker: EVM source-live deployment receipt RPC status uses exact strings.
+    if type(status) is not str or status != "0x1":
         raise RuntimeError("deployment transaction receipt status must be 0x1")
     contract_address = result.get("contractAddress")
     parsed_contract_address = _guarded_rpc_fixed_hex_data(
@@ -1242,7 +1253,9 @@ def _validate_source_summary(summary: dict[str, Any]) -> None:
     if type(domain) is not int or domain not in EXPECTED_RPC_CHAIN_IDS:
         raise ValueError("source domain must be an EVM-family SCCP lane")
     expected_chain = "eth" if domain == SCCP_DOMAIN_ETH else "bsc"
-    if source_bridge.get("chain") != expected_chain:
+    source_chain = source_bridge.get("chain")
+    # Source-inventory marker: EVM source-live copied chain metadata uses exact strings.
+    if type(source_chain) is not str or source_chain != expected_chain:
         raise ValueError("source chain metadata must match domain")
     rpc_chain_id = source_bridge.get("rpc_chain_id")
     if type(rpc_chain_id) is not int:
@@ -1653,16 +1666,17 @@ def _toml_prerequisites(summary: dict[str, Any]) -> list[str]:
     missing: list[str] = []
     source_domain = source_bridge.get("domain")
     is_eth_source = type(source_domain) is int and source_domain == SCCP_DOMAIN_ETH
-    if (
-        is_eth_source
-        and summary.get("block_tag") != "finalized"
-    ):
+    block_tag = summary.get("block_tag")
+    # Source-inventory marker: EVM source-live copied block tag metadata uses exact strings.
+    if is_eth_source and (type(block_tag) is not str or block_tag != "finalized"):
         missing.append("--block-tag finalized")
     if source_bridge.get("expected_rpc_chain_id_matches") is not True:
         missing.append("--expected-rpc-chain-id")
     if source_bridge.get("expected_source_bridge_code_hash_matches") is not True:
         missing.append("--expected-source-bridge-code-hash")
-    if source_bridge.get("deployment_receipt_status") == "0x1":
+    deployment_receipt_status = source_bridge.get("deployment_receipt_status")
+    # Source-inventory marker: EVM source-live copied receipt status metadata uses exact strings.
+    if type(deployment_receipt_status) is str and deployment_receipt_status == "0x1":
         if source_bridge.get("deployment_receipt_block_hash_matches") is not True:
             missing.append("deployment receipt block hash verification")
         if source_bridge.get("deployment_receipt_block_receipts_root_verified") is not True:
@@ -2182,6 +2196,9 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 
 def _decoded_public_blocker_text(value: str) -> str:
+    # Source-inventory marker: lane public blocker decode helpers use exact strings.
+    if type(value) is not str:
+        return ""
     decoded = value
     for _decode_pass in range(max(1, len(value))):
         next_decoded = unquote(html_unescape(decoded))
@@ -2192,6 +2209,8 @@ def _decoded_public_blocker_text(value: str) -> str:
 
 
 def _decoded_cli_error_text_issue(value: str) -> bool:
+    if type(value) is not str:
+        return True
     decoded = _decoded_public_blocker_text(value)
     if any(ord(character) < 0x20 or ord(character) == 0x7F for character in decoded):
         return True
@@ -2203,7 +2222,10 @@ def _decoded_cli_error_text_issue(value: str) -> bool:
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     if isinstance(exc, (OSError, SystemExit)):
         return fallback
-    text = str(exc)
+    try:
+        text = str(exc)
+    except Exception:
+        return fallback
     if not text:
         return fallback
     if not text.isascii():

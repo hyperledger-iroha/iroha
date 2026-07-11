@@ -13,7 +13,7 @@ summary: Quick validation workflow for chunk-range endpoints and orchestrator in
 ## Workflow Outline
 
 1. Generate a stream token via the built-in CLI (`iroha app sorafs storage token issue`) and export the manifest chunk plan by running `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --json-out manifest_report.json` (the report includes `chunk_fetch_specs`).
-2. Run `iroha app sorafs fetch --manifest manifest.to --plan manifest_report.json --manifest-id <manifest_digest_hex> --gateway-provider "name=primary,provider-id=<hex32>,base-url=https://gateway.example,stream-token=<base64>" --max-peers 4 --retry-budget 3`.
+2. Obtain the gateway's authenticated 32-byte Ed25519 token-verification key, then run `iroha app sorafs fetch --manifest manifest.to --plan manifest_report.json --manifest-id <manifest_digest_hex> --gateway-provider "name=primary,provider-id=<hex32>,gateway-key=<ed25519-public-key-hex>,base-url=https://gateway.example/,stream-token=<base64>" --max-peers 4 --retry-budget 3`.
 3. CLI verifies chunks + proofs, records summary metrics and (optionally) writes the assembled payload (`--output`) / JSON report (`--json-out`).
 4. Compare results with expected digest/metrics thresholds.
 
@@ -68,7 +68,9 @@ nonce: 4c1f8e9d97c84d61b9d3c8c5
 Use either `token.encoded` or `token_base64` as the `stream-token=<base64>` component in
 `--gateway-provider` when invoking `iroha app sorafs fetch`. The provider hex identifier in
 that flag must match the `provider_id_hex` you passed to the token issuer or the gateway
-will reject the request.
+will reject the request. Supply the separately authenticated `X-SoraFS-Verifying-Key` value
+as `gateway-key=<64-hex>` only after comparing it with the provider's approved deployment
+inventory; the token response is not its own trust anchor.
 
 ## Expected Output
 

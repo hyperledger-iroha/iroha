@@ -3,6 +3,7 @@ import Foundation
 public enum ConfidentialKeyDerivationError: Error, Sendable {
     case missingSeed
     case invalidSpendKeyLength
+    case inertSpendKey
     case invalidKeyLength(label: String, expected: Int, actual: Int)
     case invalidHexEncoding(field: String)
     case invalidBase64Encoding(field: String)
@@ -15,6 +16,8 @@ extension ConfidentialKeyDerivationError: LocalizedError {
             return "Provide either seedHex or seedBase64."
         case .invalidSpendKeyLength:
             return "Invalid spend key length; expected 32 bytes."
+        case .inertSpendKey:
+            return "Spend key material must not be all zero."
         case let .invalidKeyLength(label, expected, actual):
             return "Invalid \(label) length; expected \(expected) bytes but got \(actual)."
         case let .invalidHexEncoding(field):
@@ -62,7 +65,12 @@ public struct ConfidentialKeyset: Equatable, Sendable {
             return data
         }
 
-        self.spendKey = try validate(spendKey, label: "spendKey")
+        let checkedSpendKey = try validate(spendKey, label: "spendKey")
+        guard !checkedSpendKey.allSatisfy({ $0 == 0 }) else {
+            throw ConfidentialKeyDerivationError.inertSpendKey
+        }
+
+        self.spendKey = checkedSpendKey
         self.nullifierKey = try validate(nullifierKey, label: "nullifierKey")
         self.incomingViewKey = try validate(incomingViewKey, label: "incomingViewKey")
         self.outgoingViewKey = try validate(outgoingViewKey, label: "outgoingViewKey")
@@ -72,6 +80,9 @@ public struct ConfidentialKeyset: Equatable, Sendable {
     public static func derive(from spendKey: Data) throws -> ConfidentialKeyset {
         guard spendKey.count == 32 else {
             throw ConfidentialKeyDerivationError.invalidSpendKeyLength
+        }
+        guard !spendKey.allSatisfy({ $0 == 0 }) else {
+            throw ConfidentialKeyDerivationError.inertSpendKey
         }
 
         let prk = hmacSHA3(key: ConfidentialConstants.salt, data: spendKey)

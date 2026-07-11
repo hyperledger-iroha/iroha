@@ -333,7 +333,7 @@ def test_operator_signature_headers_sign_canonical_request() -> None:
 
     headers = ToriiClient.build_operator_signature_headers(
         method="POST",
-        path="/v1/nexus/lifecycle?b=2&a=1",
+        path="/v1/configuration?b=2&a=1",
         body=b'{"retire":[]}',
         key_pair=key_pair,
         timestamp_ms=123456,
@@ -342,7 +342,7 @@ def test_operator_signature_headers_sign_canonical_request() -> None:
 
     message = canonical_request_signature_message(
         "POST",
-        "/v1/nexus/lifecycle?b=2&a=1",
+        "/v1/configuration?b=2&a=1",
         b'{"retire":[]}',
         timestamp_ms=123456,
         nonce="nonce-1",
@@ -362,7 +362,7 @@ def test_operator_signature_headers_rejects_ambiguous_or_bad_signers() -> None:
     with pytest.raises(ValueError, match="exactly one"):
         ToriiClient.build_operator_signature_headers(
             method="POST",
-            path="/v1/nexus/lifecycle",
+            path="/v1/configuration",
             key_pair=key_pair,
             private_key_hex="11" * 32,
         )
@@ -370,7 +370,7 @@ def test_operator_signature_headers_rejects_ambiguous_or_bad_signers() -> None:
     with pytest.raises(ValueError, match="nonce"):
         ToriiClient.build_operator_signature_headers(
             method="POST",
-            path="/v1/nexus/lifecycle",
+            path="/v1/configuration",
             key_pair=key_pair,
             nonce="",
         )
@@ -378,7 +378,7 @@ def test_operator_signature_headers_rejects_ambiguous_or_bad_signers() -> None:
     with pytest.raises(ValueError, match="nonce"):
         ToriiClient.build_operator_signature_headers(
             method="POST",
-            path="/v1/nexus/lifecycle",
+            path="/v1/configuration",
             key_pair=key_pair,
             nonce="   ",
         )
@@ -386,7 +386,7 @@ def test_operator_signature_headers_rejects_ambiguous_or_bad_signers() -> None:
     with pytest.raises(ValueError, match="timestamp_ms"):
         ToriiClient.build_operator_signature_headers(
             method="POST",
-            path="/v1/nexus/lifecycle",
+            path="/v1/configuration",
             key_pair=key_pair,
             timestamp_ms=-1,
         )
@@ -398,7 +398,7 @@ def test_operator_signature_headers_rejects_ambiguous_or_bad_signers() -> None:
     with pytest.raises(TypeError, match="public_key_multihash"):
         ToriiClient.build_operator_signature_headers(
             method="POST",
-            path="/v1/nexus/lifecycle",
+            path="/v1/configuration",
             key_pair=MissingPublicKey(),
         )
 
@@ -411,7 +411,7 @@ def test_operator_signature_headers_rejects_ambiguous_or_bad_signers() -> None:
     with pytest.raises(TypeError, match="return bytes"):
         ToriiClient.build_operator_signature_headers(
             method="POST",
-            path="/v1/nexus/lifecycle",
+            path="/v1/configuration",
             key_pair=BadSignature(),
         )
 
@@ -422,7 +422,7 @@ def test_operator_signature_headers_accept_raw_private_key_inputs() -> None:
 
     hex_headers = ToriiClient.build_operator_signature_headers(
         method="POST",
-        path="/v1/nexus/lifecycle",
+        path="/v1/configuration",
         body=b"{}",
         private_key_hex=raw_private_key.hex(),
         timestamp_ms=123,
@@ -430,7 +430,7 @@ def test_operator_signature_headers_accept_raw_private_key_inputs() -> None:
     )
     bytes_headers = ToriiClient.build_operator_signature_headers(
         method="POST",
-        path="/v1/nexus/lifecycle",
+        path="/v1/configuration",
         body=b"{}",
         private_key=raw_private_key,
         timestamp_ms=123,
@@ -442,26 +442,61 @@ def test_operator_signature_headers_accept_raw_private_key_inputs() -> None:
     with pytest.raises(ValueError, match="private-key multihash or raw Ed25519 hex"):
         ToriiClient.build_operator_signature_headers(
             method="POST",
-            path="/v1/nexus/lifecycle",
+            path="/v1/configuration",
             private_key="not-hex-or-multihash",
         )
     with pytest.raises(ValueError, match="32 bytes"):
         ToriiClient.build_operator_signature_headers(
             method="POST",
-            path="/v1/nexus/lifecycle",
+            path="/v1/configuration",
             private_key="00" * 31,
         )
 
 
-def test_nexus_lane_lifecycle_posts_signed_json_without_retry() -> None:
-    session = FakeSession([response(202, {"ok": True, "lane_count": 6})])
-    client = ToriiClient(
-        "http://torii.example",
-        session=session,
-        max_retries=3,
-        retry_on_methods={"POST"},
-    )
-    key_pair = Ed25519KeyPair.from_private_key(bytes([9] * 32))
+def lifecycle_status() -> dict[str, object]:
+    return {
+        "version": 1,
+        "nexus_enabled": True,
+        "lane_count": 1,
+        "lanes": [
+            {
+                "id": 0,
+                "dataspace_id": 0,
+                "alias": "universal",
+                "description": None,
+                "visibility": "public",
+                "lane_type": None,
+                "governance": None,
+                "settlement": None,
+                "storage": "full_replica",
+                "proof_scheme": "merkle_sha256",
+                "metadata": {},
+            }
+        ],
+        "catalog_hash": "a1" * 32,
+        "incarnations": [{"lane_id": 0, "incarnation": "b2" * 32}],
+        "incarnation_root": "c3" * 32,
+    }
+
+
+def test_nexus_lane_lifecycle_status_fetches_exact_json_snapshot() -> None:
+    status = lifecycle_status()
+    session = FakeSession([response(200, status)])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    assert client.nexus_lane_lifecycle_status() == status
+    assert len(session.calls) == 1
+    assert session.calls[0]["method"] == "GET"
+    assert session.calls[0]["path"] == "/v1/nexus/lifecycle"
+    assert session.calls[0]["headers"]["Accept"] == "application/json"
+
+
+def test_nexus_lane_lifecycle_submits_native_signed_set_parameter(monkeypatch: pytest.MonkeyPatch) -> None:
+    import iroha_python.client as client_module
+
+    status = lifecycle_status()
+    session = FakeSession([response(200, status)])
+    client = ToriiClient("http://torii.example", session=session, max_retries=3)
     additions = [
         {
             "id": 5,
@@ -477,83 +512,189 @@ def test_nexus_lane_lifecycle_posts_signed_json_without_retry() -> None:
             "metadata": {"owner": "boi-poc"},
         }
     ]
+    captured: dict[str, object] = {}
 
-    result = client.nexus_lane_lifecycle(additions, retire=[1], key_pair=key_pair)
+    class FakeInstruction:
+        @staticmethod
+        def nexus_lane_lifecycle(status_json: str, plan_json: str) -> object:
+            captured["status"] = json.loads(status_json)
+            captured["plan"] = json.loads(plan_json)
+            return "set-parameter-instruction"
 
-    assert result == {"ok": True, "lane_count": 6}
+    class FakeCrypto:
+        Instruction = FakeInstruction
+
+    def fake_submit(
+        chain_id: str,
+        authority: str,
+        private_key: bytes,
+        **kwargs: object,
+    ) -> tuple[str, dict[str, object]]:
+        captured["chain_id"] = chain_id
+        captured["authority"] = authority
+        captured["private_key"] = private_key
+        captured.update(kwargs)
+        return "envelope", {"kind": "Applied"}
+
+    monkeypatch.setattr(client_module, "_require_crypto", lambda: FakeCrypto)
+    monkeypatch.setattr(client, "build_and_submit_transaction", fake_submit)
+    result = client.nexus_lane_lifecycle(
+        additions,
+        retire=[1],
+        chain_id="test-chain",
+        authority="alice@wonderland",
+        private_key=bytes([9] * 32),
+    )
+
+    assert result == ("envelope", {"kind": "Applied"})
     assert len(session.calls) == 1
-    call = session.calls[0]
-    assert call["path"] == "/v1/nexus/lifecycle"
-    assert json.loads(call["data"]) == {"additions": additions, "retire": [1]}
-    assert call["headers"]["Content-Type"] == "application/json"
-    assert call["headers"]["Accept"] == "application/json"
-    assert call["headers"]["x-iroha-operator-public-key"] == key_pair.public_key_multihash
-    assert "private" not in json.dumps(call["headers"]).lower()
+    assert session.calls[0]["method"] == "GET"
+    assert captured["status"] == status
+    assert captured["plan"] == {"additions": additions, "retire": [1]}
+    assert captured["chain_id"] == "test-chain"
+    assert captured["authority"] == "alice@wonderland"
+    assert captured["private_key"] == bytes([9] * 32)
+    assert captured["instructions"] == ["set-parameter-instruction"]
+    assert captured["wait"] is True
+    assert captured["success_statuses"] == ("Applied",)
 
 
 def test_nexus_lane_lifecycle_rejects_malformed_inputs() -> None:
     client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
-    key_pair = Ed25519KeyPair.from_private_key(bytes([10] * 32))
+    auth = {
+        "chain_id": "test-chain",
+        "authority": "alice@wonderland",
+        "private_key": bytes([10] * 32),
+    }
 
     with pytest.raises(TypeError, match="additions"):
-        client.nexus_lane_lifecycle("not-a-list", key_pair=key_pair)  # type: ignore[arg-type]
+        client.nexus_lane_lifecycle("not-a-list", **auth)  # type: ignore[arg-type]
 
     with pytest.raises(TypeError, match=r"additions\[0\]"):
-        client.nexus_lane_lifecycle([object()], key_pair=key_pair)  # type: ignore[list-item]
+        client.nexus_lane_lifecycle([object()], **auth)  # type: ignore[list-item]
 
     with pytest.raises(ValueError, match=r"retire\[0\]"):
-        client.nexus_lane_lifecycle([], retire=[-1], key_pair=key_pair)
+        client.nexus_lane_lifecycle([], retire=[-1], **auth)
 
     with pytest.raises(TypeError, match="retire"):
-        client.nexus_lane_lifecycle([], retire="12", key_pair=key_pair)  # type: ignore[arg-type]
+        client.nexus_lane_lifecycle([], retire="12", **auth)  # type: ignore[arg-type]
 
     with pytest.raises(TypeError, match="retire"):
-        client.nexus_lane_lifecycle([], retire=object(), key_pair=key_pair)  # type: ignore[arg-type]
+        client.nexus_lane_lifecycle([], retire=object(), **auth)  # type: ignore[arg-type]
 
     with pytest.raises(ValueError, match=r"retire\[0\]"):
-        client.nexus_lane_lifecycle([], retire=[object()], key_pair=key_pair)  # type: ignore[list-item]
+        client.nexus_lane_lifecycle([], retire=[object()], **auth)  # type: ignore[list-item]
 
     with pytest.raises(ValueError, match=r"retire\[0\]"):
-        client.nexus_lane_lifecycle([], retire=[True], key_pair=key_pair)  # type: ignore[list-item]
+        client.nexus_lane_lifecycle([], retire=[True], **auth)  # type: ignore[list-item]
+
+    for invalid in (1.5, "1", 0x1_0000_0000):
+        with pytest.raises(ValueError, match=r"retire\[0\].*u32"):
+            client.nexus_lane_lifecycle([], retire=[invalid], **auth)  # type: ignore[list-item]
+
+    with pytest.raises(ValueError, match="duplicates lane"):
+        client.nexus_lane_lifecycle([], retire=[1, 1], **auth)
+
+    lane = {"id": 1, "alias": "lane-one"}
+    with pytest.raises(ValueError, match=r"additions\[1\].id duplicates"):
+        client.nexus_lane_lifecycle([lane, lane], **auth)
+
+    with pytest.raises(ValueError, match=r"additions\[0\].id.*u32"):
+        client.nexus_lane_lifecycle([{"id": 1.5, "alias": "bad"}], **auth)
+
+    with pytest.raises(ValueError, match="must add or retire"):
+        client.nexus_lane_lifecycle([], **auth)
 
 
-def test_nexus_lane_lifecycle_surfaces_operator_auth_failure() -> None:
-    session = FakeSession(
-        [
-            response(
-                403,
-                {
-                    "code": "operator_key_not_allowed",
-                    "message": "operator public key is not allow-listed",
-                },
-            )
-        ]
-    )
-    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+def test_nexus_lane_lifecycle_rejects_retired_operator_only_shape() -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
     key_pair = Ed25519KeyPair.from_private_key(bytes([11] * 32))
 
-    with pytest.raises(RuntimeError, match="operator public key is not allow-listed"):
+    with pytest.raises(RuntimeError, match="operator-only Nexus lifecycle calls are deprecated"):
         client.nexus_lane_lifecycle([], key_pair=key_pair)
+    with pytest.raises(RuntimeError, match="operator-only Nexus lifecycle calls are deprecated"):
+        client.nexus_lane_lifecycle([], private_key_hex="11" * 32)
+    with pytest.raises(RuntimeError, match="operator-only Nexus lifecycle calls are deprecated"):
+        client.nexus_lane_lifecycle([], private_key="11" * 32)
 
 
-def test_nexus_lane_lifecycle_does_not_retry_signed_post_on_server_error() -> None:
-    session = FakeSession(
-        [
-            response(500, {"message": "transient"}),
-            response(202, {"ok": True}),
-        ]
-    )
+def test_nexus_lane_lifecycle_requires_full_transaction_signing_context() -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    with pytest.raises(ValueError, match="chain_id is required"):
+        client.nexus_lane_lifecycle(
+            [], authority="alice@wonderland", private_key=bytes([1] * 32)
+        )
+    with pytest.raises(ValueError, match="authority is required"):
+        client.nexus_lane_lifecycle([], chain_id="chain", private_key=bytes([1] * 32))
+    with pytest.raises(ValueError, match="private_key bytes are required"):
+        client.nexus_lane_lifecycle([], chain_id="chain", authority="alice@wonderland")
+
+
+def test_nexus_lane_lifecycle_rejects_malformed_status() -> None:
+    malformed = lifecycle_status()
+    malformed["catalog_hash"] = ""
     client = ToriiClient(
         "http://torii.example",
-        session=session,
-        max_retries=3,
-        retry_on_methods={"POST"},
-        retry_on_status=[500],
+        session=FakeSession([response(200, malformed)]),
+        max_retries=0,
     )
-    key_pair = Ed25519KeyPair.from_private_key(bytes([12] * 32))
 
-    with pytest.raises(RuntimeError, match="transient"):
-        client.nexus_lane_lifecycle([], key_pair=key_pair)
+    with pytest.raises(ValueError, match="catalog_hash"):
+        client.nexus_lane_lifecycle_status()
+
+    wrong_incarnation = lifecycle_status()
+    wrong_incarnation["incarnations"] = [
+        {"lane_id": 1, "incarnation": "b2" * 32}
+    ]
+    client = ToriiClient(
+        "http://torii.example",
+        session=FakeSession([response(200, wrong_incarnation)]),
+        max_retries=0,
+    )
+    with pytest.raises(ValueError, match="exactly match"):
+        client.nexus_lane_lifecycle_status()
+
+    missing_root = lifecycle_status()
+    missing_root["incarnation_root"] = ""
+    client = ToriiClient(
+        "http://torii.example",
+        session=FakeSession([response(200, missing_root)]),
+        max_retries=0,
+    )
+    with pytest.raises(ValueError, match="incarnation_root"):
+        client.nexus_lane_lifecycle_status()
+
+
+def test_nexus_lane_lifecycle_surfaces_stale_transaction_without_refetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import iroha_python.client as client_module
+
+    session = FakeSession([response(200, lifecycle_status())])
+    client = ToriiClient("http://torii.example", session=session, max_retries=3)
+
+    class FakeInstruction:
+        @staticmethod
+        def nexus_lane_lifecycle(_status: str, _plan: str) -> object:
+            return object()
+
+    class FakeCrypto:
+        Instruction = FakeInstruction
+
+    monkeypatch.setattr(client_module, "_require_crypto", lambda: FakeCrypto)
+
+    def stale(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("stale Nexus lane lifecycle catalog commitment")
+
+    monkeypatch.setattr(client, "build_and_submit_transaction", stale)
+    with pytest.raises(RuntimeError, match="stale Nexus"):
+        client.nexus_lane_lifecycle(
+            [],
+            retire=[0],
+            chain_id="test-chain",
+            authority="alice@wonderland",
+            private_key=bytes([12] * 32),
+        )
 
     assert len(session.calls) == 1
     assert session.calls[0]["path"] == "/v1/nexus/lifecycle"

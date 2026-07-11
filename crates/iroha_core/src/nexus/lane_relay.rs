@@ -164,6 +164,7 @@ mod tests {
         let settlement = LaneBlockCommitment {
             block_height: height,
             lane_id: LaneId::new(lane),
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(u64::from(lane) + 1),
             tx_count: 1,
             total_local_micro: 1,

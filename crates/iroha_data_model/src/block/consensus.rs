@@ -25,12 +25,15 @@ use crate::{
 };
 use iroha_primitives::numeric::{Numeric, NumericSpec};
 
-/// Wire protocol version for first-release Sumeragi consensus messages.
+/// Wire protocol version for the legacy Sumeragi v1 archival message family.
+///
+/// Live consensus rejects this family. New validators use
+/// [`super::consensus_v2`] and its explicit v2 envelope.
 pub const PROTO_VERSION: u32 = 1;
 
-/// Mode tag for classic permissioned Sumeragi used in handshakes and hashing domains.
+/// Legacy permissioned-mode tag retained for decoding and archival verification.
 pub const PERMISSIONED_TAG: &str = "iroha2-consensus::permissioned-sumeragi@v1";
-/// Mode tag for `NPoS` Sumeragi used in handshakes and hashing domains.
+/// Legacy `NPoS` mode tag retained for decoding and archival verification.
 pub const NPOS_TAG: &str = "iroha2-consensus::npos-sumeragi@v1";
 
 /// Chain-order hash used by fixtures that do not model live validator ordering.
@@ -283,6 +286,18 @@ pub struct ConsensusGenesisParams {
     /// Optional NPoS-specific configuration captured at genesis.
     #[norito(default)]
     pub npos: Option<NposGenesisParams>,
+    /// Explicit global consensus protocol revision.
+    #[norito(default)]
+    pub protocol_version: u32,
+    /// One constant, non-resetting round timeout in milliseconds.
+    #[norito(default)]
+    pub round_timeout_ms: u64,
+    /// Required signed inputs for constructing Sumeragi v2 height contexts.
+    ///
+    /// `None` exists only so archival v1 payloads remain decodable. A live v2
+    /// node must reject it rather than deriving values from local config.
+    #[norito(default)]
+    pub v2_context: Option<super::consensus_v2::SumeragiV2GenesisContextParameters>,
 }
 
 /// `NPoS`-specific consensus parameters hashed into the genesis fingerprint.
@@ -850,6 +865,8 @@ pub struct SumeragiCommittedLaneBlock {
     pub lane_id: LaneId,
     /// Dataspace bound to the lane-local block.
     pub dataspace_id: DataSpaceId,
+    /// Exact active incarnation of the lane when this block was certified.
+    pub lane_incarnation: Hash,
     /// Lane-local block height.
     pub lane_block_height: u64,
     /// Lane-local consensus view.
@@ -895,6 +912,11 @@ pub struct SumeragiLanePayloadOwnership {
     pub lane_id: LaneId,
     /// Dataspace bound to the lane payload.
     pub dataspace_id: DataSpaceId,
+    /// Exact active lane incarnation commitment.
+    ///
+    /// Recreated lanes receive a new commitment, so delayed artifacts from a
+    /// retired incarnation remain invalid regardless of their lane-local height.
+    pub lane_incarnation: Hash,
     /// Lane-local block height for the payload.
     pub lane_block_height: u64,
     /// Lane-local view for the payload.
@@ -933,6 +955,7 @@ struct LaneBlockProposalPreimage {
     descriptor_hash: Hash,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
     lane_block_height: u64,
     lane_block_view: u64,
     subject_hash: Hash,
@@ -959,6 +982,8 @@ pub struct LaneBlockDescriptorV1 {
     pub lane_id: LaneId,
     /// Dataspace bound to the lane-local block.
     pub dataspace_id: DataSpaceId,
+    /// Exact active lane incarnation commitment.
+    pub lane_incarnation: Hash,
     /// Global proposal height that planned this lane-local block.
     pub proposal_height: u64,
     /// Latest committed lane-local height used as this block's predecessor tip.
@@ -1007,6 +1032,7 @@ impl LaneBlockDescriptorV1 {
                 version: 1,
                 lane_id: self.lane_id,
                 dataspace_id: self.dataspace_id,
+                lane_incarnation: self.lane_incarnation,
                 proposal_height: self.proposal_height,
                 previous_lane_block_height: self.previous_lane_block_height,
                 previous_lane_block_descriptor_hash: self.previous_lane_block_descriptor_hash,
@@ -1085,6 +1111,7 @@ impl LaneBlockProposalV1 {
                 descriptor_hash: descriptor.descriptor_hash,
                 lane_id: descriptor.lane_id,
                 dataspace_id: descriptor.dataspace_id,
+                lane_incarnation: descriptor.lane_incarnation,
                 lane_block_height: descriptor.lane_block_height,
                 lane_block_view: descriptor.lane_block_view,
                 subject_hash: descriptor.subject_hash,
@@ -1124,6 +1151,7 @@ impl LaneBlockProposalV1 {
             phase,
             lane_id: descriptor.lane_id,
             dataspace_id: descriptor.dataspace_id,
+            lane_incarnation: descriptor.lane_incarnation,
             proposal_height: descriptor.proposal_height,
             lane_block_height: descriptor.lane_block_height,
             lane_block_view: descriptor.lane_block_view,
@@ -1156,6 +1184,8 @@ pub struct LaneBlockVoteBodyV1 {
     pub lane_id: LaneId,
     /// Dataspace bound to the lane-local block.
     pub dataspace_id: DataSpaceId,
+    /// Exact active lane incarnation commitment.
+    pub lane_incarnation: Hash,
     /// Global proposal height that planned this lane-local block.
     pub proposal_height: u64,
     /// Lane-local block height being certified.
@@ -1199,6 +1229,102 @@ impl LaneBlockVoteBodyV1 {
     }
 }
 
+/// Exact autonomous lane payload retained by one READY signer.
+///
+/// The body names both the immutable payload's origin proposal and the
+/// view-specific proposal being prepared. This prevents a valid payload
+/// certificate from being rebound across chains, epochs, lane incarnations,
+/// proposals, NewView transitions, or DA/RBC instances.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct LanePayloadAvailabilityBodyV1 {
+    /// Artifact schema version. Only version one is accepted.
+    pub version: u8,
+    /// Hash of the chain identifier that owns the payload.
+    pub chain_id_hash: Hash,
+    /// Consensus epoch at the proposal compatibility height.
+    pub epoch: u64,
+    /// Lane whose executable payload is retained.
+    pub lane_id: LaneId,
+    /// Dataspace bound to the lane.
+    pub dataspace_id: DataSpaceId,
+    /// Exact lane lifecycle incarnation.
+    pub lane_incarnation: Hash,
+    /// Global compatibility height that selected the lane work.
+    pub proposal_height: u64,
+    /// Lane-local block height whose bytes are retained.
+    pub lane_block_height: u64,
+    /// View of the immutable producer-authenticated origin proposal.
+    pub origin_lane_block_view: u64,
+    /// Hash of the immutable producer-authenticated origin proposal.
+    pub origin_proposal_hash: Hash,
+    /// Descriptor hash of the immutable origin proposal.
+    pub origin_descriptor_hash: Hash,
+    /// View of the exact proposal currently being prepared.
+    pub current_lane_block_view: u64,
+    /// Hash of the exact proposal currently being prepared.
+    pub current_proposal_hash: Hash,
+    /// Descriptor hash of the exact proposal currently being prepared.
+    pub current_descriptor_hash: Hash,
+    /// View-specific lane subject hash.
+    pub current_subject_hash: Hash,
+    /// View-specific DA/RBC payload ownership hash.
+    pub current_payload_ownership_hash: Hash,
+    /// View-specific reliable-broadcast instance hash.
+    pub current_rbc_instance_hash: Hash,
+    /// View-neutral digest of the exact executable payload bytes.
+    pub executable_payload_hash: Hash,
+    /// Version of the validator-set hashing scheme.
+    pub validator_set_hash_version: u16,
+    /// Hash of the canonical lane committee.
+    pub validator_set_hash: HashOf<Vec<PeerId>>,
+    /// Number of validators in the canonical lane committee.
+    pub validator_count: u32,
+    /// Minimum distinct READY signers required for availability.
+    pub min_quorum: u32,
+    /// Lane consensus domain tag.
+    pub qc_mode_tag: String,
+}
+
+impl LanePayloadAvailabilityBodyV1 {
+    /// Build the domain-separated READY signature preimage.
+    #[must_use]
+    pub fn signature_preimage(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(32 + 512);
+        out.extend_from_slice(b"iroha:lane-payload-availability-ready:v1");
+        out.extend_from_slice(
+            &norito::to_bytes(self).expect("lane payload availability body must encode"),
+        );
+        out
+    }
+}
+
+/// Quorum proof that the exact autonomous executable payload is durably held.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct LanePayloadAvailabilityQcV1 {
+    /// READY body certified by the aggregate signature.
+    pub body: LanePayloadAvailabilityBodyV1,
+    /// Version of the validator-set hashing scheme.
+    pub validator_set_hash_version: u16,
+    /// Stable hash of the validator set that produced the certificate.
+    pub validator_set_hash: HashOf<Vec<PeerId>>,
+    /// Ordered historical validator set indexed by `signers_bitmap`.
+    pub validator_set: Vec<PeerId>,
+    /// Valid historical PoPs aligned exactly with `validator_set`.
+    pub validator_set_pops: Vec<Vec<u8>>,
+    /// Compact READY signer bitmap (LSB-first).
+    pub signers_bitmap: Vec<u8>,
+    /// BLS12-381 aggregate READY signature bytes (compressed).
+    pub bls_aggregate_signature: Vec<u8>,
+}
+
 /// Validator-set proof for a standalone lane-local block proposal.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1218,6 +1344,13 @@ pub struct LaneBlockQcV1 {
     pub signers_bitmap: Vec<u8>,
     /// BLS12-381 aggregate signature bytes (compressed).
     pub bls_aggregate_signature: Vec<u8>,
+    /// Exact payload-availability proof for autonomous prepare QCs.
+    ///
+    /// This is `None` for commit QCs and for compatibility lane proposals
+    /// whose payload availability is inherited from a canonical global block.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub payload_availability_qc: Option<LanePayloadAvailabilityQcV1>,
 }
 
 #[derive(Clone, Debug, Encode)]
@@ -1225,6 +1358,7 @@ struct LanePayloadOwnershipSubjectPreimage {
     version: u8,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
     lane_block_height: u64,
     lane_block_view: u64,
     candidate_indices: Vec<u64>,
@@ -1238,6 +1372,7 @@ struct LanePayloadOwnershipPreimage {
     version: u8,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
     lane_block_height: u64,
     lane_block_view: u64,
     subject_hash: Hash,
@@ -1252,6 +1387,7 @@ struct LanePayloadOwnershipRbcPreimage {
     version: u8,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
     lane_block_height: u64,
     lane_block_view: u64,
     subject_hash: Hash,
@@ -1264,6 +1400,7 @@ struct LaneBlockDescriptorPreimage {
     version: u8,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
     proposal_height: u64,
     previous_lane_block_height: u64,
     previous_lane_block_descriptor_hash: Option<Hash>,
@@ -1298,6 +1435,8 @@ pub struct SumeragiLanePayloadOwnershipReplayHashes {
 /// Validation error for lane payload ownership replay material.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SumeragiLanePayloadOwnershipReplayError {
+    /// Lane incarnation commitment is the reserved all-zero value.
+    ZeroLaneIncarnation,
     /// QC mode tag is empty.
     BlankQcModeTag,
     /// No accepted candidate indices are present.
@@ -1337,6 +1476,7 @@ pub enum SumeragiLanePayloadOwnershipReplayError {
 impl fmt::Display for SumeragiLanePayloadOwnershipReplayError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let message = match self {
+            Self::ZeroLaneIncarnation => "zero lane incarnation commitment",
             Self::BlankQcModeTag => "blank QC mode tag",
             Self::EmptyCandidateIndices => "empty candidate indices",
             Self::CandidateHashCountMismatch => "candidate hash count mismatch",
@@ -1371,6 +1511,7 @@ impl SumeragiLanePayloadOwnership {
     pub fn compute_replay_subject_hash(
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
         lane_block_height: u64,
         lane_block_view: u64,
         accepted_candidate_indices: &[u64],
@@ -1382,6 +1523,7 @@ impl SumeragiLanePayloadOwnership {
                 version: 1,
                 lane_id,
                 dataspace_id,
+                lane_incarnation,
                 lane_block_height,
                 lane_block_view,
                 candidate_indices: accepted_candidate_indices.to_vec(),
@@ -1401,6 +1543,7 @@ impl SumeragiLanePayloadOwnership {
     pub fn compute_replay_payload_ownership_hash(
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
         lane_block_height: u64,
         lane_block_view: u64,
         subject_hash: Hash,
@@ -1414,6 +1557,7 @@ impl SumeragiLanePayloadOwnership {
                 version: 1,
                 lane_id,
                 dataspace_id,
+                lane_incarnation,
                 lane_block_height,
                 lane_block_view,
                 subject_hash,
@@ -1434,6 +1578,7 @@ impl SumeragiLanePayloadOwnership {
     pub fn compute_replay_rbc_instance_hash(
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
         lane_block_height: u64,
         lane_block_view: u64,
         subject_hash: Hash,
@@ -1445,6 +1590,7 @@ impl SumeragiLanePayloadOwnership {
                 version: 1,
                 lane_id,
                 dataspace_id,
+                lane_incarnation,
                 lane_block_height,
                 lane_block_view,
                 subject_hash,
@@ -1468,6 +1614,7 @@ impl SumeragiLanePayloadOwnership {
         let subject_hash = Self::compute_replay_subject_hash(
             self.lane_id,
             self.dataspace_id,
+            self.lane_incarnation,
             self.lane_block_height,
             self.lane_block_view,
             &self.accepted_candidate_indices,
@@ -1477,6 +1624,7 @@ impl SumeragiLanePayloadOwnership {
         let payload_ownership_hash = Self::compute_replay_payload_ownership_hash(
             self.lane_id,
             self.dataspace_id,
+            self.lane_incarnation,
             self.lane_block_height,
             self.lane_block_view,
             subject_hash,
@@ -1487,6 +1635,7 @@ impl SumeragiLanePayloadOwnership {
         let rbc_instance_hash = Self::compute_replay_rbc_instance_hash(
             self.lane_id,
             self.dataspace_id,
+            self.lane_incarnation,
             self.lane_block_height,
             self.lane_block_view,
             subject_hash,
@@ -1498,6 +1647,7 @@ impl SumeragiLanePayloadOwnership {
                 version: 1,
                 lane_id: self.lane_id,
                 dataspace_id: self.dataspace_id,
+                lane_incarnation: self.lane_incarnation,
                 proposal_height: self.proposal_height,
                 previous_lane_block_height: self.previous_lane_block_height,
                 previous_lane_block_descriptor_hash: self.previous_lane_block_descriptor_hash,
@@ -1549,6 +1699,9 @@ impl SumeragiLanePayloadOwnership {
     }
 
     fn validate_replay_shape(&self) -> Result<(), SumeragiLanePayloadOwnershipReplayError> {
+        if self.lane_incarnation.as_ref().iter().all(|byte| *byte == 0) {
+            return Err(SumeragiLanePayloadOwnershipReplayError::ZeroLaneIncarnation);
+        }
         if self.qc_mode_tag.trim().is_empty() {
             return Err(SumeragiLanePayloadOwnershipReplayError::BlankQcModeTag);
         }
@@ -1695,6 +1848,73 @@ pub enum NativeAmxPhase {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct NativeAmxAttestationBodyV1 {
+    /// Hash of the chain identifier that owns this attestation.
+    pub chain_id_hash: Hash,
+    /// Source transaction hash/id.
+    pub source_id: [u8; 32],
+    /// Hash of the canonical transaction entrypoint.
+    pub tx_entrypoint_hash: HashOf<crate::transaction::TransactionEntrypoint>,
+    /// Deterministic digest of the full coordinator/participant routing plan.
+    pub plan_digest: Hash,
+    /// Native AMX phase certified by this body.
+    pub phase: NativeAmxPhase,
+    /// Coordinator lane selected by the routing plan.
+    pub coordinator_lane_id: LaneId,
+    /// Coordinator dataspace selected by the routing plan.
+    pub coordinator_dataspace_id: DataSpaceId,
+    /// Exact active coordinator-lane incarnation at the authority context.
+    pub coordinator_lane_incarnation: Hash,
+    /// Participant lane certified by the committee.
+    pub participant_lane_id: LaneId,
+    /// Participant dataspace certified by the committee.
+    pub participant_dataspace_id: DataSpaceId,
+    /// Exact active participant-lane incarnation at the authority context.
+    pub participant_lane_incarnation: Hash,
+    /// Hash of the exact canonical participant committee that may attest this leg.
+    pub participant_validator_set_hash: HashOf<Vec<PeerId>>,
+    /// Number of validators in the exact participant committee.
+    pub participant_validator_count: u32,
+    /// Minimum number of participant signatures required by the lane quorum policy.
+    pub participant_min_quorum: u32,
+    /// Global/catalog height used to resolve routes, incarnations, committee,
+    /// key activation, and proofs of possession.
+    pub authority_context_height: u64,
+    /// Coordinator lane-local block height that owns the transaction.
+    pub coordinator_lane_block_height: u64,
+    /// Coordinator lane-local consensus view for this exact attestation.
+    pub coordinator_lane_block_view: u64,
+    /// Exact coordinator lane-block proposal authenticated by the request.
+    pub coordinator_proposal_hash: Hash,
+}
+
+impl NativeAmxAttestationBodyV1 {
+    /// Build the domain-separated signature preimage for this attestation body.
+    #[must_use]
+    pub fn signature_preimage(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(32 + 256);
+        out.extend_from_slice(b"iroha:native-amx:v1");
+        out.extend_from_slice(
+            &norito::to_bytes(self).expect("native AMX attestation body must encode"),
+        );
+        out
+    }
+}
+
+/// Canonical Sumeragi v2 native AMX attestation payload.
+///
+/// The exact frozen round and election epoch are part of the signed payload,
+/// preventing a valid lane-local vote from being replayed across chains,
+/// parent decisions, epochs, heights, or views.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct NativeAmxAttestationBodyV2 {
+    /// Exact frozen global round in which the receipt may be included.
+    pub round: super::consensus_v2::ConsensusRound,
+    /// Finalized election epoch repeated from the frozen height context.
+    pub epoch: u64,
     /// Source transaction hash/id.
     pub source_id: [u8; 32],
     /// Hash of the canonical transaction entrypoint.
@@ -1715,14 +1935,14 @@ pub struct NativeAmxAttestationBodyV1 {
     pub planned_coordinator_block_height: u64,
 }
 
-impl NativeAmxAttestationBodyV1 {
-    /// Build the domain-separated signature preimage for this attestation body.
+impl NativeAmxAttestationBodyV2 {
+    /// Build the domain-separated signature preimage for this v2 attestation.
     #[must_use]
     pub fn signature_preimage(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(32 + 256);
-        out.extend_from_slice(b"iroha:native-amx:v1");
+        let mut out = Vec::with_capacity(32 + 320);
+        out.extend_from_slice(b"iroha:native-amx:v2");
         out.extend_from_slice(
-            &norito::to_bytes(self).expect("native AMX attestation body must encode"),
+            &norito::to_bytes(self).expect("native AMX v2 attestation body must encode"),
         );
         out
     }
@@ -1737,6 +1957,33 @@ impl NativeAmxAttestationBodyV1 {
 pub struct NativeAmxAttestationQcV1 {
     /// Body certified by the aggregate signature.
     pub body: NativeAmxAttestationBodyV1,
+    /// Version of the validator-set hashing scheme.
+    pub validator_set_hash_version: u16,
+    /// Stable hash of the validator set that produced the certificate.
+    pub validator_set_hash: HashOf<Vec<PeerId>>,
+    /// Ordered validator set used when assembling the certificate.
+    pub validator_set: Vec<PeerId>,
+    /// Historical BLS proofs-of-possession aligned exactly with `validator_set`.
+    ///
+    /// Keeping the full aligned vector makes the certificate independently
+    /// verifiable after consensus-key rotation or lane retirement. The signed
+    /// attestation body binds the validator-set hash, count, and quorum.
+    pub validator_set_pops: Vec<Vec<u8>>,
+    /// Compact signer bitmap (LSB-first).
+    pub signers_bitmap: Vec<u8>,
+    /// BLS12-381 aggregate signature bytes (compressed).
+    pub bls_aggregate_signature: Vec<u8>,
+}
+
+/// Validator-set proof for a context-bound native AMX v2 attestation.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct NativeAmxAttestationQcV2 {
+    /// Context-bound body certified by the aggregate signature.
+    pub body: NativeAmxAttestationBodyV2,
     /// Version of the validator-set hashing scheme.
     pub validator_set_hash_version: u16,
     /// Stable hash of the validator set that produced the certificate.
@@ -1760,10 +2007,29 @@ pub struct NativeAmxLegRecord {
     pub lane_id: LaneId,
     /// Dataspace participating in the native AMX group.
     pub dataspace_id: DataSpaceId,
+    /// Exact participant-lane incarnation certified by both phase QCs.
+    pub lane_incarnation: Hash,
     /// Participant prepare QC.
     pub prepare_qc: NativeAmxAttestationQcV1,
     /// Participant commit QC.
     pub commit_qc: NativeAmxAttestationQcV1,
+}
+
+/// Per-dataspace native AMX v2 leg committed by the routing-plan coordinator.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct NativeAmxLegRecordV2 {
+    /// Participant lane certified by both phase QCs.
+    pub lane_id: LaneId,
+    /// Dataspace participating in the native AMX group.
+    pub dataspace_id: DataSpaceId,
+    /// Context-bound participant prepare QC.
+    pub prepare_qc: NativeAmxAttestationQcV2,
+    /// Context-bound participant commit QC.
+    pub commit_qc: NativeAmxAttestationQcV2,
 }
 
 /// Versioned native AMX receipt committed by a finalized coordinator block.
@@ -1777,16 +2043,26 @@ pub struct NativeAmxReceipt {
     pub version: u16,
     /// Source transaction hash/id.
     pub source_id: [u8; 32],
+    /// Hash of the chain identifier that owns this receipt.
+    pub chain_id_hash: Hash,
     /// Deterministic digest of the coordinator/participant routing plan.
     pub plan_digest: Hash,
     /// Coordinator lane that finalized the transaction.
     pub lane_id: LaneId,
     /// Coordinator dataspace that finalized the transaction.
     pub dataspace_id: DataSpaceId,
-    /// Coordinator block height that finalized the transaction.
-    pub block_height: u64,
+    /// Exact coordinator-lane incarnation at the authority context.
+    pub lane_incarnation: Hash,
+    /// Global/catalog height used to resolve all lane and key authority.
+    pub authority_context_height: u64,
+    /// Coordinator lane-local height that owns the transaction.
+    pub lane_block_height: u64,
+    /// Coordinator lane-local view that owns the transaction.
+    pub lane_block_view: u64,
+    /// Exact coordinator lane-block proposal authenticated by participant QCs.
+    pub coordinator_proposal_hash: Hash,
     /// Prepared and committed dataspace legs.
-    pub legs: Vec<NativeAmxLegRecord>,
+    pub legs: Vec<NativeAmxLegRecordV2>,
 }
 
 /// Liquidity profile applied when computing XOR conversions.
@@ -1853,6 +2129,8 @@ pub struct LaneBlockCommitment {
     pub block_height: u64,
     /// Numeric lane identifier.
     pub lane_id: LaneId,
+    /// Active incarnation commitment for the lane-local height namespace.
+    pub lane_incarnation: Hash,
     /// Numeric dataspace identifier.
     pub dataspace_id: DataSpaceId,
     /// Number of transactions contributing settlement receipts.
@@ -2623,6 +2901,9 @@ pub struct SumeragiVoteValidationDropStatus {
 )]
 #[allow(clippy::struct_excessive_bools)] // Independent capability toggles are kept explicit for the status surface.
 pub struct SumeragiConsensusCapsStatus {
+    /// Canonical digest of deterministic, locally configured Nexus policy.
+    #[norito(default)]
+    pub nexus_policy_digest: [u8; 32],
     /// Number of collectors (K).
     pub collectors_k: u16,
     /// Redundant send fanout (r).
@@ -3090,6 +3371,8 @@ pub struct SumeragiLaneBlockSessionStatus {
     /// Dataspace bound to the lane-local block.
     #[norito(default)]
     pub dataspace_id: DataSpaceId,
+    /// Exact lane incarnation bound to every proposal, vote, and certificate.
+    pub lane_incarnation: Hash,
     /// Lane-local block height.
     #[norito(default)]
     pub lane_block_height: u64,
@@ -3934,6 +4217,9 @@ impl_decode_from_slice_via_codec!(NativeAmxPhase);
 impl_decode_from_slice_via_codec!(NativeAmxAttestationBodyV1);
 impl_decode_from_slice_via_codec!(NativeAmxAttestationQcV1);
 impl_decode_from_slice_via_codec!(NativeAmxLegRecord);
+impl_decode_from_slice_via_codec!(NativeAmxAttestationBodyV2);
+impl_decode_from_slice_via_codec!(NativeAmxAttestationQcV2);
+impl_decode_from_slice_via_codec!(NativeAmxLegRecordV2);
 impl_decode_from_slice_via_codec!(NativeAmxReceipt);
 
 // Provide nicer `Debug` rendering for validator indices in test snapshots.
@@ -4165,11 +4451,19 @@ mod tests {
         coordinator: (LaneId, DataSpaceId),
         participant: (LaneId, DataSpaceId),
         validator_set: Vec<PeerId>,
-    ) -> NativeAmxAttestationQcV1 {
+    ) -> NativeAmxAttestationQcV2 {
         let (coordinator_lane_id, coordinator_dataspace_id) = coordinator;
         let (participant_lane_id, participant_dataspace_id) = participant;
-        NativeAmxAttestationQcV1 {
-            body: NativeAmxAttestationBodyV1 {
+        NativeAmxAttestationQcV2 {
+            body: NativeAmxAttestationBodyV2 {
+                round: crate::block::consensus_v2::ConsensusRound {
+                    context_id: crate::block::consensus_v2::HeightContextId(
+                        HashOf::from_untyped_unchecked(Hash::new(b"native-amx-receipt-context")),
+                    ),
+                    height: 42,
+                    view: 3,
+                },
+                epoch: 7,
                 source_id,
                 tx_entrypoint_hash: sample_entrypoint_hash(0x42),
                 plan_digest,
@@ -4222,6 +4516,7 @@ mod tests {
         let base = LaneBlockCommitment {
             block_height: 42,
             lane_id: LaneId::new(1),
+            lane_incarnation: Hash::new(b"commitment-hash-test-incarnation"),
             dataspace_id: DataSpaceId::new(7),
             tx_count: 1,
             total_local_micro: 0,
@@ -4249,6 +4544,7 @@ mod tests {
         let base = LaneBlockCommitment {
             block_height: 42,
             lane_id: coordinator_lane_id,
+            lane_incarnation: Hash::new(b"amx-commitment-test-incarnation"),
             dataspace_id: coordinator_dataspace_id,
             tx_count: 1,
             total_local_micro: 0,
@@ -4259,14 +4555,19 @@ mod tests {
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),
             native_amx_receipts: vec![NativeAmxReceipt {
-                version: 1,
+                version: 2,
                 source_id,
+                chain_id_hash: Hash::new(b"native-amx-model-chain"),
                 plan_digest,
                 lane_id: coordinator_lane_id,
                 dataspace_id: coordinator_dataspace_id,
-                block_height: 42,
+                lane_incarnation: Hash::new(b"native-amx-model-coordinator"),
+                authority_context_height: 42,
+                lane_block_height: 7,
+                lane_block_view: 2,
+                coordinator_proposal_hash: Hash::new(b"native-amx-model-proposal"),
                 legs: vec![
-                    NativeAmxLegRecord {
+                    NativeAmxLegRecordV2 {
                         lane_id: LaneId::new(7),
                         dataspace_id: DataSpaceId::new(7),
                         prepare_qc: sample_native_amx_qc(
@@ -4286,7 +4587,7 @@ mod tests {
                             validators.clone(),
                         ),
                     },
-                    NativeAmxLegRecord {
+                    NativeAmxLegRecordV2 {
                         lane_id: LaneId::new(8),
                         dataspace_id: DataSpaceId::new(8),
                         prepare_qc: sample_native_amx_qc(
@@ -4318,19 +4619,50 @@ mod tests {
     #[test]
     fn native_amx_attestation_preimage_is_domain_separated() {
         let body = NativeAmxAttestationBodyV1 {
+            chain_id_hash: Hash::new(b"native-amx-model-chain"),
             source_id: [0x11; 32],
             tx_entrypoint_hash: sample_entrypoint_hash(0x12),
             plan_digest: Hash::new(b"plan"),
             phase: NativeAmxPhase::Prepare,
             coordinator_lane_id: LaneId::new(1),
             coordinator_dataspace_id: DataSpaceId::UNIVERSAL,
+            coordinator_lane_incarnation: Hash::new(b"native-amx-model-coordinator"),
             participant_lane_id: LaneId::new(2),
             participant_dataspace_id: DataSpaceId::new(2),
-            planned_coordinator_block_height: 7,
+            participant_lane_incarnation: Hash::new(b"native-amx-model-participant"),
+            participant_validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
+            participant_validator_count: 1,
+            participant_min_quorum: 1,
+            authority_context_height: 7,
+            coordinator_lane_block_height: 3,
+            coordinator_lane_block_view: 1,
+            coordinator_proposal_hash: Hash::new(b"native-amx-model-proposal"),
         };
         let preimage = body.signature_preimage();
         assert!(preimage.starts_with(b"iroha:native-amx:v1"));
         assert!(preimage.len() > b"iroha:native-amx:v1".len());
+    }
+
+    #[test]
+    fn native_amx_v2_attestation_preimage_binds_round_and_epoch() {
+        let body = sample_native_amx_qc(
+            NativeAmxPhase::Prepare,
+            [0x31; 32],
+            Hash::new(b"v2-context-bound-plan"),
+            (LaneId::new(1), DataSpaceId::new(7)),
+            (LaneId::new(2), DataSpaceId::new(8)),
+            sample_roster(),
+        )
+        .body;
+        let preimage = body.signature_preimage();
+        let mut another_view = body;
+        another_view.round.view = another_view.round.view.saturating_add(1);
+        let mut another_epoch = body;
+        another_epoch.epoch = another_epoch.epoch.saturating_add(1);
+
+        assert!(preimage.starts_with(b"iroha:native-amx:v2"));
+        assert_ne!(preimage, another_view.signature_preimage());
+        assert_ne!(preimage, another_epoch.signature_preimage());
     }
 
     fn sample_lane_block_vote_body(phase: CertPhase) -> LaneBlockVoteBodyV1 {
@@ -4338,6 +4670,7 @@ mod tests {
             phase,
             lane_id: LaneId::new(7),
             dataspace_id: DataSpaceId::new(11),
+            lane_incarnation: Hash::new(b"lane-consensus-model-fixture"),
             proposal_height: 12,
             lane_block_height: 13,
             lane_block_view: 2,
@@ -4364,6 +4697,7 @@ mod tests {
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id: LaneId::new(7),
             dataspace_id: DataSpaceId::new(11),
+            lane_incarnation: Hash::new(b"lane-consensus-model-fixture"),
             proposal_height: 12,
             previous_lane_block_height: 12,
             previous_lane_block_descriptor_hash: Some(Hash::prehashed([0x20; Hash::LENGTH])),
@@ -5233,6 +5567,7 @@ mod tests {
             proposal_view: 3,
             lane_id: LaneId::new(7),
             dataspace_id: DataSpaceId::new(42),
+            lane_incarnation: Hash::new(b"lane-ownership-model-fixture"),
             lane_block_height: 2,
             lane_block_view: 1,
             subject_hash: Hash::new(b"lane subject placeholder"),
@@ -5398,6 +5733,7 @@ mod tests {
             proposal_view: 3,
             lane_id: LaneId::new(7),
             dataspace_id: DataSpaceId::new(42),
+            lane_incarnation: Hash::new(b"lane-ownership-model-fixture"),
             lane_block_height: 2,
             lane_block_view: 1,
             subject_hash: Hash::new(b"lane subject"),

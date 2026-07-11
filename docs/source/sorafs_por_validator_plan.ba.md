@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_por_validator_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 55ad3268dc514105d13a9ee854b154af4bcde5c881d53dc44ddda3031dc4a928
+source_hash: dfd81cf800cc489b843845c826d52f28753cd0474dd1adf2bb9cc1a201204bad
 source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-06-25
 title: SoraFS PoR Validator CLI & Reporting
@@ -99,8 +99,8 @@ struct PorWeeklyReportV1 {
     forced_challenges: U32,
     repairs_enqueued: U32,
     repairs_completed: U32,
-    mean_latency_ms: Option<F64>,
-    p95_latency_ms: Option<F64>,
+    mean_latency_ms: Option<U64>,
+    p95_latency_ms: Option<U64>,
     slashing_events: Vec<PorSlashingEventV1>,
     providers_missing_vrf: Vec<Digest32>,
     top_offenders: Vec<PorProviderSummaryV1>,
@@ -122,7 +122,7 @@ struct PorProviderSummaryV1 {
     successes: U32,
     failures: U32,
     forced: U32,
-    success_rate: F64,
+    success_rate_bps: U16,
     first_failure_at: Option<Timestamp>,
     last_success_latency_ms_p95: Option<U32>,
     repair_dispatched: Bool,

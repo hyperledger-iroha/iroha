@@ -7,19 +7,19 @@
 #![allow(unexpected_cfgs)]
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     fs::{self, File},
-    io::{self, Read, Seek, SeekFrom, Write},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
     sync::{
-        RwLock,
-        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, RwLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
 use blake3::Hash;
 use hex::ToHex;
@@ -48,8 +48,14 @@ const METADATA_FILE_NAME: &str = "metadata.to";
 const CHUNKS_DIR_NAME: &str = "chunks";
 const ATOMIC_EXT: &str = "tmp";
 const GC_TRASH_DIR_NAME: &str = "gc_trash";
+const INGEST_STAGING_DIR_NAME: &str = ".ingest-staging";
+const STORAGE_LOCK_FILE_NAME: &str = ".storage.lock";
+const MAX_STORAGE_INDEX_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_MANIFEST_METADATA_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
 static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static GC_TRASH_COUNTER: AtomicU64 = AtomicU64::new(0);
+static INGEST_STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Errors raised by the SoraFS storage backend.
 #[derive(Debug, Error)]
@@ -60,6 +66,56 @@ pub enum StorageError {
     /// Failed to encode or decode a Norito payload while persisting metadata.
     #[error("Norito codec error: {0}")]
     Norito(#[from] NoritoError),
+    /// Persisted storage index uses an unsupported schema version.
+    #[error("unsupported storage index version {version}")]
+    UnsupportedIndexVersion {
+        /// Version found in the persisted index.
+        version: u8,
+    },
+    /// Persisted index, manifest, metadata, or chunk state is inconsistent.
+    #[error("corrupt SoraFS storage state at {path}: {reason}")]
+    CorruptStorageState {
+        /// Path of the persisted artifact that failed validation.
+        path: String,
+        /// Stable diagnostic explaining the rejected invariant.
+        reason: String,
+    },
+    /// Another process already owns the configured storage directory.
+    #[error("SoraFS storage directory is already in use: {path}")]
+    StorageDirectoryInUse {
+        /// Lock file protecting the storage directory.
+        path: String,
+    },
+    /// An in-memory layout value cannot be represented by the persistent schema.
+    #[error("storage layout field {field} value {value} exceeds persistent limit {max}")]
+    LayoutValueTooLarge {
+        /// Name of the field that exceeded the persistent representation.
+        field: &'static str,
+        /// Value supplied by the in-memory build plan.
+        value: usize,
+        /// Largest value accepted by the persistent representation.
+        max: u64,
+    },
+    /// A caller supplied a file layout that cannot describe the stored chunk plan.
+    #[error("invalid storage file layout: {reason}")]
+    InvalidFileLayout {
+        /// Stable invariant rejected before persistence.
+        reason: String,
+    },
+    /// An atomic replacement reached rename but its parent directory could not be synced.
+    #[error("storage durability is uncertain for {path}: {reason}")]
+    DurabilityUncertain {
+        /// Replaced artifact whose directory entry could not be confirmed durable.
+        path: String,
+        /// Underlying synchronization failure.
+        reason: String,
+    },
+    /// A previous uncertain commit requires a process restart and recovery pass.
+    #[error("SoraFS storage is fail-stopped after an uncertain commit: {reason}")]
+    DurabilityPoisoned {
+        /// First durability failure recorded by the backend.
+        reason: String,
+    },
     /// The provided manifest is already present in the index.
     #[error("manifest {manifest_id} already stored")]
     ManifestExists {
@@ -150,6 +206,11 @@ pub struct StorageBackend {
     root_dir: PathBuf,
     manifests_dir: PathBuf,
     index_path: PathBuf,
+    _lock_file: File,
+    access_metadata_lock: Mutex<()>,
+    persisted_access_counter: AtomicU64,
+    durability_healthy: AtomicBool,
+    durability_failure: Mutex<Option<String>>,
     state: RwLock<StorageState>,
 }
 
@@ -159,8 +220,64 @@ struct StorageState {
     manifests: BTreeMap<String, StoredManifest>,
     total_bytes: u64,
     reserved_bytes: u64,
+    inflight_manifests: BTreeSet<String>,
     access_counter: u64,
     chunk_refcounts: BTreeMap<[u8; 32], u32>,
+}
+
+struct IngestReservation<'a> {
+    backend: &'a StorageBackend,
+    manifest_id: String,
+    reserved_bytes: u64,
+    active: bool,
+}
+
+impl IngestReservation<'_> {
+    fn release(&mut self, state: &mut StorageState) {
+        if !self.active {
+            return;
+        }
+        state.reserved_bytes = state.reserved_bytes.saturating_sub(self.reserved_bytes);
+        state.inflight_manifests.remove(&self.manifest_id);
+        self.active = false;
+    }
+}
+
+impl Drop for IngestReservation<'_> {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        let mut state = self
+            .backend
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.release(&mut state);
+    }
+}
+
+struct StagingDirectory {
+    path: PathBuf,
+    active: bool,
+}
+
+impl StagingDirectory {
+    fn new(path: PathBuf) -> Self {
+        Self { path, active: true }
+    }
+
+    fn disarm(&mut self) {
+        self.active = false;
+    }
+}
+
+impl Drop for StagingDirectory {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
 }
 
 impl StorageState {
@@ -189,6 +306,7 @@ pub struct StoredManifest {
     chunk_files: Vec<ChunkFileRecord>,
     por_tree: StoredPorTree,
     manifest_path: PathBuf,
+    io_lock: Arc<RwLock<()>>,
 }
 
 /// Components required to construct a [`StoredManifest`] without hitting the storage backend.
@@ -250,6 +368,7 @@ impl StoredManifest {
             chunk_files: parts.chunk_files,
             por_tree: parts.por_tree,
             manifest_path: parts.manifest_path,
+            io_lock: Arc::new(RwLock::new(())),
         }
     }
 
@@ -359,8 +478,13 @@ impl StoredManifest {
                 content_length: self.content_length,
             });
         }
+        let len_u64 = u64::try_from(len).map_err(|_| StorageError::RangeOutOfBounds {
+            offset,
+            len,
+            content_length: self.content_length,
+        })?;
         let end = offset
-            .checked_add(len as u64)
+            .checked_add(len_u64)
             .ok_or(StorageError::RangeOutOfBounds {
                 offset,
                 len,
@@ -380,7 +504,13 @@ impl StoredManifest {
 
         for (idx, chunk) in self.chunk_files.iter().enumerate() {
             let chunk_start = chunk.offset;
-            let chunk_end = chunk_start + u64::from(chunk.length);
+            let chunk_end = chunk_start.checked_add(u64::from(chunk.length)).ok_or(
+                StorageError::RangeOutOfBounds {
+                    offset,
+                    len,
+                    content_length: self.content_length,
+                },
+            )?;
 
             if chunk_end <= offset {
                 continue;
@@ -436,8 +566,26 @@ impl StoredManifest {
 
     /// Load and decode the persisted manifest payload from disk.
     pub fn load_manifest(&self) -> Result<ManifestV1, StorageError> {
-        let bytes = fs::read(self.manifest_path())?;
-        let manifest = norito::decode_from_bytes(&bytes)?;
+        let _io_guard = self
+            .io_lock
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let path = self.manifest_path();
+        let bytes = read_bounded_regular_file(path, MAX_MANIFEST_BYTES)?;
+        let manifest: ManifestV1 = norito::decode_from_bytes(&bytes)?;
+        let canonical = manifest.encode()?;
+        if canonical != bytes
+            || blake3::hash(&bytes).as_bytes() != &self.manifest_digest
+            || manifest.root_cid != self.manifest_cid
+            || manifest.content_length != self.content_length
+            || manifest.car_digest != self.payload_digest
+            || canonical_profile_handle(&manifest) != self.chunk_profile_handle
+        {
+            return Err(corrupt_storage_state(
+                path,
+                "manifest no longer matches its immutable stored identity",
+            ));
+        }
         Ok(manifest)
     }
 
@@ -500,7 +648,7 @@ impl StoredManifest {
 }
 
 /// Metadata describing an individual stored chunk.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChunkFileRecord {
     /// Path to the stored chunk file.
     pub path: PathBuf,
@@ -830,6 +978,534 @@ fn chunk_refcount_entries(map: &BTreeMap<[u8; 32], u32>) -> Vec<ChunkRefcountEnt
         .collect()
 }
 
+fn corrupt_storage_state(path: &Path, reason: impl Into<String>) -> StorageError {
+    StorageError::CorruptStorageState {
+        path: path.display().to_string(),
+        reason: reason.into(),
+    }
+}
+
+fn acquire_storage_lock(root_dir: &Path) -> Result<File, StorageError> {
+    let lock_path = root_dir.join(STORAGE_LOCK_FILE_NAME);
+    validate_atomic_output_path(&lock_path)?;
+    let before_open = match fs::symlink_metadata(&lock_path) {
+        Ok(metadata) => Some(metadata),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+        Err(err) => return Err(StorageError::Io(err)),
+    };
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true);
+    set_no_follow_flag(&mut options);
+    let file = options.open(&lock_path)?;
+    let opened_metadata = file.metadata()?;
+    if !opened_metadata.is_file() {
+        return Err(corrupt_storage_state(
+            &lock_path,
+            "storage lock must be a regular file",
+        ));
+    }
+    if before_open
+        .as_ref()
+        .is_some_and(|metadata| !metadata_identifies_same_file(metadata, &opened_metadata))
+    {
+        return Err(corrupt_storage_state(
+            &lock_path,
+            "storage lock changed between inspection and open",
+        ));
+    }
+    let after_open = fs::symlink_metadata(&lock_path)?;
+    if !metadata_identifies_same_file(&opened_metadata, &after_open) {
+        return Err(corrupt_storage_state(
+            &lock_path,
+            "storage lock path changed while opening",
+        ));
+    }
+    validate_atomic_output_path(&lock_path)?;
+    match file.try_lock() {
+        Ok(()) => {
+            let locked_path_metadata = fs::symlink_metadata(&lock_path)?;
+            if !metadata_identifies_same_file(&opened_metadata, &locked_path_metadata) {
+                return Err(corrupt_storage_state(
+                    &lock_path,
+                    "storage lock path changed while locking",
+                ));
+            }
+            validate_atomic_output_path(&lock_path)?;
+            Ok(file)
+        }
+        Err(fs::TryLockError::WouldBlock) => Err(StorageError::StorageDirectoryInUse {
+            path: lock_path.display().to_string(),
+        }),
+        Err(fs::TryLockError::Error(err)) => Err(StorageError::Io(io::Error::new(
+            err.kind(),
+            format!(
+                "failed to lock SoraFS storage directory via `{}`: {err}",
+                lock_path.display()
+            ),
+        ))),
+    }
+}
+
+#[cfg(unix)]
+fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(not(unix))]
+fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.len() == right.len()
+}
+
+fn persistent_u32(field: &'static str, value: usize) -> Result<u32, StorageError> {
+    u32::try_from(value).map_err(|_| StorageError::LayoutValueTooLarge {
+        field,
+        value,
+        max: u64::from(u32::MAX),
+    })
+}
+
+fn is_canonical_manifest_id(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn transaction_manifest_id(name: &str) -> Option<&str> {
+    let manifest_id = name.get(..64)?;
+    if !is_canonical_manifest_id(manifest_id) || name.as_bytes().get(64).copied() != Some(b'-') {
+        return None;
+    }
+    let (pid, counter) = name.get(65..)?.split_once('-')?;
+    if pid.is_empty()
+        || counter.is_empty()
+        || !pid.bytes().all(|byte| byte.is_ascii_digit())
+        || !counter.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(manifest_id)
+}
+
+fn validate_real_directory(path: &Path) -> Result<(), StorageError> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(corrupt_storage_state(
+            path,
+            "storage transaction entry must be a real directory",
+        ));
+    }
+    Ok(())
+}
+
+fn sync_directory(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        File::open(path)?.sync_all()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
+fn rename_and_sync_directories(from: &Path, to: &Path) -> io::Result<()> {
+    let from_parent = from
+        .parent()
+        .ok_or_else(|| io::Error::other("rename source has no parent directory"))?;
+    let to_parent = to
+        .parent()
+        .ok_or_else(|| io::Error::other("rename destination has no parent directory"))?;
+    fs::rename(from, to)?;
+    sync_directory(from_parent)?;
+    if to_parent != from_parent {
+        sync_directory(to_parent)?;
+    }
+    Ok(())
+}
+
+fn remove_transaction_directory(path: &Path) -> Result<(), StorageError> {
+    validate_real_directory(path)?;
+    fs::remove_dir_all(path)?;
+    if let Some(parent) = path.parent() {
+        sync_directory(parent)?;
+    }
+    Ok(())
+}
+
+fn clean_stale_ingest_transactions(root_dir: &Path) -> Result<(), StorageError> {
+    let staging_root = root_dir.join(INGEST_STAGING_DIR_NAME);
+    match fs::symlink_metadata(&staging_root) {
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(StorageError::Io(err)),
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(corrupt_storage_state(
+                &staging_root,
+                "ingest transaction root must be a real directory",
+            ));
+        }
+        Ok(_) => {}
+    }
+    for entry in fs::read_dir(&staging_root)? {
+        let entry = entry?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| corrupt_storage_state(&entry.path(), "non-UTF-8 staging entry"))?;
+        if transaction_manifest_id(&name).is_none() {
+            return Err(corrupt_storage_state(
+                &entry.path(),
+                "invalid ingest transaction directory name",
+            ));
+        }
+        remove_transaction_directory(&entry.path())?;
+    }
+    Ok(())
+}
+
+fn recover_gc_transactions(
+    root_dir: &Path,
+    manifests_dir: &Path,
+    live_manifest_ids: &BTreeSet<String>,
+) -> Result<(), StorageError> {
+    let trash_root = root_dir.join(GC_TRASH_DIR_NAME);
+    match fs::symlink_metadata(&trash_root) {
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(StorageError::Io(err)),
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(corrupt_storage_state(
+                &trash_root,
+                "GC transaction root must be a real directory",
+            ));
+        }
+        Ok(_) => {}
+    }
+    for entry in fs::read_dir(&trash_root)? {
+        let entry = entry?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| corrupt_storage_state(&entry.path(), "non-UTF-8 GC entry"))?;
+        let Some(manifest_id) = transaction_manifest_id(&name) else {
+            return Err(corrupt_storage_state(
+                &entry.path(),
+                "invalid GC transaction directory name",
+            ));
+        };
+        validate_real_directory(&entry.path())?;
+        let live_path = manifests_dir.join(manifest_id);
+        if live_manifest_ids.contains(manifest_id) {
+            match fs::symlink_metadata(&live_path) {
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                    fs::rename(entry.path(), &live_path)?;
+                    sync_directory(manifests_dir)?;
+                    sync_directory(&trash_root)?;
+                }
+                Err(err) => return Err(StorageError::Io(err)),
+                Ok(_) => {
+                    return Err(corrupt_storage_state(
+                        &entry.path(),
+                        "indexed manifest exists both live and in a GC transaction",
+                    ));
+                }
+            }
+        } else {
+            remove_transaction_directory(&entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+fn clean_unindexed_manifests(
+    manifests_dir: &Path,
+    live_manifest_ids: &BTreeSet<String>,
+) -> Result<(), StorageError> {
+    for entry in fs::read_dir(manifests_dir)? {
+        let entry = entry?;
+        let manifest_id = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| corrupt_storage_state(&entry.path(), "non-UTF-8 manifest directory"))?;
+        if !is_canonical_manifest_id(&manifest_id) {
+            return Err(corrupt_storage_state(
+                &entry.path(),
+                "invalid manifest directory name",
+            ));
+        }
+        validate_real_directory(&entry.path())?;
+        if !live_manifest_ids.contains(&manifest_id) {
+            remove_transaction_directory(&entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+fn read_bounded_regular_file(path: &Path, max_len: u64) -> Result<Vec<u8>, StorageError> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    set_no_follow_flag(&mut options);
+    let mut file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(corrupt_storage_state(
+            path,
+            "artifact is not a regular file",
+        ));
+    }
+    if metadata.len() > max_len {
+        return Err(corrupt_storage_state(
+            path,
+            format!(
+                "artifact length {} exceeds the {} byte safety limit",
+                metadata.len(),
+                max_len
+            ),
+        ));
+    }
+    let length = usize::try_from(metadata.len()).map_err(|_| {
+        corrupt_storage_state(path, "artifact length is not representable on this host")
+    })?;
+    let mut bytes = vec![0_u8; length];
+    file.read_exact(&mut bytes)?;
+    let mut trailing = [0_u8; 1];
+    if file.read(&mut trailing)? != 0 {
+        return Err(corrupt_storage_state(
+            path,
+            "artifact changed length while it was being read",
+        ));
+    }
+    Ok(bytes)
+}
+
+fn validate_manifest_id(
+    manifest_id: &str,
+    manifest_digest: &[u8; 32],
+    path: &Path,
+) -> Result<(), StorageError> {
+    if manifest_id != hex::encode(manifest_digest) {
+        return Err(corrupt_storage_state(
+            path,
+            "manifest_id must be the lowercase hex encoding of manifest_digest",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_logical_file_path(path: &[String], metadata_path: &Path) -> Result<(), StorageError> {
+    for component in path {
+        if component.is_empty()
+            || component == "."
+            || component == ".."
+            || component.contains('/')
+            || component.contains('\\')
+            || component.chars().any(char::is_control)
+        {
+            return Err(corrupt_storage_state(
+                metadata_path,
+                "logical file path contains a non-portable component",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_persisted_manifest(
+    entry: &ManifestIndexEntry,
+    record: &StoredManifestRecord,
+    manifest: &ManifestV1,
+    manifest_bytes: &[u8],
+    metadata_path: &Path,
+    manifest_path: &Path,
+) -> Result<(), StorageError> {
+    validate_manifest_id(&entry.manifest_id, &entry.manifest_digest, metadata_path)?;
+    validate_manifest_id(&record.manifest_id, &record.manifest_digest, metadata_path)?;
+    if record.manifest_id != entry.manifest_id
+        || record.manifest_digest != entry.manifest_digest
+        || record.manifest_cid != entry.manifest_cid
+        || record.payload_digest != entry.payload_digest
+        || record.content_length != entry.content_length
+        || record.chunk_profile_handle != entry.chunk_profile_handle
+        || record.stored_at_unix_secs != entry.stored_at_unix_secs
+        || record.retention_epoch != entry.retention_epoch
+        || record.chunk_files.len() != entry.chunk_count as usize
+    {
+        return Err(corrupt_storage_state(
+            metadata_path,
+            "manifest metadata does not match its index entry",
+        ));
+    }
+    if manifest.version != MANIFEST_VERSION_V1 {
+        return Err(corrupt_storage_state(
+            manifest_path,
+            format!("unsupported manifest version {}", manifest.version),
+        ));
+    }
+    let canonical_manifest = manifest.encode().map_err(StorageError::Norito)?;
+    if canonical_manifest != manifest_bytes {
+        return Err(corrupt_storage_state(
+            manifest_path,
+            "manifest bytes are not the canonical Norito encoding",
+        ));
+    }
+    let digest: [u8; 32] = blake3::hash(manifest_bytes).into();
+    if digest != record.manifest_digest
+        || manifest.root_cid != record.manifest_cid
+        || manifest.content_length != record.content_length
+        || manifest.car_digest != record.payload_digest
+        || canonical_profile_handle(manifest) != record.chunk_profile_handle
+    {
+        return Err(corrupt_storage_state(
+            manifest_path,
+            "manifest payload does not match persisted metadata",
+        ));
+    }
+    if record.files.is_empty() {
+        return Err(corrupt_storage_state(
+            metadata_path,
+            "manifest file layout must not be empty",
+        ));
+    }
+    let mut file_offset = 0_u64;
+    let mut file_paths = BTreeSet::new();
+    for file in &record.files {
+        validate_logical_file_path(&file.path, metadata_path)?;
+        if !file_paths.insert(file.path.clone()) {
+            return Err(corrupt_storage_state(
+                metadata_path,
+                "manifest file layout contains duplicate logical paths",
+            ));
+        }
+        if record.files.len() > 1 && file.path.is_empty() {
+            return Err(corrupt_storage_state(
+                metadata_path,
+                "only a single-file manifest may use an empty logical path",
+            ));
+        }
+        if file.offset != file_offset {
+            return Err(corrupt_storage_state(
+                metadata_path,
+                "manifest file layout offsets are not contiguous",
+            ));
+        }
+        file_offset = file_offset.checked_add(file.size).ok_or_else(|| {
+            corrupt_storage_state(metadata_path, "manifest file layout length overflow")
+        })?;
+        let chunk_end = u64::from(file.first_chunk) + u64::from(file.chunk_count);
+        if chunk_end > record.chunk_files.len() as u64 {
+            return Err(corrupt_storage_state(
+                metadata_path,
+                "manifest file layout references chunks outside the manifest",
+            ));
+        }
+        let first_chunk = usize::try_from(file.first_chunk).map_err(|_| {
+            corrupt_storage_state(metadata_path, "file first_chunk is not representable")
+        })?;
+        let chunk_count = usize::try_from(file.chunk_count).map_err(|_| {
+            corrupt_storage_state(metadata_path, "file chunk_count is not representable")
+        })?;
+        if file.size == 0 {
+            if chunk_count != 0 {
+                return Err(corrupt_storage_state(
+                    metadata_path,
+                    "empty logical files must not reference chunks",
+                ));
+            }
+        } else {
+            if chunk_count == 0 {
+                return Err(corrupt_storage_state(
+                    metadata_path,
+                    "non-empty logical files must reference chunks",
+                ));
+            }
+            let first = &record.chunk_files[first_chunk];
+            let last = &record.chunk_files[first_chunk + chunk_count - 1];
+            let file_end = file.offset.checked_add(file.size).ok_or_else(|| {
+                corrupt_storage_state(metadata_path, "logical file range overflow")
+            })?;
+            let chunk_end = last
+                .offset
+                .checked_add(u64::from(last.length))
+                .ok_or_else(|| {
+                    corrupt_storage_state(metadata_path, "logical file chunk range overflow")
+                })?;
+            if first.offset != file.offset || chunk_end != file_end {
+                return Err(corrupt_storage_state(
+                    metadata_path,
+                    "logical file range does not align with its chunk range",
+                ));
+            }
+        }
+    }
+    if file_offset != record.content_length {
+        return Err(corrupt_storage_state(
+            metadata_path,
+            "manifest file layout length does not match content_length",
+        ));
+    }
+
+    let mut chunk_offset = 0_u64;
+    for (index, chunk) in record.chunk_files.iter().enumerate() {
+        let expected_name = format!("chunk_{index:05}.bin");
+        if chunk.file_name != expected_name {
+            return Err(corrupt_storage_state(
+                metadata_path,
+                format!("chunk #{index} has noncanonical file name"),
+            ));
+        }
+        if chunk.offset != chunk_offset {
+            return Err(corrupt_storage_state(
+                metadata_path,
+                format!("chunk #{index} has a noncontiguous offset"),
+            ));
+        }
+        chunk_offset = chunk_offset
+            .checked_add(u64::from(chunk.length))
+            .ok_or_else(|| corrupt_storage_state(metadata_path, "chunk length overflow"))?;
+    }
+    if chunk_offset != record.content_length {
+        return Err(corrupt_storage_state(
+            metadata_path,
+            "chunk lengths do not match content_length",
+        ));
+    }
+
+    if record.por_tree.payload_len != record.content_length
+        || record.por_tree.chunks.len() != record.chunk_files.len()
+    {
+        return Err(corrupt_storage_state(
+            metadata_path,
+            "PoR tree geometry does not match manifest chunks",
+        ));
+    }
+    for (index, (por_chunk, chunk)) in record
+        .por_tree
+        .chunks
+        .iter()
+        .zip(&record.chunk_files)
+        .enumerate()
+    {
+        if por_chunk.chunk_index as usize != index
+            || por_chunk.offset != chunk.offset
+            || por_chunk.length != chunk.length
+            || por_chunk.chunk_digest != chunk.digest
+        {
+            return Err(corrupt_storage_state(
+                metadata_path,
+                format!("PoR chunk #{index} does not match chunk metadata"),
+            ));
+        }
+    }
+    let rebuilt_por = record.por_tree.to_merkle_tree();
+    if rebuilt_por.root() != &record.por_tree.root {
+        return Err(corrupt_storage_state(
+            metadata_path,
+            "PoR root does not match the persisted chunk roots",
+        ));
+    }
+    Ok(())
+}
+
 impl StorageBackend {
     /// Create a new storage backend rooted at the directory described by `config`.
     pub fn new(config: StorageConfig) -> Result<Self, StorageError> {
@@ -837,16 +1513,44 @@ impl StorageBackend {
         let manifests_dir = root_dir.join(MANIFEST_DIR_NAME);
         let index_path = root_dir.join("index.norito");
 
+        validate_atomic_output_path(&root_dir.join(".sorafs-root-probe"))?;
+        fs::create_dir_all(&root_dir)?;
+        validate_atomic_output_path(&root_dir.join(".sorafs-root-probe"))?;
+        let lock_file = acquire_storage_lock(&root_dir)?;
         fs::create_dir_all(&manifests_dir)?;
+        validate_real_directory(&manifests_dir)?;
 
         let mut index = if index_path.exists() {
-            let bytes = fs::read(&index_path)?;
+            let bytes = read_bounded_regular_file(&index_path, MAX_STORAGE_INDEX_BYTES)?;
             norito::decode_from_bytes(&bytes)?
         } else {
             ManifestIndex::default()
         };
+        if index.version != INDEX_VERSION_V1 {
+            return Err(StorageError::UnsupportedIndexVersion {
+                version: index.version,
+            });
+        }
+        if index.entries.len() > config.max_pins() {
+            return Err(StorageError::PinLimitReached {
+                limit: config.max_pins(),
+            });
+        }
+        let mut indexed_manifest_ids = BTreeSet::new();
+        for entry in &index.entries {
+            validate_manifest_id(&entry.manifest_id, &entry.manifest_digest, &index_path)?;
+            if !indexed_manifest_ids.insert(entry.manifest_id.clone()) {
+                return Err(corrupt_storage_state(
+                    &index_path,
+                    format!("duplicate manifest id {}", entry.manifest_id),
+                ));
+            }
+        }
+        recover_gc_transactions(&root_dir, &manifests_dir, &indexed_manifest_ids)?;
+        clean_unindexed_manifests(&manifests_dir, &indexed_manifest_ids)?;
+        clean_stale_ingest_transactions(&root_dir)?;
 
-        let mut total_bytes = index.total_bytes;
+        let mut total_bytes = 0_u64;
         let mut manifests = BTreeMap::new();
         let mut chunk_refcounts: BTreeMap<[u8; 32], u32> = BTreeMap::new();
         let mut access_counter = 0u64;
@@ -856,8 +1560,19 @@ impl StorageBackend {
             let metadata_path = manifest_dir.join(METADATA_FILE_NAME);
             let manifest_path = manifest_dir.join(MANIFEST_FILE_NAME);
 
-            let metadata_bytes = fs::read(&metadata_path)?;
+            let metadata_bytes =
+                read_bounded_regular_file(&metadata_path, MAX_MANIFEST_METADATA_BYTES)?;
             let mut record: StoredManifestRecord = norito::decode_from_bytes(&metadata_bytes)?;
+            let manifest_bytes = read_bounded_regular_file(&manifest_path, MAX_MANIFEST_BYTES)?;
+            let manifest: ManifestV1 = norito::decode_from_bytes(&manifest_bytes)?;
+            validate_persisted_manifest(
+                entry,
+                &record,
+                &manifest,
+                &manifest_bytes,
+                &metadata_path,
+                &manifest_path,
+            )?;
             if record.retention_source.is_none() {
                 record.retention_source = entry.retention_source.clone();
             }
@@ -869,13 +1584,30 @@ impl StorageBackend {
             entry.last_access = last_access;
             access_counter = access_counter.max(last_access);
 
-            let manifest = StoredManifest::from_record(record, manifest_path);
-            for chunk in &manifest.chunk_files {
+            let manifest =
+                StoredManifest::from_record(record, manifest_path, Arc::new(RwLock::new(())));
+            for (chunk_index, chunk) in manifest.chunk_files.iter().enumerate() {
+                read_verified_chunk(chunk, chunk_index).map_err(|err| {
+                    corrupt_storage_state(&chunk.path, format!("chunk verification failed: {err}"))
+                })?;
                 let counter = chunk_refcounts.entry(chunk.digest).or_insert(0);
-                *counter = counter.saturating_add(1);
+                *counter = counter.checked_add(1).ok_or_else(|| {
+                    corrupt_storage_state(&index_path, "chunk reference count overflow")
+                })?;
             }
 
+            total_bytes = total_bytes
+                .checked_add(manifest.content_length)
+                .ok_or_else(|| corrupt_storage_state(&index_path, "total byte count overflow"))?;
             manifests.insert(entry.manifest_id.clone(), manifest);
+        }
+
+        let max_capacity = config.max_capacity_bytes().0;
+        if total_bytes > max_capacity {
+            return Err(StorageError::CapacityExceeded {
+                required: total_bytes,
+                available: max_capacity,
+            });
         }
 
         let mut index_dirty = false;
@@ -890,25 +1622,20 @@ impl StorageBackend {
             index_dirty = true;
         }
 
-        if total_bytes == 0 {
-            total_bytes = manifests
-                .values()
-                .map(|manifest| manifest.content_length)
-                .sum();
+        if index.total_bytes != total_bytes {
+            iroha_logger::warn!(
+                stored = index.total_bytes,
+                computed = total_bytes,
+                "storage byte accounting mismatch; rebuilding from manifests"
+            );
             index.total_bytes = total_bytes;
             index_dirty = true;
         }
 
         if index_dirty {
-            if let Ok(bytes) = norito::to_bytes(&index) {
-                if let Err(err) = write_atomic(&index_path, &bytes) {
-                    iroha_logger::warn!(
-                        %err,
-                        path = %index_path.display(),
-                        "failed to persist rebuilt storage index"
-                    );
-                }
-            }
+            let bytes = norito::to_bytes(&index)?;
+            write_atomic_classified(&index_path, &bytes)
+                .map_err(AtomicWriteError::into_storage_error)?;
         }
 
         let state = StorageState {
@@ -916,6 +1643,7 @@ impl StorageBackend {
             manifests,
             total_bytes,
             reserved_bytes: 0,
+            inflight_manifests: BTreeSet::new(),
             access_counter,
             chunk_refcounts,
         };
@@ -925,6 +1653,11 @@ impl StorageBackend {
             root_dir,
             manifests_dir,
             index_path,
+            _lock_file: lock_file,
+            access_metadata_lock: Mutex::new(()),
+            persisted_access_counter: AtomicU64::new(access_counter),
+            durability_healthy: AtomicBool::new(true),
+            durability_failure: Mutex::new(None),
             state: RwLock::new(state),
         })
     }
@@ -956,6 +1689,31 @@ impl StorageBackend {
             .read()
             .expect("storage state poisoned")
             .available_capacity(max_capacity)
+    }
+
+    pub(crate) fn ensure_durability_healthy(&self) -> Result<(), StorageError> {
+        if self.durability_healthy.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let reason = self
+            .durability_failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .unwrap_or_else(|| "unknown durability failure".to_owned());
+        Err(StorageError::DurabilityPoisoned { reason })
+    }
+
+    fn fail_stop_durability(&self, error: &AtomicWriteError) {
+        let reason = error.to_string();
+        let mut failure = self
+            .durability_failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if failure.is_none() {
+            *failure = Some(reason);
+        }
+        self.durability_healthy.store(false, Ordering::Release);
     }
 
     /// Returns the root directory where manifests are stored.
@@ -1009,6 +1767,7 @@ impl StorageBackend {
         &self,
         manifest_id: &str,
     ) -> Result<bool, StorageError> {
+        self.ensure_durability_healthy()?;
         let state = self.state.read().expect("storage state poisoned");
         let manifest =
             state
@@ -1031,7 +1790,9 @@ impl StorageBackend {
 
     /// Evict a stored manifest and reclaim its payload bytes.
     pub fn evict_manifest(&self, manifest_id: &str) -> Result<u64, StorageError> {
+        self.ensure_durability_healthy()?;
         let mut state = self.state.write().expect("storage state poisoned");
+        self.ensure_durability_healthy()?;
         let stored = state
             .manifests
             .get(manifest_id)
@@ -1039,6 +1800,11 @@ impl StorageBackend {
                 manifest_id: manifest_id.to_owned(),
             })?
             .clone();
+        let _io_guard = stored
+            .io_lock
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.ensure_durability_healthy()?;
         let manifest_dir = stored
             .manifest_path()
             .parent()
@@ -1047,60 +1813,122 @@ impl StorageBackend {
         let mut new_index = state.index.clone();
         let mut refcounts = state.chunk_refcounts.clone();
         for chunk in &stored.chunk_files {
-            if let Some(count) = refcounts.get_mut(&chunk.digest) {
-                if *count <= 1 {
+            match refcounts.get(&chunk.digest).copied() {
+                Some(1) => {
                     refcounts.remove(&chunk.digest);
-                } else {
-                    *count = count.saturating_sub(1);
+                }
+                Some(count) if count > 1 => {
+                    refcounts.insert(chunk.digest, count - 1);
+                }
+                _ => {
+                    return Err(corrupt_storage_state(
+                        &self.index_path,
+                        "manifest chunk is missing a positive reference count",
+                    ));
                 }
             }
         }
+        let entries_before = new_index.entries.len();
         new_index
             .entries
             .retain(|entry| entry.manifest_id != manifest_id);
-        new_index.total_bytes = state.total_bytes.saturating_sub(stored.content_length());
+        if entries_before.checked_sub(new_index.entries.len()) != Some(1) {
+            return Err(corrupt_storage_state(
+                &self.index_path,
+                "manifest index must contain exactly one entry for eviction",
+            ));
+        }
+        new_index.total_bytes = state
+            .total_bytes
+            .checked_sub(stored.content_length())
+            .ok_or_else(|| {
+                corrupt_storage_state(
+                    &self.index_path,
+                    "manifest content length exceeds accounted storage bytes",
+                )
+            })?;
         new_index.gc_freed_bytes_total = new_index
             .gc_freed_bytes_total
-            .saturating_add(stored.content_length());
-        new_index.gc_evictions_total = new_index.gc_evictions_total.saturating_add(1);
+            .checked_add(stored.content_length())
+            .ok_or_else(|| {
+                corrupt_storage_state(&self.index_path, "GC freed-byte counter overflow")
+            })?;
+        new_index.gc_evictions_total = new_index
+            .gc_evictions_total
+            .checked_add(1)
+            .ok_or_else(|| corrupt_storage_state(&self.index_path, "GC counter overflow"))?;
         new_index.chunk_refcounts = chunk_refcount_entries(&refcounts);
 
         let index_bytes = norito::to_bytes(&new_index).map_err(StorageError::Norito)?;
-        write_atomic(&self.index_path, &index_bytes)?;
+        let trash_path = self.gc_trash_path(manifest_id);
+        let trash_root = trash_path
+            .parent()
+            .expect("GC transaction path must have a parent");
+        validate_atomic_output_path(&trash_root.join(".sorafs-gc-root-probe"))?;
+        fs::create_dir_all(trash_root)?;
+        validate_real_directory(trash_root)?;
+        match fs::symlink_metadata(&trash_path) {
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(StorageError::Io(err)),
+            Ok(_) => {
+                return Err(corrupt_storage_state(
+                    &trash_path,
+                    "GC transaction path already exists",
+                ));
+            }
+        }
+        fs::rename(&manifest_dir, &trash_path)?;
+        if let Err(primary) =
+            sync_directory(&self.manifests_dir).and_then(|()| sync_directory(trash_root))
+        {
+            let rollback = rename_and_sync_directories(&trash_path, &manifest_dir);
+            return match rollback {
+                Ok(()) => Err(StorageError::Io(primary)),
+                Err(rollback) => {
+                    let error = AtomicWriteError::DurabilityUncertain {
+                        path: manifest_dir,
+                        source: io::Error::other(format!(
+                            "failed to sync GC transaction ({primary}); rollback also failed: {rollback}"
+                        )),
+                    };
+                    self.fail_stop_durability(&error);
+                    Err(error.into_storage_error())
+                }
+            };
+        }
+        let durability_error = match write_atomic_classified(&self.index_path, &index_bytes) {
+            Ok(()) => None,
+            Err(error @ AtomicWriteError::DurabilityUncertain { .. }) => Some(error),
+            Err(AtomicWriteError::BeforeCommit(primary)) => {
+                let rollback = rename_and_sync_directories(&trash_path, &manifest_dir);
+                return match rollback {
+                    Ok(()) => Err(StorageError::Io(primary)),
+                    Err(rollback) => {
+                        let error = AtomicWriteError::DurabilityUncertain {
+                            path: manifest_dir,
+                            source: io::Error::other(format!(
+                                "failed to persist GC index ({primary}); rollback also failed: {rollback}"
+                            )),
+                        };
+                        self.fail_stop_durability(&error);
+                        Err(error.into_storage_error())
+                    }
+                };
+            }
+        };
 
         state.index = new_index;
-        state.total_bytes = state.total_bytes.saturating_sub(stored.content_length());
+        state.total_bytes = state.index.total_bytes;
         state.manifests.remove(manifest_id);
         state.chunk_refcounts = refcounts;
         drop(state);
 
-        let trash_path = self.gc_trash_path(manifest_id);
-        if let Some(parent) = trash_path.parent() {
-            if let Err(err) = fs::create_dir_all(parent) {
-                iroha_logger::warn!(
-                    %err,
-                    manifest_id = %manifest_id,
-                    path = %parent.display(),
-                    "failed to prepare GC trash directory"
-                );
-            }
+        if let Some(error) = durability_error {
+            self.fail_stop_durability(&error);
+            return Err(error.into_storage_error());
         }
-        if let Err(err) = fs::rename(&manifest_dir, &trash_path) {
-            iroha_logger::warn!(
-                %err,
-                manifest_id = %manifest_id,
-                path = %manifest_dir.display(),
-                "failed to move manifest into GC trash; deleting in place"
-            );
-            if let Err(err) = fs::remove_dir_all(&manifest_dir) {
-                iroha_logger::warn!(
-                    %err,
-                    manifest_id = %manifest_id,
-                    path = %manifest_dir.display(),
-                    "failed to delete manifest directory"
-                );
-            }
-        } else if let Err(err) = fs::remove_dir_all(&trash_path) {
+
+        if let Err(err) = remove_transaction_directory(&trash_path) {
             iroha_logger::warn!(
                 %err,
                 manifest_id = %manifest_id,
@@ -1119,7 +1947,9 @@ impl StorageBackend {
         stripe_layout: DaStripeLayout,
         chunk_roles: Vec<ChunkRoleMetadata>,
     ) -> Result<(), StorageError> {
+        self.ensure_durability_healthy()?;
         let mut state = self.state.write().expect("storage state poisoned");
+        self.ensure_durability_healthy()?;
         let manifest =
             state
                 .manifests
@@ -1127,6 +1957,11 @@ impl StorageBackend {
                 .ok_or_else(|| StorageError::ManifestNotFound {
                     manifest_id: manifest_id.to_owned(),
                 })?;
+        let io_lock = Arc::clone(&manifest.io_lock);
+        let _io_guard = io_lock
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.ensure_durability_healthy()?;
 
         let expected = manifest.chunk_files.len();
         if chunk_roles.len() != expected {
@@ -1136,19 +1971,30 @@ impl StorageBackend {
             });
         }
 
-        manifest.stripe_layout = Some(stripe_layout);
-        for (chunk, role) in manifest.chunk_files.iter_mut().zip(chunk_roles.iter()) {
+        let mut updated = manifest.clone();
+        updated.stripe_layout = Some(stripe_layout);
+        for (chunk, role) in updated.chunk_files.iter_mut().zip(chunk_roles.iter()) {
             chunk.role = Some(role.role);
             chunk.group_id = Some(role.group_id);
         }
 
-        let record = manifest.to_record();
-        let metadata_path = manifest
+        let record = updated.to_record()?;
+        let metadata_path = updated
             .manifest_path
             .parent()
             .expect("manifest path must have parent")
             .join(METADATA_FILE_NAME);
-        write_manifest_metadata(&record, &metadata_path)?;
+        let metadata_bytes = norito::to_bytes(&record)?;
+        let durability_error = match write_atomic_classified(&metadata_path, &metadata_bytes) {
+            Ok(()) => None,
+            Err(error @ AtomicWriteError::DurabilityUncertain { .. }) => Some(error),
+            Err(AtomicWriteError::BeforeCommit(source)) => return Err(StorageError::Io(source)),
+        };
+        *manifest = updated;
+        if let Some(error) = durability_error {
+            self.fail_stop_durability(&error);
+            return Err(error.into_storage_error());
+        }
         Ok(())
     }
 
@@ -1163,7 +2009,11 @@ impl StorageBackend {
         stripe_layout: Option<DaStripeLayout>,
         chunk_roles: Option<Vec<ChunkRoleMetadata>>,
     ) -> Result<(), StorageError> {
+        self.ensure_durability_healthy()?;
+        let files = stored_files_from_plan(plan)?;
+        validate_persistent_file_layout(&files)?;
         let mut state = self.state.write().expect("storage state poisoned");
+        self.ensure_durability_healthy()?;
         let manifest =
             state
                 .manifests
@@ -1171,6 +2021,11 @@ impl StorageBackend {
                 .ok_or_else(|| StorageError::ManifestNotFound {
                     manifest_id: manifest_id.to_owned(),
                 })?;
+        let io_lock = Arc::clone(&manifest.io_lock);
+        let _io_guard = io_lock
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.ensure_durability_healthy()?;
 
         if manifest.content_length != plan.content_length
             || manifest.payload_digest != *plan.payload_digest.as_bytes()
@@ -1190,12 +2045,13 @@ impl StorageBackend {
                         && stored.length == planned.length
                         && stored.digest == planned.digest
                 });
-        if !chunks_match && (stripe_layout.is_some() || chunk_roles.is_some()) {
+        if !chunks_match {
             return Err(StorageError::ManifestExists {
                 manifest_id: manifest_id.to_owned(),
             });
         }
 
+        let mut updated = manifest.clone();
         if let Some(roles) = chunk_roles {
             let expected = manifest.chunk_files.len();
             if roles.len() != expected {
@@ -1204,23 +2060,33 @@ impl StorageBackend {
                     actual: roles.len(),
                 });
             }
-            for (chunk, role) in manifest.chunk_files.iter_mut().zip(roles.iter()) {
+            for (chunk, role) in updated.chunk_files.iter_mut().zip(roles.iter()) {
                 chunk.role = Some(role.role);
                 chunk.group_id = Some(role.group_id);
             }
         }
         if let Some(layout) = stripe_layout {
-            manifest.stripe_layout = Some(layout);
+            updated.stripe_layout = Some(layout);
         }
-        manifest.files = stored_files_from_plan(plan);
+        updated.files = files;
 
-        let record = manifest.to_record();
-        let metadata_path = manifest
+        let record = updated.to_record()?;
+        let metadata_path = updated
             .manifest_path
             .parent()
             .expect("manifest path must have parent")
             .join(METADATA_FILE_NAME);
-        write_manifest_metadata(&record, &metadata_path)?;
+        let metadata_bytes = norito::to_bytes(&record)?;
+        let durability_error = match write_atomic_classified(&metadata_path, &metadata_bytes) {
+            Ok(()) => None,
+            Err(error @ AtomicWriteError::DurabilityUncertain { .. }) => Some(error),
+            Err(AtomicWriteError::BeforeCommit(source)) => return Err(StorageError::Io(source)),
+        };
+        *manifest = updated;
+        if let Some(error) = durability_error {
+            self.fail_stop_durability(&error);
+            return Err(error.into_storage_error());
+        }
         Ok(())
     }
 
@@ -1255,6 +2121,7 @@ impl StorageBackend {
         stripe_layout: Option<DaStripeLayout>,
         chunk_roles: Option<Vec<ChunkRoleMetadata>>,
     ) -> Result<String, StorageError> {
+        self.ensure_durability_healthy()?;
         if manifest.version != MANIFEST_VERSION_V1 {
             return Err(StorageError::UnsupportedManifestVersion {
                 version: manifest.version,
@@ -1269,9 +2136,15 @@ impl StorageBackend {
 
         ensure_chunk_profile_match(manifest, plan)?;
 
-        let mut state = self.state.write().expect("storage state poisoned");
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.ensure_durability_healthy()?;
 
-        if state.manifests.contains_key(&manifest_id) {
+        if state.manifests.contains_key(&manifest_id)
+            || state.inflight_manifests.contains(&manifest_id)
+        {
             return Err(StorageError::ManifestExists {
                 manifest_id: manifest_id.clone(),
             });
@@ -1291,37 +2164,35 @@ impl StorageBackend {
             });
         }
 
-        state.reserved_bytes = state
-            .reserved_bytes
-            .checked_add(required_bytes)
-            .expect("reserved bytes overflow");
+        state.reserved_bytes = state.reserved_bytes.checked_add(required_bytes).ok_or(
+            StorageError::CapacityExceeded {
+                required: required_bytes,
+                available: state.available_capacity(max_capacity),
+            },
+        )?;
+        state.inflight_manifests.insert(manifest_id.clone());
         drop(state);
 
-        let manifest_dir = self.manifests_dir.join(&manifest_id);
-        let chunks_dir = manifest_dir.join(CHUNKS_DIR_NAME);
-        let manifest_path = manifest_dir.join(MANIFEST_FILE_NAME);
-        let metadata_path = manifest_dir.join(METADATA_FILE_NAME);
-
-        let ingest_result = self.ingest_payload(plan, reader, &chunks_dir);
-
-        let (mut chunk_records, por_tree) = match ingest_result {
-            Ok(value) => value,
-            Err(err) => {
-                let mut state = self.state.write().expect("storage state poisoned");
-                state.reserved_bytes = state.reserved_bytes.saturating_sub(required_bytes);
-                drop(state);
-                let _ = fs::remove_dir_all(&manifest_dir);
-                return Err(err);
-            }
+        let mut reservation = IngestReservation {
+            backend: self,
+            manifest_id: manifest_id.clone(),
+            reserved_bytes: required_bytes,
+            active: true,
         };
+
+        let manifest_dir = self.manifests_dir.join(&manifest_id);
+        let staging_dir = self.ingest_staging_path(&manifest_id);
+        let mut staging_guard = StagingDirectory::new(staging_dir.clone());
+        prepare_ingest_staging_directory(&staging_dir)?;
+        let chunks_dir = staging_dir.join(CHUNKS_DIR_NAME);
+        let staged_manifest_path = staging_dir.join(MANIFEST_FILE_NAME);
+        let metadata_path = staging_dir.join(METADATA_FILE_NAME);
+
+        let (mut chunk_records, por_tree) = self.ingest_payload(plan, reader, &chunks_dir)?;
 
         if let Some(roles) = chunk_roles {
             let expected = chunk_records.len();
             if roles.len() != expected {
-                let mut state = self.state.write().expect("storage state poisoned");
-                state.reserved_bytes = state.reserved_bytes.saturating_sub(required_bytes);
-                drop(state);
-                let _ = fs::remove_dir_all(&manifest_dir);
                 return Err(StorageError::ChunkRoleLengthMismatch {
                     expected,
                     actual: roles.len(),
@@ -1335,43 +2206,23 @@ impl StorageBackend {
             }
         }
 
-        if let Err(err) = fs::create_dir_all(&manifest_dir) {
-            let mut state = self.state.write().expect("storage state poisoned");
-            state.reserved_bytes = state.reserved_bytes.saturating_sub(required_bytes);
-            drop(state);
-            let _ = fs::remove_dir_all(&manifest_dir);
-            return Err(StorageError::from(err));
-        }
-
-        if let Err(err) = write_atomic(&manifest_path, &manifest_bytes) {
-            let mut state = self.state.write().expect("storage state poisoned");
-            state.reserved_bytes = state.reserved_bytes.saturating_sub(required_bytes);
-            drop(state);
-            let _ = fs::remove_dir_all(&manifest_dir);
-            return Err(StorageError::from(err));
-        }
+        write_atomic(&staged_manifest_path, &manifest_bytes)?;
 
         let stored_at_unix_secs = unix_timestamp();
         let retention_source = RetentionSourceV1::from_manifest(manifest)?;
         let retention_epoch = retention_source.effective_epoch();
-        let files = stored_files_from_plan(plan);
-        let persisted_files = files
-            .iter()
-            .map(|file| StoredFileRecordNorito {
-                path: file.path.clone(),
-                offset: file.offset,
-                size: file.size,
-                first_chunk: file.first_chunk as u32,
-                chunk_count: file.chunk_count as u32,
-            })
-            .collect();
+        let files = stored_files_from_plan(plan)?;
+        let persisted_files = persistent_file_records(&files)?;
         let last_access = {
             let mut state = self.state.write().expect("storage state poisoned");
-            let next_access = state.access_counter.saturating_add(1);
+            self.ensure_durability_healthy()?;
+            let next_access = state.access_counter.checked_add(1).ok_or_else(|| {
+                corrupt_storage_state(&self.index_path, "manifest access counter overflow")
+            })?;
             state.access_counter = next_access;
             next_access
         };
-        let chunk_count = plan.chunks.len() as u32;
+        let chunk_count = persistent_u32("chunk_count", plan.chunks.len())?;
 
         let metadata_record = StoredManifestRecord {
             manifest_id: manifest_id.clone(),
@@ -1390,23 +2241,32 @@ impl StorageBackend {
             por_tree: StoredPorTree::from(&por_tree),
         };
 
-        if let Err(err) = write_manifest_metadata(&metadata_record, &metadata_path) {
-            let mut state = self.state.write().expect("storage state poisoned");
-            state.reserved_bytes = state.reserved_bytes.saturating_sub(required_bytes);
-            drop(state);
-            let _ = fs::remove_dir_all(&manifest_dir);
-            return Err(err);
+        write_manifest_metadata(&metadata_record, &metadata_path)?;
+
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.ensure_durability_healthy()?;
+        if state.manifests.contains_key(&manifest_id) {
+            return Err(StorageError::ManifestExists {
+                manifest_id: manifest_id.clone(),
+            });
         }
 
-        let mut state = self.state.write().expect("storage state poisoned");
-        state.reserved_bytes = state.reserved_bytes.saturating_sub(required_bytes);
-
         let mut new_index = state.index.clone();
-        new_index.total_bytes = state.total_bytes + required_bytes;
+        new_index.total_bytes = state.total_bytes.checked_add(required_bytes).ok_or(
+            StorageError::CapacityExceeded {
+                required: required_bytes,
+                available: state.available_capacity(self.config.max_capacity_bytes().0),
+            },
+        )?;
         let mut refcounts = state.chunk_refcounts.clone();
         for record in &chunk_records {
             let counter = refcounts.entry(record.digest).or_insert(0);
-            *counter = counter.saturating_add(1);
+            *counter = counter.checked_add(1).ok_or_else(|| {
+                corrupt_storage_state(&self.index_path, "chunk reference count overflow")
+            })?;
         }
         new_index.chunk_refcounts = chunk_refcount_entries(&refcounts);
         new_index.entries.push(ManifestIndexEntry {
@@ -1427,23 +2287,82 @@ impl StorageBackend {
             Ok(bytes) => bytes,
             Err(err) => {
                 drop(state);
-                let _ = fs::remove_dir_all(&manifest_dir);
                 return Err(StorageError::Norito(err));
             }
         };
 
-        if let Err(err) = write_atomic(&self.index_path, &index_bytes) {
-            drop(state);
-            let _ = fs::remove_dir_all(&manifest_dir);
-            return Err(StorageError::from(err));
+        match fs::symlink_metadata(&manifest_dir) {
+            Ok(_) => {
+                drop(state);
+                return Err(StorageError::ManifestExists {
+                    manifest_id: manifest_id.clone(),
+                });
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                drop(state);
+                return Err(StorageError::from(err));
+            }
         }
+        fs::rename(&staging_dir, &manifest_dir)?;
+        let staging_root = staging_dir
+            .parent()
+            .expect("ingest transaction path must have a parent");
+        if let Err(primary) =
+            sync_directory(&self.manifests_dir).and_then(|()| sync_directory(staging_root))
+        {
+            let rollback = rename_and_sync_directories(&manifest_dir, &staging_dir);
+            return match rollback {
+                Ok(()) => Err(StorageError::Io(primary)),
+                Err(rollback) => {
+                    let error = AtomicWriteError::DurabilityUncertain {
+                        path: manifest_dir,
+                        source: io::Error::other(format!(
+                            "failed to sync ingest transaction ({primary}); rollback also failed: {rollback}"
+                        )),
+                    };
+                    self.fail_stop_durability(&error);
+                    Err(error.into_storage_error())
+                }
+            };
+        }
+        staging_guard.disarm();
 
-        let stored_manifest = StoredManifest::from_record(metadata_record, manifest_path);
+        let durability_error = match write_atomic_classified(&self.index_path, &index_bytes) {
+            Ok(()) => None,
+            Err(error @ AtomicWriteError::DurabilityUncertain { .. }) => Some(error),
+            Err(AtomicWriteError::BeforeCommit(primary)) => {
+                drop(state);
+                if let Err(cleanup) = remove_transaction_directory(&manifest_dir) {
+                    let error = AtomicWriteError::DurabilityUncertain {
+                        path: manifest_dir,
+                        source: io::Error::other(format!(
+                            "index write failed before commit ({primary}); ingest rollback failed: {cleanup}"
+                        )),
+                    };
+                    self.fail_stop_durability(&error);
+                    return Err(error.into_storage_error());
+                }
+                return Err(StorageError::Io(primary));
+            }
+        };
 
+        let manifest_path = manifest_dir.join(MANIFEST_FILE_NAME);
+        let stored_manifest =
+            StoredManifest::from_record(metadata_record, manifest_path, Arc::new(RwLock::new(())));
+
+        let new_total_bytes = new_index.total_bytes;
         state.index = new_index;
-        state.total_bytes = state.total_bytes.saturating_add(required_bytes);
+        state.total_bytes = new_total_bytes;
         state.manifests.insert(manifest_id.clone(), stored_manifest);
         state.chunk_refcounts = refcounts;
+        reservation.release(&mut state);
+
+        if let Some(error) = durability_error {
+            drop(state);
+            self.fail_stop_durability(&error);
+            return Err(error.into_storage_error());
+        }
 
         Ok(manifest_id)
     }
@@ -1471,69 +2390,119 @@ impl StorageBackend {
             .cloned()
     }
 
-    fn manifest_for_access(&self, manifest_id: &str) -> Result<StoredManifest, StorageError> {
-        let (record, metadata_path, index_bytes, manifest) = {
-            let mut state = self.state.write().expect("storage state poisoned");
-            let next_access = state.access_counter.saturating_add(1);
-            state.access_counter = next_access;
-            let (record, metadata_path, manifest, retention_source) = {
-                let manifest = state.manifests.get_mut(manifest_id).ok_or_else(|| {
-                    StorageError::ManifestNotFound {
-                        manifest_id: manifest_id.to_owned(),
-                    }
-                })?;
-                manifest.last_access = next_access;
-                let retention_source = manifest.retention_source.clone();
-                let record = manifest.to_record();
-                let metadata_path = manifest
-                    .manifest_path
-                    .parent()
-                    .expect("manifest path must have parent")
-                    .join(METADATA_FILE_NAME);
-                (record, metadata_path, manifest.clone(), retention_source)
-            };
-
-            if let Some(entry) = state
-                .index
-                .entries
-                .iter_mut()
-                .find(|entry| entry.manifest_id == manifest_id)
-            {
-                entry.last_access = next_access;
-                entry.retention_source = retention_source;
-            }
-            let index_bytes = match norito::to_bytes(&state.index) {
-                Ok(bytes) => Some(bytes),
-                Err(err) => {
-                    iroha_logger::warn!(
-                        %err,
-                        manifest_id = %manifest_id,
-                        "failed to encode storage index while updating access"
-                    );
-                    None
+    fn with_manifest_for_access<T, F>(&self, manifest_id: &str, work: F) -> Result<T, StorageError>
+    where
+        F: FnOnce(&StoredManifest) -> Result<T, StorageError>,
+    {
+        self.ensure_durability_healthy()?;
+        let mut state = self.state.write().expect("storage state poisoned");
+        let io_lock = state
+            .manifests
+            .get(manifest_id)
+            .map(|manifest| Arc::clone(&manifest.io_lock))
+            .ok_or_else(|| StorageError::ManifestNotFound {
+                manifest_id: manifest_id.to_owned(),
+            })?;
+        let _io_guard = io_lock
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.ensure_durability_healthy()?;
+        let next_access = state.access_counter.checked_add(1).ok_or_else(|| {
+            corrupt_storage_state(&self.index_path, "manifest access counter overflow")
+        })?;
+        state.access_counter = next_access;
+        let (record, metadata_path, manifest, retention_source) = {
+            let manifest = state.manifests.get_mut(manifest_id).ok_or_else(|| {
+                StorageError::ManifestNotFound {
+                    manifest_id: manifest_id.to_owned(),
                 }
-            };
-            (record, metadata_path, index_bytes, manifest)
+            })?;
+            manifest.last_access = next_access;
+            let retention_source = manifest.retention_source.clone();
+            let record = manifest.to_record()?;
+            let metadata_path = manifest
+                .manifest_path
+                .parent()
+                .expect("manifest path must have parent")
+                .join(METADATA_FILE_NAME);
+            (record, metadata_path, manifest.clone(), retention_source)
         };
 
-        if let Err(err) = write_manifest_metadata(&record, &metadata_path) {
-            iroha_logger::warn!(
-                %err,
-                manifest_id = %manifest_id,
-                "failed to persist manifest access metadata"
-            );
-        }
-        if let Some(bytes) = index_bytes {
-            if let Err(err) = write_atomic(&self.index_path, &bytes) {
-                iroha_logger::warn!(
-                    %err,
-                    manifest_id = %manifest_id,
-                    "failed to persist storage index access metadata"
-                );
+        let entry = state
+            .index
+            .entries
+            .iter_mut()
+            .find(|entry| entry.manifest_id == manifest_id)
+            .ok_or_else(|| {
+                corrupt_storage_state(
+                    &self.index_path,
+                    "stored manifest is missing its index entry",
+                )
+            })?;
+        entry.last_access = next_access;
+        entry.retention_source = retention_source;
+        let metadata_bytes = norito::to_bytes(&record).map_err(StorageError::Norito)?;
+        let index_bytes = norito::to_bytes(&state.index).map_err(StorageError::Norito)?;
+        drop(state);
+
+        let mut durability_error = None;
+        {
+            let _metadata_guard = self
+                .access_metadata_lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.ensure_durability_healthy()?;
+            if next_access > self.persisted_access_counter.load(Ordering::Acquire) {
+                let mut persisted = true;
+                for (path, bytes, label) in [
+                    (
+                        metadata_path.as_path(),
+                        metadata_bytes.as_slice(),
+                        "manifest access metadata",
+                    ),
+                    (
+                        self.index_path.as_path(),
+                        index_bytes.as_slice(),
+                        "storage index access metadata",
+                    ),
+                ] {
+                    match write_atomic_classified(path, bytes) {
+                        Ok(()) => {}
+                        Err(error @ AtomicWriteError::DurabilityUncertain { .. }) => {
+                            iroha_logger::error!(
+                                %error,
+                                manifest_id = %manifest_id,
+                                "storage fail-stopped after uncertain access-metadata commit"
+                            );
+                            self.fail_stop_durability(&error);
+                            durability_error = Some(error);
+                            persisted = false;
+                            break;
+                        }
+                        Err(AtomicWriteError::BeforeCommit(err)) => {
+                            iroha_logger::warn!(
+                                %err,
+                                manifest_id = %manifest_id,
+                                %label,
+                                "failed to persist storage access metadata"
+                            );
+                            persisted = false;
+                        }
+                    }
+                }
+                if persisted {
+                    self.persisted_access_counter
+                        .store(next_access, Ordering::Release);
+                }
             }
         }
 
-        Ok(manifest)
+        if let Some(error) = durability_error {
+            return Err(error.into_storage_error());
+        }
+        self.ensure_durability_healthy()?;
+
+        work(&manifest)
     }
 
     /// Read an exact range from the stored payload.
@@ -1543,27 +2512,45 @@ impl StorageBackend {
         offset: u64,
         len: usize,
     ) -> Result<Vec<u8>, StorageError> {
+        self.ensure_durability_healthy()?;
         if len == 0 {
+            let manifest =
+                self.manifest(manifest_id)
+                    .ok_or_else(|| StorageError::ManifestNotFound {
+                        manifest_id: manifest_id.to_owned(),
+                    })?;
+            if offset > manifest.content_length {
+                return Err(StorageError::RangeOutOfBounds {
+                    offset,
+                    len,
+                    content_length: manifest.content_length,
+                });
+            }
             return Ok(Vec::new());
         }
 
-        let manifest = self.manifest_for_access(manifest_id)?;
-
-        if offset
-            .checked_add(len as u64)
-            .map(|end| end > manifest.content_length)
-            .unwrap_or(true)
-        {
-            return Err(StorageError::RangeOutOfBounds {
+        self.with_manifest_for_access(manifest_id, |manifest| {
+            let len_u64 = u64::try_from(len).map_err(|_| StorageError::RangeOutOfBounds {
                 offset,
                 len,
                 content_length: manifest.content_length,
-            });
-        }
+            })?;
+            if offset
+                .checked_add(len_u64)
+                .map(|end| end > manifest.content_length)
+                .unwrap_or(true)
+            {
+                return Err(StorageError::RangeOutOfBounds {
+                    offset,
+                    len,
+                    content_length: manifest.content_length,
+                });
+            }
 
-        let mut buffer = vec![0u8; len];
-        read_into_manifest(&manifest, offset, &mut buffer)?;
-        Ok(buffer)
+            let mut buffer = vec![0u8; len];
+            read_into_manifest(manifest, offset, &mut buffer)?;
+            Ok(buffer)
+        })
     }
 
     /// Locate chunk metadata by digest for the provided manifest.
@@ -1572,6 +2559,7 @@ impl StorageBackend {
         manifest_id: &str,
         digest: &[u8; 32],
     ) -> Result<ChunkFileRecord, StorageError> {
+        self.ensure_durability_healthy()?;
         let manifest =
             self.manifest(manifest_id)
                 .ok_or_else(|| StorageError::ManifestNotFound {
@@ -1595,24 +2583,18 @@ impl StorageBackend {
         manifest_id: &str,
         digest: &[u8; 32],
     ) -> Result<Vec<u8>, StorageError> {
-        let manifest = self.manifest_for_access(manifest_id)?;
-        let record = manifest
-            .chunk_files
-            .iter()
-            .find(|record| record.digest == *digest)
-            .cloned()
-            .ok_or_else(|| StorageError::ChunkNotFound {
-                manifest_id: manifest_id.to_owned(),
-                digest_hex: digest.encode_hex::<String>(),
-            })?;
-        let bytes = fs::read(&record.path)?;
-        if bytes.len() != record.length as usize {
-            return Err(StorageError::PayloadLengthMismatch {
-                expected: record.length as u64,
-                actual: bytes.len() as u64,
-            });
-        }
-        Ok(bytes)
+        self.with_manifest_for_access(manifest_id, |manifest| {
+            let (chunk_index, record) = manifest
+                .chunk_files
+                .iter()
+                .enumerate()
+                .find(|(_, record)| record.digest == *digest)
+                .ok_or_else(|| StorageError::ChunkNotFound {
+                    manifest_id: manifest_id.to_owned(),
+                    digest_hex: digest.encode_hex::<String>(),
+                })?;
+            read_verified_chunk(record, chunk_index).map_err(StorageError::ChunkStore)
+        })
     }
 
     /// Sample PoR leaves for the specified manifest.
@@ -1622,42 +2604,49 @@ impl StorageBackend {
         count: usize,
         seed: u64,
     ) -> Result<Vec<(usize, PorProof)>, StorageError> {
+        self.ensure_durability_healthy()?;
         if count == 0 {
+            if self.manifest(manifest_id).is_none() {
+                return Err(StorageError::ManifestNotFound {
+                    manifest_id: manifest_id.to_owned(),
+                });
+            }
             return Ok(Vec::new());
         }
 
-        let manifest = self.manifest_for_access(manifest_id)?;
-
-        let por_tree = manifest.por_tree();
-        let total = por_tree.leaf_count();
-        if total == 0 {
-            return Ok(Vec::new());
-        }
-
-        let target = count.min(total);
-        let mut rng_state = seed;
-        let mut seen = HashSet::new();
-        let mut samples = Vec::with_capacity(target);
-
-        while samples.len() < target {
-            rng_state = splitmix64(rng_state);
-            let leaf_index = (rng_state as usize) % total;
-            if !seen.insert(leaf_index) {
-                continue;
+        self.with_manifest_for_access(manifest_id, |manifest| {
+            let por_tree = manifest.por_tree();
+            let total = por_tree.leaf_count();
+            if total == 0 {
+                return Ok(Vec::new());
             }
-            let Some((chunk_idx, segment_idx, leaf_idx)) = por_tree.leaf_path(leaf_index) else {
-                continue;
-            };
-            let mut payload = ManifestPayload::new(&manifest);
-            let proof = por_tree
-                .prove_leaf_with(chunk_idx, segment_idx, leaf_idx, &mut payload)
-                .map_err(StorageError::ChunkStore)?;
-            if let Some(proof) = proof {
-                samples.push((leaf_index, proof));
-            }
-        }
 
-        Ok(samples)
+            let target = count.min(total);
+            let mut rng_state = seed;
+            let mut seen = HashSet::new();
+            let mut samples = Vec::with_capacity(target);
+
+            while samples.len() < target {
+                rng_state = splitmix64(rng_state);
+                let leaf_index = (rng_state as usize) % total;
+                if !seen.insert(leaf_index) {
+                    continue;
+                }
+                let Some((chunk_idx, segment_idx, leaf_idx)) = por_tree.leaf_path(leaf_index)
+                else {
+                    continue;
+                };
+                let mut payload = ManifestPayload::new(manifest);
+                let proof = por_tree
+                    .prove_leaf_with(chunk_idx, segment_idx, leaf_idx, &mut payload)
+                    .map_err(StorageError::ChunkStore)?;
+                if let Some(proof) = proof {
+                    samples.push((leaf_index, proof));
+                }
+            }
+
+            Ok(samples)
+        })
     }
 
     fn ingest_payload<R: Read>(
@@ -1694,7 +2683,11 @@ impl StorageBackend {
 }
 
 impl StoredManifest {
-    fn from_record(record: StoredManifestRecord, manifest_path: PathBuf) -> Self {
+    fn from_record(
+        record: StoredManifestRecord,
+        manifest_path: PathBuf,
+        io_lock: Arc<RwLock<()>>,
+    ) -> Self {
         let files = if record.files.is_empty() {
             vec![StoredFileRecord {
                 path: Vec::new(),
@@ -1749,21 +2742,12 @@ impl StoredManifest {
             chunk_files,
             por_tree: record.por_tree,
             manifest_path,
+            io_lock,
         }
     }
 
-    fn to_record(&self) -> StoredManifestRecord {
-        let files = self
-            .files
-            .iter()
-            .map(|file| StoredFileRecordNorito {
-                path: file.path.clone(),
-                offset: file.offset,
-                size: file.size,
-                first_chunk: file.first_chunk as u32,
-                chunk_count: file.chunk_count as u32,
-            })
-            .collect();
+    fn to_record(&self) -> Result<StoredManifestRecord, StorageError> {
+        let files = persistent_file_records(&self.files)?;
         let chunk_files = self
             .chunk_files
             .iter()
@@ -1784,7 +2768,7 @@ impl StoredManifest {
             })
             .collect();
 
-        StoredManifestRecord {
+        Ok(StoredManifestRecord {
             manifest_id: self.manifest_id.clone(),
             manifest_cid: self.manifest_cid.clone(),
             manifest_digest: self.manifest_digest,
@@ -1799,26 +2783,127 @@ impl StoredManifest {
             files,
             chunk_files,
             por_tree: self.por_tree.clone(),
-        }
+        })
     }
 }
 
-fn stored_files_from_plan(plan: &CarBuildPlan) -> Vec<StoredFileRecord> {
-    let mut offset = 0u64;
-    plan.files
+fn persistent_file_records(
+    files: &[StoredFileRecord],
+) -> Result<Vec<StoredFileRecordNorito>, StorageError> {
+    files
         .iter()
         .map(|file| {
-            let record = StoredFileRecord {
+            Ok(StoredFileRecordNorito {
                 path: file.path.clone(),
-                offset,
+                offset: file.offset,
                 size: file.size,
-                first_chunk: file.first_chunk,
-                chunk_count: file.chunk_count,
-            };
-            offset = offset.saturating_add(file.size);
-            record
+                first_chunk: persistent_u32("file.first_chunk", file.first_chunk)?,
+                chunk_count: persistent_u32("file.chunk_count", file.chunk_count)?,
+            })
         })
         .collect()
+}
+
+fn validate_persistent_file_layout(files: &[StoredFileRecord]) -> Result<(), StorageError> {
+    for file in files {
+        persistent_u32("file.first_chunk", file.first_chunk)?;
+        persistent_u32("file.chunk_count", file.chunk_count)?;
+    }
+    Ok(())
+}
+
+fn stored_files_from_plan(plan: &CarBuildPlan) -> Result<Vec<StoredFileRecord>, StorageError> {
+    if plan.files.is_empty() {
+        return Err(StorageError::InvalidFileLayout {
+            reason: "file inventory must not be empty".to_owned(),
+        });
+    }
+    let mut offset = 0u64;
+    let mut paths = BTreeSet::new();
+    let mut records = Vec::with_capacity(plan.files.len());
+    for file in &plan.files {
+        if file.path.iter().any(|component| {
+            component.is_empty()
+                || component == "."
+                || component == ".."
+                || component.contains('/')
+                || component.contains('\\')
+                || component.chars().any(char::is_control)
+        }) {
+            return Err(StorageError::InvalidFileLayout {
+                reason: "logical file path contains a non-portable component".to_owned(),
+            });
+        }
+        if plan.files.len() > 1 && file.path.is_empty() {
+            return Err(StorageError::InvalidFileLayout {
+                reason: "only a single-file plan may use an empty logical path".to_owned(),
+            });
+        }
+        if !paths.insert(file.path.clone()) {
+            return Err(StorageError::InvalidFileLayout {
+                reason: "logical file paths must be unique".to_owned(),
+            });
+        }
+
+        let file_end =
+            offset
+                .checked_add(file.size)
+                .ok_or_else(|| StorageError::InvalidFileLayout {
+                    reason: "logical file byte range overflowed u64".to_owned(),
+                })?;
+        let chunk_end = file
+            .first_chunk
+            .checked_add(file.chunk_count)
+            .ok_or_else(|| StorageError::InvalidFileLayout {
+                reason: "logical file chunk range overflowed usize".to_owned(),
+            })?;
+        if chunk_end > plan.chunks.len() {
+            return Err(StorageError::InvalidFileLayout {
+                reason: "logical file references chunks outside the plan".to_owned(),
+            });
+        }
+        if file.size == 0 {
+            if file.chunk_count != 0 {
+                return Err(StorageError::InvalidFileLayout {
+                    reason: "empty logical files must not reference chunks".to_owned(),
+                });
+            }
+        } else {
+            if file.chunk_count == 0 {
+                return Err(StorageError::InvalidFileLayout {
+                    reason: "non-empty logical files must reference chunks".to_owned(),
+                });
+            }
+            let first = &plan.chunks[file.first_chunk];
+            let last = &plan.chunks[chunk_end - 1];
+            let planned_end = last
+                .offset
+                .checked_add(u64::from(last.length))
+                .ok_or_else(|| StorageError::InvalidFileLayout {
+                    reason: "logical file chunk byte range overflowed u64".to_owned(),
+                })?;
+            if first.offset != offset || planned_end != file_end {
+                return Err(StorageError::InvalidFileLayout {
+                    reason: "logical file range must align exactly with its chunk range".to_owned(),
+                });
+            }
+        }
+
+        records.push(StoredFileRecord {
+            path: file.path.clone(),
+            offset,
+            size: file.size,
+            first_chunk: file.first_chunk,
+            chunk_count: file.chunk_count,
+        });
+        offset = file_end;
+    }
+    if offset != plan.content_length {
+        return Err(StorageError::InvalidFileLayout {
+            reason: "logical file sizes must equal plan content length".to_owned(),
+        });
+    }
+    Ok(records)
 }
 
 fn canonical_profile_handle(manifest: &ManifestV1) -> String {
@@ -1850,30 +2935,113 @@ fn unix_timestamp() -> u64 {
         .unwrap_or(0)
 }
 
-pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
+fn prepare_ingest_staging_directory(path: &Path) -> io::Result<()> {
     let parent = path
         .parent()
-        .ok_or_else(|| io::Error::other("missing parent directory"))?;
-    validate_atomic_output_path(path)?;
-    fs::create_dir_all(parent).map_err(|err| {
+        .ok_or_else(|| io::Error::other("ingest staging path has no parent"))?;
+    validate_atomic_output_path(&parent.join(".sorafs-staging-parent-probe"))?;
+    fs::create_dir_all(parent)?;
+    validate_atomic_output_path(&parent.join(".sorafs-staging-parent-probe"))?;
+    fs::create_dir(path).map_err(|err| {
         io::Error::new(
+            err.kind(),
+            format!(
+                "failed to create unique ingest staging directory `{}`: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(io::Error::other(format!(
+            "ingest staging path `{}` must be a real directory",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Error)]
+enum AtomicWriteError {
+    #[error("atomic replacement failed before commit: {0}")]
+    BeforeCommit(#[source] io::Error),
+    #[error("atomic replacement of {path} was renamed but directory sync failed: {source}")]
+    DurabilityUncertain {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+}
+
+impl AtomicWriteError {
+    fn into_io_error(self) -> io::Error {
+        match self {
+            Self::BeforeCommit(source) => source,
+            Self::DurabilityUncertain { path, source } => io::Error::new(
+                source.kind(),
+                format!(
+                    "atomic replacement of {} was renamed but directory sync failed: {source}",
+                    path.display()
+                ),
+            ),
+        }
+    }
+
+    fn into_storage_error(self) -> StorageError {
+        match self {
+            Self::BeforeCommit(source) => StorageError::Io(source),
+            Self::DurabilityUncertain { path, source } => StorageError::DurabilityUncertain {
+                path: path.display().to_string(),
+                reason: source.to_string(),
+            },
+        }
+    }
+}
+
+pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
+    write_atomic_classified(path, data).map_err(AtomicWriteError::into_io_error)
+}
+
+fn write_atomic_classified(path: &Path, data: &[u8]) -> Result<(), AtomicWriteError> {
+    write_atomic_with_directory_sync(path, data, sync_directory)
+}
+
+fn write_atomic_with_directory_sync<F>(
+    path: &Path,
+    data: &[u8],
+    sync_parent: F,
+) -> Result<(), AtomicWriteError>
+where
+    F: FnOnce(&Path) -> io::Result<()>,
+{
+    let parent = path.parent().ok_or_else(|| {
+        AtomicWriteError::BeforeCommit(io::Error::other("missing parent directory"))
+    })?;
+    validate_atomic_output_path(path).map_err(AtomicWriteError::BeforeCommit)?;
+    fs::create_dir_all(parent).map_err(|err| {
+        AtomicWriteError::BeforeCommit(io::Error::new(
             err.kind(),
             format!(
                 "failed to create output parent `{}`: {err}",
                 parent.display()
             ),
-        )
+        ))
     })?;
-    validate_atomic_output_path(path)?;
+    validate_atomic_output_path(path).map_err(AtomicWriteError::BeforeCommit)?;
     let tmp = atomic_temp_path(path);
 
-    let write_result = (|| -> io::Result<()> {
-        let mut file = open_atomic_temp_file(&tmp)?;
-        file.write_all(data)?;
-        file.sync_all()?;
+    let write_result = (|| -> Result<(), AtomicWriteError> {
+        let mut file = open_atomic_temp_file(&tmp).map_err(AtomicWriteError::BeforeCommit)?;
+        file.write_all(data)
+            .map_err(AtomicWriteError::BeforeCommit)?;
+        file.sync_all().map_err(AtomicWriteError::BeforeCommit)?;
         drop(file);
-        validate_atomic_output_path(path)?;
-        fs::rename(&tmp, path)?;
+        validate_atomic_output_path(path).map_err(AtomicWriteError::BeforeCommit)?;
+        fs::rename(&tmp, path).map_err(AtomicWriteError::BeforeCommit)?;
+        sync_parent(parent).map_err(|source| AtomicWriteError::DurabilityUncertain {
+            path: path.to_path_buf(),
+            source,
+        })?;
         Ok(())
     })();
 
@@ -2034,6 +3202,13 @@ fn write_manifest_metadata(
 }
 
 impl StorageBackend {
+    fn ingest_staging_path(&self, manifest_id: &str) -> PathBuf {
+        let counter = INGEST_STAGING_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let name = format!("{manifest_id}-{pid}-{counter}");
+        self.root_dir.join(INGEST_STAGING_DIR_NAME).join(name)
+    }
+
     fn gc_trash_path(&self, manifest_id: &str) -> PathBuf {
         let counter = GC_TRASH_COUNTER.fetch_add(1, Ordering::Relaxed);
         let pid = std::process::id();
@@ -2069,11 +3244,26 @@ fn read_into_manifest(
 
     let mut remaining = buf.len();
     let mut cursor = 0usize;
-    let end = offset + remaining as u64;
+    let requested_len =
+        u64::try_from(remaining).map_err(|_| ChunkStoreError::OffsetOutOfRange {
+            offset,
+            len: u64::MAX,
+        })?;
+    let end = offset
+        .checked_add(requested_len)
+        .ok_or(ChunkStoreError::OffsetOutOfRange {
+            offset,
+            len: requested_len,
+        })?;
 
-    for chunk in manifest.chunk_files.iter() {
+    for (chunk_index, chunk) in manifest.chunk_files.iter().enumerate() {
         let chunk_start = chunk.offset;
-        let chunk_end = chunk_start + chunk.length as u64;
+        let chunk_end = chunk_start.checked_add(u64::from(chunk.length)).ok_or(
+            ChunkStoreError::OffsetOutOfRange {
+                offset: chunk_start,
+                len: u64::from(chunk.length),
+            },
+        )?;
 
         if end <= chunk_start {
             break;
@@ -2089,12 +3279,28 @@ fn read_into_manifest(
             continue;
         }
 
-        let mut file = File::open(&chunk.path).map_err(ChunkStoreError::Io)?;
-        let rel_offset = read_start - chunk_start;
-        file.seek(SeekFrom::Start(rel_offset))
-            .map_err(ChunkStoreError::Io)?;
-        file.read_exact(&mut buf[cursor..cursor + bytes_to_read])
-            .map_err(ChunkStoreError::Io)?;
+        let verified = read_verified_chunk(chunk, chunk_index)?;
+        let rel_offset = usize::try_from(read_start - chunk_start).map_err(|_| {
+            ChunkStoreError::OffsetOutOfRange {
+                offset: read_start,
+                len: u64::from(chunk.length),
+            }
+        })?;
+        let rel_end =
+            rel_offset
+                .checked_add(bytes_to_read)
+                .ok_or(ChunkStoreError::OffsetOutOfRange {
+                    offset: read_start,
+                    len: u64::try_from(bytes_to_read).unwrap_or(u64::MAX),
+                })?;
+        let output_end =
+            cursor
+                .checked_add(bytes_to_read)
+                .ok_or(ChunkStoreError::OffsetOutOfRange {
+                    offset: u64::try_from(cursor).unwrap_or(u64::MAX),
+                    len: u64::try_from(bytes_to_read).unwrap_or(u64::MAX),
+                })?;
+        buf[cursor..output_end].copy_from_slice(&verified[rel_offset..rel_end]);
 
         cursor += bytes_to_read;
         remaining = remaining.saturating_sub(bytes_to_read);
@@ -2114,6 +3320,51 @@ fn read_into_manifest(
     Ok(())
 }
 
+fn read_verified_chunk(
+    record: &ChunkFileRecord,
+    chunk_index: usize,
+) -> Result<Vec<u8>, ChunkStoreError> {
+    let expected_len =
+        usize::try_from(record.length).map_err(|_| ChunkStoreError::ChunkLengthTooLarge {
+            length: usize::MAX,
+            limit: u32::MAX,
+        })?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    set_no_follow_flag(&mut options);
+    let mut file = options.open(&record.path).map_err(ChunkStoreError::Io)?;
+    let metadata = file.metadata().map_err(ChunkStoreError::Io)?;
+    if !metadata.is_file() {
+        return Err(ChunkStoreError::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "chunk path `{}` is not a regular file",
+                record.path.display()
+            ),
+        )));
+    }
+    if metadata.len() != u64::from(record.length) {
+        return Err(ChunkStoreError::LengthMismatch {
+            expected: u64::from(record.length),
+            actual: metadata.len(),
+        });
+    }
+
+    let mut bytes = vec![0_u8; expected_len];
+    file.read_exact(&mut bytes).map_err(ChunkStoreError::Io)?;
+    let mut trailing = [0_u8; 1];
+    if file.read(&mut trailing).map_err(ChunkStoreError::Io)? != 0 {
+        return Err(ChunkStoreError::LengthMismatch {
+            expected: u64::from(record.length),
+            actual: u64::from(record.length).saturating_add(1),
+        });
+    }
+    if blake3::hash(&bytes).as_bytes() != &record.digest {
+        return Err(ChunkStoreError::DigestMismatch { chunk_index });
+    }
+    Ok(bytes)
+}
+
 fn splitmix64(mut state: u64) -> u64 {
     state = state.wrapping_add(0x9e3779b97f4a7c15);
     let mut z = state;
@@ -2124,7 +3375,13 @@ fn splitmix64(mut state: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{
+        fs,
+        io::{self, Cursor, Read},
+        sync::{Arc, mpsc},
+        thread,
+        time::{Duration, Instant},
+    };
 
     use blake3;
     use sorafs_car::{CarPlanError, FileEntry};
@@ -2147,6 +3404,328 @@ mod tests {
 
     fn single_file_plan(bytes: &[u8]) -> Result<CarBuildPlan, CarPlanError> {
         CarBuildPlan::single_file(bytes)
+    }
+
+    fn test_manifest(payload: &[u8], plan: &CarBuildPlan, root_byte: u8) -> ManifestV1 {
+        ManifestBuilder::new()
+            .root_cid(vec![root_byte; 8])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(
+                sorafs_chunker::ChunkProfile::DEFAULT,
+                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            )
+            .content_length(plan.content_length)
+            .car_digest(blake3::hash(payload).into())
+            .car_size(plan.content_length)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .expect("manifest")
+    }
+
+    fn ingest_test_payload(
+        temp_dir: &TempDir,
+        payload: &[u8],
+        root_byte: u8,
+    ) -> (StorageConfig, StorageBackend, String) {
+        let config = temp_config(temp_dir);
+        let backend = StorageBackend::new(config.clone()).expect("backend init");
+        let plan = single_file_plan(payload).expect("plan");
+        let manifest = test_manifest(payload, &plan, root_byte);
+        let mut reader = payload;
+        let manifest_id = backend
+            .ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest");
+        (config, backend, manifest_id)
+    }
+
+    fn replace_with_empty_index(config: &StorageConfig) {
+        let index_path = config.data_dir().join("index.norito");
+        let bytes = norito::to_bytes(&ManifestIndex::default()).expect("encode empty index");
+        write_atomic(&index_path, &bytes).expect("replace storage index");
+    }
+
+    struct GatedReader {
+        bytes: Cursor<Vec<u8>>,
+        entered: Option<mpsc::Sender<()>>,
+        release: mpsc::Receiver<()>,
+        fail_after_release: bool,
+    }
+
+    impl Read for GatedReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if let Some(entered) = self.entered.take() {
+                entered
+                    .send(())
+                    .map_err(|_| io::Error::other("test gate receiver dropped"))?;
+                self.release
+                    .recv()
+                    .map_err(|_| io::Error::other("test gate sender dropped"))?;
+                if self.fail_after_release {
+                    return Err(io::Error::other("injected ingest reader failure"));
+                }
+            }
+            self.bytes.read(buffer)
+        }
+    }
+
+    fn assert_staging_empty(backend: &StorageBackend) {
+        let staging_root = backend.root_dir().join(INGEST_STAGING_DIR_NAME);
+        if staging_root.exists() {
+            assert!(
+                fs::read_dir(&staging_root)
+                    .expect("read staging root")
+                    .next()
+                    .is_none(),
+                "ingest staging root must not retain attempt directories"
+            );
+        }
+    }
+
+    #[test]
+    fn storage_directory_has_single_process_owner() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let config = temp_config(&temp_dir);
+        let owner = StorageBackend::new(config.clone()).expect("acquire storage ownership");
+
+        assert!(matches!(
+            StorageBackend::new(config.clone()),
+            Err(StorageError::StorageDirectoryInUse { .. })
+        ));
+
+        drop(owner);
+        StorageBackend::new(config).expect("storage ownership releases on drop");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn storage_lock_rejects_symlink() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let target = temp_dir.path().join("lock-target");
+        fs::write(&target, b"must remain untouched").expect("write lock target");
+        std::os::unix::fs::symlink(&target, temp_dir.path().join(STORAGE_LOCK_FILE_NAME))
+            .expect("create storage lock symlink");
+
+        assert!(matches!(
+            StorageBackend::new(temp_config(&temp_dir)),
+            Err(StorageError::Io(_))
+        ));
+        assert_eq!(
+            fs::read(&target).expect("read lock target"),
+            b"must remain untouched"
+        );
+    }
+
+    #[test]
+    fn startup_rolls_back_uncommitted_gc_move() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = b"GC transaction rollback payload";
+        let (config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xA3);
+        let manifest_dir = backend.manifests_dir.join(&manifest_id);
+        let trash_root = backend.root_dir.join(GC_TRASH_DIR_NAME);
+        let trash_path = trash_root.join(format!("{manifest_id}-999-1"));
+        drop(backend);
+
+        fs::create_dir_all(&trash_root).expect("create GC transaction root");
+        fs::rename(&manifest_dir, &trash_path).expect("simulate pre-index GC move");
+
+        let recovered = StorageBackend::new(config).expect("recover pre-index GC transaction");
+        assert!(recovered.manifest(&manifest_id).is_some());
+        assert!(manifest_dir.is_dir());
+        assert!(!trash_path.exists());
+    }
+
+    #[test]
+    fn startup_finishes_committed_gc_move() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = b"GC transaction completion payload";
+        let (config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xA4);
+        let manifest_dir = backend.manifests_dir.join(&manifest_id);
+        let trash_root = backend.root_dir.join(GC_TRASH_DIR_NAME);
+        let trash_path = trash_root.join(format!("{manifest_id}-999-2"));
+        drop(backend);
+
+        fs::create_dir_all(&trash_root).expect("create GC transaction root");
+        fs::rename(&manifest_dir, &trash_path).expect("simulate committed GC move");
+        replace_with_empty_index(&config);
+
+        let recovered = StorageBackend::new(config).expect("finish committed GC transaction");
+        assert_eq!(recovered.manifest_count(), 0);
+        assert!(!manifest_dir.exists());
+        assert!(!trash_path.exists());
+    }
+
+    #[test]
+    fn startup_rejects_duplicate_live_and_gc_transaction_data() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = b"ambiguous duplicate GC transaction payload";
+        let (config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xA6);
+        let manifest_dir = backend.manifests_dir.join(&manifest_id);
+        let trash_path = backend
+            .root_dir
+            .join(GC_TRASH_DIR_NAME)
+            .join(format!("{manifest_id}-999-4"));
+        drop(backend);
+        fs::create_dir_all(&trash_path).expect("create duplicate GC transaction directory");
+
+        assert!(matches!(
+            StorageBackend::new(config),
+            Err(StorageError::CorruptStorageState { .. })
+        ));
+        assert!(manifest_dir.is_dir());
+        assert!(trash_path.is_dir());
+    }
+
+    #[test]
+    fn startup_removes_unindexed_ingest_commit() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = b"unindexed ingest transaction payload";
+        let (config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xA5);
+        let manifest_dir = backend.manifests_dir.join(&manifest_id);
+        drop(backend);
+        replace_with_empty_index(&config);
+
+        let recovered = StorageBackend::new(config).expect("remove unindexed manifest");
+        assert_eq!(recovered.manifest_count(), 0);
+        assert!(!manifest_dir.exists());
+    }
+
+    #[test]
+    fn startup_cleans_stale_ingest_staging_directory() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let config = temp_config(&temp_dir);
+        let backend = StorageBackend::new(config.clone()).expect("backend init");
+        let staging_path = backend
+            .root_dir
+            .join(INGEST_STAGING_DIR_NAME)
+            .join(format!("{}-999-3", "a".repeat(64)));
+        drop(backend);
+        fs::create_dir_all(&staging_path).expect("create stale staging directory");
+        fs::write(staging_path.join("partial"), b"partial").expect("write staged fragment");
+
+        StorageBackend::new(config).expect("clean stale staging transaction");
+        assert!(!staging_path.exists());
+    }
+
+    #[test]
+    fn startup_rejects_unknown_transaction_entries() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let config = temp_config(&temp_dir);
+        let backend = StorageBackend::new(config.clone()).expect("backend init");
+        let invalid_path = backend
+            .root_dir
+            .join(INGEST_STAGING_DIR_NAME)
+            .join("unknown");
+        drop(backend);
+        fs::create_dir_all(&invalid_path).expect("create invalid transaction entry");
+
+        assert!(matches!(
+            StorageBackend::new(config),
+            Err(StorageError::CorruptStorageState { .. })
+        ));
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn persistent_layout_conversion_rejects_truncation() {
+        let oversized = usize::try_from(u64::from(u32::MAX) + 1).expect("64-bit usize");
+        assert!(matches!(
+            persistent_u32("test", oversized),
+            Err(StorageError::LayoutValueTooLarge {
+                field: "test",
+                value,
+                max
+            }) if value == oversized && max == u64::from(u32::MAX)
+        ));
+    }
+
+    #[test]
+    fn concurrent_same_manifest_ingest_has_single_owner() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let config = temp_config(&temp_dir);
+        let backend = Arc::new(StorageBackend::new(config.clone()).expect("backend init"));
+        let payload = vec![0xA5; 32 * 1024];
+        let plan = single_file_plan(&payload).expect("plan");
+        let manifest = test_manifest(&payload, &plan, 0xA1);
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+
+        let worker_backend = Arc::clone(&backend);
+        let worker_manifest = manifest.clone();
+        let worker_plan = plan.clone();
+        let worker_payload = payload.clone();
+        let worker = thread::spawn(move || {
+            let mut reader = GatedReader {
+                bytes: Cursor::new(worker_payload),
+                entered: Some(entered_tx),
+                release: release_rx,
+                fail_after_release: false,
+            };
+            worker_backend.ingest_manifest(&worker_manifest, &worker_plan, &mut reader)
+        });
+
+        entered_rx.recv().expect("worker reached read gate");
+        let mut competing_reader = payload.as_slice();
+        assert!(matches!(
+            backend.ingest_manifest(&manifest, &plan, &mut competing_reader),
+            Err(StorageError::ManifestExists { .. })
+        ));
+        release_tx.send(()).expect("release worker");
+        let manifest_id = worker.join().expect("worker join").expect("worker ingest");
+
+        assert_eq!(backend.manifest_count(), 1);
+        assert_eq!(backend.total_bytes(), plan.content_length);
+        assert!(backend.manifest(&manifest_id).is_some());
+        assert_staging_empty(&backend);
+
+        drop(backend);
+        let reloaded = StorageBackend::new(config).expect("reload backend");
+        assert_eq!(reloaded.manifest_count(), 1);
+        assert_eq!(reloaded.total_bytes(), plan.content_length);
+    }
+
+    #[test]
+    fn failed_ingest_releases_reservation_without_deleting_retry() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let backend = Arc::new(StorageBackend::new(temp_config(&temp_dir)).expect("backend init"));
+        let payload = vec![0x5A; 32 * 1024];
+        let plan = single_file_plan(&payload).expect("plan");
+        let manifest = test_manifest(&payload, &plan, 0xA2);
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+
+        let worker_backend = Arc::clone(&backend);
+        let worker_manifest = manifest.clone();
+        let worker_plan = plan.clone();
+        let worker_payload = payload.clone();
+        let worker = thread::spawn(move || {
+            let mut reader = GatedReader {
+                bytes: Cursor::new(worker_payload),
+                entered: Some(entered_tx),
+                release: release_rx,
+                fail_after_release: true,
+            };
+            worker_backend.ingest_manifest(&worker_manifest, &worker_plan, &mut reader)
+        });
+
+        entered_rx.recv().expect("worker reached read gate");
+        let mut competing_reader = payload.as_slice();
+        assert!(matches!(
+            backend.ingest_manifest(&manifest, &plan, &mut competing_reader),
+            Err(StorageError::ManifestExists { .. })
+        ));
+        release_tx.send(()).expect("release worker");
+        assert!(worker.join().expect("worker join").is_err());
+        assert_eq!(backend.manifest_count(), 0);
+        assert_eq!(backend.total_bytes(), 0);
+        assert_staging_empty(&backend);
+
+        let mut retry_reader = payload.as_slice();
+        let manifest_id = backend
+            .ingest_manifest(&manifest, &plan, &mut retry_reader)
+            .expect("retry succeeds after failed owner");
+        assert!(backend.manifest(&manifest_id).is_some());
+        assert_eq!(backend.total_bytes(), plan.content_length);
+        assert_staging_empty(&backend);
     }
 
     #[test]
@@ -2254,6 +3833,7 @@ mod tests {
         let rebuilt_plan = stored.to_car_plan(sorafs_chunker::ChunkProfile::DEFAULT);
         assert_eq!(rebuilt_plan.files, plan.files);
 
+        drop(backend);
         let reloaded = StorageBackend::new(temp_config(&temp_dir)).expect("reload backend");
         let stored_reloaded = reloaded.manifest(&manifest_id).expect("reloaded manifest");
         assert_eq!(stored_reloaded.files(), stored.files());
@@ -2428,6 +4008,7 @@ mod tests {
         }
 
         // Reload to ensure metadata persisted on disk.
+        drop(backend);
         let reloaded = StorageBackend::new(temp_config(&temp_dir)).expect("reload");
         let stored_reloaded = reloaded.manifest(&manifest_id).expect("stored manifest");
         assert_eq!(stored_reloaded.stripe_layout(), Some(&layout));
@@ -2478,6 +4059,79 @@ mod tests {
                 actual: _
             }
         );
+    }
+
+    #[test]
+    fn attach_stripe_layout_does_not_mutate_memory_when_persistence_fails() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = b"stripe metadata failure payload";
+        let (_config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xD1);
+        let before = backend.manifest(&manifest_id).expect("stored manifest");
+        let metadata_path = backend
+            .manifests_dir
+            .join(&manifest_id)
+            .join(METADATA_FILE_NAME);
+        fs::remove_file(&metadata_path).expect("remove metadata file");
+        fs::create_dir(&metadata_path).expect("block metadata replacement");
+
+        let layout = DaStripeLayout {
+            total_stripes: 1,
+            shards_per_stripe: before.chunk_count() as u32,
+            row_parity_stripes: 0,
+        };
+        let roles = (0..before.chunk_count())
+            .map(|index| ChunkRoleMetadata {
+                role: ChunkRole::Data,
+                group_id: index as u32,
+            })
+            .collect();
+        assert!(matches!(
+            backend.attach_stripe_layout(&manifest_id, layout, roles),
+            Err(StorageError::Io(_))
+        ));
+
+        let after = backend.manifest(&manifest_id).expect("stored manifest");
+        assert_eq!(after.stripe_layout(), before.stripe_layout());
+        assert_eq!(after.chunk_files, before.chunk_files);
+    }
+
+    #[test]
+    fn attach_plan_metadata_validates_plan_and_commits_only_after_persistence() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = b"logical file metadata payload";
+        let (_config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xD2);
+        let before = backend.manifest(&manifest_id).expect("stored manifest");
+
+        let mut mismatched_chunks = single_file_plan(payload).expect("plan");
+        mismatched_chunks.chunks[0].digest[0] ^= 1;
+        assert!(matches!(
+            backend.attach_plan_metadata(&manifest_id, &mismatched_chunks, None, None),
+            Err(StorageError::ManifestExists { .. })
+        ));
+
+        let mut invalid_path = single_file_plan(payload).expect("plan");
+        invalid_path.files[0].path = vec!["..".to_owned()];
+        assert!(matches!(
+            backend.attach_plan_metadata(&manifest_id, &invalid_path, None, None),
+            Err(StorageError::InvalidFileLayout { .. })
+        ));
+
+        let mut updated_plan = single_file_plan(payload).expect("plan");
+        updated_plan.files[0].path = vec!["index.html".to_owned()];
+        let metadata_path = backend
+            .manifests_dir
+            .join(&manifest_id)
+            .join(METADATA_FILE_NAME);
+        fs::remove_file(&metadata_path).expect("remove metadata file");
+        fs::create_dir(&metadata_path).expect("block metadata replacement");
+        assert!(matches!(
+            backend.attach_plan_metadata(&manifest_id, &updated_plan, None, None),
+            Err(StorageError::Io(_))
+        ));
+
+        let after = backend.manifest(&manifest_id).expect("stored manifest");
+        assert_eq!(after.files(), before.files());
+        assert_eq!(after.chunk_files, before.chunk_files);
     }
 
     #[test]
@@ -2591,6 +4245,7 @@ mod tests {
             vec![sorafs_manifest::retention::RetentionSourceKindV1::DealEnd]
         );
 
+        drop(backend);
         let reloaded = StorageBackend::new(temp_config(&temp_dir)).expect("reload");
         let stored_reloaded = reloaded.manifest(&manifest_id).expect("stored manifest");
         assert_eq!(stored_reloaded.retention_epoch(), 150);
@@ -2640,6 +4295,7 @@ mod tests {
         let updated = backend.manifest(&manifest_id).expect("stored");
         assert!(updated.last_access() > initial_access);
 
+        drop(backend);
         let reloaded = StorageBackend::new(temp_config(&temp_dir)).expect("reload");
         let stored_reloaded = reloaded.manifest(&manifest_id).expect("stored");
         assert_eq!(stored_reloaded.last_access(), updated.last_access());
@@ -2684,8 +4340,106 @@ mod tests {
         assert_eq!(backend.total_bytes(), 0);
         assert!(!manifest_dir.exists());
 
+        drop(backend);
         let reloaded = StorageBackend::new(temp_config(&temp_dir)).expect("reload");
         assert_eq!(reloaded.manifest_count(), 0);
+    }
+
+    #[test]
+    fn eviction_waits_for_active_manifest_io_lease() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = b"active readers must not race eviction";
+        let (_config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xD1);
+        let backend = Arc::new(backend);
+        let stored = backend.manifest(&manifest_id).expect("stored manifest");
+        let read_lease = stored
+            .io_lock
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (done_tx, done_rx) = mpsc::channel();
+        let worker_backend = Arc::clone(&backend);
+        let worker_manifest_id = manifest_id.clone();
+        let worker = thread::spawn(move || {
+            let result = worker_backend.evict_manifest(&worker_manifest_id);
+            done_tx.send(result).expect("send eviction result");
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while backend.state.try_read().is_ok() {
+            assert!(
+                Instant::now() < deadline,
+                "eviction worker did not reach the manifest I/O lease"
+            );
+            thread::yield_now();
+        }
+        assert!(
+            matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+            "eviction must remain blocked while a reader holds the manifest lease"
+        );
+
+        drop(read_lease);
+        assert_eq!(
+            done_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("eviction must finish after releasing the reader")
+                .expect("eviction succeeds"),
+            payload.len() as u64
+        );
+        worker.join().expect("eviction worker joins");
+        assert!(backend.manifest(&manifest_id).is_none());
+    }
+
+    #[test]
+    fn access_metadata_update_cannot_resurrect_evicted_manifest() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = b"access metadata must share the manifest lifecycle lease";
+        let (_config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xD2);
+        let manifest_dir = backend.manifests_dir.join(&manifest_id);
+        let backend = Arc::new(backend);
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let access_backend = Arc::clone(&backend);
+        let access_manifest_id = manifest_id.clone();
+        let access = thread::spawn(move || {
+            access_backend.with_manifest_for_access(&access_manifest_id, |_| {
+                entered_tx.send(()).expect("announce active access");
+                release_rx.recv().expect("release active access");
+                Ok(())
+            })
+        });
+        entered_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("access operation enters protected section");
+
+        let (evicted_tx, evicted_rx) = mpsc::channel();
+        let evict_backend = Arc::clone(&backend);
+        let evict_manifest_id = manifest_id.clone();
+        let eviction = thread::spawn(move || {
+            evicted_tx
+                .send(evict_backend.evict_manifest(&evict_manifest_id))
+                .expect("send eviction result");
+        });
+        assert!(
+            matches!(
+                evicted_rx.recv_timeout(Duration::from_millis(50)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ),
+            "eviction must wait for access metadata and payload work"
+        );
+
+        release_tx.send(()).expect("release access operation");
+        access
+            .join()
+            .expect("access worker joins")
+            .expect("access succeeds");
+        evicted_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("eviction completes")
+            .expect("eviction succeeds");
+        eviction.join().expect("eviction worker joins");
+
+        assert!(!manifest_dir.exists());
+        assert!(backend.manifest(&manifest_id).is_none());
     }
 
     #[test]
@@ -2877,6 +4631,79 @@ mod tests {
     }
 
     #[test]
+    fn same_length_chunk_corruption_fails_all_read_paths() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
+        let payload = b"immutable chunks must be verified before every read";
+        let plan = single_file_plan(payload).expect("plan");
+        let manifest = test_manifest(payload, &plan, 0xB1);
+        let mut reader = payload.as_slice();
+        let manifest_id = backend
+            .ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest");
+        let chunk = backend
+            .manifest(&manifest_id)
+            .and_then(|stored| stored.chunk(0).cloned())
+            .expect("stored chunk");
+
+        let mut corrupted = payload.to_vec();
+        corrupted[0] ^= 0x80;
+        fs::write(&chunk.path, &corrupted).expect("replace chunk with same-length corruption");
+
+        assert!(matches!(
+            backend.read_chunk(&manifest_id, &chunk.digest),
+            Err(StorageError::ChunkStore(ChunkStoreError::DigestMismatch {
+                chunk_index: 0
+            }))
+        ));
+        assert!(matches!(
+            backend.read_payload_range(&manifest_id, 0, payload.len()),
+            Err(StorageError::ChunkStore(ChunkStoreError::DigestMismatch {
+                chunk_index: 0
+            }))
+        ));
+        assert!(matches!(
+            backend.sample_por(&manifest_id, 1, 42),
+            Err(StorageError::ChunkStore(ChunkStoreError::DigestMismatch {
+                chunk_index: 0
+            }))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn chunk_reads_reject_symlink_replacement() {
+        use std::os::unix::fs::symlink;
+
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
+        let payload = b"symlink replacement must fail closed";
+        let plan = single_file_plan(payload).expect("plan");
+        let manifest = test_manifest(payload, &plan, 0xB2);
+        let mut reader = payload.as_slice();
+        let manifest_id = backend
+            .ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest");
+        let chunk = backend
+            .manifest(&manifest_id)
+            .and_then(|stored| stored.chunk(0).cloned())
+            .expect("stored chunk");
+        let replacement = canonical_temp_path(&temp_dir).join("replacement.bin");
+        fs::write(&replacement, payload).expect("write replacement");
+        fs::remove_file(&chunk.path).expect("remove stored chunk");
+        symlink(&replacement, &chunk.path).expect("install symlink");
+
+        assert!(matches!(
+            backend.read_chunk(&manifest_id, &chunk.digest),
+            Err(StorageError::ChunkStore(ChunkStoreError::Io(_)))
+        ));
+        assert!(matches!(
+            backend.read_payload_range(&manifest_id, 0, payload.len()),
+            Err(StorageError::ChunkStore(ChunkStoreError::Io(_)))
+        ));
+    }
+
+    #[test]
     fn restart_rehydrates_manifest_index() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let cfg = temp_config(&temp_dir);
@@ -2917,6 +4744,178 @@ mod tests {
     }
 
     #[test]
+    fn restart_rejects_same_length_chunk_corruption() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = b"restart integrity verification";
+        let (config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xC1);
+        let chunk_path = backend
+            .manifest(&manifest_id)
+            .and_then(|stored| stored.chunk(0).map(|chunk| chunk.path.clone()))
+            .expect("chunk path");
+        drop(backend);
+        let mut corrupted = payload.to_vec();
+        corrupted[0] ^= 0x01;
+        fs::write(&chunk_path, corrupted).expect("corrupt chunk");
+
+        assert!(matches!(
+            StorageBackend::new(config),
+            Err(StorageError::CorruptStorageState { .. })
+        ));
+    }
+
+    #[test]
+    fn restart_rejects_unsupported_index_version_and_duplicate_ids() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = b"index validation payload";
+        let (config, backend, _) = ingest_test_payload(&temp_dir, payload, 0xC2);
+        let index_path = backend.index_path.clone();
+        drop(backend);
+        let bytes = fs::read(&index_path).expect("read index");
+        let mut index: ManifestIndex = norito::decode_from_bytes(&bytes).expect("decode index");
+        index.version = INDEX_VERSION_V1 + 1;
+        fs::write(&index_path, norito::to_bytes(&index).expect("encode index"))
+            .expect("write unsupported index");
+        assert!(matches!(
+            StorageBackend::new(config.clone()),
+            Err(StorageError::UnsupportedIndexVersion { .. })
+        ));
+
+        index.version = INDEX_VERSION_V1;
+        index.entries.push(index.entries[0].clone());
+        fs::write(
+            &index_path,
+            norito::to_bytes(&index).expect("encode duplicate index"),
+        )
+        .expect("write duplicate index");
+        assert!(matches!(
+            StorageBackend::new(config),
+            Err(StorageError::CorruptStorageState { .. })
+        ));
+    }
+
+    #[test]
+    fn restart_rejects_manifest_id_path_traversal() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = b"manifest id containment";
+        let (config, backend, _) = ingest_test_payload(&temp_dir, payload, 0xC3);
+        let index_path = backend.index_path.clone();
+        drop(backend);
+        let bytes = fs::read(&index_path).expect("read index");
+        let mut index: ManifestIndex = norito::decode_from_bytes(&bytes).expect("decode index");
+        index.entries[0].manifest_id = "../outside".to_string();
+        fs::write(&index_path, norito::to_bytes(&index).expect("encode index"))
+            .expect("write traversing index");
+
+        assert!(matches!(
+            StorageBackend::new(config),
+            Err(StorageError::CorruptStorageState { .. })
+        ));
+    }
+
+    #[test]
+    fn restart_rejects_chunk_filename_traversal() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = b"chunk metadata containment";
+        let (config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xC4);
+        let metadata_path = backend
+            .manifests_dir
+            .join(manifest_id)
+            .join(METADATA_FILE_NAME);
+        drop(backend);
+        let bytes = fs::read(&metadata_path).expect("read metadata");
+        let mut record: StoredManifestRecord =
+            norito::decode_from_bytes(&bytes).expect("decode metadata");
+        record.chunk_files[0].file_name = "../../outside.bin".to_string();
+        fs::write(
+            &metadata_path,
+            norito::to_bytes(&record).expect("encode metadata"),
+        )
+        .expect("write traversing metadata");
+
+        assert!(matches!(
+            StorageBackend::new(config),
+            Err(StorageError::CorruptStorageState { .. })
+        ));
+    }
+
+    #[test]
+    fn restart_rejects_nonportable_logical_file_paths() {
+        for component in [".", "..", "nested/name", "windows\\name", "line\nbreak"] {
+            let temp_dir = tempfile::tempdir().expect("create temp dir");
+            let payload = b"logical path containment";
+            let (config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xC6);
+            let metadata_path = backend
+                .manifests_dir
+                .join(manifest_id)
+                .join(METADATA_FILE_NAME);
+            drop(backend);
+            let bytes = fs::read(&metadata_path).expect("read metadata");
+            let mut record: StoredManifestRecord =
+                norito::decode_from_bytes(&bytes).expect("decode metadata");
+            record.files[0].path = vec![component.to_string()];
+            fs::write(
+                &metadata_path,
+                norito::to_bytes(&record).expect("encode metadata"),
+            )
+            .expect("write invalid metadata");
+
+            assert!(
+                matches!(
+                    StorageBackend::new(config),
+                    Err(StorageError::CorruptStorageState { .. })
+                ),
+                "component {component:?} must be rejected"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restart_rejects_symlinked_manifest_artifacts() {
+        use std::os::unix::fs::symlink;
+
+        for artifact_name in [MANIFEST_FILE_NAME, METADATA_FILE_NAME] {
+            let temp_dir = tempfile::tempdir().expect("create temp dir");
+            let payload = b"symlinked storage metadata";
+            let (config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xC7);
+            let artifact_path = backend.manifests_dir.join(manifest_id).join(artifact_name);
+            let replacement_path = canonical_temp_path(&temp_dir).join(artifact_name);
+            fs::copy(&artifact_path, &replacement_path).expect("copy artifact");
+            drop(backend);
+            fs::remove_file(&artifact_path).expect("remove artifact");
+            symlink(&replacement_path, &artifact_path).expect("install symlink");
+
+            assert!(
+                StorageBackend::new(config).is_err(),
+                "symlinked {artifact_name} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn restart_rejects_oversized_metadata_before_allocation() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = b"bounded metadata loading";
+        let (config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xC5);
+        let metadata_path = backend
+            .manifests_dir
+            .join(manifest_id)
+            .join(METADATA_FILE_NAME);
+        drop(backend);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&metadata_path)
+            .expect("open metadata")
+            .set_len(MAX_MANIFEST_METADATA_BYTES + 1)
+            .expect("extend metadata sparsely");
+
+        assert!(matches!(
+            StorageBackend::new(config),
+            Err(StorageError::CorruptStorageState { .. })
+        ));
+    }
+
+    #[test]
     fn write_atomic_uses_added_extension_and_cleans_up_temp_file() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let temp_path = canonical_temp_path(&temp_dir);
@@ -2936,6 +4935,64 @@ mod tests {
             !target_no_ext.with_added_extension(ATOMIC_EXT).exists(),
             "temporary file should be removed even when original path has no extension"
         );
+    }
+
+    #[test]
+    fn write_atomic_reports_post_rename_directory_sync_failure() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let target = canonical_temp_path(&temp_dir).join("index.norito");
+        fs::write(&target, b"old").expect("seed target");
+
+        let error = write_atomic_with_directory_sync(&target, b"new", |_| {
+            Err(io::Error::other("injected directory sync failure"))
+        })
+        .expect_err("post-rename sync failure must be classified");
+
+        assert!(matches!(
+            error,
+            AtomicWriteError::DurabilityUncertain { .. }
+        ));
+        assert_eq!(
+            fs::read(&target).expect("read committed replacement"),
+            b"new",
+            "rename committed even though directory durability is uncertain"
+        );
+        let leftovers = fs::read_dir(target.parent().expect("target parent"))
+            .expect("read target parent")
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("index.norito.tmp.")
+            })
+            .collect::<Vec<_>>();
+        assert!(leftovers.is_empty(), "temporary file must not remain");
+    }
+
+    #[test]
+    fn uncertain_commit_fail_stops_subsequent_storage_operations() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = b"fail-stop durability payload";
+        let (_config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xD3);
+        let uncertainty = AtomicWriteError::DurabilityUncertain {
+            path: backend.index_path.clone(),
+            source: io::Error::other("injected directory sync failure"),
+        };
+        backend.fail_stop_durability(&uncertainty);
+
+        assert!(matches!(
+            backend.read_payload_range(&manifest_id, 0, 1),
+            Err(StorageError::DurabilityPoisoned { .. })
+        ));
+
+        let plan = single_file_plan(payload).expect("plan");
+        let manifest = test_manifest(payload, &plan, 0xD4);
+        let mut reader = &payload[..];
+        assert!(matches!(
+            backend.ingest_manifest(&manifest, &plan, &mut reader),
+            Err(StorageError::DurabilityPoisoned { .. })
+        ));
     }
 
     #[test]

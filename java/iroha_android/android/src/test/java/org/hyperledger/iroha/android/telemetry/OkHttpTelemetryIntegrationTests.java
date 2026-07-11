@@ -4,6 +4,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import okhttp3.mockwebserver.MockResponse;
@@ -13,6 +14,7 @@ import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.HttpTransportExecutor;
 import org.hyperledger.iroha.android.client.okhttp.OkHttpTransportExecutorFactory;
 import org.hyperledger.iroha.android.client.okhttp.OkHttpWebSocketConnectorFactory;
+import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.client.stream.ToriiEventStream;
 import org.hyperledger.iroha.android.client.stream.ToriiEventStreamClient;
 import org.hyperledger.iroha.android.client.stream.ToriiEventStreamListener;
@@ -32,7 +34,7 @@ public final class OkHttpTelemetryIntegrationTests {
   private OkHttpTelemetryIntegrationTests() {}
 
   public static void main(final String[] args) throws Exception {
-    httpTelemetryViaOkHttp();
+    httpTelemetryForCanonicalGatewayOrigin();
     sseTelemetryViaOkHttp();
     webSocketTelemetryViaOkHttp();
     System.out.println("[IrohaAndroid] OkHttpTelemetryIntegrationTests passed.");
@@ -49,7 +51,7 @@ public final class OkHttpTelemetryIntegrationTests {
         .build();
   }
 
-  private static void httpTelemetryViaOkHttp() throws Exception {
+  private static void httpTelemetryForCanonicalGatewayOrigin() throws Exception {
     final TelemetryOptions options = telemetryOptions();
     final RecordingSink sink = new RecordingSink();
     final TelemetryObserver observer = new TelemetryObserver(options, sink);
@@ -62,19 +64,25 @@ public final class OkHttpTelemetryIntegrationTests {
                 GatewayProvider.builder()
                     .setName("alpha")
                     .setProviderIdHex("01".repeat(32))
+                    .setGatewayPublicKeyHex("02".repeat(32))
                     .setBaseUrl("https://provider.example")
                     .setStreamTokenBase64("c3RyZWFtLXRva2Vu")
                     .build())
             .build();
-    try (MockWebServer server = new MockWebServer()) {
-      server.enqueue(new MockResponse().setResponseCode(200).setBody("{\"status\":\"ok\"}"));
-      server.start();
-
-      final HttpTransportExecutor executor = OkHttpTransportExecutorFactory.createDefault();
+      final URI baseUri = URI.create("https://gateway.example/");
+      final HttpTransportExecutor executor =
+          ignored ->
+              CompletableFuture.completedFuture(
+                  new TransportResponse(
+                      200,
+                      "{\"status\":\"ok\"}"
+                          .getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                      "OK",
+                      java.util.Collections.emptyMap()));
       final SorafsGatewayClient client =
           SorafsGatewayClient.builder()
               .setExecutor(executor)
-              .setBaseUri(server.url("/").uri())
+              .setBaseUri(baseUri)
               .setTimeout(Duration.ofSeconds(2))
               .addObserver(observer)
               .build();
@@ -83,11 +91,6 @@ public final class OkHttpTelemetryIntegrationTests {
       assert new String(response.body(), java.nio.charset.StandardCharsets.UTF_8)
           .contains("\"status\":\"ok\"") : "gateway body should match";
 
-      final RecordedRequest recorded = server.takeRequest(1, TimeUnit.SECONDS);
-      assert recorded != null : "gateway request should reach server";
-      assert "/v1/sorafs/gateway/fetch".equals(recorded.getPath()) : "route mismatch";
-      assert "POST".equals(recorded.getMethod()) : "HTTP method mismatch";
-
       assert sink.requestCount.get() == 1 : "telemetry should capture request";
       assert sink.responseCount.get() == 1 : "telemetry should capture response";
       final TelemetryRecord record = sink.lastResponseRecord;
@@ -95,12 +98,11 @@ public final class OkHttpTelemetryIntegrationTests {
       final String authority =
           options
               .redaction()
-              .hashAuthority(server.getHostName() + ":" + server.getPort())
+              .hashAuthority(baseUri.getAuthority())
               .orElseThrow(() -> new IllegalStateException("authority hash missing"));
       assert authority.equals(record.authorityHash()) : "authority hash mismatch";
       assert "/v1/sorafs/gateway/fetch".equals(record.route()) : "route should include path";
       assert "POST".equals(record.method()) : "method should be POST";
-    }
   }
 
   private static void sseTelemetryViaOkHttp() throws Exception {

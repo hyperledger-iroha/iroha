@@ -68,7 +68,7 @@ CLIགི་ཁྱབ་ཚད་འདི་རྐྱངམ་ཅིག་ག�
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
-  --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
+  --provider name=gw-regulated,provider-id=001122...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64
 ```
 
 - ཡིག་ཚུགས་འདི་གིས་ སི་ཨེལ་ཨའི་ དར་ཆ་ཚུ་གཉིས་ཆ་ར་ལུ་བརྩི་མཐོང་འབདཝ་ཨིནམ་དང་ ལྡེ་མིག་=གནས་གོང་རིམ་སྒྲིག་ཡིག་སྣོད་ (`docs/examples/sorafs_direct_mode_smoke.conf` ལུ་བལྟ།)། མངོན་གསལ་འབད་མི་ ཟས་བཅུད་དང་ བྱིན་མི་ བརྡ་ཁྱབ་ཐོ་བཀོད་ཚུ་ བཀོལ་སྤྱོད་མ་འབད་བའི་ཧེ་མ་ བཟོ་བསྐྲུན་གནས་གོང་ཚུ་དང་གཅིག་ཁར་ མི་རློབས་བཏོན།

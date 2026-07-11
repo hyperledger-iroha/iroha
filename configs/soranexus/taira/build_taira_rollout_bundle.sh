@@ -99,6 +99,30 @@ sha256_file() {
   fi
 }
 
+validator_lock_path="${REPO_ROOT}/Cargo.lock"
+validator_lock_expected_sha="${IROHA_VALIDATOR_LOCK_SHA256:-}"
+validator_build_provenance="${IROHA_VALIDATOR_BUILD_PROVENANCE:-}"
+if [[ ! "$validator_lock_expected_sha" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "IROHA_VALIDATOR_LOCK_SHA256 must contain the reviewed 64-character checksum" >&2
+  echo "Use dpn-api-rust/ops/taira/build-validator-bundle.sh instead of invoking this builder directly." >&2
+  exit 1
+fi
+if [[ ! -f "$validator_lock_path" || -L "$validator_lock_path" ]]; then
+  echo "reviewed validator Cargo.lock is missing or not a regular file: $validator_lock_path" >&2
+  exit 1
+fi
+validator_lock_actual_sha="$(sha256_file "$validator_lock_path")"
+if [[ "$validator_lock_actual_sha" != "$validator_lock_expected_sha" ]]; then
+  echo "validator Cargo.lock checksum mismatch" >&2
+  echo "expected: $validator_lock_expected_sha" >&2
+  echo "actual:   $validator_lock_actual_sha" >&2
+  exit 1
+fi
+if [[ -z "$validator_build_provenance" || ! -f "$validator_build_provenance" || -L "$validator_build_provenance" ]]; then
+  echo "IROHA_VALIDATOR_BUILD_PROVENANCE must name the verified DPN build provenance file" >&2
+  exit 1
+fi
+
 case "$OUTPUT_DIR" in
   /*)
     ;;
@@ -118,11 +142,28 @@ if [[ -n "$git_status" && $ALLOW_DIRTY -ne 1 ]]; then
   exit 1
 fi
 
+python3 - "$validator_build_provenance" "$validator_lock_actual_sha" "$git_head" <<'PY'
+import json
+import sys
+
+path, expected_lock_sha, expected_head = sys.argv[1:]
+with open(path, encoding="utf-8") as stream:
+    payload = json.load(stream)
+if payload.get("schema_version") != 1:
+    raise SystemExit("validator build provenance has an unsupported schema")
+if payload.get("validator_lock_sha256") != expected_lock_sha:
+    raise SystemExit("validator build provenance lock checksum does not match Cargo.lock")
+if payload.get("iroha_git_head") != expected_head:
+    raise SystemExit("validator build provenance Git HEAD does not match the source checkout")
+if payload.get("iroha_worktree_clean") is not True:
+    raise SystemExit("validator build provenance does not attest a clean source checkout")
+PY
+
 if [[ $SKIP_LOCAL_REGRESSIONS -ne 1 ]]; then
   (
     cd "$REPO_ROOT"
-    cargo test -p iroha_core queue::router::tests::smart_contract_deploy_rule --lib
-    cargo test -p iroha_core contract_call_transaction_preserves_three_hop_transfer_authorities --lib
+    cargo test --locked -p iroha_core queue::router::tests::smart_contract_deploy_rule --lib
+    cargo test --locked -p iroha_core contract_call_transaction_preserves_three_hop_transfer_authorities --lib
   )
 fi
 
@@ -132,18 +173,19 @@ bundle_dir="${OUTPUT_DIR}/${bundle_name}"
 archive_path="${OUTPUT_DIR}/${bundle_name}.tar.gz"
 binary_dir="${REPO_ROOT}/target/${PROFILE}"
 
-mkdir -p "$bundle_dir/bin" "$bundle_dir/configs/soranexus" "$bundle_dir/scripts"
+mkdir -p "$bundle_dir/bin" "$bundle_dir/configs/soranexus" "$bundle_dir/scripts" "$bundle_dir/provenance"
 
 if [[ $SKIP_BUILD -ne 1 ]]; then
   core_build_args=(
     build
+    --locked
     -p irohad
     -p iroha_cli
     --bin irohad
     --bin iroha
     --features embedded-soracloud-runtime
   )
-  sorafs_build_args=(build -p sorafs_car --features cli --bin sorafs_manifest_stub --bin sorafs_tx_stdin_builder)
+  sorafs_build_args=(build --locked -p sorafs_car --features cli --bin sorafs_manifest_stub --bin sorafs_tx_stdin_builder)
   if [[ "$PROFILE" == "release" ]]; then
     core_build_args+=(--release)
     sorafs_build_args+=(--release)
@@ -168,6 +210,8 @@ cp -R "${REPO_ROOT}/configs/soranexus/taira" "${bundle_dir}/configs/soranexus/"
 cp "${REPO_ROOT}/scripts/render_taira_validator_bundle.py" "${bundle_dir}/scripts/"
 cp "${REPO_ROOT}/scripts/render_taira_edge_nginx_conf.py" "${bundle_dir}/scripts/"
 cp "${REPO_ROOT}/scripts/taira_faucet_canary.py" "${bundle_dir}/scripts/"
+cp "$validator_lock_path" "${bundle_dir}/provenance/Cargo.lock"
+cp "$validator_build_provenance" "${bundle_dir}/provenance/dpn-validator-build.provenance.json"
 chmod 755 "${bundle_dir}/configs/soranexus/taira/check_inrou_host_prereqs.sh"
 
 manifest_path="${bundle_dir}/rollout.manifest.json"
@@ -187,6 +231,7 @@ PROFILE_NAME="$PROFILE" \
 BUNDLE_NAME="$bundle_name" \
 REPO_ROOT="$REPO_ROOT" \
 SKIP_LOCAL_REGRESSIONS="$SKIP_LOCAL_REGRESSIONS" \
+VALIDATOR_LOCK_SHA256="$validator_lock_actual_sha" \
 python3 - <<'PY' >"$manifest_path"
 import json
 import os
@@ -199,6 +244,8 @@ payload = {
     "git_tree_clean": os.environ["GIT_TREE_CLEAN"] == "true",
     "git_status_lines": [line for line in status.splitlines() if line],
     "cargo_profile": os.environ["PROFILE_NAME"],
+    "cargo_locked": True,
+    "validator_lock_sha256": os.environ["VALIDATOR_LOCK_SHA256"],
     "irohad_features": [
         "embedded-soracloud-runtime",
     ],
@@ -212,12 +259,12 @@ payload = {
     "prebundle_checks": [
         {
             "name": "soraswap_smart_contract_deploy_router_regression",
-            "command": "cargo test -p iroha_core queue::router::tests::smart_contract_deploy_rule --lib",
+            "command": "cargo test --locked -p iroha_core queue::router::tests::smart_contract_deploy_rule --lib",
             "skipped": os.environ["SKIP_LOCAL_REGRESSIONS"] == "1",
         },
         {
             "name": "soraswap_three_hop_nested_transfer_canary",
-            "command": "cargo test -p iroha_core contract_call_transaction_preserves_three_hop_transfer_authorities --lib",
+            "command": "cargo test --locked -p iroha_core contract_call_transaction_preserves_three_hop_transfer_authorities --lib",
             "skipped": os.environ["SKIP_LOCAL_REGRESSIONS"] == "1",
         },
     ],
@@ -226,6 +273,8 @@ payload = {
         "scripts/render_taira_validator_bundle.py",
         "scripts/render_taira_edge_nginx_conf.py",
         "scripts/taira_faucet_canary.py",
+        "provenance/Cargo.lock",
+        "provenance/dpn-validator-build.provenance.json",
     ],
     "required_followup": [
         "install the native Inrou prerequisites reported by configs/soranexus/taira/check_inrou_host_prereqs.sh or run the CONFIG_PROFILE=taira container image",

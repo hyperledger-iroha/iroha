@@ -13,6 +13,7 @@ import {
   buildRegisterAccountInstruction,
   buildRegisterAssetDefinitionInstruction,
   buildGrantAccountPermissionInstruction,
+  buildSetAccountKeyValueInstruction,
   buildSetAssetDefinitionAliasInstruction,
   buildTransferAssetInstruction,
   buildTransferDomainInstruction,
@@ -897,6 +898,45 @@ test("buildGrantAccountPermissionInstruction defaults payload", () => {
     },
   });
   assert.deepEqual(encodeAndDecode(instruction), canonicalizeClone(instruction));
+});
+
+test("buildSetAccountKeyValueInstruction produces canonical Norito payload", () => {
+  const sourceTxHash = "ab".repeat(32);
+  const instruction = buildSetAccountKeyValueInstruction({
+    accountId: ACCOUNT_ID,
+    key: `pk_cbuae_settlement_${sourceTxHash}`,
+    value: {
+      protocol: "pk-cbuae-settlement",
+      version: 1,
+      source_tx_hash: sourceTxHash,
+    },
+  });
+  assert.deepEqual(instruction, {
+    SetKeyValue: {
+      Account: {
+        object: ACCOUNT_ID_CANONICAL,
+        key: `pk_cbuae_settlement_${sourceTxHash}`,
+        value: {
+          protocol: "pk-cbuae-settlement",
+          version: 1,
+          source_tx_hash: sourceTxHash,
+        },
+      },
+    },
+  });
+  assert.deepEqual(encodeAndDecode(instruction), canonicalizeClone(instruction));
+});
+
+baseTest("buildSetAccountKeyValueInstruction rejects non-JSON marker values", () => {
+  assert.throws(
+    () =>
+      buildSetAccountKeyValueInstruction({
+        accountId: ACCOUNT_ID,
+        key: "marker",
+        value: undefined,
+      }),
+    /value/i,
+  );
 });
 
 test("buildSetAssetDefinitionAliasInstruction supports clearing aliases", () => {

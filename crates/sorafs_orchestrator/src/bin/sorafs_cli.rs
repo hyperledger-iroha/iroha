@@ -151,10 +151,23 @@ fn parse_u16_arg(flag: &str, raw: &str, context: &str) -> Result<u16, String> {
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
 
+fn parse_i32_arg(flag: &str, raw: &str, context: &str) -> Result<i32, String> {
+    require_canonical_signed_decimal(flag, raw, context)?;
+    raw.parse::<i32>()
+        .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
+}
+
 fn parse_decimal_arg(flag: &str, raw: &str, context: &str) -> Result<Decimal, String> {
     require_canonical_decimal_token(flag, raw, context)?;
-    raw.parse::<Decimal>()
-        .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
+    let value = raw
+        .parse::<Decimal>()
+        .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))?;
+    if value.to_string() != raw {
+        return Err(format!(
+            "failed to parse `{flag}` for `{context}`: value must be a canonical decimal"
+        ));
+    }
+    Ok(value)
 }
 
 fn require_canonical_unsigned_decimal(flag: &str, raw: &str, context: &str) -> Result<(), String> {
@@ -170,8 +183,53 @@ fn require_canonical_unsigned_decimal(flag: &str, raw: &str, context: &str) -> R
     Ok(())
 }
 
+fn require_canonical_signed_decimal(flag: &str, raw: &str, context: &str) -> Result<(), String> {
+    if raw.is_empty() || raw.trim() != raw || raw.starts_with('+') {
+        return Err(format!(
+            "failed to parse `{flag}` for `{context}`: value must be a canonical signed decimal integer"
+        ));
+    }
+    let negative = raw.starts_with('-');
+    let digits = raw.strip_prefix('-').unwrap_or(raw).as_bytes();
+    if digits.is_empty()
+        || !digits.iter().all(u8::is_ascii_digit)
+        || (digits.len() > 1 && digits[0] == b'0')
+        || (negative && digits == b"0")
+    {
+        return Err(format!(
+            "failed to parse `{flag}` for `{context}`: value must be a canonical signed decimal integer"
+        ));
+    }
+    Ok(())
+}
+
 fn require_canonical_decimal_token(flag: &str, raw: &str, context: &str) -> Result<(), String> {
     if raw.is_empty() || raw.trim() != raw || raw.starts_with('+') {
+        return Err(format!(
+            "failed to parse `{flag}` for `{context}`: value must be a canonical decimal"
+        ));
+    }
+
+    let body = raw.strip_prefix('-').unwrap_or(raw);
+    let (integer, fractional) = match body.split_once('.') {
+        Some((integer, fractional)) => {
+            if body.matches('.').count() != 1 || fractional.is_empty() || fractional.ends_with('0')
+            {
+                return Err(format!(
+                    "failed to parse `{flag}` for `{context}`: value must be a canonical decimal"
+                ));
+            }
+            (integer, Some(fractional))
+        }
+        None => (body, None),
+    };
+
+    if integer.is_empty()
+        || !integer.as_bytes().iter().all(u8::is_ascii_digit)
+        || (integer.len() > 1 && integer.as_bytes()[0] == b'0')
+        || fractional.is_some_and(|digits| !digits.as_bytes().iter().all(u8::is_ascii_digit))
+        || (raw.starts_with('-') && integer == "0" && fractional.is_none())
+    {
         return Err(format!(
             "failed to parse `{flag}` for `{context}`: value must be a canonical decimal"
         ));
@@ -2049,40 +2107,48 @@ fn taikai_bundle(raw_args: Vec<String>) -> Result<(), String> {
             "--track-kind" => track_kind = Some(value.to_string()),
             "--codec" => codec = Some(value.to_string()),
             "--bitrate-kbps" => {
-                bitrate_kbps = Some(parse_u32_arg(
-                    "--bitrate-kbps",
-                    value,
-                    "sorafs_cli taikai bundle",
-                )?)
+                let parsed = parse_u32_arg("--bitrate-kbps", value, "sorafs_cli taikai bundle")?;
+                if parsed == 0 {
+                    return Err(
+                        "`--bitrate-kbps` for `sorafs_cli taikai bundle` must be greater than zero"
+                            .to_string(),
+                    );
+                }
+                bitrate_kbps = Some(parsed);
             }
             "--resolution" => resolution = Some(value.to_string()),
             "--audio-layout" => audio_layout = Some(value.to_string()),
             "--segment-sequence" => {
-                let parsed = value.trim().parse::<u64>().map_err(|err| {
-                    format!(
-                        "failed to parse `--segment-sequence` for `sorafs_cli taikai bundle`: {err}"
-                    )
-                })?;
-                segment_sequence = Some(parsed);
-            }
-            "--segment-start-pts" => {
-                let parsed = value.trim().parse::<u64>().map_err(|err| {
-                    format!("failed to parse `--segment-start-pts` for `sorafs_cli taikai bundle`: {err}")
-                })?;
-                segment_start_pts = Some(parsed);
-            }
-            "--segment-duration" => {
-                segment_duration = Some(parse_u32_arg(
-                    "--segment-duration",
+                segment_sequence = Some(parse_u64_arg(
+                    "--segment-sequence",
                     value,
                     "sorafs_cli taikai bundle",
-                )?)
+                )?);
+            }
+            "--segment-start-pts" => {
+                segment_start_pts = Some(parse_u64_arg(
+                    "--segment-start-pts",
+                    value,
+                    "sorafs_cli taikai bundle",
+                )?);
+            }
+            "--segment-duration" => {
+                let parsed =
+                    parse_u32_arg("--segment-duration", value, "sorafs_cli taikai bundle")?;
+                if parsed == 0 {
+                    return Err(
+                        "`--segment-duration` for `sorafs_cli taikai bundle` must be greater than zero"
+                            .to_string(),
+                    );
+                }
+                segment_duration = Some(parsed);
             }
             "--wallclock-unix-ms" => {
-                let parsed = value.trim().parse::<u64>().map_err(|err| {
-                    format!("failed to parse `--wallclock-unix-ms` for `sorafs_cli taikai bundle`: {err}")
-                })?;
-                wallclock_unix_ms = Some(parsed);
+                wallclock_unix_ms = Some(parse_u64_arg(
+                    "--wallclock-unix-ms",
+                    value,
+                    "sorafs_cli taikai bundle",
+                )?);
             }
             "--manifest-hash" => manifest_hash_hex = Some(value.to_string()),
             "--storage-ticket" => storage_ticket_hex = Some(value.to_string()),
@@ -2094,10 +2160,11 @@ fn taikai_bundle(raw_args: Vec<String>) -> Result<(), String> {
                 )?)
             }
             "--live-edge-drift-ms" => {
-                let parsed = value.trim().parse::<i32>().map_err(|err| {
-                    format!("failed to parse `--live-edge-drift-ms` for `sorafs_cli taikai bundle`: {err}")
-                })?;
-                live_edge_drift_ms = Some(parsed);
+                live_edge_drift_ms = Some(parse_i32_arg(
+                    "--live-edge-drift-ms",
+                    value,
+                    "sorafs_cli taikai bundle",
+                )?);
             }
             "--ingest-node-id" => ingest_node_id = Some(value.to_string()),
             "--metadata-json" => metadata_json = Some(PathBuf::from(value)),
@@ -2278,7 +2345,7 @@ struct TaikaiBundleInputs {
     ingest_node_id: Option<String>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum TaikaiCliTrackKind {
     Video,
     Audio,
@@ -2296,12 +2363,15 @@ impl TaikaiCliTrackKind {
 }
 
 fn parse_taikai_track_kind(value: &str) -> Result<TaikaiCliTrackKind, String> {
-    match value.trim().to_ascii_lowercase().as_str() {
+    match value {
         "video" => Ok(TaikaiCliTrackKind::Video),
         "audio" => Ok(TaikaiCliTrackKind::Audio),
         "data" => Ok(TaikaiCliTrackKind::Data),
-        other => Err(format!(
+        other if other.trim().to_ascii_lowercase() == other => Err(format!(
             "invalid `--track-kind` value `{other}`; expected video|audio|data"
+        )),
+        other => Err(format!(
+            "`--track-kind` value `{other}` must be canonical lowercase video|audio|data"
         )),
     }
 }
@@ -2337,17 +2407,45 @@ fn build_taikai_track_metadata(
 }
 
 fn parse_blob_digest_field(value: &str, flag: &str) -> Result<BlobDigest, String> {
-    let trimmed = value.trim_start_matches("0x");
-    let digest = parse_digest_hex(trimmed)
+    let digest = parse_taikai_digest_hex(value, flag)
         .map_err(|err| format!("invalid `{flag}` value `{value}`: {err}"))?;
     Ok(BlobDigest::new(digest))
 }
 
 fn parse_storage_ticket_field(value: &str, flag: &str) -> Result<StorageTicketId, String> {
-    let trimmed = value.trim_start_matches("0x");
-    let bytes = parse_digest_hex(trimmed)
+    let bytes = parse_taikai_digest_hex(value, flag)
         .map_err(|err| format!("invalid `{flag}` value `{value}`: {err}"))?;
     Ok(StorageTicketId::new(bytes))
+}
+
+fn parse_taikai_digest_hex(value: &str, flag: &str) -> Result<[u8; 32], String> {
+    if value.is_empty() {
+        return Err(format!("`{flag}` must not be empty"));
+    }
+    if value.as_bytes().iter().any(u8::is_ascii_whitespace) {
+        return Err(format!("`{flag}` must not contain ASCII whitespace"));
+    }
+    if value.starts_with("0x") || value.starts_with("0X") {
+        return Err(format!("`{flag}` must not use a hex prefix"));
+    }
+    if value.len() != 64 {
+        return Err(format!(
+            "`{flag}` must contain exactly 64 lowercase hex characters"
+        ));
+    }
+    if !value
+        .chars()
+        .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+    {
+        return Err(format!(
+            "`{flag}` must contain only lowercase hex characters"
+        ));
+    }
+    let digest = parse_digest_hex(value)?;
+    if digest.iter().all(|&byte| byte == 0) {
+        return Err(format!("`{flag}` must not be all zero"));
+    }
+    Ok(digest)
 }
 
 fn render_taikai_summary_value(inputs: &TaikaiBundleInputs, summary: &BundleSummary) -> Value {
@@ -3301,7 +3399,7 @@ fn usage() -> String {
   sorafs_cli manifest proposal --manifest=PATH --submitted-epoch=EPOCH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --proposal-out=PATH [--successor-of=HEX] [--alias-hint=TEXT]
   sorafs_cli storage prepare --manifest=PATH --payload=PATH --payload-out=PATH --files-out=PATH [--summary-out=PATH]
   sorafs_cli storage pin --manifest=PATH --payload=PATH --torii-url=URL [--summary-out=PATH] [--response-out=PATH]
-  sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [...]
+  sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...]
   sorafs_cli proof stream --manifest=PATH (--torii-url=URL | --gateway-url=URL | --endpoint=URL) (--provider-id-hex=HEX32 | --provider-id=ID) [--proof-kind=por|pdp|potr] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX] [--stream-token=TOKEN] [--bearer-token-env=VAR] [--por-root-hex=HEX32] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false] [--max-failures=N] [--max-verification-failures=N]
   sorafs_cli proof verify --manifest=PATH --car=PATH [--chunk-plan=PATH] [--summary-out=PATH]
   sorafs_cli reputation publish --torii-url=URL --snapshot=PATH [--summary-out=PATH]
@@ -3327,7 +3425,7 @@ fn usage() -> String {
   sorafs_cli moderation committee-serve --manifest=PATH [--format=json|norito] --quorum=N [--listen=HOST:PORT] [--max-body-bytes=N]
   sorafs_cli moderation committee-bundle --manifest=PATH [--format=json|norito] --quorum=N --bundle-out=DIR [--listen=HOST:PORT] [--max-body-bytes=N] [--binary=PATH] [--service-name=NAME] [--service-user=USER] [--service-group=GROUP]
   sorafs_cli moderation committee-canary --manifest=PATH [--format=json|norito] --committee-url=URL --quorum=N --result=PATH [--result=PATH...] [--checked-at=UNIX_SECS] [--notes=TEXT] [--timeout-ms=N] [--json-out=PATH]
-  sorafs_cli moderation honey-audit --manifest-id=HEX --honey=HEX [--honey=HEX...] --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [...] [--chunker-handle=HANDLE] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] [--require-proof] [--json-out=PATH] [--markdown-out=PATH]
+  sorafs_cli moderation honey-audit --manifest-id=HEX --honey=HEX [--honey=HEX...] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...] [--chunker-handle=HANDLE] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] [--require-proof] [--json-out=PATH] [--markdown-out=PATH]
   sorafs_cli appeal quote --class=content|access|fraud|other [--backlog=N] [--evidence-mb=N] [--urgency=normal|high] [--panel-size=N] [--format=table|json] [--config=PATH|-]
   sorafs_cli governance dag list --root=DIR [--format=table|json] [--summary-out=PATH]
   sorafs_cli governance dag show --node=PATH [--format=table|json] [--summary-out=PATH]
@@ -3356,7 +3454,7 @@ fn reputation_usage() -> String {
 
 fn fetch_usage() -> String {
     "Usage:
-  sorafs_cli fetch --plan=PATH --manifest-id=HEX --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [additional --provider entries...] [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--local-proxy-manifest-out=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64]"
+  sorafs_cli fetch --plan=PATH --manifest-id=HEX --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [additional --provider entries...] [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--local-proxy-manifest-out=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64]"
         .to_string()
 }
 
@@ -3627,7 +3725,7 @@ fn moderation_usage() -> String {
   sorafs_cli moderation committee-serve --manifest=PATH [--format=json|norito] --quorum=N [--listen=HOST:PORT] [--max-body-bytes=N]
   sorafs_cli moderation committee-bundle --manifest=PATH [--format=json|norito] --quorum=N --bundle-out=DIR [--listen=HOST:PORT] [--max-body-bytes=N] [--binary=PATH] [--service-name=NAME] [--service-user=USER] [--service-group=GROUP]
   sorafs_cli moderation committee-canary --manifest=PATH [--format=json|norito] --committee-url=URL --quorum=N --result=PATH [--result=PATH...] [--checked-at=UNIX_SECS] [--notes=TEXT] [--timeout-ms=N] [--json-out=PATH]
-  sorafs_cli moderation honey-audit --manifest-id=HEX --honey=HEX [--honey=HEX...] --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [...] [--chunker-handle=HANDLE] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] [--require-proof] [--json-out=PATH] [--markdown-out=PATH]
+  sorafs_cli moderation honey-audit --manifest-id=HEX --honey=HEX [--honey=HEX...] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...] [--chunker-handle=HANDLE] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] [--require-proof] [--json-out=PATH] [--markdown-out=PATH]
 
 Validates governance-signed AI moderation reproducibility manifests and adversarial corpus registries before gateways adopt them. Use `registry-serve` to run a persistent standalone model-registry service, `run-local` to produce deterministic local screening-result JSON for Torii admission, `runner-serve` to expose the same locked-manifest deterministic runner over local HTTP, `runner-grpc-serve` to expose the production unary gRPC runner service, `runner-bundle` to generate supervised deployment artifacts for that runner, `runner-canary` to capture payload-free rollout evidence from a deployed runner, `committee-run` to aggregate payload-free runner results under a quorum, `committee-serve` to expose that aggregation as a locked-manifest service, `committee-bundle` and `committee-canary` to package and verify that committee service, and `honey-audit` to probe gateways with denylisted digests and emit JSON/Markdown evidence for policy enforcement."
         .to_string()
@@ -3918,6 +4016,7 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
         .map(|spec| GatewayProviderInput {
             name: spec.name.clone(),
             provider_id_hex: spec.provider_id_hex.clone(),
+            gateway_public_key_hex: spec.gateway_public_key_hex.clone(),
             base_url: spec.base_url.clone(),
             stream_token_b64: spec.stream_token_b64.clone(),
             privacy_events_url: spec.privacy_events_url.clone(),
@@ -9026,7 +9125,7 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
             if let Some(spec) = rest.strip_prefix('=') {
                 provider_specs.push(parse_gateway_provider_spec(spec)?);
             } else {
-                return Err("expected `--provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64`".to_string());
+                return Err("expected `--provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64`".to_string());
             }
         } else {
             return Err(moderation_usage());
@@ -9083,6 +9182,7 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
         .map(|spec| GatewayProviderInput {
             name: spec.name.clone(),
             provider_id_hex: spec.provider_id_hex.clone(),
+            gateway_public_key_hex: spec.gateway_public_key_hex.clone(),
             base_url: spec.base_url.clone(),
             stream_token_b64: spec.stream_token_b64.clone(),
             privacy_events_url: spec.privacy_events_url.clone(),
@@ -11600,6 +11700,7 @@ enum InputSummary {
 struct GatewayProviderSpec {
     name: String,
     provider_id_hex: String,
+    gateway_public_key_hex: String,
     base_url: String,
     stream_token_b64: String,
     privacy_events_url: Option<String>,
@@ -17779,10 +17880,11 @@ fn manifest_sign(raw_args: Vec<String>) -> Result<(), String> {
             }
             "--chunk-digest-sha3" => chunk_digest_hex_arg = Some(value.to_string()),
             "--issued-at" => {
-                let parsed: u64 = value
-                    .parse()
-                    .map_err(|err| format!("invalid `--issued-at` value: {err}"))?;
-                issued_at_unix = Some(parsed);
+                issued_at_unix = Some(parse_u64_arg(
+                    "--issued-at",
+                    value,
+                    "sorafs_cli manifest sign",
+                )?);
             }
             _ => {
                 return Err(format!(
@@ -17824,9 +17926,9 @@ fn manifest_sign(raw_args: Vec<String>) -> Result<(), String> {
         true,
         "sorafs_cli manifest sign",
     )?;
-    let chunk_digest_bytes = chunk_digest_resolution
-        .digest
-        .expect("chunk digest required when `require_digest` is true");
+    let chunk_digest_bytes = chunk_digest_resolution.digest.ok_or_else(|| {
+        "missing chunk digest for sorafs_cli manifest sign after digest resolution".to_string()
+    })?;
     let chunk_digest_hex = chunk_digest_resolution
         .hex
         .unwrap_or_else(|| hex_encode(chunk_digest_bytes));
@@ -17857,12 +17959,7 @@ fn manifest_sign(raw_args: Vec<String>) -> Result<(), String> {
         .and_then(|key| key.try_to_prefixed_string())
         .map_err(|err| format!("failed to format public key multihash: {err}"))?;
 
-    let issued_at = issued_at_unix.unwrap_or_else(|| {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock before UNIX_EPOCH")
-            .as_secs()
-    });
+    let issued_at = manifest_sign_issued_at(issued_at_unix, SystemTime::now())?;
 
     let mut bundle = Map::new();
     bundle.insert(
@@ -17991,6 +18088,18 @@ fn manifest_sign(raw_args: Vec<String>) -> Result<(), String> {
     println!("{summary_rendered}");
 
     Ok(())
+}
+
+fn manifest_sign_issued_at(issued_at_unix: Option<u64>, now: SystemTime) -> Result<u64, String> {
+    match issued_at_unix {
+        Some(value) => Ok(value),
+        None => now
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .map_err(|_| {
+                "system clock is before UNIX_EPOCH; refusing to sign SoraFS manifest".to_string()
+            }),
+    }
 }
 
 fn checked_manifest_ed25519_signature_from_bytes(
@@ -18822,6 +18931,212 @@ mod tests {
 
     fn fixture_account(seed: u8) -> AccountId {
         AccountId::new(fixture_keypair(seed).public_key().clone())
+    }
+
+    #[test]
+    fn numeric_arg_parsers_reject_noncanonical_unsigned_tokens() {
+        for value in ["", " 1", "1 ", "+1", "01", "1_000", "-1"] {
+            let err = parse_u64_arg("--timeout-ms", value, "sorafs_cli moderation runner-canary")
+                .expect_err("noncanonical u64 token must fail");
+            assert!(
+                err.contains("canonical unsigned decimal integer"),
+                "unexpected u64 error for {value:?}: {err}"
+            );
+        }
+
+        assert_eq!(
+            parse_u64_arg("--timeout-ms", "0", "sorafs_cli moderation runner-canary")
+                .expect("zero is a canonical unsigned token"),
+            0
+        );
+        assert_eq!(
+            parse_u32_arg("--backlog", "42", "sorafs_cli appeal quote").expect("canonical u32"),
+            42
+        );
+        assert_eq!(
+            parse_u16_arg(
+                "--authority-network-prefix",
+                "369",
+                "sorafs_cli manifest submit"
+            )
+            .expect("canonical u16"),
+            369
+        );
+    }
+
+    #[test]
+    fn signed_numeric_arg_parser_rejects_noncanonical_tokens() {
+        assert_eq!(
+            parse_i32_arg("--live-edge-drift-ms", "-17", "sorafs_cli taikai bundle")
+                .expect("canonical negative drift"),
+            -17
+        );
+        assert_eq!(
+            parse_i32_arg("--live-edge-drift-ms", "0", "sorafs_cli taikai bundle")
+                .expect("canonical zero drift"),
+            0
+        );
+
+        for value in ["", " 1", "1 ", "+1", "01", "-01", "-0", "1_000"] {
+            let err = parse_i32_arg("--live-edge-drift-ms", value, "sorafs_cli taikai bundle")
+                .expect_err("noncanonical i32 token must fail");
+            assert!(
+                err.contains("canonical signed decimal integer"),
+                "unexpected i32 error for {value:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn bounded_numeric_arg_parsers_still_reject_overflow() {
+        let err = parse_u16_arg(
+            "--authority-network-prefix",
+            "70000",
+            "sorafs_cli manifest submit",
+        )
+        .expect_err("overflowing u16 must fail");
+
+        assert!(
+            err.contains("number too large"),
+            "unexpected overflow error: {err}"
+        );
+    }
+
+    #[test]
+    fn taikai_digest_fields_reject_noncanonical_hex() {
+        let canonical = "33".repeat(32);
+        assert_eq!(
+            parse_taikai_digest_hex(&canonical, "--manifest-hash")
+                .expect("canonical taikai digest"),
+            [0x33; 32]
+        );
+
+        for (value, expected) in [
+            ("", "must not be empty"),
+            (
+                "0x3333333333333333333333333333333333333333333333333333333333333333",
+                "prefix",
+            ),
+            (
+                "333333333333333333333333333333333333333333333333333333333333333A",
+                "lowercase",
+            ),
+            (
+                "333333333333333333333333333333333333333333333333333333333333333 ",
+                "whitespace",
+            ),
+            ("3333", "exactly 64"),
+            (
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                "all zero",
+            ),
+        ] {
+            let err = parse_taikai_digest_hex(value, "--manifest-hash")
+                .expect_err("noncanonical taikai digest must fail");
+            assert!(
+                err.contains(expected),
+                "unexpected digest error for {value:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn taikai_track_kind_requires_canonical_lowercase() {
+        assert!(matches!(
+            parse_taikai_track_kind("video").expect("video kind"),
+            TaikaiCliTrackKind::Video
+        ));
+
+        for (value, expected) in [
+            ("Video", "canonical lowercase"),
+            (" video", "canonical lowercase"),
+            ("subtitle", "invalid `--track-kind`"),
+        ] {
+            let err = parse_taikai_track_kind(value).expect_err("noncanonical kind must fail");
+            assert!(
+                err.contains(expected),
+                "unexpected track kind error for {value:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_sign_rejects_noncanonical_issued_at_tokens() {
+        for value in ["", " 1", "1 ", "+1", "01", "1_000", "-1"] {
+            let err = manifest_sign(vec![format!("--issued-at={value}")])
+                .expect_err("noncanonical issued-at token must fail");
+            assert!(
+                err.contains("canonical unsigned decimal integer"),
+                "unexpected issued-at error for {value:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_sign_issued_at_rejects_pre_epoch_clock() {
+        let err = manifest_sign_issued_at(
+            None,
+            UNIX_EPOCH
+                .checked_sub(std::time::Duration::from_secs(1))
+                .expect("construct pre-epoch system time"),
+        )
+        .expect_err("pre-epoch clock must fail");
+        assert!(
+            err.contains("before UNIX_EPOCH"),
+            "unexpected clock error: {err}"
+        );
+
+        assert_eq!(
+            manifest_sign_issued_at(Some(1_700_000_000), UNIX_EPOCH)
+                .expect("explicit timestamp bypasses clock"),
+            1_700_000_000
+        );
+    }
+
+    #[test]
+    fn resolve_chunk_digest_reports_required_digest_without_panic() {
+        let err =
+            match resolve_chunk_digest(None, None, None, None, true, "sorafs_cli manifest sign") {
+                Ok(_) => panic!("missing required digest must fail"),
+                Err(err) => err,
+            };
+        assert!(
+            err.contains("missing chunk digest"),
+            "unexpected digest error: {err}"
+        );
+    }
+
+    #[test]
+    fn decimal_arg_parser_rejects_noncanonical_tokens() {
+        for value in [
+            "", " 1.25", "1.25 ", "+1.25", "01.25", "1.250", "1.0", "1.", ".25", "-0",
+        ] {
+            let err = parse_decimal_arg("deposit", value, CONTEXT_APPEAL_SETTLE)
+                .expect_err("noncanonical decimal token must fail");
+            assert!(
+                err.contains("canonical decimal"),
+                "unexpected decimal error for {value:?}: {err}"
+            );
+        }
+
+        assert_eq!(
+            parse_decimal_arg("deposit", "1.25", CONTEXT_APPEAL_SETTLE).expect("canonical decimal"),
+            Decimal::new(125, 2)
+        );
+        assert_eq!(
+            parse_decimal_arg("deposit", "0", CONTEXT_APPEAL_SETTLE).expect("canonical zero"),
+            Decimal::ZERO
+        );
+        assert_eq!(
+            parse_decimal_arg("deposit", "0.25", CONTEXT_APPEAL_SETTLE)
+                .expect("canonical fractional decimal"),
+            Decimal::new(25, 2)
+        );
+        assert_eq!(
+            parse_decimal_arg("deposit", "-1.25", CONTEXT_APPEAL_SETTLE)
+                .expect("canonical negative decimal remains a parser-level value"),
+            Decimal::new(-125, 2)
+        );
     }
 
     #[test]
@@ -19790,6 +20105,7 @@ fn qos_counts_value(priority: u64, standard: u64, bulk: u64) -> Value {
 fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, String> {
     let mut name: Option<String> = None;
     let mut provider_id: Option<String> = None;
+    let mut gateway_public_key: Option<String> = None;
     let mut base_url: Option<String> = None;
     let mut stream_token: Option<String> = None;
     let mut privacy_events_url: Option<String> = None;
@@ -19816,6 +20132,12 @@ fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, Strin
                 }
                 provider_id = Some(val.to_ascii_lowercase());
             }
+            "gateway-key" | "gateway_key" | "gateway-public-key" | "gateway_public_key" => {
+                if val.len() != 64 || !val.chars().all(|c| c.is_ascii_hexdigit()) {
+                    return Err("--provider gateway-key must be 32-byte hex".into());
+                }
+                gateway_public_key = Some(val.to_ascii_lowercase());
+            }
             "base-url" | "base_url" => {
                 if val.is_empty() {
                     return Err("--provider base-url must not be empty".into());
@@ -19841,6 +20163,8 @@ fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, Strin
     let name = name.ok_or_else(|| "--provider requires a `name=` entry".to_string())?;
     let provider_id_hex =
         provider_id.ok_or_else(|| "--provider requires a `provider-id=` entry".to_string())?;
+    let gateway_public_key_hex = gateway_public_key
+        .ok_or_else(|| "--provider requires a `gateway-key=` entry".to_string())?;
     let base_url = base_url.ok_or_else(|| "--provider requires a `base-url=` entry".to_string())?;
     let stream_token_b64 =
         stream_token.ok_or_else(|| "--provider requires a `stream-token=` entry".to_string())?;
@@ -19848,6 +20172,7 @@ fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, Strin
     Ok(GatewayProviderSpec {
         name,
         provider_id_hex,
+        gateway_public_key_hex,
         base_url,
         stream_token_b64,
         privacy_events_url,
@@ -19974,10 +20299,10 @@ fn render_report_markdown(report: &PorWeeklyReportV1) -> String {
         report.repairs_completed
     );
     if let Some(mean) = report.mean_latency_ms {
-        let _ = writeln!(&mut out, "- Mean latency: {mean:.0} ms");
+        let _ = writeln!(&mut out, "- Mean latency: {mean} ms");
     }
     if let Some(p95) = report.p95_latency_ms {
-        let _ = writeln!(&mut out, "- P95 latency: {p95:.0} ms");
+        let _ = writeln!(&mut out, "- P95 latency: {p95} ms");
     }
 
     if !report.top_offenders.is_empty() {
@@ -19992,7 +20317,8 @@ fn render_report_markdown(report: &PorWeeklyReportV1) -> String {
         );
         for provider in &report.top_offenders {
             let provider_id = hex_prefix(&provider.provider_id, 12);
-            let success_rate = provider.success_rate * 100.0;
+            let success_rate_whole = provider.success_rate_bps / 100;
+            let success_rate_fractional = provider.success_rate_bps % 100;
             let ticket = provider.ticket_id.as_deref().unwrap_or("-");
             let first_failure = provider
                 .first_failure_at
@@ -20004,13 +20330,14 @@ fn render_report_markdown(report: &PorWeeklyReportV1) -> String {
                 .unwrap_or_else(|| "-".to_string());
             let _ = writeln!(
                 &mut out,
-                "| {} | {} | {} | {} | {} | {:.2}% | {} | {} | {} | {} | {} |",
+                "| {} | {} | {} | {} | {} | {}.{:02}% | {} | {} | {} | {} | {} |",
                 provider_id,
                 provider.challenges,
                 provider.successes,
                 provider.failures,
                 provider.forced,
-                success_rate,
+                success_rate_whole,
+                success_rate_fractional,
                 provider.pending_repairs,
                 bool_label(provider.repair_dispatched),
                 ticket,

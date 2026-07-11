@@ -3,10 +3,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use blake3::hash as blake3_hash;
-use ed25519_dalek::{
-    PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature as DalekSignature, Signer, SigningKey, Verifier,
-    VerifyingKey,
-};
+use ed25519_dalek::{Signer, SigningKey};
 use sorafs_manifest::{
     AdvertEndpoint, AdvertSignature, AvailabilityTier, CapabilityTlv, CapabilityType, EndpointKind,
     EndpointMetadata, EndpointMetadataKey, MAX_ADVERT_TTL_SECS, PROVIDER_ADVERT_VERSION_V1,
@@ -412,11 +409,7 @@ fn make_signed_advert(
     body.validate()
         .expect("test vectors must build valid advert bodies");
 
-    let body_bytes =
-        norito::to_bytes(&body).expect("advert body must encode deterministically for signing");
-    let signature = signing_key.sign(&body_bytes);
-
-    ProviderAdvertV1 {
+    let mut advert = ProviderAdvertV1 {
         version: PROVIDER_ADVERT_VERSION_V1,
         issued_at: ISSUED_AT,
         expires_at: ISSUED_AT
@@ -426,11 +419,16 @@ fn make_signed_advert(
         signature: AdvertSignature {
             algorithm: SignatureAlgorithm::Ed25519,
             public_key: signing_key.verifying_key().to_bytes().to_vec(),
-            signature: signature.to_bytes().to_vec(),
+            signature: vec![0; 64],
         },
         signature_strict: true,
         allow_unknown_capabilities,
-    }
+    };
+    let payload = advert
+        .signature_payload_bytes()
+        .expect("advert envelope must encode deterministically for signing");
+    advert.signature.signature = signing_key.sign(&payload).to_bytes().to_vec();
+    advert
 }
 
 struct TestMesh {
@@ -556,8 +554,9 @@ impl TestNode {
         advert
             .validate_with_body(now)
             .map_err(|err| format!("validation failed: {err}"))?;
-        if advert.signature_strict {
-            verify_signature(advert)?;
+        verify_signature(advert)?;
+        if !advert.signature_strict {
+            return Err("provider advert disabled mandatory signature verification".to_owned());
         }
 
         let mut known_caps = Vec::new();
@@ -600,38 +599,5 @@ fn advert_fingerprint(advert: &ProviderAdvertV1) -> Result<[u8; 32], String> {
 }
 
 fn verify_signature(advert: &ProviderAdvertV1) -> Result<(), String> {
-    match advert.signature.algorithm {
-        SignatureAlgorithm::Ed25519 => {}
-        other => {
-            return Err(format!("unsupported signature algorithm: {other:?}"));
-        }
-    }
-
-    if advert.signature.public_key.len() != PUBLIC_KEY_LENGTH {
-        return Err(format!(
-            "unexpected public key length: {}",
-            advert.signature.public_key.len()
-        ));
-    }
-    if advert.signature.signature.len() != SIGNATURE_LENGTH {
-        return Err(format!(
-            "unexpected signature length: {}",
-            advert.signature.signature.len()
-        ));
-    }
-
-    let mut pk = [0u8; PUBLIC_KEY_LENGTH];
-    pk.copy_from_slice(&advert.signature.public_key);
-    let verifying_key =
-        VerifyingKey::from_bytes(&pk).map_err(|err| format!("invalid public key: {err}"))?;
-
-    let mut sig_bytes = [0u8; SIGNATURE_LENGTH];
-    sig_bytes.copy_from_slice(&advert.signature.signature);
-    let signature = DalekSignature::from_bytes(&sig_bytes);
-
-    let body_bytes =
-        norito::to_bytes(&advert.body).map_err(|err| format!("encode advert body: {err}"))?;
-    verifying_key
-        .verify(&body_bytes, &signature)
-        .map_err(|err| format!("signature verification failed: {err}"))
+    advert.verify_signature().map_err(|err| err.to_string())
 }

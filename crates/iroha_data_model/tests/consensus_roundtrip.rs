@@ -245,6 +245,12 @@ fn rng_consensus_genesis_params(rng: &mut DeterministicRng) -> ConsensusGenesisP
         epoch_length_blocks: rng.next_u64(),
         bls_domain: rng_ascii_string(rng, 24),
         npos,
+        protocol_version: rng.next_u32(),
+        round_timeout_ms: rng.next_u64(),
+        v2_context: Some(
+            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
+            ),
+        ),
     }
 }
 
@@ -954,6 +960,7 @@ fn rng_lane_relay_envelope(rng: &mut DeterministicRng) -> LaneRelayEnvelope {
     let settlement = LaneBlockCommitment {
         block_height: header.height().get(),
         lane_id: LaneId::new(rng.next_u32()),
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id: DataSpaceId::new(rng.next_u64()),
         tx_count: 1,
         total_local_micro: receipt.local_amount_micro,
@@ -1079,6 +1086,7 @@ fn rng_consensus_caps_status(rng: &mut DeterministicRng) -> SumeragiConsensusCap
         }
     };
     SumeragiConsensusCapsStatus {
+        nexus_policy_digest: rng.array32(),
         collectors_k: rng.next_u16(),
         redundant_send_r: rng.next_u8(),
         da_enabled: rng.next_bool(),
@@ -1390,8 +1398,8 @@ fn sumeragi_wire_status_roundtrip() {
     let relay = rng_lane_relay_envelope(&mut rng);
     let status = SumeragiStatusWire {
         canonical: SumeragiV1StatusWire::default(),
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
-        staged_mode_tag: Some("iroha2-consensus::npos-sumeragi@v1".to_string()),
+        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
+        staged_mode_tag: Some("iroha2-consensus::npos-sumeragi@v2".to_string()),
         staged_mode_activation_height: Some(42),
         mode_activation_lag_blocks: Some(2),
         mode_flip_kill_switch: true,
@@ -1402,6 +1410,7 @@ fn sumeragi_wire_status_roundtrip() {
         last_mode_flip_timestamp_ms: Some(123),
         last_mode_flip_error: None,
         consensus_caps: Some(SumeragiConsensusCapsStatus {
+            nexus_policy_digest: [0xA5; 32],
             collectors_k: 1,
             redundant_send_r: 1,
             da_enabled: true,
@@ -1954,8 +1963,14 @@ fn consensus_genesis_norito_roundtrip() {
         block_max_transactions: 512,
         da_enabled: true,
         epoch_length_blocks: 120,
-        bls_domain: "bls-iroha2:npos-sumeragi:v1".to_owned(),
+        bls_domain: "bls-iroha2:npos-sumeragi:v2".to_owned(),
         npos: Some(npos),
+        protocol_version: 2,
+        round_timeout_ms: 10_000,
+        v2_context: Some(
+            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
+            ),
+        ),
     };
     let without_npos = ConsensusGenesisParams {
         npos: None,
@@ -2454,6 +2469,7 @@ fn sample_lane_commitment_fixture() -> LaneBlockCommitment {
     LaneBlockCommitment {
         block_height: 8_642,
         lane_id: LaneId::new(1),
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id: DataSpaceId::new(7),
         tx_count: 1,
         total_local_micro: receipt.local_amount_micro,
@@ -2477,6 +2493,7 @@ fn sample_lane_commitment_fixture_without_metadata() -> LaneBlockCommitment {
     LaneBlockCommitment {
         block_height: 8_643,
         lane_id: LaneId::new(2),
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id: DataSpaceId::new(9),
         tx_count: 0,
         total_local_micro: 0,

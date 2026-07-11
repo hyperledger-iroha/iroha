@@ -1,18 +1,5 @@
 [
   {
-    "seed_label": "all_zero",
-    "seed_hex": "0000000000000000000000000000000000000000000000000000000000000000",
-    "seed_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-    "nullifier_key_hex": "982df44a1f2e7f1d914e3da70f745f56d7f1652ab2c82186277e09e454aab32a",
-    "nullifier_key_b64": "mC30Sh8ufx2RTj2nD3RfVtfxZSqyyCGGJ34J5FSqsyo=",
-    "incoming_view_key_hex": "4aef3f316cc4e294a8dde5dedb06207e5005d0acd4dca0f10e5ed1a814ff9896",
-    "incoming_view_key_b64": "Su8/MWzE4pSo3eXe2wYgflAF0KzU3KDxDl7RqBT/mJY=",
-    "outgoing_view_key_hex": "b7b2d192766f3603954b5e794ff83bd3bfec022e46bd924c1a1e0ff48a43c676",
-    "outgoing_view_key_b64": "t7LRknZvNgOVS155T/g707/sAi5GvZJMGh4P9IpDxnY=",
-    "full_view_key_hex": "45cff7ac6465b7a162de9e43fb8d5bd1bd1d2deb8818a088f7654b9081587006",
-    "full_view_key_b64": "Rc/3rGRlt6Fi3p5D+41b0b0dLeuIGKCI92VLkIFYcAY="
-  },
-  {
     "seed_label": "0x42_repeat",
     "seed_hex": "4242424242424242424242424242424242424242424242424242424242424242",
     "seed_b64": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",

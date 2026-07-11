@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import okhttp3.WebSocketListener;
 import okhttp3.mockwebserver.MockResponse;
@@ -19,6 +20,7 @@ import org.hyperledger.iroha.android.client.stream.ToriiEventStream;
 import org.hyperledger.iroha.android.client.stream.ToriiEventStreamClient;
 import org.hyperledger.iroha.android.client.stream.ToriiEventStreamListener;
 import org.hyperledger.iroha.android.client.stream.ToriiEventStreamOptions;
+import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.client.websocket.ToriiWebSocketClient;
 import org.hyperledger.iroha.android.client.websocket.ToriiWebSocketListener;
 import org.hyperledger.iroha.android.client.websocket.ToriiWebSocketOptions;
@@ -36,28 +38,37 @@ import org.junit.Test;
 public final class AndroidTransportTelemetryTests {
 
   @Test
-  public void sorafsFetchEmitsTelemetryWithDefaultExecutor() throws Exception {
+  public void sorafsFetchEmitsTelemetryForCanonicalHttpsOrigin() throws Exception {
     final TelemetryOptions telemetryOptions = telemetryOptions();
     final RecordingTelemetrySink sink = new RecordingTelemetrySink();
     final TelemetryObserver observer = new TelemetryObserver(telemetryOptions, sink);
 
-    try (MockWebServer server = new MockWebServer()) {
-      server.enqueue(new MockResponse().setResponseCode(200).setBody("{}"));
-      server.start();
-      final URI baseUri = server.url("/").uri();
+    final URI baseUri = URI.create("https://gateway.example/");
 
       final GatewayProvider provider =
           GatewayProvider.builder()
               .setName("provider-a")
               .setProviderIdHex("01".repeat(32))
-              .setBaseUrl("http://example.com")
+              .setGatewayPublicKeyHex("02".repeat(32))
+              .setBaseUrl("https://example.com/")
               .setStreamTokenBase64("c3R1Yg==")
               .build();
       final GatewayFetchRequest request =
           GatewayFetchRequest.builder().setManifestIdHex("ab".repeat(32)).addProvider(provider).build();
 
       final SorafsGatewayClient client =
-          SorafsGatewayClient.builder().setBaseUri(baseUri).addObserver(observer).build();
+          SorafsGatewayClient.builder()
+              .setBaseUri(baseUri)
+              .setExecutor(
+                  ignored ->
+                      CompletableFuture.completedFuture(
+                          new TransportResponse(
+                              200,
+                              "{}".getBytes(StandardCharsets.UTF_8),
+                              "OK",
+                              java.util.Collections.emptyMap())))
+              .addObserver(observer)
+              .build();
 
       client.fetch(request).get(2, TimeUnit.SECONDS);
 
@@ -70,7 +81,6 @@ public final class AndroidTransportTelemetryTests {
       assertEquals("POST", requestRecord.method());
       assertEquals(expectedHash, responseRecord.authorityHash());
       assertEquals(200, responseRecord.statusCode().orElseThrow());
-    }
   }
 
   @Test

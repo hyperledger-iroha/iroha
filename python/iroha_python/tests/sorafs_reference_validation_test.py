@@ -10,6 +10,7 @@ from iroha_python import (
     build_signed_orderbook_order_cancel,
     build_signed_orderbook_order_request,
     build_signed_orderbook_settlement_receipt,
+    derive_orderbook_order_id,
     sign_orderbook_payload,
     validate_orderbook_payload,
     validate_pdp_bundle,
@@ -112,9 +113,10 @@ def test_sign_orderbook_payload_rejects_non_signable_and_bad_keys() -> None:
 
 
 def test_field_level_orderbook_builders_emit_valid_signed_payloads() -> None:
+    order_id = derive_orderbook_order_id(_ORDERBOOK_OWNER_ACCOUNT, 7)
+    assert len(order_id) == 32
     order = build_signed_orderbook_order_request(
         {
-            "orderId": _fixed32(0x11),
             "side": "bid",
             "tier": "hot",
             "pricePerGibMicroXor": "1000000",
@@ -135,7 +137,7 @@ def test_field_level_orderbook_builders_emit_valid_signed_payloads() -> None:
 
     cancel = build_signed_orderbook_order_cancel(
         {
-            "order_id": _fixed32(0x11),
+            "order_id": order_id,
             "owner_account": _ORDERBOOK_OWNER_ACCOUNT,
             "reason": "owner_requested",
             "nonce": 8,
@@ -169,6 +171,35 @@ def test_field_level_orderbook_builders_emit_valid_signed_payloads() -> None:
         receipt,
         generated_at_unix=1_700_000_999,
     )["status"] == "Ok"
+
+
+def test_order_id_derivation_matches_cross_sdk_golden_vector() -> None:
+    assert derive_orderbook_order_id(b"buyer@sora", 7).hex() == (
+        "9d91ad7700ca0c4762e031f9231aa38dd4502c6048c6ffa31d365e3c4e080b69"
+    )
+    with pytest.raises(ValueError, match="must not be empty"):
+        derive_orderbook_order_id(b"", 7)
+    with pytest.raises(ValueError, match="greater than zero"):
+        derive_orderbook_order_id(b"buyer@sora", 0)
+
+
+def test_field_level_orderbook_builder_rejects_noncanonical_order_id() -> None:
+    with pytest.raises(ValueError, match="canonical owner-and-nonce derivation"):
+        build_signed_orderbook_order_request(
+            {
+                "order_id": _fixed32(0x11),
+                "side": "bid",
+                "tier": "hot",
+                "price_per_gib_micro_xor": "1000000",
+                "quantity_gib": "12",
+                "owner_account": _ORDERBOOK_OWNER_ACCOUNT,
+                "expiry_unix": "1700010000",
+                "nonce": "7",
+                "maker_fee_bps": "25",
+                "taker_fee_bps": "30",
+            },
+            _ORDERBOOK_PRIVATE_KEY,
+        )
 
 
 def test_field_level_settlement_receipt_builder_rejects_imbalanced_amounts() -> None:

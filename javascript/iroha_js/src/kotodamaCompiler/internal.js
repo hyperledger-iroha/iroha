@@ -1,6 +1,6 @@
-import { blake3 } from '@noble/hashes/blake3.js';
-import { ed25519 } from '@noble/curves/ed25519.js';
-import { sha256 } from '@noble/hashes/sha256.js';
+import { blake3 } from "@noble/hashes/blake3";
+import { ed25519 } from "@noble/curves/ed25519";
+import { sha256 } from "@noble/hashes/sha256";
 import { blake2b256 } from '../blake2b.js';
 import { normalizeAssetDefinitionIdLiteral, parseAssetIdLiteral } from './assetDefinitionLiteral.js';
 import { normalizeAccountIdLiteral, renderCanonicalAccountIdLiteralFromPublicKeyLiteral, renderCanonicalPublicKeyLiteralFromAccountIdLiteral, } from './accountLiteral.js';

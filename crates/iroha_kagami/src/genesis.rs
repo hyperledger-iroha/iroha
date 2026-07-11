@@ -1,6 +1,8 @@
 use std::io::{BufWriter, Write};
 
 use clap::Subcommand;
+use color_eyre::eyre::eyre;
+use iroha_genesis::RawGenesisTransaction;
 
 use crate::{Outcome, RunArgs};
 
@@ -22,6 +24,18 @@ pub use profile::{
     parse_vrf_seed_hex, profile_defaults, profile_requires_npos, profile_uses_public_xor,
     public_xor_profile_for_chain_id, resolve_vrf_seed,
 };
+
+fn require_v2_wire_protocol_only(manifest: &RawGenesisTransaction) -> color_eyre::Result<()> {
+    let expected = [u32::from(
+        iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
+    )];
+    if manifest.wire_proto_versions() != expected {
+        return Err(eyre!(
+            "fresh genesis must advertise exactly wire_proto_versions = [2]; legacy, mixed, and downgrade protocol lists are prohibited"
+        ));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum Args {

@@ -6,7 +6,7 @@ import java.util.Arrays;
 /** Thin JVM/JNI wrapper around the SoraFS reference validators in {@code connect_norito_bridge}. */
 public final class SorafsReferenceValidators {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
-  public static final int REQUIRED_BRIDGE_ABI_VERSION = 12;
+  public static final int REQUIRED_BRIDGE_ABI_VERSION = 16;
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
   private SorafsReferenceValidators() {}
@@ -14,6 +14,10 @@ public final class SorafsReferenceValidators {
   /** Returns true when the native bridge is present and new enough for SoraFS validation. */
   public static boolean isNativeAvailable() {
     return NATIVE_AVAILABLE;
+  }
+
+  static boolean isBridgeAbiSupported(final int abiVersion) {
+    return abiVersion >= REQUIRED_BRIDGE_ABI_VERSION;
   }
 
   public static String validateOrderbookPayloadJson(
@@ -118,6 +122,74 @@ public final class SorafsReferenceValidators {
     }
   }
 
+  /** Derive the canonical V1 order id from owner-account bytes and nonce. */
+  public static byte[] deriveOrderbookOrderId(final byte[] ownerAccount, final long nonce) {
+    final byte[] ownerBytes = requireNonEmptyBytes(ownerAccount, "ownerAccount");
+    requirePositive(nonce, "nonce");
+    requireNative();
+    final byte[] orderId =
+        requireBytesOutput(
+            nativeDeriveOrderbookOrderId(ownerBytes, nonce),
+            "SoraFS orderbook order id derivation");
+    if (orderId.length != 32) {
+      throw new IllegalStateException(
+          "SoraFS orderbook order id derivation returned a non-32-byte identifier");
+    }
+    return orderId;
+  }
+
+  public static byte[] buildSignedOrderbookOrderRequest(
+      final SorafsOrderbookSide side,
+      final SorafsOrderbookTier tier,
+      final String pricePerGibMicroXor,
+      final long quantityGib,
+      final byte[] ownerAccount,
+      final long expiryUnix,
+      final long nonce,
+      final int makerFeeBps,
+      final int takerFeeBps,
+      final byte[] privateKey) {
+    return buildSignedOrderbookOrderRequest(
+        side,
+        tier,
+        pricePerGibMicroXor,
+        quantityGib,
+        quantityGib,
+        ownerAccount,
+        expiryUnix,
+        nonce,
+        makerFeeBps,
+        takerFeeBps,
+        privateKey);
+  }
+
+  public static byte[] buildSignedOrderbookOrderRequest(
+      final SorafsOrderbookSide side,
+      final SorafsOrderbookTier tier,
+      final String pricePerGibMicroXor,
+      final long quantityGib,
+      final long remainingGib,
+      final byte[] ownerAccount,
+      final long expiryUnix,
+      final long nonce,
+      final int makerFeeBps,
+      final int takerFeeBps,
+      final byte[] privateKey) {
+    return buildSignedOrderbookOrderRequest(
+        deriveOrderbookOrderId(ownerAccount, nonce),
+        side,
+        tier,
+        pricePerGibMicroXor,
+        quantityGib,
+        remainingGib,
+        ownerAccount,
+        expiryUnix,
+        nonce,
+        makerFeeBps,
+        takerFeeBps,
+        privateKey);
+  }
+
   public static byte[] buildSignedOrderbookOrderRequest(
       final byte[] orderId,
       final SorafsOrderbookSide side,
@@ -168,6 +240,11 @@ public final class SorafsReferenceValidators {
     final byte[] ownerBytes = requireNonEmptyBytes(ownerAccount, "ownerAccount");
     requirePositive(expiryUnix, "expiryUnix");
     requirePositive(nonce, "nonce");
+    final byte[] canonicalOrderId = deriveOrderbookOrderId(ownerBytes, nonce);
+    if (!Arrays.equals(orderIdBytes, canonicalOrderId)) {
+      throw new IllegalArgumentException(
+          "orderId must equal the canonical owner-and-nonce derivation");
+    }
     final int makerFee = requireFeeBps(makerFeeBps, "makerFeeBps");
     final int takerFee = requireFeeBps(takerFeeBps, "takerFeeBps");
     final byte[] key = requirePrivateKey(privateKey);
@@ -552,7 +629,7 @@ public final class SorafsReferenceValidators {
   private static boolean loadLibrary() {
     try {
       System.loadLibrary(LIBRARY_NAME);
-      return nativeBridgeAbiVersion() >= REQUIRED_BRIDGE_ABI_VERSION;
+      return isBridgeAbiSupported(nativeBridgeAbiVersion());
     } catch (final UnsatisfiedLinkError | SecurityException error) {
       return false;
     }
@@ -571,6 +648,8 @@ public final class SorafsReferenceValidators {
 
   private static native byte[] nativeSignOrderbookPayload(
       int kind, byte[] payload, byte[] privateKey);
+
+  private static native byte[] nativeDeriveOrderbookOrderId(byte[] ownerAccount, long nonce);
 
   private static native byte[] nativeBuildSignedOrderbookOrderRequest(
       byte[] orderId,

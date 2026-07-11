@@ -1,9 +1,10 @@
 {
-  "bls_domain": "bls-iroha2:npos-sumeragi:v1",
+  "bls_domain": "bls-iroha2:npos-sumeragi:v2",
   "chain": "iroha3-nexus",
   "chain_discriminant": 753,
-  "consensus_fingerprint": "0xa521ddad8b2d372665bca6e60136333cfd0ad67162a9075ed3c4a91e74fc91b8",
+  "consensus_fingerprint": "0xe1c473dca0104b3628316e1456773d019dcc47846cda9a3f1ac8d5cde0be9f50",
   "consensus_mode": "Npos",
+  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"ReedSolomon16"},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024},"nexus_amx_context_hash":"60C0397F7C1480941842C6FF340378A15E14C136097751F379493592553FE0C5"},
   "crypto": {
     "allowed_curve_ids": [
       1,
@@ -28,7 +29,7 @@
         {
           "Register": {
             "Domain": {
-              "id": "wonderland",
+              "id": "wonderland.universal",
               "logo": null,
               "metadata": {
                 "key": "value"
@@ -72,7 +73,7 @@
         {
           "Register": {
             "Domain": {
-              "id": "garden_of_live_flowers",
+              "id": "garden_of_live_flowers.universal",
               "logo": null,
               "metadata": {}
             }
@@ -81,7 +82,7 @@
         {
           "Register": {
             "Account": {
-              "id": "34mSYmj74pAZ6nNwwEsmGKGrHErCPMWtqeBwWhHkT9WcsndXbe2FjCNWFYCn5FiW5fdUcsbQD",
+              "id": "sorauﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A",
               "label": null,
               "metadata": {},
               "uaid": null
@@ -195,7 +196,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+            "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": "13"
             }
           }
@@ -203,7 +204,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M",
+            "destination": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M#sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": "44"
             }
           }
@@ -270,6 +271,6 @@
     }
   ],
   "wire_proto_versions": [
-    1
+    2
   ]
 }

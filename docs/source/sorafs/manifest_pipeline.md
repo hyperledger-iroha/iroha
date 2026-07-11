@@ -151,14 +151,15 @@ When you need to hit a live Torii gateway instead of local files, swap the
 ```
 sorafs-fetch \
   --plan=chunk_fetch_specs.json \
-  --gateway-provider=name=gw-a,provider-id=<hex>,base-url=https://gw-a.example/,stream-token=<base64> \
+  --gateway-provider=name=gw-a,provider-id=<hex>,gateway-key=<ed25519-public-key-hex>,base-url=https://gw-a.example/,stream-token=<base64> \
   --gateway-manifest-id=<manifest_id_hex> \
   --gateway-chunker-handle=sorafs.sf1@1.0.0 \
   --gateway-client-id=ci-orchestrator \
   --json-out=gateway_fetch_report.json
 ```
 
-The CLI validates the stream token, enforces chunker/profile alignment, and
+The CLI verifies the stream token against the separately supplied gateway key,
+enforces its lifetime and provider/chunker/manifest bindings, and
 records the gateway metadata alongside the usual provider receipts so operators
 can archive the report as rollout evidence (see the deployment handbook for the
 full blue/green flow).

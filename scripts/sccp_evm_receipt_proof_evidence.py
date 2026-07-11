@@ -132,6 +132,9 @@ def parse_rpc_chain_id(value: str) -> int:
 def _json_object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     decoded: dict[str, Any] = {}
     for key, value in pairs:
+        # Source-inventory marker: live JSON duplicate-key helpers use exact strings.
+        if type(key) is not str:
+            raise ValueError("JSON-RPC returned duplicate JSON keys")
         if key in decoded:
             raise ValueError("JSON-RPC returned duplicate JSON keys")
         decoded[key] = value
@@ -163,6 +166,9 @@ def _normalize_evm_rpc_url(rpc_url: str) -> str:
 
 
 def _evm_rpc_host_is_loopback(host: str) -> bool:
+    # Source-inventory marker: runtime URL host classifiers use exact strings.
+    if type(host) is not str:
+        return False
     normalized = host.strip("[]").lower()
     try:
         return ipaddress.ip_address(normalized).is_loopback
@@ -171,6 +177,8 @@ def _evm_rpc_host_is_loopback(host: str) -> bool:
 
 
 def _evm_rpc_host_is_non_public_dns(host: str) -> bool:
+    if type(host) is not str:
+        return True
     normalized = host.strip("[]").lower()
     try:
         ipaddress.ip_address(normalized)
@@ -238,7 +246,9 @@ def _json_rpc(
         raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from None
     if type(decoded) is not dict:
         raise RuntimeError(f"JSON-RPC {method} returned a non-object response")
-    if decoded.get("jsonrpc") != "2.0":
+    protocol_version = decoded.get("jsonrpc")
+    # Source-inventory marker: EVM receipt-proof JSON-RPC protocol version uses exact strings.
+    if type(protocol_version) is not str or protocol_version != "2.0":
         raise RuntimeError(f"JSON-RPC {method} returned an invalid protocol version")
     response_id = decoded.get("id")
     if type(response_id) is not int or response_id != 1:
@@ -278,6 +288,12 @@ def _rpc_hex_data(result: Any, *, method: str) -> bytes:
         raise RuntimeError(
             f"{method} returned non-canonical lowercase 0x hex data"
         ) from None
+
+
+def _rpc_exact_string_literal(value: Any, expected: str, *, message: str) -> str:
+    if type(value) is not str or value != expected:
+        raise RuntimeError(message)
+    return value
 
 
 def _rpc_fixed_hex_data(
@@ -726,8 +742,12 @@ def _source_event_digest_from_receipt(
             continue
         if len(topics) != 2:
             raise RuntimeError("SCCP source event log must contain exactly 2 topics")
-        if log.get("data") != "0x":
-            raise RuntimeError("SCCP source event log data must be 0x")
+        # Source-inventory marker: EVM receipt-proof source-event log data uses exact strings.
+        _rpc_exact_string_literal(
+            log.get("data"),
+            "0x",
+            message="SCCP source event log data must be 0x",
+        )
         log_transaction_hash = _rpc_fixed_hex_data(
             log.get("transactionHash"),
             method=f"receipt.logs[{index}].transactionHash",
@@ -810,8 +830,12 @@ def collect_receipt_proof_evidence(
     )
     if receipt_tx_hash != transaction_hash:
         raise RuntimeError("receipt.transactionHash does not match requested transaction")
-    if receipt.get("status") != "0x1":
-        raise RuntimeError("receipt.status must be 0x1")
+    # Source-inventory marker: EVM receipt-proof receipt status uses exact strings.
+    receipt_status = _rpc_exact_string_literal(
+        receipt.get("status"),
+        "0x1",
+        message="receipt.status must be 0x1",
+    )
     block_hash = _rpc_fixed_hex_data(
         receipt.get("blockHash"),
         method="receipt.blockHash",
@@ -905,7 +929,7 @@ def collect_receipt_proof_evidence(
         "rpc_chain_id": chain_id,
         "transaction_hash": _hex(transaction_hash),
         "transaction_index": transaction_index,
-        "receipt_status": "0x1",
+        "receipt_status": receipt_status,
         "receipt_type": receipt.get("type", "0x0"),
         "receipt_rlp": _hex(proof["receipt_rlp"]),
         "block_hash": _hex(block_hash),
@@ -996,6 +1020,9 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 
 def _decoded_public_blocker_text(value: str) -> str:
+    # Source-inventory marker: lane public blocker decode helpers use exact strings.
+    if type(value) is not str:
+        return ""
     decoded = value
     for _decode_pass in range(max(1, len(value))):
         next_decoded = unquote(html_unescape(decoded))
@@ -1006,6 +1033,8 @@ def _decoded_public_blocker_text(value: str) -> str:
 
 
 def _decoded_cli_error_text_issue(value: str) -> bool:
+    if type(value) is not str:
+        return True
     decoded = _decoded_public_blocker_text(value)
     if any(ord(character) < 0x20 or ord(character) == 0x7F for character in decoded):
         return True
@@ -1017,7 +1046,10 @@ def _decoded_cli_error_text_issue(value: str) -> bool:
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     if isinstance(exc, (OSError, SystemExit)):
         return fallback
-    text = str(exc)
+    try:
+        text = str(exc)
+    except Exception:
+        return fallback
     if not text:
         return fallback
     if not text.isascii():

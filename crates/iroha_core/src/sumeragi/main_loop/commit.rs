@@ -338,15 +338,6 @@ fn commit_pipeline_sample_from_timings(
     }
 }
 
-fn autoscale_transition_committed_at(
-    nexus: &iroha_config::parameters::actual::Nexus,
-    committed_height: u64,
-) -> bool {
-    nexus.enabled
-        && nexus.autoscale.enabled
-        && nexus.autoscale.last_transition_height == committed_height
-}
-
 #[derive(Debug)]
 pub(super) enum CommitOutcome {
     Rejected {
@@ -804,6 +795,7 @@ pub(super) fn execute_commit_work(
         Ok((committed_block, mut state_block, exec_witness, fastpq_witness_context)) => {
             let persist_start = Instant::now();
             let pipeline_events = pipeline_events;
+            let staged_merge_entry = state_block.staged_merge_entry().cloned();
             let validated_commit_artifact_for_manifest = validated_commit_artifact.or_else(|| {
                 exec_witness
                     .as_ref()
@@ -818,7 +810,12 @@ pub(super) fn execute_commit_work(
             let committed_block_for_kura = committed_block.clone();
             log_stage_start("kura_store");
             let kura_start = Instant::now();
-            if let Err(err) = kura.store_block(committed_block_for_kura) {
+            let kura_store_result = if let Some(entry) = staged_merge_entry.as_ref() {
+                kura.store_block_with_merge_entry(committed_block_for_kura, entry)
+            } else {
+                kura.store_block(committed_block_for_kura)
+            };
+            if let Err(err) = kura_store_result {
                 log_stage_end("kura_store", kura_start);
                 timings.kura_store_ms = Some(to_ms(kura_start.elapsed()));
                 timings.persist_ms = Some(to_ms(persist_start.elapsed()));
@@ -880,7 +877,33 @@ pub(super) fn execute_commit_work(
             }
             timings.state_commit_ms = Some(to_ms(state_commit_start.elapsed()));
             log_stage_end("state_commit", state_commit_start);
+            if let Some(entry) = staged_merge_entry.as_ref() {
+                state
+                    .record_globally_committed_merge_entry(entry)
+                    .unwrap_or_else(|err| {
+                        panic!(
+                            "canonical merge carrier {block_hash} at height {block_height} committed its WSV but could not publish the verified merge cache: {err}; restart recovery is required"
+                        )
+                    });
+            }
             let mut post_commit_persistence_error = None;
+            if let Some(entry) = staged_merge_entry.as_ref()
+                && let Err(err) = kura.persist_merge_lane_block_application_receipts(
+                    entry,
+                    block_height,
+                    block_hash,
+                )
+            {
+                post_commit_persistence_error = Some(format!("merge application receipts: {err}"));
+                error!(
+                    ?err,
+                    height = block_height,
+                    block = %block_hash,
+                    merge_epoch = entry.epoch_id,
+                    merge_entry = %entry.canonical_hash(),
+                    "failed to persist merge application receipts after state commit; restart recovery will retry from the canonical carrier"
+                );
+            }
             let wsv_checkpoint_hash = crate::snapshot::canonical_state_snapshot_hash(state);
             if std::env::var_os("IROHA_DEBUG_WSV_COMPONENTS").is_some() {
                 let components = crate::snapshot::canonical_state_snapshot_component_hashes(state);
@@ -897,7 +920,10 @@ pub(super) fn execute_commit_work(
             if let Err(err) =
                 kura.store_wsv_checkpoint(block_height, block_hash, wsv_checkpoint_hash)
             {
-                post_commit_persistence_error = Some(format!("WSV checkpoint: {err}"));
+                post_commit_persistence_error = Some(match post_commit_persistence_error.take() {
+                    Some(previous) => format!("{previous}; WSV checkpoint: {err}"),
+                    None => format!("WSV checkpoint: {err}"),
+                });
                 error!(
                     ?err,
                     height = block_height,
@@ -2154,22 +2180,59 @@ impl Actor {
             } => {
                 let pending = take_pending_or_return!();
                 self.note_view_change_from_block(pending_height, pending_view);
+                if let Some(reference) = committed_block
+                    .as_ref()
+                    .execution_context()
+                    .and_then(|bundle| bundle.merge_entry.as_ref())
+                {
+                    let entry = self
+                        .kura
+                        .merge_entry_by_hash(reference.entry_hash)
+                        .unwrap_or_else(|err| {
+                            panic!(
+                                "committed merge carrier {block_hash} cannot read its durable entry: {err}; restart recovery is required"
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "committed merge carrier {block_hash} lost durable entry {}; restart recovery is required",
+                                reference.entry_hash
+                            )
+                        });
+                    let reservations = crate::state::certified_merge_queue_reservations(&entry)
+                        .unwrap_or_else(|err| {
+                            panic!(
+                                "committed merge carrier {block_hash} has invalid queue bindings: {err}; restart recovery is required"
+                            )
+                        });
+                    for (transaction_hash, reservation) in reservations {
+                        if let Err(err) = self.queue.commit_lane_reservation(&reservation) {
+                            error!(
+                                ?err,
+                                height = pending_height,
+                                block = %block_hash,
+                                %transaction_hash,
+                                reservation = ?reservation,
+                                "failed to finalize exact committed merge reservation; durable reconciliation will retry"
+                            );
+                        }
+                    }
+                }
                 let committed_tx_hashes =
                     super::block_external_transaction_hashes(committed_block.as_ref());
                 self.queue
                     .remove_committed_hashes(committed_tx_hashes, None);
                 let committed_nexus = self.state.nexus_snapshot();
-                if autoscale_transition_committed_at(&committed_nexus, pending_height) {
-                    let lane_compliance = self.queue.lane_compliance_engine();
-                    self.queue.reconfigure_nexus_with_state(
-                        &committed_nexus,
-                        self.state.as_ref(),
-                        lane_compliance,
-                    );
+                let lane_compliance = self.queue.lane_compliance_engine();
+                if self.queue.reconfigure_nexus_with_state_if_needed(
+                    &committed_nexus,
+                    self.state.as_ref(),
+                    lane_compliance,
+                ) {
                     debug!(
                         height = pending_height,
                         lanes = committed_nexus.lane_catalog.lane_count().get(),
-                        "reconfigured queue after deterministic Nexus autoscale transition"
+                        "reconfigured queue after committed Nexus topology transition"
                     );
                 }
                 crate::sumeragi::status::record_kura_stage(
@@ -3730,6 +3793,7 @@ impl Actor {
         reason: String,
         reason_label: &'static str,
     ) {
+        let mut retained_retry_owner = None;
         if let Some(pending) = self.pending.pending_blocks.remove(&invalid_hash) {
             self.subsystems.validation.inflight.remove(&invalid_hash);
             self.subsystems
@@ -3737,6 +3801,13 @@ impl Actor {
                 .superseded_results
                 .remove(&invalid_hash);
             self.clean_rbc_sessions_for_block(invalid_hash, pending.height);
+            if pending.requeue_pending {
+                debug_assert!(
+                    !pending.requeue_retry_payload.is_empty(),
+                    "retained requeue owner must carry exact retry payload"
+                );
+                retained_retry_owner = Some(pending);
+            }
         }
         if let Some(ev) = evidence {
             if let Err(err) = self.handle_evidence(*ev) {
@@ -3771,6 +3842,11 @@ impl Actor {
             invalid_view,
             invalid_hash,
         );
+        if let Some(pending) = retained_retry_owner {
+            // Keep transaction custody out of stale-view pruning while the invalid round is
+            // retired, then restore the bounded retry owner until queue admission succeeds.
+            self.pending.pending_blocks.insert(invalid_hash, pending);
+        }
     }
 
     #[allow(clippy::too_many_lines)]
@@ -9662,6 +9738,7 @@ impl Actor {
         let _ = self.maybe_release_committed_edge_conflict_owner("committed_height_advanced");
         self.prune_missing_block_recovery_state(now);
         self.refresh_p2p_topology();
+        self.refresh_consensus_handshake_caps(false)?;
         if let Some(baseline_roster) = self.recovery_pending_baseline_restore.remove(&height) {
             if let Err(err) = self.install_elected_roster(&baseline_roster) {
                 warn!(
@@ -11052,24 +11129,6 @@ mod tests {
             slow_stage,
             Duration::from_secs(5)
         ));
-    }
-
-    #[test]
-    fn autoscale_transition_committed_at_requires_enabled_matching_height() {
-        let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.enabled = true;
-        nexus.autoscale.enabled = true;
-        nexus.autoscale.last_transition_height = 42;
-
-        assert!(autoscale_transition_committed_at(&nexus, 42));
-        assert!(!autoscale_transition_committed_at(&nexus, 41));
-
-        nexus.autoscale.enabled = false;
-        assert!(!autoscale_transition_committed_at(&nexus, 42));
-
-        nexus.autoscale.enabled = true;
-        nexus.enabled = false;
-        assert!(!autoscale_transition_committed_at(&nexus, 42));
     }
 
     struct CommitFixture {

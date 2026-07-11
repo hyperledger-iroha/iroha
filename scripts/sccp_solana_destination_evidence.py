@@ -44,6 +44,7 @@ SOLANA_UPGRADEABLE_LOADER_PROGRAM_TAG = 2
 SOLANA_UPGRADEABLE_LOADER_PROGRAMDATA_TAG = 3
 SOLANA_PROGRAMDATA_METADATA_LEN = 45
 SOLANA_BPF_ELF_MAGIC = b"\x7fELF"
+PROGRAM_BYTES_FILE_PATH_TYPE = type(Path())
 SOLANA_BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 SOLANA_BASE58_INDEX = {
     symbol: index for index, symbol in enumerate(SOLANA_BASE58_ALPHABET)
@@ -140,11 +141,16 @@ def parse_program_bytes_base64(value: str, *, label: str) -> bytes:
 
 
 def _reject_program_bytes_file_symlink_path(path: Path) -> None:
+    # Source-inventory marker: program bytes file helpers use native paths.
+    if type(path) is not PROGRAM_BYTES_FILE_PATH_TYPE:
+        raise argparse.ArgumentTypeError("program bytes file cannot be read")
     if first_symlinked_existing_path_component(path) is not None:
         raise argparse.ArgumentTypeError("program bytes file must not be a symlink")
 
 
 def _read_program_bytes_file(path: Path, *, label: str) -> bytes:
+    if type(path) is not PROGRAM_BYTES_FILE_PATH_TYPE:
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
     try:
         _reject_program_bytes_file_symlink_path(path)
     except (OSError, argparse.ArgumentTypeError):
@@ -1585,6 +1591,9 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 
 def _decoded_public_blocker_text(value: str) -> str:
+    # Source-inventory marker: lane public blocker decode helpers use exact strings.
+    if type(value) is not str:
+        return ""
     decoded = value
     for _decode_pass in range(max(1, len(value))):
         next_decoded = unquote(html_unescape(decoded))
@@ -1595,6 +1604,8 @@ def _decoded_public_blocker_text(value: str) -> str:
 
 
 def _decoded_cli_error_text_issue(value: str) -> bool:
+    if type(value) is not str:
+        return True
     decoded = _decoded_public_blocker_text(value)
     if any(ord(character) < 0x20 or ord(character) == 0x7F for character in decoded):
         return True
@@ -1606,7 +1617,10 @@ def _decoded_cli_error_text_issue(value: str) -> bool:
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     if isinstance(exc, (OSError, SystemExit)):
         return fallback
-    text = str(exc)
+    try:
+        text = str(exc)
+    except Exception:
+        return fallback
     if not text:
         return fallback
     if not text.isascii():

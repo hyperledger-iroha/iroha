@@ -68,7 +68,7 @@ cargo test -p sorafs_car --features cli fetch_command_respects_direct_transports
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
-  --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
+  --provider name=gw-regulated,provider-id=001122...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64
 ```
 
 - 该脚本尊重 CLI 标志和 key=value 配置文件（请参阅 `docs/examples/sorafs_direct_mode_smoke.conf`）。在运行之前使用生产值填充清单摘要和提供商广告条目。

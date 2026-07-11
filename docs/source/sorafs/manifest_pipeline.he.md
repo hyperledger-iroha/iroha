@@ -119,7 +119,7 @@ cargo run -p sorafs_car --bin sorafs_fetch --   --plan=chunk_fetch_specs.json   
 באפשרויות החדשות המכוונות ל‑HTTP:
 
 ```
-sorafs-fetch   --plan=chunk_fetch_specs.json   --gateway-provider=name=gw-a,provider-id=<hex>,base-url=https://gw-a.example/,stream-token=<base64>   --gateway-manifest-id=<manifest_id_hex>   --gateway-chunker-handle=sorafs.sf1@1.0.0   --gateway-client-id=ci-orchestrator   --json-out=gateway_fetch_report.json
+sorafs-fetch   --plan=chunk_fetch_specs.json   --gateway-provider=name=gw-a,provider-id=<hex>,gateway-key=<ed25519-public-key-hex>,base-url=https://gw-a.example/,stream-token=<base64>   --gateway-manifest-id=<manifest_id_hex>   --gateway-chunker-handle=sorafs.sf1@1.0.0   --gateway-client-id=ci-orchestrator   --json-out=gateway_fetch_report.json
 ```
 
 ה‑CLI מאמת את ה‑stream token, אוכף יישור של chunker/profile, ורושם את מטא‑נתוני ה‑gateway לצד

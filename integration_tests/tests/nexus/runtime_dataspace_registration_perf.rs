@@ -5,12 +5,10 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::PathBuf,
-    sync::atomic::{AtomicU64, Ordering},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use base64::Engine as _;
 use eyre::{Result, WrapErr, ensure, eyre};
 use futures_util::StreamExt;
 use integration_tests::sandbox;
@@ -46,8 +44,6 @@ use iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManife
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::ALICE_ID;
 use norito::json::Value as JsonValue;
-use reqwest::StatusCode;
-use sha2::{Digest as _, Sha256};
 use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},
@@ -69,13 +65,6 @@ const STATUS_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const COMMITTED_TX_OUTCOME_TIMEOUT: Duration = Duration::from_secs(30);
 const TX_SSE_HANDSHAKE_DELAY: Duration = Duration::from_millis(100);
-const HEADER_OPERATOR_PUBLIC_KEY: &str = "x-iroha-operator-public-key";
-const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
-const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
-const HEADER_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
-
-static OPERATOR_NONCE_COUNTER: AtomicU64 = AtomicU64::new(1);
-
 fn parse_positive_usize_override(raw: Option<&str>, default: usize) -> usize {
     raw.and_then(|value| value.trim().parse::<usize>().ok())
         .filter(|value| *value > 0)
@@ -810,90 +799,13 @@ fn emit_latency_stats(label: &str, samples: &[Duration]) {
     }
 }
 
-async fn post_lane_lifecycle_plan(
-    http: &reqwest::Client,
-    client: &Client,
-    plan: &LaneLifecyclePlan,
-) -> Result<()> {
-    let url = client
-        .torii_url
-        .join("v1/nexus/lifecycle")
-        .wrap_err("compose /v1/nexus/lifecycle URL")?;
-    let body = norito::json::to_json(plan).wrap_err("serialize lane lifecycle plan")?;
-    let operator_headers = operator_signature_headers(client, "POST", url.path(), body.as_bytes())?;
-
-    let mut request = http
-        .post(url)
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .header(reqwest::header::ACCEPT, "application/json");
-    for (name, value) in &client.headers {
-        request = request.header(name, value);
-    }
-    for (name, value) in operator_headers {
-        request = request.header(name, value);
-    }
-
-    let response = request
-        .body(body)
-        .send()
-        .await
-        .wrap_err("send /v1/nexus/lifecycle request")?;
-    let status = response.status();
-    let payload = response.text().await.unwrap_or_default();
-    ensure!(
-        status == StatusCode::ACCEPTED,
-        "nexus lifecycle request failed with {status}: {payload}"
-    );
-    Ok(())
-}
-
-fn operator_signature_headers(
-    client: &Client,
-    method: &str,
-    path: &str,
-    body: &[u8],
-) -> Result<Vec<(&'static str, String)>> {
-    let Some(operator_key_pair) = client.operator_key_pair.as_ref() else {
-        return Ok(Vec::new());
-    };
-
-    let timestamp_ms: u64 = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX);
-    let nonce_counter = OPERATOR_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let mut nonce_bytes = [0_u8; 12];
-    nonce_bytes[..8].copy_from_slice(&nonce_counter.to_le_bytes());
-    let nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
-
-    let mut hasher = Sha256::new();
-    hasher.update(body);
-    let body_hash_hex = hex::encode(hasher.finalize());
-    let message = format!(
-        "{}\n{}\n\n{}\n{}\n{}",
-        method.to_ascii_uppercase(),
-        path,
-        body_hash_hex,
-        timestamp_ms,
-        nonce
-    )
-    .into_bytes();
-
-    let signature = iroha_crypto::Signature::try_new(operator_key_pair.private_key(), &message)
-        .wrap_err("sign runtime registration operator request")?;
-    let signature_b64 = base64::engine::general_purpose::STANDARD.encode(signature.payload());
-
-    Ok(vec![
-        (
-            HEADER_OPERATOR_PUBLIC_KEY,
-            operator_key_pair.public_key().to_string(),
-        ),
-        (HEADER_OPERATOR_TIMESTAMP_MS, timestamp_ms.to_string()),
-        (HEADER_OPERATOR_NONCE, nonce),
-        (HEADER_OPERATOR_SIGNATURE, signature_b64),
-    ])
+fn submit_lane_lifecycle_plan(client: &Client, plan: &LaneLifecyclePlan) -> Result<()> {
+    client
+        .submit_lane_lifecycle_blocking(plan.clone())
+        .map(|_| ())
+        .wrap_err(
+            "submit signed SetParameter(nexus_lane_lifecycle_v1) transaction and wait for apply",
+        )
 }
 
 #[derive(Debug)]
@@ -920,7 +832,6 @@ struct RegistrationIterationMetrics {
 
 fn run_registration_iteration(
     rt: &tokio::runtime::Runtime,
-    http: &reqwest::Client,
     network: &sandbox::SerializedNetwork,
     iteration: usize,
 ) -> Result<RegistrationIterationMetrics> {
@@ -1076,9 +987,11 @@ fn run_registration_iteration(
 
     let lane_started = Instant::now();
     let lane_submit_started = Instant::now();
-    rt.block_on(post_lane_lifecycle_plan(http, &submitter, &plan))
+    submit_lane_lifecycle_plan(&submitter, &plan)
         .wrap_err_with(|| {
-            format!("submit lifecycle plan to peer {submitter_peer_index} as leader target")
+            format!(
+                "submit signed lifecycle transaction through peer {submitter_peer_index} as leader target"
+            )
         })?;
     let lane_submit_latency = lane_submit_started.elapsed();
 
@@ -1140,13 +1053,12 @@ fn run_registration_iteration(
         additions: Vec::new(),
         retire: vec![lane_id],
     };
-    rt.block_on(post_lane_lifecycle_plan(http, &submitter, &retire_plan))
-        .wrap_err_with(|| {
-            format!(
-                "submit lane retirement plan for lane {} to peer {submitter_peer_index}",
-                lane_id.as_u32()
-            )
-        })?;
+    submit_lane_lifecycle_plan(&submitter, &retire_plan).wrap_err_with(|| {
+        format!(
+            "submit lane retirement plan for lane {} to peer {submitter_peer_index}",
+            lane_id.as_u32()
+        )
+    })?;
     wait_for_lane_absence(
         &submitter,
         lane_id,
@@ -1221,10 +1133,6 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
                 })?;
     }
 
-    let http = reqwest::Client::builder()
-        .timeout(integration_tests::http::request_timeout())
-        .build()
-        .wrap_err("build reqwest client for lifecycle benchmark")?;
     let bench_iterations = benchmark_iterations();
     eprintln!("[registration-perf] report-only lane+dataspace metrics (no threshold gating)");
 
@@ -1261,7 +1169,7 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
     let mut failure: Option<eyre::Report> = None;
 
     for iteration in 0..bench_iterations {
-        match run_registration_iteration(&rt, &http, &network, iteration) {
+        match run_registration_iteration(&rt, &network, iteration) {
             Ok(metrics) => {
                 passes += 1;
                 lane_submit_samples.push(metrics.lane_submit_latency);
@@ -1358,7 +1266,7 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
         );
         if max == 0 {
             eprintln!(
-                "[registration-perf] note: lifecycle visibility completed without commit-height advancement on any peer (expected for control-plane /v1/nexus/lifecycle state mutation)"
+                "[registration-perf] warning: lifecycle visibility completed without observed commit-height advancement despite signed consensus submission"
             );
         }
     }

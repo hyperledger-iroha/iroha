@@ -807,6 +807,10 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn test_sumeragi_config() -> SumeragiConfig {
         SumeragiConfig {
+            protocol_version: iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
+            round_timeout: std::time::Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS,
+            ),
             role: NodeRole::Validator,
             consensus_mode: ConsensusMode::Npos,
             mode_flip: SumeragiModeFlip {

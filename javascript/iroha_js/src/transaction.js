@@ -442,6 +442,56 @@ export function hashSignedTransaction(signedTransaction, options = {}) {
 }
 
 /**
+ * Compute the detached-signature preimage used by Torii for a transaction
+ * scaffold (`HashOf::new(tx.payload())`).
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
+ * @param {{ encoding?: BufferEncoding }} [options]
+ * @returns {string | Buffer} Hex string by default, Buffer when `encoding` is `"buffer"`.
+ */
+export function hashSignedTransactionPayload(signedTransaction, options = {}) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.hashSignedTransactionPayload !== "function") {
+    throw new Error(
+      "native binding 'hashSignedTransactionPayload' is unavailable",
+    );
+  }
+  const buffer = toBuffer(signedTransaction);
+  const hashBuffer = Buffer.from(native.hashSignedTransactionPayload(buffer));
+  if (options.encoding === "buffer") {
+    return hashBuffer;
+  }
+  const encoding = options.encoding ?? "hex";
+  return hashBuffer.toString(encoding);
+}
+
+/**
+ * Compute the canonical proposal identity for an authorized instruction batch
+ * (`HashOf::new(&Vec<InstructionBox>)`). This is the value Torii exposes as
+ * both `instructions_hash` and `proposal_id` for multisig proposals.
+ * @param {Array<object | string>} instructions
+ * @param {{ encoding?: BufferEncoding }} [options]
+ * @returns {string | Buffer} Hex string by default, Buffer when `encoding` is `"buffer"`.
+ */
+export function hashInstructionBatch(instructions, options = {}) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.hashInstructionBatch !== "function") {
+    throw new Error("native binding 'hashInstructionBatch' is unavailable");
+  }
+  const normalizedInstructions = serializeInstructionPayloads(
+    instructions,
+    "instructions",
+  );
+  const hashBuffer = Buffer.from(
+    native.hashInstructionBatch(normalizedInstructions),
+  );
+  if (options.encoding === "buffer") {
+    return hashBuffer;
+  }
+  const encoding = options.encoding ?? "hex";
+  return hashBuffer.toString(encoding);
+}
+
+/**
  * Re-sign a Norito-encoded transaction with the provided Ed25519 private key.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
  * @param {ArrayBufferView | ArrayBuffer | Buffer} privateKey 32- or 64-byte Ed25519 key.

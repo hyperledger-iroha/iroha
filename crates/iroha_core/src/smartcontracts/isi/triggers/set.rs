@@ -243,6 +243,156 @@ pub struct SetBlock<'set> {
     contracts: TriggerContractStoreBlock<'set>,
 }
 
+fn append_delta_component(out: &mut Vec<u8>, bytes: &[u8]) {
+    out.extend_from_slice(&u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
+    out.extend_from_slice(bytes);
+}
+
+fn append_trigger_storage_delta<K, V>(
+    out: &mut Vec<u8>,
+    name: &'static str,
+    storage: &StorageBlock<'_, K, V>,
+    encode_value: impl Fn(&V) -> Vec<u8>,
+) where
+    K: mv::Key + Encode,
+    V: mv::Value,
+{
+    if !storage.is_dirty() {
+        return;
+    }
+    append_delta_component(out, name.as_bytes());
+    out.extend_from_slice(
+        &u64::try_from(storage.revert_map().len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    for key in storage.revert_map().keys() {
+        append_delta_component(out, &key.encode());
+        match storage.get(key) {
+            Some(value) => {
+                out.push(1);
+                append_delta_component(out, &encode_value(value));
+            }
+            None => out.push(0),
+        }
+    }
+}
+
+impl SetBlock<'_> {
+    /// Append every staged trigger-store mutation to a canonical merge write set.
+    pub(crate) fn append_merge_execution_write_set(&self, out: &mut Vec<u8>) {
+        append_trigger_storage_delta(out, "triggers.data", &self.data_triggers, |value| {
+            LoadedActionDto::from(value).encode()
+        });
+        append_trigger_storage_delta(out, "triggers.pipeline", &self.pipeline_triggers, |value| {
+            LoadedActionDto::from(value).encode()
+        });
+        append_trigger_storage_delta(out, "triggers.time", &self.time_triggers, |value| {
+            LoadedActionDto::from(value).encode()
+        });
+        append_trigger_storage_delta(out, "triggers.by_call", &self.by_call_triggers, |value| {
+            LoadedActionDto::from(value).encode()
+        });
+        append_trigger_storage_delta(out, "triggers.ids", &self.ids, Encode::encode);
+        append_trigger_storage_delta(
+            out,
+            "triggers.active_data",
+            &self.active_data_trigger_ids,
+            Encode::encode,
+        );
+        append_trigger_storage_delta(
+            out,
+            "triggers.active_pipeline",
+            &self.active_pipeline_trigger_ids,
+            Encode::encode,
+        );
+        append_trigger_storage_delta(
+            out,
+            "triggers.active_time",
+            &self.active_time_trigger_ids,
+            Encode::encode,
+        );
+        append_trigger_storage_delta(
+            out,
+            "triggers.active_by_call",
+            &self.active_by_call_trigger_ids,
+            Encode::encode,
+        );
+        append_trigger_storage_delta(out, "triggers.contracts", &self.contracts, |value| {
+            IvmBytecodeEntryDto::from(value).encode()
+        });
+    }
+}
+
+#[cfg(test)]
+mod merge_write_set_tests {
+    use super::*;
+
+    #[test]
+    fn encoder_mentions_every_trigger_block_store() {
+        let source = include_str!("set.rs");
+        let struct_start = source
+            .find("pub struct SetBlock<'set> {")
+            .expect("SetBlock declaration must remain discoverable");
+        let struct_tail = &source[struct_start..];
+        let struct_end = struct_tail
+            .find("\n}\n\nfn append_delta_component")
+            .expect("SetBlock declaration terminator must remain discoverable");
+        let struct_body = &struct_tail[..struct_end];
+
+        let encoder_start = source
+            .find("pub(crate) fn append_merge_execution_write_set")
+            .expect("trigger merge write-set encoder must exist");
+        let encoder_tail = &source[encoder_start..];
+        let encoder_end = encoder_tail
+            .find("\n    }\n}")
+            .expect("trigger merge write-set encoder terminator must remain discoverable");
+        let encoder = &encoder_tail[..encoder_end];
+
+        for line in struct_body.lines() {
+            if !line.starts_with("    ") || line.starts_with("        ") {
+                continue;
+            }
+            let Some((field, _)) = line.trim().split_once(':') else {
+                continue;
+            };
+            if !field
+                .chars()
+                .all(|character| character == '_' || character.is_ascii_alphanumeric())
+            {
+                continue;
+            }
+            assert!(
+                encoder.contains(field),
+                "trigger SetBlock field `{field}` is absent from the merge write-set encoder"
+            );
+        }
+    }
+
+    #[test]
+    fn encoder_distinguishes_equal_trigger_kinds_under_different_ids() {
+        let set = Set::default();
+        let mut first = set.block();
+        first.ids.insert(
+            "merge_trigger_a".parse().expect("valid trigger id"),
+            TriggeringEventType::Time,
+        );
+        let mut first_bytes = Vec::new();
+        first.append_merge_execution_write_set(&mut first_bytes);
+        drop(first);
+
+        let mut second = set.block();
+        second.ids.insert(
+            "merge_trigger_b".parse().expect("valid trigger id"),
+            TriggeringEventType::Time,
+        );
+        let mut second_bytes = Vec::new();
+        second.append_merge_execution_write_set(&mut second_bytes);
+
+        assert_ne!(first_bytes, second_bytes);
+    }
+}
+
 /// Trigger set for transaction's aggregated changes
 pub struct SetTransaction<'block, 'set> {
     /// Triggers using [`DataEventFilter`]

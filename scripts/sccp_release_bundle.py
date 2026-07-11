@@ -53,7 +53,24 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return payload
 
 
+NATIVE_PATH_TYPE = type(Path())
+
+
+def _require_native_path(
+    path: object,
+    *,
+    json_read_error: str | None = None,
+    value_error: str = "release artifact path must be a regular file",
+) -> Path:
+    if type(path) is not NATIVE_PATH_TYPE:
+        if json_read_error is not None:
+            raise OSError(json_read_error)
+        raise ValueError(value_error)
+    return path
+
+
 def _load_json_without_duplicate_keys(path: Path) -> Any:
+    path = _require_native_path(path, json_read_error="JSON path cannot be read")
     try:
         _reject_release_artifact_symlink_path(path)
     except (OSError, ValueError):
@@ -89,6 +106,9 @@ def _verify_module() -> Any:
 
 
 def _path_control_character(path: str) -> str | None:
+    # Source-inventory marker: release path text helpers use exact strings.
+    if type(path) is not str:
+        return "non-string path"
     for character in path:
         if ord(character) < 0x20 or ord(character) == 0x7F:
             return repr(character)
@@ -195,6 +215,8 @@ PUBLIC_SENSITIVE_MARKER_CONFUSABLES = str.maketrans(
 
 
 def _path_markdown_unsafe_character(path: str) -> str | None:
+    if type(path) is not str:
+        return "non-string path"
     for character in path:
         if character in MARKDOWN_UNSAFE_PATH_CHARACTERS:
             return repr(character)
@@ -225,6 +247,8 @@ def _native_evm_prover_duplicate_json_key_error(key: Any) -> str:
 
 
 def _path_percent_encoded_traversal(path: str) -> str | None:
+    if type(path) is not str:
+        return "non-string path"
     decoded = path
     seen = {decoded}
     for _ in range(32):
@@ -263,6 +287,8 @@ def _reject_release_artifact_symlink_path(path: Path) -> None:
 
 
 def _artifact(path: Path, root: Path) -> dict[str, Any]:
+    path = _require_native_path(path)
+    root = _require_native_path(root)
     _reject_release_artifact_symlink_path(path)
     if not path.is_file():
         raise ValueError("release artifact path must be a regular file")
@@ -303,6 +329,14 @@ def _artifact(path: Path, root: Path) -> dict[str, Any]:
 
 
 def _copy_file(source: Path, destination: Path) -> Path:
+    source = _require_native_path(
+        source,
+        value_error="release bundle source path must be a native path",
+    )
+    destination = _require_native_path(
+        destination,
+        value_error="release bundle destination path must be a native path",
+    )
     _reject_symlink_sources([source])
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, destination)
@@ -310,6 +344,10 @@ def _copy_file(source: Path, destination: Path) -> Path:
 
 
 def _safe_name(path: Path, index: int) -> str:
+    path = _require_native_path(
+        path,
+        value_error="release bundle source path must be a native path",
+    )
     name = path.name.replace("/", "_").replace("\\", "_")
     if name.strip() != name:
         raise ValueError(
@@ -335,6 +373,10 @@ def _safe_name(path: Path, index: int) -> str:
 
 
 def _copy_evidence_inputs(paths: list[Path], output_dir: Path) -> list[Path]:
+    output_dir = _require_native_path(
+        output_dir,
+        value_error="release bundle output directory must be a native path",
+    )
     evidence_dir = output_dir / "evidence"
     return [
         _copy_file(path, evidence_dir / _safe_name(path, index))
@@ -444,6 +486,10 @@ def _phase_evidence_source_label(name: str) -> str:
 
 
 def _phase_log_from_dir(directory: Path, phase: str) -> Path:
+    directory = _require_native_path(
+        directory,
+        value_error="release bundle phase evidence directory must be a native path",
+    )
     candidates = (
         directory / f"{phase}.log",
         directory / "dist" / "sccp-production-corridor" / f"{phase}.log",
@@ -709,6 +755,10 @@ def _all_lanes_summary(paths: list[Path]) -> dict[str, Any]:
 
 
 def _write_json(path: Path, payload: Any) -> None:
+    path = _require_native_path(
+        path,
+        value_error="release bundle JSON output path must be a native path",
+    )
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
@@ -3562,6 +3612,9 @@ def _submission_surface_sdk_helpers_text_error(value: Any, label: str) -> str | 
 
 
 def _decoded_public_blocker_text(value: str) -> str:
+    # Source-inventory marker: release bundle public blocker decode helpers use exact strings.
+    if type(value) is not str:
+        return ""
     decoded = value
     for _decode_pass in range(max(1, len(value))):
         next_decoded = unquote(html_unescape(decoded))
@@ -3572,12 +3625,16 @@ def _decoded_public_blocker_text(value: str) -> str:
 
 
 def _decoded_sensitive_public_marker_text(value: str) -> str:
+    if type(value) is not str:
+        return ""
     return _decoded_public_blocker_text(value).translate(
         PUBLIC_SENSITIVE_MARKER_CONFUSABLES
     ).casefold()
 
 
 def _decoded_public_blocker_text_issue(value: str) -> str | None:
+    if type(value) is not str:
+        return "non-string value"
     decoded = _decoded_public_blocker_text(value)
     if _path_control_character(decoded) is not None:
         return "control character"
@@ -3589,6 +3646,8 @@ def _decoded_public_blocker_text_issue(value: str) -> str | None:
 
 
 def _canonical_public_blocker_key(value: str) -> str:
+    if type(value) is not str:
+        return ""
     return _decoded_public_blocker_text(value).casefold()
 
 
@@ -3768,6 +3827,15 @@ def _public_mapping_string_view(payload: dict[Any, Any]) -> dict[str, Any]:
     """Return exact string-keyed public fields without comparing hostile aliases."""
 
     return {key: value for key, value in payload.items() if type(key) is str}
+
+
+def _corridor_phase_status_is_exact_passed(status: Any) -> bool:
+    # Source-inventory marker: bundled corridor phase status comparisons use exact copied strings.
+    return type(status) is str and status == "passed"
+
+
+def _corridor_phase_status_is_valid(status: Any) -> bool:
+    return type(status) is str and status in {"passed", "blocked"}
 
 
 def _require_report_list(value: Any, label: str, errors: list[str]) -> list[Any]:
@@ -5735,8 +5803,13 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
             _sccp_domain_bsc(),
             row_get("chain"),
         )
+        chain = row_get("chain")
+        # Source-inventory marker: bundle BSC testnet profile labels require exact
+        # public chain strings before equality checks.
         expected_chain = (
-            "bsc-testnet" if row_get("chain") == "bsc-testnet" else "bsc"
+            "bsc-testnet"
+            if type(chain) is str and chain == "bsc-testnet"
+            else "bsc"
         )
         for field in ("evm_source_rpc_chain_id", "evm_destination_rpc_chain_id"):
             value_for_field = row_get(field)
@@ -6737,9 +6810,13 @@ def _submission_surface_row_bundle_errors(surface: Any, label: str) -> list[str]
     validation_status_passed = (
         type(validation_status) is str and validation_status == "passed"
     )
-    if _public_mapping_has_string_key(payload, "validation_status") and (
-        type(validation_status) is not str
-        or validation_status not in {"passed", "blocked"}
+    validation_status_valid = (
+        type(validation_status) is str
+        and validation_status in {"passed", "blocked"}
+    )
+    if (
+        _public_mapping_has_string_key(payload, "validation_status")
+        and not validation_status_valid
     ):
         errors.append(f"{label} validation_status must be passed or blocked")
     elif not validation_status_passed:
@@ -7053,7 +7130,7 @@ def _corridor_phase_transcript_bundle_errors(
     errors: list[str] = []
     verifier = _verify_module()
     for phase, status in phases.items():
-        if status != "passed":
+        if not _corridor_phase_status_is_exact_passed(status):
             continue
         phase_error = _corridor_phase_key_error(
             phase,
@@ -8463,7 +8540,8 @@ def _release_report_bundle_errors(
                 phase_key_errors.append(phase_error)
             elif phase not in known_corridor_phases:
                 errors.append(f"{label}.corridor has unknown phase status: {phase}")
-            if status not in {"passed", "blocked"}:
+            status_is_passed = _corridor_phase_status_is_exact_passed(status)
+            if not _corridor_phase_status_is_valid(status):
                 if phase_error is None:
                     errors.append(
                         f"{label}.corridor phase {phase} status must be passed or blocked"
@@ -8472,7 +8550,7 @@ def _release_report_bundle_errors(
                     errors.append(
                         f"{label}.corridor phase status must be passed or blocked"
                     )
-            elif corridor_production_ready is True and status != "passed":
+            elif corridor_production_ready is True and not status_is_passed:
                 if phase_error is None:
                     errors.append(
                         f"{label}.corridor phase {phase} is not passed: {status!r}"
@@ -8529,7 +8607,7 @@ def _release_report_bundle_errors(
         )
         if corridor_require_phase_evidence is True:
             for phase, status in phases.items():
-                if status != "passed":
+                if not _corridor_phase_status_is_exact_passed(status):
                     continue
                 phase_error = _corridor_phase_key_error(
                     phase,
@@ -8887,6 +8965,10 @@ def _release_notes_attachment(
 
 
 def _bundle_artifacts(output_dir: Path, paths: list[Path]) -> list[dict[str, Any]]:
+    output_dir = _require_native_path(
+        output_dir,
+        value_error="release bundle output directory must be a native path",
+    )
     return [_artifact(path, output_dir) for path in paths]
 
 
@@ -9161,6 +9243,10 @@ def _strict_verifier_summary_errors(summary: Any) -> list[str]:
 
 
 def _verify_generated_bundle(output_dir: Path) -> dict[str, Any]:
+    output_dir = _require_native_path(
+        output_dir,
+        value_error="generated SCCP release bundle path must be a native path",
+    )
     summary = _verify_module().verify_bundle(output_dir)
     summary_errors = _strict_verifier_summary_errors(summary)
     if summary_errors:
@@ -9178,6 +9264,14 @@ def _verify_generated_bundle(output_dir: Path) -> dict[str, Any]:
 
 
 def _relative_to_bundle(output_dir: Path, path: Path) -> Path:
+    output_dir = _require_native_path(
+        output_dir,
+        value_error="release bundle relative path root must be a native path",
+    )
+    path = _require_native_path(
+        path,
+        value_error="release bundle relative path target must be a native path",
+    )
     return path.relative_to(output_dir)
 
 
@@ -9188,6 +9282,10 @@ def _relative_phase_evidence_arg(root: Path, raw: object) -> str:
         raise ValueError(
             "release bundle phase evidence assignment must use NAME=PATH syntax"
         )
+    root = _require_native_path(
+        root,
+        value_error="release bundle phase evidence root must be a native path",
+    )
     phase, path_text = raw.split("=", 1)
     return f"{phase}={_relative_to_bundle(root, Path(path_text))}"
 
@@ -9228,6 +9326,14 @@ def _build_bundle_report(
 
 
 def _absolute_from_cwd(path: Path, cwd: Path) -> Path:
+    path = _require_native_path(
+        path,
+        value_error="release bundle path must be a native path",
+    )
+    cwd = _require_native_path(
+        cwd,
+        value_error="release bundle cwd must be a native path",
+    )
     return path if path.is_absolute() else cwd / path
 
 
@@ -9342,6 +9448,10 @@ def _prepare_output_dir(path: Path, *, force: bool) -> None:
     if type(force) is not bool:
         raise ValueError("release bundle output force must be a boolean")
 
+    path = _require_native_path(
+        path,
+        value_error="release bundle output directory must be a native path",
+    )
     if path.exists():
         if not force:
             raise FileExistsError("output directory already exists")
@@ -9358,6 +9468,7 @@ def _path_contains(parent: Path, child: Path) -> bool:
 
 
 def _reject_path_control_characters(path: Path, label: str) -> None:
+    path = _require_native_path(path, value_error=f"{label} must be a native path")
     path_text = str(path)
     control_character = _path_control_character(path_text)
     if control_character is not None:
@@ -9380,6 +9491,10 @@ def _reject_sensitive_source_filename(name: str) -> None:
 
 def _reject_symlink_sources(paths: list[Path]) -> None:
     for path in paths:
+        path = _require_native_path(
+            path,
+            value_error="release bundle source path must be a native path",
+        )
         _reject_path_control_characters(path, "release bundle source path")
         if path.name.strip() != path.name:
             raise ValueError(
@@ -9409,6 +9524,10 @@ def _reject_symlink_sources(paths: list[Path]) -> None:
 
 
 def _evidence_input_identity(path: Path) -> tuple[object, ...]:
+    path = _require_native_path(
+        path,
+        value_error="release bundle evidence input path must be a native path",
+    )
     try:
         status = path.stat()
     except FileNotFoundError:
@@ -9419,6 +9538,10 @@ def _evidence_input_identity(path: Path) -> tuple[object, ...]:
 def _reject_duplicate_evidence_inputs(paths: list[Path]) -> None:
     seen: dict[tuple[object, ...], Path] = {}
     for path in paths:
+        path = _require_native_path(
+            path,
+            value_error="release bundle evidence input path must be a native path",
+        )
         identity = _evidence_input_identity(path)
         previous = seen.get(identity)
         if previous is not None:
@@ -9430,6 +9553,10 @@ def _reject_duplicate_evidence_inputs(paths: list[Path]) -> None:
 
 
 def _reject_symlinked_existing_output_path(path: Path) -> None:
+    path = _require_native_path(
+        path,
+        value_error="release bundle output directory must be a native path",
+    )
     symlink_component = first_symlinked_existing_path_component(path)
     if symlink_component is None:
         return
@@ -9441,6 +9568,10 @@ def _reject_symlinked_existing_output_path(path: Path) -> None:
 
 
 def _reject_existing_output_non_directory(path: Path) -> None:
+    path = _require_native_path(
+        path,
+        value_error="release bundle output directory must be a native path",
+    )
     if path.exists() and not path.is_dir():
         raise ValueError("release bundle output directory must be a directory")
 
@@ -9605,7 +9736,10 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
         or getattr(exc, "filename2", None) is not None
     ):
         return fallback
-    text = str(exc)
+    try:
+        text = str(exc)
+    except Exception:
+        return fallback
     if not text:
         return fallback
     if not text.isascii():

@@ -3220,6 +3220,8 @@ mod handle_update_tests {
             proto_version: u32::from(marker),
             consensus_fingerprint: [marker; 32],
             config: crate::ConsensusConfigCaps {
+                nexus_policy_digest: [marker; 32],
+                v2_config_fingerprint: [marker; 32],
                 collectors_k: u16::from(marker),
                 redundant_send_r: marker,
                 da_enabled: marker.is_multiple_of(2),

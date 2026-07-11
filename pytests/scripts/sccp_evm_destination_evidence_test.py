@@ -855,6 +855,36 @@ def test_evm_runtime_bytecode_file_rejects_unreadable_file_shapes(tmp_path):
         def __fspath__(self):
             raise AssertionError("secret-token EVM runtime path-like was coerced")
 
+    # Source-inventory marker: runtime bytecode file native path helpers reject path-like inputs.
+    for path in (
+        str(outside),
+        HostileRuntimeBytecodePath(),
+        HostileRuntimeBytecodePathLike(),
+    ):
+        try:
+            module._read_runtime_bytecode_file_text(
+                path,
+                label="bridge runtime bytecode",
+            )
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == "bridge runtime bytecode file cannot be read"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError("EVM runtime bytecode helper accepted hostile path")
+
+        try:
+            module._reject_runtime_bytecode_file_symlink_path(path)
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == "runtime bytecode file cannot be read"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("EVM runtime bytecode symlink helper accepted hostile path")
+
     for path in (
         str(symlink_input),
         str(directory_input),
@@ -2655,6 +2685,52 @@ def test_evm_destination_exact_runtime_strings_reject_string_subclasses_without_
             assert exc.__cause__ is None
         else:
             raise AssertionError("EVM destination JSON accepted hostile runtime text")
+
+
+def test_evm_destination_scalar_literal_parsers_reject_string_subclasses_without_hooks():
+    module = load_evidence_module()
+
+    cases = (
+        (
+            lambda: module.parse_u32_decimal(
+                HostileEvmDestinationString("7"),
+                label="route canary log index",
+            ),
+            "route canary log index must be a canonical u32 decimal",
+        ),
+        (
+            lambda: module.parse_u64_decimal(
+                HostileEvmDestinationString("42"),
+                label="route canary block number",
+            ),
+            "route canary block number must be a canonical u64 decimal",
+        ),
+        (
+            lambda: module.parse_bool_literal(
+                HostileEvmDestinationString("true"),
+                label="route canary inclusion gate",
+            ),
+            "route canary inclusion gate must be true or false",
+        ),
+        (
+            lambda: module.parse_bool_literal(
+                HostileEvmDestinationString("false"),
+                label="route canary inclusion gate",
+            ),
+            "route canary inclusion gate must be true or false",
+        ),
+    )
+
+    for parser, expected_message in cases:
+        try:
+            parser()
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("EVM destination scalar parser accepted hostile text")
 
 
 def test_evm_destination_byte_helpers_reject_subclasses_without_hooks():

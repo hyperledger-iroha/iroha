@@ -7,6 +7,7 @@ import {
   buildSignedOrderbookOrderCancel,
   buildSignedOrderbookOrderRequest,
   buildSignedOrderbookSettlementReceipt,
+  deriveOrderbookOrderId,
   signOrderbookPayload,
   validateOrderbookPayload,
 } from "../src/sorafs.js";
@@ -142,9 +143,10 @@ test("signOrderbookPayload rejects malformed private keys", () => {
 });
 
 test("field-level orderbook builders emit valid signed payloads", () => {
+  const orderId = deriveOrderbookOrderId(ORDERBOOK_OWNER_ACCOUNT, "7");
+  assert.equal(orderId.length, 32);
   const order = buildSignedOrderbookOrderRequest(
     {
-      orderId: fixed32(0x11),
       side: "bid",
       tier: "hot",
       pricePerGibMicroXor: "1000000",
@@ -166,7 +168,7 @@ test("field-level orderbook builders emit valid signed payloads", () => {
 
   const cancel = buildSignedOrderbookOrderCancel(
     {
-      order_id: fixed32(0x11),
+      order_id: orderId,
       owner_account: ORDERBOOK_OWNER_ACCOUNT,
       reason: "owner_requested",
       nonce: 8n,
@@ -201,6 +203,37 @@ test("field-level orderbook builders emit valid signed payloads", () => {
       generatedAtUnix: 1_700_000_999,
     }).status,
     "Ok",
+  );
+});
+
+test("order id derivation matches the cross-SDK golden vector", () => {
+  assert.equal(
+    deriveOrderbookOrderId(Buffer.from("buyer@sora", "utf8"), 7n).toString("hex"),
+    "9d91ad7700ca0c4762e031f9231aa38dd4502c6048c6ffa31d365e3c4e080b69",
+  );
+  assert.throws(() => deriveOrderbookOrderId(Buffer.alloc(0), 7), /must not be empty/i);
+  assert.throws(() => deriveOrderbookOrderId(Buffer.from("buyer@sora"), 0), /greater than zero/i);
+});
+
+test("field-level orderbook builder rejects noncanonical supplied order ids", () => {
+  assert.throws(
+    () =>
+      buildSignedOrderbookOrderRequest(
+        {
+          orderId: fixed32(0x11),
+          side: "bid",
+          tier: "hot",
+          pricePerGibMicroXor: "1000000",
+          quantityGib: "12",
+          ownerAccount: ORDERBOOK_OWNER_ACCOUNT,
+          expiryUnix: "1700010000",
+          nonce: "7",
+          makerFeeBps: "25",
+          takerFeeBps: "30",
+        },
+        ORDERBOOK_PRIVATE_KEY,
+      ),
+    /canonical owner-and-nonce derivation/i,
   );
 });
 

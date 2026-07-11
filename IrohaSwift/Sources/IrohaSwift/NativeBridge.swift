@@ -73,9 +73,9 @@ enum NoritoBridgeLoader {
         expectedBridgeAbiVersion(for: currentIdentifier())
     }
     private static let expectedHashes: [String: String] = [
-        "macos-arm64": "7c6a5b157cdc61ac0022e8486bd709da806e1c6cc714643afb78659252379013",
-        "ios-arm64": "975baedc27e5f77e7694701439d68c1901d1c337f40a6f359e779139a8452ab2",
-        "ios-arm64_x86_64-simulator": "33cddff0a5f47516b46b2f176c195d65fcf4c02c9d84c23d0c6770cf0e857712"
+        "macos-arm64": "fc77593666772726caf3ca96516b943c7a6b89fb003a39c5fd6bb26d9b01851a",
+        "ios-arm64": "0de8b53c56f4ded6c0bed760ce8c527eeb9bc6cab0033e0aeb51ba034d8620dc",
+        "ios-arm64_x86_64-simulator": "c091e66c9fca491a2633ce65dc7920889a8b88fe9e3d2cda417930ba8cf7fb56"
     ]
     private static let requiredSymbols = [
         "connect_norito_bridge_abi_version",
@@ -1844,6 +1844,11 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
+    private typealias SorafsReferenceOrderbookOrderIdDeriveFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64,
+        UnsafeMutablePointer<UInt8>?, CUnsignedLong
+    ) -> Int32
     private typealias SorafsReferenceOrderbookOrderRequestBuilderFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong,
         UInt32, UInt32,
@@ -2161,6 +2166,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var sorafsLocalFetchFn: SorafsLocalFetchFn? = nil
     private var sorafsReferenceValidateOrderbookFn: SorafsReferencePayloadFn? = nil
     private var sorafsReferenceSignOrderbookFn: SorafsReferenceOrderbookSignFn? = nil
+    private var sorafsReferenceDeriveOrderbookOrderIdFn: SorafsReferenceOrderbookOrderIdDeriveFn? = nil
     private var sorafsReferenceBuildOrderbookOrderRequestFn: SorafsReferenceOrderbookOrderRequestBuilderFn? = nil
     private var sorafsReferenceBuildOrderbookOrderCancelFn: SorafsReferenceOrderbookCancelBuilderFn? = nil
     private var sorafsReferenceBuildOrderbookSettlementReceiptFn: SorafsReferenceOrderbookSettlementReceiptBuilderFn? = nil
@@ -2317,6 +2323,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let sorafsLocalFetchFn: Any? = nil
     private let sorafsReferenceValidateOrderbookFn: Any? = nil
     private let sorafsReferenceSignOrderbookFn: Any? = nil
+    private let sorafsReferenceDeriveOrderbookOrderIdFn: Any? = nil
     private let sorafsReferenceBuildOrderbookOrderRequestFn: Any? = nil
     private let sorafsReferenceBuildOrderbookOrderCancelFn: Any? = nil
     private let sorafsReferenceBuildOrderbookSettlementReceiptFn: Any? = nil
@@ -3280,6 +3287,14 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.sorafsReferenceSignOrderbookFn = nil
             }
+            if let symbol = dlsym(handle, "connect_norito_sorafs_reference_derive_orderbook_order_id") {
+                self.sorafsReferenceDeriveOrderbookOrderIdFn = unsafeBitCast(
+                    symbol,
+                    to: SorafsReferenceOrderbookOrderIdDeriveFn.self
+                )
+            } else {
+                self.sorafsReferenceDeriveOrderbookOrderIdFn = nil
+            }
             if let symbol = dlsym(handle, "connect_norito_sorafs_reference_build_signed_orderbook_order_request") {
                 self.sorafsReferenceBuildOrderbookOrderRequestFn = unsafeBitCast(
                     symbol,
@@ -3679,6 +3694,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.sorafsLocalFetchFn = nil
             self.sorafsReferenceValidateOrderbookFn = nil
             self.sorafsReferenceSignOrderbookFn = nil
+            self.sorafsReferenceDeriveOrderbookOrderIdFn = nil
             self.sorafsReferenceBuildOrderbookOrderRequestFn = nil
             self.sorafsReferenceBuildOrderbookOrderCancelFn = nil
             self.sorafsReferenceBuildOrderbookSettlementReceiptFn = nil
@@ -4310,6 +4326,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         return sorafsReferenceBuildOrderbookOrderRequestFn != nil
             && sorafsReferenceBuildOrderbookOrderCancelFn != nil
             && sorafsReferenceBuildOrderbookSettlementReceiptFn != nil
+            && sorafsReferenceDeriveOrderbookOrderIdFn != nil
             && freeFn != nil
         #else
         return false
@@ -9376,6 +9393,23 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             return nil
         }
         return takeData(pointer: outPtr, length: UInt(outLen))
+        #else
+        return nil
+        #endif
+    }
+
+    func sorafsReferenceDeriveOrderbookOrderId(ownerAccount: Data, nonce: UInt64) -> Data? {
+        #if canImport(Darwin)
+        guard let function = sorafsReferenceDeriveOrderbookOrderIdFn else { return nil }
+        var output = Data(count: 32)
+        let status = output.withUnsafeMutableBytes { outputBytes in
+            let outputPtr = outputBytes.baseAddress?.assumingMemoryBound(to: UInt8.self)
+            return withDataPointer(ownerAccount) { ownerPtr, ownerLen in
+                function(ownerPtr, ownerLen, nonce, outputPtr, CUnsignedLong(outputBytes.count))
+            }
+        }
+        guard status == 0 else { return nil }
+        return output
         #else
         return nil
         #endif

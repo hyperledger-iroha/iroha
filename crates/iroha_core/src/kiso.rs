@@ -1135,6 +1135,11 @@ mod tests {
                 eviction_required_replicas: iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             sumeragi: Sumeragi {
+                protocol_version:
+                    iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
+                round_timeout: Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS,
+                ),
                 role: NodeRole::Validator,
                 consensus_mode: iroha_config::parameters::actual::ConsensusMode::Permissioned,
                 mode_flip: iroha_config::parameters::actual::SumeragiModeFlip {

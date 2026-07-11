@@ -331,6 +331,27 @@ impl OperatorSignatures {
         self.enabled
     }
 
+    /// Return the canonical Ed25519 key payloads trusted by operator policy.
+    ///
+    /// PoR verdict authentication reuses this configured trust root rather
+    /// than trusting keys embedded by the submitter. Non-Ed25519 operator keys
+    /// are intentionally excluded because first-release PoR artefacts require
+    /// Ed25519 signatures.
+    pub(crate) fn trusted_ed25519_key_bytes(&self) -> Vec<Vec<u8>> {
+        let mut keys = self
+            .allowed_public_keys
+            .iter()
+            .chain(self.allow_node_key.then_some(&self.node_public_key))
+            .filter_map(|key| {
+                let (algorithm, bytes) = key.to_bytes();
+                (algorithm == iroha_crypto::Algorithm::Ed25519).then(|| bytes.to_vec())
+            })
+            .collect::<Vec<_>>();
+        keys.sort_unstable();
+        keys.dedup();
+        keys
+    }
+
     fn is_key_allowed(&self, public_key: &PublicKey) -> bool {
         if self.allow_node_key && public_key == &self.node_public_key {
             return true;
@@ -366,11 +387,10 @@ impl OperatorSignatures {
             })
     }
 
-    fn ensure_freshness(
+    fn validate_freshness(
         &self,
         timestamp_ms: u64,
         nonce: &str,
-        public_key: &PublicKey,
     ) -> Result<(), OperatorSignatureError> {
         let now_ms = Self::now_unix_ms();
         let delta_ms = now_ms.abs_diff(timestamp_ms);
@@ -390,6 +410,14 @@ impl OperatorSignatures {
             ));
         }
 
+        Ok(())
+    }
+
+    fn admit_nonce(
+        &self,
+        nonce: &str,
+        public_key: &PublicKey,
+    ) -> Result<(), OperatorSignatureError> {
         let replay_key = format!("{public_key}:{nonce}");
         if !self.replay_cache.check_and_insert(replay_key) {
             return Err(OperatorSignatureError::replay());
@@ -441,12 +469,17 @@ impl OperatorSignatures {
         let signature = parse_operator_signature_for_public_key(&signature_bytes, &public_key)?;
         validate_operator_signature_for_public_key(&signature, &public_key)?;
 
-        self.ensure_freshness(timestamp_ms, nonce, &public_key)?;
+        self.validate_freshness(timestamp_ms, nonce)?;
 
         let msg = Self::operator_request_message(method, uri, body, timestamp_ms, nonce);
         signature
             .verify(&public_key, &msg)
             .map_err(|_| OperatorSignatureError::bad_signature())?;
+
+        // Admit the nonce only after authenticating the request. `check_and_insert` is atomic for
+        // a replay key, so concurrently verified requests using the same nonce still have exactly
+        // one winner without letting unauthenticated traffic consume or evict cache entries.
+        self.admit_nonce(nonce, &public_key)?;
 
         Ok(())
     }
@@ -580,7 +613,10 @@ pub async fn enforce_operator_access(
 
 #[cfg(all(test, feature = "app_api"))]
 mod tests {
-    use std::sync::Arc;
+    use std::{
+        sync::{Arc, Barrier},
+        thread,
+    };
 
     use super::*;
     use axum::routing::get;
@@ -625,6 +661,41 @@ mod tests {
     fn checked_mldsa_keypair() -> KeyPair {
         KeyPair::try_from_seed(b"torii-operator-signature-mldsa".to_vec(), Algorithm::MlDsa)
             .expect("generate checked ML-DSA operator signature fixture keypair")
+    }
+
+    fn operator_signatures_with_capacity(
+        key_pair: &KeyPair,
+        capacity: usize,
+    ) -> OperatorSignatures {
+        let cfg = ToriiOperatorSignatures {
+            enabled: true,
+            allow_node_key: true,
+            allowed_public_keys: Vec::new(),
+            max_clock_skew: Duration::from_secs(60),
+            nonce_ttl: Duration::from_secs(300),
+            replay_cache_capacity: NonZeroUsize::new(capacity).expect("non-zero test capacity"),
+        };
+        OperatorSignatures::new(
+            cfg,
+            key_pair.public_key().clone(),
+            1024,
+            crate::routing::MaybeTelemetry::disabled(),
+        )
+    }
+
+    fn signed_headers_with_nonce(
+        key_pair: &KeyPair,
+        method: &crate::Method,
+        uri: &crate::Uri,
+        body: &[u8],
+        timestamp_ms: u64,
+        nonce: &str,
+    ) -> HeaderMap {
+        let message =
+            OperatorSignatures::operator_request_message(method, uri, body, timestamp_ms, nonce);
+        let signature = Signature::try_new(key_pair.private_key(), &message)
+            .expect("checked operator signature fixture");
+        operator_signature_headers(key_pair, timestamp_ms, nonce, &signature)
     }
 
     const ED25519_SMALL_ORDER_POINT: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
@@ -700,6 +771,155 @@ mod tests {
             .err()
             .expect("second use rejected");
         assert_eq!(err.code, "operator_signature_replay");
+    }
+
+    #[test]
+    fn bad_signature_does_not_consume_its_claimed_nonce() {
+        let key_pair = checked_ed25519_keypair();
+        let auth = operator_signatures_with_capacity(&key_pair, 1);
+        let uri: crate::Uri = "/v1/configuration".parse().unwrap();
+        let body = b"{}";
+        let timestamp_ms = OperatorSignatures::now_unix_ms();
+        let nonce = "nonce-after-bad-signature";
+        let valid_headers = signed_headers_with_nonce(
+            &key_pair,
+            &crate::Method::POST,
+            &uri,
+            body,
+            timestamp_ms,
+            nonce,
+        );
+
+        let mut invalid_headers = signed_headers_with_nonce(
+            &key_pair,
+            &crate::Method::POST,
+            &uri,
+            body,
+            timestamp_ms,
+            "nonce-that-was-actually-signed",
+        );
+        invalid_headers.insert(
+            HEADER_OPERATOR_NONCE,
+            nonce.parse().expect("claimed nonce header"),
+        );
+
+        let error = auth
+            .authorize_bytes(&invalid_headers, &crate::Method::POST, &uri, body)
+            .expect_err("mismatched signature must fail");
+        assert_eq!(error.code, "operator_signature_bad");
+
+        auth.authorize_bytes(&valid_headers, &crate::Method::POST, &uri, body)
+            .expect("bad signature must not consume the nonce");
+        let replay = auth
+            .authorize_bytes(&valid_headers, &crate::Method::POST, &uri, body)
+            .expect_err("authenticated nonce must remain replay-protected");
+        assert_eq!(replay.code, "operator_signature_replay");
+    }
+
+    #[test]
+    fn bad_signatures_cannot_poison_replay_cache_capacity() {
+        let key_pair = checked_ed25519_keypair();
+        let auth = operator_signatures_with_capacity(&key_pair, 2);
+        let uri: crate::Uri = "/v1/configuration".parse().unwrap();
+        let body = b"{}";
+        let timestamp_ms = OperatorSignatures::now_unix_ms();
+        let protected_headers: Vec<_> = ["protected-nonce-a", "protected-nonce-b"]
+            .into_iter()
+            .map(|nonce| {
+                signed_headers_with_nonce(
+                    &key_pair,
+                    &crate::Method::POST,
+                    &uri,
+                    body,
+                    timestamp_ms,
+                    nonce,
+                )
+            })
+            .collect();
+
+        for headers in &protected_headers {
+            auth.authorize_bytes(headers, &crate::Method::POST, &uri, body)
+                .expect("initial authenticated nonce use");
+        }
+
+        for index in 0..32 {
+            let mut poison_headers = signed_headers_with_nonce(
+                &key_pair,
+                &crate::Method::POST,
+                &uri,
+                body,
+                timestamp_ms,
+                "different-signed-nonce",
+            );
+            poison_headers.insert(
+                HEADER_OPERATOR_NONCE,
+                format!("poison-nonce-{index}")
+                    .parse()
+                    .expect("poison nonce header"),
+            );
+
+            let error = auth
+                .authorize_bytes(&poison_headers, &crate::Method::POST, &uri, body)
+                .expect_err("poisoning request must fail signature verification");
+            assert_eq!(error.code, "operator_signature_bad");
+        }
+
+        for headers in &protected_headers {
+            let replay = auth
+                .authorize_bytes(headers, &crate::Method::POST, &uri, body)
+                .expect_err("invalid traffic must not evict authenticated replay protection");
+            assert_eq!(replay.code, "operator_signature_replay");
+        }
+    }
+
+    #[test]
+    fn concurrent_valid_requests_with_same_nonce_have_one_winner() {
+        const WORKERS: usize = 16;
+
+        let key_pair = checked_ed25519_keypair();
+        let auth = operator_signatures_with_capacity(&key_pair, 64);
+        let uri: crate::Uri = "/v1/configuration".parse().unwrap();
+        let body = b"{}";
+        let headers = signed_headers_with_nonce(
+            &key_pair,
+            &crate::Method::POST,
+            &uri,
+            body,
+            OperatorSignatures::now_unix_ms(),
+            "concurrent-shared-nonce",
+        );
+        let barrier = Arc::new(Barrier::new(WORKERS));
+
+        let results = thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(WORKERS);
+            for _ in 0..WORKERS {
+                let barrier = Arc::clone(&barrier);
+                let headers = headers.clone();
+                let auth = &auth;
+                let uri = &uri;
+                handles.push(scope.spawn(move || {
+                    barrier.wait();
+                    auth.authorize_bytes(&headers, &crate::Method::POST, uri, body)
+                        .map_err(|error| error.code)
+                }));
+            }
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("authorization worker"))
+                .collect::<Vec<_>>()
+        });
+
+        let mut accepted = 0;
+        let mut replayed = 0;
+        for result in results {
+            match result {
+                Ok(()) => accepted += 1,
+                Err("operator_signature_replay") => replayed += 1,
+                Err(code) => panic!("unexpected concurrent authorization error: {code}"),
+            }
+        }
+        assert_eq!(accepted, 1);
+        assert_eq!(replayed, WORKERS - 1);
     }
 
     #[test]

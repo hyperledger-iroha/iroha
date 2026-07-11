@@ -32,7 +32,7 @@ import {
   generateDaProofSummary,
   emitDaProofSummaryArtifact,
 } from "./dataAvailability.js";
-import { sorafsGatewayFetch } from "./sorafs.js";
+import { normaliseGatewayProvider, sorafsGatewayFetch } from "./sorafs.js";
 import { buildPacs008Message, buildPacs009Message } from "./isoBridge.js";
 import { looksLikeIban, normalizeIban } from "./identifiers.js";
 import {
@@ -27295,36 +27295,33 @@ function normalizeDaGatewayProviders(value, context) {
   }
   return value.map((entry, index) => {
     const record = ensureRecord(entry, `${context}[${index}]`);
-    const name = requireNonEmptyString(
-      record.name,
-      `${context}[${index}].name`,
-    ).trim();
-    const providerIdHex = normalizeHex32String(
-      record.providerIdHex ??
+    const native = normaliseGatewayProvider({
+      name: record.name,
+      providerIdHex:
+        record.providerIdHex ??
         record.provider_id_hex ??
         record.providerId ??
         record.provider_id,
-      `${context}[${index}].providerIdHex`,
-    );
-    const baseUrl = requireNonEmptyString(
-      record.baseUrl,
-      `${context}[${index}].baseUrl`,
-    );
-    const streamTokenB64 = normalizeBase64Token(
-      record.streamTokenB64 ??
+      gatewayPublicKeyHex:
+        record.gatewayPublicKeyHex ??
+        record.gateway_public_key_hex ??
+        record.gatewayPublicKey ??
+        record.gateway_public_key,
+      baseUrl: record.baseUrl,
+      streamTokenB64:
+        record.streamTokenB64 ??
         record.stream_token_b64 ??
         record.streamToken ??
         record.stream_token,
-      `${context}[${index}].streamTokenB64`,
-    );
-    const privacyEventsUrl =
-      record.privacyEventsUrl ?? null;
+      privacyEventsUrl: record.privacyEventsUrl ?? record.privacy_events_url,
+    });
     return {
-      name,
-      providerIdHex,
-      baseUrl,
-      streamTokenB64,
-      privacyEventsUrl: privacyEventsUrl ?? null,
+      name: native.name,
+      providerIdHex: native.provider_id_hex,
+      gatewayPublicKeyHex: native.gateway_public_key_hex,
+      baseUrl: native.base_url,
+      streamTokenB64: native.stream_token_b64,
+      privacyEventsUrl: native.privacy_events_url ?? null,
     };
   });
 }

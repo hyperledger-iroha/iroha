@@ -69,7 +69,7 @@ cargo test -p sorafs_car --features cli fetch_command_respects_direct_transports
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
-  --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
+  --provider name=gw-regulated,provider-id=001122...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64
 ```- اسکرپٹ دونوں CLI جھنڈوں اور کلیدی = ویلیو کنفیگ فائلوں دونوں کا احترام کرتا ہے (`docs/examples/sorafs_direct_mode_smoke.conf` دیکھیں)۔ لانچ کرنے سے پہلے ، فراہم کنندہ کے ڈائجسٹ مینی فیسٹ کو پُر کریں اور پروڈکشن کی اقدار کے ساتھ اشتہارات کے ریکارڈ کو پُر کریں۔
 - `--policy` `docs/examples/sorafs_direct_mode_policy.json` پر پہلے سے طے شدہ ہے ، لیکن `sorafs_orchestrator::bindings::config_to_json` کے ذریعہ تیار کردہ کوئی بھی آرکسٹریٹر JSON پاس کیا جاسکتا ہے۔ سی ایل آئی پالیسی کو `--orchestrator-config=PATH` کے توسط سے قبول کرتا ہے ، جو دستی طور پر جھنڈوں کو ایڈجسٹ کیے بغیر تولیدی رنز فراہم کرتا ہے۔
 - اگر `sorafs_cli` `PATH` میں نہیں ہے تو ، مددگار اسے `sorafs_orchestrator` کریٹ (ریلیز پروفائل) سے جمع کرتا ہے تاکہ دھواں رنز فراہم کردہ ڈائریکٹ موڈ سرکٹ کی جانچ پڑتال کریں۔

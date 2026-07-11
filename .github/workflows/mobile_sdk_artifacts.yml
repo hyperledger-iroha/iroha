@@ -21,6 +21,11 @@ on:
         description: "Artifact version override; defaults to tag, PR number, or commit."
         required: false
         type: string
+      privacy_production_enabled:
+        description: "Build the opt-in real privacy prover/verifier after production-gate evidence is approved."
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -42,7 +47,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Shell syntax
-        run: bash -n scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/package_mobile_sdk_artifacts.sh
+        run: bash -n scripts/build_norito_xcframework.sh scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/package_mobile_sdk_artifacts.sh
       - name: Artifact checker fixture tests
         run: bash scripts/check_mobile_sdk_artifacts_test.sh
 
@@ -72,7 +77,20 @@ jobs:
       - name: Install Apple Rust targets
         run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin
       - name: Build NoritoBridge XCFramework
-        run: NORITO_BRIDGE_PRESERVE_CARGO_TARGETS=1 scripts/build_norito_xcframework.sh
+        env:
+          PRIVACY_PRODUCTION_ENABLED: ${{ inputs.privacy_production_enabled || false }}
+        run: |
+          build_args=()
+          if [[ "$PRIVACY_PRODUCTION_ENABLED" == "true" ]]; then
+            build_args+=(--privacy-production-enabled)
+          fi
+          NORITO_BRIDGE_PRESERVE_CARGO_TARGETS=1 \
+            scripts/build_norito_xcframework.sh "${build_args[@]}"
+          if [[ "$PRIVACY_PRODUCTION_ENABLED" == "true" ]]; then
+            test -f dist/NoritoBridge.xcframework/.privacy-production-enabled
+          else
+            test ! -e dist/NoritoBridge.xcframework/.privacy-production-enabled
+          fi
       - name: Validate Apple mobile SDK artifact
         run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only
       - name: Package Apple mobile SDK artifact
