@@ -1,5 +1,21 @@
 import Foundation
 
+/// Unsigned registration transaction for external/secure-element signing.
+public struct OfflineDeviceAttestationUnsignedTransaction: Sendable {
+    /// Digest that the account signing service must sign.
+    public let signingHash: Data
+
+    fileprivate let transactionPayload: Data
+
+    /// Attach one canonical Ed25519 signature and produce the Torii envelope.
+    public func signed(signature: Data) throws -> SignedTransactionEnvelope {
+        try OfflineNoteV2SwiftNoritoEncoder.finalizeUnsignedTransaction(
+            transactionPayload: transactionPayload,
+            signature: signature
+        )
+    }
+}
+
 private enum OfflineNoteV2SwiftNoritoEncoder {
     private static let signedTransactionWireVersion: UInt8 = 1
 
@@ -88,20 +104,43 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
                                                 registration: OfflineDeviceAttestationRegistration,
                                                 metadata: [String: ToriiJSONValue],
                                                 signingKey: SigningKey) throws -> SignedTransactionEnvelope {
+        let unsigned = try encodeRegisterDeviceAttestationUnsigned(
+            chainId: chainId,
+            authority: authority,
+            creationTimeMs: creationTimeMs,
+            ttlMs: ttlMs,
+            nonce: nonce,
+            registration: registration,
+            metadata: metadata
+        )
+        return try unsigned.signed(signature: signingKey.sign(unsigned.signingHash))
+    }
+
+    static func encodeRegisterDeviceAttestationUnsigned(chainId: String,
+                                                        authority: String,
+                                                        creationTimeMs: UInt64,
+                                                        ttlMs: UInt64?,
+                                                        nonce: UInt32?,
+                                                        registration: OfflineDeviceAttestationRegistration,
+                                                        metadata: [String: ToriiJSONValue]) throws
+        -> OfflineDeviceAttestationUnsignedTransaction {
         let instruction = try encodeInstruction(
             wireName: OfflineNoteV2TypeNames.registerDeviceAttestationInstruction,
             typeName: OfflineNoteV2TypeNames.registerDeviceAttestationInstruction,
             modelPayload: OfflineNoteV2Encoding.encodeDeviceAttestationRegistration(registration)
         )
-        return try encodeTransaction(
+        let payload = try encodeTransactionPayload(
             chainId: chainId,
             authority: authority,
             creationTimeMs: creationTimeMs,
             ttlMs: ttlMs,
             nonce: nonce,
             instructionPayload: instruction,
-            metadata: metadata,
-            signingKey: signingKey
+            metadata: metadata
+        )
+        return OfflineDeviceAttestationUnsignedTransaction(
+            signingHash: IrohaHash.hash(payload),
+            transactionPayload: payload
         )
     }
 
@@ -140,6 +179,28 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
             metadata: metadata
         )
         let signature = try signingKey.sign(IrohaHash.hash(transactionPayload))
+        let signedTransaction = encodeSignedTransaction(
+            signature: signature,
+            transactionPayload: transactionPayload
+        )
+        let transactionHash = IrohaHash.hash(encodeTransactionEntrypoint(signedTransaction))
+        var norito = Data([signedTransactionWireVersion])
+        norito.append(signedTransaction)
+        return SignedTransactionEnvelope(
+            norito: norito,
+            signedTransaction: signedTransaction,
+            payload: nil,
+            transactionHash: transactionHash
+        )
+    }
+
+    fileprivate static func finalizeUnsignedTransaction(
+        transactionPayload: Data,
+        signature: Data
+    ) throws -> SignedTransactionEnvelope {
+        guard signature.count == 64, signature.contains(where: { $0 != 0 }) else {
+            throw OfflineNoteV2Error.nonCanonicalField(field: "transaction_signature")
+        }
         let signedTransaction = encodeSignedTransaction(
             signature: signature,
             transactionPayload: transactionPayload
@@ -195,7 +256,7 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
     }
 
     private static func encodeTransactionEntrypoint(_ signedTransaction: Data) -> Data {
-        var entrypoint = OfflineNoritoWriter()
+        var entrypoint = OfflineCompactNoritoWriter()
         entrypoint.writeUInt32LE(0)
         entrypoint.writeField(signedTransaction)
         return entrypoint.data
@@ -305,6 +366,25 @@ extension SwiftTransactionEncoder {
             signingKey: signingKey
         )
     }
+
+    static func encodeUnsignedRegisterOfflineDeviceAttestation(
+        request: RegisterOfflineDeviceAttestationRequest,
+        creationTimeMs: UInt64
+    ) throws -> OfflineDeviceAttestationUnsignedTransaction {
+        let ids = try TransactionInputValidator.validate(
+            chainId: request.chainId,
+            authorityId: request.authority
+        )
+        return try OfflineNoteV2SwiftNoritoEncoder.encodeRegisterDeviceAttestationUnsigned(
+            chainId: ids.chainId,
+            authority: ids.authorityId,
+            creationTimeMs: creationTimeMs,
+            ttlMs: request.ttlMs,
+            nonce: request.nonce,
+            registration: request.registration,
+            metadata: request.metadata
+        )
+    }
 }
 
 public extension IrohaSDK {
@@ -369,6 +449,25 @@ public extension IrohaSDK {
             keypair: keypair,
             creationTimeMs: creationTimeProvider()
         )
+    }
+
+    /// Build the exact transaction digest without exporting account key material.
+    func buildUnsignedRegisterOfflineDeviceAttestation(
+        request: RegisterOfflineDeviceAttestationRequest
+    ) throws -> OfflineDeviceAttestationUnsignedTransaction {
+        try SwiftTransactionEncoder.encodeUnsignedRegisterOfflineDeviceAttestation(
+            request: request,
+            creationTimeMs: creationTimeProvider()
+        )
+    }
+
+    /// Build registration with an external signer such as a transient signing service.
+    func buildRegisterOfflineDeviceAttestation(
+        request: RegisterOfflineDeviceAttestationRequest,
+        signer: (Data) throws -> Data
+    ) throws -> SignedTransactionEnvelope {
+        let unsigned = try buildUnsignedRegisterOfflineDeviceAttestation(request: request)
+        return try unsigned.signed(signature: signer(unsigned.signingHash))
     }
 
     func buildRegisterOfflineDeviceAttestation(request: RegisterOfflineDeviceAttestationRequest,

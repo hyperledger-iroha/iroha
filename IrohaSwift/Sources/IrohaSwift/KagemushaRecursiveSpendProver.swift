@@ -59,7 +59,8 @@ public enum KagemushaRecursiveSpendProver {
         "kagemusha-recursive-spend-lineage-append-v1"
     public static let compactTokenMaxHops: UInt32 = 64
     public static let recursiveSpendLineageWitnesslessMaxHopsV1: UInt32 = 64
-    public static let recursiveSpendLineageTransitionCircuitWiredV1 = true
+    /// Reserved-lineage transition proofs are not admitted until the verifier circuit is wired.
+    public static let recursiveSpendLineageTransitionCircuitWiredV1 = false
     public static let recursivePreviousProofOpenEnvelopesRequiredCountV1 = 1
     public static let recursivePreviousProofOpenEnvelopesMaxBytes = 8 * 1024 * 1024
     public static let recursivePallasOpenEnvelopeMaxTranscriptLabelBytes = 128

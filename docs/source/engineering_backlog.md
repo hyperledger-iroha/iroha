@@ -9458,7 +9458,7 @@ redistributable schemas, and official trust/revocation bundles.
     disabled telemetry, schema, and profiling paths as well.
   - Completed 2026-06-06: account-alias resolver service fallbacks no longer
     return `501 Not Implemented` for non-account `AliasTarget` records.
-    `/v1/aliases/resolve` and `/v1/aliases/resolve_index` now return a
+    `/v1/aliases/resolve` and `/v1/aliases/resolve-index` now return a
     documented `409 Conflict` when a stored alias-service record targets an
     asset, peer, or custom payload instead of an account.
   - Completed 2026-06-06: routed-query `query_unsupported` responses now use

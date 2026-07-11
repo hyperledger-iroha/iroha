@@ -1,6 +1,7 @@
 import { Buffer } from "buffer";
 import { ed25519 } from "@noble/curves/ed25519";
 import { sha256 } from "@noble/hashes/sha256";
+import { verifyEd25519Strict } from "./ed25519Strict.js";
 import {
   entropyToMnemonic,
   generateMnemonic,
@@ -273,7 +274,7 @@ export function verifyEd25519(message, signature, publicKey) {
   const messageBuffer = toBuffer(message, "message");
   const signatureBuffer = toBuffer(signature, "signature");
   const publicKeyBuffer = normalizePublicKey(publicKey);
-  return ed25519.verify(signatureBuffer, messageBuffer, publicKeyBuffer);
+  return verifyEd25519Strict(messageBuffer, signatureBuffer, publicKeyBuffer);
 }
 
 function recoveryPhraseWords(phrase) {
@@ -439,7 +440,8 @@ export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 =
   "kagemusha-recursive-spend-lineage-append-v1";
 export const KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS = 64;
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64;
-export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = true;
+// Reserved-lineage transition proofs remain fail-closed until the verifier is wired.
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = false;
 export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1 = 1;
 export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES = 8 * 1024 * 1024;
 export const KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES = 128;

@@ -1069,9 +1069,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             name: "lineage_witness_append_result"
         )
         let lineageVerifierRecord = try Self.sampleVerifierRecord()
-        var mutableVerifierRecordBytes = Self.syntheticArchive(
-            schema: KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName
-        )
+        var mutableVerifierRecordBytes = try canonicalKagemushaVerifierRecordArchive(seed: 0x67)
         let copiedVerifierRecordBytes = mutableVerifierRecordBytes
         let copiedVerifierRecord = try KagemushaRecursiveSpendVerifierRecordRef(
             verifierKeyId: "halo2/ipa:copied-verifier-record",
@@ -1134,13 +1132,20 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                     recipient: try Self.sampleRecipient(),
                     publicAmount: "7",
                     redeemProof: redeemProof,
+                    lineageWitness: lineageWitness,
                     lineageVerifierRecord: lineageVerifierRecord
                 )
             ),
             schema: KagemushaRecursiveSpendRequestCodecs.redeemRequestWireName
         )
         XCTAssertEqual(exactRedeemFields.count, 9)
-        try Self.assertOptionNone(exactRedeemFields[4])
+        XCTAssertEqual(
+            try Self.compactPayload(
+                lineageWitness,
+                schema: KagemushaRecursiveSpendRequestCodecs.lineageWitnessWireName
+            ),
+            try Self.optionSomePayload(exactRedeemFields[4])
+        )
         try Self.assertOptionNone(exactRedeemFields[5])
         XCTAssertEqual(
             try Self.compactPayload(
@@ -1159,6 +1164,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                     recipient: try Self.sampleRecipient(),
                     publicAmount: "7",
                     redeemProof: redeemProof,
+                    lineageWitness: lineageWitness,
                     lineageVerifierRecords: [lineageVerifierRecord]
                 )
             ),
@@ -1182,6 +1188,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             recipient: try Self.sampleRecipient(),
             publicAmount: "7",
             redeemProof: redeemProof,
+            lineageWitness: lineageWitness,
             lineageVerifierRecords: mutableLineageVerifierRecords
         )
         mutableLineageVerifierRecords.removeAll()
@@ -1979,6 +1986,9 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
 
+        // The first release disables witnessless lineage transitions. That
+        // fail-closed output-circuit check must precede every optional lineage
+        // artifact or previous-proof parser, including adversarial archives.
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendAppendRequest(
                 previousBundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
@@ -1994,7 +2004,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 error as? KagemushaRecursiveSpendRequestCodecError,
-                .invalidField("lineageVerifierKey")
+                .invalidField("outputProofCircuitId")
             )
         }
         XCTAssertThrowsError(
@@ -2012,7 +2022,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 error as? KagemushaRecursiveSpendRequestCodecError,
-                .invalidField("previousProofOpenEnvelopes")
+                .invalidField("outputProofCircuitId")
             )
         }
         XCTAssertThrowsError(
@@ -2030,7 +2040,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 error as? KagemushaRecursiveSpendRequestCodecError,
-                .invalidArchive("previousProofOpenEnvelopes")
+                .invalidField("outputProofCircuitId")
             )
         }
         for transcriptLabel in ["", String(repeating: "\u{00e9}", count: 65)] {
@@ -2051,7 +2061,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             ) { error in
                 XCTAssertEqual(
                     error as? KagemushaRecursiveSpendRequestCodecError,
-                    .invalidArchive("previousProofOpenEnvelopes")
+                    .invalidField("outputProofCircuitId")
                 )
             }
         }
@@ -2072,7 +2082,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             ) { error in
                 XCTAssertEqual(
                     error as? KagemushaRecursiveSpendRequestCodecError,
-                    .invalidArchive("previousProofOpenEnvelopes.\(metadataField)"),
+                    .invalidField("outputProofCircuitId"),
                     metadataField
                 )
             }
@@ -2094,7 +2104,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             ) { error in
                 XCTAssertEqual(
                     error as? KagemushaRecursiveSpendRequestCodecError,
-                    .invalidArchive("previousProofOpenEnvelopes.\(sequenceField)"),
+                    .invalidField("outputProofCircuitId"),
                     sequenceField
                 )
             }
@@ -2133,9 +2143,8 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
     }
 
     private static func sampleVerifierRecord() throws -> KagemushaRecursiveSpendVerifierRecordRef {
-        try KagemushaRecursiveSpendVerifierRecordRef(
-            verifierKeyId: "halo2/ipa:kagemusha-recursive-spend-lineage-test",
-            recordBytes: syntheticArchive(schema: KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName)
+        try canonicalKagemushaVerifierRecordRef(
+            verifierKeyId: "halo2/ipa:kagemusha-recursive-spend-lineage-test"
         )
     }
 

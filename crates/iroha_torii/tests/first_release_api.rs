@@ -162,6 +162,175 @@ async fn retired_api_versions_endpoint_is_unmounted() {
 }
 
 #[tokio::test]
+async fn retired_route_spellings_and_iso_status_alias_cannot_resolve() {
+    let router = build_router();
+    let retired = [
+        (Method::POST, "/v1/aliases/resolve_index"),
+        (Method::POST, "/v1/aliases/by_account"),
+        (Method::GET, "/v1/da/proof_policies"),
+        (Method::GET, "/v1/da/proof_policy_snapshot"),
+        (Method::POST, "/v1/da/pin_intents"),
+        (Method::POST, "/v1/da/pin_intents/prove"),
+        (Method::POST, "/v1/da/pin_intents/verify"),
+        (Method::GET, "/v1/iso20022/status/message-1"),
+        (Method::GET, "/v1/sumeragi/new_view/json"),
+        (Method::GET, "/v1/sumeragi/new_view/sse"),
+        (Method::GET, "/v1/sumeragi/bls_keys"),
+        (Method::GET, "/v1/sumeragi/commit_qc/deadbeef"),
+        // A parameter-looking tail must not let the retired item prefix
+        // resolve through the canonical commit-certificate resources.
+        (Method::GET, "/v1/sumeragi/commit_qc/commit-certificates"),
+        // Router normalization must not turn alternate spellings into aliases.
+        (Method::POST, "/v1/aliases/resolve-index/"),
+        (Method::POST, "/v1/Aliases/resolve-index"),
+        (Method::POST, "/v1/aliases//resolve-index"),
+        (Method::POST, "/v1/aliases/resolve%5Findex"),
+    ];
+
+    for (method, path) in retired {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method.clone())
+                    .uri(path)
+                    .extension(local_connect_info())
+                    .header(ACCEPT, "application/json")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from("{}"))
+                    .expect("retired-route request"),
+            )
+            .await
+            .expect("retired-route response");
+        let (status, _, envelope) = decode_error_response(response).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}");
+        assert_eq!(envelope.code(), "route_not_found", "{method} {path}");
+    }
+}
+
+#[tokio::test]
+async fn unsupported_por_routes_are_unregistered_and_cannot_mutate_state() {
+    async fn por_status_snapshot(router: &axum::Router) -> Vec<u8> {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/sorafs/por/status")
+                    .extension(local_connect_info())
+                    .body(axum::body::Body::empty())
+                    .expect("PoR status request"),
+            )
+            .await
+            .expect("PoR status response");
+        assert_eq!(response.status(), StatusCode::OK);
+        response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect PoR status")
+            .to_bytes()
+            .to_vec()
+    }
+
+    let router = build_router();
+    let before = por_status_snapshot(&router).await;
+    let unsupported = [
+        "/v1/sorafs/capacity/por-challenge",
+        "/v1/sorafs/capacity/por",
+        "/v1/sorafs/por/trigger",
+        "/v1/sorafs/storage/por-challenge",
+        "/v1/sorafs/storage/por-proof",
+        "/v1/sorafs/storage/por-verdict",
+        // No retired spelling may be recovered through a slash alias, case
+        // folding, or a parameter-looking suffix.
+        "/v1/sorafs/capacity/por-challenge/",
+        "/v1/SoraFS/capacity/por-challenge",
+        "/v1/sorafs/capacity/por-challenge/arbitrary",
+        "/v1/sorafs/storage/por-proof/arbitrary",
+    ];
+
+    for path in unsupported {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(path)
+                    .extension(local_connect_info())
+                    .header(ACCEPT, "application/json")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from(
+                        r#"{"challenge_b64":"forged","proof_b64":"forged","verdict_b64":"forged","success":true}"#,
+                    ))
+                    .expect("unsupported PoR request"),
+            )
+            .await
+            .expect("unsupported PoR response");
+        let (status, _, envelope) = decode_error_response(response).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "POST {path}");
+        assert_eq!(envelope.code(), "route_not_found", "POST {path}");
+        assert_eq!(
+            por_status_snapshot(&router).await,
+            before,
+            "unregistered route changed PoR state: POST {path}"
+        );
+    }
+
+    for active_path in [
+        "/v1/sorafs/capacity/por-proof",
+        "/v1/sorafs/capacity/por-verdict",
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(active_path)
+                    .extension(local_connect_info())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from("{}"))
+                    .expect("active PoR route request"),
+            )
+            .await
+            .expect("active PoR route response");
+        assert_ne!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "active route was removed: POST {active_path}"
+        );
+    }
+}
+
+#[cfg(feature = "telemetry")]
+#[tokio::test]
+async fn canonical_sumeragi_spellings_reach_their_resource_handlers() {
+    let router = build_router();
+    for path in [
+        "/v1/sumeragi/new-view",
+        "/v1/sumeragi/bls-keys",
+        "/v1/sumeragi/commit-qcs/deadbeef",
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .extension(local_connect_info())
+                    .header(ACCEPT, "application/json")
+                    .body(axum::body::Body::empty())
+                    .expect("canonical Sumeragi request"),
+            )
+            .await
+            .expect("canonical Sumeragi response");
+        assert_ne!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "canonical route must resolve: {path}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn proof_access_is_not_gated_by_a_version_header() {
     let response = build_router()
         .oneshot(

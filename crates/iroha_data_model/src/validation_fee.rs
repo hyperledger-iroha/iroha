@@ -8,13 +8,17 @@ use iroha_primitives::{json::Json, numeric::Numeric};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
-use crate::parameter::{CustomParameter, CustomParameterId};
+use crate::{
+    Level,
+    isi::{InstructionBox, Log},
+    parameter::{CustomParameter, CustomParameterId},
+};
 
 /// Schema version for the initial validation-fee policy.
 pub const VALIDATION_FEE_POLICY_SCHEMA_VERSION: u16 = 1;
-/// Decimal scale required for the initial SBD validation-fee policy.
-pub const VALIDATION_FEE_SBD_SCALE: u8 = 2;
-/// Fee amount required by the initial SBD validation-fee policy, in minor units.
+/// Decimal scale required for the initial Digital Shekel validation-fee policy.
+pub const VALIDATION_FEE_DS_SCALE: u8 = 2;
+/// Fee amount required by the initial Digital Shekel validation-fee policy, in minor units.
 pub const VALIDATION_FEE_INITIAL_MINOR_UNITS: u64 = 10;
 /// Only release exemption class implemented by validator admission.
 pub const VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS: &str = "TREASURY_PAYOUT";
@@ -31,6 +35,162 @@ pub const VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY: &str = "validation_fee_
 /// Transaction metadata key that identifies the aggregate validation-fee batch entry, when used.
 pub const VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY: &str =
     "validation_fee_transfer_entry_index";
+/// Reserved prefix for the canonical marker carried inside fee-bearing multisig proposals.
+pub const VALIDATION_FEE_MULTISIG_MARKER_PREFIX: &str = "iroha:validation_fee:multisig:v1:";
+const VALIDATION_FEE_MULTISIG_MARKER_RESERVED_PREFIX: &str = "iroha:validation_fee:multisig:";
+
+/// Signed fee designation carried inside a multisig proposal's instruction list.
+///
+/// The marker is encoded as a canonical `TRACE` [`Log`] instruction. Because it is part of the
+/// proposal instruction list, both the proposal hash and every approval bind the active policy and
+/// exact fee coordinate, including an optional batch-entry coordinate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ValidationFeeMultisigMarkerV1 {
+    /// Active signed validation-fee policy version.
+    pub policy_version: u64,
+    /// Active signed validation-fee policy hash.
+    pub policy_hash: [u8; 32],
+    /// Fee transfer instruction index within this proposal execution context.
+    pub instruction_index: u64,
+    /// Fee batch-entry index, when the fee is an entry in `TransferAssetBatch`.
+    pub transfer_entry_index: Option<u64>,
+}
+
+impl ValidationFeeMultisigMarkerV1 {
+    /// Construct a canonical multisig validation-fee marker.
+    pub const fn new(
+        policy_version: u64,
+        policy_hash: [u8; 32],
+        instruction_index: u64,
+        transfer_entry_index: Option<u64>,
+    ) -> Self {
+        Self {
+            policy_version,
+            policy_hash,
+            instruction_index,
+            transfer_entry_index,
+        }
+    }
+
+    /// Encode this marker as the canonical no-asset-effect instruction.
+    pub fn into_instruction(self) -> InstructionBox {
+        let entry = self
+            .transfer_entry_index
+            .map_or_else(|| "-".to_owned(), |index| index.to_string());
+        Log::new(
+            Level::TRACE,
+            format!(
+                "{VALIDATION_FEE_MULTISIG_MARKER_PREFIX}{}:{}:{}:{entry}",
+                self.policy_version,
+                hex::encode(self.policy_hash),
+                self.instruction_index,
+            ),
+        )
+        .into()
+    }
+
+    /// Parse a canonical marker instruction.
+    ///
+    /// Returns `Ok(None)` for ordinary instructions and logs outside the reserved marker namespace.
+    /// Any instruction claiming the reserved namespace must be canonical or parsing fails closed.
+    pub fn parse_instruction(
+        instruction: &InstructionBox,
+    ) -> Result<Option<Self>, ValidationFeeMultisigMarkerError> {
+        let Some(log) = instruction.as_any().downcast_ref::<Log>() else {
+            return Ok(None);
+        };
+        if !log
+            .msg
+            .starts_with(VALIDATION_FEE_MULTISIG_MARKER_RESERVED_PREFIX)
+        {
+            return Ok(None);
+        }
+        if log.level != Level::TRACE {
+            return Err(ValidationFeeMultisigMarkerError::WrongLogLevel);
+        }
+        let Some(payload) = log.msg.strip_prefix(VALIDATION_FEE_MULTISIG_MARKER_PREFIX) else {
+            return Err(ValidationFeeMultisigMarkerError::Malformed);
+        };
+        let mut fields = payload.split(':');
+        let policy_version = fields
+            .next()
+            .and_then(parse_canonical_marker_u64)
+            .filter(|version| *version > 0)
+            .ok_or(ValidationFeeMultisigMarkerError::Malformed)?;
+        let policy_hash_hex = fields
+            .next()
+            .ok_or(ValidationFeeMultisigMarkerError::Malformed)?;
+        if policy_hash_hex.len() != 64
+            || !policy_hash_hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(ValidationFeeMultisigMarkerError::Malformed);
+        }
+        let policy_hash: [u8; 32] = hex::decode(policy_hash_hex)
+            .map_err(|_| ValidationFeeMultisigMarkerError::Malformed)?
+            .try_into()
+            .map_err(|_| ValidationFeeMultisigMarkerError::Malformed)?;
+        let instruction_index = fields
+            .next()
+            .and_then(parse_canonical_marker_u64)
+            .ok_or(ValidationFeeMultisigMarkerError::Malformed)?;
+        let entry = fields
+            .next()
+            .ok_or(ValidationFeeMultisigMarkerError::Malformed)?;
+        if fields.next().is_some() {
+            return Err(ValidationFeeMultisigMarkerError::Malformed);
+        }
+        let transfer_entry_index = if entry == "-" {
+            None
+        } else {
+            Some(
+                parse_canonical_marker_u64(entry)
+                    .ok_or(ValidationFeeMultisigMarkerError::Malformed)?,
+            )
+        };
+        Ok(Some(Self {
+            policy_version,
+            policy_hash,
+            instruction_index,
+            transfer_entry_index,
+        }))
+    }
+}
+
+fn parse_canonical_marker_u64(value: &str) -> Option<u64> {
+    if value.is_empty()
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+        || (value.len() > 1 && value.starts_with('0'))
+    {
+        return None;
+    }
+    value.parse().ok()
+}
+
+/// Error returned when an instruction claims the reserved multisig marker namespace but is not
+/// canonical.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValidationFeeMultisigMarkerError {
+    /// The reserved marker used a log level other than `TRACE`.
+    WrongLogLevel,
+    /// The marker payload was not in the canonical versioned representation.
+    Malformed,
+}
+
+impl core::fmt::Display for ValidationFeeMultisigMarkerError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::WrongLogLevel => write!(
+                f,
+                "validation-fee multisig marker must use the TRACE log level"
+            ),
+            Self::Malformed => write!(f, "validation-fee multisig marker is malformed"),
+        }
+    }
+}
+
+impl std::error::Error for ValidationFeeMultisigMarkerError {}
 
 /// Error returned when signed validation-fee policy verification fails.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -454,10 +614,10 @@ pub struct ValidationFeePolicyV1 {
     /// Previous policy hash for policy-chain validation.
     #[norito(default)]
     pub previous_policy_hash: Option<[u8; 32]>,
-    /// Concrete SBD asset definition charged by this policy.
-    pub sbd_asset_id: String,
-    /// Decimal scale used to interpret SBD minor units.
-    pub sbd_scale: u8,
+    /// Concrete Digital Shekel asset definition charged by this policy.
+    pub ds_asset_id: String,
+    /// Decimal scale used to interpret Digital Shekel minor units.
+    pub ds_scale: u8,
     /// Fee amount in fee asset minor units.
     pub fee_minor_units: u64,
     /// Concrete validator treasury account.
@@ -545,10 +705,12 @@ impl ValidationFeePolicyV1 {
         if self.network_id.trim().is_empty() || self.network_id.trim() != self.network_id {
             return Some("validation-fee policy network id must be a non-empty trimmed string");
         }
-        if self.sbd_asset_id.trim().is_empty() || self.sbd_asset_id.trim() != self.sbd_asset_id {
-            return Some("validation-fee policy SBD asset id must be a non-empty trimmed string");
+        if self.ds_asset_id.trim().is_empty() || self.ds_asset_id.trim() != self.ds_asset_id {
+            return Some(
+                "validation-fee policy Digital Shekel asset id must be a non-empty trimmed string",
+            );
         }
-        if self.sbd_scale != VALIDATION_FEE_SBD_SCALE {
+        if self.ds_scale != VALIDATION_FEE_DS_SCALE {
             return Some("validation-fee policy asset scale must be 2");
         }
         if self.fee_minor_units != VALIDATION_FEE_INITIAL_MINOR_UNITS {
@@ -602,7 +764,7 @@ impl ValidationFeePolicyV1 {
     /// Fee amount as a ledger [`Numeric`].
     #[must_use]
     pub fn fee_amount_numeric(&self) -> Numeric {
-        Numeric::new(self.fee_minor_units, u32::from(self.sbd_scale))
+        Numeric::new(self.fee_minor_units, u32::from(self.ds_scale))
     }
 
     /// Domain-separated payload that governance keys sign.
@@ -752,7 +914,7 @@ mod tests {
     use super::*;
     use crate::{account::AccountId, asset::AssetDefinitionId, domain::DomainId, name::Name};
 
-    const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_SBD_SCALE;
+    const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_DS_SCALE;
     const TEST_VALIDATION_FEE_MINOR_UNITS: u64 = VALIDATION_FEE_INITIAL_MINOR_UNITS;
 
     fn account(seed: u8) -> AccountId {
@@ -784,8 +946,8 @@ mod tests {
             genesis_hash: [7; 32],
             policy_version: 1,
             previous_policy_hash: None,
-            sbd_asset_id: fee_asset().to_string(),
-            sbd_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
+            ds_asset_id: fee_asset().to_string(),
+            ds_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
             fee_minor_units: TEST_VALIDATION_FEE_MINOR_UNITS,
             treasury_account_id: account(1).to_string(),
             charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
@@ -1170,7 +1332,7 @@ mod tests {
     #[test]
     fn policy_invariants_reject_wrong_fee_scale() {
         let mut policy = policy();
-        policy.sbd_scale = VALIDATION_FEE_SBD_SCALE + 1;
+        policy.ds_scale = VALIDATION_FEE_DS_SCALE + 1;
 
         assert_eq!(
             policy.policy_invariant_error(),
@@ -1260,5 +1422,60 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn multisig_marker_round_trips_canonical_batch_coordinate() {
+        let marker = ValidationFeeMultisigMarkerV1::new(1, [0xabu8; 32], 7, Some(3));
+        let instruction = marker.into_instruction();
+        assert_eq!(
+            ValidationFeeMultisigMarkerV1::parse_instruction(&instruction),
+            Ok(Some(marker))
+        );
+        let log = instruction
+            .as_any()
+            .downcast_ref::<Log>()
+            .expect("marker log");
+        assert_eq!(log.level, Level::TRACE);
+        assert_eq!(
+            log.msg,
+            format!(
+                "{VALIDATION_FEE_MULTISIG_MARKER_PREFIX}1:{}:7:3",
+                "ab".repeat(32)
+            )
+        );
+    }
+
+    #[test]
+    fn multisig_marker_reserved_namespace_fails_closed_on_noncanonical_forms() {
+        let canonical = format!(
+            "{VALIDATION_FEE_MULTISIG_MARKER_PREFIX}1:{}:7:-",
+            "ab".repeat(32)
+        );
+        let malformed = [
+            canonical.replace(":1:", ":01:"),
+            canonical.replace(&"ab".repeat(32), &"AB".repeat(32)),
+            canonical.replace(":7:-", ":07:-"),
+            canonical.replace(":v1:", ":v2:"),
+            format!("{canonical}:extra"),
+        ];
+        for message in malformed {
+            let instruction: InstructionBox = Log::new(Level::TRACE, message).into();
+            assert_eq!(
+                ValidationFeeMultisigMarkerV1::parse_instruction(&instruction),
+                Err(ValidationFeeMultisigMarkerError::Malformed)
+            );
+        }
+
+        let wrong_level: InstructionBox = Log::new(Level::INFO, canonical).into();
+        assert_eq!(
+            ValidationFeeMultisigMarkerV1::parse_instruction(&wrong_level),
+            Err(ValidationFeeMultisigMarkerError::WrongLogLevel)
+        );
+        let ordinary_log: InstructionBox = Log::new(Level::INFO, "ordinary".to_owned()).into();
+        assert_eq!(
+            ValidationFeeMultisigMarkerV1::parse_instruction(&ordinary_log),
+            Ok(None)
+        );
     }
 }

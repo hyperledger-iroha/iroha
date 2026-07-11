@@ -83,9 +83,8 @@ use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::chunker_registry;
 use sorafs_manifest::deal::{MICRO_XOR_PER_XOR, XorAmount};
 use sorafs_manifest::repair::{
-    REPAIR_SLASH_PROPOSAL_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1,
-    RepairSlashProposalV1, RepairTicketId, RepairWorkerActionV1,
-    RepairWorkerSignaturePayloadV1,
+    REPAIR_SLASH_PROPOSAL_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1, RepairSlashProposalV1,
+    RepairTicketId, RepairWorkerActionV1, RepairWorkerSignaturePayloadV1,
 };
 use sorafs_manifest::{
     ChunkingProfileV1, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1, PinPolicy,

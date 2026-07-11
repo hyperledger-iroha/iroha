@@ -7604,13 +7604,20 @@ impl Telemetry {
         }
     }
 
-    /// Record HTTP request metrics for Torii (content type, method, status, latency, bytes).
+    /// Record cardinality-safe HTTP request metrics for Torii.
+    #[allow(clippy::too_many_arguments)]
     pub fn observe_torii_http_request(
         &self,
+        route_id: &str,
+        route_template: &str,
+        surface: &str,
         method: &str,
         status: StatusCode,
         content_type: &str,
+        representation: &str,
+        error_code: &str,
         duration: Duration,
+        request_bytes: Option<u64>,
         response_bytes: Option<u64>,
     ) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -7622,16 +7629,54 @@ impl Telemetry {
             };
             self.metrics
                 .torii_http_requests_total
-                .with_label_values(&[content_label.as_str(), method, status_label.as_str()])
+                .with_label_values(&[
+                    route_id,
+                    route_template,
+                    surface,
+                    representation,
+                    error_code,
+                    content_label.as_str(),
+                    method,
+                    status_label.as_str(),
+                ])
                 .inc();
             self.metrics
                 .torii_http_request_duration_seconds
-                .with_label_values(&[content_label.as_str(), method])
+                .with_label_values(&[
+                    route_id,
+                    route_template,
+                    surface,
+                    representation,
+                    content_label.as_str(),
+                    method,
+                ])
                 .observe(duration.as_secs_f64());
+            if let Some(bytes) = request_bytes {
+                self.metrics
+                    .torii_http_request_bytes_total
+                    .with_label_values(&[
+                        route_id,
+                        route_template,
+                        surface,
+                        representation,
+                        content_label.as_str(),
+                        method,
+                    ])
+                    .inc_by(bytes);
+            }
             if let Some(bytes) = response_bytes {
                 self.metrics
                     .torii_http_response_bytes_total
-                    .with_label_values(&[content_label.as_str(), method, status_label.as_str()])
+                    .with_label_values(&[
+                        route_id,
+                        route_template,
+                        surface,
+                        representation,
+                        error_code,
+                        content_label.as_str(),
+                        method,
+                        status_label.as_str(),
+                    ])
                     .inc_by(bytes);
             }
         }
@@ -9639,6 +9684,78 @@ mod tests {
 
     fn checked_peer_id() -> PeerId {
         PeerId::new(checked_keypair().public_key().clone())
+    }
+
+    #[test]
+    fn torii_http_metrics_expose_only_stable_route_labels() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::new(Arc::clone(&metrics), true);
+        telemetry.observe_torii_http_request(
+            "offline.operation",
+            "/v1/offline/operations/{operation_id}",
+            "public",
+            "GET",
+            StatusCode::NOT_FOUND,
+            "application/json",
+            "json",
+            "offline_operation_not_found",
+            Duration::from_millis(3),
+            Some(0),
+            Some(96),
+        );
+
+        assert_eq!(
+            metrics
+                .torii_http_requests_total
+                .with_label_values(&[
+                    "offline.operation",
+                    "/v1/offline/operations/{operation_id}",
+                    "public",
+                    "json",
+                    "offline_operation_not_found",
+                    "application/json",
+                    "GET",
+                    "404",
+                ])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_http_request_bytes_total
+                .with_label_values(&[
+                    "offline.operation",
+                    "/v1/offline/operations/{operation_id}",
+                    "public",
+                    "json",
+                    "application/json",
+                    "GET",
+                ])
+                .get(),
+            0
+        );
+        assert_eq!(
+            metrics
+                .torii_http_response_bytes_total
+                .with_label_values(&[
+                    "offline.operation",
+                    "/v1/offline/operations/{operation_id}",
+                    "public",
+                    "json",
+                    "offline_operation_not_found",
+                    "application/json",
+                    "GET",
+                    "404",
+                ])
+                .get(),
+            96
+        );
+
+        let exposition = metrics.try_to_string().expect("encode metrics");
+        assert!(exposition.contains("route_id=\"offline.operation\""));
+        assert!(exposition.contains("route_template=\"/v1/offline/operations/{operation_id}\""));
+        assert!(!exposition.contains("op_8f61d9a9"));
+        assert!(!exposition.contains("cursor=eyJzbmFwc2hvdCI6"));
     }
 
     #[test]

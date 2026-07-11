@@ -1,8 +1,7 @@
 //! Alias resolution helpers.
 //!
-//! The underlying API surface is not yet stable; these commands focus on basic
-//! input validation, forwarding requests to the alias Torii endpoints while
-//! handling not-yet-implemented responses gracefully.
+//! These commands validate inputs and call the canonical first-release alias
+//! lookup resources.
 
 use crate::cli_output::print_with_optional_text;
 use crate::{Run, RunContext};
@@ -16,11 +15,9 @@ use iroha_i18n::{Bundle, Language, Localizer};
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
-    /// Evaluate a blinded element using the alias VOPRF service (placeholder).
-    VoprfEvaluate(VoprfEvaluateArgs),
-    /// Resolve an alias by its canonical name (placeholder).
+    /// Resolve an alias by its canonical name.
     Resolve(ResolveArgs),
-    /// Resolve an alias by Merkle index (placeholder).
+    /// Resolve an alias by deterministic index.
     ResolveIndex(ResolveIndexArgs),
     /// List aliases bound to a canonical account id.
     ByAccount(ByAccountArgs),
@@ -29,28 +26,10 @@ pub enum Command {
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
-            Command::VoprfEvaluate(args) => args.run(context),
             Command::Resolve(args) => args.run(context),
             Command::ResolveIndex(args) => args.run(context),
             Command::ByAccount(args) => args.run(context),
         }
-    }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct VoprfEvaluateArgs {
-    /// Blinded element in hex encoding.
-    #[arg(long, value_name = "HEX")]
-    pub blinded_element_hex: String,
-}
-
-impl Run for VoprfEvaluateArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        alias_voprf_evaluate_with(
-            context,
-            &self.blinded_element_hex,
-            Client::post_alias_voprf_hex,
-        )
     }
 }
 
@@ -110,35 +89,6 @@ impl Run for ByAccountArgs {
             self.domain.as_deref(),
             Client::post_alias_lookup_by_account,
         )
-    }
-}
-
-fn alias_voprf_evaluate_with<C, F>(context: &mut C, blinded_hex: &str, call: F) -> Result<()>
-where
-    C: RunContext,
-    F: FnOnce(&Client, &str) -> Result<Response<Vec<u8>>>,
-{
-    hex::decode(blinded_hex.trim_start_matches("0x"))
-        .map_err(|err| eyre!("invalid blinded element hex: {err}"))?;
-    let client = context.client_from_config();
-    let response = call(&client, blinded_hex)?;
-    let status = response.status();
-    let body = response.into_body();
-
-    match status {
-        StatusCode::OK => {
-            let value: norito::json::Value = norito::json::from_slice(&body)?;
-            let text = render_voprf_evaluate_text(&value);
-            print_with_optional_text(context, Some(text), &value)
-        }
-        StatusCode::NOT_IMPLEMENTED => Err(eyre!(
-            "{}",
-            format_alias_error("alias VOPRF evaluation is not available", &body)
-        )),
-        status => Err(eyre!(
-            "alias VOPRF evaluation failed with status {status}: {}",
-            format_alias_error("server response", &body)
-        )),
     }
 }
 
@@ -334,23 +284,6 @@ fn parse_alias_error_message(body: &[u8]) -> Option<String> {
         .map(|err| err.error)
 }
 
-fn render_voprf_evaluate_text(value: &norito::json::Value) -> String {
-    let mut out = String::new();
-    let _ = writeln!(out, "alias VOPRF evaluation completed");
-    if let Some(obj) = value.as_object() {
-        if let Some(evaluated) = obj
-            .get("evaluated_element_hex")
-            .and_then(norito::json::Value::as_str)
-        {
-            let _ = writeln!(out, "evaluated_element_hex: {evaluated}");
-        }
-        if let Some(backend) = obj.get("backend").and_then(norito::json::Value::as_str) {
-            let _ = writeln!(out, "backend: {backend}");
-        }
-    }
-    out
-}
-
 fn render_alias_resolve_text(dto: &AliasResolveResponse) -> String {
     let mut out = String::new();
     let _ = writeln!(
@@ -476,18 +409,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_voprf_args() {
-        let wrapper =
-            Wrapper::parse_from(["iroha", "voprf-evaluate", "--blinded-element-hex", "00"]);
-        match wrapper.command {
-            Command::VoprfEvaluate(args) => {
-                assert_eq!(args.blinded_element_hex, "00");
-            }
-            _ => panic!("unexpected command"),
-        }
-    }
-
-    #[test]
     fn parse_by_account_args() {
         let wrapper = Wrapper::parse_from([
             "iroha",
@@ -596,50 +517,6 @@ mod tests {
             .header("Content-Type", "application/json")
             .body(body)
             .unwrap())
-    }
-
-    #[test]
-    fn voprf_helper_prints_ok_payload() {
-        let mut ctx = TestContext::new(CliOutputFormat::Json);
-        alias_voprf_evaluate_with(&mut ctx, "deadbeef", |_, _| {
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "evaluated_element_hex": "aa",
-                    "backend": "mock"
-                }))?)
-                .unwrap())
-        })
-        .expect("helper should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"backend\":\"mock\""));
-    }
-
-    #[test]
-    fn voprf_text_includes_backend() {
-        let payload = norito::json!({
-            "evaluated_element_hex": "aa",
-            "backend": "mock"
-        });
-        let text = render_voprf_evaluate_text(&payload);
-        assert!(text.contains("backend: mock"));
-    }
-
-    #[test]
-    fn voprf_helper_handles_not_implemented() {
-        let mut ctx = TestContext::new(CliOutputFormat::Json);
-        let err =
-            alias_voprf_evaluate_with(&mut ctx, "deadbeef", |_, _| not_implemented_response())
-                .expect_err("expected error");
-        assert!(err.to_string().contains("not ready"));
-    }
-
-    #[test]
-    fn voprf_helper_validates_hex() {
-        let mut ctx = TestContext::new(CliOutputFormat::Json);
-        let err = alias_voprf_evaluate_with(&mut ctx, "zz", |_, _| unreachable!());
-        assert!(err.is_err());
     }
 
     #[test]

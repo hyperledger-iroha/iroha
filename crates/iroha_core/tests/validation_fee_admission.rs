@@ -12,22 +12,24 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
     tx::AcceptedTransaction,
 };
-use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
+use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
 use iroha_data_model::{
     account::AccountId,
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
     block::BlockHeader,
     domain::DomainId,
     isi::{SetParameter, Transfer, TransferAssetBatch, TransferAssetBatchEntry},
-    parameter::Parameter,
+    parameter::{CustomParameter, Parameter},
     prelude::*,
-    transaction::SignedTransaction,
+    transaction::{
+        Executable, IvmBytecode, IvmProved, SignedTransaction, insert_transaction_gas_limit,
+    },
     validation_fee::{
-        SignedValidationFeePolicyV1, VALIDATION_FEE_INITIAL_MINOR_UNITS,
+        SignedValidationFeePolicyV1, VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_INITIAL_MINOR_UNITS,
         VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
         VALIDATION_FEE_POLICY_SCHEMA_VERSION, VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
-        VALIDATION_FEE_SBD_SCALE, VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY,
-        ValidationFeeChargingMode, ValidationFeeGovernanceKeyV1, ValidationFeeGovernanceKeysetV1,
+        VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY, ValidationFeeChargingMode,
+        ValidationFeeGovernanceKeyV1, ValidationFeeGovernanceKeysetV1,
         ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1,
         ValidationFeePolicySignatureV1, ValidationFeePolicyV1,
     },
@@ -35,7 +37,7 @@ use iroha_data_model::{
 use iroha_primitives::{json::Json, numeric::Numeric};
 use mv::storage::StorageReadOnly;
 
-const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_SBD_SCALE;
+const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_DS_SCALE;
 const TEST_VALIDATION_FEE_MINOR_UNITS: u64 = VALIDATION_FEE_INITIAL_MINOR_UNITS;
 
 fn block_header(height: u64, timestamp_ms: u64) -> BlockHeader {
@@ -149,8 +151,8 @@ fn validation_fee_policy(
         genesis_hash,
         policy_version: 1,
         previous_policy_hash: None,
-        sbd_asset_id: fee_asset.to_string(),
-        sbd_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
+        ds_asset_id: fee_asset.to_string(),
+        ds_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
         fee_minor_units: TEST_VALIDATION_FEE_MINOR_UNITS,
         treasury_account_id: treasury.to_string(),
         charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
@@ -225,6 +227,22 @@ fn install_validation_fee_policy(
     }
     stx.apply();
     block.commit().expect("commit validation-fee policy");
+}
+
+fn install_validation_fee_custom_parameter(
+    state: &State,
+    authority: &AccountId,
+    custom: CustomParameter,
+) {
+    let mut block = state.block(block_header(2, 1_700_000_001_000));
+    let mut stx = block.transaction();
+    SetParameter::new(Parameter::Custom(custom))
+        .execute(authority, &mut stx)
+        .expect("install partial validation-fee custom parameter");
+    stx.apply();
+    block
+        .commit()
+        .expect("commit partial validation-fee configuration");
 }
 
 fn metadata_for_policy(policy: &ValidationFeePolicyV1, fee_instruction_index: usize) -> Metadata {
@@ -367,6 +385,32 @@ fn signed_transfer_with_principal_and_fee_instruction(
         .sign(user_key_pair.private_key())
 }
 
+fn signed_ivm_proved_overlay(
+    state: &State,
+    user: &AccountId,
+    user_key_pair: &KeyPair,
+    overlay: Vec<InstructionBox>,
+    mut metadata: Metadata,
+) -> SignedTransaction {
+    insert_transaction_gas_limit(&mut metadata, 1_000);
+    let mut program = ivm::ProgramMetadata {
+        max_cycles: 1_000,
+        ..ivm::ProgramMetadata::default()
+    }
+    .encode();
+    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+
+    TransactionBuilder::new(state.chain_id.clone(), user.clone())
+        .with_executable(Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(program),
+            overlay: overlay.into(),
+            events_commitment: Hash::new(b"events"),
+            gas_policy_commitment: Hash::new(b"gas-policy"),
+        }))
+        .with_metadata(metadata)
+        .sign(user_key_pair.private_key())
+}
+
 fn signed_transfer_with_explicit_fee_asset_instruction(
     state: &State,
     user: &AccountId,
@@ -433,29 +477,45 @@ fn signed_batch_transfer_with_principal_amounts(
     first_principal_amount: Numeric,
     second_principal_amount: Numeric,
 ) -> SignedTransaction {
-    let batch = TransferAssetBatch::new(vec![
-        TransferAssetBatchEntry::new(
-            user.clone(),
-            recipient.clone(),
-            fee_asset.clone(),
-            first_principal_amount,
-        ),
-        TransferAssetBatchEntry::new(
-            user.clone(),
-            recipient.clone(),
-            fee_asset.clone(),
-            second_principal_amount,
-        ),
-        TransferAssetBatchEntry::new(
-            user.clone(),
-            policy_treasury_account(policy),
-            fee_asset.clone(),
-            Numeric::new(
-                2 * TEST_VALIDATION_FEE_MINOR_UNITS,
-                TEST_VALIDATION_FEE_ASSET_SCALE.into(),
+    signed_batch_transfer_with_entries(
+        state,
+        user,
+        user_key_pair,
+        policy,
+        vec![
+            TransferAssetBatchEntry::new(
+                user.clone(),
+                recipient.clone(),
+                fee_asset.clone(),
+                first_principal_amount,
             ),
-        ),
-    ]);
+            TransferAssetBatchEntry::new(
+                user.clone(),
+                recipient.clone(),
+                fee_asset.clone(),
+                second_principal_amount,
+            ),
+            TransferAssetBatchEntry::new(
+                user.clone(),
+                policy_treasury_account(policy),
+                fee_asset.clone(),
+                Numeric::new(
+                    2 * TEST_VALIDATION_FEE_MINOR_UNITS,
+                    TEST_VALIDATION_FEE_ASSET_SCALE.into(),
+                ),
+            ),
+        ],
+    )
+}
+
+fn signed_batch_transfer_with_entries(
+    state: &State,
+    user: &AccountId,
+    user_key_pair: &KeyPair,
+    policy: &ValidationFeePolicyV1,
+    entries: Vec<TransferAssetBatchEntry>,
+) -> SignedTransaction {
+    let batch = TransferAssetBatch::new(entries);
     TransactionBuilder::new(state.chain_id.clone(), user.clone())
         .with_instructions([InstructionBox::from(batch)])
         .with_metadata(metadata_for_batch_policy(policy, 0, 2))
@@ -542,6 +602,106 @@ fn raw_fee_asset_transfer_is_rejected_without_exact_active_validation_fee() {
         ),
     );
     assert_eq!(exact_fee_result, "ok");
+}
+
+#[test]
+fn partial_validation_fee_configuration_without_signed_policy_fails_closed() {
+    for partial_kind in ["keyset", "registry"] {
+        let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
+        let genesis_hash = commit_empty_genesis_like_block(&state);
+        let gov = key_pair(21);
+        let policy = validation_fee_policy(&state, fee_asset.clone(), treasury, genesis_hash);
+        let custom = if partial_kind == "keyset" {
+            ValidationFeeGovernanceKeysetV1 {
+                keyset_id: policy.governance_keyset_id.clone(),
+                threshold: 1,
+                keys: vec![ValidationFeeGovernanceKeyV1 {
+                    public_key: gov.public_key().clone(),
+                    weight: 1,
+                }],
+            }
+            .into_custom_parameter()
+        } else {
+            policy_registry(&policy).into_custom_parameter()
+        };
+        install_validation_fee_custom_parameter(&state, &user, custom);
+
+        let error = validate_in_block(
+            &state,
+            3,
+            signed_transfer(
+                &state,
+                &user,
+                &user_key_pair,
+                &recipient,
+                &fee_asset,
+                &policy,
+                false,
+            ),
+        );
+        assert!(
+            error.contains("validation-fee signed policy parameter is missing"),
+            "{partial_kind}-only validation-fee configuration must fail closed: {error}"
+        );
+    }
+}
+
+#[test]
+fn ivm_proved_overlay_reaches_active_validation_fee_admission() {
+    let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
+    let genesis_hash = commit_empty_genesis_like_block(&state);
+    let gov_1 = key_pair(21);
+    let gov_2 = key_pair(22);
+    let policy = validation_fee_policy(&state, fee_asset.clone(), treasury.clone(), genesis_hash);
+    install_validation_fee_policy(&state, &user, policy.clone(), &[&gov_1, &gov_2]);
+
+    let principal = || {
+        InstructionBox::from(Transfer::asset_numeric(
+            AssetId::new(fee_asset.clone(), user.clone()),
+            Numeric::new(1, 0),
+            recipient.clone(),
+        ))
+    };
+    let fee = || {
+        InstructionBox::from(Transfer::asset_numeric(
+            AssetId::new(fee_asset.clone(), user.clone()),
+            policy.fee_amount_numeric(),
+            treasury.clone(),
+        ))
+    };
+
+    let missing_fee_error = validate_in_block(
+        &state,
+        3,
+        signed_ivm_proved_overlay(
+            &state,
+            &user,
+            &user_key_pair,
+            vec![principal()],
+            Metadata::default(),
+        ),
+    );
+    assert!(
+        missing_fee_error.contains("missing validation-fee transfer of 10 minor units"),
+        "unexpected proved-IVM missing-fee rejection: {missing_fee_error}"
+    );
+
+    let exact_fee_result = validate_in_block(
+        &state,
+        4,
+        signed_ivm_proved_overlay(
+            &state,
+            &user,
+            &user_key_pair,
+            vec![principal(), fee()],
+            metadata_for_policy(&policy, 1),
+        ),
+    );
+    assert!(
+        !exact_fee_result.contains("validation-fee admission rejected transaction")
+            && !exact_fee_result.contains("UnsupportedExecutable"),
+        "exact proved-IVM overlay fee must pass validation-fee admission: {exact_fee_result}"
+    );
 }
 
 #[test]
@@ -889,6 +1049,105 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
         signature_error.contains("SignatureVerification")
             || signature_error.contains("signature verification"),
         "batch-principal payload mutation must fail signature admission, got {signature_error}"
+    );
+
+    let wrong_batch_source_tx = signed_batch_transfer_with_entries(
+        &state,
+        &user,
+        &user_key_pair,
+        &policy,
+        vec![
+            TransferAssetBatchEntry::new(
+                recipient.clone(),
+                recipient.clone(),
+                fee_asset.clone(),
+                Numeric::new(1, 0),
+            ),
+            TransferAssetBatchEntry::new(
+                user.clone(),
+                recipient.clone(),
+                fee_asset.clone(),
+                Numeric::new(1, 0),
+            ),
+            TransferAssetBatchEntry::new(
+                user.clone(),
+                policy_treasury_account(&policy),
+                fee_asset.clone(),
+                Numeric::new(
+                    2 * TEST_VALIDATION_FEE_MINOR_UNITS,
+                    TEST_VALIDATION_FEE_ASSET_SCALE.into(),
+                ),
+            ),
+        ],
+    );
+    let mut batch_source_mutation_tx = exact_batch_tx.clone();
+    batch_source_mutation_tx.set_signature(wrong_batch_source_tx.signature().clone());
+    let signature_error = accept_transaction_error(&state, batch_source_mutation_tx);
+    assert!(
+        signature_error.contains("SignatureVerification")
+            || signature_error.contains("signature verification"),
+        "batch-source payload mutation must fail signature admission, got {signature_error}"
+    );
+
+    let wrong_batch_amount_tx = signed_batch_transfer_with_principal_amounts(
+        &state,
+        &user,
+        &user_key_pair,
+        &recipient,
+        &fee_asset,
+        &policy,
+        Numeric::new(2, 0),
+        Numeric::new(1, 0),
+    );
+    let mut batch_amount_mutation_tx = exact_batch_tx.clone();
+    batch_amount_mutation_tx.set_signature(wrong_batch_amount_tx.signature().clone());
+    let signature_error = accept_transaction_error(&state, batch_amount_mutation_tx);
+    assert!(
+        signature_error.contains("SignatureVerification")
+            || signature_error.contains("signature verification"),
+        "batch-amount payload mutation must fail signature admission, got {signature_error}"
+    );
+
+    let wrong_batch_asset = AssetDefinitionId::new(
+        DomainId::try_new("fees", "paynet").expect("domain id"),
+        "wrong_batch_token".parse().expect("asset name"),
+    );
+    let wrong_batch_asset_tx = signed_batch_transfer_with_entries(
+        &state,
+        &user,
+        &user_key_pair,
+        &policy,
+        vec![
+            TransferAssetBatchEntry::new(
+                user.clone(),
+                recipient.clone(),
+                wrong_batch_asset,
+                Numeric::new(1, 0),
+            ),
+            TransferAssetBatchEntry::new(
+                user.clone(),
+                recipient.clone(),
+                fee_asset.clone(),
+                Numeric::new(1, 0),
+            ),
+            TransferAssetBatchEntry::new(
+                user.clone(),
+                policy_treasury_account(&policy),
+                fee_asset.clone(),
+                Numeric::new(
+                    2 * TEST_VALIDATION_FEE_MINOR_UNITS,
+                    TEST_VALIDATION_FEE_ASSET_SCALE.into(),
+                ),
+            ),
+        ],
+    );
+    let mut batch_asset_mutation_tx = exact_batch_tx.clone();
+    batch_asset_mutation_tx.set_signature(wrong_batch_asset_tx.signature().clone());
+    let signature_error = accept_transaction_error(&state, batch_asset_mutation_tx);
+    assert!(
+        signature_error.contains("SignatureVerification")
+            || signature_error.contains("signature verification"),
+        "batch-asset payload mutation must fail signature admission, got {signature_error}"
     );
 
     let wrong_batch_recipient_tx = signed_batch_transfer_with_principal_amounts(

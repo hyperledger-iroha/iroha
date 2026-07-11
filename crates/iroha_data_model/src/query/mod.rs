@@ -1795,9 +1795,9 @@ mod model {
         pub result_proof: MerkleProof<TransactionResult>,
         /// The result of executing the transaction (trigger sequence or rejection).
         pub result: TransactionResult,
-        /// Certified merge-sidecar proof context, or `None` for an ordinary block entrypoint.
-        #[norito(default)]
-        #[norito(skip_serializing_if = "Option::is_none")]
+        /// Certified merge-sidecar proof context.
+        ///
+        /// Canonical Norito always encodes this field; ordinary block entrypoints use `None`.
         pub merge_inclusion: Option<CertifiedMergeTransactionInclusion>,
     }
 }
@@ -5062,15 +5062,11 @@ mod certified_merge_inclusion_tests {
         trigger::DataTriggerSequence,
     };
 
-    #[derive(Encode)]
-    struct LegacyCommittedTransaction {
-        block_hash: HashOf<BlockHeader>,
-        entrypoint_hash: HashOf<TransactionEntrypoint>,
-        entrypoint_proof: MerkleProof<TransactionEntrypoint>,
-        entrypoint: TransactionEntrypoint,
-        result_hash: HashOf<TransactionResult>,
-        result_proof: MerkleProof<TransactionResult>,
-        result: TransactionResult,
+    fn assert_committed_transaction_roundtrip(committed: &CommittedTransaction) {
+        let encoded = committed.encode();
+        let decoded = CommittedTransaction::decode_all(&mut encoded.as_slice())
+            .expect("canonical committed transaction must decode");
+        assert_eq!(decoded, *committed);
     }
 
     #[test]
@@ -5140,6 +5136,15 @@ mod certified_merge_inclusion_tests {
         };
 
         assert!(committed.verify_certified_merge_inclusion(&reference));
+        assert_committed_transaction_roundtrip(&committed);
+
+        let mut ordinary = committed.clone();
+        ordinary.merge_inclusion = None;
+        assert_committed_transaction_roundtrip(&ordinary);
+        assert!(
+            !ordinary.verify_certified_merge_inclusion(&reference),
+            "ordinary transactions must not verify as certified merge inclusions"
+        );
 
         #[cfg(feature = "transparent_api")]
         {
@@ -5205,21 +5210,6 @@ mod certified_merge_inclusion_tests {
         let mut misaligned = committed;
         misaligned.result_proof = MerkleProof::from_audit_path(1, Vec::new());
         assert!(!misaligned.verify_certified_merge_inclusion(&reference));
-
-        let legacy = LegacyCommittedTransaction {
-            block_hash: misaligned.block_hash,
-            entrypoint_hash: misaligned.entrypoint_hash,
-            entrypoint_proof: misaligned.entrypoint_proof,
-            entrypoint: misaligned.entrypoint,
-            result_hash: misaligned.result_hash,
-            result_proof: misaligned.result_proof,
-            result: misaligned.result,
-        };
-        let encoded = legacy.encode();
-        let mut cursor = encoded.as_slice();
-        let decoded = CommittedTransaction::decode_all(&mut cursor)
-            .expect("legacy committed transaction must decode without merge metadata");
-        assert_eq!(decoded.merge_inclusion, None);
     }
 }
 

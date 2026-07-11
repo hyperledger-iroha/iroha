@@ -40,6 +40,40 @@ final class OfflineNoteTests: XCTestCase {
         }
     }
 
+    private func copyCompactCertificate(
+        _ base: OfflineCompactKeyCertificate,
+        platform: String? = nil,
+        publicKey: String? = nil,
+        assertionPublicKey: String? = nil,
+        omitAssertionPublicKey: Bool = false,
+        appAttestPublicKeyBase64: String? = nil,
+        issuerSignatureBase64: String? = nil
+    ) -> OfflineCompactKeyCertificate {
+        OfflineCompactKeyCertificate(
+            version: base.version,
+            platform: platform ?? OfflineNoteV2Constants.androidKeyMintPlatform,
+            keyId: base.keyId,
+            deviceId: base.deviceId,
+            accountId: base.accountId,
+            publicKey: publicKey ?? base.publicKey,
+            assertionScheme: OfflineNoteV2Constants.androidKeyMintAssertionScheme,
+            assertionKeyAlgorithm: OfflineNoteV2Constants.androidKeyMintAssertionKeyAlgorithm,
+            assertionPublicKey: omitAssertionPublicKey
+                ? nil
+                : (assertionPublicKey ?? base.assertionPublicKey),
+            assertionUsageCountLimit: base.assertionUsageCountLimit,
+            oneUse: base.oneUse,
+            issuedAtMs: base.issuedAtMs,
+            expiresAtMs: base.expiresAtMs,
+            appAttestPublicKeyBase64: appAttestPublicKeyBase64,
+            iosTeamId: base.iosTeamId,
+            iosBundleId: base.iosBundleId,
+            iosEnvironment: base.iosEnvironment,
+            issuerSignatureBase64: issuerSignatureBase64 ?? base.issuerSignatureBase64,
+            issuerSignaturePayloadBase64: base.issuerSignaturePayloadBase64
+        )
+    }
+
     func testCertificateSigningBytesMatchRustVector() throws {
         let fixture = try Self.loadFixture()
         let sender = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
@@ -3804,6 +3838,105 @@ final class OfflineNoteTests: XCTestCase {
         )
         XCTAssertFalse(canonicalToken.containsOutputNoteCommitment(String(repeating: "f", count: 64)))
         XCTAssertFalse(canonicalToken.containsOutputNoteCommitment(String(repeating: "ab", count: 31)))
+    }
+
+    func testCompactKeyCertificateRejectsRetiredAssertionPublicKeyAlias() throws {
+        let fixture = try Self.loadFixture()
+        let base = OfflineCompactKeyCertificate(
+            certificate: try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        )
+        let retiredAlias = try XCTUnwrap(base.assertionPublicKey)
+        let aliased = copyCompactCertificate(
+            base,
+            appAttestPublicKeyBase64: retiredAlias
+        )
+        XCTAssertThrowsError(try aliased.offlineNoteKeyCertificate()) { error in
+            XCTAssertEqual(
+                error as? OfflineNotePayloadError,
+                .invalidField("app_attest_public_key_base64")
+            )
+        }
+
+        let missingCanonicalKey = copyCompactCertificate(
+            base,
+            omitAssertionPublicKey: true
+        )
+        XCTAssertThrowsError(try missingCanonicalKey.offlineNoteKeyCertificate()) { error in
+            XCTAssertEqual(
+                error as? OfflineNotePayloadError,
+                .invalidField("assertion_public_key")
+            )
+        }
+    }
+
+    func testCompactKeyCertificateRejectsNonCanonicalCertificateFields() throws {
+        let fixture = try Self.loadFixture()
+        let base = OfflineCompactKeyCertificate(
+            certificate: try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        )
+        for invalidPlatform in ["android", "android-keymint ", "Android-keymint", "ios-appattest-android"] {
+            let malformed = copyCompactCertificate(base, platform: invalidPlatform)
+            XCTAssertThrowsError(try malformed.offlineNoteKeyCertificate()) { error in
+                XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("platform"))
+            }
+        }
+    }
+
+    func testCompactKeyCertificateRejectsNonCanonicalBase64Encodings() throws {
+        let fixture = try Self.loadFixture()
+        let base = OfflineCompactKeyCertificate(
+            certificate: try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        )
+        let hexPublicKey = Data(repeating: 1, count: 33)
+        let hexEncoded = copyCompactCertificate(base, publicKey: hexPublicKey.hexLowercased())
+        XCTAssertThrowsError(try hexEncoded.offlineNoteKeyCertificate()) { error in
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("public_key"))
+        }
+
+        let urlSafeAssertionKey = Data(repeating: 0xFF, count: 32)
+        let urlSafeEncoded = urlSafeAssertionKey.base64EncodedString()
+            .replacingOccurrences(of: "/", with: "_")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "="))
+        let assertionEncoded = copyCompactCertificate(
+            base,
+            assertionPublicKey: urlSafeEncoded
+        )
+        XCTAssertThrowsError(try assertionEncoded.offlineNoteKeyCertificate()) { error in
+            XCTAssertEqual(
+                error as? OfflineNotePayloadError,
+                .invalidField("assertion_public_key")
+            )
+        }
+    }
+
+    func testRecursiveProofRejectsNonCanonicalBase64Encodings() throws {
+        let publicInputsHash = String(repeating: "ab", count: 32)
+        let hexProofBytes = Data(repeating: 4, count: 33)
+        let hexEncoded = OfflineRecursiveProof(
+            publicInputsHashHex: publicInputsHash,
+            proofBytesBase64: hexProofBytes.hexLowercased()
+        )
+        XCTAssertThrowsError(try hexEncoded.offlineNoteRecursiveProof()) { error in
+            XCTAssertEqual(
+                error as? OfflineNotePayloadError,
+                .invalidField("proof_bytes_base64")
+            )
+        }
+
+        let urlSafeProofBytes = Data(repeating: 0xFF, count: 64)
+        let urlSafeEncoded = urlSafeProofBytes.base64EncodedString()
+            .replacingOccurrences(of: "/", with: "_")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "="))
+        let urlEncoded = OfflineRecursiveProof(
+            publicInputsHashHex: publicInputsHash,
+            proofBytesBase64: urlSafeEncoded
+        )
+        XCTAssertThrowsError(try urlEncoded.offlineNoteRecursiveProof()) { error in
+            XCTAssertEqual(
+                error as? OfflineNotePayloadError,
+                .invalidField("proof_bytes_base64")
+            )
+        }
     }
 
     func testOfflineNotePayloadRejectsInvalidAmountStrings() throws {

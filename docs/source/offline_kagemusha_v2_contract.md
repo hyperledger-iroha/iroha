@@ -1,8 +1,9 @@
 # Kagemusha recursive spend V2 contract
 
-This document fixes the additive wire contract for exact fractional transfers
-and independently redeemable sender change. V1 remains unchanged. Implementations
-MUST NOT reinterpret V1 integer note amounts as public scale-zero asset amounts.
+This document defines the first-release wire contract for exact fractional
+transfers, one- or two-input joins, and independently redeemable sender change.
+There is no deployed compatibility surface to preserve: implementations use
+the single canonical layout below and reject retired pre-release shapes.
 
 ## Wire types
 
@@ -14,13 +15,18 @@ The canonical Norito names are:
 - `KagemushaRequestAuthorizationV2`
 - `KagemushaRecursiveSpendInitRequestV2`
 - `KagemushaRecursiveSpendTopUpRequestV2`
+- `KagemushaRecursiveSpendTopUpAnchorV2`
+- `KagemushaRecursiveSpendTopUpAnchorRefV2`
 - `KagemushaRecursiveSpendSplitIntentV2`
 - `KagemushaRecursiveSpendAppendRequestV2`
 - `KagemushaRecursiveSpendBranchV2`
 - `KagemushaRecursiveSpendBundleV2`
 - `KagemushaRecursiveSpendSplitResultV2`
+- `KagemushaRecursiveSpendPeerPaymentV2`
 - `KagemushaRecursiveSpendVerifyRequestV2`
 - `KagemushaRecursiveSpendVerifyResultV2`
+- `KagemushaRecursiveSpendLineageNodeV2`
+- `KagemushaRecursiveSpendLineageWitnessV2`
 - `KagemushaReceiverAcknowledgementPayloadV2`
 - `KagemushaReceiverAcknowledgementV2`
 - `KagemushaReceiverAcknowledgementVerifyResultV2`
@@ -38,10 +44,21 @@ result branch preserves it, and redemption must match it. Relabeling the same
 atomic note with a different scale is invalid. Top-up chain execution must also
 compare the request scale to the live asset definition before debiting funds.
 
-The init, top-up, and redeem requests bind a nonzero stable operation id so a
-retry cannot create a second economic operation. The append request binds the
-receiver's nonce-bearing request digest, the parent lineage digest, recipient
-output, optional change output, exact transfer amount, and operation id.
+The chain-facing top-up and redeem requests bind a nonzero stable operation id
+so a retry cannot create a second economic operation. The local
+`KagemushaRecursiveSpendInitRequestV2` is deliberately flat and anchor-derived.
+It contains exactly the finalized `topup_anchor`, checked one-hop
+`record_bundle`, `pallas_open_envelopes_archive`, `lineage_mode`, and optional
+`lineage_artifact`. It does not nest the discarded pre-release init request or
+duplicate amount, current note, operation id, inline keys, or an optional block
+height. Amount,
+note, operation identity, artifact generation, and verifier lifecycle height
+come from the finalized anchor. Before native dispatch, the checked transfer
+must match the anchor's chain, asset, initial/final roots, input nullifiers,
+single output commitment, verifier id, verifier commitment, and finalization
+height. The append request binds the receiver's nonce-bearing request digest,
+the canonical parent bundle digests, recipient output, optional change output,
+exact transfer amount, and operation id.
 
 Before a sender reserves inputs or performs proof work, it validates the
 receiver-device signature on `KagemushaRecipientPaymentRequestV2`. The signed
@@ -67,10 +84,19 @@ ambiguous bundle. The result carries the shared split statement and binding
 digest, a branch-tagged recipient bundle, and a branch-tagged change bundle
 exactly when `change_output` is present. Each bundle repeats the same split and
 binding digest. Both branch accumulators must share chain, asset, initial/final
-roots, top-up anchors, and hop count, while their current notes and recursive
-proofs are distinct. This lets transport and durable wallet staging treat the
-recipient and sender-change outputs as separate spendable states without
-reconstructing opaque accumulator or proof bytes.
+roots, compact top-up anchor references, and hop count, while their current
+notes and recursive proofs are distinct. Full finalized anchors remain in
+chain state and semantic init-node archives; spendable peer bundles carry only
+the strictly ordered `(topup_operation_id, anchor_digest)` identity pair. This
+lets transport and durable wallet staging treat recipient and sender-change
+outputs as separate spendable states without growing every peer payload with
+full anchor receipts.
+
+`KagemushaRecursiveSpendPeerPaymentV2` is the recipient-only transport type and
+contains exactly one field: `recipient_bundle`. Its stable operation id and
+recipient-request digest are read from the bundle's proof-bound recipient
+`PeerSplit` transition. They are not repeated as peer-payment fields, so there
+is no second identity source that can disagree with the proof statement.
 
 ## Split and lineage invariants
 
@@ -98,10 +124,22 @@ coordinates conflict; siblings do not. `proof_step_count` includes top-up and
 redemption-change transitions, while `peer_hop_count` is zero at top-up and
 increments only for offline peer transfers.
 
-These properties require a V2 recursive accumulator/circuit and chain state
-transition. V1 stores one current note and redemption consumes shared top-up
-anchors, so constructing two V1 bundles from one 1-to-2 hop cannot provide
-independent change: the first redemption invalidates the sibling.
+Each branch claim carries exactly `path.depth` transition tags, with no padded
+slots. A tag is
+`SHA-256("iroha:kagemusha:v2:transition-tag:sha256-192" || 0x00 || transition_digest)[0..24]`,
+where `transition_digest` is the complete proof-bound 32-byte digest and the
+result must be nonzero. On the wire, `transition_tags` is one `Vec<u8>` whose
+length is exactly `path.depth * 24`; consecutive 24-byte slices are the tags.
+It is not a vector of nested fixed-byte arrays. Claims and compact anchor
+references are strictly ordered and unique. Every claim lineage root must equal
+one referenced anchor digest; the ledger resolves each compact reference back
+to the complete finalized anchor before crediting a redemption.
+
+These properties require the recursive accumulator/circuit and chain state
+transition. The discarded single-parent prototype stored one current note and
+consumed shared top-up anchors at redemption, so cloning two bundles from one
+1-to-2 hop could not provide independent change: the first redemption would
+invalidate the sibling.
 
 ## Durable receiver acknowledgement
 
@@ -115,48 +153,70 @@ committing its reserved inputs.
 
 The receiver stores the final acknowledgement archive under
 `(operation_id, recipient_request_digest)` in the same durable transaction as
-the accepted bundle. Duplicate delivery returns those exact bytes; it must not
-generate a fresh timestamp or signature.
+the accepted bundle. Both values come from the accepted bundle's recipient
+`PeerSplit` transition, not duplicated peer-envelope fields. Duplicate delivery
+returns those exact bytes; it must not generate a fresh timestamp or signature.
 
 ## Fragmented balances and multi-input payments
 
-The implemented V2 split/append contract has exactly one input note. It does
-not recursively merge parents, and readiness therefore advertises
-`supports_multi_input: false`. A wallet may display the sum of available notes,
-but it must separately expose the maximum single-note spendable amount and must
-not claim that the full displayed balance is spendable in one payment.
+The canonical split consumes one or two parent bundles. Parent bundles are
+strictly ordered by bundle digest; their compact top-up references are merged,
+deduplicated, and strictly ordered. Checked `u128` addition conserves the sum
+of both inputs into one recipient output and optional sender change. Mixing
+parents from another chain, asset, scale, lineage mode, artifact generation,
+or an alternative transition choice is invalid.
 
-The recommended bounded follow-up is a typed aggregate over one or two
-independent per-input split results, not a lineage-DAG merge. A receiver-created
-aggregate request must bind one total exact amount and one or two recipient
-output commitments. The sender proves each input independently, and a typed
-payment aggregate binds the request digest, common operation id, ordered
-recipient bundles, and the checked sum of their exact atomic values. The
-receiver verifies and persists all recipient bundles atomically and signs one
-aggregate acknowledgement; sender input reservations commit atomically only
-after that acknowledgement. Replay/lost-ACK handling is at the aggregate
-operation id. This aggregate wire/circuit orchestration is not yet implemented,
-so `fragmented_balance_spendable` and `supports_multi_input` must remain false.
+Semantic mode carries a bounded canonical lineage DAG rather than a linear
+archive list. Each node identifies its result bundle, zero to two sorted parent
+digests, proof-step count, verifier-check height, and opaque typed transition
+archive. Nodes are uniquely ordered by `(proof_step_count,
+result_bundle_digest)`, contain the complete ancestor closure, and have one
+final sink. Limits are 64 nodes, 64 KiB per transition archive, 2 MiB total,
+and eight semantic peer hops. Root nodes retain the full finalized anchor and
+the proof-bearing init bundle; peer nodes retain the full split preimage and
+selected result bundle. This makes cross-top-up joins verifiable without
+putting full ancestry into every spendable peer bundle.
 
 ## Availability and rollout
 
 `KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE` is currently `false`.
-The data model and Swift exact-amount API are available for integration and
-fixture convergence, but V2 append/verify/redeem entrypoints MUST return
-`RecursiveSpendV2ProofBackendUnavailable` before proving or state mutation.
-Wallets MUST quarantine funded V1 state and disable fractional/split transfers;
-they MUST NOT emulate V2 by cloning V1 bundles or trusting a host-only split.
+The data model, Swift exact-amount API, and proof-independent native top-up
+bridge builder are available for integration and fixture convergence. Core
+execution of V2 top-up instructions and all proof-gated init, append,
+redeem-change, verify, and redeem entrypoints MUST return
+`RecursiveSpendV2ProofBackendUnavailable` before proving or state mutation. No
+funded state from a discarded pre-release shape is accepted or migrated.
+Wallets MUST disable fractional/split transfers and MUST NOT emulate them by
+cloning pre-release bundles or trusting a host-only split.
 
-The reserved native symbol names are
+The proof-gated native symbol names are
 `connect_norito_kagemusha_recursive_spend_init_v2`,
-`connect_norito_kagemusha_recursive_spend_topup_v2`,
 `connect_norito_kagemusha_recursive_spend_append_v2`,
+`connect_norito_kagemusha_recursive_spend_redeem_change_v2`,
 `connect_norito_kagemusha_recursive_spend_verify_v2`, and
 `connect_norito_kagemusha_recursive_spend_redeem_v2`. Each is exported as an
-ABI-17 fail-closed stub while the availability constant is false. Append
-reserves a `KagemushaRecursiveSpendSplitResultV2` output archive. Standalone V1 lineage-witness verification
-reserves `connect_norito_kagemusha_recursive_spend_lineage_witness_verify`;
-current ABI 17 verifies that witness only inside redemption, so the Swift typed
+ABI-18 fail-closed stub while the availability constant is false. ABI 18 also
+exports `connect_norito_kagemusha_recursive_spend_capabilities_v1`; callers
+must require its `proof_backend_available` field and must not infer readiness
+from symbols. It selects artifact manifest
+`kagemusha.offline.recursive_spend.artifact_manifest.v3`, mode
+`recursive_spend_v1`, proof backend `halo2/ipa-pasta-cycle-v1`, and transcript
+profile `kagemusha-pasta-cycle-poseidon-v1`. V3 artifact files are framed with
+`KRV3KEY\0`; the older V2 artifact spool is not a production release contract.
+Use the maintained `kagemusha_recursive_spend_v3_bundle` binary documented in
+`offline_kagemusha_recursion_adapter.md` to frame an externally generated,
+reviewed 2×3 artifact set and its canonical top-up finality roster; ABI-7
+material and generators are not compatible. This packager is an unsigned
+staging step. Wallets and native verification must use the authenticated
+manifest SHA and exact roster/artifact digests, never generation labels alone.
+The
+proof-independent `connect_norito_kagemusha_recursive_spend_topup_v2` path is
+part of the protocol-symbol inventory and validates the finalized transfer and
+debit contract without pretending that recursive proving is available. Append
+reserves a `KagemushaRecursiveSpendSplitResultV2` output archive. Standalone V1
+lineage-witness verification reserves
+`connect_norito_kagemusha_recursive_spend_lineage_witness_verify`;
+the current bridge verifies that witness only inside redemption, so the Swift typed
 verifier also reports unavailable rather than substituting structural parsing.
 
 Production availability requires all of the following in one release:
@@ -171,8 +231,8 @@ Production availability requires all of the following in one release:
    sibling redemption tests.
 5. Signed Reserved-lineage init/append artifacts and the advertised production
    performance gates.
-6. The bounded multi-input aggregate contract above, or an explicitly reduced
-   product contract that does not advertise fragmented balances as spendable.
+6. One- and two-input circuit tests covering compact-anchor resolution,
+   semantic DAG closure, conservation, and alternative-branch rejection.
 
 The first-release public HTTP lifecycle is deliberately small:
 
@@ -180,6 +240,11 @@ The first-release public HTTP lifecycle is deliberately small:
 - `POST /v1/offline/top-up`
 - `POST /v1/offline/redeem`
 - `GET /v1/offline/operations/{operation_id}`
+
+Readiness returns `evaluated_block_height` and an exact 64-character lowercase
+`evaluated_block_hash` from the same committed state view. Wallets use that
+pair as the recent-block anchor for device-attestation registration; they must
+not combine a height and hash from independent reads.
 
 The POST body is the typed `OfflineTopUpRequest` or `OfflineRedeemRequest`
 itself. With `Content-Type: application/json`, clients send its structured JSON
@@ -201,30 +266,35 @@ change the public request schema.
 
 The JSON form is the Norito JSON mapping of the same DTO, not an independently
 shaped compatibility payload. Struct fields use their declared snake-case
-names; tagged enums use the documented `tag` and `content` fields. Fixed byte
-arrays and ordinary byte vectors are arrays of JSON integers from 0 through
-255 unless a field explicitly declares another representation. Hashes, keys,
-signatures, account identifiers, and numeric values use the textual or numeric
-mapping declared by their data-model type. In particular, wide integers are
-lossless JSON integers; clients must not round them through an IEEE-754
-`double`. An `Option` is emitted as its typed value or `null` unless its field
-explicitly omits `None`; decoders also treat an omitted optional field as
-`None`. Duplicate declared fields, unknown enum discriminator values,
-non-finite numbers, and out-of-range integers are invalid. Decoders ignore
-unknown object members. Unit enum content is emitted as explicit `null`, while
-decoders also accept an omitted content member as the same unit value.
-Signatures and payload digests cover canonical typed Norito bytes, never the
-lexical spelling, member order, or ignored members of input JSON.
+names; tagged enums use the documented `tag` and `content` fields. An
+unannotated fixed `[u8; N]` is a JSON string of exactly `2 * N` hexadecimal
+digits; canonical output is uppercase and the decoder accepts either case. A
+field using the `fixed_bytes` helper and an ordinary `Vec<u8>` instead use
+integer-byte arrays unless that field declares another textual helper. Hashes,
+keys, signatures, account identifiers, and numeric values use the mapping
+declared by their data-model type. In particular, wide integers are lossless
+JSON integers; clients must not round them through an IEEE-754 `double`. An
+`Option` is emitted as its typed value or `null` unless its field explicitly
+omits `None`; decoders also treat an omitted optional field as `None`. Duplicate
+declared fields, unknown enum discriminator values, non-finite numbers, and
+out-of-range integers are invalid. Decoders ignore unknown object members. Unit
+enum content is emitted as explicit `null`, while decoders also accept an
+omitted content member as the same unit value. Signatures and payload digests
+cover canonical typed Norito bytes, never the lexical spelling, member order,
+or ignored members of input JSON.
 
-The `/v1` Norito layouts and their JSON mappings are frozen once this first
-release ships. Adding or reordering a field, changing a field mapping, removing
-a field, or adding an enum variant to a closed public DTO requires `/v2` unless
-the type already defines an explicit extensibility mechanism. Adding a new
-route or a new stable error-code string is additive; clients must treat unknown
-error codes as non-exhaustive while preserving the HTTP status. Required
-request fields cannot be added within `/v1`. Internal consensus/proof type
-names may retain implementation version suffixes, but those suffixes never
-appear as nested HTTP path versions or response-level negotiation.
+Before the first release is published, pre-release DTOs and wire layouts are
+replaced directly when correctness or clarity requires it. This is a sharp
+cutover, not a migration: the schema names and field sets documented here are
+the sole supported release target, with no compatibility period or alternate
+decoder. Implementations must not retain fallback decoders for the retired
+nested-init, full-anchor peer bundle, duplicated peer-payment identity, fixed
+padded or nested branch-history, or linear semantic-witness shapes. At
+publication, these public DTOs follow the `/v1` evolution policy in
+`torii/api_contract.md`.
+Internal consensus/proof type names may retain implementation version suffixes,
+but those suffixes never appear as nested HTTP path versions or response-level
+negotiation.
 
 Top-up and redemption are asynchronous. Acceptance returns `202 Accepted`, a
 typed `OfflineOperationReference`, and a `Location` header pointing to the
@@ -246,19 +316,60 @@ another route, authorization, or payload returns `409 operation_id_conflict`
 while the original queue, admission-cache, or committed-block record is
 retained. Clients must treat the identifier as globally single-use and must not
 recycle it after a status lookup returns `404`.
-Torii derives the submitted transaction's creation time and lifetime from the
-signed authorization, so an identical replay produces the same transaction
-hash. Pending operations are recovered from the transaction queue and committed
-applied or rejected operations from retained blocks. The auxiliary admission
-registry is a process-local optimization, is not restart-persistent, and is
-pruned opportunistically during reservation after the signed authorization's
-expiry plus 24 hours. Committed results remain discoverable while the
-corresponding block is retained.
+Torii resolves an identical replay against its admission registry, transaction
+queue, and retained committed blocks before applying current snapshot or issuer
+policy checks. It returns the original transaction hash and therefore does not
+depend on a signing implementation reproducing identical signature bytes.
+Concurrent identical submissions on one Torii node share an in-flight admission
+coordinator: duplicate callers wait for the leader's queue result and receive
+`202` only after that transaction has actually been admitted. If the leader
+fails or is cancelled, waiters retry recovery instead of receiving a provisional
+operation reference.
+Pending operations are recovered from the transaction queue and committed
+applied or rejected operations through Kura's operation-id index and one exact
+retained carrier-block read. When the operation executed through a lane merge,
+Kura also resolves that carrier's full merge entry by its sparse exact-height
+index and revalidates the canonical block hash, compact reference, and durable
+merge-log entry. A status miss never scans retained chain or merge history.
+While either index is being reconstructed, or when the indexed block body or
+merge entry is unavailable, Torii returns `503` with
+`offline_operation_index_unavailable` or `offline_operation_history_unavailable`;
+an index/body/result disagreement returns
+`offline_operation_index_inconsistent`. These states never guess a `404`. The
+auxiliary admission registry is a process-local optimization, is not
+restart-persistent, and is pruned opportunistically on admitted-record lookup
+after the signed authorization's expiry plus 24 hours. Committed results remain
+discoverable while the corresponding block is retained.
+
+The in-flight coordinator, admission registry, and transaction queue are local
+to one Torii process. A load balancer must keep a command submitter and its
+pending status polls on the accepting instance until commit. Before commit, a
+status lookup routed to another instance can return `404`; that miss never
+permits reuse or replacement of the globally single-use operation id. Every
+replica that accepts Offline commands for one deployment must use the same
+issuer identity and behaviorally identical issuer policy so an identical
+signed request constructs the same canonical transaction. Independent replicas
+can nevertheless race to admit that candidate, so consensus and the on-chain
+operation-id uniqueness rule—not a distributed idempotency cache—provide the
+final at-most-one-economic-effect guarantee. After commit, synchronized
+replicas resolve the terminal state through Kura's operation-id index while the
+indexed block is retained. A deployment that cannot provide pre-commit
+instance affinity must not expose these command routes until it provides shared
+admission coordination.
 
 Accepted operation references and pending status responses include
 `Retry-After: 1`. Accepted operation references and successful status responses
-use `Cache-Control: no-store`. The status resource is subject to the same Torii
-access policy as submission and is not projected as an MCP tool.
+use `Cache-Control: no-store`. Economic command authorization is carried by the
+signed request body. Separately, when Torii's API-token policy is enabled, all
+four lifecycle routes require the configured `x-api-token`; a missing or invalid
+token returns `401 api_token_required` with
+`WWW-Authenticate: IrohaApiToken realm="torii"`. Operation status remains
+non-secret chain-status data keyed by the non-zero operation id: possession of
+the id is not itself an authorization credential and does not bypass the
+transport token policy. Neither command nor status routes are projected as MCP
+tools. Only top-up and redeem document typed `403` rejection for the
+authenticated signed-body/header-policy check; readiness and operation status
+do not expose that command-only response.
 
 Readiness is a domain-state read. The selector may be a canonical
 asset-definition address literal or a currently live asset alias; the response

@@ -436,40 +436,6 @@
         ],
         "type": "object"
       },
-      "AliasVoprfEvaluateRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "blinded_element_hex": {
-            "description": "Hex-encoded blinded element to evaluate.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "blinded_element_hex"
-        ],
-        "type": "object"
-      },
-      "AliasVoprfEvaluateResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "backend": {
-            "description": "Name of the evaluator implementation.",
-            "enum": [
-              "blake2b512-mock"
-            ],
-            "type": "string"
-          },
-          "evaluated_element_hex": {
-            "description": "Hex-encoded evaluated element.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "evaluated_element_hex",
-          "backend"
-        ],
-        "type": "object"
-      },
       "AppPageMetadata": {
         "additionalProperties": true,
         "properties": {
@@ -1568,6 +1534,9 @@
         "properties": {
           "code": {
             "description": "Application-specific error identifier.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z0-9][a-z0-9_]{0,63}$",
             "type": "string"
           },
           "details": {
@@ -3371,7 +3340,6 @@
         "type": "array"
       },
       "OfflineOperationApplied": {
-        "additionalProperties": false,
         "properties": {
           "state": {
             "enum": [
@@ -3390,7 +3358,6 @@
         "type": "object"
       },
       "OfflineOperationAppliedValue": {
-        "additionalProperties": false,
         "properties": {
           "operation_id": {
             "$ref": "#/components/schemas/OfflineOperationId"
@@ -3406,13 +3373,59 @@
         "type": "object"
       },
       "OfflineOperationId": {
-        "description": "Canonical lowercase hexadecimal 32-byte operation id.",
-        "pattern": "^[0-9a-f]{64}$",
+        "description": "Canonical non-zero lowercase hexadecimal 32-byte operation id.",
+        "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
         "type": "string"
       },
+      "OfflineOperationIdBytes": {
+        "description": "Norito JSON representation of the non-zero signed 32-byte operation id.",
+        "items": {
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxItems": 32,
+        "minItems": 32,
+        "not": {
+          "const": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "type": "array"
+      },
       "OfflineOperationKind": {
-        "additionalProperties": false,
-        "description": "Norito tagged unit enum selecting top-up or redemption.",
+        "description": "Norito tagged unit enum selecting top-up or redemption. Canonical output includes value=null; decoders also accept omitted value and ignore unknown object members.",
         "properties": {
           "kind": {
             "enum": [
@@ -3426,13 +3439,11 @@
           }
         },
         "required": [
-          "kind",
-          "value"
+          "kind"
         ],
         "type": "object"
       },
       "OfflineOperationPending": {
-        "additionalProperties": false,
         "properties": {
           "state": {
             "enum": [
@@ -3451,7 +3462,6 @@
         "type": "object"
       },
       "OfflineOperationPendingValue": {
-        "additionalProperties": false,
         "properties": {
           "kind": {
             "$ref": "#/components/schemas/OfflineOperationKind"
@@ -3478,7 +3488,6 @@
         "type": "object"
       },
       "OfflineOperationReference": {
-        "additionalProperties": false,
         "properties": {
           "kind": {
             "$ref": "#/components/schemas/OfflineOperationKind"
@@ -3491,7 +3500,7 @@
           },
           "status_uri": {
             "format": "uri-reference",
-            "pattern": "^/v1/offline/operations/[0-9a-f]{64}$",
+            "pattern": "^/v1/offline/operations/(?!0{64}$)[0-9a-f]{64}$",
             "type": "string"
           },
           "submitted_at_ms": {
@@ -3515,7 +3524,6 @@
         "type": "object"
       },
       "OfflineOperationRejected": {
-        "additionalProperties": false,
         "properties": {
           "state": {
             "enum": [
@@ -3534,7 +3542,6 @@
         "type": "object"
       },
       "OfflineOperationRejectedValue": {
-        "additionalProperties": false,
         "properties": {
           "error": {
             "$ref": "#/components/schemas/ErrorEnvelope"
@@ -3571,8 +3578,7 @@
         ]
       },
       "OfflineOperationState": {
-        "additionalProperties": false,
-        "description": "Norito tagged initial operation state.",
+        "description": "Norito tagged initial operation state. Canonical output includes value=null; decoders also accept omitted value and ignore unknown object members.",
         "properties": {
           "state": {
             "enum": [
@@ -3585,8 +3591,7 @@
           }
         },
         "required": [
-          "state",
-          "value"
+          "state"
         ],
         "type": "object"
       },
@@ -3607,7 +3612,6 @@
         ]
       },
       "OfflineReadiness": {
-        "additionalProperties": false,
         "properties": {
           "asset_definition_id": {
             "type": "string"
@@ -3618,6 +3622,11 @@
             },
             "type": "array"
           },
+          "evaluated_block_hash": {
+            "description": "Lowercase hash of the evaluated committed block; clients may bind device-attestation registration to this exact snapshot.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
           "evaluated_block_height": {
             "description": "Committed height used for the evaluation.",
             "format": "uint64",
@@ -3625,24 +3634,26 @@
             "type": "integer"
           },
           "ready": {
-            "description": "False is a successfully evaluated domain state, not a service error.",
+            "description": "True exactly when blockers is empty. False is a successfully evaluated domain state, not a service error.",
             "type": "boolean"
           }
         },
         "required": [
           "asset_definition_id",
           "evaluated_block_height",
+          "evaluated_block_hash",
           "ready",
           "blockers"
         ],
         "type": "object"
       },
       "OfflineReadinessBlocker": {
-        "additionalProperties": false,
         "properties": {
           "code": {
             "description": "Stable machine-readable blocker code.",
-            "pattern": "^[a-z][a-z0-9_]*$",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z0-9][a-z0-9_]{0,63}$",
             "type": "string"
           },
           "message": {
@@ -3657,7 +3668,6 @@
         "type": "object"
       },
       "OfflineRedeemOperationResult": {
-        "additionalProperties": false,
         "properties": {
           "kind": {
             "enum": [
@@ -3676,8 +3686,7 @@
         "type": "object"
       },
       "OfflineRedeemRequest": {
-        "additionalProperties": false,
-        "description": "Direct structured JSON representation of the offline redemption request. application/x-norito carries the corresponding KagemushaRecursiveSpendRedeemRequestV2 value directly, not a wrapper containing encoded bytes.",
+        "description": "Direct structured JSON representation of OfflineRedeemRequest. application/x-norito carries the corresponding typed value directly, not a wrapper containing encoded bytes. JSON decoding ignores unknown object members but rejects duplicate declared members.",
         "properties": {
           "amount": {
             "$ref": "#/components/schemas/OfflineScaledAmount"
@@ -3719,7 +3728,7 @@
             ]
           },
           "operation_id": {
-            "$ref": "#/components/schemas/OfflineFixed32Bytes"
+            "$ref": "#/components/schemas/OfflineOperationIdBytes"
           },
           "recipient": {
             "description": "Canonical domainless account id credited by redemption.",
@@ -3744,10 +3753,9 @@
           "authorization"
         ],
         "type": "object",
-        "x-iroha-norito-type": "iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV2"
+        "x-iroha-norito-schema": "iroha.torii.v1.offline.redeem.request"
       },
       "OfflineRedeemResult": {
-        "additionalProperties": false,
         "properties": {
           "finalized_block_height": {
             "format": "uint64",
@@ -3771,7 +3779,6 @@
         "type": "object"
       },
       "OfflineScaledAmount": {
-        "additionalProperties": false,
         "properties": {
           "atomic_units": {
             "description": "Positive u128 emitted as an unquoted Norito-JSON integer.",
@@ -3792,7 +3799,6 @@
         "type": "object"
       },
       "OfflineTopUpOperationResult": {
-        "additionalProperties": false,
         "properties": {
           "kind": {
             "enum": [
@@ -3811,8 +3817,7 @@
         "type": "object"
       },
       "OfflineTopUpRequest": {
-        "additionalProperties": false,
-        "description": "Direct structured JSON representation of the offline top-up request. application/x-norito carries the corresponding KagemushaRecursiveSpendTopUpRequestV2 value directly, not a wrapper containing encoded bytes.",
+        "description": "Direct structured JSON representation of OfflineTopUpRequest. application/x-norito carries the corresponding typed value directly, not a wrapper containing encoded bytes. JSON decoding ignores unknown object members but rejects duplicate declared members.",
         "properties": {
           "amount": {
             "$ref": "#/components/schemas/OfflineScaledAmount"
@@ -3834,7 +3839,7 @@
             "description": "Typed first spendable note descriptor."
           },
           "operation_id": {
-            "$ref": "#/components/schemas/OfflineFixed32Bytes"
+            "$ref": "#/components/schemas/OfflineOperationIdBytes"
           },
           "pallas_open_envelopes_archive": {
             "$ref": "#/components/schemas/OfflineByteArray",
@@ -3856,10 +3861,9 @@
           "authorization"
         ],
         "type": "object",
-        "x-iroha-norito-type": "iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV2"
+        "x-iroha-norito-schema": "iroha.torii.v1.offline.top_up.request"
       },
       "OfflineTopUpResult": {
-        "additionalProperties": false,
         "properties": {
           "anchor": {
             "$ref": "#/components/schemas/JsonValue",
@@ -7041,7 +7045,7 @@
     },
     "/v1/accounts/{account_id}/permissions": {
       "get": {
-        "description": "List permissions granted to an account. Signed/internal reads fan out across all configured dataspaces so dataspace-scoped grants remain visible regardless of ingress; unsigned reads stay limited to caller-visible routes.",
+        "description": "List effective permissions granted to an account, including permissions inherited from assigned roles. Signed/internal reads fan out across all configured dataspaces so dataspace-scoped grants remain visible regardless of ingress; unsigned reads stay limited to caller-visible routes.",
         "parameters": [
           {
             "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
@@ -7228,7 +7232,7 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/aliases/by_account": {
+    "/v1/aliases/by-account": {
       "post": {
         "description": "Routes the lookup through the Nexus read proxy using the target account routes, merges deduplicated alias rows across reachable dataspaces, recomputes `total`, and returns `source = fanout` when multiple routes contribute to the response.",
         "operationId": "aliasLookupByAccount",
@@ -7394,7 +7398,7 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/aliases/resolve_index": {
+    "/v1/aliases/resolve-index": {
       "post": {
         "description": "Fans out the alias-index lookup across configured Nexus dataspaces because the index alone does not encode a dataspace, dedupes identical bindings, and returns `source = fanout` when the result comes from multi-route merging.",
         "operationId": "aliasResolveIndex",
@@ -7465,59 +7469,6 @@
           "Aliases"
         ],
         "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/aliases/voprf/evaluate": {
-      "post": {
-        "description": "Takes a blinded alias element (hex) and returns the deterministically evaluated mock response used by tooling.",
-        "operationId": "aliasVoprfEvaluate",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AliasVoprfEvaluateRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AliasVoprfEvaluateResponse"
-                }
-              }
-            },
-            "description": "Blinded element successfully evaluated."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Malformed request (invalid hex encoding)."
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Internal server error."
-          }
-        },
-        "summary": "Evaluate the mock alias VOPRF helper.",
-        "tags": [
-          "Aliases"
-        ],
-        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/api/version": {
@@ -7817,24 +7768,70 @@
     },
     "/v1/blocks/stream": {
       "get": {
-        "description": "Upgrade to the block stream WebSocket.",
+        "description": "Upgrade to the ordered block stream WebSocket. Send exactly one framed Norito `BlockSubscriptionRequest`; its non-zero height is the supported replay/reconnect position.",
+        "operationId": "streamBlocksWebSocket",
         "responses": {
-          "200": {
-            "content": {
-              "text/plain": {
+          "101": {
+            "description": "WebSocket upgrade accepted.",
+            "headers": {
+              "Sec-WebSocket-Protocol": {
+                "required": true,
                 "schema": {
+                  "enum": [
+                    "iroha-norito-v1"
+                  ],
                   "type": "string"
                 }
               }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
             },
-            "description": "Successful response."
+            "description": "Missing, invalid, duplicated, or unsupported WebSocket stream handshake input."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentication failed before WebSocket establishment."
           }
         },
         "summary": "Connect to the block stream WebSocket.",
         "tags": [
           "Streams"
         ],
-        "x-iroha-tool-effect": "read"
+        "x-iroha-close-codes": {
+          "1000": "normal closure",
+          "1007": "invalid Norito payload or unexpected data frame",
+          "1008": "subscription timeout or policy violation",
+          "1009": "subscription message or frame exceeds 256 KiB",
+          "1011": "server-side stream failure",
+          "1013": "lag or send backpressure; retry from a safe snapshot/height"
+        },
+        "x-iroha-heartbeat-seconds": 15,
+        "x-iroha-max-subscription-message-bytes": 262144,
+        "x-iroha-tool-effect": "read",
+        "x-iroha-websocket-subprotocol": "iroha-norito-v1"
       }
     },
     "/v1/bridge/finality/bundle/{height}": {
@@ -8829,7 +8826,8 @@
     },
     "/v1/contracts/events/sse": {
       "get": {
-        "description": "Stream generic contract events via Server-Sent Events.",
+        "description": "Stream live generic contract events via Server-Sent Events. Payload `event_id` values support deduplication only and are not replay cursors; `Last-Event-ID` is rejected. Lag emits one terminal `stream_error` event.",
+        "operationId": "streamContractEventsSse",
         "responses": {
           "200": {
             "content": {
@@ -8840,12 +8838,25 @@
               }
             },
             "description": "Event stream."
+          },
+          "400": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Stream establishment rejected. A `stream_error` event identifies an unsupported resume request."
           }
         },
         "summary": "Subscribe to contract event stream.",
         "tags": [
           "Streams"
         ],
+        "x-iroha-heartbeat-seconds": 15,
+        "x-iroha-lag-behavior": "terminal_stream_error",
+        "x-iroha-replay-supported": false,
         "x-iroha-tool-effect": "read"
       }
     },
@@ -9498,7 +9509,7 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/controls/asset-transfer/get": {
+    "/v1/controls/asset-transfer/query": {
       "post": {
         "description": "Resolve an asset-transfer control request and return the current control snapshot.",
         "requestBody": {
@@ -9724,7 +9735,7 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/da/pin_intents": {
+    "/v1/da/pin-intents": {
       "post": {
         "description": "List pin intent commitments indexed by the node.",
         "requestBody": {
@@ -9756,7 +9767,7 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/da/pin_intents/prove": {
+    "/v1/da/pin-intents/prove": {
       "post": {
         "description": "Locate a pin intent by storage ticket, alias, manifest hash, or lane/epoch/sequence and return the indexed block location payload.",
         "requestBody": {
@@ -9788,7 +9799,7 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/da/pin_intents/verify": {
+    "/v1/da/pin-intents/verify": {
       "post": {
         "description": "Check that a provided DA pin intent location payload matches the node's current pin-intent index.",
         "requestBody": {
@@ -9820,7 +9831,7 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/da/proof_policies": {
+    "/v1/da/proof-policies": {
       "get": {
         "description": "Return the configured DA proof policy set.",
         "responses": {
@@ -9842,7 +9853,7 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/da/proof_policy_snapshot": {
+    "/v1/da/proof-policies/snapshot": {
       "get": {
         "description": "Return the active DA proof policy snapshot bundle.",
         "responses": {
@@ -9969,7 +9980,8 @@
     },
     "/v1/events/sse": {
       "get": {
-        "description": "Stream pipeline events via Server-Sent Events.",
+        "description": "Stream live pipeline and data events via Server-Sent Events. This endpoint has no replay log: `Last-Event-ID` is rejected, heartbeat comments do not affect ordering, and lag emits one `stream_error` event before the connection closes.",
+        "operationId": "streamEventsSse",
         "responses": {
           "200": {
             "content": {
@@ -9980,35 +9992,94 @@
               }
             },
             "description": "Event stream."
+          },
+          "400": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Stream establishment rejected. A `stream_error` event identifies an unsupported resume request."
           }
         },
         "summary": "Subscribe to event stream.",
         "tags": [
           "Streams"
         ],
+        "x-iroha-heartbeat-seconds": 15,
+        "x-iroha-lag-behavior": "terminal_stream_error",
+        "x-iroha-replay-supported": false,
         "x-iroha-tool-effect": "read"
       }
     },
     "/v1/events/ws": {
       "get": {
-        "description": "Upgrade to the event subscription WebSocket.",
+        "description": "Upgrade to the live event subscription WebSocket. Send exactly one framed Norito `EventSubscriptionRequest`; subsequent data frames are protocol errors. The stream has no replay log.",
+        "operationId": "streamEventsWebSocket",
         "responses": {
-          "200": {
-            "content": {
-              "text/plain": {
+          "101": {
+            "description": "WebSocket upgrade accepted.",
+            "headers": {
+              "Sec-WebSocket-Protocol": {
+                "required": true,
                 "schema": {
+                  "enum": [
+                    "iroha-norito-v1"
+                  ],
                   "type": "string"
                 }
               }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
             },
-            "description": "Successful response."
+            "description": "Missing, invalid, duplicated, or unsupported WebSocket stream handshake input."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentication failed before WebSocket establishment."
           }
         },
         "summary": "Connect to the event WebSocket.",
         "tags": [
           "Streams"
         ],
-        "x-iroha-tool-effect": "read"
+        "x-iroha-close-codes": {
+          "1000": "normal closure",
+          "1007": "invalid Norito payload or unexpected data frame",
+          "1008": "subscription timeout or policy violation",
+          "1009": "subscription message or frame exceeds 256 KiB",
+          "1011": "server-side stream failure",
+          "1013": "lag or send backpressure; retry from a safe snapshot/height"
+        },
+        "x-iroha-heartbeat-seconds": 15,
+        "x-iroha-max-subscription-message-bytes": 262144,
+        "x-iroha-tool-effect": "read",
+        "x-iroha-websocket-subprotocol": "iroha-norito-v1"
       }
     },
     "/v1/explorer/accounts": {
@@ -12257,39 +12328,6 @@
         "x-iroha-tool-effect": "write"
       }
     },
-    "/v1/iso20022/status/{msg_id}": {
-      "get": {
-        "description": "Return ISO 20022 message status by message id.",
-        "parameters": [
-          {
-            "description": "ISO 20022 message id.",
-            "in": "path",
-            "name": "msg_id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fetch ISO 20022 message status.",
-        "tags": [
-          "ISO20022"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
     "/v1/kaigi/relays": {
       "get": {
         "description": "Returns relay identifiers, domains, bandwidth classes, HPKE fingerprints, and the freshest health report (if available).",
@@ -12808,7 +12846,7 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/multisig/approvals/get": {
+    "/v1/multisig/approvals/lookup": {
       "post": {
         "description": "Resolve a multisig selector and fetch a recorded approval by proposal selector.",
         "requestBody": {
@@ -12866,7 +12904,7 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/multisig/approvals/get_for_authority": {
+    "/v1/multisig/approvals/lookup-for-authority": {
       "post": {
         "description": "Fetch a multisig approval visible to the authenticated caller authority by proposal selector.",
         "requestBody": {
@@ -12924,7 +12962,7 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/multisig/approvals/list": {
+    "/v1/multisig/approvals/query": {
       "post": {
         "description": "Resolve a multisig selector and list approvals recorded for the active concrete multisig authority.",
         "requestBody": {
@@ -12982,7 +13020,7 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/multisig/approvals/list_for_authority": {
+    "/v1/multisig/approvals/query-for-authority": {
       "post": {
         "description": "List multisig approvals visible to the authenticated caller authority using the signatory index.",
         "requestBody": {
@@ -13156,7 +13194,7 @@
         "x-iroha-tool-effect": "write"
       }
     },
-    "/v1/multisig/proposals/get": {
+    "/v1/multisig/proposals/lookup": {
       "post": {
         "description": "Resolve a multisig selector and fetch a proposal by `proposal_id` or `instructions_hash`.",
         "requestBody": {
@@ -13214,7 +13252,7 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/multisig/proposals/list": {
+    "/v1/multisig/proposals/query": {
       "post": {
         "description": "Resolve a multisig selector and list nonterminal proposals for the active concrete multisig authority.",
         "requestBody": {
@@ -13388,6 +13426,346 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/musubi/aliases/{alias}": {
+      "get": {
+        "description": "Return the package id bound to one curated short alias.",
+        "parameters": [
+          {
+            "description": "Curated Musubi short alias.",
+            "in": "path",
+            "name": "alias",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Resolve a Musubi package alias.",
+        "tags": [
+          "Musubi"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/musubi/instructions/assert-release-exists": {
+      "post": {
+        "description": "Return a deterministic unsigned release-existence assertion for local signing.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Build a Musubi release-existence assertion.",
+        "tags": [
+          "Musubi"
+        ],
+        "x-iroha-tool-effect": "build_instruction"
+      }
+    },
+    "/v1/musubi/instructions/publish-release": {
+      "post": {
+        "description": "Validate a release and return a deterministic unsigned instruction envelope for local signing.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Build a Musubi publish-release instruction.",
+        "tags": [
+          "Musubi"
+        ],
+        "x-iroha-tool-effect": "build_instruction"
+      }
+    },
+    "/v1/musubi/instructions/set-alias": {
+      "post": {
+        "description": "Return a deterministic unsigned short-alias instruction envelope for local signing.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Build a Musubi set-alias instruction.",
+        "tags": [
+          "Musubi"
+        ],
+        "x-iroha-tool-effect": "build_instruction"
+      }
+    },
+    "/v1/musubi/instructions/yank-release": {
+      "post": {
+        "description": "Return a deterministic unsigned yank instruction envelope for local signing.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Build a Musubi yank-release instruction.",
+        "tags": [
+          "Musubi"
+        ],
+        "x-iroha-tool-effect": "build_instruction"
+      }
+    },
+    "/v1/musubi/packages": {
+      "get": {
+        "description": "Return a deterministic, bounded package search result.",
+        "parameters": [
+          {
+            "description": "Case-sensitive namespace/package substring.",
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional Musubi namespace filter.",
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Include packages with only yanked releases.",
+            "in": "query",
+            "name": "include_yanked",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Deterministic result offset.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Maximum result count; Torii applies its configured cap.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Search Musubi packages.",
+        "tags": [
+          "Musubi"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/musubi/release": {
+      "get": {
+        "description": "Return one exact package release selected by namespace/name@version.",
+        "parameters": [
+          {
+            "description": "Exact release reference in namespace/name@version form.",
+            "in": "query",
+            "name": "package",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch a Musubi release.",
+        "tags": [
+          "Musubi"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/musubi/releases": {
+      "get": {
+        "description": "Return release summaries for one package.",
+        "parameters": [
+          {
+            "description": "Package id in namespace/name form.",
+            "in": "query",
+            "name": "package",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Include yanked releases.",
+            "in": "query",
+            "name": "include_yanked",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "List Musubi package releases.",
+        "tags": [
+          "Musubi"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/musubi/versions": {
+      "get": {
+        "description": "Return published versions for one package.",
+        "parameters": [
+          {
+            "description": "Package id in namespace/name form.",
+            "in": "query",
+            "name": "package",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "List Musubi package versions.",
+        "tags": [
+          "Musubi"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/nexus/dataspaces/accounts/{literal}/summary": {
       "get": {
         "description": "Resolves the supplied canonical I105 account literal or on-chain alias and returns a joined view of UAID bindings, space-directory manifests, portfolio counters, and per-dataspace consensus commitments.",
@@ -13478,31 +13856,9 @@
           "Nexus"
         ],
         "x-iroha-tool-effect": "read"
-      },
-      "post": {
-        "deprecated": true,
-        "description": "This route never mutates state and always rejects valid request bodies. Submit a signed transaction containing `SetParameter` with custom id `nexus_lane_lifecycle_v1` instead.",
-        "operationId": "deprecatedPostNexusLaneLifecycle",
-        "responses": {
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Node-local lane lifecycle mutation is disabled."
-          }
-        },
-        "summary": "Retired node-local lifecycle mutation route.",
-        "tags": [
-          "Nexus"
-        ],
-        "x-iroha-tool-effect": "operator"
       }
     },
-    "/v1/nexus/public_lanes/{lane_id}/rewards/pending": {
+    "/v1/nexus/public-lanes/{lane_id}/rewards/pending": {
       "get": {
         "description": "Returns the unclaimed reward amount per asset for the requested account in the given public lane. Requires an `account` query parameter (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`) and accepts optional `asset_id` and `upto_epoch` filters.",
         "operationId": "nexusPublicLaneRewards",
@@ -13575,7 +13931,7 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/nexus/public_lanes/{lane_id}/stake": {
+    "/v1/nexus/public-lanes/{lane_id}/stake": {
       "get": {
         "description": "Returns bonded stake per validator/staker pair for the requested public lane, including pending unbond timers. Supports an optional validator filter.",
         "operationId": "nexusPublicLaneStake",
@@ -13629,7 +13985,7 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/nexus/public_lanes/{lane_id}/validators": {
+    "/v1/nexus/public-lanes/{lane_id}/validators": {
       "get": {
         "description": "Returns validators servicing the requested public lane with lifecycle status (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation epoch/height, and `release_at_ms` when an exit timer is running.",
         "operationId": "nexusPublicLaneValidators",
@@ -14154,16 +14510,16 @@
     },
     "/v1/offline/operations/{operation_id}": {
       "get": {
-        "description": "Return the current tagged state of an accepted top-up or redemption. Pending responses include Retry-After. Pending state can be recovered from the transaction queue, and committed terminal state remains readable while its block is retained; the auxiliary admission registry is process-local and eligible for pruning 24 hours after the signed authorization expires.",
+        "description": "Return the current tagged state of an accepted top-up or redemption. Pending responses include Retry-After. Pending state can be recovered from the transaction queue, and committed terminal state is resolved through Kura's bounded operation-id index and exact canonical carrier, including its validated merge entry when applicable; the auxiliary admission registry is process-local and eligible for pruning 24 hours after the signed authorization expires. A 503 response means that index reconstruction or the indexed block or merge history is temporarily unavailable.",
         "operationId": "offlineOperationStatus",
         "parameters": [
           {
-            "description": "Canonical lowercase hexadecimal offline operation id.",
+            "description": "Canonical non-zero lowercase hexadecimal identifier from the global offline operation namespace.",
             "in": "path",
             "name": "operation_id",
             "required": true,
             "schema": {
-              "pattern": "^[0-9a-f]{64}$",
+              "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
               "type": "string"
             }
           }
@@ -14222,7 +14578,7 @@
             },
             "description": "The operation id is malformed."
           },
-          "403": {
+          "401": {
             "content": {
               "application/json": {
                 "schema": {
@@ -14235,7 +14591,16 @@
                 }
               }
             },
-            "description": "The request does not satisfy Torii's API-token or route access policy."
+            "description": "The Torii API token is missing or invalid (api_token_required).",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Authentication challenge for the Torii API-token scheme.",
+                "schema": {
+                  "example": "IrohaApiToken realm=\"torii\"",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -14300,6 +14665,21 @@
               }
             },
             "description": "The process-local operation registry could not be read."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The offline operation index or indexed block body is temporarily unavailable."
           }
         },
         "summary": "Fetch an offline operation.",
@@ -14315,7 +14695,7 @@
         "operationId": "offlineReadiness",
         "parameters": [
           {
-            "description": "Canonical asset definition id whose live on-chain scale and verifier readiness are evaluated.",
+            "description": "Canonical asset-definition address literal or currently live asset alias. The response always contains the resolved canonical asset definition id.",
             "in": "query",
             "name": "asset_definition_id",
             "required": true,
@@ -14324,7 +14704,7 @@
             }
           },
           {
-            "description": "ETag returned by an earlier readiness evaluation.",
+            "description": "A strong or weak ETag returned by an earlier readiness evaluation, or *. A match for the selected representation returns 304.",
             "in": "header",
             "name": "If-None-Match",
             "required": false,
@@ -14357,7 +14737,7 @@
                 }
               },
               "ETag": {
-                "description": "Readiness representation validator bound to the evaluated block.",
+                "description": "Strong readiness validator bound to the complete selected representation and evaluated block.",
                 "schema": {
                   "type": "string"
                 }
@@ -14382,7 +14762,7 @@
                 }
               },
               "ETag": {
-                "description": "Readiness representation validator.",
+                "description": "Strong validator for the selected readiness representation.",
                 "schema": {
                   "type": "string"
                 }
@@ -14410,6 +14790,30 @@
               }
             },
             "description": "The asset selector is malformed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The Torii API token is missing or invalid (api_token_required).",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Authentication challenge for the Torii API-token scheme.",
+                "schema": {
+                  "example": "IrohaApiToken realm=\"torii\"",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -14474,12 +14878,12 @@
         "operationId": "offlineRedeem",
         "parameters": [
           {
-            "description": "Lowercase hexadecimal form of the request's signed 32-byte operation id. Identical replays return the original operation; reuse for different canonical request bytes returns 409.",
+            "description": "Non-zero lowercase hexadecimal form of the request's signed 32-byte operation id. The identifier is globally single-use across offline command routes and binds the complete signed authorization and canonical typed request. Identical replays return the original operation; any other reuse conflicts while the original queue, process-cache, or retained-block record is recoverable. Clients must never recycle an id after a 404.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": true,
             "schema": {
-              "pattern": "^[0-9a-f]{64}$",
+              "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
               "type": "string"
             }
           }
@@ -14495,7 +14899,7 @@
               "schema": {
                 "format": "binary",
                 "type": "string",
-                "x-iroha-norito-type": "iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV2"
+                "x-iroha-norito-schema": "iroha.torii.v1.offline.redeem.request"
               }
             }
           },
@@ -14528,6 +14932,7 @@
                 "description": "Canonical operation status resource.",
                 "schema": {
                   "format": "uri-reference",
+                  "pattern": "^/v1/offline/operations/(?!0{64}$)[0-9a-f]{64}$",
                   "type": "string"
                 }
               },
@@ -14562,6 +14967,30 @@
             },
             "description": "The typed request is malformed."
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The Torii API token is missing or invalid (api_token_required).",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Authentication challenge for the Torii API-token scheme.",
+                "schema": {
+                  "example": "IrohaApiToken realm=\"torii\"",
+                  "type": "string"
+                }
+              }
+            }
+          },
           "403": {
             "content": {
               "application/json": {
@@ -14575,7 +15004,7 @@
                 }
               }
             },
-            "description": "The request does not satisfy Torii's API-token or route access policy."
+            "description": "Canonical X-Iroha request-signing headers are unsupported on signed-body offline commands."
           },
           "406": {
             "content": {
@@ -14685,12 +15114,12 @@
         "operationId": "offlineTopUp",
         "parameters": [
           {
-            "description": "Lowercase hexadecimal form of the request's signed 32-byte operation id. Identical replays return the original operation; reuse for different canonical request bytes returns 409.",
+            "description": "Non-zero lowercase hexadecimal form of the request's signed 32-byte operation id. The identifier is globally single-use across offline command routes and binds the complete signed authorization and canonical typed request. Identical replays return the original operation; any other reuse conflicts while the original queue, process-cache, or retained-block record is recoverable. Clients must never recycle an id after a 404.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": true,
             "schema": {
-              "pattern": "^[0-9a-f]{64}$",
+              "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
               "type": "string"
             }
           }
@@ -14706,7 +15135,7 @@
               "schema": {
                 "format": "binary",
                 "type": "string",
-                "x-iroha-norito-type": "iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV2"
+                "x-iroha-norito-schema": "iroha.torii.v1.offline.top_up.request"
               }
             }
           },
@@ -14739,6 +15168,7 @@
                 "description": "Canonical operation status resource.",
                 "schema": {
                   "format": "uri-reference",
+                  "pattern": "^/v1/offline/operations/(?!0{64}$)[0-9a-f]{64}$",
                   "type": "string"
                 }
               },
@@ -14773,6 +15203,30 @@
             },
             "description": "The typed request is malformed."
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The Torii API token is missing or invalid (api_token_required).",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Authentication challenge for the Torii API-token scheme.",
+                "schema": {
+                  "example": "IrohaApiToken realm=\"torii\"",
+                  "type": "string"
+                }
+              }
+            }
+          },
           "403": {
             "content": {
               "application/json": {
@@ -14786,7 +15240,7 @@
                 }
               }
             },
-            "description": "The request does not satisfy Torii's API-token or route access policy."
+            "description": "Canonical X-Iroha request-signing headers are unsupported on signed-body offline commands."
           },
           "406": {
             "content": {
@@ -16524,6 +16978,167 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/sccp/messages/recent": {
+      "get": {
+        "description": "Returns a newest-first bounded window of committed SCCP messages with optional `from` and `limit` query parameters. Supports JSON or Norito content negotiation via the `Accept` header.",
+        "operationId": "sccpRecentMessages",
+        "parameters": [
+          {
+            "description": "Optional starting block height (inclusive, newest-first window).",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional maximum number of records to return (bounded by server cap).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Recent SCCP message window."
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
+          }
+        },
+        "summary": "List recently committed SCCP messages.",
+        "tags": [
+          "Bridge"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sccp/proofs/burn/{message_id}": {
+      "get": {
+        "description": "Returns the typed Nexus SCCP burn bundle for a canonical message id. Supports JSON or Norito content negotiation via the `Accept` header.",
+        "operationId": "sccpBurnProof",
+        "parameters": [
+          {
+            "description": "Canonical SCCP message id hex string.",
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Typed SCCP burn proof bundle."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "SCCP message not found."
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
+          }
+        },
+        "summary": "Fetch an SCCP burn proof bundle.",
+        "tags": [
+          "Bridge"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sccp/proofs/message/{message_id}": {
+      "get": {
+        "description": "Returns the typed Nexus SCCP message bundle for a canonical message id. Supports JSON or Norito content negotiation via the `Accept` header.",
+        "operationId": "sccpMessageProof",
+        "parameters": [
+          {
+            "description": "Canonical SCCP message id hex string.",
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Typed SCCP message proof bundle."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "SCCP message not found."
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
+          }
+        },
+        "summary": "Fetch an SCCP message proof bundle.",
+        "tags": [
+          "Bridge"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/sns/names": {
       "post": {
         "description": "Register a ledger-backed SNS name record in one of the fixed namespaces.",
@@ -18047,70 +18662,6 @@
         "x-iroha-tool-effect": "write"
       }
     },
-    "/v1/sorafs/capacity/por": {
-      "post": {
-        "description": "Return 410 Gone; PoR metering is derived from authenticated proof and verdict lifecycle transitions.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Manual PoR observation retired.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/sorafs/capacity/por-challenge": {
-      "post": {
-        "description": "Return 410 Gone after operator authentication. The verified coordinator scheduler is the only permitted future production authority; automation enablement fails closed until authenticated external drand/VRF feeds are configured.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "External PoR challenge submission retired.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
     "/v1/sorafs/capacity/por-proof": {
       "post": {
         "description": "Submit a domain-separated provider-signed proof whose request key and current admitted advert key match the proof signer.",
@@ -19618,38 +20169,6 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/sorafs/por/trigger": {
-      "post": {
-        "description": "Return a fail-closed retirement response for the legacy manual PoR trigger route. The verified scheduler is the only permitted future challenge authority, and is not enabled without authenticated external drand/VRF feeds.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Manual PoR trigger retired.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
     "/v1/sorafs/proof/stream": {
       "post": {
         "description": "Request a PoR or PoTR proof stream payload. PoR `sample_count` must be between 1 and 500. `proof_kind=pdp` is reserved for future SF-13 work and is rejected as an unsupported proof kind.",
@@ -19892,6 +20411,43 @@
           }
         },
         "summary": "Stream reputation events.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sorafs/reputation/events/ws": {
+      "get": {
+        "description": "Upgrade to a SoraFS reputation WebSocket. The stream emits JSON text frames with `event = reputation_snapshot` for the optional `since`/`limit` backlog and for live snapshot publications; lag frames use `event = lagged`.",
+        "parameters": [
+          {
+            "description": "Emit backlog events with sequence greater than this cursor.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional backlog page size limit.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "WebSocket upgrade accepted."
+          }
+        },
+        "summary": "Connect to the reputation WebSocket.",
         "tags": [
           "SoraFS"
         ],
@@ -20483,70 +21039,6 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/sorafs/storage/por-challenge": {
-      "post": {
-        "description": "Submit a storage PoR challenge.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Submit storage PoR challenge.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/sorafs/storage/por-proof": {
-      "post": {
-        "description": "Submit a storage PoR proof.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Submit storage PoR proof.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
     "/v1/sorafs/storage/por-sample": {
       "post": {
         "description": "Request a proof-of-replication sample. The JSON `count` field must be between 1 and 500; the returned `samples` array is also capped by the stored manifest leaf count.",
@@ -20573,38 +21065,6 @@
           }
         },
         "summary": "Request a PoR sample.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/sorafs/storage/por-verdict": {
-      "post": {
-        "description": "Submit a storage PoR verdict.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Submit storage PoR verdict.",
         "tags": [
           "SoraFS"
         ],
@@ -21332,7 +21792,7 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/sumeragi/bls_keys": {
+    "/v1/sumeragi/bls-keys": {
       "get": {
         "description": "Return the consensus BLS key set.",
         "responses": {
@@ -21451,14 +21911,14 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/sumeragi/commit_qc/{hash}": {
+    "/v1/sumeragi/commit-qcs/{block_hash}": {
       "get": {
         "description": "Fetch commit QC by block hash.",
         "parameters": [
           {
             "description": "Block hash (hex).",
             "in": "path",
-            "name": "hash",
+            "name": "block_hash",
             "required": true,
             "schema": {
               "type": "string"
@@ -21635,7 +22095,7 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/sumeragi/new_view/json": {
+    "/v1/sumeragi/new-view": {
       "get": {
         "description": "Return new view status snapshot.",
         "responses": {
@@ -21657,7 +22117,7 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/sumeragi/new_view/sse": {
+    "/v1/sumeragi/new-view/sse": {
       "get": {
         "description": "Stream new view events via SSE.",
         "responses": {
@@ -23241,43 +23701,6 @@
         ],
         "x-iroha-tool-effect": "read"
       }
-    },
-    "/ws/reputation": {
-      "get": {
-        "description": "Upgrade to a SoraFS reputation WebSocket. The stream emits JSON text frames with `event = reputation_snapshot` for the optional `since`/`limit` backlog and for live snapshot publications; lag frames use `event = lagged`.",
-        "parameters": [
-          {
-            "description": "Emit backlog events with sequence greater than this cursor.",
-            "in": "query",
-            "name": "since",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Optional backlog page size limit.",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "101": {
-            "description": "WebSocket upgrade accepted."
-          }
-        },
-        "summary": "Connect to the reputation WebSocket.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
     }
   },
   "servers": [
@@ -23454,6 +23877,10 @@
     {
       "description": "ISO 20022 bridge submissions and status queries.",
       "name": "ISO20022"
+    },
+    {
+      "description": "Kotodama package-registry reads and deterministic unsigned instruction builders.",
+      "name": "Musubi"
     },
     {
       "description": "SoraNet privacy ingestion endpoints.",

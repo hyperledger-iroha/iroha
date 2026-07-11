@@ -808,6 +808,27 @@ public final class OfflineNoteV2Test {
         obj(obj(fixture, "chain_vectors"), "attestation_registration");
     final String androidSigningDigestHex =
         nullableString(vector, "android_signing_certificate_sha256");
+    final byte[] preAttestationChallenge =
+        OfflineNoteV2.DeviceAttestationRegistrationV2.preAttestationChallengeHash(
+            intValue(vector, "version"),
+            string(vector, "platform"),
+            string(vector, "key_id"),
+            string(vector, "device_id"),
+            string(vector, "account_id"),
+            nullableString(vector, "asset_definition_id"),
+            nullableString(vector, "ios_team_id"),
+            nullableString(vector, "ios_bundle_id"),
+            nullableString(vector, "ios_environment"),
+            nullableString(vector, "android_package_name"),
+            androidSigningDigestHex == null ? null : hexBytes(androidSigningDigestHex),
+            base64Bytes(string(vector, "public_key")),
+            string(vector, "assertion_scheme"),
+            string(vector, "assertion_key_algorithm"),
+            nullableInt(vector, "assertion_usage_count_limit"),
+            bool(vector, "one_use"),
+            longValue(vector, "recent_block_height"),
+            hexBytes(string(vector, "recent_block_hash")),
+            longValue(vector, "expires_at_ms"));
     final OfflineNoteV2.DeviceAttestationRegistrationV2 draft =
         new OfflineNoteV2.DeviceAttestationRegistrationV2(
             intValue(vector, "version"),
@@ -842,6 +863,10 @@ public final class OfflineNoteV2Test {
         string(vector, "challenge_hash"),
         hex(draft.canonicalChallengeHash()),
         "draft device attestation canonical challenge hash");
+    assertArrayEquals(
+        preAttestationChallenge,
+        draft.challengeHash(),
+        "pre-attestation challenge helper parity");
     assertEquals(
         string(vector, "challenge_hash"),
         hex(draft.challengeHash()),

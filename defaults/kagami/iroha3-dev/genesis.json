@@ -277,7 +277,7 @@
   "wire_proto_versions": [
     2
   ],
-  "consensus_fingerprint": "0x6a0273d7ba4e0754f425d9695530ebc0b04b698f0a5ab5fba6db17b24511b41d",
+  "consensus_fingerprint": "0x9a8dfaa453447b1e246b562a4b652a9d610a422cd67ff61d1212779b8ba46a6d",
   "sumeragi_v2": {
     "da_layout": {
       "encoding": {
@@ -290,7 +290,7 @@
       "max_payload_size_bytes": 16777216,
       "max_chunk_count": 1024
     },
-    "nexus_amx_context_hash": "76FC637FEC320C7EAD22A65E693658FBB1187A3B0152900D64644C841E77CA7F"
+    "nexus_amx_context_hash": "83B1B4C42FB3BB4FD01FD99C6D15E0BED7C83C0F3100B9A7701522807B9F73BF"
   },
   "crypto": {
     "sm_openssl_preview": false,

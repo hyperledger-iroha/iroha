@@ -15,7 +15,9 @@ use std::{
 };
 
 use iroha_crypto::{Hash, HashOf, PublicKey};
-use iroha_data_model::block::{SignedBlock, consensus_v2 as wire, decode_framed_signed_block};
+use iroha_data_model::block::{
+    CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire, decode_framed_signed_block,
+};
 use norito::codec::{Decode, DecodeAll as _, Encode};
 use thiserror::Error;
 
@@ -125,20 +127,34 @@ pub(crate) enum BodyValidationCompletion {
         /// Deterministic validator diagnostic.
         reason: String,
     },
+    /// Validation is sound but cannot finish until the exact certified merge
+    /// sidecar referenced by the durable body is fetched and authenticated.
+    DeferredMergeSidecar {
+        /// Stable asynchronous work identifier retained for the exact retry.
+        work_id: EffectWorkId,
+        /// Original reducer event tag.
+        tag: iroha_sumeragi_core::EventTag,
+        /// Complete compact reference needed by the bounded sidecar transport.
+        reference: CertifiedMergeLedgerReference,
+    },
 }
 
 impl BodyValidationCompletion {
     /// Stable asynchronous work identifier.
     pub(crate) const fn work_id(&self) -> EffectWorkId {
         match self {
-            Self::Validated { work_id, .. } | Self::Rejected { work_id, .. } => *work_id,
+            Self::Validated { work_id, .. }
+            | Self::Rejected { work_id, .. }
+            | Self::DeferredMergeSidecar { work_id, .. } => *work_id,
         }
     }
 
     /// Original reducer event tag.
     pub(crate) const fn tag(&self) -> iroha_sumeragi_core::EventTag {
         match self {
-            Self::Validated { tag, .. } | Self::Rejected { tag, .. } => *tag,
+            Self::Validated { tag, .. }
+            | Self::Rejected { tag, .. }
+            | Self::DeferredMergeSidecar { tag, .. } => *tag,
         }
     }
 
@@ -146,7 +162,7 @@ impl BodyValidationCompletion {
     pub(crate) const fn validated_receipt(&self) -> Option<&ValidatedBodyReceipt> {
         match self {
             Self::Validated { receipt, .. } => Some(receipt),
-            Self::Rejected { .. } => None,
+            Self::Rejected { .. } | Self::DeferredMergeSidecar { .. } => None,
         }
     }
 
@@ -154,10 +170,31 @@ impl BodyValidationCompletion {
     pub(crate) fn rejection_reason(&self) -> Option<&str> {
         match self {
             Self::Rejected { reason, .. } => Some(reason),
-            Self::Validated { .. } => None,
+            Self::Validated { .. } | Self::DeferredMergeSidecar { .. } => None,
+        }
+    }
+
+    /// Compact certified merge reference whose absence deferred validation.
+    pub(crate) const fn missing_merge_sidecar(&self) -> Option<&CertifiedMergeLedgerReference> {
+        match self {
+            Self::DeferredMergeSidecar { reference, .. } => Some(reference),
+            Self::Validated { .. } | Self::Rejected { .. } => None,
         }
     }
 }
+
+/// Typed classification supplied by deterministic body validators.
+///
+/// Only a missing, compact-reference-bound merge sidecar is recoverable. Every
+/// other semantic error remains a terminal rejection of the exact body.
+pub(crate) trait BodyValidationError: std::fmt::Display {
+    /// Return the exact missing sidecar reference when validation should defer.
+    fn missing_certified_merge_sidecar(&self) -> Option<&CertifiedMergeLedgerReference> {
+        None
+    }
+}
+
+impl BodyValidationError for String {}
 
 /// Authority whose single block signature must cover an exact proposal body.
 ///
@@ -444,27 +481,45 @@ impl V2BodyStore {
     ) -> Result<BodyValidationCompletion, V2BodyStoreError>
     where
         F: FnOnce(&SignedBlock) -> Result<(), E>,
-        E: std::fmt::Display,
+        E: BodyValidationError,
     {
         if task.round() != task.durable_receipt().round()
             || task.subject() != task.durable_receipt().subject()
         {
             return Err(V2BodyStoreError::ReceiptMismatch);
         }
-        match self.validate(task.durable_receipt(), validator) {
-            Ok(receipt) => Ok(BodyValidationCompletion::Validated {
+        let key = (task.round(), task.subject());
+        if let Some(validated) = self.validated.get(&key) {
+            if validated.durable() != task.durable_receipt() {
+                return Err(V2BodyStoreError::ReceiptMismatch);
+            }
+            return Ok(BodyValidationCompletion::Validated {
                 work_id: task.id(),
                 tag: task.tag(),
-                receipt,
+                receipt: validated.clone(),
+            });
+        }
+        let block = self.load(task.durable_receipt())?;
+        match validator(&block) {
+            Ok(()) => Ok(BodyValidationCompletion::Validated {
+                work_id: task.id(),
+                tag: task.tag(),
+                receipt: self.persist_validated_receipt(task.durable_receipt())?,
             }),
-            Err(V2BodyStoreError::DeterministicValidation(reason)) => {
+            Err(error) => {
+                if let Some(reference) = error.missing_certified_merge_sidecar() {
+                    return Ok(BodyValidationCompletion::DeferredMergeSidecar {
+                        work_id: task.id(),
+                        tag: task.tag(),
+                        reference: reference.clone(),
+                    });
+                }
                 Ok(BodyValidationCompletion::Rejected {
                     work_id: task.id(),
                     tag: task.tag(),
-                    reason,
+                    reason: error.to_string(),
                 })
             }
-            Err(error) => Err(error),
         }
     }
 
@@ -559,11 +614,9 @@ impl V2BodyStore {
         Ok(Some((manifest, receipt)))
     }
 
-    /// Run the production deterministic validator over the exact body and
-    /// mint a success token only when it returns `Ok(())`.
-    ///
-    /// The callback receives the block reloaded from the final, checksummed
-    /// body file; it cannot accidentally validate different in-memory bytes.
+    /// Test helper that runs a validator synchronously over the exact durable
+    /// body and persists the same marker used by the production task API.
+    #[cfg(test)]
     pub(crate) fn validate<F, E>(
         &mut self,
         receipt: &DurableBodyReceipt,
@@ -583,6 +636,20 @@ impl V2BodyStore {
         let block = self.load(receipt)?;
         validator(&block)
             .map_err(|error| V2BodyStoreError::DeterministicValidation(error.to_string()))?;
+        self.persist_validated_receipt(receipt)
+    }
+
+    fn persist_validated_receipt(
+        &mut self,
+        receipt: &DurableBodyReceipt,
+    ) -> Result<ValidatedBodyReceipt, V2BodyStoreError> {
+        let key = (receipt.round, receipt.subject);
+        if let Some(validated) = self.validated.get(&key) {
+            if validated.durable() != receipt {
+                return Err(V2BodyStoreError::ReceiptMismatch);
+            }
+            return Ok(validated.clone());
+        }
         let validated = ValidatedBodyReceipt {
             durable: receipt.clone(),
         };
@@ -1002,7 +1069,8 @@ pub(crate) enum V2BodyStoreError {
     /// Expected block signature is cryptographically invalid.
     #[error("invalid Sumeragi v2 block signature")]
     InvalidExpectedSignature,
-    /// Production deterministic validation rejected the exact durable body.
+    /// Test-only synchronous deterministic validation rejected the body.
+    #[cfg(test)]
     #[error("deterministic Sumeragi v2 body validation failed: {0}")]
     DeterministicValidation(String),
     /// Two final files map to one semantic round/subject key.
@@ -1038,17 +1106,50 @@ pub(crate) enum V2BodyStoreError {
 mod tests {
     use std::{cell::Cell, fs, num::NonZeroU64};
 
-    use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
-        block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire},
+        block::{
+            BlockHeader, BlockSignature, CertifiedMergeLedgerReference, SignedBlock,
+            consensus_v2 as wire,
+        },
+        merge::MergeQuorumCertificate,
         peer::PeerId,
     };
+    use iroha_sumeragi_core::{EventTag, Generation};
     use tempfile::TempDir;
 
     use super::{
-        BlockSignaturePolicy, STORE_VERSION, V2BodyStore, V2BodyStoreError, ValidatedBodyMarker,
-        ValidatedBodyReceipt, write_validated_marker,
+        BlockSignaturePolicy, BodyValidationCompletion, BodyValidationError, STORE_VERSION,
+        V2BodyStore, V2BodyStoreError, ValidatedBodyMarker, ValidatedBodyReceipt,
+        write_validated_marker,
     };
+    use crate::sumeragi::v2_effects::BodyValidationTask;
+
+    #[derive(Debug)]
+    enum FixtureValidationError {
+        MissingMergeSidecar(CertifiedMergeLedgerReference),
+        Invalid(&'static str),
+    }
+
+    impl std::fmt::Display for FixtureValidationError {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::MissingMergeSidecar(reference) => {
+                    write!(formatter, "missing merge sidecar {}", reference.entry_hash)
+                }
+                Self::Invalid(reason) => formatter.write_str(reason),
+            }
+        }
+    }
+
+    impl BodyValidationError for FixtureValidationError {
+        fn missing_certified_merge_sidecar(&self) -> Option<&CertifiedMergeLedgerReference> {
+            match self {
+                Self::MissingMergeSidecar(reference) => Some(reference),
+                Self::Invalid(_) => None,
+            }
+        }
+    }
 
     fn context_and_keys() -> (wire::HeightContext, Vec<KeyPair>) {
         let mut keys = (1_u8..=4)
@@ -1087,6 +1188,41 @@ mod tests {
             leader_seed: [0x42; 32],
         };
         (context, keys)
+    }
+
+    fn missing_merge_reference(
+        receipt: &super::DurableBodyReceipt,
+    ) -> CertifiedMergeLedgerReference {
+        let parent_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"body-store validation parent"));
+        CertifiedMergeLedgerReference {
+            version: 1,
+            entry_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"body-store missing merge sidecar",
+            )),
+            encoded_len: 512,
+            epoch_id: 7,
+            execution_batch_hash: None,
+            entrypoint_count: None,
+            entrypoint_merkle_root: None,
+            result_merkle_root: None,
+            base_state_height: None,
+            base_state_hash: None,
+            merge_qc: MergeQuorumCertificate::new(
+                receipt.round().view,
+                7,
+                receipt.round().height,
+                parent_hash,
+                Hash::new(b"body-store validation chain"),
+                1,
+                HashOf::new(&Vec::<PeerId>::new()),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Hash::new(b"body-store validation certificate"),
+            ),
+        }
     }
 
     fn body_and_manifest(
@@ -1226,6 +1362,70 @@ mod tests {
             })
             .expect("durable validation marker resumes without revalidation");
         assert!(!callback_ran.get());
+    }
+
+    #[test]
+    fn typed_validation_deferral_and_rejection_never_mint_success_receipts() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store = V2BodyStore::open(directory.path(), context).expect("open store");
+        let receipt = store.store(manifest, body).expect("store exact body");
+        let task = BodyValidationTask::for_test(
+            41,
+            EventTag::new(1, 0, Generation::new(1)),
+            receipt.clone(),
+        );
+        let reference = missing_merge_reference(&receipt);
+
+        let deferred = store
+            .execute_validation_task(&task, |_| {
+                Err::<(), _>(FixtureValidationError::MissingMergeSidecar(
+                    reference.clone(),
+                ))
+            })
+            .expect("classify exact missing sidecar as deferred");
+        assert!(matches!(
+            deferred,
+            BodyValidationCompletion::DeferredMergeSidecar {
+                reference: deferred_reference,
+                ..
+            } if deferred_reference == reference
+        ));
+        assert!(store.validated_recovery_catalog().is_empty());
+        assert!(
+            !store
+                .validated_path_for(receipt.round(), receipt.subject())
+                .exists()
+        );
+
+        let rejected = store
+            .execute_validation_task(&task, |_| {
+                Err::<(), _>(FixtureValidationError::Invalid("invalid candidate"))
+            })
+            .expect("return terminal deterministic rejection");
+        assert_eq!(rejected.rejection_reason(), Some("invalid candidate"));
+        assert!(store.validated_recovery_catalog().is_empty());
+        assert!(
+            !store
+                .validated_path_for(receipt.round(), receipt.subject())
+                .exists()
+        );
+
+        let validated = store
+            .execute_validation_task(&task, |_| Ok::<(), FixtureValidationError>(()))
+            .expect("persist validation only after success");
+        assert_eq!(
+            validated
+                .validated_receipt()
+                .map(ValidatedBodyReceipt::durable),
+            Some(&receipt)
+        );
+        assert!(
+            store
+                .validated_path_for(receipt.round(), receipt.subject())
+                .exists()
+        );
     }
 
     #[test]

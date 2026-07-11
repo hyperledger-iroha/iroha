@@ -436,7 +436,7 @@ submission = client.submit_iso_pacs008_typed(iso_xml)
 if submission is None:
     raise RuntimeError("bridge did not return a message id")
 
-# Poll `/v1/iso20022/status/{id}` until the message leaves Pending/Accepted.
+# Poll `/v1/iso20022/messages/{id}` until the message leaves Pending/Accepted.
 status = client.wait_for_iso_message_status(
     submission.message_id,
     poll_interval=0.5,

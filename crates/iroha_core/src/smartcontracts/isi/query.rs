@@ -2104,7 +2104,7 @@ impl ValidQueryRequest {
         state: &impl StateReadOnly,
         authority: &AccountId,
     ) -> Result<QueryResponse, Error> {
-        self.execute_stored_inner(live_query_store, state, authority, None)
+        self.execute_stored_and_bind_revalidation(live_query_store, state, authority, None)
     }
 
     /// Execute a validated query request with an optional state handle for
@@ -2120,7 +2120,48 @@ impl ValidQueryRequest {
         authority: &AccountId,
         replay_state: Weak<State>,
     ) -> Result<QueryResponse, Error> {
-        self.execute_stored_inner(live_query_store, state, authority, Some(replay_state))
+        self.execute_stored_and_bind_revalidation(
+            live_query_store,
+            state,
+            authority,
+            Some(replay_state),
+        )
+    }
+
+    fn execute_stored_and_bind_revalidation(
+        self,
+        live_query_store: &LiveQueryStoreHandle,
+        state: &impl StateReadOnly,
+        authority: &AccountId,
+        replay_state: Option<Weak<State>>,
+    ) -> Result<QueryResponse, Error> {
+        let revalidation_archive = matches!(&self.request, QueryRequest::Start(_))
+            .then(|| {
+                norito::to_bytes(&self.request).map_err(|error| {
+                    Error::Conversion(format!(
+                        "failed to encode stored-query authorization request: {error}"
+                    ))
+                })
+            })
+            .transpose()?;
+        let response =
+            self.execute_stored_inner(live_query_store, state, authority, replay_state)?;
+
+        if let (
+            Some(archive),
+            QueryResponse::Iterable(QueryOutput {
+                continue_cursor: Some(cursor),
+                ..
+            }),
+        ) = (revalidation_archive, &response)
+            && let Err(error) =
+                live_query_store.bind_revalidation_request(cursor, authority, archive)
+        {
+            live_query_store.drop_query(&cursor.query);
+            return Err(error);
+        }
+
+        Ok(response)
     }
 
     #[allow(clippy::too_many_lines)] // not much we can do, we _need_ to list all the box types here
@@ -3645,7 +3686,7 @@ impl ValidQueryRequest {
                 ))
             }
             QueryRequest::Continue(cursor) => Ok(QueryResponse::Iterable(
-                live_query_store.handle_iter_continue(cursor)?,
+                live_query_store.handle_iter_continue(cursor, authority)?,
             )),
         }
     }
@@ -5080,7 +5121,7 @@ mod tests {
         );
 
         let second = handle
-            .handle_iter_continue(cursor.expect("first cursor"))
+            .handle_iter_continue(cursor.expect("first cursor"), &ALICE_ID)
             .expect("second page");
         assert_eq!(second.remaining_items, None);
         assert!(second.has_more);
@@ -5091,7 +5132,7 @@ mod tests {
         );
 
         let third = handle
-            .handle_iter_continue(cursor.expect("second cursor"))
+            .handle_iter_continue(cursor.expect("second cursor"), &ALICE_ID)
             .expect("third page");
         assert_eq!(third.remaining_items, None);
         assert!(!third.has_more);
@@ -5180,7 +5221,7 @@ mod tests {
         );
 
         let err = handle
-            .handle_iter_continue(cursor.expect("first cursor"))
+            .handle_iter_continue(cursor.expect("first cursor"), &ALICE_ID)
             .expect_err("missing replay state expires the cursor");
         assert!(matches!(err, Error::Expired));
     }
@@ -5484,7 +5525,7 @@ mod tests {
             .into_parts();
         let cursor = cursor.expect("cursor");
         let next = handle
-            .handle_iter_continue(cursor)
+            .handle_iter_continue(cursor, &ALICE_ID)
             .expect("first continuation")
             .into_parts();
 
@@ -5756,7 +5797,7 @@ mod tests {
 
         // Continue for the remaining item
         let cursor = cursor.expect("should continue");
-        let next = handle.handle_iter_continue(cursor).unwrap();
+        let next = handle.handle_iter_continue(cursor, &ALICE_ID).unwrap();
         let (batch2, _rem2, cur2) = next.into_parts();
         let mut tuple_iter2 = batch2.into_iter();
         let v2 = match tuple_iter2.next().expect("slice") {
@@ -6373,7 +6414,7 @@ mod tests {
 
         // Continue for the last (no-rank) domain
         let next = handle
-            .handle_iter_continue(cursor.expect("should continue"))
+            .handle_iter_continue(cursor.expect("should continue"), &ALICE_ID)
             .unwrap();
         let (batch2, _rem2, cur2) = next.into_parts();
         let mut tuple_iter2 = batch2.into_iter();
@@ -6668,7 +6709,9 @@ mod tests {
         assert!(cursor.is_some());
 
         // Next batch should contain the last within limit: 'd'
-        let next = handle.handle_iter_continue(cursor.unwrap()).unwrap();
+        let next = handle
+            .handle_iter_continue(cursor.unwrap(), &ALICE_ID)
+            .unwrap();
         let (batch2, remaining2, cursor2) = next.into_parts();
         let mut tuple_iter2 = batch2.into_iter();
         let v2 = match tuple_iter2.next().expect("slice") {
@@ -7685,7 +7728,9 @@ mod tests {
             let mut ids = to_ids(batch);
 
             while let Some(c) = cursor {
-                let next = handle.handle_iter_continue(c).expect("continue cursor");
+                let next = handle
+                    .handle_iter_continue(c, &ALICE_ID)
+                    .expect("continue cursor");
                 let (next_batch, _next_remaining, next_cursor) = next.into_parts();
                 ids.extend(to_ids(next_batch));
                 cursor = next_cursor;
@@ -8876,7 +8921,7 @@ mod tests {
         assert_eq!(remaining, 1);
         let cursor = cursor.expect("should continue");
 
-        let next = handle.handle_iter_continue(cursor).unwrap();
+        let next = handle.handle_iter_continue(cursor, &ALICE_ID).unwrap();
         let (batch2, remaining2, cursor2) = next.into_parts();
         let v2 = match batch2.into_iter().next().expect("slice") {
             iroha_data_model::query::QueryOutputBatchBox::Account(v) => v,
@@ -8974,7 +9019,7 @@ mod tests {
         assert_eq!(remaining, 1);
         let cursor = cursor.expect("should continue");
 
-        let next = handle.handle_iter_continue(cursor).unwrap();
+        let next = handle.handle_iter_continue(cursor, &ALICE_ID).unwrap();
         let (batch2, remaining2, cursor2) = next.into_parts();
         let v2 = match batch2.into_iter().next().expect("slice") {
             iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(v) => v,
@@ -9076,7 +9121,7 @@ mod tests {
         assert_eq!(remaining, 1);
 
         let cursor = cursor.expect("should continue");
-        let next = handle.handle_iter_continue(cursor).unwrap();
+        let next = handle.handle_iter_continue(cursor, &ALICE_ID).unwrap();
         let (batch2, remaining2, cursor2) = next.into_parts();
         let v2 = match batch2.into_iter().next().expect("slice") {
             iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(v) => v,
@@ -9178,7 +9223,7 @@ mod tests {
         assert_eq!(remaining, 1);
 
         let cursor = cursor.expect("should continue");
-        let next = handle.handle_iter_continue(cursor).unwrap();
+        let next = handle.handle_iter_continue(cursor, &ALICE_ID).unwrap();
         let (batch2, remaining2, cursor2) = next.into_parts();
         let v2 = match batch2.into_iter().next().expect("slice") {
             iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(v) => v,
@@ -9283,7 +9328,7 @@ mod tests {
 
         // Second batch: should contain rank=2 (c)
         let cursor = cursor.expect("should continue");
-        let next = handle.handle_iter_continue(cursor).unwrap();
+        let next = handle.handle_iter_continue(cursor, &ALICE_ID).unwrap();
         let (batch2, remaining2, cursor2) = next.into_parts();
         let v2 = match batch2.into_iter().next().expect("slice") {
             iroha_data_model::query::QueryOutputBatchBox::Account(v) => v,
@@ -9386,7 +9431,7 @@ mod tests {
         assert_eq!(remaining, 1);
 
         let cursor = cursor.expect("should continue");
-        let next = handle.handle_iter_continue(cursor).unwrap();
+        let next = handle.handle_iter_continue(cursor, &ALICE_ID).unwrap();
         let (batch2, remaining2, cursor2) = next.into_parts();
         let v2 = match batch2.into_iter().next().expect("slice") {
             iroha_data_model::query::QueryOutputBatchBox::Account(v) => v,

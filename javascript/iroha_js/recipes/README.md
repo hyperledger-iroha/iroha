@@ -179,7 +179,7 @@ Environment variables:
 ## streaming.mjs
 
 - Streams `/v1/events/sse` with a deterministic filter (pipeline transactions by default).
-- Persists the `Last-Event-ID` cursor so runs resume after restarts.
+- Treats the endpoint as live-only: reconnects start a new subscription and may have a gap.
 - Surfaces pipeline status transitions using `extractPipelineStatusKind` so runbooks can capture
   applied/committed transitions side-by-side with the live JSON payload.
 
@@ -190,8 +190,7 @@ npm install
 node ./recipes/streaming.mjs \
   TORII_URL=https://torii.nexus.example \
   PIPELINE_STATUS=Committed \
-  STREAM_MAX_EVENTS=25 \
-  STREAM_CURSOR_FILE=.cache/torii.cursor
+  STREAM_MAX_EVENTS=25
 ```
 
 Environment variables:
@@ -199,7 +198,6 @@ Environment variables:
 - `STREAM_FILTER_JSON` — override the default pipeline transaction filter with raw JSON.
 - `PIPELINE_STATUS` — change the default status filter (Committed/Approved/Applied/Pending, etc.).
 - `STREAM_MAX_EVENTS` — stop after N events (`0` keeps the iterator running until interrupted).
-- `STREAM_CURSOR_FILE` — path to the cursor file storing the latest `Last-Event-ID`.
 - `TORII_API_TOKEN` / `TORII_AUTH_TOKEN` — optional headers for locked-down Torii deployments.
 
 ## assets_iterators.mjs

@@ -1,6 +1,9 @@
 package org.hyperledger.iroha.android.offline;
 
 import java.math.BigInteger;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Objects;
@@ -21,9 +24,9 @@ public final class OfflineOperationCodec {
   private static final String TOP_UP_ANCHOR_SCHEMA =
       "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpAnchorV2";
   private static final String TOP_UP_REQUEST_SCHEMA =
-      "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV2";
+      "iroha.torii.v1.offline.top_up.request";
   private static final String REDEEM_REQUEST_SCHEMA =
-      "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV2";
+      "iroha.torii.v1.offline.redeem.request";
   private static final int STATUS_HEADER_PADDING = 8;
   private static final char[] LOWER_HEX = "0123456789abcdef".toCharArray();
 
@@ -75,6 +78,53 @@ public final class OfflineOperationCodec {
     }
     if (!nonZero) {
       throw new IllegalArgumentException("operationId must be non-zero");
+    }
+    return value;
+  }
+
+  static String requireTransactionHash(final String value, final String field) {
+    Objects.requireNonNull(value, field);
+    if (value.length() != 64) {
+      throw new IllegalArgumentException(
+          field + " must be exactly 32 bytes encoded as lowercase hexadecimal");
+    }
+    for (int index = 0; index < value.length(); index++) {
+      final char character = value.charAt(index);
+      if (!((character >= '0' && character <= '9')
+          || (character >= 'a' && character <= 'f'))) {
+        throw new IllegalArgumentException(
+            field + " must be exactly 32 bytes encoded as lowercase hexadecimal");
+      }
+    }
+    return value;
+  }
+
+  static String requireOperationStatusUri(final String value, final String operationId) {
+    Objects.requireNonNull(value, "statusUri");
+    final String expected = "/v1/offline/operations/" + requireOperationId(operationId);
+    if (!value.equals(expected)) {
+      throw new IllegalArgumentException(
+          "statusUri must equal the canonical operation resource " + expected);
+    }
+    return value;
+  }
+
+  static String requireStableErrorCode(final String value, final String field) {
+    Objects.requireNonNull(value, field);
+    if (value.isEmpty() || value.length() > 64) {
+      throw new IllegalArgumentException(
+          field + " must be a 1-64 character lowercase stable identifier");
+    }
+    for (int index = 0; index < value.length(); index++) {
+      final char character = value.charAt(index);
+      final boolean valid =
+          (character >= 'a' && character <= 'z')
+              || (character >= '0' && character <= '9')
+              || (index > 0 && character == '_');
+      if (!valid) {
+        throw new IllegalArgumentException(
+            field + " must be a 1-64 character lowercase stable identifier");
+      }
     }
     return value;
   }
@@ -502,8 +552,19 @@ public final class OfflineOperationCodec {
     if (length > Integer.MAX_VALUE) {
       throw new IllegalArgumentException("Offline operation string length overflow");
     }
-    final String value =
-        new String(decoder.readBytes((int) length), StandardCharsets.UTF_8);
+    final byte[] bytes = decoder.readBytes((int) length);
+    final String value;
+    try {
+      value =
+          StandardCharsets.UTF_8
+              .newDecoder()
+              .onMalformedInput(CodingErrorAction.REPORT)
+              .onUnmappableCharacter(CodingErrorAction.REPORT)
+              .decode(ByteBuffer.wrap(bytes))
+              .toString();
+    } catch (final CharacterCodingException error) {
+      throw new IllegalArgumentException("Offline operation string must be valid UTF-8", error);
+    }
     if (value.isEmpty() || !value.equals(value.trim())) {
       throw new IllegalArgumentException("Offline operation string must be exact non-empty text");
     }

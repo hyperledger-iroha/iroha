@@ -4568,6 +4568,17 @@ impl Default for Pipeline {
     }
 }
 
+/// One active lane lifecycle binding committed into a Sumeragi v2 height context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode)]
+pub struct SumeragiV2LaneLifecycleEntry {
+    /// Canonical lane identifier.
+    pub lane_id: LaneId,
+    /// Non-zero incarnation commitment for the active lane generation.
+    pub incarnation: Hash,
+    /// Global carrier height that activated this incarnation.
+    pub activation_height: u64,
+}
+
 /// Compute the canonical Sumeragi v2 commitment to the Nexus and AMX inputs
 /// that can change proposal assembly or deterministic validation.
 ///
@@ -4575,6 +4586,8 @@ impl Default for Pipeline {
 /// sizing, caches, and telemetry. It includes the validated lane geometry,
 /// dataspace and routing catalogs, lane election/fee/AXT/DA policy, the five
 /// deterministic AMX budgets, and staged active public-lane validator records.
+/// It also commits the active lane incarnation and activation-height map so
+/// peers with divergent lifecycle histories cannot enter the same height.
 /// Active records are sorted by their storage key before encoding so callers
 /// cannot accidentally make the commitment depend on iteration order.
 #[must_use]
@@ -4582,6 +4595,7 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
     nexus: &Nexus,
     pipeline: &Pipeline,
     active_validators: &[GenesisActiveNexusLaneRecord],
+    lane_lifecycle: &[SumeragiV2LaneLifecycleEntry],
 ) -> Hash {
     fn append<T: Encode>(out: &mut Vec<u8>, tag: &'static str, value: &T) {
         let bytes = value.encode();
@@ -4593,7 +4607,7 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
         out.extend_from_slice(&bytes);
     }
 
-    let mut preimage = b"sumeragi-v2:nexus-amx-context\0v1".to_vec();
+    let mut preimage = b"sumeragi-v2:nexus-amx-context\0v2".to_vec();
     append(&mut preimage, "nexus.enabled", &nexus.enabled);
 
     append(
@@ -4606,6 +4620,30 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
         "nexus.lane_catalog.lanes",
         &nexus.lane_catalog.lanes().to_vec(),
     );
+    let mut lane_lifecycle = lane_lifecycle.to_vec();
+    lane_lifecycle.sort_by_key(|entry| entry.lane_id);
+    append(
+        &mut preimage,
+        "nexus.lane_lifecycle.count",
+        &u64::try_from(lane_lifecycle.len()).expect("lane lifecycle length fits in u64"),
+    );
+    for entry in lane_lifecycle {
+        append(
+            &mut preimage,
+            "nexus.lane_lifecycle.lane_id",
+            &entry.lane_id,
+        );
+        append(
+            &mut preimage,
+            "nexus.lane_lifecycle.incarnation",
+            &entry.incarnation,
+        );
+        append(
+            &mut preimage,
+            "nexus.lane_lifecycle.activation_height",
+            &entry.activation_height,
+        );
+    }
 
     append(
         &mut preimage,
@@ -12438,10 +12476,11 @@ mod tests {
 
     #[test]
     fn sumeragi_v2_default_nexus_amx_hash_is_stable() {
-        let hash = sumeragi_v2_nexus_amx_context_hash(&Nexus::default(), &Pipeline::default(), &[]);
+        let hash =
+            sumeragi_v2_nexus_amx_context_hash(&Nexus::default(), &Pipeline::default(), &[], &[]);
         assert_eq!(
             hex::encode(hash.as_ref()),
-            "76fc637fec320c7ead22a65e693658fbb1187a3b0152900d64644c841e77ca7f",
+            "d446d219eb801ae752cd0168e0f47b3acf53ba4d5c965fd2983f4f93f4da6ea7",
         );
         assert_eq!(
             <[u8; 32]>::from(hash),
@@ -12478,11 +12517,11 @@ mod tests {
     fn sumeragi_v2_nexus_amx_hash_binds_every_projection_category() {
         let nexus = Nexus::default();
         let pipeline = Pipeline::default();
-        let baseline = sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[]);
+        let baseline = sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &[]);
         let assert_nexus_change = |label: &str, changed: Nexus| {
             assert_ne!(
                 baseline,
-                sumeragi_v2_nexus_amx_context_hash(&changed, &pipeline, &[]),
+                sumeragi_v2_nexus_amx_context_hash(&changed, &pipeline, &[], &[]),
                 "{label} must change the signed Nexus/AMX commitment"
             );
         };
@@ -12559,15 +12598,33 @@ mod tests {
         changed_pipeline.amx_per_instruction_ns += 1;
         assert_ne!(
             baseline,
-            sumeragi_v2_nexus_amx_context_hash(&nexus, &changed_pipeline, &[]),
+            sumeragi_v2_nexus_amx_context_hash(&nexus, &changed_pipeline, &[], &[]),
             "deterministic AMX budgets must change the signed commitment"
         );
 
         let active = [test_active_validator(0xA1, LaneId::SINGLE)];
         assert_ne!(
             baseline,
-            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &active),
+            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &active, &[]),
             "staged active validators must change the signed commitment"
+        );
+
+        let lifecycle = [SumeragiV2LaneLifecycleEntry {
+            lane_id: LaneId::SINGLE,
+            incarnation: Hash::new(b"sumeragi-v2-test-incarnation"),
+            activation_height: 7,
+        }];
+        assert_ne!(
+            baseline,
+            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &lifecycle),
+            "lane lifecycle history must change the signed commitment"
+        );
+        let mut changed_lifecycle = lifecycle;
+        changed_lifecycle[0].activation_height += 1;
+        assert_ne!(
+            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &lifecycle),
+            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &changed_lifecycle),
+            "activation height must be committed independently of the current catalog"
         );
     }
 
@@ -12580,8 +12637,34 @@ mod tests {
         let forward = [first.clone(), second.clone()];
         let reverse = [second, first];
         assert_eq!(
-            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &forward),
-            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &reverse),
+            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &forward, &[]),
+            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &reverse, &[]),
+        );
+
+        let first_lifecycle = SumeragiV2LaneLifecycleEntry {
+            lane_id: LaneId::new(1),
+            incarnation: Hash::new(b"first-lifecycle"),
+            activation_height: 3,
+        };
+        let second_lifecycle = SumeragiV2LaneLifecycleEntry {
+            lane_id: LaneId::SINGLE,
+            incarnation: Hash::new(b"second-lifecycle"),
+            activation_height: 0,
+        };
+        assert_eq!(
+            sumeragi_v2_nexus_amx_context_hash(
+                &nexus,
+                &pipeline,
+                &[],
+                &[first_lifecycle, second_lifecycle],
+            ),
+            sumeragi_v2_nexus_amx_context_hash(
+                &nexus,
+                &pipeline,
+                &[],
+                &[second_lifecycle, first_lifecycle],
+            ),
+            "lane lifecycle input order must not affect the context commitment"
         );
     }
 }

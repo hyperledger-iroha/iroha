@@ -23,8 +23,9 @@ public final class OfflineOperationReference {
     this.operationId = OfflineOperationCodec.requireOperationId(operationId);
     this.kind = Objects.requireNonNull(kind, "kind");
     this.state = Objects.requireNonNull(state, "state");
-    this.transactionHash = requireExactNonEmptyText(transactionHash, "transactionHash");
-    this.statusUri = requireExactNonEmptyText(statusUri, "statusUri");
+    this.transactionHash =
+        OfflineOperationCodec.requireTransactionHash(transactionHash, "transactionHash");
+    this.statusUri = OfflineOperationCodec.requireOperationStatusUri(statusUri, this.operationId);
     this.submittedAtMs = Objects.requireNonNull(submittedAtMs, "submittedAtMs");
     if (submittedAtMs.signum() < 0 || submittedAtMs.compareTo(U64_MAX) > 0) {
       throw new IllegalArgumentException("submittedAtMs must fit in an unsigned 64-bit integer");
@@ -77,11 +78,4 @@ public final class OfflineOperationReference {
     return Objects.hash(operationId, kind, state, transactionHash, statusUri, submittedAtMs);
   }
 
-  private static String requireExactNonEmptyText(final String value, final String field) {
-    Objects.requireNonNull(value, field);
-    if (value.isEmpty() || !value.equals(value.trim())) {
-      throw new IllegalArgumentException(field + " must be exact non-empty text");
-    }
-    return value;
-  }
 }

@@ -2,39 +2,31 @@ package org.hyperledger.iroha.android.offline;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import org.hyperledger.iroha.android.client.JsonEncoder;
 import org.hyperledger.iroha.android.client.JsonParser;
 
 public final class OfflineJsonParser {
   private static final BigInteger U64_MAX =
       BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
-  private static final Set<String> READINESS_FIELDS =
-      new HashSet<>(
-          Arrays.asList("asset_definition_id", "evaluated_block_height", "ready", "blockers"));
-  private static final Set<String> READINESS_BLOCKER_FIELDS =
-      new HashSet<>(Arrays.asList("code", "message"));
-
   private OfflineJsonParser() {}
 
   public static OfflineReadiness parseOfflineReadiness(final byte[] payload) {
     final Object root = parse(payload);
     final Map<String, Object> object = expectObject(root, "root");
-    rejectUnknownFields(object, READINESS_FIELDS, "root");
     final List<Object> rawBlockers = asList(object.get("blockers"), "blockers");
     final List<OfflineReadinessBlocker> blockers = new ArrayList<>(rawBlockers.size());
     for (int i = 0; i < rawBlockers.size(); i++) {
       final String path = "blockers[" + i + "]";
       final Map<String, Object> blocker = expectObject(rawBlockers.get(i), path);
-      rejectUnknownFields(blocker, READINESS_BLOCKER_FIELDS, path);
       blockers.add(
           new OfflineReadinessBlocker(
               asExactReadinessString(blocker.get("code"), path + ".code"),
@@ -43,6 +35,7 @@ public final class OfflineJsonParser {
     return new OfflineReadiness(
         asExactReadinessString(object.get("asset_definition_id"), "asset_definition_id"),
         asReadinessU64(object.get("evaluated_block_height"), "evaluated_block_height"),
+        asExactLowercaseHash(object.get("evaluated_block_hash"), "evaluated_block_hash"),
         asBoolean(object.get("ready"), "ready"),
         blockers);
   }
@@ -65,7 +58,19 @@ public final class OfflineJsonParser {
   }
 
   private static Object parse(final byte[] payload) {
-    final String json = new String(payload, StandardCharsets.UTF_8).trim();
+    final String json;
+    try {
+      json =
+          StandardCharsets.UTF_8
+              .newDecoder()
+              .onMalformedInput(CodingErrorAction.REPORT)
+              .onUnmappableCharacter(CodingErrorAction.REPORT)
+              .decode(ByteBuffer.wrap(payload))
+              .toString()
+              .trim();
+    } catch (final CharacterCodingException error) {
+      throw new IllegalStateException("Offline JSON payload must be valid UTF-8", error);
+    }
     if (json.isEmpty()) {
       throw new IllegalStateException("Empty JSON payload");
     }
@@ -97,6 +102,20 @@ public final class OfflineJsonParser {
     return string;
   }
 
+  private static String asExactLowercaseHash(final Object value, final String path) {
+    final String string = asExactReadinessString(value, path);
+    if (string.length() != 64) {
+      throw new IllegalStateException(path + " must be exact lowercase 32-byte hexadecimal");
+    }
+    for (int index = 0; index < string.length(); index++) {
+      final char character = string.charAt(index);
+      if (!((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f'))) {
+        throw new IllegalStateException(path + " must be exact lowercase 32-byte hexadecimal");
+      }
+    }
+    return string;
+  }
+
   private static BigInteger asReadinessU64(final Object value, final String path) {
     final BigInteger integer;
     if (value instanceof BigInteger bigInteger) {
@@ -121,15 +140,6 @@ public final class OfflineJsonParser {
       throw new IllegalStateException(path + " must fit in an unsigned 64-bit integer");
     }
     return integer;
-  }
-
-  private static void rejectUnknownFields(
-      final Map<String, Object> object, final Set<String> allowed, final String path) {
-    for (final String field : object.keySet()) {
-      if (!allowed.contains(field)) {
-        throw new IllegalStateException(path + "." + field + " is not a supported field");
-      }
-    }
   }
 
   private static OfflineTransferList.OfflineTransferItem parseTransferItem(

@@ -15,6 +15,9 @@ pub mod qr;
 /// Canonical Torii route metadata and projection helpers.
 pub mod route_catalog;
 
+/// Required WebSocket subprotocol for canonical Norito event and block streams.
+pub const NORITO_V1_WEBSOCKET_SUBPROTOCOL: &str = "iroha-norito-v1";
+
 pub mod uri {
     //! URI that Torii uses to route incoming requests.
 
@@ -806,6 +809,47 @@ mod tests {
             details.hint.as_deref(),
             Some("inspect transaction rejection reason")
         );
+    }
+
+    #[test]
+    fn error_envelope_json_discards_unknown_members_and_rejects_duplicates() {
+        let decoded: ErrorEnvelope = norito::json::from_str(
+            r#"{"code":"bad_request","message":"invalid","unknown":"discarded","details":{"field":"amount","unknown_nested":{"secret":true}}}"#,
+        )
+        .expect("decode envelope with independently additive members");
+        assert_eq!(decoded.code(), "bad_request");
+        assert_eq!(
+            decoded
+                .details
+                .as_ref()
+                .and_then(|details| details.field.as_deref()),
+            Some("amount")
+        );
+        let canonical = norito::json::to_string(&decoded).expect("re-encode closed envelope");
+        assert!(!canonical.contains("unknown"));
+        assert!(!canonical.contains("secret"));
+
+        for json in [
+            r#"{"code":"bad_request","code":"conflict","message":"invalid"}"#,
+            r#"{"code":"bad_request","message":"invalid","details":{"field":"amount","field":"asset"}}"#,
+        ] {
+            let error = norito::json::from_str::<ErrorEnvelope>(json)
+                .expect_err("duplicate declared error member must fail");
+            assert!(
+                error.to_string().contains("duplicate field"),
+                "unexpected duplicate-member error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn error_envelope_json_rejects_untyped_details_values() {
+        for details in ["[]", "\"dynamic\"", "1", "true"] {
+            let json =
+                format!(r#"{{"code":"bad_request","message":"invalid","details":{details}}}"#);
+            norito::json::from_str::<ErrorEnvelope>(&json)
+                .expect_err("details must be the declared typed record or null");
+        }
     }
 
     #[test]

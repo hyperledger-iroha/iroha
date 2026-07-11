@@ -42,11 +42,11 @@ umbrella_text = umbrella.read_text(encoding="utf-8")
 
 recursive_export_pattern = re.compile(
     r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+'
-    r'(connect_norito_kagemusha_recursive_spend_[a-z0-9_]+)\s*\('
+    r'(connect_norito_kagemusha_(?:recursive_spend_|topup_finality_)[a-z0-9_]+)\s*\('
 )
 recursive_declaration_pattern = re.compile(
     r'int32_t\s+'
-    r'(connect_norito_kagemusha_recursive_spend_[a-z0-9_]+)\s*\('
+    r'(connect_norito_kagemusha_(?:recursive_spend_|topup_finality_)[a-z0-9_]+)\s*\('
 )
 privacy_export_pattern = re.compile(
     r'pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+'
@@ -82,28 +82,11 @@ bridge_abi_declaration = re.search(
     header_text,
 ) is not None
 
-required_abi6 = {
-    "connect_norito_kagemusha_recursive_spend_init",
-    "connect_norito_kagemusha_recursive_spend_append",
-    "connect_norito_kagemusha_recursive_spend_topup",
-    "connect_norito_kagemusha_recursive_spend_transition_profile_init",
-    "connect_norito_kagemusha_recursive_spend_transition_profile_append",
-    "connect_norito_kagemusha_recursive_spend_lineage_append_boundary",
-    "connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result",
-    "connect_norito_kagemusha_recursive_spend_lineage_witness_append_result",
-    "connect_norito_kagemusha_recursive_spend_verify",
-    "connect_norito_kagemusha_recursive_spend_redeem",
-    "connect_norito_kagemusha_recursive_spend_init_v2",
-    "connect_norito_kagemusha_recursive_spend_topup_v2",
-    "connect_norito_kagemusha_recursive_spend_append_v2",
-    "connect_norito_kagemusha_recursive_spend_verify_v2",
-    "connect_norito_kagemusha_recursive_spend_redeem_v2",
-    "connect_norito_kagemusha_recursive_spend_build_split_intent_v2",
-    "connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2",
-}
-
 def const_u8_ptr(name):
     return rf"const\s+uint8_t\s*\*\s*{name}"
+
+def const_char_ptr(name):
+    return rf"const\s+char\s*\*\s*{name}"
 
 def u8_out_ptr(name):
     return rf"uint8_t\s*\*\*\s*{name}"
@@ -134,6 +117,16 @@ def recursive_request_signature(name, out_ptr_name, out_len_name):
     )
 
 expected_recursive_signatures = {
+    "connect_norito_kagemusha_recursive_spend_compact_payment_token_from_bundle": c_signature(
+        "int32_t",
+        "connect_norito_kagemusha_recursive_spend_compact_payment_token_from_bundle",
+        [
+            const_u8_ptr("bundle_norito_ptr"),
+            ulong("bundle_norito_len"),
+            u8_out_ptr("out_compact_token_ptr"),
+            ulong_ptr("out_compact_token_len"),
+        ],
+    ),
     "connect_norito_kagemusha_recursive_spend_init": recursive_request_signature(
         "connect_norito_kagemusha_recursive_spend_init",
         "out_bundle_ptr",
@@ -148,6 +141,104 @@ expected_recursive_signatures = {
         "connect_norito_kagemusha_recursive_spend_init_v2",
         "out_bundle_ptr",
         "out_bundle_len",
+    ),
+    "connect_norito_kagemusha_recursive_spend_capabilities_v1": c_signature(
+        "int32_t",
+        "connect_norito_kagemusha_recursive_spend_capabilities_v1",
+        [
+            u8_out_ptr("out_capabilities_ptr"),
+            ulong_ptr("out_capabilities_len"),
+        ],
+    ),
+    "connect_norito_kagemusha_topup_finality_verify_v2": c_signature(
+        "int32_t",
+        "connect_norito_kagemusha_topup_finality_verify_v2",
+        [
+            const_u8_ptr("proof_norito_ptr"),
+            ulong("proof_norito_len"),
+            const_u8_ptr("roster_norito_ptr"),
+            ulong("roster_norito_len"),
+            const_u8_ptr("expected_roster_sha256_ptr"),
+            ulong("expected_roster_sha256_len"),
+        ],
+    ),
+    "connect_norito_kagemusha_recursive_spend_artifact_begin_v3": c_signature(
+        "int32_t",
+        "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
+        [
+            const_u8_ptr("manifest_norito_ptr"),
+            ulong("manifest_norito_len"),
+            const_u8_ptr("expected_manifest_sha256_ptr"),
+            ulong("expected_manifest_sha256_len"),
+            const_u8_ptr("expected_artifact_sha256_ptr"),
+            ulong("expected_artifact_sha256_len"),
+            r"uint64_t\s*\*\s*out_handle",
+        ],
+    ),
+    "connect_norito_kagemusha_recursive_spend_artifact_write_v3": c_signature(
+        "int32_t",
+        "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
+        [
+            r"uint64_t\s+handle",
+            const_u8_ptr("chunk_ptr"),
+            ulong("chunk_len"),
+        ],
+    ),
+    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3": c_signature(
+        "int32_t",
+        "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
+        [r"uint64_t\s+handle"],
+    ),
+    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3": c_signature(
+        "int32_t",
+        "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
+        [r"uint64_t\s+handle"],
+    ),
+    "connect_norito_kagemusha_recursive_spend_artifact_begin_v2": c_signature(
+        "int32_t",
+        "connect_norito_kagemusha_recursive_spend_artifact_begin_v2",
+        [
+            const_u8_ptr("reference_norito_ptr"),
+            ulong("reference_norito_len"),
+            r"uint32_t\s+expected_role",
+            r"uint64_t\s*\*\s*out_handle",
+        ],
+    ),
+    "connect_norito_kagemusha_recursive_spend_artifact_write_v2": c_signature(
+        "int32_t",
+        "connect_norito_kagemusha_recursive_spend_artifact_write_v2",
+        [
+            r"uint64_t\s+handle",
+            const_u8_ptr("chunk_ptr"),
+            ulong("chunk_len"),
+        ],
+    ),
+    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v2": c_signature(
+        "int32_t",
+        "connect_norito_kagemusha_recursive_spend_artifact_finalize_v2",
+        [r"uint64_t\s+handle"],
+    ),
+    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v2": c_signature(
+        "int32_t",
+        "connect_norito_kagemusha_recursive_spend_artifact_cancel_v2",
+        [r"uint64_t\s+handle"],
+    ),
+    "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2": recursive_request_signature(
+        "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2",
+        "out_digest_ptr",
+        "out_digest_len",
+    ).replace("request_norito", "unsigned_norito"),
+    "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2": c_signature(
+        "int32_t",
+        "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2",
+        [
+            const_u8_ptr("unsigned_norito_ptr"),
+            ulong("unsigned_norito_len"),
+            const_u8_ptr("authorization_norito_ptr"),
+            ulong("authorization_norito_len"),
+            u8_out_ptr("out_request_ptr"),
+            ulong_ptr("out_request_len"),
+        ],
     ),
     "connect_norito_kagemusha_recursive_spend_topup_v2": recursive_request_signature(
         "connect_norito_kagemusha_recursive_spend_topup_v2",
@@ -167,6 +258,11 @@ expected_recursive_signatures = {
             ulong_ptr("out_split_result_len"),
         ],
     ),
+    "connect_norito_kagemusha_recursive_spend_redeem_change_v2": recursive_request_signature(
+        "connect_norito_kagemusha_recursive_spend_redeem_change_v2",
+        "out_result_ptr",
+        "out_result_len",
+    ),
     "connect_norito_kagemusha_recursive_spend_verify_v2": recursive_request_signature(
         "connect_norito_kagemusha_recursive_spend_verify_v2",
         "out_result_ptr",
@@ -177,6 +273,23 @@ expected_recursive_signatures = {
         "out_instruction_ptr",
         "out_instruction_len",
     ),
+    "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v2": recursive_request_signature(
+        "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v2",
+        "out_digest_ptr",
+        "out_digest_len",
+    ).replace("request_norito", "unsigned_norito"),
+    "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2": c_signature(
+        "int32_t",
+        "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2",
+        [
+            const_u8_ptr("unsigned_norito_ptr"),
+            ulong("unsigned_norito_len"),
+            const_u8_ptr("authorization_norito_ptr"),
+            ulong("authorization_norito_len"),
+            u8_out_ptr("out_request_ptr"),
+            ulong_ptr("out_request_len"),
+        ],
+    ),
     "connect_norito_kagemusha_recursive_spend_build_split_intent_v2": recursive_request_signature(
         "connect_norito_kagemusha_recursive_spend_build_split_intent_v2",
         "out_intent_ptr",
@@ -186,6 +299,36 @@ expected_recursive_signatures = {
         "connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2",
         "out_intent_ptr",
         "out_intent_len",
+    ),
+    "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v2": c_signature(
+        "int32_t",
+        "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v2",
+        [
+            const_u8_ptr("split_result_norito_ptr"),
+            ulong("split_result_norito_len"),
+            u8_out_ptr("out_payment_ptr"),
+            ulong_ptr("out_payment_len"),
+        ],
+    ),
+    "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v2": c_signature(
+        "int32_t",
+        "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v2",
+        [
+            const_u8_ptr("payment_norito_ptr"),
+            ulong("payment_norito_len"),
+            u8_out_ptr("out_payment_ptr"),
+            ulong_ptr("out_payment_len"),
+        ],
+    ),
+    "connect_norito_kagemusha_recursive_spend_bundle_summary_v2": c_signature(
+        "int32_t",
+        "connect_norito_kagemusha_recursive_spend_bundle_summary_v2",
+        [
+            const_u8_ptr("bundle_norito_ptr"),
+            ulong("bundle_norito_len"),
+            u8_out_ptr("out_summary_ptr"),
+            ulong_ptr("out_summary_len"),
+        ],
     ),
     "connect_norito_kagemusha_recursive_spend_topup": recursive_request_signature(
         "connect_norito_kagemusha_recursive_spend_topup",
@@ -249,6 +392,7 @@ expected_recursive_signatures = {
         "out_instruction_len",
     ),
 }
+required_recursive_ffi = set(expected_recursive_signatures)
 required_privacy_ffi = {
     "iroha_privacy_capabilities_v1",
     "iroha_privacy_proof_request_v1",
@@ -317,8 +461,10 @@ expected_privacy_signatures = {
     ),
 }
 
-missing_exports = sorted(required_abi6 - rust_exports)
-missing_header_declarations = sorted(required_abi6 - header_declarations)
+missing_exports = sorted(required_recursive_ffi - rust_exports)
+missing_header_declarations = sorted(required_recursive_ffi - header_declarations)
+unexpected_exports = sorted(rust_exports - required_recursive_ffi)
+unexpected_header_declarations = sorted(header_declarations - required_recursive_ffi)
 undeclared_exports = sorted(rust_exports - header_declarations)
 stale_header_declarations = sorted(header_declarations - rust_exports)
 missing_privacy_exports = sorted(required_privacy_ffi - rust_privacy_exports)
@@ -345,12 +491,21 @@ stale_sorafs_reference_header_declarations = sorted(
 errors = []
 if missing_exports:
     errors.append(
-        "missing required Rust ABI-6 exports: " + ", ".join(missing_exports)
+        "missing required Rust recursive-spend exports: " + ", ".join(missing_exports)
     )
 if missing_header_declarations:
     errors.append(
         "missing required C header declarations: "
         + ", ".join(missing_header_declarations)
+    )
+if unexpected_exports:
+    errors.append(
+        "unexpected Rust recursive-spend exports: " + ", ".join(unexpected_exports)
+    )
+if unexpected_header_declarations:
+    errors.append(
+        "unexpected C header recursive-spend declarations: "
+        + ", ".join(unexpected_header_declarations)
     )
 if undeclared_exports:
     errors.append(
@@ -420,7 +575,7 @@ if errors:
 
 print(
     "connect_norito_bridge.h declares all "
-    f"{len(required_abi6)} recursive spend symbols and "
+    f"{len(required_recursive_ffi)} recursive spend symbols and "
     f"{len(required_privacy_ffi)} privacy FFI symbols and "
     f"{len(required_sorafs_reference_ffi)} SoraFS reference symbols"
 )
@@ -476,9 +631,9 @@ if [[ "${MODE}" == --negative-control-* ]]; then
         "${tmp}/NoritoBridge.h"
       ;;
     --negative-control-bad-recursive-signature)
-      perl -0pi -e 's/uint8_t\*\*\s+out_instruction_ptr/uint8_t* out_instruction_ptr/s or die "missing recursive signature target\n"' "${tmp}/connect_norito_bridge.h"
+      perl -0pi -e 's/(int32_t\s+connect_norito_kagemusha_recursive_spend_capabilities_v1\s*\(\s*)uint8_t\*\*\s+out_capabilities_ptr/${1}uint8_t* out_capabilities_ptr/s or die "missing recursive capability signature target\n"' "${tmp}/connect_norito_bridge.h"
       expect_contract_rejection \
-        "C header recursive-spend declaration has wrong signature: connect_norito_kagemusha_recursive_spend_redeem" \
+        "C header recursive-spend declaration has wrong signature: connect_norito_kagemusha_recursive_spend_capabilities_v1" \
         "${tmp}/lib.rs" \
         "${tmp}/connect_norito_bridge.h" \
         "${tmp}/NoritoBridge.h"
@@ -486,7 +641,7 @@ if [[ "${MODE}" == --negative-control-* ]]; then
     --negative-control-missing-rust-export)
       perl -0pi -e 's/pub\s+unsafe\s+extern\s+"C"\s+fn\s+connect_norito_kagemusha_recursive_spend_lineage_append_boundary\s*\(/pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_lineage_append_boundary_removed(/s or die "missing Rust export target\n"' "${tmp}/lib.rs"
       expect_contract_rejection \
-        "missing required Rust ABI-6 exports" \
+        "missing required Rust recursive-spend exports" \
         "${tmp}/lib.rs" \
         "${tmp}/connect_norito_bridge.h" \
         "${tmp}/NoritoBridge.h"

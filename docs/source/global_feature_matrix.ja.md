@@ -82,7 +82,7 @@ translator: manual
 | ポインター ABI の厳格検証 & ドキュメント同期 | ◉ | TLV ポリシーをホスト／IVM の両方で強制し、ゴールデンテストと生成ドキュメントを整備。 | status.md:227; status.md:317; status.md:344; status.md:366; status.md:527 |
 | ZK システムコールの CoreHost ゲーティング | ◉ | オペレーション毎のキューが証明とハッシュ一致を確認し、ISI 実行前にゲート。 | crates/iroha_core/src/smartcontracts/ivm/host.rs:213;同:279 |
 | Kotodama ポインター ABI ドキュメント & 文法 | ◉ | Grammar / Docs を実装と同期。 | status.md:299-301 |
-| ISO 20022 スキーマ駆動エンジン & Torii ブリッジ | ◉ | 正規の ISO 20022 スキーマを組み込み、決定論的 XML 解析と `/v1/iso20022/status/{MsgId}` を公開。 | status.md:65-70 |
+| ISO 20022 スキーマ駆動エンジン & Torii ブリッジ | ◉ | 正規の ISO 20022 スキーマを組み込み、決定論的 XML 解析と `/v1/iso20022/messages/{MsgId}` を公開。 | status.md:65-70 |
 
 ## ハードウェアアクセラレーション
 

@@ -7,13 +7,13 @@ use core::ffi::c_void;
 use std::{
     collections::{HashMap, HashSet},
     fs::{File, OpenOptions},
-    io::{Seek as _, SeekFrom, Write as _},
+    io::{Read as _, Seek as _, SeekFrom, Write as _},
     num::{NonZeroU32, NonZeroU64},
     path::PathBuf,
     ptr, slice,
     str::FromStr as _,
     sync::{
-        Mutex, OnceLock,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
@@ -93,7 +93,7 @@ use zeroize::Zeroizing;
 #[cfg(feature = "privacy-production-enabled")]
 mod privacy_production;
 
-const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 17;
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 18;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 256 * 1024 * 1024;
 const SORAFS_ORDERBOOK_SIDE_BID: u32 = 1;
 const SORAFS_ORDERBOOK_SIDE_ASK: u32 = 2;
@@ -9256,14 +9256,37 @@ struct KagemushaRecursiveSpendArtifactIngestV2 {
     ready: bool,
 }
 
+struct KagemushaRecursiveSpendArtifactIngestV3 {
+    manifest: iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV3,
+    descriptor: iroha_data_model::offline::KagemushaPastaCycleArtifactV3,
+    file: Option<File>,
+    path: PathBuf,
+    framed_sha256: Sha256,
+    written: u64,
+    ready: bool,
+    failed: bool,
+}
+
 static KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HANDLES_V2: AtomicU64 = AtomicU64::new(1);
 static KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_REGISTRY_V2: OnceLock<
     Mutex<HashMap<u64, KagemushaRecursiveSpendArtifactIngestV2>>,
 > = OnceLock::new();
+static KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HANDLES_V3: AtomicU64 = AtomicU64::new(1);
+static KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_REGISTRY_V3: OnceLock<
+    Mutex<HashMap<u64, Arc<Mutex<KagemushaRecursiveSpendArtifactIngestV3>>>>,
+> = OnceLock::new();
+const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_SESSIONS_V3: usize = 8;
+const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_MANIFEST_BYTES_V3: c_ulong = 1024 * 1024;
+const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_HEADER_BYTES_V3: usize = 64 * 1024;
 
 fn kagemusha_recursive_spend_artifact_registry_v2()
 -> &'static Mutex<HashMap<u64, KagemushaRecursiveSpendArtifactIngestV2>> {
     KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_REGISTRY_V2.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn kagemusha_recursive_spend_artifact_registry_v3()
+-> &'static Mutex<HashMap<u64, Arc<Mutex<KagemushaRecursiveSpendArtifactIngestV3>>>> {
+    KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_REGISTRY_V3.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn kagemusha_recursive_spend_artifact_role_v2(
@@ -9329,25 +9352,137 @@ fn remove_kagemusha_recursive_spend_artifact_v2(
     }
 }
 
-/// Return a fresh seekable reader for a finalized, content-addressed V2 prover artifact.
-///
-/// The proof path opens the already verified spool file instead of copying the
-/// complete artifact into another in-memory buffer. No network or peer input is
-/// consulted here.
-fn kagemusha_recursive_spend_artifact_reader_v2(
-    reference: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactReferenceV2,
-) -> BridgeResult<File> {
-    let registry = kagemusha_recursive_spend_artifact_registry_v2()
-        .lock()
-        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
-    let artifact = registry
-        .values()
-        .find(|artifact| artifact.ready && artifact.reference == *reference)
+fn kagemusha_recursive_spend_artifact_path_v3(handle: u64) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "iroha-kagemusha-v3-artifact-{}-{handle}.bin",
+        std::process::id()
+    ))
+}
+
+fn remove_kagemusha_recursive_spend_artifact_v3(
+    registry: &mut HashMap<u64, Arc<Mutex<KagemushaRecursiveSpendArtifactIngestV3>>>,
+    handle: u64,
+) {
+    if let Some(artifact) = registry.remove(&handle) {
+        let path = match artifact.lock() {
+            Ok(mut artifact) => {
+                drop(artifact.file.take());
+                artifact.path.clone()
+            }
+            Err(poisoned) => {
+                let mut artifact = poisoned.into_inner();
+                drop(artifact.file.take());
+                artifact.path.clone()
+            }
+        };
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+fn validate_kagemusha_recursive_spend_artifact_spool_v3(
+    artifact: &mut KagemushaRecursiveSpendArtifactIngestV3,
+) -> BridgeResult<()> {
+    use iroha_core::zk::kagemusha_v2::{
+        KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V3,
+        KagemushaRecursiveSpendPastaCycleArtifactsV3,
+    };
+
+    let file = artifact
+        .file
+        .as_mut()
         .ok_or(BridgeError::KagemushaRecursiveSpendV2Artifact)?;
-    OpenOptions::new()
-        .read(true)
-        .open(&artifact.path)
-        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)
+    file.flush()
+        .and_then(|()| file.sync_all())
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+    if file
+        .metadata()
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?
+        .len()
+        != artifact.descriptor.size_bytes
+    {
+        return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+    }
+    file.seek(SeekFrom::Start(0))
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+
+    let mut framed_sha256 = Sha256::new();
+    let mut magic = vec![0_u8; KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V3.len()];
+    file.read_exact(&mut magic)
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+    if magic != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V3 {
+        return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+    }
+    framed_sha256.update(&magic);
+
+    let mut header_len_bytes = [0_u8; 4];
+    file.read_exact(&mut header_len_bytes)
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+    framed_sha256.update(header_len_bytes);
+    let header_len = usize::try_from(u32::from_le_bytes(header_len_bytes))
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+    let prefix_len = magic
+        .len()
+        .checked_add(header_len_bytes.len())
+        .and_then(|len| len.checked_add(header_len))
+        .ok_or(BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+    let prefix_len_u64 =
+        u64::try_from(prefix_len).map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+    if header_len == 0
+        || header_len > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_HEADER_BYTES_V3
+        || prefix_len_u64 >= artifact.descriptor.size_bytes
+    {
+        return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+    }
+    let mut header_bytes = vec![0_u8; header_len];
+    file.read_exact(&mut header_bytes)
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+    framed_sha256.update(&header_bytes);
+    let header =
+        decode_canonical_kagemusha_archive::<KagemushaRecursiveSpendPastaCycleArtifactsV3>(
+            &header_bytes,
+        )
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+    header
+        .validate_against_manifest(&artifact.manifest, &artifact.descriptor)
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+    if prefix_len_u64
+        .checked_add(header.payload_size_bytes)
+        .ok_or(BridgeError::KagemushaRecursiveSpendV2Artifact)?
+        != artifact.descriptor.size_bytes
+    {
+        return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+    }
+
+    let mut payload_sha256 = Sha256::new();
+    let mut remaining = header.payload_size_bytes;
+    let mut buffer = [0_u8; 64 * 1024];
+    while remaining != 0 {
+        let take = usize::try_from(remaining.min(buffer.len() as u64))
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        file.read_exact(&mut buffer[..take])
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        payload_sha256.update(&buffer[..take]);
+        framed_sha256.update(&buffer[..take]);
+        remaining -= take as u64;
+    }
+    let mut trailing = [0_u8; 1];
+    if file
+        .read(&mut trailing)
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?
+        != 0
+    {
+        return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+    }
+    let payload_digest: [u8; 32] = payload_sha256.finalize().into();
+    let framed_digest: [u8; 32] = framed_sha256.finalize().into();
+    if payload_digest != artifact.descriptor.payload_sha256
+        || framed_digest != artifact.descriptor.sha256
+    {
+        return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+    }
+    file.seek(SeekFrom::Start(0))
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+    Ok(())
 }
 
 fn kagemusha_recipient_payment_request_signing_bytes_v2(
@@ -9602,9 +9737,7 @@ fn kagemusha_receiver_acknowledgement_payload_v2(
     payment: &iroha_data_model::offline::KagemushaRecursiveSpendPeerPaymentV2,
     accepted_at_ms: u64,
 ) -> BridgeResult<iroha_data_model::offline::KagemushaReceiverAcknowledgementPayloadV2> {
-    use iroha_data_model::offline::{
-        KagemushaReceiverAcknowledgementPayloadV2, KagemushaRecursiveSpendBranchV2,
-    };
+    use iroha_data_model::offline::KagemushaReceiverAcknowledgementPayloadV2;
 
     request
         .validate_at(accepted_at_ms)
@@ -9614,23 +9747,19 @@ fn kagemusha_receiver_acknowledgement_payload_v2(
         .map_err(|_| BridgeError::KagemushaProve)?;
     let bundle = &payment.recipient_bundle;
     let request_digest = request.digest().map_err(|_| BridgeError::KagemushaProve)?;
-    let transition = bundle
-        .statement
-        .transition
-        .as_ref()
-        .and_then(|transition| transition.as_peer_split())
-        .ok_or(BridgeError::KagemushaProve)?;
-    if transition.branch != KagemushaRecursiveSpendBranchV2::Recipient
-        || bundle.statement.current_note != request.recipient_output
-        || transition.recipient_request_digest != request_digest
-        || transition.operation_id != payment.operation_id
-        || payment.recipient_request_digest != request_digest
+    let transition = payment
+        .recipient_split_transition()
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    let operation_id = transition.operation_id;
+    let recipient_request_digest = transition.recipient_request_digest;
+    if bundle.statement.current_note != request.recipient_output
+        || recipient_request_digest != request_digest
     {
         return Err(BridgeError::KagemushaProve);
     }
     let payload = KagemushaReceiverAcknowledgementPayloadV2 {
-        operation_id: payment.operation_id,
-        recipient_request_digest: payment.recipient_request_digest,
+        operation_id,
+        recipient_request_digest,
         payment_bundle_digest: bundle.digest().map_err(|_| BridgeError::KagemushaProve)?,
         recipient_commitment: bundle.statement.current_note.note_commitment,
         accepted_at_ms,
@@ -10181,6 +10310,331 @@ fn kagemusha_recursive_spend_v2_unavailable(
     BridgeError::KagemushaRecursiveSpendV2Unavailable.code()
 }
 
+/// Return the exact ABI-18/V3 recursive-spend capability contract.
+///
+/// The archive is available even when the proof backend is unavailable, so
+/// wallets can fail closed without inferring capability from symbol presence.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_capabilities_v1(
+    out_capabilities_ptr: *mut *mut c_uchar,
+    out_capabilities_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_capabilities_ptr, out_capabilities_len)?;
+        let capabilities =
+            iroha_data_model::offline::kagemusha_recursive_spend_native_capabilities_v1();
+        capabilities
+            .validate()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Unavailable)?;
+        let archive = norito::to_bytes(&capabilities)
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Unavailable)?;
+        unsafe {
+            write_kagemusha_archive_bridge(out_capabilities_ptr, out_capabilities_len, &archive)
+        }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Verify one compact Kagemusha top-up finality proof against a pre-fetched,
+/// content-addressed validator roster artifact.
+///
+/// Both inputs must be canonical Norito archives. `expected_roster_sha256` is
+/// the exact digest selected by the authenticated artifact manifest; a roster
+/// generation label alone is never accepted as a trust anchor.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_topup_finality_verify_v2(
+    proof_norito_ptr: *const c_uchar,
+    proof_norito_len: c_ulong,
+    roster_norito_ptr: *const c_uchar,
+    roster_norito_len: c_ulong,
+    expected_roster_sha256_ptr: *const c_uchar,
+    expected_roster_sha256_len: c_ulong,
+) -> c_int {
+    let result = (|| {
+        let proof_len =
+            usize::try_from(proof_norito_len).map_err(|_| BridgeError::KagemushaProve)?;
+        let roster_len =
+            usize::try_from(roster_norito_len).map_err(|_| BridgeError::KagemushaProve)?;
+        if proof_len == 0
+            || u64::try_from(proof_len).map_or(true, |length| {
+                length > iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2
+            })
+            || roster_len == 0
+            || u64::try_from(roster_len).map_or(true, |length| {
+                length
+                > iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2
+            })
+            || expected_roster_sha256_len != 32
+        {
+            return Err(BridgeError::KagemushaProve);
+        }
+        let proof_bytes =
+            unsafe { read_kagemusha_archive_bytes(proof_norito_ptr, proof_norito_len)? };
+        let roster_bytes =
+            unsafe { read_kagemusha_archive_bytes(roster_norito_ptr, roster_norito_len)? };
+        let expected_roster_sha256 = unsafe {
+            read_kagemusha_archive_bytes(expected_roster_sha256_ptr, expected_roster_sha256_len)?
+        }
+        .try_into()
+        .map_err(|_| BridgeError::KagemushaProve)?;
+        let proof: iroha_data_model::offline::KagemushaTopUpFinalityProofV2 =
+            decode_canonical_kagemusha_archive(&proof_bytes)?;
+        let roster: iroha_data_model::offline::KagemushaTopUpFinalityRosterArtifactV2 =
+            decode_canonical_kagemusha_archive(&roster_bytes)?;
+        iroha_core::zk::kagemusha_finality::verify_kagemusha_topup_finality_v2(
+            &proof,
+            &roster,
+            expected_roster_sha256,
+        )
+        .map_err(|_| BridgeError::KagemushaProve)
+    })();
+    bridge_result_to_code(result)
+}
+
+// TODO(kagemusha-v2-release): V3 artifact ingestion is enabled below, but no
+// ingested material may authorize proving until the audited recursive backend
+// and terminal decider are linked. The V2 proof entrypoints remain fail-closed.
+
+/// Begin bounded streaming of one complete, manifest-bound V3 Pasta package.
+///
+/// The caller supplies the published `KRV3KEY` file opaquely. The trusted
+/// manifest digest and selected content-addressed artifact digest are pinned
+/// before a handle is allocated; finalize parses and authenticates framing,
+/// header, payload, and the actual held file descriptor.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_begin_v3(
+    manifest_norito_ptr: *const c_uchar,
+    manifest_norito_len: c_ulong,
+    expected_manifest_sha256_ptr: *const c_uchar,
+    expected_manifest_sha256_len: c_ulong,
+    expected_artifact_sha256_ptr: *const c_uchar,
+    expected_artifact_sha256_len: c_ulong,
+    out_handle: *mut u64,
+) -> c_int {
+    if !out_handle.is_null() {
+        unsafe { *out_handle = 0 };
+    }
+    let result = (|| {
+        if out_handle.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+        if manifest_norito_ptr.is_null()
+            || expected_manifest_sha256_ptr.is_null()
+            || expected_artifact_sha256_ptr.is_null()
+        {
+            return Err(BridgeError::NullPtr);
+        }
+        if expected_manifest_sha256_len != 32 || expected_artifact_sha256_len != 32 {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        if manifest_norito_len == 0
+            || manifest_norito_len > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_MANIFEST_BYTES_V3
+        {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        let manifest_bytes =
+            unsafe { read_kagemusha_archive_bytes(manifest_norito_ptr, manifest_norito_len) }?;
+        let expected_manifest_sha256: [u8; 32] = unsafe {
+            read_kagemusha_archive_bytes(
+                expected_manifest_sha256_ptr,
+                expected_manifest_sha256_len,
+            )?
+        }
+        .try_into()
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        let expected_artifact_sha256: [u8; 32] = unsafe {
+            read_kagemusha_archive_bytes(
+                expected_artifact_sha256_ptr,
+                expected_artifact_sha256_len,
+            )?
+        }
+        .try_into()
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        let actual_manifest_sha256: [u8; 32] = Sha256::digest(&manifest_bytes).into();
+        if expected_manifest_sha256 == [0; 32]
+            || expected_artifact_sha256 == [0; 32]
+            || actual_manifest_sha256 != expected_manifest_sha256
+        {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        let manifest = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV3,
+        >(&manifest_bytes)
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        manifest
+            .validate()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        let mut matches = manifest
+            .profiles
+            .iter()
+            .flat_map(|profile| profile.artifacts.iter())
+            .filter(|artifact| artifact.sha256 == expected_artifact_sha256);
+        let descriptor = matches
+            .next()
+            .cloned()
+            .ok_or(BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        if matches.next().is_some() {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+
+        let mut registry = kagemusha_recursive_spend_artifact_registry_v3()
+            .lock()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        if registry.len() >= KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_SESSIONS_V3 {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        let mut opened = None;
+        for _ in 0..32 {
+            let handle =
+                KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HANDLES_V3.fetch_add(1, Ordering::Relaxed);
+            if handle == 0 || registry.contains_key(&handle) {
+                continue;
+            }
+            let path = kagemusha_recursive_spend_artifact_path_v3(handle);
+            if let Ok(file) = open_kagemusha_recursive_spend_artifact_v2(&path) {
+                opened = Some((handle, path, file));
+                break;
+            }
+        }
+        let (handle, path, file) = opened.ok_or(BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        let artifact = Arc::new(Mutex::new(KagemushaRecursiveSpendArtifactIngestV3 {
+            manifest,
+            descriptor,
+            file: Some(file),
+            path,
+            framed_sha256: Sha256::new(),
+            written: 0,
+            ready: false,
+            failed: false,
+        }));
+        if registry.insert(handle, artifact).is_some() {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        unsafe { *out_handle = handle };
+        Ok(())
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Append one complete-package chunk without buffering the artifact in memory.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_write_v3(
+    handle: u64,
+    chunk_ptr: *const c_uchar,
+    chunk_len: c_ulong,
+) -> c_int {
+    let result = (|| {
+        if handle == 0 || chunk_ptr.is_null() || chunk_len == 0 {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        let chunk_len_u64: u64 = chunk_len
+            .try_into()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        if chunk_len_u64
+            > iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V3
+        {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        let artifact = kagemusha_recursive_spend_artifact_registry_v3()
+            .lock()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?
+            .get(&handle)
+            .cloned()
+            .ok_or(BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        let mut artifact = artifact
+            .lock()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        if artifact.ready || artifact.failed {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        let next = artifact
+            .written
+            .checked_add(chunk_len_u64)
+            .ok_or(BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        if next > artifact.descriptor.size_bytes {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        let chunk_len: usize = chunk_len_u64
+            .try_into()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        let chunk = unsafe { slice::from_raw_parts(chunk_ptr, chunk_len) };
+        let write_result = artifact
+            .file
+            .as_mut()
+            .ok_or(BridgeError::KagemushaRecursiveSpendV2Artifact)?
+            .write_all(chunk);
+        if write_result.is_err() {
+            artifact.failed = true;
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        artifact.framed_sha256.update(chunk);
+        artifact.written = next;
+        Ok(())
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Finalize only after the actual open file re-parses and both hashes match.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_finalize_v3(
+    handle: u64,
+) -> c_int {
+    let result = (|| {
+        if handle == 0 {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        let artifact = kagemusha_recursive_spend_artifact_registry_v3()
+            .lock()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?
+            .get(&handle)
+            .cloned()
+            .ok_or(BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        let mut artifact_guard = artifact
+            .lock()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        if artifact_guard.ready || artifact_guard.failed {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        let streamed_digest: [u8; 32] = artifact_guard.framed_sha256.clone().finalize().into();
+        let valid = artifact_guard.written == artifact_guard.descriptor.size_bytes
+            && streamed_digest == artifact_guard.descriptor.sha256
+            && validate_kagemusha_recursive_spend_artifact_spool_v3(&mut artifact_guard).is_ok();
+        if !valid {
+            artifact_guard.failed = true;
+            drop(artifact_guard);
+            let mut registry = kagemusha_recursive_spend_artifact_registry_v3()
+                .lock()
+                .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+            remove_kagemusha_recursive_spend_artifact_v3(&mut registry, handle);
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        artifact_guard.ready = true;
+        Ok(())
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Cancel an in-progress ingest or release a finalized spool.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_cancel_v3(
+    handle: u64,
+) -> c_int {
+    let result = (|| {
+        if handle == 0 {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        let mut registry = kagemusha_recursive_spend_artifact_registry_v3()
+            .lock()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        if !registry.contains_key(&handle) {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        remove_kagemusha_recursive_spend_artifact_v3(&mut registry, handle);
+        Ok(())
+    })();
+    bridge_result_to_code(result)
+}
+
 /// Reserved additive V2 first-hop entrypoint.
 ///
 /// The symbol is present for capability negotiation, clears output state, and
@@ -10464,6 +10918,27 @@ mod offline_note_prover_tests {
     use iroha_zkp_halo2::batch::verify_open_batch;
 
     use super::*;
+
+    fn read_finalized_kagemusha_recursive_spend_artifact_for_test_v2(
+        reference: &KagemushaRecursiveSpendArtifactReferenceV2,
+    ) -> BridgeResult<Vec<u8>> {
+        let registry = kagemusha_recursive_spend_artifact_registry_v2()
+            .lock()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        let artifact = registry
+            .values()
+            .find(|artifact| artifact.ready && artifact.reference == *reference)
+            .ok_or(BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        let mut reader = OpenOptions::new()
+            .read(true)
+            .open(&artifact.path)
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        let mut bytes = Vec::new();
+        reader
+            .read_to_end(&mut bytes)
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        Ok(bytes)
+    }
 
     fn sample_signature(seed: u8) -> Signature {
         let mut bytes = [0u8; 64];
@@ -11844,7 +12319,535 @@ mod offline_note_prover_tests {
 
     #[test]
     fn bridge_abi_version_advertises_sorafs_order_id_derivation() {
-        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 17);
+        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 18);
+    }
+
+    #[test]
+    fn recursive_spend_capabilities_advertise_v3_and_remain_fail_closed() {
+        let mut out_ptr: *mut c_uchar = ptr::dangling_mut::<c_uchar>();
+        let mut out_len: c_ulong = 777;
+        let rc = unsafe {
+            connect_norito_kagemusha_recursive_spend_capabilities_v1(&mut out_ptr, &mut out_len)
+        };
+        assert_eq!(rc, 0);
+        assert!(!out_ptr.is_null());
+        let bytes = unsafe { slice::from_raw_parts(out_ptr, out_len as usize) }.to_vec();
+        connect_norito_free(out_ptr);
+        let capabilities: iroha_data_model::offline::KagemushaRecursiveSpendNativeCapabilitiesV1 =
+            norito::decode_from_bytes(&bytes).expect("decode recursive-spend capabilities");
+        capabilities.validate().expect("canonical capabilities");
+        assert_eq!(capabilities.bridge_abi_version, 18);
+        assert_eq!(
+            capabilities.artifact_manifest_schema,
+            "kagemusha.offline.recursive_spend.artifact_manifest.v3"
+        );
+        assert!(!capabilities.proof_backend_available);
+        assert!(!capabilities.missing_gates.is_empty());
+    }
+
+    #[test]
+    fn recursive_spend_capabilities_reject_null_outputs_and_clear_available_state() {
+        let mut out_len: c_ulong = 777;
+        let missing_pointer_rc = unsafe {
+            connect_norito_kagemusha_recursive_spend_capabilities_v1(ptr::null_mut(), &mut out_len)
+        };
+        assert_eq!(missing_pointer_rc, ERR_NULL_PTR);
+        assert_eq!(out_len, 0);
+
+        let mut out_ptr: *mut c_uchar = ptr::dangling_mut::<c_uchar>();
+        let missing_length_rc = unsafe {
+            connect_norito_kagemusha_recursive_spend_capabilities_v1(&mut out_ptr, ptr::null_mut())
+        };
+        assert_eq!(missing_length_rc, ERR_NULL_PTR);
+        assert!(out_ptr.is_null());
+
+        let both_missing_rc = unsafe {
+            connect_norito_kagemusha_recursive_spend_capabilities_v1(
+                ptr::null_mut(),
+                ptr::null_mut(),
+            )
+        };
+        assert_eq!(both_missing_rc, ERR_NULL_PTR);
+    }
+
+    #[test]
+    fn topup_finality_verifier_rejects_null_and_noncanonical_archives() {
+        let null_rc = unsafe {
+            connect_norito_kagemusha_topup_finality_verify_v2(
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+            )
+        };
+        assert_eq!(null_rc, ERR_NULL_PTR);
+
+        let malformed = [0xA5_u8];
+        let expected_roster_sha256 = [0x5A_u8; 32];
+        let malformed_rc = unsafe {
+            connect_norito_kagemusha_topup_finality_verify_v2(
+                malformed.as_ptr(),
+                malformed.len() as c_ulong,
+                malformed.as_ptr(),
+                malformed.len() as c_ulong,
+                expected_roster_sha256.as_ptr(),
+                expected_roster_sha256.len() as c_ulong,
+            )
+        };
+        assert_eq!(malformed_rc, ERR_KAGEMUSHA_PROVE);
+
+        let oversized_proof_rc = unsafe {
+            connect_norito_kagemusha_topup_finality_verify_v2(
+                ptr::dangling::<c_uchar>(),
+                c_ulong::MAX,
+                malformed.as_ptr(),
+                malformed.len() as c_ulong,
+                expected_roster_sha256.as_ptr(),
+                expected_roster_sha256.len() as c_ulong,
+            )
+        };
+        assert_eq!(oversized_proof_rc, ERR_KAGEMUSHA_PROVE);
+
+        let wrong_digest_length_rc = unsafe {
+            connect_norito_kagemusha_topup_finality_verify_v2(
+                malformed.as_ptr(),
+                malformed.len() as c_ulong,
+                malformed.as_ptr(),
+                malformed.len() as c_ulong,
+                expected_roster_sha256.as_ptr(),
+                31,
+            )
+        };
+        assert_eq!(wrong_digest_length_rc, ERR_KAGEMUSHA_PROVE);
+    }
+
+    fn recursive_spend_v3_artifact_fixture() -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
+        use iroha_core::zk::kagemusha_v2::{
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_VERSION_V3,
+            KagemushaRecursiveSpendPastaCycleArtifactsV3,
+        };
+        use iroha_data_model::offline::{
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_MODE_V1, KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1,
+            KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2,
+            KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2,
+            KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2, KagemushaPastaCycleArtifactKindV3,
+            KagemushaPastaCycleArtifactV3, KagemushaPastaCycleParityV1,
+            KagemushaPastaCycleProofProfileV1, KagemushaRecursiveSpendArtifactManifestV3,
+            KagemushaTopUpFinalityRosterArtifactReferenceV2,
+        };
+
+        fn placeholder(
+            kind: KagemushaPastaCycleArtifactKindV3,
+            file_name: &str,
+            seed: u8,
+        ) -> KagemushaPastaCycleArtifactV3 {
+            KagemushaPastaCycleArtifactV3 {
+                kind,
+                file_name: file_name.to_owned(),
+                size_bytes: 96,
+                sha256: [seed; 32],
+                payload_size_bytes: 32,
+                payload_sha256: [seed.wrapping_add(64); 32],
+            }
+        }
+
+        let generation = "bridge-v3-release";
+        let parameter_generation = "bridge-v3-params";
+        let payload = (0_u8..=127).collect::<Vec<_>>();
+        let payload_sha256: [u8; 32] = Sha256::digest(&payload).into();
+        let header = KagemushaRecursiveSpendPastaCycleArtifactsV3 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_VERSION_V3,
+            manifest_schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
+            bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+            proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
+            transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
+            generation: generation.to_owned(),
+            parity: KagemushaPastaCycleParityV1::TransitionEq,
+            circuit_id: KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1.to_owned(),
+            parameter_generation: parameter_generation.to_owned(),
+            ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
+            kind: KagemushaPastaCycleArtifactKindV3::Parameters,
+            payload_size_bytes: payload.len() as u64,
+            payload_sha256,
+        };
+        let header_archive = norito::to_bytes(&header).expect("V3 artifact header");
+        let mut framed = Vec::new();
+        framed.extend_from_slice(KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V3);
+        framed.extend_from_slice(
+            &u32::try_from(header_archive.len())
+                .expect("small header")
+                .to_le_bytes(),
+        );
+        framed.extend_from_slice(&header_archive);
+        framed.extend_from_slice(&payload);
+        let descriptor = KagemushaPastaCycleArtifactV3 {
+            kind: KagemushaPastaCycleArtifactKindV3::Parameters,
+            file_name: "transition-parameters.krv3".to_owned(),
+            size_bytes: framed.len() as u64,
+            sha256: Sha256::digest(&framed).into(),
+            payload_size_bytes: payload.len() as u64,
+            payload_sha256,
+        };
+        let asset = sample_asset(sample_account(91));
+        let manifest = KagemushaRecursiveSpendArtifactManifestV3 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
+            bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+            mode: KAGEMUSHA_RECURSIVE_SPEND_MODE_V1.to_owned(),
+            proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
+            transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
+            generation: generation.to_owned(),
+            source_commit: "1".repeat(40),
+            chain_id: "bridge-v3-ingest".parse().expect("chain id"),
+            asset: asset.definition().clone(),
+            asset_scale: 9,
+            activation_height: 10,
+            withdrawal_height: 100,
+            max_proof_bytes: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
+            profiles: vec![
+                KagemushaPastaCycleProofProfileV1 {
+                    parity: KagemushaPastaCycleParityV1::TransitionEq,
+                    circuit_id: KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1.to_owned(),
+                    parameter_generation: parameter_generation.to_owned(),
+                    ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
+                    artifacts: vec![
+                        descriptor,
+                        placeholder(
+                            KagemushaPastaCycleArtifactKindV3::ProvingKey,
+                            "transition-proving.krv3",
+                            2,
+                        ),
+                        placeholder(
+                            KagemushaPastaCycleArtifactKindV3::VerifyingKey,
+                            "transition-verifying.krv3",
+                            3,
+                        ),
+                    ],
+                },
+                KagemushaPastaCycleProofProfileV1 {
+                    parity: KagemushaPastaCycleParityV1::StateEp,
+                    circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1.to_owned(),
+                    parameter_generation: parameter_generation.to_owned(),
+                    ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
+                    artifacts: vec![
+                        placeholder(
+                            KagemushaPastaCycleArtifactKindV3::Parameters,
+                            "state-parameters.krv3",
+                            4,
+                        ),
+                        placeholder(
+                            KagemushaPastaCycleArtifactKindV3::ProvingKey,
+                            "state-proving.krv3",
+                            5,
+                        ),
+                        placeholder(
+                            KagemushaPastaCycleArtifactKindV3::VerifyingKey,
+                            "state-verifying.krv3",
+                            6,
+                        ),
+                    ],
+                },
+            ],
+            topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV2 {
+                file_name: "topup-finality-roster.norito".to_owned(),
+                size_bytes: 128,
+                sha256: [0xD0; 32],
+                artifact_generation: generation.to_owned(),
+                circuit_id: KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2.to_owned(),
+                purpose: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2.to_owned(),
+                artifact_type: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2.to_owned(),
+                required_bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+            },
+            benchmark_evidence_sha256: [0xE1; 32],
+            cryptographic_review_sha256: [0xE2; 32],
+            release_attestation_sha256: [0xE3; 32],
+        };
+        manifest.validate().expect("valid V3 manifest");
+        (
+            norito::to_bytes(&manifest).expect("V3 manifest archive"),
+            header_archive,
+            payload,
+            framed,
+        )
+    }
+
+    fn begin_recursive_spend_v3_artifact(
+        manifest: &[u8],
+        framed: &[u8],
+        handle: &mut u64,
+    ) -> c_int {
+        let manifest_sha256: [u8; 32] = Sha256::digest(manifest).into();
+        let artifact_sha256: [u8; 32] = Sha256::digest(framed).into();
+        unsafe {
+            connect_norito_kagemusha_recursive_spend_artifact_begin_v3(
+                manifest.as_ptr(),
+                manifest.len() as c_ulong,
+                manifest_sha256.as_ptr(),
+                manifest_sha256.len() as c_ulong,
+                artifact_sha256.as_ptr(),
+                artifact_sha256.len() as c_ulong,
+                handle,
+            )
+        }
+    }
+
+    fn recursive_spend_v3_artifact_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("V3 artifact test lock")
+    }
+
+    #[test]
+    fn recursive_spend_v3_artifact_ffi_streams_exact_manifest_bound_bytes() {
+        let _test_lock = recursive_spend_v3_artifact_test_lock();
+        let (manifest, _, _, framed) = recursive_spend_v3_artifact_fixture();
+        let mut handle = 77;
+        assert_eq!(
+            begin_recursive_spend_v3_artifact(&manifest, &framed, &mut handle),
+            0
+        );
+        assert_ne!(handle, 0);
+        let split = 41;
+        for chunk in [&framed[..split], &framed[split..]] {
+            assert_eq!(
+                unsafe {
+                    connect_norito_kagemusha_recursive_spend_artifact_write_v3(
+                        handle,
+                        chunk.as_ptr(),
+                        chunk.len() as c_ulong,
+                    )
+                },
+                0
+            );
+        }
+        assert_eq!(
+            unsafe { connect_norito_kagemusha_recursive_spend_artifact_finalize_v3(handle) },
+            0
+        );
+        let path = {
+            let registry = kagemusha_recursive_spend_artifact_registry_v3()
+                .lock()
+                .expect("V3 registry");
+            let artifact = registry
+                .get(&handle)
+                .expect("finalized V3 artifact")
+                .lock()
+                .expect("finalized V3 artifact lock");
+            assert!(artifact.ready);
+            artifact.path.clone()
+        };
+        assert_eq!(std::fs::read(&path).expect("spooled V3 artifact"), framed);
+        assert_eq!(
+            unsafe { connect_norito_kagemusha_recursive_spend_artifact_finalize_v3(handle) },
+            BridgeError::KagemushaRecursiveSpendV2Artifact.code()
+        );
+        assert_eq!(
+            unsafe { connect_norito_kagemusha_recursive_spend_artifact_cancel_v3(handle) },
+            0
+        );
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn recursive_spend_v3_artifact_ffi_rejects_tampering_overrun_and_nulls() {
+        let _test_lock = recursive_spend_v3_artifact_test_lock();
+        let (manifest, header, payload, framed) = recursive_spend_v3_artifact_fixture();
+        let mut tampered_header: iroha_core::zk::kagemusha_v2::KagemushaRecursiveSpendPastaCycleArtifactsV3 =
+            norito::decode_from_bytes(&header).expect("header");
+        tampered_header.payload_sha256[0] ^= 1;
+        let tampered_header = norito::to_bytes(&tampered_header).expect("tampered header");
+        let mut tampered_framed = Vec::new();
+        tampered_framed.extend_from_slice(
+            iroha_core::zk::kagemusha_v2::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V3,
+        );
+        tampered_framed.extend_from_slice(
+            &u32::try_from(tampered_header.len())
+                .expect("tampered header length")
+                .to_le_bytes(),
+        );
+        tampered_framed.extend_from_slice(&tampered_header);
+        tampered_framed.extend_from_slice(&payload);
+        let mut handle = 88;
+        assert_eq!(
+            begin_recursive_spend_v3_artifact(&manifest, &framed, &mut handle),
+            0
+        );
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_recursive_spend_artifact_write_v3(
+                    handle,
+                    tampered_framed.as_ptr(),
+                    tampered_framed.len() as c_ulong,
+                )
+            },
+            0
+        );
+        assert_eq!(
+            unsafe { connect_norito_kagemusha_recursive_spend_artifact_finalize_v3(handle) },
+            BridgeError::KagemushaRecursiveSpendV2Artifact.code()
+        );
+
+        assert_eq!(
+            begin_recursive_spend_v3_artifact(&manifest, &framed, &mut handle),
+            0
+        );
+        let oversized = vec![0xAA; framed.len() + 1];
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_recursive_spend_artifact_write_v3(
+                    handle,
+                    oversized.as_ptr(),
+                    oversized.len() as c_ulong,
+                )
+            },
+            BridgeError::KagemushaRecursiveSpendV2Artifact.code()
+        );
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_recursive_spend_artifact_write_v3(
+                    handle,
+                    oversized.as_ptr(),
+                    c_ulong::MAX,
+                )
+            },
+            BridgeError::KagemushaRecursiveSpendV2Artifact.code()
+        );
+        assert_eq!(
+            unsafe { connect_norito_kagemusha_recursive_spend_artifact_cancel_v3(handle) },
+            0
+        );
+
+        let manifest_sha256: [u8; 32] = Sha256::digest(&manifest).into();
+        let artifact_sha256: [u8; 32] = Sha256::digest(&framed).into();
+        let wrong_manifest_sha256 = [0xA7; 32];
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_recursive_spend_artifact_begin_v3(
+                    manifest.as_ptr(),
+                    manifest.len() as c_ulong,
+                    wrong_manifest_sha256.as_ptr(),
+                    wrong_manifest_sha256.len() as c_ulong,
+                    artifact_sha256.as_ptr(),
+                    artifact_sha256.len() as c_ulong,
+                    &mut handle,
+                )
+            },
+            BridgeError::KagemushaRecursiveSpendV2Artifact.code()
+        );
+        assert_eq!(handle, 0);
+
+        handle = 99;
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_recursive_spend_artifact_begin_v3(
+                    ptr::null(),
+                    0,
+                    ptr::null(),
+                    0,
+                    ptr::null(),
+                    0,
+                    &mut handle,
+                )
+            },
+            ERR_NULL_PTR
+        );
+        assert_eq!(handle, 0);
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_recursive_spend_artifact_begin_v3(
+                    manifest.as_ptr(),
+                    manifest.len() as c_ulong,
+                    manifest_sha256.as_ptr(),
+                    manifest_sha256.len() as c_ulong,
+                    artifact_sha256.as_ptr(),
+                    artifact_sha256.len() as c_ulong,
+                    ptr::null_mut(),
+                )
+            },
+            ERR_NULL_PTR
+        );
+    }
+
+    #[test]
+    fn recursive_spend_v3_artifact_ffi_rehashes_spool_and_caps_sessions() {
+        let _test_lock = recursive_spend_v3_artifact_test_lock();
+        let (manifest, _, _, framed) = recursive_spend_v3_artifact_fixture();
+        let mut handle = 0;
+        assert_eq!(
+            begin_recursive_spend_v3_artifact(&manifest, &framed, &mut handle),
+            0
+        );
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_recursive_spend_artifact_write_v3(
+                    handle,
+                    framed.as_ptr(),
+                    framed.len() as c_ulong,
+                )
+            },
+            0
+        );
+        let path = {
+            let registry = kagemusha_recursive_spend_artifact_registry_v3()
+                .lock()
+                .expect("V3 registry");
+            registry
+                .get(&handle)
+                .expect("active V3 artifact")
+                .lock()
+                .expect("active V3 artifact lock")
+                .path
+                .clone()
+        };
+        let mut external = OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("open V3 spool for corruption test");
+        external
+            .seek(SeekFrom::Start(0))
+            .and_then(|_| external.write_all(&[0x00]))
+            .and_then(|_| external.sync_all())
+            .expect("mutate V3 spool");
+        drop(external);
+        assert_eq!(
+            unsafe { connect_norito_kagemusha_recursive_spend_artifact_finalize_v3(handle) },
+            BridgeError::KagemushaRecursiveSpendV2Artifact.code()
+        );
+        assert!(!path.exists());
+
+        let mut handles = Vec::new();
+        for _ in 0..KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_SESSIONS_V3 {
+            let mut handle = 0;
+            assert_eq!(
+                begin_recursive_spend_v3_artifact(&manifest, &framed, &mut handle),
+                0
+            );
+            handles.push(handle);
+        }
+        let mut overflow_handle = 91;
+        assert_eq!(
+            begin_recursive_spend_v3_artifact(&manifest, &framed, &mut overflow_handle),
+            BridgeError::KagemushaRecursiveSpendV2Artifact.code()
+        );
+        assert_eq!(overflow_handle, 0);
+        for handle in handles {
+            assert_eq!(
+                unsafe { connect_norito_kagemusha_recursive_spend_artifact_cancel_v3(handle) },
+                0
+            );
+        }
     }
 
     #[test]
@@ -12094,6 +13097,10 @@ mod offline_note_prover_tests {
             0
         );
         assert_ne!(handle, 0);
+        assert!(
+            read_finalized_kagemusha_recursive_spend_artifact_for_test_v2(&reference).is_err(),
+            "an in-progress artifact must not be readable"
+        );
         for chunk in bytes.chunks(5) {
             assert_eq!(
                 unsafe {
@@ -12106,16 +13113,16 @@ mod offline_note_prover_tests {
                 0
             );
         }
+        assert!(
+            read_finalized_kagemusha_recursive_spend_artifact_for_test_v2(&reference).is_err(),
+            "an artifact must remain unreadable until finalization authenticates its length and hash"
+        );
         assert_eq!(
             unsafe { connect_norito_kagemusha_recursive_spend_artifact_finalize_v2(handle) },
             0
         );
-        let mut reader =
-            kagemusha_recursive_spend_artifact_reader_v2(&reference).expect("ready reader");
-        let mut actual = Vec::new();
-        reader
-            .read_to_end(&mut actual)
-            .expect("read spooled artifact");
+        let actual = read_finalized_kagemusha_recursive_spend_artifact_for_test_v2(&reference)
+            .expect("ready artifact");
         assert_eq!(actual, bytes);
         assert_eq!(
             unsafe {
@@ -12131,7 +13138,7 @@ mod offline_note_prover_tests {
             unsafe { connect_norito_kagemusha_recursive_spend_artifact_cancel_v2(handle) },
             0
         );
-        assert!(kagemusha_recursive_spend_artifact_reader_v2(&reference).is_err());
+        assert!(read_finalized_kagemusha_recursive_spend_artifact_for_test_v2(&reference).is_err());
     }
 
     #[test]
@@ -12224,7 +13231,10 @@ mod offline_note_prover_tests {
             unsafe { connect_norito_kagemusha_recursive_spend_artifact_cancel_v2(handle) },
             0
         );
-        assert!(kagemusha_recursive_spend_artifact_reader_v2(&exact_reference).is_err());
+        assert!(
+            read_finalized_kagemusha_recursive_spend_artifact_for_test_v2(&exact_reference)
+                .is_err()
+        );
     }
 
     #[test]
@@ -15653,15 +16663,19 @@ mod offline_note_prover_tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_redeem_bridge_rejects_semantic_profile_after_public_binding() {
+    fn kagemusha_recursive_spend_redeem_bridge_rejects_witnessless_semantic_profile_early() {
         let request = sample_recursive_spend_redeem_request(42);
-        request
+        let err = request
             .validate_public_binding()
-            .expect("semantic recursive redeem request has valid public bindings");
+            .expect_err("witnessless semantic recursive redeem must fail closed");
+        assert!(
+            err.to_string().contains("lineage_witness"),
+            "unexpected witnessless semantic public-binding error: {err}"
+        );
         let archive = norito::to_bytes(&request).expect("encode recursive spend redeem request");
         assert!(
             kagemusha_recursive_spend_redeem_from_request_archive(&archive).is_err(),
-            "bridge must not serialize semantic recursive spend redeems that chain admission rejects"
+            "bridge must reject witnessless semantic recursive spend redeems before verification"
         );
 
         let mut wrong_amount = sample_recursive_spend_redeem_request(41);
@@ -15735,15 +16749,36 @@ mod offline_note_prover_tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_redeem_bridge_accepts_witnessless_reserved_lineage_public_binding()
+    fn kagemusha_recursive_spend_redeem_bridge_rejects_witnessless_reserved_lineage_before_backend()
     {
-        let mut request = sample_recursive_spend_redeem_request(42);
+        let mut witnessless = sample_recursive_spend_redeem_request(42);
+        attach_strict_reserved_lineage_envelope(&mut witnessless);
+        witnessless.lineage_verifier_record =
+            Some(sample_recursive_spend_lineage_verifier_record());
+
+        let err = witnessless
+            .validate_public_binding()
+            .expect_err("witnessless Reserved-lineage redeem must fail closed");
+        assert!(
+            err.to_string().contains("lineage_witness"),
+            "unexpected witnessless rejection: {err}"
+        );
+        let witnessless_archive = norito::to_bytes(&witnessless)
+            .expect("encode witnessless lineage recursive redeem request");
+        assert!(
+            kagemusha_recursive_spend_redeem_from_request_archive(&witnessless_archive).is_err(),
+            "bridge must reject witnessless reserved-lineage redeem before backend verification"
+        );
+
+        let (bundle, lineage_witness) = sample_verifying_semantic_recursive_spend_lineage_fixture();
+        let mut request = sample_recursive_spend_redeem_request(7);
+        request.bundle = bundle;
+        request.lineage_witness = Some(lineage_witness);
         attach_strict_reserved_lineage_envelope(&mut request);
         request.lineage_verifier_record = Some(sample_recursive_spend_lineage_verifier_record());
-
-        request.validate_public_binding().expect(
-            "witnessless reserved-lineage redeem validates before backend proof verification",
-        );
+        request
+            .validate_public_binding()
+            .expect("record-backed reserved-lineage redeem must validate before backend work");
 
         let mut wrong_record_circuit = request.clone();
         wrong_record_circuit
@@ -15753,11 +16788,11 @@ mod offline_note_prover_tests {
             .circuit_id = KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.to_owned();
         let err = wrong_record_circuit
             .validate_public_binding()
-            .expect_err("reserved-lineage redeem must reject mismatched final lineage record");
+            .expect_err("record-backed reserved-lineage redeem must reject a mismatched record");
         assert!(
             err.to_string()
                 .contains("lineage_verifier_record.circuit_id"),
-            "unexpected wrong-circuit final lineage-record error: {err}"
+            "unexpected record-backed wrong-record rejection: {err}"
         );
         let wrong_record_archive = norito::to_bytes(&wrong_record_circuit)
             .expect("encode wrong-circuit lineage recursive redeem request");
@@ -15772,10 +16807,8 @@ mod offline_note_prover_tests {
             "bridge must reject the fixture's backend-invalid reserved-lineage proof"
         );
 
-        let mut missing_lineage_slice = sample_recursive_spend_redeem_request(42);
+        let mut missing_lineage_slice = request.clone();
         attach_reserved_lineage_envelope_without_lineage_slice(&mut missing_lineage_slice);
-        missing_lineage_slice.lineage_verifier_record =
-            Some(sample_recursive_spend_lineage_verifier_record());
         let missing_lineage_slice_archive =
             norito::to_bytes(&missing_lineage_slice).expect("encode missing-slice request");
         assert!(
@@ -15851,6 +16884,9 @@ mod offline_note_prover_tests {
             request.lineage_witness = Some(witness.clone());
             request
         };
+        base_request
+            .validate_public_binding()
+            .expect("fast adversarial lineage baseline must be structurally valid");
 
         fn assert_rejects(request: KagemushaRecursiveSpendRedeemRequestV1, label: &str) {
             let public_binding_err = request
@@ -27003,6 +28039,25 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativePastaCycleV3BackendAvailable(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jboolean {
+    if iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE {
+        jni::sys::JNI_TRUE
+    } else {
+        jni::sys::JNI_FALSE
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildPallasOpenEnvelopesArchive(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -27501,6 +28556,25 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jint {
     CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePastaCycleV3BackendAvailable(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jboolean {
+    if iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE {
+        jni::sys::JNI_TRUE
+    } else {
+        jni::sys::JNI_FALSE
+    }
 }
 
 #[cfg(any(
@@ -30010,6 +31084,16 @@ mod tests {
         PRIVACY_FFI_ERROR_PRODUCTION_DISABLED;
     #[cfg(feature = "privacy-production-enabled")]
     const PRIVACY_IN_SCOPE_PLACEHOLDER_VERIFY_ERROR_CODE: u32 = PRIVACY_FFI_ERROR_PROVING_FAILED;
+
+    #[test]
+    fn disabled_local_fetch_integrity_maps_to_execution_error() {
+        for field in ["verify_digests", "verify_lengths"] {
+            assert_eq!(
+                map_local_fetch_error(LocalFetchError::IntegrityVerificationDisabled(field)),
+                ERR_FETCH_EXECUTION,
+            );
+        }
+    }
 
     struct ResetConfig(AccelerationConfig);
 
@@ -36658,16 +37742,6 @@ mod sorafs_tests {
     use tempfile::tempdir;
 
     use super::*;
-
-    #[test]
-    fn disabled_local_fetch_integrity_maps_to_execution_error() {
-        for field in ["verify_digests", "verify_lengths"] {
-            assert_eq!(
-                map_local_fetch_error(LocalFetchError::IntegrityVerificationDisabled(field)),
-                ERR_FETCH_EXECUTION,
-            );
-        }
-    }
 
     #[test]
     fn sorafs_local_fetch_via_ffi() {

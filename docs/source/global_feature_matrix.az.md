@@ -77,7 +77,7 @@ translator: machine-google-reviewed
 | Pointer-ABI ciddi yoxlama və sənəd sinxronizasiyası | ◉ | TLV siyasəti qızıl testlər və yaradılan sənədlərlə host/IVM üzərində tətbiq edilir. | status.md:227; status.md:317; status.md:344; status.md:366; status.md:527 |
 | CoreHost | vasitəsilə ZK syscall qapısı ◉ | Hər əməliyyat növbəsi təsdiqlənmiş zərfləri bağlayır və ISI icrasından əvvəl hash uyğunluğunu təmin edir. | crates/iroha_core/src/smartcontracts/ivm/host.rs:213; crates/iroha_core/src/smartcontracts/ivm/host.rs:279 |
 | Kotodama göstərici-ABI sənədləri və qrammatikası | ◉ | Qrammatika/sənədlər canlı konstruktorlar və SCALL xəritələri ilə sinxronlaşdırılır. | status.md:299-301 |
-| ISO 20022 sxemlə idarə olunan mühərrik və Torii körpüsü | ◉ | Kanonik ISO 20022 sxemləri daxil edilmiş, deterministik XML təhlili və `/v1/iso20022/status/{MsgId}` API ifşa edilmişdir. | status.md:65-70 |
+| ISO 20022 sxemlə idarə olunan mühərrik və Torii körpüsü | ◉ | Kanonik ISO 20022 sxemləri daxil edilmiş, deterministik XML təhlili və `/v1/iso20022/messages/{MsgId}` API ifşa edilmişdir. | status.md:65-70 |
 
 ## Avadanlıq Sürətləndirilməsi
 

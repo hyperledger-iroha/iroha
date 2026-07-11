@@ -12922,9 +12922,18 @@ mod tests {
         let mut redeem_request = sample_recursive_spend_redeem_request(7);
         redeem_request.bundle = bundle;
         redeem_request.lineage_witness = Some(witness);
+        // This shared fixture pins canonical Norito serialization. Its proof material is
+        // intentionally synthetic, so constructing the reference instruction must not
+        // imply that native cryptographic admission accepted the request.
         let redeem_instruction =
-            kagemusha_recursive_spend_redeem_instruction_from_request(redeem_request.clone())
-                .expect("build ABI-7 native redeem instruction");
+            iroha_data_model::isi::offline::RedeemKagemushaRecursive::new_with_lineage_witness_and_change(
+                redeem_request.bundle.clone(),
+                redeem_request.recipient.clone(),
+                redeem_request.public_amount,
+                redeem_request.redeem_proof.clone(),
+                redeem_request.lineage_witness.clone(),
+                redeem_request.change_output.clone(),
+            );
         let redeem_request =
             norito::to_bytes(&redeem_request).expect("encode ABI-7 redeem request");
         let redeem_instruction =
@@ -14122,14 +14131,28 @@ mod tests {
         let committed_redeem_instruction: iroha_data_model::isi::offline::RedeemKagemushaRecursive =
             norito::decode_from_bytes(&redeem_instruction_archive)
                 .expect("decode ABI-7 redeem instruction archive");
-        let native_redeem_instruction =
-            kagemusha_recursive_spend_redeem_instruction_from_request(redeem_request)
-                .expect("native ABI-7 recursive spend redeem instruction");
+        let canonical_redeem_instruction =
+            iroha_data_model::isi::offline::RedeemKagemushaRecursive::new_with_lineage_witness_and_change(
+                redeem_request.bundle.clone(),
+                redeem_request.recipient.clone(),
+                redeem_request.public_amount,
+                redeem_request.redeem_proof.clone(),
+                redeem_request.lineage_witness.clone(),
+                redeem_request.change_output.clone(),
+            );
         assert_eq!(
-            norito::to_bytes(&native_redeem_instruction).expect("encode native redeem instruction"),
+            norito::to_bytes(&canonical_redeem_instruction)
+                .expect("encode canonical redeem instruction"),
             norito::to_bytes(&committed_redeem_instruction)
                 .expect("encode committed redeem instruction"),
-            "committed ABI-7 redeem instruction must be produced by the native bridge"
+            "committed ABI-7 redeem instruction must pin canonical Norito serialization"
+        );
+        let error = kagemusha_recursive_spend_redeem_instruction_from_request(redeem_request)
+            .expect_err("native redemption must reject the synthetic ABI-7 fixture lineage");
+        assert_eq!(
+            error,
+            "record-backed recursive Kagemusha lineage accumulator does not match redeem bundle",
+            "synthetic ABI-7 fixture rejection must remain fail-closed and diagnostic"
         );
     }
 
@@ -15552,14 +15575,15 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_redeem_python_native_rejects_semantic_profile() {
+    fn kagemusha_recursive_spend_redeem_python_native_rejects_witnessless_semantic_profile_early() {
         let request = sample_recursive_spend_redeem_request(42);
-        request
+        let err = request
             .validate_public_binding()
-            .expect("semantic recursive spend redeem request has valid public bindings");
+            .expect_err("witnessless semantic recursive spend redeem must fail closed");
+        assert!(err.to_string().contains("lineage_witness"));
         let err = kagemusha_recursive_spend_redeem_instruction_from_request(request)
-            .expect_err("Python native redeem builder must reject semantic profile");
-        assert!(err.contains("private-hop lineage"));
+            .expect_err("Python native redeem builder must reject witnessless semantic profile");
+        assert!(err.contains("lineage_witness"));
 
         let wrong_amount = sample_recursive_spend_redeem_request(41);
         let err = kagemusha_recursive_spend_redeem_instruction_from_request(wrong_amount)
@@ -15708,6 +15732,9 @@ mod tests {
             request.lineage_witness = Some(witness);
             request
         };
+        base_request
+            .validate_public_binding()
+            .expect("Python adversarial lineage baseline must be structurally valid");
 
         fn assert_rejects(request: KagemushaRecursiveSpendRedeemRequestV1, label: &str) {
             let err = match kagemusha_recursive_spend_redeem_instruction_from_request(request) {
@@ -15865,13 +15892,36 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_redeem_python_native_accepts_witnessless_reserved_lineage_public_binding()
+    fn kagemusha_recursive_spend_redeem_python_native_rejects_witnessless_reserved_lineage_before_backend()
      {
-        let mut request = sample_recursive_spend_redeem_request(42);
+        let mut witnessless = sample_recursive_spend_redeem_request(42);
+        attach_strict_reserved_lineage_envelope(&mut witnessless);
+        witnessless.lineage_verifier_record =
+            Some(sample_recursive_spend_lineage_verifier_record());
+        let err = witnessless
+            .validate_public_binding()
+            .expect_err("witnessless reserved-lineage redeem must fail closed");
+        assert!(
+            err.to_string().contains("lineage_witness"),
+            "unexpected witnessless reserved-lineage public-binding error: {err}"
+        );
+        let err = kagemusha_recursive_spend_redeem_instruction_from_request(witnessless)
+            .expect_err(
+                "Python native redeem builder must reject witnessless reserved-lineage before backend",
+            );
+        assert!(
+            err.contains("lineage_witness"),
+            "unexpected witnessless reserved-lineage host error: {err}"
+        );
+
+        let (bundle, lineage_witness) = sample_verifying_semantic_recursive_spend_lineage_fixture();
+        let mut request = sample_recursive_spend_redeem_request(7);
+        request.bundle = bundle;
+        request.lineage_witness = Some(lineage_witness);
         attach_strict_reserved_lineage_envelope(&mut request);
         request.lineage_verifier_record = Some(sample_recursive_spend_lineage_verifier_record());
         request.validate_public_binding().expect(
-            "witnessless reserved-lineage redeem validates before backend proof verification",
+            "record-backed reserved-lineage redeem validates before backend proof verification",
         );
 
         let mut wrong_record_circuit = request.clone();
@@ -15902,23 +15952,24 @@ mod tests {
                 "Python native redeem builder must reject backend-invalid reserved-lineage proof",
             );
         assert!(
-            err.contains("missing verifier-slice public instance columns"),
+            err.contains("inline key")
+                || err.contains("missing verifier-slice public instance columns"),
             "unexpected structurally invalid reserved-lineage rejection: {err}"
         );
 
-        let mut missing_lineage_slice = sample_recursive_spend_redeem_request(42);
+        let mut missing_lineage_slice = request.clone();
         attach_reserved_lineage_envelope(
             &mut missing_lineage_slice,
             false,
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
         );
-        missing_lineage_slice.lineage_verifier_record =
-            Some(sample_recursive_spend_lineage_verifier_record());
         let err = kagemusha_recursive_spend_redeem_instruction_from_request(missing_lineage_slice)
             .expect_err("reserved-lineage redeem without verifier-slice columns must reject");
         assert!(
-            err.contains("verifier-slice") || err.contains("public instance columns"),
-            "unexpected missing-verifier-slice error: {err}"
+            err.contains("inline key")
+                || err.contains("verifier-slice")
+                || err.contains("public instance columns"),
+            "unexpected record-backed lineage backend-profile error: {err}"
         );
 
         let mut missing_scalar = request.clone();
@@ -15946,18 +15997,22 @@ mod tests {
         let err = kagemusha_recursive_spend_redeem_instruction_from_request(malformed_envelope)
             .expect_err("malformed reserved lineage proof envelope must reject");
         assert!(
-            err.contains("failed to decode recursive spend lineage proof envelope"),
+            err.contains("inline key")
+                || err.contains("failed to decode recursive spend lineage proof envelope"),
             "unexpected malformed-lineage-envelope error: {err}"
         );
     }
 
     #[test]
     fn kagemusha_recursive_spend_redeem_python_native_supports_reserved_lineage_circuit_family() {
+        let (bundle, lineage_witness) = sample_verifying_semantic_recursive_spend_lineage_fixture();
         for circuit_id in [
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
         ] {
-            let mut request = sample_recursive_spend_redeem_request(42);
+            let mut request = sample_recursive_spend_redeem_request(7);
+            request.bundle = bundle.clone();
+            request.lineage_witness = Some(lineage_witness.clone());
             attach_reserved_lineage_envelope(&mut request, true, circuit_id);
             let mut record = sample_recursive_spend_lineage_verifier_record();
             record.circuit_id = circuit_id.to_owned();
@@ -15976,26 +16031,31 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_redeem_python_function_rejects_semantic_profile() {
+    fn kagemusha_recursive_spend_redeem_python_function_rejects_witnessless_semantic_profile_early()
+    {
         ensure_python();
         let request = sample_recursive_spend_redeem_request(42);
-        request
+        let public_binding_err = request
             .validate_public_binding()
-            .expect("semantic recursive spend redeem request has valid public bindings");
+            .expect_err("witnessless semantic recursive spend redeem must fail closed");
+        assert!(public_binding_err.to_string().contains("lineage_witness"));
         let archive = norito::to_bytes(&request).expect("encode recursive spend request");
         Python::attach(|py| {
             let err = kagemusha_recursive_spend_redeem_py(py, &archive)
                 .expect_err("Python function must reject semantic profile");
             let message = err.to_string();
             assert!(message.contains("invalid Kagemusha recursive spend redeem request"));
-            assert!(message.contains("private-hop lineage"));
+            assert!(message.contains("lineage_witness"));
         });
     }
 
     #[test]
     fn kagemusha_recursive_spend_redeem_python_function_rejects_structurally_invalid_lineage() {
         ensure_python();
-        let mut request = sample_recursive_spend_redeem_request(42);
+        let (bundle, lineage_witness) = sample_verifying_semantic_recursive_spend_lineage_fixture();
+        let mut request = sample_recursive_spend_redeem_request(7);
+        request.bundle = bundle;
+        request.lineage_witness = Some(lineage_witness);
         attach_strict_reserved_lineage_envelope(&mut request);
         let mut lineage_record = sample_recursive_spend_lineage_verifier_record();
         lineage_record.max_proof_bytes =
@@ -16010,7 +16070,8 @@ mod tests {
             let message = err.to_string();
             assert!(message.contains("invalid Kagemusha recursive spend redeem request"));
             assert!(
-                message.contains("missing verifier-slice public instance columns"),
+                message.contains("inline key")
+                    || message.contains("missing verifier-slice public instance columns"),
                 "unexpected structurally invalid lineage rejection: {message}"
             );
         });

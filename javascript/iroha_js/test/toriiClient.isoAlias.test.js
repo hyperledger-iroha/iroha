@@ -182,7 +182,7 @@ test("resolveAliasByIndex posts payloads and normalises responses", async () => 
   assert.equal(result.index, 7);
   assert.equal(result.source, "imported");
   const url = new URL(lastRequest.input);
-  assert.equal(url.pathname, "/v1/aliases/resolve_index");
+  assert.equal(url.pathname, "/v1/aliases/resolve-index");
   assert.equal(lastRequest.init.method, "POST");
 });
 
@@ -242,7 +242,7 @@ test("lookupAliasesByAccount posts canonical account ids with optional filters",
     },
   ]);
   const url = new URL(lastRequest.input);
-  assert.equal(url.pathname, "/v1/aliases/by_account");
+  assert.equal(url.pathname, "/v1/aliases/by-account");
   assert.equal(lastRequest.init.method, "POST");
 });
 

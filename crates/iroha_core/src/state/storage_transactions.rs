@@ -262,6 +262,8 @@ mod block {
         EmptyBlock,
         /// Deterministic autoscale lane lifecycle failed while preparing block commit
         AutoscaleLaneLifecycle,
+        /// Certified merge admission changed before the block could commit
+        MergeAdmission,
     }
 
     /// Batched update to the storage that can be reverted later

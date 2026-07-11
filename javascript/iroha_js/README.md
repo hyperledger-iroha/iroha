@@ -23,6 +23,11 @@ When publishing or testing the packaged layout, build the ESM dist tree:
 npm run build:dist
 ```
 
+The checked-in `dist` tree is the input for local `file:` consumers. Dependency
+installation does not rebuild or mutate the SDK checkout. `build:dist` uses an
+inter-process lock, validates a staging tree, and publishes only when source and
+distribution content differ, so explicit concurrent builds are deterministic.
+
 Native bindings load only after verifying the platform-specific SHA-256 recorded
 in `native/iroha_js_host.checksums.json`. When the checksum is missing or
 mismatched, SDK startup fails. Run `npm run build:native` explicitly after
@@ -164,7 +169,8 @@ requests must still include the append lineage key artifacts in the raw Norito
 request. Use `kagemushaRecursiveSpendLineageKeyArtifactsForInit(...)` and
 `kagemushaRecursiveSpendLineageKeyArtifactsForAppend(...)` to package and
 validate these verifier/proving key artifacts before building a witnessless
-Reserved-lineage request.
+Reserved-lineage request once transition verification is wired. The current
+release does not select or prove that path.
 Verify request archives must pass the same public-binding preflight before the
 native host returns a `KagemushaRecursiveSpendVerifyResultV1`: Reserved-lineage
 bundles require a matching active `lineage_verifier_record`, semantic bundles
@@ -185,14 +191,15 @@ record there for vector-only callers.
 
 `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` is currently `64`,
 and `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1` is
-`true`: witnessless Reserved-lineage online redemption is available for lineage
-bundles inside the 64-hop cap.
+`false`. The hop constant is only the protocol bound: witnessless
+Reserved-lineage redeem and append fail closed for every circuit and hop count,
+and redeem requires a record-backed lineage witness.
 Wallets should use the exported `canRedeem...`, `requires...LineageWitness...`,
 `preferred...AppendOutput...`, and `canSelect...AppendOutput...` helpers and
-select Reserved-lineage append for previous hop counts `1..63`.
-Semantic append is bounded by the separate
-`KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS` constant; witnessless Reserved-lineage
-append and redeem use `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1`.
+select semantic recursive aggregation while transition verification is
+unavailable. Semantic append is bounded by the separate
+`KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS` constant; the witnessless max-hop constant
+does not enable witnessless admission.
 
 ## Native Privacy Bridge
 
@@ -237,6 +244,92 @@ import { ToriiClient } from "@iroha/iroha-js/torii";
 import { noritoEncodeInstruction } from "@iroha/iroha-js/norito";
 import { generateKeyPair } from "@iroha/iroha-js/crypto";
 ```
+
+### Browser-safe external transaction signing
+
+Use `@iroha/iroha-js/transaction-codec` when a browser wallet needs to build
+and finalize a canonical transparent transfer without loading the native Node
+binding. This deliberately narrow surface supports one `Transfer::Asset`
+instruction, single-key Ed25519 I105 authorities, canonical asset identifiers,
+and accounts sharing one Taira-style network prefix/chain discriminant.
+
+```js
+import {
+  browserTransactionPayloadHashHex,
+  buildBrowserTransferPayload,
+  finalizeBrowserSignedTransaction,
+} from "@iroha/iroha-js/transaction-codec";
+
+const payloadBytes = buildBrowserTransferPayload({
+  chainId,
+  authority,
+  sourceAssetHoldingId: `${assetDefinitionId}#${authority}`,
+  quantity: "1.25",
+  destinationAccountId,
+  metadata: { memo: "wallet transfer" },
+  creationTimeMs: Date.now(),
+  ttlMs: 30_000,
+  nonce: 42,
+  networkPrefix,
+});
+
+// Sign the exact 32-byte Iroha prehash, not the payload bytes or hex text.
+const payloadHashHex = browserTransactionPayloadHashHex(payloadBytes);
+const payloadHash = Uint8Array.from(
+  payloadHashHex.match(/../g),
+  (octet) => Number.parseInt(octet, 16),
+);
+const signature = await wallet.signEd25519(payloadHash);
+
+const finalized = finalizeBrowserSignedTransaction(
+  {
+    payloadBytes,
+    payloadHashHex,
+    authority,
+    signingPublicKey: wallet.publicKey,
+    signatureAlgorithm: "ed25519",
+  },
+  { algorithm: "ed25519", signature },
+  wallet.publicKey,
+);
+
+console.log(finalized.hashHex, finalized.signedTransaction);
+```
+
+Finalization fails closed when the payload, asserted prehash, authority,
+signing key, signature, metadata limits, or canonical Norito framing disagree.
+Ed25519 verification uses the same strict, uncofactored equation as the Rust
+node and rejects ZIP-215/mixed-torsion aliases. Metadata arrays must be dense
+plain arrays containing data elements only; metadata numbers must be safe
+integers (encode decimal values as strings), and all strings must contain
+well-formed Unicode scalar values. Metadata supplied as a JSON string must
+already use the exact canonical encoding; use an object when canonicalization
+is desired. Transfer quantities use positive plain-decimal syntax, at most 28
+fractional digits, and the current Rust 64-byte signed-integer positive range
+(`2^511 - 1`).
+The codec only returns verified bytes and the canonical compact-entrypoint
+pipeline hash: importing it does not enable Nexus, connect a wallet, submit to
+Torii, or turn on live-send behavior. Applications must authorize and perform
+those steps separately.
+
+The `@iroha/iroha-js/nexus-app` export is also a browser-only dependency graph:
+it uses the browser codec and strict browser Ed25519 verifier by default and
+contains no native binding or `node:` imports. Supplying `toriiBaseUrl` gives
+the facade a bounded Fetch-based pipeline submit/status client; applications
+may instead inject `toriiClient` and `transactionCodec`. Torii response bodies
+are capped at 64 KiB, submission requests time out after 15 seconds, polling
+defaults to a 30-second budget, and credentials/query/fragment components are
+rejected in the configured Torii base URL. Requests omit ambient credentials
+and referrers and reject redirects.
+
+When supplying a custom `transactionCodec` to `NexusAppClient`, payload hash
+aliases must be exact lowercase 64-character hex and must match the returned
+payload bytes. Finalization must return canonical version-1, single-signature
+`Transfer::Asset` bytes plus the exact compact-entrypoint hash. Before any
+submission, the facade independently finalizes and hashes those bytes with the
+browser codec, rejects conflicting byte/hash aliases, and rechecks the signable
+payload prehash. Torii response hash aliases are likewise conflict-checked
+before status polling or receipt construction.
 
 For offline cash screens and headless wallet flows, use the dedicated
 `offline-cash` subpath. It validates cached setup for local exchange, syncs
@@ -1839,14 +1932,14 @@ for await (const order of torii.iterateSorafsReplicationOrders({ pageSize: 25 })
 > continues to throw when the digest is absent so automation that expects a
 > manifest still fails fast.
 
-Uptime telemetry and PoR automation helpers surface the raw endpoints so SDK
-callers can publish probe samples, submit Norito-encoded challenges/proofs, and
-retrieve the coordinator exports:
+Uptime telemetry and PoR automation helpers surface the first-release endpoints
+so SDK callers can publish uptime samples, submit authenticated Norito-encoded
+proofs and verdicts, and retrieve coordinator exports. Challenge issuance is
+owned by the coordinator scheduler; there is no client-side challenge or manual
+observation API.
 
 ```js
 await torii.submitSorafsUptimeObservation({ uptimeSecs: 540, observedSecs: 600 });
-await torii.submitSorafsPorObservation({ success: true });
-await torii.recordSorafsPorChallenge({ challenge: porChallengeBytes });
 await torii.recordSorafsPorProof({ proof: porProofBytes });
 await torii.recordSorafsPorVerdict({ verdict: porVerdictBytes });
 
@@ -2080,7 +2173,7 @@ console.log(status.message_id, status.status, status.transaction_hash);
 
 `submitIsoPacs008` and `submitIsoPacs009` accept strings or binary buffers and
 enforce `application/xml` content-type by default. `submitIsoPacs008AndWait` /
-`submitIsoPacs009AndWait` build on those helpers to poll `/v1/iso20022/status`
+`submitIsoPacs009AndWait` build on those helpers to poll `/v1/iso20022/messages`
 until the bridge reports a deterministic terminal state. Provide `wait` options
 to customise the cadence, attach telemetry hooks, or opt into resolving as soon
 as an `Accepted` status arrives (even before the Torii transaction hash is
@@ -2391,6 +2484,101 @@ Any JSON-serializable payload is cloned before submission so callers can reuse t
 object elsewhere without mutation. The helper rejects malformed entrypoint
 selectors, missing or invalid gas limits, or invalid contract target selectors
 before the request reaches Torii.
+
+### Proof-carrying deployed contract calls
+
+`submitIvmProvedContractCall` is the generic deployed-router path for networks
+that reject opaque `Executable::ContractCall` effects. It simulates the selected
+entrypoint, fetches the bytecode bound to the resolved contract address, calls
+`/v1/zk/ivm/derive`, submits that exact payload to `/v1/zk/ivm/prove`, and only
+signs after the prover echoes the same node-derived payload. The resulting user
+signature covers the complete `IvmProved` executable, including every transfer
+in its overlay.
+
+For an DS-fee-bearing call, use
+`submitValidationFeeIvmProvedContractCall`. The strict helper requires the
+signed active policy as `validationFeePolicy` and a `ToriiClient` provisioned
+with the governance keyset, contiguous policy registry, and ledger binding;
+omitting either is an error. It independently
+reproduces the canonical Norito policy hash and ledger signature payload,
+verifies the weighted governance threshold, network, genesis, active height,
+active registry tip, and version chain, then derives the fee from the proved
+overlay. Active-policy verification cannot be disabled. Under policy v1 the fee
+is exactly 10 minor units at scale 2 (`0.10`) per qualifying DS transfer.
+
+```js
+import {
+  ToriiClient,
+  submitValidationFeeIvmProvedContractCall,
+} from "@iroha/iroha-js";
+
+const torii = new ToriiClient(process.env.IROHA_TORII_URL, {
+  authToken: process.env.IROHA_TORII_AUTH_TOKEN,
+  // Provisioned by the application from independently trusted ledger state.
+  validationFeeVerificationContext: {
+    networkId: "production-chain",
+    genesisHash,
+    currentHeight,
+    governanceKeyset,
+    policyRegistry, // full contiguous registry ending at the active policy
+  },
+});
+const result = await submitValidationFeeIvmProvedContractCall(torii, {
+  chainId: "production-chain",
+  authority: AUTHORITY_ACCOUNT_ID,
+  privateKey,
+  vkRef: { backend: "halo2/ipa", name: "ivm-execution-v1" },
+  contractAlias: "router::dex.universal",
+  entrypoint: "route_swap",
+  payload: { pool: POOL_CONTRACT_ADDRESS, amount_in: "100" },
+  gasLimit: 50_000,
+  validationFeePolicy: {
+    signedPolicy, // SignedValidationFeePolicyV1 read from ledger state
+    qualifyingTransferCount: 1, // optional assertion; the overlay is authoritative
+    feeInstructionIndex: 2, // exact fee coordinate in the derived overlay
+  },
+});
+
+console.log("submitted proved call:", result.hash);
+```
+
+The helper reserves `validation_fee_policy_version`,
+`validation_fee_policy_hash`, `validation_fee_instruction_index`, and
+`validation_fee_transfer_entry_index`; callers cannot override them. It binds
+the verified active version/hash and exact fee coordinate before derivation.
+It decodes each real base64 Norito `InstructionBox`, resolves direct and
+`TransferAssetBatch` coordinates exactly as validator admission does, derives
+the qualifying-transfer count from the decoded overlay, and treats a caller
+count only as an optional assertion. Equivalent fixed-scale values such as
+`0.1` and `0.10` are compared as 10 minor units. Ambiguous coordinates and
+unsupported fee-bearing nested multisig contexts fail before proving or
+signing.
+
+The trust anchor belongs to the `ToriiClient`, not to an individual submission.
+The constructor snapshots its registry, keysets, hashes, and byte arrays, so a
+request producer cannot swap them after the client is provisioned. A strict
+submission without `validationFeeVerificationContext` is rejected, and any
+per-call `verificationContext` (including an internally self-consistent fake
+registry/keyset) is rejected as an override. Create a newly provisioned client
+when the independently trusted height, registry, or governance keyset advances.
+
+The generic `submitIvmProvedContractCall` remains available for non-policy,
+asset-neutral proved calls. It does not imply validation-fee enforcement when
+`validationFeePolicy` is omitted. Alias pairs are mutually exclusive on both
+helpers; supplying both camel-case and snake-case forms is rejected.
+
+The optional legacy `requiredOverlayTransfer` assertion may be supplied too,
+but it must equal the policy-derived transfer and cannot redirect or change the
+fee. It never appends an instruction: the deployed contract (including any
+nested pool call) must emit the transfer inside the proved overlay.
+
+The deployed artifact must be compiled in ZK mode (for `koto_compile`, use
+`--force-zk`), its manifest and bytecode must already be registered, and the
+node must have an active `ivm-execution-v1` verifying-key record plus the
+matching proving key. A conventional non-ZK deployed artifact cannot be
+retrofitted by this client helper; it must be rebuilt and deployed by its owner.
+The helper is asset- and venue-neutral and does not create pools, choose asset
+pairs, or install official liquidity defaults.
 
 ## Governance Voting Helpers
 
@@ -2994,7 +3182,7 @@ if (features.rbcSampling?.enabled) {
 
 - Cache both `npm` and `cargo` directories so native bindings rebuild quickly across matrix runs.
 - Run `npm run lint:test` before the dockerised integration job. The script enforces ESLint with zero warnings, builds the native addon, and runs the Node test suite so the JS-10 gate matches what the publish workflow executes.
-- Prefer Node LTS releases (currently 18 and 20) alongside the `rust-toolchain.toml` version to minimise drift across environments.
+- Test the declared minimum Node 18 runtime plus the maintained even-numbered Node release lines alongside the `rust-toolchain.toml` version to minimise drift across environments.
 - Use `node --test` for quick smoke runs when native artifacts are already built (for example after `npm run build:native` in a cached workspace); keep `npm run lint:test` in CI to cover the full pipeline.
 - Layer any project-specific linting or formatting checks on top of `npm run lint:test` if your monorepo enforces stricter policies.
 - See `docs/source/examples/iroha_js_ci.md` for extended guidance and optional smoke-job templates.
@@ -3222,14 +3410,39 @@ They are normalised via the same unsigned-integer validators before any request 
 exactly like `25` while still surfacing a `TypeError` when the value is negative,
 fractional, NaN, or otherwise invalid.
 
-The supported first-release offline HTTP surface is Offline readiness. Retired
-Offline Note issuance, redemption, and audit transaction paths are retired; use
-Kagemusha readiness fields and payment flows for offline payments.
+The first-release Offline HTTP surface is a sharp `/v1` contract: asset-scoped
+readiness, asynchronous top-up and redemption commands, and one pollable
+operation resource. Requests use direct structured JSON. The SDK derives the
+`Idempotency-Key` from the command's non-zero 32-byte `operation_id` and rejects
+requests whose authorization carries a different ID.
 
 ```js
-const readiness = await torii.getOfflineReadiness();
-console.log("Kagemusha ready", readiness.offline_kagemusha_recursive_compact_available);
+const readiness = await torii.getOfflineReadiness("xor#sora");
+if (readiness.ready) {
+  const accepted = await torii.submitOfflineTopUp({
+    ...signedTopUp,
+    operation_id: [...operationIdBytes],
+    authorization: {
+      ...signedTopUp.authorization,
+      operation_id: [...operationIdBytes],
+    },
+  });
+  const status = await torii.getOfflineOperationStatus(accepted.operation_id);
+  console.log(status.state); // pending | applied | rejected
+}
 ```
+
+The exact routes are `GET /v1/offline/readiness?asset_definition_id=…`,
+`POST /v1/offline/top-up`, `POST /v1/offline/redeem`, and
+`GET /v1/offline/operations/{operation_id}`. Whole-payload base64/Norito
+wrappers and `/offline/v2` aliases are not supported.
+
+Offline responses use a lossless JSON parser. Integer tokens through
+`Number.MAX_SAFE_INTEGER` are returned as `number`; wider `u64`/`u128` values
+are returned as `bigint`. Duplicate object keys, malformed number spellings,
+non-finite values, excessive nesting, and unpaired Unicode surrogates are
+rejected before DTO normalization, so a JavaScript runtime never silently
+rounds an amount, height, or timestamp.
 
 for await (const assetDef of torii.iterateAssetDefinitions({
   pageSize: 50,
@@ -3643,6 +3856,13 @@ await torii.registerTrigger({
   action: precommitAction,
 });
 ```
+
+The canonical `/v1/events/sse` and `/v1/contracts/events/sse` feeds are
+live-only and have no replay log. Their helpers intentionally expose no
+`lastEventId` option; reconnecting starts a new subscription and can have a
+gap. A terminal `event: stream_error` frame is yielded before the iterator
+ends, so applications must handle it instead of treating closure as a lossless
+continuation point.
 
 `list*`/`query*` helpers and explorer QR snapshots now emit canonical I105 account
 literals only; address-format hints are no longer supported.

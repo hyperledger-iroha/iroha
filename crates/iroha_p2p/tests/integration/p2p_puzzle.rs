@@ -20,7 +20,10 @@ use iroha_crypto::{
         DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
     },
 };
-use iroha_data_model::{ChainId, prelude::Peer};
+use iroha_data_model::{
+    ChainId,
+    prelude::{Peer, PeerId},
+};
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_p2p::{
     NetworkHandle,
@@ -31,6 +34,8 @@ use iroha_primitives::addr::socket_addr;
 use norito::codec::{Decode, Encode};
 
 use super::next_port;
+
+const PUZZLE_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Decode, Encode)]
 struct EmptyMsg;
@@ -202,6 +207,95 @@ fn config(addr: iroha_primitives::addr::SocketAddr, handshake: ActualSoranetHand
         tls_only_v1_3: true,
         quic_max_idle_timeout: None,
     }
+}
+
+async fn assert_exact_peers_connect(
+    network: &NetworkHandle<EmptyMsg>,
+    expected_peers: &HashSet<PeerId>,
+) {
+    let mut online = network.online_peers_receiver();
+    tokio::time::timeout(
+        PUZZLE_CONNECT_TIMEOUT,
+        online.wait_for(|peers| {
+            peers.len() == expected_peers.len()
+                && expected_peers.iter().all(|peer| peers.contains(peer))
+        }),
+    )
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "expected exact matching-puzzle peer set {expected_peers:?} did not connect within {PUZZLE_CONNECT_TIMEOUT:?}"
+        )
+    })
+    .expect("online peers channel closed while waiting for required-puzzle handshake");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn matching_required_puzzle_parameters_connect() {
+    if super::skip_if_no_tcp_bind() {
+        return;
+    }
+
+    let chain = ChainId::from("puzzle_match");
+    let key_pairs = std::array::from_fn::<_, 4, _>(|_| KeyPair::random());
+    let addresses = std::array::from_fn::<_, 4, _>(|_| socket_addr!(127.0.0.1: {next_port()}));
+    // Exercise the real Argon2 admission path with a small but valid memory
+    // cost so the positive case remains reliable on loaded CI workers.
+    let handshake = puzzle_handshake(1, 4 * 1024);
+    assert!(handshake.pow.required, "test must require puzzle admission");
+    assert!(handshake.pow.puzzle.is_some(), "test must configure Argon2");
+
+    let shutdown = ShutdownSignal::new();
+    let mut networks = Vec::with_capacity(key_pairs.len());
+    let mut children = Vec::with_capacity(key_pairs.len());
+    for (index, (key_pair, address)) in key_pairs.iter().zip(&addresses).enumerate() {
+        let (network, child) = NetworkHandle::<EmptyMsg>::start(
+            key_pair.clone(),
+            config(address.clone(), handshake.clone()),
+            Some(chain.clone()),
+            None,
+            None,
+            shutdown.clone(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("required-puzzle peer {index} should start: {error}"));
+        networks.push(network);
+        children.push(child);
+    }
+
+    let peers = addresses
+        .into_iter()
+        .zip(&key_pairs)
+        .map(|(address, key_pair)| Peer::new(address, key_pair.public_key().clone()))
+        .collect::<Vec<_>>();
+
+    // Use a star with peer 0 as the sole dialer. This exercises three
+    // independent puzzle-gated handshakes without simultaneous-connection
+    // replacement races. Each leaf authorizes only the hub as an inbound peer.
+    let hub_expected = peers[1..]
+        .iter()
+        .map(|peer| peer.id().clone())
+        .collect::<HashSet<_>>();
+    networks[0].update_topology(UpdateTopology(hub_expected.clone()));
+    networks[0].update_peers_addresses(UpdatePeers(
+        peers[1..]
+            .iter()
+            .map(|peer| (peer.id().clone(), peer.address().clone()))
+            .collect(),
+    ));
+    let leaf_expected = HashSet::from([peers[0].id().clone()]);
+    for network in &networks[1..] {
+        network.update_topology(UpdateTopology(leaf_expected.clone()));
+    }
+
+    tokio::join!(
+        assert_exact_peers_connect(&networks[0], &hub_expected),
+        assert_exact_peers_connect(&networks[1], &leaf_expected),
+        assert_exact_peers_connect(&networks[2], &leaf_expected),
+        assert_exact_peers_connect(&networks[3], &leaf_expected),
+    );
+
+    shutdown.send();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

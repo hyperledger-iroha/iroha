@@ -15,6 +15,19 @@ public final class KagemushaRecursiveSpendProver {
   public static final int RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION =
       RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION;
   public static final int TOP_UP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 15;
+  public static final int PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 18;
+  public static final String PASTA_CYCLE_V3_ARTIFACT_MANIFEST_SCHEMA =
+      "kagemusha.offline.recursive_spend.artifact_manifest.v3";
+  public static final String PASTA_CYCLE_V3_MODE = "recursive_spend_v1";
+  public static final String PASTA_CYCLE_V3_PROOF_BACKEND =
+      "halo2/ipa-pasta-cycle-v1";
+  public static final String PASTA_CYCLE_V3_TRANSCRIPT_PROFILE =
+      "kagemusha-pasta-cycle-poseidon-v1";
+  public static final String PASTA_CYCLE_V3_TRANSITION_CIRCUIT_ID =
+      "kagemusha-recursive-spend-transition-eq-v1";
+  public static final String PASTA_CYCLE_V3_STATE_CIRCUIT_ID =
+      "kagemusha-recursive-spend-state-ep-v1";
+  public static final int PASTA_CYCLE_V3_MAX_PROOF_BYTES = 4_096;
   public static final String RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 =
       "kagemusha-recursive-aggregation-v1";
   public static final String RECURSIVE_COMPACT_CIRCUIT_ID_V1 =
@@ -26,7 +39,8 @@ public final class KagemushaRecursiveSpendProver {
       "kagemusha-recursive-spend-lineage-append-v1";
   public static final int COMPACT_TOKEN_MAX_HOPS = 64;
   public static final int RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64;
-  public static final boolean RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = true;
+  /** Reserved-lineage transition proofs remain fail-closed until the verifier is wired. */
+  public static final boolean RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = false;
   public static final int RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1 = 1;
   public static final int RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES = 8 * 1024 * 1024;
   public static final int RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES = 128;
@@ -72,6 +86,7 @@ public final class KagemushaRecursiveSpendProver {
       };
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
   private static final boolean TOP_UP_NATIVE_AVAILABLE = loadTopUpBridge();
+  private static final boolean PASTA_CYCLE_V3_BACKEND_AVAILABLE = loadPastaCycleV3Backend();
 
   public enum Mode {
     RECURSIVE_COMPACT_V1("recursive_compact_v1"),
@@ -96,6 +111,11 @@ public final class KagemushaRecursiveSpendProver {
 
   public static boolean isTopUpNativeAvailable() {
     return TOP_UP_NATIVE_AVAILABLE;
+  }
+
+  /** Exact ABI-18/V3 proof capability; legacy ABI-6 symbol availability is insufficient. */
+  public static boolean isPastaCycleV3BackendAvailable() {
+    return PASTA_CYCLE_V3_BACKEND_AVAILABLE;
   }
 
   public static Mode preferredMode() {
@@ -879,6 +899,15 @@ public final class KagemushaRecursiveSpendProver {
             TOP_UP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
   }
 
+  private static boolean loadPastaCycleV3Backend() {
+    return NATIVE_AVAILABLE
+        && detectNativeAvailability(
+            () -> {},
+            KagemushaRecursiveSpendProver::nativeBridgeAbiVersion,
+            KagemushaRecursiveSpendProver::nativePastaCycleV3BackendAvailable,
+            PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
+  }
+
   private static boolean probeRequiredNativeSymbols() {
     final byte[] probe = MALFORMED_NATIVE_PROBE_ARCHIVE;
     boolean available = true;
@@ -983,6 +1012,8 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   private static native int nativeBridgeAbiVersion();
+
+  private static native boolean nativePastaCycleV3BackendAvailable();
 
   private static native byte[] nativeInitSpend(byte[] requestArchive);
 

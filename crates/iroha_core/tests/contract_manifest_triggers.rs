@@ -238,6 +238,11 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
         .time_triggers()
         .get(&trigger_id)
         .expect("trigger registered");
+    assert_eq!(
+        action.authority(),
+        &contract_address.subject_id(),
+        "a manifest trigger without an explicit authority must execute as the immutable non-signable contract subject, not the activation signer"
+    );
     let metadata = &action.metadata;
     let key_address: Name = "contract_address".parse().expect("contract address key");
     let key_entrypoint: Name = "contract_entrypoint".parse().expect("entrypoint key");

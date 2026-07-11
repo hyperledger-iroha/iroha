@@ -2,7 +2,7 @@
 
 use core::{result::Result, time::Duration};
 
-use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
+use axum::extract::ws::{CloseFrame, Message, Utf8Bytes, WebSocket};
 use futures::{SinkExt, StreamExt};
 use norito::prelude::*;
 
@@ -20,9 +20,25 @@ pub enum Error {
     Decode(#[from] norito::Error),
     /// Error during Norito message encoding
     Encode(norito::Error),
+    /// Unexpected WebSocket frame `{actual}`; expected {expected}
+    UnexpectedFrame {
+        /// Expected frame kind for the current protocol state.
+        expected: &'static str,
+        /// Received frame kind.
+        actual: &'static str,
+    },
     /// Connection is closed
     Closed,
 }
+
+/// RFC 6455 close code for invalid frame payload data.
+pub const CLOSE_INVALID_PAYLOAD: u16 = 1007;
+/// RFC 6455 close code for a protocol policy violation.
+pub const CLOSE_POLICY_VIOLATION: u16 = 1008;
+/// RFC 6455 close code for an unexpected server failure.
+pub const CLOSE_INTERNAL_ERROR: u16 = 1011;
+/// RFC 6455 close code asking the client to retry later.
+pub const CLOSE_TRY_AGAIN_LATER: u16 = 1013;
 
 /// Wrapper to send/receive Norito encoded messages
 #[derive(Debug)]
@@ -63,13 +79,24 @@ impl WebSocketNorito {
         .map_err(extract_ws_closed)
     }
 
+    /// Send an empty WebSocket ping frame as a transport heartbeat.
+    pub async fn ping(&mut self) -> Result<(), Error> {
+        tokio::time::timeout(
+            self.timeout,
+            self.ws.send(Message::Ping(axum::body::Bytes::new())),
+        )
+        .await
+        .map_err(|_err| Error::SendTimeout)?
+        .map_err(extract_ws_closed)
+    }
+
     /// Recv message and try to decode it
     pub async fn recv<M>(&mut self) -> Result<M, Error>
     where
         for<'a> M: NoritoDeserialize<'a>,
         M: Send,
     {
-        // NOTE: ignore non binary messages
+        // Control frames remain valid while text data frames are a protocol error.
         loop {
             let message = tokio::time::timeout(self.timeout, self.ws.next())
                 .await
@@ -83,11 +110,18 @@ impl WebSocketNorito {
                     // Decode using Norito framing (header + checksum).
                     return norito::decode_from_bytes::<M>(binary.as_ref()).map_err(Error::Decode);
                 }
-                Message::Text(_) | Message::Ping(_) | Message::Pong(_) => {
+                Message::Text(_) => {
+                    return Err(Error::UnexpectedFrame {
+                        expected: "a binary Norito subscription request",
+                        actual: "text",
+                    });
+                }
+                Message::Ping(_) | Message::Pong(_) => {
                     iroha_logger::trace!(?message, "Unexpected message received");
                 }
                 Message::Close(_) => {
                     iroha_logger::trace!(?message, "Close message received");
+                    return Err(Error::Closed);
                 }
             }
         }
@@ -109,19 +143,43 @@ impl WebSocketNorito {
                 Message::Binary(binary) => {
                     return norito::decode_from_bytes::<M>(binary.as_ref()).map_err(Error::Decode);
                 }
-                Message::Text(_) | Message::Ping(_) | Message::Pong(_) => {}
+                Message::Text(_) => {
+                    return Err(Error::UnexpectedFrame {
+                        expected: "a binary Norito subscription request",
+                        actual: "text",
+                    });
+                }
+                Message::Ping(_) | Message::Pong(_) => {}
                 Message::Close(_) => return Err(Error::Closed),
             }
         }
     }
 
-    /// Discard messages and wait for close message
+    /// Wait for the peer to close while rejecting post-subscription data frames.
+    ///
+    /// Canonical Torii event and block streams are server-to-client after their
+    /// single binary subscription request. Silently accepting further data
+    /// frames would make protocol mistakes indistinguishable from supported
+    /// control messages.
     pub async fn closed(&mut self) -> Result<(), Error> {
         loop {
             match self.ws.next().await {
                 // NOTE: `None` is the same as `ConnectionClosed` or `AlreadyClosed`
                 None => return Ok(()),
-                Some(Ok(_)) => {}
+                Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
+                Some(Ok(Message::Close(_))) => return Ok(()),
+                Some(Ok(Message::Binary(_))) => {
+                    return Err(Error::UnexpectedFrame {
+                        expected: "ping, pong, or close",
+                        actual: "binary",
+                    });
+                }
+                Some(Ok(Message::Text(_))) => {
+                    return Err(Error::UnexpectedFrame {
+                        expected: "ping, pong, or close",
+                        actual: "text",
+                    });
+                }
                 // NOTE: technically `ConnectionClosed` or `AlreadyClosed` never returned
                 // from `Stream` impl of `tokio_tungstenite` but left `ConnectionClosed` extraction to protect from potential change
                 Some(Err(error)) => match extract_ws_closed(error) {
@@ -136,6 +194,32 @@ impl WebSocketNorito {
     pub async fn close(mut self) -> Result<(), Error> {
         // NOTE: use `SinkExt::close` because it's not trying to write to closed socket
         match <_ as SinkExt<_>>::close(&mut self.ws)
+            .await
+            .map_err(extract_ws_closed)
+        {
+            Err(Error::Closed) | Ok(()) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Close the WebSocket with a stable protocol status and reason.
+    pub async fn close_with(self, code: u16, reason: impl Into<String>) -> Result<(), Error> {
+        let mut this = self;
+        let reason = reason.into();
+        let frame = CloseFrame {
+            code,
+            reason: Utf8Bytes::from(reason),
+        };
+        match tokio::time::timeout(this.timeout, this.ws.send(Message::Close(Some(frame)))).await {
+            Err(_elapsed) => return Err(Error::SendTimeout),
+            Ok(Err(error)) => match extract_ws_closed(error) {
+                Error::Closed => return Ok(()),
+                error => return Err(error),
+            },
+            Ok(Ok(())) => {}
+        }
+
+        match <_ as SinkExt<_>>::close(&mut this.ws)
             .await
             .map_err(extract_ws_closed)
         {

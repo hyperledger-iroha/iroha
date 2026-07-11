@@ -3,10 +3,12 @@ package org.hyperledger.iroha.sdk.client
 import java.math.BigInteger
 import java.net.URI
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionException
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.offline.OfflineOperationCodec
@@ -16,6 +18,7 @@ import org.hyperledger.iroha.sdk.offline.OfflineOperationState
 import org.hyperledger.iroha.sdk.offline.OfflineOperationStatus
 import org.hyperledger.iroha.sdk.offline.OfflineRedeemRequest
 import org.hyperledger.iroha.sdk.offline.OfflineTopUpRequest
+import org.hyperledger.iroha.sdk.offline.OfflineToriiException
 import org.hyperledger.iroha.sdk.norito.CRC64
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
@@ -31,7 +34,7 @@ class OfflineToriiClientOperationTest {
         assertEquals(operationId, decoded.operationId)
         assertEquals(OfflineOperationKind.TOP_UP, decoded.kind)
         assertEquals(OfflineOperationState.PENDING, decoded.state)
-        assertEquals("transaction-hash", decoded.transactionHash)
+        assertEquals(TRANSACTION_HASH, decoded.transactionHash)
         assertEquals("/v1/offline/operations/$operationId", decoded.statusUri)
         assertEquals(BigInteger("18446744073709551615"), decoded.submittedAtMs)
         assertContentEquals(archive, OfflineOperationCodec.encodeReference(decoded))
@@ -45,7 +48,7 @@ class OfflineToriiClientOperationTest {
         val pending = OfflineOperationCodec.decodeStatus(pendingArchive) as OfflineOperationStatus.Pending
         assertEquals(operationId, pending.operationId)
         assertEquals(OfflineOperationKind.TOP_UP, pending.kind)
-        assertEquals("transaction-hash", pending.transactionHash)
+        assertEquals(TRANSACTION_HASH, pending.transactionHash)
         assertEquals(BigInteger("18446744073709551615"), pending.submittedAtMs)
         assertContentEquals(pendingArchive, OfflineOperationCodec.encodeStatus(pending))
         val wrongSchema = pendingArchive.copyOf().also { it[6] = (it[6].toInt() xor 1).toByte() }
@@ -66,7 +69,7 @@ class OfflineToriiClientOperationTest {
         val applied = OfflineOperationCodec.decodeStatus(appliedArchive) as OfflineOperationStatus.Applied
         assertEquals(operationId, applied.operationId)
         val result = (applied.result as OfflineOperationStatus.Result.Redeem).value
-        assertEquals("transaction-hash", result.transactionHash)
+        assertEquals(TRANSACTION_HASH, result.transactionHash)
         assertEquals(BigInteger("18446744073709551615"), result.finalizedBlockHeight)
         assertEquals(BigInteger.valueOf(42), result.serverTimeMs)
         assertContentEquals(appliedArchive, OfflineOperationCodec.encodeStatus(applied))
@@ -78,7 +81,7 @@ class OfflineToriiClientOperationTest {
         val pending = OfflineOperationStatus.Pending(
             operationId,
             OfflineOperationKind.TOP_UP,
-            "transaction-hash",
+            TRANSACTION_HASH,
             BigInteger("18446744073709551615"),
         )
         val decodedPending = OfflineOperationCodec.decodeStatus(
@@ -92,7 +95,7 @@ class OfflineToriiClientOperationTest {
             operationId,
             OfflineOperationStatus.Result.Redeem(
                 OfflineOperationStatus.RedeemResult(
-                    "transaction-hash",
+                    TRANSACTION_HASH,
                     BigInteger("18446744073709551615"),
                     BigInteger.valueOf(42),
                 ),
@@ -121,7 +124,7 @@ class OfflineToriiClientOperationTest {
             actual = "invalid",
             profile = "taira",
             chainDiscriminant = 369,
-            transactionHash = "transaction-hash",
+            transactionHash = TRANSACTION_HASH,
             lastStatus = "rejected",
             hint = "refresh proof",
             axt = OfflineOperationStatus.AxtErrorDetails(
@@ -137,7 +140,7 @@ class OfflineToriiClientOperationTest {
         val rejected = OfflineOperationStatus.Rejected(
             operationId,
             OfflineOperationKind.REDEEM,
-            "transaction-hash",
+            TRANSACTION_HASH,
             OfflineOperationStatus.Error("rejected", "Transaction rejected", details),
         )
         val decodedRejected = OfflineOperationCodec.decodeStatus(
@@ -161,7 +164,7 @@ class OfflineToriiClientOperationTest {
         val executor = CapturingExecutor(responseArchive)
         val client = client(executor)
 
-        val actual = client.submitTopUp(
+        val actual = client.submitOfflineTopUp(
             OfflineTopUpRequest(requestArchive),
         ).join()
         requestArchive.fill(0)
@@ -185,7 +188,7 @@ class OfflineToriiClientOperationTest {
 
         assertEquals(
             reference,
-            client.submitRedeem(OfflineRedeemRequest(requestArchive)).join(),
+            client.submitOfflineRedeem(OfflineRedeemRequest(requestArchive)).join(),
         )
         assertEquals("/v1/offline/redeem", executor.lastRequest.uri.path)
         assertContentEquals(requestArchive, executor.lastRequest.body)
@@ -199,7 +202,7 @@ class OfflineToriiClientOperationTest {
                 reference.submittedAtMs,
             ),
         )
-        val status = client.getOperationStatus(reference.operationId).join()
+        val status = client.getOfflineOperationStatus(reference.operationId).join()
         assertEquals("GET", executor.lastRequest.method)
         assertEquals(
             "/v1/offline/operations/${reference.operationId}",
@@ -284,6 +287,129 @@ class OfflineToriiClientOperationTest {
         }
     }
 
+    @Test
+    fun operationModelsRejectNonCanonicalResponseFields() {
+        val operationId = "11".repeat(32)
+        assertFailsWith<IllegalArgumentException> {
+            OfflineOperationReference(
+                operationId,
+                OfflineOperationKind.TOP_UP,
+                OfflineOperationState.PENDING,
+                "ab".repeat(32).uppercase(),
+                "/v1/offline/operations/$operationId",
+                BigInteger.ZERO,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineOperationReference(
+                operationId,
+                OfflineOperationKind.TOP_UP,
+                OfflineOperationState.PENDING,
+                TRANSACTION_HASH,
+                "/v1/offline/operations/${"33".repeat(32)}",
+                BigInteger.ZERO,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineOperationStatus.Pending(
+                operationId,
+                OfflineOperationKind.TOP_UP,
+                "2".repeat(63),
+                BigInteger.ZERO,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineOperationStatus.Error("Bad-Code", "rejected", null)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineOperationStatus.Error("a".repeat(65), "rejected", null)
+        }
+    }
+
+    @Test
+    fun referenceDecoderRejectsMalformedUtf8WithoutReplacement() {
+        val archive = OfflineOperationCodec.encodeReference(reference(OfflineOperationKind.TOP_UP))
+        val marker = ByteArray(64) { '2'.code.toByte() }
+        val offset = archive.indexOf(marker)
+        require(offset >= NoritoHeader.HEADER_LENGTH)
+        archive[offset] = 0xc3.toByte()
+        archive[offset + 1] = 0x28
+        rewritePayloadChecksum(archive, NoritoHeader.HEADER_LENGTH)
+
+        assertFailsWith<IllegalArgumentException> {
+            OfflineOperationCodec.decodeReference(archive)
+        }
+    }
+
+    @Test
+    fun submissionBindsTypedReferenceAndResponseHeaders() {
+        val operationIdBytes = ByteArray(32) { 0x11 }
+        val request = OfflineTopUpRequest(topUpRequestArchive(operationIdBytes))
+        val canonical = reference(OfflineOperationKind.TOP_UP)
+        val executor = CapturingExecutor(OfflineOperationCodec.encodeReference(canonical))
+        val client = client(executor)
+
+        executor.responseBody = OfflineOperationCodec.encodeReference(
+            reference(OfflineOperationKind.REDEEM),
+        )
+        assertOfflineClientRejects { client.submitOfflineTopUp(request).join() }
+
+        val otherOperationId = "33".repeat(32)
+        executor.responseBody = OfflineOperationCodec.encodeReference(
+            OfflineOperationReference(
+                otherOperationId,
+                OfflineOperationKind.TOP_UP,
+                OfflineOperationState.PENDING,
+                TRANSACTION_HASH,
+                "/v1/offline/operations/$otherOperationId",
+                BigInteger.ZERO,
+            ),
+        )
+        executor.responseHeaders = mapOf(
+            "Content-Type" to listOf("application/x-norito"),
+            "Location" to listOf("/v1/offline/operations/$otherOperationId"),
+        )
+        assertOfflineClientRejects { client.submitOfflineTopUp(request).join() }
+
+        executor.responseBody = OfflineOperationCodec.encodeReference(canonical)
+        executor.responseHeaders = mapOf(
+            "Content-Type" to listOf("application/x-norito"),
+        )
+        assertOfflineClientRejects { client.submitOfflineTopUp(request).join() }
+
+        executor.responseHeaders = mapOf(
+            "Content-Type" to listOf("application/x-norito"),
+            "Location" to listOf(canonical.statusUri, canonical.statusUri),
+        )
+        assertOfflineClientRejects { client.submitOfflineTopUp(request).join() }
+
+        executor.responseHeaders = mapOf(
+            "Content-Type" to listOf("application/x-norito"),
+            "Location" to listOf("${canonical.statusUri}/extra"),
+        )
+        assertOfflineClientRejects { client.submitOfflineTopUp(request).join() }
+
+        executor.responseHeaders = mapOf(
+            "Content-Type" to listOf("application/json"),
+            "Location" to listOf(canonical.statusUri),
+        )
+        assertOfflineClientRejects { client.submitOfflineTopUp(request).join() }
+
+        executor.statusCode = 200
+        executor.responseBody = OfflineOperationCodec.encodeStatus(
+            OfflineOperationStatus.Pending(
+                otherOperationId,
+                OfflineOperationKind.TOP_UP,
+                TRANSACTION_HASH,
+                BigInteger.ZERO,
+            ),
+        )
+        executor.responseHeaders = mapOf(
+            "Content-Type" to listOf("application/x-norito"),
+        )
+        assertOfflineClientRejects { client.getOfflineOperationStatus(canonical.operationId).join() }
+    }
+
     private fun client(executor: HttpTransportExecutor): OfflineToriiClient =
         OfflineToriiClient.builder()
             .executor(executor)
@@ -295,7 +421,7 @@ class OfflineToriiClientOperationTest {
             operationId = "11".repeat(32),
             kind = kind,
             state = OfflineOperationState.PENDING,
-            transactionHash = "transaction-hash",
+            transactionHash = TRANSACTION_HASH,
             statusUri = "/v1/offline/operations/${"11".repeat(32)}",
             submittedAtMs = BigInteger("18446744073709551615"),
         )
@@ -306,6 +432,10 @@ class OfflineToriiClientOperationTest {
         lateinit var lastRequest: TransportRequest
         var statusCode: Int = 202
         var responseBody: ByteArray = responseBody.copyOf()
+        var responseHeaders: Map<String, List<String>> = mapOf(
+            "Content-Type" to listOf("application/x-norito"),
+            "Location" to listOf("/v1/offline/operations/${"11".repeat(32)}"),
+        )
 
         override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
             lastRequest = request
@@ -313,6 +443,7 @@ class OfflineToriiClientOperationTest {
                 TransportResponse.builder()
                     .setStatusCode(statusCode)
                     .setBody(responseBody.copyOf())
+                    .setHeaders(responseHeaders)
                     .build(),
             )
         }
@@ -323,6 +454,28 @@ class OfflineToriiClientOperationTest {
         .firstOrNull { it.key.equals(name, ignoreCase = true) }
         ?.value
         ?.firstOrNull()
+
+    private fun assertOfflineClientRejects(action: () -> Unit) {
+        val error = assertFailsWith<CompletionException> { action() }
+        assertTrue(error.cause is OfflineToriiException)
+    }
+
+    private fun ByteArray.indexOf(needle: ByteArray): Int {
+        if (needle.isEmpty() || needle.size > size) return -1
+        for (offset in 0..size - needle.size) {
+            if (needle.indices.all { index -> this[offset + index] == needle[index] }) {
+                return offset
+            }
+        }
+        return -1
+    }
+
+    private fun rewritePayloadChecksum(archive: ByteArray, payloadOffset: Int) {
+        val checksum = CRC64.compute(archive.copyOfRange(payloadOffset, archive.size))
+        repeat(Long.SIZE_BYTES) { index ->
+            archive[31 + index] = (checksum ushr (index * 8)).toByte()
+        }
+    }
 
     private fun hexBytes(value: String): ByteArray {
         require(value.length % 2 == 0)
@@ -395,28 +548,23 @@ class OfflineToriiClientOperationTest {
     }
 
     private companion object {
+        val TRANSACTION_HASH: String = "22".repeat(32)
+
         const val TOP_UP_REQUEST_SCHEMA =
-            "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV2"
+            "iroha.torii.v1.offline.top_up.request"
         const val REDEEM_REQUEST_SCHEMA =
-            "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV2"
+            "iroha.torii.v1.offline.redeem.request"
 
         const val RUST_OPERATION_REFERENCE_HEX =
-            "4e5254300000e8e2244e45e4be2a975e34957141128b00c000000000000000fe" +
-                "8a8b6e958d244702414031313131313131313131313131313131313131313131" +
-                "3131313131313131313131313131313131313131313131313131313131313131" +
-                "313131313131313131310400000000040000000011107472616e73616374696f" +
-                "6e2d6861736858572f76312f6f66666c696e652f6f7065726174696f6e732f31" +
-                "3131313131313131313131313131313131313131313131313131313131313131" +
-                "3131313131313131313131313131313131313131313131313131313131313108" +
-                "ffffffffffffffff"
+            "4e5254300000e8e2244e45e4be2a975e34957141128b00f0000000000000001f5b5402d6dc2092024140313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310400000000040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323258572f76312f6f66666c696e652f6f7065726174696f6e732f3131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313108ffffffffffffffff"
 
         const val RUST_PENDING_STATUS_HEX =
-            "4e5254300000fb04214104df1bdcd39249bddd4db23a006600000000000000b3fae818809b7b8e02000000000000000000000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040000000011107472616e73616374696f6e2d6861736808ffffffffffffffff"
+            "4e5254300000fb04214104df1bdcd39249bddd4db23a009600000000000000bdfee2508f80055702000000000000000000000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323208ffffffffffffffff"
 
         const val RUST_REJECTED_STATUS_HEX =
-            "4e5254300000fb04214104df1bdcd39249bddd4db23a0086000000000000008878a32fe86d887302000000000000000002000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040100000011107472616e73616374696f6e2d68617368281b1a6f66666c696e655f6f7065726174696f6e5f72656a6563746564090872656a65637465640100"
+            "4e5254300000fb04214104df1bdcd39249bddd4db23a00b6000000000000009322104cda8e602a020000000000000000020000004140313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310401000000414032323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232281b1a6f66666c696e655f6f7065726174696f6e5f72656a6563746564090872656a65637465640100"
 
         const val RUST_APPLIED_REDEEM_STATUS_HEX =
-            "4e5254300000fb04214104df1bdcd39249bddd4db23a007000000000000000451e52608aefd9710200000000000000000100000041403131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313129010000002411107472616e73616374696f6e2d6861736808ffffffffffffffff082a00000000000000"
+            "4e5254300000fb04214104df1bdcd39249bddd4db23a00a00000000000000092cd6b32b062b3d30200000000000000000100000041403131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313159010000005441403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323208ffffffffffffffff082a00000000000000"
     }
 }

@@ -66,7 +66,7 @@ ADDITIVE_ABI15_C_SYMBOLS = (
     "connect_norito_kagemusha_recursive_spend_topup",
 )
 
-ADDITIVE_ABI17_V2_C_SYMBOLS = (
+ABI18_V2_C_SYMBOLS = (
     "connect_norito_kagemusha_recursive_spend_init_v2",
     "connect_norito_kagemusha_recursive_spend_append_v2",
     "connect_norito_kagemusha_recursive_spend_verify_v2",
@@ -86,6 +86,71 @@ ADDITIVE_ABI17_V2_C_SYMBOLS = (
     "connect_norito_kagemusha_recursive_spend_artifact_write_v2",
     "connect_norito_kagemusha_recursive_spend_artifact_finalize_v2",
     "connect_norito_kagemusha_recursive_spend_artifact_cancel_v2",
+)
+
+ABI18_V2_NON_RECURSIVE_C_SYMBOLS = (
+    "connect_norito_kagemusha_topup_finality_verify_v2",
+    "connect_norito_kagemusha_receiver_key_reference_v2",
+    "connect_norito_kagemusha_recipient_output_derive_v2",
+    "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
+    "connect_norito_kagemusha_recipient_payment_request_create_v2",
+    "connect_norito_kagemusha_recipient_payment_request_verify_v2",
+    "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
+    "connect_norito_kagemusha_request_authorization_create_v2",
+    "connect_norito_kagemusha_receiver_acknowledgement_payload_v2",
+    "connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2",
+    "connect_norito_kagemusha_receiver_acknowledgement_create_v2",
+    "connect_norito_kagemusha_receiver_acknowledgement_verify_v2",
+)
+
+ABI18_V2_ALL_C_SYMBOLS = (
+    ABI18_V2_C_SYMBOLS + ABI18_V2_NON_RECURSIVE_C_SYMBOLS
+)
+
+ADDITIVE_ABI18_V3_C_SYMBOLS = (
+    "connect_norito_kagemusha_recursive_spend_capabilities_v1",
+    "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
+)
+
+ABI18_V2_PROOF_C_SYMBOLS = (
+    "connect_norito_kagemusha_recursive_spend_init_v2",
+    "connect_norito_kagemusha_recursive_spend_append_v2",
+    "connect_norito_kagemusha_recursive_spend_redeem_change_v2",
+    "connect_norito_kagemusha_recursive_spend_verify_v2",
+    "connect_norito_kagemusha_recursive_spend_redeem_v2",
+)
+
+ABI18_V2_LEGACY_ARTIFACT_C_SYMBOLS = (
+    "connect_norito_kagemusha_recursive_spend_artifact_begin_v2",
+    "connect_norito_kagemusha_recursive_spend_artifact_write_v2",
+    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v2",
+    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v2",
+)
+
+REQUIRED_ABI18_V2_PROTOCOL_C_SYMBOLS = tuple(
+    symbol
+    for symbol in ABI18_V2_ALL_C_SYMBOLS
+    if symbol not in (
+        ABI18_V2_PROOF_C_SYMBOLS
+        + ABI18_V2_LEGACY_ARTIFACT_C_SYMBOLS
+    )
+) + ADDITIVE_ABI18_V3_C_SYMBOLS
+
+CURRENT_KAGEMUSHA_C_SYMBOLS = (
+    REQUIRED_C_SYMBOLS
+    + ADDITIVE_ABI15_C_SYMBOLS
+    + ABI18_V2_ALL_C_SYMBOLS
+    + ADDITIVE_ABI18_V3_C_SYMBOLS
+)
+
+CURRENT_RECURSIVE_SPEND_C_SYMBOLS = (
+    REQUIRED_C_SYMBOLS
+    + ADDITIVE_ABI15_C_SYMBOLS
+    + ABI18_V2_C_SYMBOLS
+    + ADDITIVE_ABI18_V3_C_SYMBOLS
 )
 
 REQUIRED_RECURSIVE_COMPACT_C_SYMBOLS = (
@@ -508,6 +573,8 @@ SOURCE_PATHS = (
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendV2Tests.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift",
     "IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteProver.swift",
@@ -977,11 +1044,6 @@ SOURCE_PATHS = (
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashCodec.kt",
-    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashSetupRequest.kt",
-    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashLoadRequest.kt",
-    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashRefreshRequest.kt",
-    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashSyncRequest.kt",
-    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashRedeemRequest.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycle.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineJsonParser.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteHalo2Prover.java",
@@ -994,6 +1056,7 @@ SOURCE_PATHS = (
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineQrStream.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineOperation.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineOperationStatus.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineReadiness.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineSettlementProofs.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineToriiException.kt",
@@ -1593,12 +1656,32 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-compact-projection-hardening",
     ),
     (
+        "Swift Offline Note payload certificate fail-closed negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-note-payload-certificate-fail-closed",
+    ),
+    (
+        "Swift Offline Note retired route wording negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-note-retired-route-wording",
+    ),
+    (
         "Swift Offline Note V2 registration certificate payload negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-note-v2-registration-certificate-payload",
     ),
     (
         "mobile Offline Note V2 retired iOS App Attest profile negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-note-v2-retired-ios-app-attest-profile",
+    ),
+    (
+        "Swift typed Offline operation request contract negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-operation-request-contract",
+    ),
+    (
+        "Swift typed Offline operation status codec negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-operation-status-contract",
+    ),
+    (
+        "Swift typed Offline operation client contract negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-operation-client-contract",
     ),
     (
         "Mobile retired QR prefix wording negative control",
@@ -2229,7 +2312,7 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-assembler-identity-fields",
     ),
     (
-        "native C bridge ABI version negative control",
+        "ABI-18 native capability contract negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-c-bridge-abi-version",
     ),
     (
@@ -2721,8 +2804,8 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-cash-settlement-coverage",
     ),
     (
-        "Kotlin offline cash request strictness negative control",
-        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-cash-request-strictness",
+        "Kotlin retired offline cash HTTP surface negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-retired-offline-cash-http-surface",
     ),
     (
         "Kotlin offline wallet compact certificate profile negative control",
@@ -4545,11 +4628,115 @@ def check_c_bridge(texts, errors):
         header,
         r"int32_t\s+(connect_norito_kagemusha_recursive_spend_[a-z0-9_]+)\s*\(",
     )
-    required_current_c_symbols = (
-        REQUIRED_C_SYMBOLS + ADDITIVE_ABI15_C_SYMBOLS + ADDITIVE_ABI17_V2_C_SYMBOLS
+    require_same_set(
+        rust_exports,
+        CURRENT_RECURSIVE_SPEND_C_SYMBOLS,
+        "Rust C recursive Kagemusha exports",
+        errors,
     )
-    require_same_set(rust_exports, required_current_c_symbols, "Rust C recursive Kagemusha exports", errors)
-    require_same_set(header_exports, required_current_c_symbols, "C header recursive Kagemusha declarations", errors)
+    require_same_set(
+        header_exports,
+        CURRENT_RECURSIVE_SPEND_C_SYMBOLS,
+        "C header recursive Kagemusha declarations",
+        errors,
+    )
+    rust_v2_exports = names_from_matches(
+        rust,
+        r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+'
+        r"(connect_norito_kagemusha_[a-z0-9_]+_v2)\s*\(",
+    )
+    header_v2_exports = names_from_matches(
+        header,
+        r"int32_t\s+(connect_norito_kagemusha_[a-z0-9_]+_v2)\s*\(",
+    )
+    require_same_set(
+        rust_v2_exports,
+        ABI18_V2_ALL_C_SYMBOLS,
+        "Rust C complete ABI-18 V2 Kagemusha exports",
+        errors,
+    )
+    require_same_set(
+        header_v2_exports,
+        ABI18_V2_ALL_C_SYMBOLS,
+        "C header complete ABI-18 V2 Kagemusha declarations",
+        errors,
+    )
+    rust_v3_exports = names_from_matches(
+        rust,
+        r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+'
+        r"(connect_norito_kagemusha_recursive_spend_(?:capabilities_v1|artifact_[a-z0-9_]+_v3))\s*\(",
+    )
+    header_v3_exports = names_from_matches(
+        header,
+        r"int32_t\s+"
+        r"(connect_norito_kagemusha_recursive_spend_(?:capabilities_v1|artifact_[a-z0-9_]+_v3))\s*\(",
+    )
+    require_same_set(
+        rust_v3_exports,
+        ADDITIVE_ABI18_V3_C_SYMBOLS,
+        "Rust C complete ABI-18 V3 capability exports",
+        errors,
+    )
+    require_same_set(
+        header_v3_exports,
+        ADDITIVE_ABI18_V3_C_SYMBOLS,
+        "C header complete ABI-18 V3 capability declarations",
+        errors,
+    )
+
+    swift_v2 = texts["IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift"]
+    proof_match = re.search(
+        r"public static let requiredProofSymbols = \[(.*?)\n    \]",
+        swift_v2,
+        re.DOTALL,
+    )
+    protocol_match = re.search(
+        r"public static let requiredProtocolSymbols = \[(.*?)\n    \]",
+        swift_v2,
+        re.DOTALL,
+    )
+    require(
+        proof_match is not None,
+        "Swift V2 proof symbol inventory declaration is missing",
+        errors,
+    )
+    require(
+        protocol_match is not None,
+        "Swift V2 protocol symbol inventory declaration is missing",
+        errors,
+    )
+    if proof_match is not None:
+        require_same_set(
+            names_from_matches(
+                proof_match.group(1),
+                r'"(connect_norito_kagemusha_[a-z0-9_]+_v2)"',
+            ),
+            ABI18_V2_PROOF_C_SYMBOLS,
+            "Swift ABI-18 V2 proof symbol inventory",
+            errors,
+        )
+    if protocol_match is not None:
+        require_same_set(
+            names_from_matches(
+                protocol_match.group(1),
+                r'"(connect_norito_kagemusha_[a-z0-9_]+_(?:v1|v2|v3))"',
+            ),
+            REQUIRED_ABI18_V2_PROTOCOL_C_SYMBOLS,
+            "Swift ABI-18 V2 protocol and capability symbol inventory",
+            errors,
+        )
+    for artifact_inventory_path in (
+        "scripts/build_norito_xcframework.sh",
+        "scripts/check_mobile_sdk_artifacts.sh",
+        "scripts/check_mobile_sdk_artifacts_test.sh",
+    ):
+        require_contains(
+            texts,
+            artifact_inventory_path,
+            ABI18_V2_ALL_C_SYMBOLS + ADDITIVE_ABI18_V3_C_SYMBOLS,
+            f"{artifact_inventory_path} complete ABI-18 V2/V3 symbol inventory",
+            errors,
+        )
     rust_record_exports = names_from_matches(
         rust,
         r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+'
@@ -4627,10 +4814,114 @@ def check_c_bridge(texts, errors):
     require_regex(
         texts,
         "crates/connect_norito_bridge/src/lib.rs",
-        r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*17\s*;",
+        r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*18\s*;",
         "C native bridge ABI version",
         errors,
     )
+    require_contains(
+        texts,
+        "crates/iroha_data_model/src/offline/mod.rs",
+        (
+            "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3: u32 = 18;",
+            "KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE: bool = false;",
+            "pub struct KagemushaRecursiveSpendNativeCapabilitiesV1",
+            "self.proof_backend_available != KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE",
+            "self.missing_gates != kagemusha_v3_missing_gates()",
+            "pub fn kagemusha_recursive_spend_native_capabilities_v1()",
+            "proof_backend_available: KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE",
+            "fn kagemusha_pasta_cycle_capability_is_explicitly_fail_closed()",
+            "forged.proof_backend_available = true;",
+            "assert!(forged.validate().is_err());",
+        ),
+        "Rust ABI-18 V3 fail-closed capability contract",
+        errors,
+    )
+    require_contains(
+        texts,
+        "crates/connect_norito_bridge/src/lib.rs",
+        (
+            "connect_norito_kagemusha_recursive_spend_capabilities_v1",
+            "kagemusha_recursive_spend_native_capabilities_v1();",
+            "capabilities.validate()",
+            "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
+            "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
+            "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
+            "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
+            "fn recursive_spend_capabilities_advertise_v3_and_remain_fail_closed()",
+            "assert!(!capabilities.proof_backend_available);",
+            "KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE",
+            "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativePastaCycleV3BackendAvailable",
+            "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePastaCycleV3BackendAvailable",
+        ),
+        "native ABI-18 V3 capability export and fail-closed probes",
+        errors,
+    )
+    require_contains(
+        texts,
+        "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift",
+        (
+            "The ABI-18 Kagemusha recursive spend V2 bridge is unavailable.",
+            "requiredNativeBridgeAbiVersion: UInt32 = 18",
+            "isProofBackendAvailable = false",
+            "connect_norito_kagemusha_recursive_spend_capabilities_v1",
+            "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
+            "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
+            "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
+            "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
+        ),
+        "Swift ABI-18 V3 fail-closed capability contract",
+        errors,
+    )
+    require_contains(
+        texts,
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendV2Tests.swift",
+        (
+            "testABI18InventoryRequiresExplicitFailClosedCapabilities",
+            "KagemushaRecursiveSpendV2.requiredNativeBridgeAbiVersion, 18",
+            "The ABI-18 Kagemusha recursive spend V2 bridge is unavailable.",
+            "connect_norito_kagemusha_recursive_spend_capabilities_v1",
+            "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
+        ),
+        "Swift ABI-18 V3 capability regression tests",
+        errors,
+    )
+    for sdk_source, sdk_tests, sdk_label in (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
+            "Kotlin",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "Android Java",
+        ),
+    ):
+        require_contains(
+            texts,
+            sdk_source,
+            (
+                "PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
+                "PASTA_CYCLE_V3_ARTIFACT_MANIFEST_SCHEMA",
+                "nativePastaCycleV3BackendAvailable",
+                "isPastaCycleV3BackendAvailable",
+            ),
+            f"{sdk_label} ABI-18 V3 fail-closed capability probe",
+            errors,
+        )
+        require_contains(
+            texts,
+            sdk_tests,
+            (
+                "PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
+                "PASTA_CYCLE_V3_ARTIFACT_MANIFEST_SCHEMA",
+                "PASTA_CYCLE_V3_PROOF_BACKEND",
+                "PASTA_CYCLE_V3_TRANSCRIPT_PROFILE",
+                "PASTA_CYCLE_V3_MAX_PROOF_BYTES",
+            ),
+            f"{sdk_label} ABI-18 V3 capability regression tests",
+            errors,
+        )
     require_contains(
         texts,
         "crates/connect_norito_bridge/src/lib.rs",
@@ -7659,8 +7950,8 @@ def check_rust_policy_constants(texts, errors):
     require_regex(
         texts,
         relative,
-        r"KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1\s*:\s*bool\s*=\s*true\s*;",
-        "Rust transition-circuit wired flag",
+        r"KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1\s*:\s*bool\s*=\s*false\s*;",
+        "Rust transition-circuit fail-closed flag",
         errors,
     )
     require_contains(
@@ -8624,6 +8915,8 @@ def check_mobile_offline_readiness_coverage(texts, errors):
         texts,
         "crates/iroha_torii_shared/src/offline_api.rs",
         (
+            "KagemushaRecursiveSpendRedeemRequestV2 as OfflineRedeemRequest",
+            "KagemushaRecursiveSpendTopUpRequestV2 as OfflineTopUpRequest",
             "pub struct OfflineReadinessBlocker {",
             "pub struct OfflineReadiness {",
             "pub asset_definition_id: String,",
@@ -8662,13 +8955,17 @@ def check_mobile_offline_readiness_coverage(texts, errors):
             "evaluated_block_height: block_height,",
             "ready: blockers.is_empty(),",
             "async fn handler_offline_top_up(",
-            "KagemushaRecursiveSpendTopUpRequestV2",
+            "iroha_torii_shared::offline_api::OfflineTopUpRequest",
             "async fn handler_offline_redeem(",
-            "KagemushaRecursiveSpendRedeemRequestV2",
+            "iroha_torii_shared::offline_api::OfflineRedeemRequest",
             "async fn handler_offline_operation_status(",
-            ".route(uri::OFFLINE_READINESS, get(handler_offline_readiness))",
-            ".route(uri::OFFLINE_REDEEM, post(handler_offline_redeem))",
-            ".route(uri::OFFLINE_TOP_UP, post(handler_offline_top_up))",
+            "&route_catalog::offline::READINESS",
+            "get(handler_offline_readiness)",
+            "&route_catalog::offline::REDEEM",
+            "post(handler_offline_redeem)",
+            "&route_catalog::offline::TOP_UP",
+            "post(handler_offline_top_up)",
+            "&route_catalog::offline::OPERATION",
             "get(handler_offline_operation_status)",
         ),
         "Torii typed Offline handlers and mounts",
@@ -8680,9 +8977,9 @@ def check_mobile_offline_readiness_coverage(texts, errors):
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/OfflineToriiClient.kt",
             (
                 "fun getOfflineReadiness(assetDefinitionId: String)",
-                "fun submitTopUp(request: OfflineTopUpRequest)",
-                "fun submitRedeem(request: OfflineRedeemRequest)",
-                "fun getOperationStatus(operationId: String)",
+                "fun submitOfflineTopUp(request: OfflineTopUpRequest)",
+                "fun submitOfflineRedeem(request: OfflineRedeemRequest)",
+                "fun getOfflineOperationStatus(operationId: String)",
                 'private const val OFFLINE_READINESS_PATH = "/v1/offline/readiness"',
                 'private const val OFFLINE_TOP_UP_PATH = "/v1/offline/top-up"',
                 'private const val OFFLINE_REDEEM_PATH = "/v1/offline/redeem"',
@@ -8696,9 +8993,9 @@ def check_mobile_offline_readiness_coverage(texts, errors):
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/OfflineToriiClient.java",
             (
                 "getOfflineReadiness(",
-                "submitTopUp(",
-                "submitRedeem(",
-                "getOperationStatus(",
+                "submitOfflineTopUp(",
+                "submitOfflineRedeem(",
+                "getOfflineOperationStatus(",
                 'OFFLINE_READINESS_PATH = "/v1/offline/readiness"',
                 'OFFLINE_TOP_UP_PATH = "/v1/offline/top-up"',
                 'OFFLINE_REDEEM_PATH = "/v1/offline/redeem"',
@@ -8759,7 +9056,7 @@ def check_mobile_offline_readiness_coverage(texts, errors):
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/OfflineToriiClientTests.java",
         (
             "readinessUsesCanonicalGetPathAndParsesResponse",
-            "operationsUseCanonicalPathsAndNoritoBodies",
+            "private static void operationsUseCanonicalPathsAndNoritoBodies() {",
             '"/v1/offline/readiness"',
             "asset_definition_id=xor%23wonderland",
             '"/v1/offline/top-up"',
@@ -8809,6 +9106,7 @@ def check_mobile_offline_readiness_coverage(texts, errors):
         "crates/iroha_torii_shared/src/offline_api.rs",
         "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/OfflineToriiClient.kt",
         "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineOperation.kt",
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineOperationStatus.kt",
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/OfflineToriiClient.java",
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineOperationCodec.java",
         "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
@@ -8833,6 +9131,108 @@ def check_mobile_offline_readiness_coverage(texts, errors):
             )
 
 
+def check_swift_offline_operation_contract(texts, errors):
+    source = "IrohaSwift/Sources/IrohaSwift/ToriiOfflineCashAPIModels.swift"
+    model_tests = "IrohaSwift/Tests/IrohaSwiftTests/ToriiOfflineCashAPIModelsTests.swift"
+    client = "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"
+    client_tests = "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift"
+    require_contains(
+        texts,
+        source,
+        (
+            "public struct OfflineTopUpRequest",
+            "public struct OfflineRedeemRequest",
+            "operationIdFieldIndex: 6",
+            "fieldCount: 8",
+            "operationIdFieldIndex: 9",
+            "fieldCount: 11",
+            "static func requestArchive(",
+            "frame.paddingLength == 0",
+            "guard reader.remaining() == 0 else {",
+            ") == value else {",
+            "guard operationId.count == 32,",
+            "operationId.contains(where: { $0 != 0 })",
+        ),
+        "Swift typed Offline operation request contract",
+        errors,
+    )
+    require_contains(
+        texts,
+        model_tests,
+        (
+            "testRequestsDeriveLowercaseOperationIdsFromCanonicalArchives",
+            "testRequestsRequireTheirExactSchemaAndOperationIdField",
+            "testRequestsRejectZeroOrWrongLengthOperationIds",
+            "testRequestsRejectNonCanonicalFramingAndTrailingPayload",
+        ),
+        "Swift typed Offline operation request adversarial tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        source,
+        (
+            '"iroha_torii_shared::offline_api::OfflineOperationReference"',
+            '"iroha_torii_shared::offline_api::OfflineOperationStatus"',
+            "public static func decodeReference(_ archive: Data)",
+            "public static func decodeStatus(_ archive: Data)",
+            "frame.header.flags == NoritoHeader.compactLen",
+            "frame.paddingLength == 8",
+            "guard reader.remaining() == 0 else {",
+        ),
+        "Swift typed Offline operation status codec contract",
+        errors,
+    )
+    require_contains(
+        texts,
+        model_tests,
+        (
+            "testOperationReferenceMatchesRustNoritoGoldenVector",
+            "testPendingOperationStatusMatchesRustNoritoGoldenVector",
+            "testRejectedOperationStatusMatchesRustNoritoGoldenVector",
+            "testAppliedRedeemStatusMatchesRustNoritoGoldenVector",
+            "testOperationStatusRequiresExactSharedSchema",
+        ),
+        "Swift typed Offline operation status codec tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        client,
+        (
+            "public func submitOfflineTopUp(",
+            "path: OfflineAPI.Endpoint.topUp.path",
+            "public func submitOfflineRedeem(",
+            "path: OfflineAPI.Endpoint.redeem.path",
+            "public func getOfflineOperationStatus(",
+            "let path = try OfflineAPI.operationPath(operationId)",
+            '"Content-Type": "application/x-norito"',
+            '"Accept": "application/x-norito"',
+            '"Idempotency-Key": operationId',
+            "let reference = try OfflineOperationCodec.decodeReference(data)",
+            "reference.operationId == operationId",
+            "reference.kind == expectedKind",
+            "reference.state == .pending",
+            "reference.statusUri == expectedStatusUri",
+        ),
+        "Swift typed Offline operation client contract",
+        errors,
+    )
+    require_contains(
+        texts,
+        client_tests,
+        (
+            "testOfflineOperationsUseCanonicalPathsAndDirectNoritoBodies",
+            'case "/v1/offline/top-up":',
+            'case "/v1/offline/redeem":',
+            'case "/v1/offline/operations/\\(operationId)":',
+            'request.value(forHTTPHeaderField: "Idempotency-Key")',
+            'request.value(forHTTPHeaderField: "Content-Type")',
+            'request.value(forHTTPHeaderField: "Accept")',
+        ),
+        "Swift typed Offline operation client tests",
+        errors,
+    )
 
 
 def check_offline_readiness_artifact_contract(texts, errors):
@@ -9994,8 +10394,6 @@ def check_kotlin_offline_cash_settlement_coverage(texts, errors):
             "canonicalAmountString",
             "receiptKeys",
             "redeemRequestCommitmentHex",
-            "stableIdempotencyKey",
-            '"offline-cash:setup:${sha256Hex(digestInput)}"',
             '"redeem_request"',
             "MAX_NUMERIC_SCALE = 28",
             "MAX_NUMERIC_BYTES = 64",
@@ -10028,11 +10426,9 @@ def check_kotlin_offline_cash_settlement_coverage(texts, errors):
             "canonicalAmountMatchesRustNumericDisplay",
             "canonicalAmountRejectsInvalidRustNumericForms",
             "receiptKeysAreSortedAndFormatted",
-            "idempotencyKeyUsesOperationIdForMutationsAndSha256ForSetup",
             "redeemRequestCommitmentHexMatchesExpected",
             '"1e3"',
             "BigInteger.ONE.shiftLeft(511)",
-            '"offline-cash:setup:$expectedHex"',
             '"kind":"redeem_request"',
         ),
         "Kotlin offline cash codec tests",
@@ -10069,106 +10465,88 @@ def check_kotlin_offline_cash_settlement_coverage(texts, errors):
     )
 
 
-def check_kotlin_offline_cash_request_strictness(texts, errors):
+def check_kotlin_retired_offline_cash_http_surface_absent(texts, errors):
+    retired_models = (
+        "OfflineCashSetupRequest.kt",
+        "OfflineCashLoadRequest.kt",
+        "OfflineCashRefreshRequest.kt",
+        "OfflineCashSyncRequest.kt",
+        "OfflineCashRedeemRequest.kt",
+        "OfflineCashReadiness.kt",
+        "OfflineCashEnvelope.kt",
+    )
+    model_root = root / "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline"
+    for filename in retired_models:
+        require(
+            not (model_root / filename).exists(),
+            f"Kotlin retired offline cash HTTP model must be absent: {filename}",
+            errors,
+        )
+    for relative in (
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashCodec.kt",
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineJsonParser.kt",
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineCashCodecTest.kt",
+    ):
+        require_not_regex(
+            texts,
+            relative,
+            r"/v1/offline/cash|OfflineCash(?:Setup|Load|Refresh|Sync|Redeem)Request|OfflineCash(?:Readiness|Envelope)|stableIdempotencyKey|parseCash(?:Readiness|Envelope)",
+            "Kotlin retired offline cash HTTP surface",
+            errors,
+        )
     require_contains(
         texts,
-        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashCodec.kt",
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineOperation.kt",
         (
-            "internal fun requireExactNonEmptyText(value: String, field: String): String",
-            "value.isNotEmpty() && value.trim() == value",
-            '"$field must be an exact non-empty string"',
-            "internal fun requireOptionalExactNonEmptyText(value: String?, field: String): String?",
-            "return requireExactNonEmptyText(value, field)",
-            "internal fun canonicalNonNegativeAmountString(amount: String, field: String): String",
-            "amount.isNotEmpty() && amount.trim() == amount",
-            '"$field must be an exact amount string"',
-            "require(!canonical.startsWith(\"-\"))",
-            '"$field must be a non-negative amount"',
+            "class OfflineTopUpRequest(",
+            "class OfflineRedeemRequest(",
+            "operationIdFieldIndex = 6",
+            "fieldCount = 8",
+            "operationIdFieldIndex = 9",
+            "fieldCount = 11",
+            '"iroha.torii.v1.offline.top_up.request"',
+            '"iroha.torii.v1.offline.redeem.request"',
+            "requireCanonicalOfflineRequest(",
+            '"Offline request operation_id must contain exactly 32 raw bytes"',
+            '"Offline request operation_id must be non-zero"',
+            '"Trailing fields or bytes after canonical Offline request"',
+            "fun noritoArchive(): ByteArray = archive.copyOf()",
         ),
-        "Kotlin offline cash request strictness helpers",
+        "Kotlin typed Offline operation request contract",
         errors,
     )
-    request_targets = (
-        (
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashSetupRequest.kt",
-            "Kotlin offline cash setup request exactness",
-            (
-                'OfflineCashCodec.requireExactNonEmptyText(accountId, "account_id")',
-                'OfflineCashCodec.requireExactNonEmptyText(',
-                '"asset_definition_id"',
-                'map["account_id"] = accountId',
-                'map["asset_definition_id"] = assetDefinitionId',
-            ),
-        ),
-        (
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashLoadRequest.kt",
-            "Kotlin offline cash load request exactness",
-            (
-                'OfflineCashCodec.requireExactNonEmptyText(operationId, "operation_id")',
-                'OfflineCashCodec.requireOptionalExactNonEmptyText(lineageId, "lineage_id")',
-                'OfflineCashCodec.requireExactNonEmptyText(accountId, "account_id")',
-                '"asset_definition_id"',
-                'OfflineCashCodec.canonicalNonNegativeAmountString(amount, "amount")',
-                'map["amount"] = amount',
-            ),
-        ),
-        (
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashRefreshRequest.kt",
-            "Kotlin offline cash refresh request exactness",
-            (
-                'OfflineCashCodec.requireExactNonEmptyText(operationId, "operation_id")',
-                'OfflineCashCodec.requireExactNonEmptyText(lineageId, "lineage_id")',
-                'OfflineCashCodec.requireExactNonEmptyText(accountId, "account_id")',
-                'map["lineage_id"] = lineageId',
-            ),
-        ),
-        (
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashSyncRequest.kt",
-            "Kotlin offline cash sync request exactness",
-            (
-                'OfflineCashCodec.requireExactNonEmptyText(operationId, "operation_id")',
-                'OfflineCashCodec.requireExactNonEmptyText(lineageId, "lineage_id")',
-                'OfflineCashCodec.requireExactNonEmptyText(accountId, "account_id")',
-                "private val _receipts: List<OfflineTransferReceipt> = receipts.toList()",
-                "val receipts: List<OfflineTransferReceipt> get() = _receipts.toList()",
-            ),
-        ),
-        (
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashRedeemRequest.kt",
-            "Kotlin offline cash redeem request exactness",
-            (
-                'OfflineCashCodec.requireExactNonEmptyText(operationId, "operation_id")',
-                'OfflineCashCodec.requireExactNonEmptyText(lineageId, "lineage_id")',
-                'OfflineCashCodec.requireExactNonEmptyText(accountId, "account_id")',
-                'OfflineCashCodec.canonicalNonNegativeAmountString(amount, "amount")',
-                "private val _receipts: List<OfflineTransferReceipt> = receipts.toList()",
-                'map["redeem_proof"] = redeemProof.toJsonMap()',
-            ),
-        ),
-    )
-    for relative, label, needles in request_targets:
-        require_contains(texts, relative, needles, label, errors)
     require_contains(
         texts,
-        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineCashCodecTest.kt",
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/OfflineToriiClient.kt",
         (
-            "cashMutationRequestsRejectNonCanonicalSignedFields",
-            'assertEquals("1.2300", load.amount)',
-            'assertEquals("1.2300", load.toJsonMap()["amount"])',
-            'assertEquals("10", redeem.amount)',
-            'assertEquals("10", redeem.toJsonMap()["amount"])',
-            '"account_id must be an exact non-empty string" to {',
-            '"asset_definition_id must be an exact non-empty string" to {',
-            '"operation_id must be an exact non-empty string" to {',
-            '"lineage_id must be an exact non-empty string" to {',
-            '"amount must be an exact amount string" to {',
-            '"amount must be a non-negative amount" to {',
-            "OfflineCashRefreshRequest(",
-            "OfflineCashSyncRequest(",
-            "OfflineCashRedeemRequest(",
-            "private fun redeemRequestProof(): OfflineRedeemRequestProof",
+            "fun submitOfflineTopUp(request: OfflineTopUpRequest)",
+            "OFFLINE_TOP_UP_PATH,\n            request.operationId,\n            request.noritoArchive(),\n            OfflineOperationKind.TOP_UP,",
+            "fun submitOfflineRedeem(request: OfflineRedeemRequest)",
+            "OFFLINE_REDEEM_PATH,\n            request.operationId,\n            request.noritoArchive(),\n            OfflineOperationKind.REDEEM,",
+            "fun getOfflineOperationStatus(operationId: String)",
+            "val canonicalId = org.hyperledger.iroha.sdk.offline.requireOperationId(operationId)",
+            'ensureHeader(headers, "Content-Type", NORITO_MEDIA_TYPE)',
+            'ensureHeader(headers, "Idempotency-Key", idempotencyKey)',
         ),
-        "Kotlin offline cash request strictness tests",
+        "Kotlin typed Offline operation client contract",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientOperationTest.kt",
+        (
+            "operationReferenceMatchesRustGoldenArchive",
+            "operationStatusesMatchRustGoldenArchives",
+            "typedOperationStatusesRoundTrip",
+            "topUpPostsCanonicalNoritoArchive",
+            "redeemAndOperationStatusUseCanonicalPaths",
+            "requestsDeriveAndValidateCanonicalOperationIds",
+            "OfflineTopUpRequest(redeemRequestArchive(operationIdBytes))",
+            "OfflineRedeemRequest(redeemRequestArchive(ByteArray(32)))",
+            "OfflineTopUpRequest(topUpRequestArchive(ByteArray(31) { 1 }))",
+            "OfflineTopUpRequest(withHeaderPadding(topUpRequestArchive(operationIdBytes)))",
+        ),
+        "Kotlin typed Offline operation adversarial tests",
         errors,
     )
 
@@ -11711,7 +12089,8 @@ def check_mobile_transaction_norito_runner_coverage(texts, errors):
         (
             "TransactionEntrypoint::External",
             "SignedTransactionEncoder.encode(transaction)",
-            "new byte[12 + encoded.length]",
+            "final byte[] lengthPrefix = encodeCompactLength(canonicalBareSignedTransaction.length);",
+            "new byte[4 + lengthPrefix.length + canonicalBareSignedTransaction.length]",
             "IrohaHash.prehash(canonicalBytes)",
             "Failed to encode signed transaction",
         ),
@@ -13341,12 +13720,23 @@ def check_mobile_retired_offline_note_issuers(texts, errors):
             "class OfflineTopUpRequest(",
             "class OfflineRedeemRequest(",
             "class OfflineOperationReference(",
-            "class OfflineOperationStatus",
             "object OfflineOperationCodec",
             "fun decodeReference(archive: ByteArray)",
             "fun noritoArchive(): ByteArray = archive.copyOf()",
         ),
         "Kotlin typed Offline operation models",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineOperationStatus.kt",
+        (
+            "sealed class OfflineOperationStatus(",
+            "class Pending(",
+            "class Applied(",
+            "class Rejected(",
+        ),
+        "Kotlin typed Offline operation status model",
         errors,
     )
     for relative, needles, label in (
@@ -13383,7 +13773,7 @@ def check_mobile_retired_offline_note_issuers(texts, errors):
                 "public struct OfflineTopUpRequest",
                 "public struct OfflineRedeemRequest",
                 "public struct OfflineOperationReference",
-                "public struct OfflineOperationStatus",
+                "public enum OfflineOperationStatus",
                 "public enum OfflineOperationCodec",
             ),
             "Swift typed Offline operation models",
@@ -13432,13 +13822,13 @@ def check_mobile_retired_offline_note_submitters(texts, errors):
     for relative, direct_body, idempotency, label in (
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/OfflineToriiClient.kt",
-            "executeNoritoPost(OFFLINE_TOP_UP_PATH, request.operationId, request.noritoArchive())",
+            "OFFLINE_TOP_UP_PATH,\n            request.operationId,\n            request.noritoArchive(),\n            OfflineOperationKind.TOP_UP,",
             'ensureHeader(headers, "Idempotency-Key", idempotencyKey)',
             "Kotlin direct typed Offline submitter",
         ),
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/OfflineToriiClient.java",
-            "OFFLINE_TOP_UP_PATH, request.operationId(), request.noritoArchive()",
+            "OFFLINE_TOP_UP_PATH,\n        request.operationId(),\n        request.noritoArchive(),\n        OfflineOperationKind.TOP_UP)",
             'ensureHeader(headers, "Idempotency-Key", idempotencyKey)',
             "Android Java direct typed Offline submitter",
         ),
@@ -14722,17 +15112,16 @@ def check_javascript_torii_runner_coverage(texts, errors):
         texts,
         "javascript/iroha_js/test/toriiClient.test.js",
         (
-            "getOfflineReadiness rejects noncanonical ABI versions",
-            "getOfflineReadiness rejects removed ABI-7 readiness fields",
-            "canonicalOfflineReadinessPayload",
-            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-            "OFFLINE_READINESS_REMOVED_ABI7_FIELDS",
-            "must be an exact positive integer string",
-            "must fit in signed 32-bit range",
-            '"007"',
-            "2147483648",
+            "getOfflineReadiness sends the required exact asset selector and parses blockers",
+            "getOfflineReadiness rejects invalid selectors and contradictory snapshots",
+            "offlineReadinessPayload",
+            "asset_definition_id",
+            "evaluated_block_height",
+            "proof_backend_unavailable",
+            "Number.MAX_SAFE_INTEGER + 1",
+            "NOT-CANONICAL",
         ),
-        "JavaScript Torii offline readiness ABI exactness tests",
+        "JavaScript Torii first-release offline readiness contract tests",
         errors,
     )
     require_contains(
@@ -15158,7 +15547,7 @@ def check_javascript(texts, errors):
     constants = (
         "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 6",
         "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64",
-        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = true",
+        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = false",
         "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1 = 1",
         "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES = 8 * 1024 * 1024",
         "KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES = 128",
@@ -15671,7 +16060,7 @@ def check_javascript(texts, errors):
             'kagemushaRequestCodecError("field", "lineageVerifierKey", null)',
             'kagemushaRequestCodecError("field", "previousLineageVerifierRecord", null)',
             'kagemushaRequestCodecError("field", "outputProofCircuitId", null)',
-            'kagemushaRequestCodecError("field", "previousProofOpenEnvelopes", null)',
+            'outputProofCircuitId: "kagemusha-recursive-spend-invalid-output-v1"',
             'kagemushaRequestCodecError("field", "lineageKeyArtifacts", null)',
             'kagemushaRequestCodecError("field", "lineageKeyArtifacts", /lineageKeyArtifacts:/)',
             'kagemushaRequestCodecError("archive", "bundle", /must use/)',
@@ -17875,7 +18264,7 @@ def check_javascript(texts, errors):
         + (
             "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 6",
             "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1: 64",
-            "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1: true",
+            "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1: false",
             "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1: 1",
             "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES: 8388608",
             "KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: 128",
@@ -18567,7 +18956,7 @@ def check_javascript(texts, errors):
             "/only valid for lineage append output/",
             'kagemushaRequestCodecError("field", "lineageKeyArtifacts", null)',
             'kagemushaRequestCodecError("field", "outputProofCircuitId", null)',
-            'kagemushaRequestCodecError("field", "previousProofOpenEnvelopes", null)',
+            'outputProofCircuitId: "kagemusha-recursive-spend-invalid-output-v1"',
             'kagemushaRequestCodecError(\n'
             '      "field",\n'
             '      "previousProofOpenEnvelopes",\n'
@@ -19172,13 +19561,15 @@ def check_python(texts, errors):
         "python/iroha_torii_client/client.py",
         (
             "class OfflineReadiness",
-            "def required_positive_int(field: str) -> int:",
-            "isinstance(value, bool)",
-            're.fullmatch(r"[1-9][0-9]*", value)',
-            "must be an exact positive integer string",
-            "must fit in signed 32-bit range",
+            "asset_definition_id: str",
+            "evaluated_block_height: int",
+            "ready: bool",
+            "blockers: Tuple[OfflineReadinessBlocker, ...]",
+            "_OFFLINE_MAX_U64",
+            "must be true exactly when blockers is empty",
+            'f"{blocker_context}.code must be a stable lowercase code of 1 to 64 characters"',
         ),
-        "Python Torii offline readiness ABI exactness",
+        "Python Torii first-release offline readiness contract",
         errors,
     )
     require(
@@ -19230,17 +19621,17 @@ def check_python(texts, errors):
         texts,
         "python/iroha_torii_client/tests/test_client.py",
         (
-            "test_get_offline_readiness_rejects_noncanonical_abi_versions",
-            "test_get_offline_readiness_rejects_removed_abi7_fields",
+            "test_get_offline_readiness_sends_exact_asset_selector_and_parses_blockers",
+            "test_get_offline_readiness_rejects_invalid_selector_before_network",
+            "test_get_offline_readiness_rejects_adversarial_snapshots",
             "_offline_readiness_payload",
-            "OFFLINE_READINESS_REMOVED_ABI7_FIELDS",
-            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-            "must be an exact positive integer string",
-            "must fit in signed 32-bit range",
-            '"007"',
-            "2_147_483_648",
+            "asset_definition_id",
+            "evaluated_block_height",
+            "proof_backend_unavailable",
+            "different-asset",
+            "NOT-CANONICAL",
         ),
-        "Python Torii offline readiness ABI exactness tests",
+        "Python Torii first-release offline readiness contract tests",
         errors,
     )
     require_contains(
@@ -19553,19 +19944,20 @@ def check_python(texts, errors):
             "previous_lineage_verifier_record is required for lineage previous bundles",
             "previous_openings_without_lineage_record = _synthetic_pallas_open_envelopes_archive()",
             "output_proof_circuit_id is not valid for the previous bundle",
+            'output_proof_circuit_id="kagemusha-recursive-spend-invalid-output-v1"',
             "previous_lineage_verifier_record is only valid for lineage previous bundles",
             "malformedPreviousLineageRecordBeforeOpenings",
             "previous_proof_open_envelopes",
             "previous_proof_open_envelopes are only valid for lineage append output",
-            "previous_proof_open_envelopes requires exactly 1 envelope\\(s\\)",
             "lineage_key_artifacts must be init artifacts",
             "semantic_init_request = kagemusha.KagemushaRecursiveSpendInitRequest(",
             "assert semantic_init_request.lineage_verifier_key is None",
             "lineage_verifier_key is required when lineage_proving_key_archive is present",
             "lineage_proving_key_archive is required when lineage_verifier_key is present",
-            "lineage_key_artifacts must be append artifacts",
             "lineage_key_artifacts must not be combined with raw key fields",
             "lineage_key_artifacts are only valid for lineage append output",
+            "for _metadata_field, metadata_kwargs, _expected in malformed_pallas_metadata_payloads:",
+            "for sequence_kwargs, _expected, _previous_expected in malformed_pallas_sequence_payloads:",
             "assert not kagemusha.requires_kagemusha_recursive_spend_lineage_key_artifacts_for_init()",
             "bundle must be a valid iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV1 Norito archive",
             "_recursive_spend_bundle_with_accumulator_field",
@@ -19789,9 +20181,10 @@ def check_python(texts, errors):
             r"pallas_open_envelopes\[0\]\.vk_commitment must be exactly 32 bytes",
             r"pallas_open_envelopes\[0\]\.public_inputs_schema_hash must be exactly 32 bytes",
             r"pallas_open_envelopes\[0\]\.domain_tag must be exactly 32 bytes",
-            'expected.replace("pallas_open_envelopes", "previous_proof_open_envelopes")',
+            "for _metadata_field, metadata_kwargs, _expected in malformed_pallas_metadata_payloads:",
+            'match="output_proof_circuit_id is not valid for the previous bundle"',
         ),
-        "Python Pallas metadata option malformed fixed-array vectors",
+        "Python Pallas metadata option malformed fixed-array and append gate vectors",
         errors,
     )
     require_block_contains(
@@ -20611,7 +21004,7 @@ def check_python(texts, errors):
         (
             "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 6",
             "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64",
-            "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = True",
+            "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = False",
             "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1 = 1",
             "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES = 8 * 1024 * 1024",
             "KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES = 128",
@@ -21188,6 +21581,20 @@ def check_swift(texts, errors):
     )
     require_contains(
         texts,
+        offline_note_test,
+        (
+            "func testCompactKeyCertificateRejectsRetiredAssertionPublicKeyAlias() throws",
+            "func testCompactKeyCertificateRejectsNonCanonicalCertificateFields() throws",
+            'for invalidPlatform in ["android", "android-keymint ", "Android-keymint", "ios-appattest-android"]',
+            "func testCompactKeyCertificateRejectsNonCanonicalBase64Encodings() throws",
+            "let hexPublicKey = Data(repeating: 1, count: 33)",
+            "let urlSafeAssertionKey = Data(repeating: 0xFF, count: 32)",
+        ),
+        "Swift Offline Note payload certificate fail-closed tests",
+        errors,
+    )
+    require_contains(
+        texts,
         offline_payloads,
         (
             "guard let proofBytes = OfflineNoteTextPayloadEncoding.decodeExactBase64(proofBytesBase64),\n"
@@ -21195,6 +21602,17 @@ def check_swift(texts, errors):
             'throw OfflineNotePayloadError.invalidField("proof_bytes_base64")',
         ),
         "Swift Offline recursive proof exact-base64 source",
+        errors,
+    )
+    require_contains(
+        texts,
+        offline_note_test,
+        (
+            "func testRecursiveProofRejectsNonCanonicalBase64Encodings() throws",
+            "let hexProofBytes = Data(repeating: 4, count: 33)",
+            "let urlSafeProofBytes = Data(repeating: 0xFF, count: 64)",
+        ),
+        "Swift Offline recursive proof exact-base64 tests",
         errors,
     )
     require(
@@ -22105,10 +22523,25 @@ def check_swift(texts, errors):
     require_regex(
         texts,
         request_codecs_test,
-        r'lineageVerifierKey: nil,[\s\S]*?lineageProvingKeyArchive: nil[\s\S]*?\.invalidField\("lineageVerifierKey"\)',
-        "Swift typed recursive spend append lineage-key exact diagnostics",
+        r'outputProofCircuitId: KagemushaRecursiveSpendProver\.recursiveSpendLineageAppendProofCircuitIdV1,[\s\S]*?previousProofOpenEnvelopes: Self\.syntheticPallasOpenEnvelopesArchive\(\),[\s\S]*?lineageVerifierKey: nil,[\s\S]*?lineageProvingKeyArchive: nil[\s\S]*?\.invalidField\("outputProofCircuitId"\)',
+        "Swift typed recursive spend append fail-closed output diagnostic precedence",
         errors,
         flags=re.S,
+    )
+    require_contains(
+        texts,
+        request_codecs_test,
+        (
+            "lineageVerifierKey: nil,\n"
+            "                lineageProvingKeyArchive: nil\n"
+            "            )\n"
+            "        ) { error in\n"
+            "            XCTAssertEqual(\n"
+            "                error as? KagemushaRecursiveSpendRequestCodecError,\n"
+            '                .invalidField("outputProofCircuitId")',
+        ),
+        "Swift typed recursive spend append fail-closed output diagnostic precedence",
+        errors,
     )
     require_contains(
         texts,
@@ -22612,7 +23045,7 @@ def check_swift(texts, errors):
         texts,
         request_codecs_test,
         (
-            "var mutableVerifierRecordBytes = Self.syntheticArchive(",
+            "var mutableVerifierRecordBytes = try canonicalKagemushaVerifierRecordArchive(seed: 0x67)",
             "let copiedVerifierRecordBytes = mutableVerifierRecordBytes",
             "mutableVerifierRecordBytes[mutableVerifierRecordBytes.index(before: mutableVerifierRecordBytes.endIndex)] ^=",
             "var returnedVerifierRecordBytes = copiedVerifierRecord.recordBytes",
@@ -23286,7 +23719,7 @@ def check_swift(texts, errors):
         (
             "requiredNativeBridgeAbiVersion: UInt32 = 6",
             "recursiveSpendLineageWitnesslessMaxHopsV1: UInt32 = 64",
-            "recursiveSpendLineageTransitionCircuitWiredV1 = true",
+            "recursiveSpendLineageTransitionCircuitWiredV1 = false",
             "recursivePreviousProofOpenEnvelopesRequiredCountV1 = 1",
             "recursivePreviousProofOpenEnvelopesMaxBytes = 8 * 1024 * 1024",
             "recursivePallasOpenEnvelopeMaxTranscriptLabelBytes = 128",
@@ -25011,7 +25444,7 @@ def check_java_kotlin(texts, errors):
             "lineageVerifierKey = appendLineageArtifacts.verifierKey",
             "lineageProvingKeyArchive = appendLineageArtifacts.provingKeyArchive",
             "lineageProvingKeyArchive = byteArrayOf(0)",
-            "invalidOutputWithLineageKeyMaterial",
+            "val invalidOutputWithLineageKeyMaterial = assertFailsWith<IllegalArgumentException>",
             '"kagemusha-recursive-spend-invalid-output-v1"',
             "outputProofCircuitId is not valid for the previous bundle",
         ),
@@ -25107,7 +25540,7 @@ def check_java_kotlin(texts, errors):
         texts,
         kotlin_request_codecs_test,
         (
-            "invalidOutputWithLineageKeyMaterial",
+            "val invalidOutputWithLineageKeyMaterial = assertFailsWith<IllegalArgumentException>",
             '"kagemusha-recursive-spend-invalid-output-v1"',
             "outputProofCircuitId is not valid for the previous bundle",
             "val missingPreviousLineageRecordWithPreviousOpenings =",
@@ -25521,11 +25954,11 @@ def check_java_kotlin(texts, errors):
         texts,
         java_test,
         (
-            "final IllegalArgumentException autoPreviousOpeningsWithoutLineageRecord =",
-            "previousLineageVerifierRecord is required for lineage previous bundles",
+            "final IllegalArgumentException autoLineageAppendWithoutLineageRecord =",
+            '"outputProofCircuitId is not valid for the previous bundle"\n        .equals(autoLineageAppendWithoutLineageRecord.getMessage())',
             "buildRecursiveSpendAppendRequest(",
         ),
-        "Android Java typed recursive spend append auto previous-openings lineage preflight tests",
+        "Android Java typed recursive spend append auto lineage transition gate tests",
         errors,
     )
     require_contains(
@@ -25535,7 +25968,7 @@ def check_java_kotlin(texts, errors):
             "autoInitPallasMissingLineageKey",
             "autoInitPallasWrongProfile",
             "autoAppendLineageArtifactsOnAggregation",
-            "autoAppendWrongProfile",
+            "autoLineageAppendWithInitProfile",
             "lineageVerifierKey is required when lineageProvingKeyArchive is present",
             "lineageKeyArtifacts are only valid for lineage append output",
             "malformedLineageProvingKeyOnAggregation",
@@ -25634,7 +26067,7 @@ def check_java_kotlin(texts, errors):
             '"previousProofOpenEnvelopes[0].domain_tag option tag must be 0 or 1"',
             '"Trailing bytes after previousProofOpenEnvelopes[0]"',
             '"Unexpected end of data"',
-            "assert expectedMessage.equals(archiveError.getMessage());",
+            'assert "outputProofCircuitId is not valid for the previous bundle"\n          .equals(archiveError.getMessage()) : adversarialCase;',
         ),
         "Android Java typed recursive spend append previous-proof Pallas diagnostics",
         errors,
@@ -25676,8 +26109,11 @@ def check_java_kotlin(texts, errors):
         java_test,
         "    final Object[][] malformedPreviousOpenArchives = {",
         "  private static void rejectsEmptyArchivesBeforeNativeDispatch() {",
-        ("assert expectedMessage.equals(archiveError.getMessage());",),
-        "Android Java typed recursive spend append previous-proof Pallas diagnostics",
+        (
+            'assert "outputProofCircuitId is not valid for the previous bundle"',
+            ".equals(archiveError.getMessage()) : adversarialCase;",
+        ),
+        "Android Java typed recursive spend append previous-proof transition gate diagnostics",
         errors,
     )
     require_contains(
@@ -25707,13 +26143,13 @@ def check_java_kotlin(texts, errors):
         (
             '"pallasOpenEnvelopes requires exactly 2 envelope(s)".equals(countMismatch.getMessage())',
             '"lineageKeyArtifacts must be init artifacts"\n        .equals(autoInitPallasWrongProfile.getMessage())',
-            '"lineageKeyArtifacts must be append artifacts"\n        .equals(autoAppendWrongProfile.getMessage())',
+            '"outputProofCircuitId is not valid for the previous bundle"\n        .equals(autoLineageAppendWithInitProfile.getMessage())',
             '"lineage key artifacts are invalid for recursive spend init"\n        .equals(wrongInitLineage.getMessage())',
             '"lineageKeyArtifacts must be init artifacts".equals(wrongInitLineageProfile.getMessage())',
             '"lineage key artifacts are invalid for recursive spend init"\n        .equals(forgedCommitment.getMessage())',
             '"lineage key artifacts are invalid for recursive spend init"\n        .equals(malformedVerifierKey.getMessage())',
-            '"previousProofOpenEnvelopes is required for lineage append output"\n        .equals(error.getMessage())',
-            '"lineage key artifacts are invalid for lineage append output"\n        .equals(wrongAppendLineage.getMessage())',
+            '"outputProofCircuitId is not valid for the previous bundle"\n        .equals(error.getMessage())',
+            '"outputProofCircuitId is not valid for the previous bundle"\n        .equals(wrongAppendLineage.getMessage())',
             '"lineageKeyArtifacts must be append artifacts"\n        .equals(wrongAppendLineageProfile.getMessage())',
         ),
         "Android Java typed recursive spend lineage-key exact diagnostics",
@@ -29261,13 +29697,13 @@ def check_java_kotlin(texts, errors):
 
     require_regex(texts, java, r"REQUIRED_NATIVE_BRIDGE_ABI_VERSION\s*=\s*6\s*;", "Android ABI version", errors)
     require_regex(texts, java, r"RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1\s*=\s*64\s*;", "Android max hops", errors)
-    require_regex(texts, java, r"RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1\s*=\s*true\s*;", "Android transition-circuit wired flag", errors)
+    require_regex(texts, java, r"RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1\s*=\s*false\s*;", "Android transition-circuit fail-closed flag", errors)
     require_regex(texts, java, r"RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1\s*=\s*1\s*;", "Android open envelope count", errors)
     require_regex(texts, java, r"RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES\s*=\s*8\s*\*\s*1024\s*\*\s*1024\s*;", "Android open envelope max bytes", errors)
     require_regex(texts, java, r"RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES\s*=\s*128\s*;", "Android Pallas open-envelope transcript label max bytes", errors)
     require_regex(texts, kotlin, r"REQUIRED_NATIVE_BRIDGE_ABI_VERSION:\s*Int\s*=\s*6", "Kotlin ABI version", errors)
     require_regex(texts, kotlin, r"RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1:\s*Int\s*=\s*64", "Kotlin max hops", errors)
-    require_regex(texts, kotlin, r"RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1:\s*Boolean\s*=\s*true", "Kotlin transition-circuit wired flag", errors)
+    require_regex(texts, kotlin, r"RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1:\s*Boolean\s*=\s*false", "Kotlin transition-circuit fail-closed flag", errors)
     require_regex(texts, kotlin, r"RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1:\s*Int\s*=\s*1", "Kotlin open envelope count", errors)
     require_regex(texts, kotlin, r"RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES:\s*Int\s*=\s*8\s*\*\s*1024\s*\*\s*1024", "Kotlin open envelope max bytes", errors)
     require_regex(texts, kotlin, r"RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES:\s*Int\s*=\s*128", "Kotlin Pallas open-envelope transcript label max bytes", errors)
@@ -29542,7 +29978,7 @@ def check_java_kotlin(texts, errors):
                 '.invalidField("previousProofOpenEnvelopes")',
                 '.invalidArchive("pallasOpenEnvelopes")',
                 '.invalidArchive("pallasOpenEnvelopes.domain_tag")',
-                '.invalidArchive("previousProofOpenEnvelopes")',
+                '.invalidField("outputProofCircuitId")',
                 "previousProofOpenEnvelopes: Self.syntheticPallasOpenEnvelopesArchive(count: 2)",
             ),
             "Swift typed recursive spend Pallas preflight tests",
@@ -29558,7 +29994,7 @@ def check_java_kotlin(texts, errors):
                 "transcriptLabel,",
                 "kagemushaRequestCodecError(\"archive\", expectedField, expectedMessage)",
                 '"pallasOpenEnvelopes[0].domain_tag"',
-                '"previousProofOpenEnvelopes[0]"',
+                'kagemushaRequestCodecError("field", "outputProofCircuitId", null)',
                 "previousProofOpenEnvelopes: syntheticPallasOpenEnvelopesArchive(2)",
             ),
             "JavaScript typed recursive spend Pallas preflight tests",
@@ -29576,7 +30012,7 @@ def check_java_kotlin(texts, errors):
                 'pallasField: "pallasOpenEnvelopes[0].domain_tag"',
                 'previousField: "previousProofOpenEnvelopes[0].domain_tag"',
                 'kagemushaRequestCodecError("archive", pallasField, message)',
-                'kagemushaRequestCodecError("archive", previousField, message)',
+                'kagemushaRequestCodecError("field", "outputProofCircuitId", null)',
             ),
             "JavaScript dist typed recursive spend Pallas preflight tests",
         ),
@@ -29592,8 +30028,8 @@ def check_java_kotlin(texts, errors):
                 "pallas_open_envelopes\\[0\\]\\.domain_tag is required",
                 'for malformed_transcript_label in ("", "\\u00e9" * 65):',
                 'match=r"pallas_open_envelopes\\[0\\]\\.transcript_label is invalid"',
-                'match=r"previous_proof_open_envelopes\\[0\\]\\.transcript_label is invalid"',
-                'match="previous_proof_open_envelopes is required for lineage append output"',
+                'for _metadata_field, metadata_kwargs, _expected in malformed_pallas_metadata_payloads:',
+                'match="output_proof_circuit_id is not valid for the previous bundle"',
                 "previous_proof_open_envelopes=_synthetic_pallas_open_envelopes_archive(2)",
             ),
             "Python typed recursive spend Pallas preflight tests",
@@ -29616,14 +30052,16 @@ def check_java_kotlin(texts, errors):
     require_block_contains(
         texts,
         "python/iroha_python/tests/kagemusha_test.py",
-        'match=r"previous_proof_open_envelopes requires exactly 1 envelope\\(s\\)",',
-        "for _metadata_field, metadata_kwargs, expected in malformed_pallas_metadata_payloads:",
+        'lineage_proving_key_archive=_synthetic_kagemusha_archive("test::Key", 0x75),',
+        'match="lineage_key_artifacts are only valid for lineage append output",',
         (
             'for malformed_transcript_label in ("", "\\u00e9" * 65):',
-            'match=r"previous_proof_open_envelopes\\[0\\]\\.transcript_label is invalid"',
+            'match="output_proof_circuit_id is not valid for the previous bundle"',
             "transcript_label=malformed_transcript_label",
+            "for _metadata_field, metadata_kwargs, _expected in malformed_pallas_metadata_payloads:",
+            "for sequence_kwargs, _expected, _previous_expected in malformed_pallas_sequence_payloads:",
         ),
-        "Python typed recursive spend Pallas append previous-proof diagnostics",
+        "Python typed recursive spend Pallas append transition gate diagnostics",
         errors,
     )
     require_block_contains(
@@ -29649,9 +30087,9 @@ def check_java_kotlin(texts, errors):
             'String(repeating: "\\u{00e9}", count: 65)',
             "previousProofOpenEnvelopes: Self.syntheticPallasOpenEnvelopesArchive(",
             "transcriptLabel: transcriptLabel",
-            '.invalidArchive("previousProofOpenEnvelopes")',
+            '.invalidField("outputProofCircuitId")',
         ),
-        "Swift typed recursive spend append previous-proof Pallas diagnostics",
+        "Swift typed recursive spend append previous-proof fail-closed diagnostics",
         errors,
     )
     require_contains(
@@ -29711,22 +30149,42 @@ def check_java_kotlin(texts, errors):
         "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
         (
             "RecursiveSpendInitRequestEncoderRejectsMalformedLineageAndPallasInputsBeforeNativeBridge",
-            "RecursiveSpendAppendRequestEncoderRejectsPreviousProofOpeningAndLineageDriftBeforeNativeBridge",
+            "RecursiveSpendAppendRequestEncoderFailsClosedForReservedOutputAndRejectsMisplacedLineageMaterial",
             "RecursiveSpendGeneratedPallasInitRequestHelperRejectsLineageBeforeNativeBuilder",
             "RecursiveSpendGeneratedPallasAppendRequestHelperRejectsLineageBeforeNativeBuilder",
             "ValidSpendableNoteDescriptor",
             "VerifyingKeyRecordArchive",
             "wrongArtifactProfile",
-            "missingPreviousRecord",
-            "missingPreviousOpenings",
-            "malformedPreviousOpenings",
-            "overCountPreviousOpenings",
+            "reservedOutput",
+            "danglingPreviousRecord",
             "danglingPreviousOpenings",
             "wrongAppendArtifact",
             "danglingLineageKeyMaterial",
             "malformedRecordBundle",
         ),
         "C# typed recursive spend init/append request codec tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+        "public void RecursiveSpendAppendRequestEncoderFailsClosedForReservedOutputAndRejectsMisplacedLineageMaterial()",
+        "public void RecursiveSpendGeneratedPallasInitRequestHelperRejectsLineageBeforeNativeBuilder()",
+        (
+            "RecursiveSpendLineageAppendProofCircuitIdV1",
+            "Assert.Equal(\"outputProofCircuitId\", reservedOutput.ParamName);",
+            "outputProofCircuitId is not valid for the previous bundle",
+            "RecursiveAggregationProofCircuitIdV1",
+            "Assert.Equal(0x00, fields[5][0]);",
+            "Assert.Equal(0x00, fields[6][0]);",
+            "Assert.Equal(0x00, fields[7][0]);",
+            "Assert.Equal(0x00, fields[8][0]);",
+            "Assert.Equal(0x01, fields[9][0]);",
+            "previousLineageVerifierRecordArchive is only valid",
+            "previousProofOpenEnvelopesArchive is only valid",
+            "lineageKeyArtifacts are only valid for lineage append output",
+        ),
+        "C# fail-closed Reserved append request codec tests",
         errors,
     )
     require_contains(
@@ -29737,11 +30195,17 @@ def check_java_kotlin(texts, errors):
             "requiredOptionPayloadWithTrailingByte",
             "requiredOptionPayloadWithUnknownTag",
             "requiredOptionPayloadWithDeclaredLengthTooLong",
-            '.invalidArchive("pallasOpenEnvelopes.\\(metadataField)")',
-            '.invalidArchive("previousProofOpenEnvelopes.\\(metadataField)")',
         ),
-        "Swift Pallas metadata option generic fixed32 and malformed framing vectors",
+        "Swift Pallas metadata option generic fixed32 and fail-closed append vectors",
         errors,
+    )
+    require_regex(
+        texts,
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+        r'for \(metadataField, archive\) in malformedPallasMetadataArchives \{(?:(?!for \(metadataField, archive\))[\s\S])*?KagemushaRecursiveSpendAppendRequest\((?:(?!for \(metadataField, archive\))[\s\S])*?previousProofOpenEnvelopes: archive,(?:(?!for \(metadataField, archive\))[\s\S])*?\.invalidField\("outputProofCircuitId"\),\s*metadataField',
+        "Swift Pallas metadata append vectors fail closed before archive parsing",
+        errors,
+        flags=re.S,
     )
     require_contains(
         texts,
@@ -29751,9 +30215,9 @@ def check_java_kotlin(texts, errors):
             "publicInputsSchemaHashPayload: kagemushaFixedArrayPayload(0x71, 32)",
             "domainTagPayload: kagemushaFixedArrayPayload(0x72, 32)",
             "accepted stale fixed-array Pallas metadata payload",
-            "accepted stale fixed-array previous-proof Pallas metadata payload",
+            "parsed unavailable lineage append metadata",
             "error.field === `pallasOpenEnvelopes[0].${metadataField}`",
-            "error.field === `previousProofOpenEnvelopes[0].${metadataField}`",
+            'kagemushaRequestCodecError("field", "outputProofCircuitId", null)',
         ),
         "JavaScript Pallas metadata option malformed fixed-array vectors",
         errors,
@@ -29766,10 +30230,10 @@ def check_java_kotlin(texts, errors):
             "publicInputsSchemaHashPayload: kagemushaFixedArrayPayload(0x71, 32)",
             "domainTagPayload: kagemushaFixedArrayPayload(0x72, 32)",
             "package dist accepted malformed init Pallas open-envelope archive",
-            "package dist accepted malformed previous-proof Pallas open-envelope archive",
+            "package dist parsed unavailable lineage append metadata",
             "malformedPallasMetadataArchives",
             "error.field === `pallasOpenEnvelopes[0].${metadataField}`",
-            "error.field === `previousProofOpenEnvelopes[0].${metadataField}`",
+            'kagemushaRequestCodecError("field", "outputProofCircuitId", null)',
         ),
         "JavaScript package dist Pallas metadata option malformed fixed-array vectors",
         errors,
@@ -30115,7 +30579,7 @@ def check_java_kotlin(texts, errors):
             "paramsGSequencePayload: u64LE(5)",
             "proofLSequencePayload: u64LE(3)",
             "accepted raw count-prefix-only Pallas sequence payload",
-            "accepted raw count-prefix-only previous-proof Pallas sequence payload",
+            "parsed unavailable lineage append sequence",
             "previousProofOpenEnvelopes[0].proof",
         ),
         "JavaScript Pallas sequence count-prefix vectors",
@@ -30155,11 +30619,18 @@ def check_java_kotlin(texts, errors):
             "paramsGSequencePayload: Self.uint64Payload(5)",
             "proofLSequencePayload: Self.uint64Payload(3)",
             '.invalidArchive("pallasOpenEnvelopes.\\(sequenceField)")',
-            '.invalidArchive("previousProofOpenEnvelopes.\\(sequenceField)")',
             "private static func uint64Payload(_ value: UInt64) -> Data",
         ),
-        "Swift Pallas sequence count-prefix vectors",
+        "Swift Pallas sequence count-prefix and fail-closed append vectors",
         errors,
+    )
+    require_regex(
+        texts,
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+        r'for \(sequenceField, archive\) in malformedPallasSequenceArchives \{(?:(?!for \(sequenceField, archive\))[\s\S])*?KagemushaRecursiveSpendAppendRequest\((?:(?!for \(sequenceField, archive\))[\s\S])*?previousProofOpenEnvelopes: archive,(?:(?!for \(sequenceField, archive\))[\s\S])*?\.invalidField\("outputProofCircuitId"\),\s*sequenceField',
+        "Swift Pallas sequence append vectors fail closed before archive parsing",
+        errors,
+        flags=re.S,
     )
     require_contains(
         texts,
@@ -30212,8 +30683,8 @@ def check_java_kotlin(texts, errors):
         "  for (const [\n    metadataField,",
         (
             "previousProofOpenEnvelopes: malformedPreviousProofOpenEnvelopes",
-            'kagemushaRequestCodecError("archive", previousField, message)',
-            "package dist accepted malformed previous-proof Pallas open-envelope archive",
+            'kagemushaRequestCodecError("field", "outputProofCircuitId", null)',
+            "package dist parsed unavailable lineage append opening",
         ),
         "JavaScript dist typed recursive spend previous-proof Pallas preflight tests",
         errors,
@@ -30222,29 +30693,29 @@ def check_java_kotlin(texts, errors):
         texts,
         "javascript/iroha_js/test/package_dist.test.js",
         (
-            "package dist Kagemusha recursive spend typed requests reject malformed raw lineage key fields before native dispatch",
+            "package dist Kagemusha recursive spend validates init keys and fails closed before append key parsing",
             "package dist accepted init raw lineage proving key without verifier key",
             "package dist accepted init raw lineage verifier key without proving key",
             "package dist accepted init raw lineage key profile mismatch",
-            "package dist accepted append raw lineage keys without previous proof openings",
-            "package dist accepted append raw lineage proving key without verifier key",
-            "package dist accepted append raw lineage verifier key without proving key",
-            "package dist accepted append raw lineage key profile mismatch",
+            "package dist did not fail closed before append key parsing",
+            "package dist parsed append raw lineage proving key while the circuit is unavailable",
+            "package dist parsed append raw lineage verifier key while the circuit is unavailable",
+            "package dist parsed append key profiles while the circuit is unavailable",
             "lineageProvingKeyArchive: appendProvingKey",
             "lineageProvingKeyArchive: initProvingKey",
             'kagemushaRequestCodecError("field", "lineageVerifierKey", null)',
             'kagemushaRequestCodecError("archive", "lineageProvingKeyArchive", null)',
             'kagemushaRequestCodecError("field", "lineageKeyArtifacts", /lineageKeyArtifacts:/)',
-            'kagemushaRequestCodecError("field", "previousProofOpenEnvelopes", null)',
+            'kagemushaRequestCodecError("field", "outputProofCircuitId", null)',
         ),
         "JavaScript dist typed recursive spend raw lineage key request tests",
         errors,
     )
     raw_lineage_block_start = (
-        'test("package dist Kagemusha recursive spend typed requests reject malformed raw lineage key fields before native dispatch", () => {'
+        'test("package dist Kagemusha recursive spend validates init keys and fails closed before append key parsing", () => {'
     )
     raw_lineage_block_end = (
-        'test("package dist Kagemusha recursive spend typed requests parse previous lineage records before opening validation", () => {'
+        'test("package dist Kagemusha recursive spend fails closed before previous lineage parsing", () => {'
     )
     for pattern, label in (
         (
@@ -30271,30 +30742,30 @@ def check_java_kotlin(texts, errors):
             r"previousLineageVerifierRecord,\s*"
             r"lineageVerifierKey: appendVerifierKey,\s*"
             r"lineageProvingKeyArchive: appendProvingKey,\s*\}\),\s*"
-            r'kagemushaRequestCodecError\("field", "previousProofOpenEnvelopes", null\),\s*'
-            r'"package dist accepted append raw lineage keys without previous proof openings"',
+            r'kagemushaRequestCodecError\("field", "outputProofCircuitId", null\),\s*'
+            r'"package dist did not fail closed before append key parsing"',
             "JavaScript dist typed recursive spend raw lineage append missing-previous-openings input vector",
         ),
         (
             r"previousProofOpenEnvelopes,\s*"
             r"lineageProvingKeyArchive: appendProvingKey,\s*\}\),\s*"
-            r'kagemushaRequestCodecError\("field", "lineageVerifierKey", null\),\s*'
-            r'"package dist accepted append raw lineage proving key without verifier key"',
+            r'kagemushaRequestCodecError\("field", "outputProofCircuitId", null\),\s*'
+            r'"package dist parsed append raw lineage proving key while the circuit is unavailable"',
             "JavaScript dist typed recursive spend raw lineage append proving-without-verifier input vector",
         ),
         (
             r"previousProofOpenEnvelopes,\s*"
             r"lineageVerifierKey: appendVerifierKey,\s*\}\),\s*"
-            r'kagemushaRequestCodecError\("archive", "lineageProvingKeyArchive", null\),\s*'
-            r'"package dist accepted append raw lineage verifier key without proving key"',
+            r'kagemushaRequestCodecError\("field", "outputProofCircuitId", null\),\s*'
+            r'"package dist parsed append raw lineage verifier key while the circuit is unavailable"',
             "JavaScript dist typed recursive spend raw lineage append verifier-without-proving input vector",
         ),
         (
             r"previousProofOpenEnvelopes,\s*"
             r"lineageVerifierKey: appendVerifierKey,\s*"
             r"lineageProvingKeyArchive: initProvingKey,\s*\}\),\s*"
-            r'kagemushaRequestCodecError\("field", "lineageKeyArtifacts", /lineageKeyArtifacts:/\),\s*'
-            r'"package dist accepted append raw lineage key profile mismatch"',
+            r'kagemushaRequestCodecError\("field", "outputProofCircuitId", null\),\s*'
+            r'"package dist parsed append key profiles while the circuit is unavailable"',
             "JavaScript dist typed recursive spend raw lineage append wrong-circuit proving-key input vector",
         ),
     ):
@@ -30311,11 +30782,11 @@ def check_java_kotlin(texts, errors):
         texts,
         "javascript/iroha_js/test/package_dist.test.js",
         (
-            "package dist Kagemusha recursive spend typed requests parse previous lineage records before opening validation",
+            "package dist Kagemusha recursive spend fails closed before previous lineage parsing",
             "malformedPreviousLineageRecordBeforeOpeningsPackageDist",
             "previousProofOpenEnvelopes: syntheticPallasOpenEnvelopesArchive(2)",
-            'kagemushaRequestCodecError(\n      "archive",\n      "previousLineageVerifierRecord",\n      /valid Norito archive/,\n    )',
-            "package dist checked previous-proof openings before parsing previous lineage record",
+            'kagemushaRequestCodecError("field", "outputProofCircuitId", null)',
+            "package dist parsed previous lineage material while the output circuit is unavailable",
         ),
         "JavaScript package dist previous-lineage record parse ordering tests",
         errors,
@@ -30951,7 +31422,7 @@ def check_csharp(texts, errors):
         (
             "RequiredNativeBridgeAbiVersion = 6",
             "RecursiveSpendLineageWitnesslessMaxHopsV1 = 64",
-            "RecursiveSpendLineageTransitionCircuitWiredV1 = true",
+            "RecursiveSpendLineageTransitionCircuitWiredV1 = false",
             "RecursivePreviousProofOpenEnvelopesRequiredCountV1 = 1",
             "RecursivePreviousProofOpenEnvelopesMaxBytes = 8 * 1024 * 1024",
             "RecursivePallasOpenEnvelopeMaxTranscriptLabelBytes = 128",
@@ -31767,6 +32238,26 @@ def check_csharp(texts, errors):
         "C# Kagemusha instruction transaction builder tests",
         errors,
     )
+    require_block_regex(
+        texts,
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs",
+        "public void KagemushaRecursiveRedeemMetadataOverloadsAllowValidRelationshipsBeforeNativeRequestValidation()",
+        "public void BuildSignedEmbedsKagemushaInstructionArchiveWithoutReframing()",
+        r"RecursiveSpendLineageAppendProofCircuitIdV1,\s*hopCount: 2u,\s*hasLineageWitness: true,\s*hasLineageVerifierRecord: false,\s*lineageVerifierRecordCount: 2\)",
+        "C# reserved valid-relationship lineage witness binding for record vectors",
+        errors,
+        flags=re.S,
+    )
+    require_block_regex(
+        texts,
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs",
+        "public void KagemushaRecursiveRedeemMetadataOverloadsAllowValidRelationshipsBeforeNativeRequestValidation()",
+        "public void BuildSignedEmbedsKagemushaInstructionArchiveWithoutReframing()",
+        r"RecursiveSpendLineageAppendProofCircuitIdV1,\s*hopCount: 2u,\s*hasLineageWitness: true,\s*hasLineageVerifierRecord: false,\s*lineageVerifierRecordCount: 1,\s*publicAmount: \"40\"",
+        "C# reserved valid-relationship lineage witness binding for change output",
+        errors,
+        flags=re.S,
+    )
     require_contains(
         texts,
         "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
@@ -32207,33 +32698,37 @@ def check_sdk_readme_instruction_transaction_surface(texts, errors):
         "RedeemKagemushaRecursive",
         "valid Norito archives",
         "empty, malformed, tampered, or wrong-type instruction archives",
-        "recursive redeem derivation inside",
     )
     sdk_required = {
         "IrohaSwift/README.md": (
             "KagemushaInstructionTransactionRequest",
             "IrohaSDK.buildKagemushaRecursiveRedeem(...)",
+            "recursive top-up/redeem derivation inside",
         ),
         "java/iroha_android/README.md": (
             "KagemushaInstructionArchives",
             "builds a single archived instruction transaction payload",
             "derives the redeem instruction from a native recursive redeem request",
+            "recursive redeem derivation inside",
         ),
         "kotlin/README.md": (
             "KagemushaInstructionArchives",
             "builds a single archived instruction transaction payload",
             "derives the redeem instruction from a native recursive redeem request",
+            "recursive top-up/redeem derivation inside",
         ),
         "csharp/README.md": (
             "TransactionInstruction.KagemushaInstructionArchive(...)",
             "KagemushaInstructionArchiveInstruction",
             "TransactionBuilder.KagemushaInstructionArchive(...)",
             "TransactionBuilder.KagemushaRecursiveRedeem(...)",
+            "recursive redeem derivation inside",
         ),
         "javascript/iroha_js/README.md": (
             "buildKagemushaInstructionArchiveInstruction({ instructionType, instructionArchive })",
             "buildKagemushaInstructionTransaction(...)",
             "buildKagemushaRecursiveRedeemTransaction(...)",
+            "recursive redeem derivation inside",
         ),
         "python/iroha_python/README.md": (
             "kagemusha_instruction_archive_instruction(instruction_type, instruction_archive)",
@@ -32241,6 +32736,7 @@ def check_sdk_readme_instruction_transaction_surface(texts, errors):
             "build_kagemusha_recursive_redeem_transaction(...)",
             "TransactionDraft.kagemusha_instruction_archive(...)",
             "TransactionDraft.kagemusha_recursive_redeem(...)",
+            "recursive redeem derivation inside",
         ),
     }
     for relative in SDK_README_PATHS:
@@ -34123,6 +34619,7 @@ def run_checks(texts):
     check_mobile_zk_torii_parser_shape_coverage(texts, errors)
     check_mobile_confidential_note_coverage(texts, errors)
     check_mobile_offline_readiness_coverage(texts, errors)
+    check_swift_offline_operation_contract(texts, errors)
     check_offline_readiness_artifact_contract(texts, errors)
     check_mobile_bearer_cash_policy_validation(texts, errors)
     check_mobile_offline_bearer_cash_text_exactness(texts, errors)
@@ -34136,7 +34633,7 @@ def run_checks(texts):
     check_kotlin_offline_payment_token_commitment_exactness(texts, errors)
     check_swift_offline_payment_token_commitment_exactness(texts, errors)
     check_kotlin_offline_cash_settlement_coverage(texts, errors)
-    check_kotlin_offline_cash_request_strictness(texts, errors)
+    check_kotlin_retired_offline_cash_http_surface_absent(texts, errors)
     check_kotlin_offline_wallet_compact_certificate_profile(texts, errors)
     check_kotlin_offline_wallet_recursive_proof_strictness(texts, errors)
     check_kotlin_offline_wallet_device_binding_alias_strictness(texts, errors)
@@ -39681,25 +40178,79 @@ if mode == "--negative-control-mobile-confidential-witness-codecs":
     raise SystemExit(0)
 
 if mode == "--negative-control-mobile-offline-readiness-coverage":
-    mutated = dict(texts)
-    target = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/OfflineToriiClient.kt"
-    old = 'private const val OFFLINE_TOP_UP_PATH = "/v1/offline/top-up"'
-    new = 'private const val OFFLINE_TOP_UP_PATH = "/v1/offline/v2/kagemusha/topup"'
-    mutated[target] = mutated[target].replace(old, new, 1)
-    if mutated[target] == texts[target]:
-        raise SystemExit("negative control failed: unable to mutate canonical Offline route")
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        expected = "Kotlin canonical Offline HTTP client missing " + old
-        if expected not in str(error):
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/OfflineToriiClient.kt",
+            'private const val OFFLINE_TOP_UP_PATH = "/v1/offline/top-up"',
+            'private const val OFFLINE_TOP_UP_PATH = "/v1/offline/v2/kagemusha/topup"',
+            "Kotlin canonical Offline HTTP client",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/OfflineToriiClient.java",
+            'OFFLINE_TOP_UP_PATH = "/v1/offline/top-up"',
+            'OFFLINE_TOP_UP_PATH = "/v1/offline/v2/kagemusha/topup"',
+            "Android Java canonical Offline HTTP client",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
+            "OfflineAPI.Endpoint.topUp.path",
+            '"/v1/offline/v2/kagemusha/topup"',
+            "Swift canonical Offline HTTP client",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientOperationTest.kt",
+            "topUpPostsCanonicalNoritoArchive",
+            "topUpPostsCompatibilityWrapper",
+            "Kotlin exact Offline operation tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/OfflineToriiClientTests.java",
+            "private static void operationsUseCanonicalPathsAndNoritoBodies() {",
+            "private static void operationsUseCompatibilityPathsAndJsonBodies() {",
+            "Android Java exact Offline HTTP tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
+            "testOfflineOperationsUseCanonicalPathsAndDirectNoritoBodies",
+            "testOfflineOperationsUseCompatibilityPathsAndWrappedBodies",
+            "Swift exact Offline HTTP tests",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, label in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
             raise SystemExit(
-                "negative control failed: canonical Offline route drift was rejected for the wrong reason: "
-                + str(error).splitlines()[0]
+                "negative control failed: unable to mutate typed mobile Offline operation coverage for "
+                + target
             )
-        print("negative control rejected canonical Offline route drift")
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: canonical Offline route drift was not detected")
+        mutated_texts[target] = mutated
+        expected = f"{label} missing {old}"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: typed mobile Offline operation drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: typed mobile Offline operation drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: typed mobile Offline operation drift was not detected")
+    print("negative control rejected typed mobile Offline operation drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-mobile-bearer-cash-policy-validation":
     mutated_texts = dict(texts)
@@ -40483,71 +41034,41 @@ if mode == "--negative-control-kotlin-offline-cash-settlement-coverage":
         print(detected_message)
     raise SystemExit(0)
 
-if mode == "--negative-control-kotlin-offline-cash-request-strictness":
+if mode == "--negative-control-kotlin-retired-offline-cash-http-surface":
     mutated_texts = dict(texts)
     mutations = (
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashCodec.kt",
-            "internal fun requireExactNonEmptyText(value: String, field: String): String",
-            "internal fun requireLooseNonEmptyText(value: String, field: String): String",
-            "Kotlin offline cash request strictness helpers missing internal fun requireExactNonEmptyText(value: String, field: String): String",
+            None,
+            "\nclass OfflineCashLoadRequest // /v1/offline/cash/load\n",
+            "Kotlin retired offline cash HTTP surface contains forbidden pattern",
         ),
         (
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashCodec.kt",
-            "amount.isNotEmpty() && amount.trim() == amount",
-            "amount.isNotEmpty()",
-            "Kotlin offline cash request strictness helpers missing amount.isNotEmpty() && amount.trim() == amount",
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineOperation.kt",
+            "operationIdFieldIndex = 6",
+            "operationIdFieldIndex = 5",
+            "Kotlin typed Offline operation request contract missing operationIdFieldIndex = 6",
         ),
         (
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashSetupRequest.kt",
-            'OfflineCashCodec.requireExactNonEmptyText(accountId, "account_id")',
-            "accountId",
-            'Kotlin offline cash setup request exactness missing OfflineCashCodec.requireExactNonEmptyText(accountId, "account_id")',
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/OfflineToriiClient.kt",
+            "OFFLINE_TOP_UP_PATH,\n            request.operationId,\n            request.noritoArchive(),\n            OfflineOperationKind.TOP_UP,",
+            "OFFLINE_TOP_UP_PATH,\n            request.operationId,\n            ByteArray(0),\n            OfflineOperationKind.TOP_UP,",
+            "Kotlin typed Offline operation client contract missing OFFLINE_TOP_UP_PATH,",
         ),
         (
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashLoadRequest.kt",
-            'OfflineCashCodec.requireOptionalExactNonEmptyText(lineageId, "lineage_id")',
-            "lineageId",
-            'Kotlin offline cash load request exactness missing OfflineCashCodec.requireOptionalExactNonEmptyText(lineageId, "lineage_id")',
-        ),
-        (
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashLoadRequest.kt",
-            'OfflineCashCodec.canonicalNonNegativeAmountString(amount, "amount")',
-            "amount",
-            'Kotlin offline cash load request exactness missing OfflineCashCodec.canonicalNonNegativeAmountString(amount, "amount")',
-        ),
-        (
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashRefreshRequest.kt",
-            'OfflineCashCodec.requireExactNonEmptyText(operationId, "operation_id")',
-            "operationId",
-            'Kotlin offline cash refresh request exactness missing OfflineCashCodec.requireExactNonEmptyText(operationId, "operation_id")',
-        ),
-        (
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashSyncRequest.kt",
-            'OfflineCashCodec.requireExactNonEmptyText(lineageId, "lineage_id")',
-            "lineageId",
-            'Kotlin offline cash sync request exactness missing OfflineCashCodec.requireExactNonEmptyText(lineageId, "lineage_id")',
-        ),
-        (
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashRedeemRequest.kt",
-            'OfflineCashCodec.canonicalNonNegativeAmountString(amount, "amount")',
-            "amount",
-            'Kotlin offline cash redeem request exactness missing OfflineCashCodec.canonicalNonNegativeAmountString(amount, "amount")',
-        ),
-        (
-            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineCashCodecTest.kt",
-            "cashMutationRequestsRejectNonCanonicalSignedFields",
-            "cashMutationRequestsAllowNonCanonicalSignedFields",
-            "Kotlin offline cash request strictness tests missing cashMutationRequestsRejectNonCanonicalSignedFields",
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientOperationTest.kt",
+            "requestsDeriveAndValidateCanonicalOperationIds",
+            "requestsPermitNonCanonicalOperationIds",
+            "Kotlin typed Offline operation adversarial tests missing requestsDeriveAndValidateCanonicalOperationIds",
         ),
     )
     detected_messages = []
-    for target, old, new, expected_label in mutations:
+    for target, old, new, expected in mutations:
         original = mutated_texts[target]
-        mutated = original.replace(old, new, 1)
+        mutated = original + new if old is None else original.replace(old, new, 1)
         if mutated == original:
             raise SystemExit(
-                "negative control failed: unable to mutate Kotlin offline cash request strictness for "
+                "negative control failed: unable to mutate Kotlin typed Offline operation contract for "
                 + target
             )
         mutated_texts[target] = mutated
@@ -40555,17 +41076,17 @@ if mode == "--negative-control-kotlin-offline-cash-request-strictness":
             detected_messages.extend(
                 detect_negative_control(
                     mutated_texts,
-                    (expected_label,),
-                    "Kotlin offline cash request strictness drift",
+                    (expected,),
+                    "Kotlin typed Offline operation contract drift",
                 )
             )
         finally:
             mutated_texts[target] = original
     if not detected_messages:
-        raise SystemExit("negative control failed: Kotlin offline cash request strictness drift was not detected")
-    print("negative control rejected Kotlin offline cash request strictness drift")
-    for detected_message in detected_messages:
-        print(detected_message)
+        raise SystemExit("negative control failed: Kotlin typed Offline operation contract drift was not detected")
+    print("negative control rejected Kotlin typed Offline operation contract drift")
+    for message in detected_messages:
+        print(message)
     raise SystemExit(0)
 
 if mode == "--negative-control-kotlin-offline-wallet-compact-certificate-profile":
@@ -41668,28 +42189,67 @@ if mode == "--negative-control-android-offline-note-issued-claim-amount-exactnes
     raise SystemExit(0)
 
 if mode == "--negative-control-offline-readiness-artifact-contract":
-    mutated = dict(texts)
-    target = "crates/iroha_torii/src/lib.rs"
-    old = 'HeaderValue::from_static("private, max-age=0, must-revalidate")'
-    mutated[target] = mutated[target].replace(
-        old,
-        'HeaderValue::from_static("public, max-age=3600")',
-        1,
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "crates/iroha_torii/src/lib.rs",
+            'HeaderValue::from_static("private, max-age=0, must-revalidate")',
+            'HeaderValue::from_static("public, max-age=3600")',
+            "Torii Offline readiness snapshot cache contract",
+        ),
+        (
+            "crates/iroha_torii/tests/offline_readiness_smoke.rs",
+            "offline_router_exposes_only_the_final_first_release_contract",
+            "offline_router_exposes_retired_compatibility_contracts",
+            "Torii first-release Offline router smoke coverage",
+        ),
+        (
+            "crates/iroha_torii/tests/offline_v2_readiness_smoke.rs",
+            "offline_catalog_exposes_only_the_first_release_routes",
+            "offline_catalog_exposes_retired_routes",
+            "Offline catalog projection coverage",
+        ),
+        (
+            "python/iroha_torii_client/client.py",
+            'f"{blocker_context}.code must be a stable lowercase code of 1 to 64 characters"',
+            'f"{blocker_context}.code may use any display code"',
+            "Python Torii first-release offline readiness contract",
+        ),
     )
-    if mutated[target] == texts[target]:
-        raise SystemExit("negative control failed: unable to mutate Offline readiness cache policy")
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        expected = "Torii Offline readiness snapshot cache contract missing " + old
-        if expected not in str(error):
+    detected_messages = []
+    for target, old, new, label in targets:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
             raise SystemExit(
-                "negative control failed: Offline readiness cache drift was rejected for the wrong reason: "
-                + str(error).splitlines()[0]
+                "negative control failed: unable to mutate first-release Offline readiness contract for "
+                + target
             )
-        print("negative control rejected Offline readiness cache drift")
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: Offline readiness cache drift was not detected")
+        mutated_texts[target] = mutated
+        expected = f"{label} missing {old}"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: first-release Offline readiness drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: first-release Offline readiness drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: first-release Offline readiness drift was not detected")
+    print("negative control rejected first-release Offline readiness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-offline-cash-issuer-key-exactness":
     mutated_texts = dict(texts)
@@ -47695,8 +48255,8 @@ if mode == "--negative-control-js-browser-helper":
     mutated = dict(texts)
     target = "javascript/iroha_js/dist/crypto.browser.js"
     mutated[target] = mutated[target].replace(
-        "export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = true;",
         "export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = false;",
+        "export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = true;",
         1,
     )
     if mutated[target] == texts[target]:
@@ -47706,7 +48266,7 @@ if mode == "--negative-control-js-browser-helper":
     except ParityError as error:
         message = str(error)
         expected_labels = (
-            "javascript/iroha_js/dist/crypto.browser.js constants missing KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = true",
+            "javascript/iroha_js/dist/crypto.browser.js constants missing KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = false",
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:
@@ -49407,24 +49967,24 @@ if mode == "--negative-control-js-package-dist-raw-lineage-key-vectors":
             "JavaScript dist typed recursive spend raw lineage key request tests missing package dist accepted init raw lineage key profile mismatch",
         ),
         (
-            "package dist accepted append raw lineage keys without previous proof openings",
-            "package dist accepted append raw lineage keys with previous proof openings",
-            "JavaScript dist typed recursive spend raw lineage key request tests missing package dist accepted append raw lineage keys without previous proof openings",
+            "package dist did not fail closed before append key parsing",
+            "package dist parsed append keys before checking circuit availability",
+            "JavaScript dist typed recursive spend raw lineage key request tests missing package dist did not fail closed before append key parsing",
         ),
         (
-            "package dist accepted append raw lineage proving key without verifier key",
-            "package dist accepted append raw lineage proving key with verifier key",
-            "JavaScript dist typed recursive spend raw lineage key request tests missing package dist accepted append raw lineage proving key without verifier key",
+            "package dist parsed append raw lineage proving key while the circuit is unavailable",
+            "package dist accepted append raw lineage proving key while the circuit is unavailable",
+            "JavaScript dist typed recursive spend raw lineage key request tests missing package dist parsed append raw lineage proving key while the circuit is unavailable",
         ),
         (
-            "package dist accepted append raw lineage verifier key without proving key",
-            "package dist accepted append raw lineage verifier key with proving key",
-            "JavaScript dist typed recursive spend raw lineage key request tests missing package dist accepted append raw lineage verifier key without proving key",
+            "package dist parsed append raw lineage verifier key while the circuit is unavailable",
+            "package dist accepted append raw lineage verifier key while the circuit is unavailable",
+            "JavaScript dist typed recursive spend raw lineage key request tests missing package dist parsed append raw lineage verifier key while the circuit is unavailable",
         ),
         (
-            "package dist accepted append raw lineage key profile mismatch",
-            "package dist accepted append raw lineage key profile match",
-            "JavaScript dist typed recursive spend raw lineage key request tests missing package dist accepted append raw lineage key profile mismatch",
+            "package dist parsed append key profiles while the circuit is unavailable",
+            "package dist accepted append key profiles while the circuit is unavailable",
+            "JavaScript dist typed recursive spend raw lineage key request tests missing package dist parsed append key profiles while the circuit is unavailable",
         ),
     )
     input_replacements = (
@@ -50092,6 +50652,48 @@ if mode == "--negative-control-csharp-kagemusha-recursive-redeem-builder-metadat
     mutated = dict(texts)
     source_target = "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionBuilder.cs"
     test_target = "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs"
+    reserved_change_before = (
+        "KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,\n"
+        "                hopCount: 2u,\n"
+        "                hasLineageWitness: true,\n"
+        "                hasLineageVerifierRecord: false,\n"
+        "                lineageVerifierRecordCount: 1,\n"
+    )
+    reserved_change_after = reserved_change_before.replace(
+        "hasLineageWitness: true",
+        "hasLineageWitness: false",
+        1,
+    )
+    witness_only = dict(texts)
+    witness_only_test = texts[test_target].replace(
+        reserved_change_before,
+        reserved_change_after,
+        1,
+    )
+    if witness_only_test == texts[test_target] or reserved_change_before in witness_only_test:
+        raise SystemExit(
+            "negative control failed: unable to mutate C# reserved valid-relationship lineage witness"
+        )
+    witness_only[test_target] = witness_only_test
+    try:
+        run_checks(witness_only)
+    except ParityError as error:
+        message = str(error)
+        expected_label = (
+            "C# reserved valid-relationship lineage witness binding for change output"
+        )
+        if expected_label not in message:
+            raise SystemExit(
+                "negative control failed: C# reserved valid-relationship lineage witness drift "
+                "was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
+        print("negative control rejected C# reserved valid-relationship witness drift")
+        print(first_lines_for_labels(message, (expected_label,))[0])
+    else:
+        raise SystemExit(
+            "negative control failed: C# reserved valid-relationship lineage witness drift was not detected"
+        )
     mutated_source = texts[source_target].replace(
         "KagemushaRecursiveSpendNative.Redeem(\n"
         "            redeemRequestArchive,\n"
@@ -50695,6 +51297,334 @@ if mode == "--negative-control-swift-compact-projection-hardening":
 
 
 
+if mode == "--negative-control-swift-offline-note-retired-route-wording":
+    mutated = dict(texts)
+    target = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
+    replacements = (
+        (
+            "testOfflineNoteKeychainStoreKeepsUnrevisionedCollectionWhenMetadataSaveFails",
+            "testOfflineNoteKeychainStoreKeepsLeg" "acyCollectionWhenMetadataSaveFails",
+        ),
+        (
+            "metadata-blocks-unrevisioned-collection-test",
+            "metadata-blocks-leg" "acy-fallback-test",
+        ),
+        (
+            "testOfflineNoteKeychainStoreUsesMetadataWhenUnrevisionedDeleteFails",
+            "testOfflineNoteKeychainStoreUsesMetadataWhenLeg" "acyDeleteFails",
+        ),
+        (
+            "testToriiIssuerClientDoesNotRetryRetiredRoutesAfterV2Failure",
+            "testToriiIssuerClientDoesNotFallBackToLeg" "acyRoutesAfterV2Failure",
+        ),
+        (
+            "client must not retry retired offline issuer routes",
+            "client must not fall back to leg" "acy offline issuer routes",
+        ),
+        (
+            "v2 issuer 404 must be surfaced instead of retrying retired routes",
+            "v2 issuer 404 must be surfaced instead of retrying leg" "acy routes",
+        ),
+    )
+    expected_label = (
+        "Swift Offline Note retired route and unrevisioned keychain wording contains forbidden pattern "
+        "KeepsLeg" "acyCollection|DoesNotFallBackToLeg"
+        "acyCollection|UsesMetadataWhenLeg" "acyDelete|leg"
+        "acy-metadata|metadata-blocks-leg" "acy|leg"
+        "acy-delete|leg" "acy offline issuer|retrying leg"
+        "acy|unexpected\\\":\\\"leg" "acy|DoesNotFallBackToLeg"
+        "acyRoutes"
+    )
+    detected_messages = []
+
+    for before, after in replacements:
+        current = mutated[target]
+        updated = current.replace(before, after, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate Swift retired route wording: "
+                + before
+            )
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: Swift retired route wording drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: Swift retired route wording drift was not detected for "
+            + before
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: Swift retired route wording drift was not detected")
+    print("negative control rejected Swift retired route wording drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-swift-offline-note-payload-certificate-fail-closed":
+    mutated = dict(texts)
+    source = "IrohaSwift/Sources/IrohaSwift/OfflineNotePayloads.swift"
+    test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
+    mutations = (
+        (
+            source,
+            "guard resolvedAssertionScheme == defaultAssertionScheme else {",
+            "if false && resolvedAssertionScheme != defaultAssertionScheme {",
+            (
+                "Swift Offline Note payload certificate canonical profile source",
+            ),
+        ),
+        (
+            source,
+            "case OfflineNoteV2Constants.androidKeyMintPlatform:",
+            'case _ where platform.contains("android"):',
+            (
+                "Swift Offline Note payload certificate exact platform profile source contains forbidden pattern",
+            ),
+        ),
+        (
+            source,
+            "guard let issuerSignature = OfflineNoteTextPayloadEncoding.decodeExactBase64(issuerSignatureBase64),\n"
+            "              issuerSignature.count == 64 else {\n"
+            "            throw OfflineNotePayloadError.invalidField(\"issuer_signature_base64\")\n"
+            "        }",
+            "let decodedSignature = OfflineNoteTextPayloadEncoding.decodeBase64Like(issuerSignatureBase64)\n"
+            "        let issuerSignature = decodedSignature?.count == 64\n"
+            "            ? decodedSignature!\n"
+            "            : Data(repeating: 0, count: 64)",
+            (
+                "Swift Offline Note payload certificate exact-base64 fail-closed source",
+                "Swift Offline Note payload certificate must not synthesize zero issuer signatures",
+            ),
+        ),
+        (
+            source,
+            "decoded.base64EncodedString() == value",
+            "true",
+            (
+                "Swift Offline Note payload certificate exact-base64 fail-closed source",
+            ),
+        ),
+        (
+            source,
+            "guard appAttestPublicKeyBase64 == nil else {\n"
+            "            throw OfflineNotePayloadError.invalidField(\"app_attest_public_key_base64\")\n"
+            "        }\n"
+            "        guard let assertionPublicKeyValue = assertionPublicKey else {\n"
+            "            throw OfflineNotePayloadError.invalidField(\"assertion_public_key\")\n"
+            "        }",
+            "let assertionPublicKeyValue = assertionPublicKey\n"
+            "            ?? appAttestPublicKeyBase64\n"
+            "            ?? publicKey",
+            (
+                "Swift Offline Note payload certificate retired assertion-key alias source",
+            ),
+        ),
+        (
+            test,
+            "func testCompactKeyCertificateRejectsRetiredAssertionPublicKeyAlias() throws",
+            "func testCompactKeyCertificateAllowsRetiredAssertionPublicKeyAlias() throws",
+            (
+                "Swift Offline Note payload certificate fail-closed tests",
+            ),
+        ),
+        (
+            source,
+            "guard let proofBytes = OfflineNoteTextPayloadEncoding.decodeExactBase64(proofBytesBase64),\n"
+            "              !proofBytes.isEmpty else {",
+            "guard let proofBytes = OfflineNoteTextPayloadEncoding.decodeBase64Like(proofBytesBase64),\n"
+            "              !proofBytes.isEmpty else {",
+            (
+                "Swift Offline recursive proof exact-base64 source",
+                "Swift Offline payload must not keep permissive base64-like decoder",
+            ),
+        ),
+        (
+            source,
+            "static func canonicalAmount(_ value: String) throws -> String {\n"
+            "        try ToriiOfflineCashCodec.canonicalAmountString(value)\n"
+            "    }",
+            "static func canonicalAmountOrOriginal(_ value: String) -> String {\n"
+            "        (try? ToriiOfflineCashCodec.canonicalAmountString(value)) ?? value\n"
+            "    }",
+            (
+                "Swift Offline Note payload amount strict source",
+                "Swift Offline payload must not keep permissive amount normalization",
+            ),
+        ),
+        (
+            source,
+            "guard assetId == issuedClaim.assetId else {\n"
+            "            throw OfflineNotePayloadError.invalidField(\"asset_id\")\n"
+            "        }",
+            "if false && assetId != issuedClaim.assetId {\n"
+            "            throw OfflineNotePayloadError.invalidField(\"asset_id\")\n"
+            "        }",
+            (
+                "Swift Offline Note payload input-claim amount/hash strict source",
+            ),
+        ),
+        (
+            source,
+            "claimHash: container.decodeIfPresent(String.self, forKey: .claimHash)",
+            "claimHash: nil",
+            (
+                "Swift Offline Note payload input-claim amount/hash strict source",
+            ),
+        ),
+        (
+            source,
+            "value == value.lowercased()",
+            "true",
+            (
+                "Swift Offline Note payload input-claim amount/hash strict source",
+            ),
+        ),
+        (
+            test,
+            "func testCompactKeyCertificateRejectsNonCanonicalCertificateFields() throws",
+            "func testCompactKeyCertificateAllowsNonCanonicalCertificateFields() throws",
+            (
+                "Swift Offline Note payload certificate fail-closed tests",
+            ),
+        ),
+        (
+            test,
+            'for invalidPlatform in ["android", "android-keymint ", "Android-keymint", "ios-appattest-android"]',
+            'for invalidPlatform in ["android"]',
+            (
+                'Swift Offline Note payload certificate fail-closed tests missing for invalidPlatform in ["android", "android-keymint ", "Android-keymint", "ios-appattest-android"]',
+            ),
+        ),
+        (
+            test,
+            "func testCompactKeyCertificateRejectsNonCanonicalBase64Encodings() throws",
+            "func testCompactKeyCertificateAllowsNonCanonicalBase64Encodings() throws",
+            (
+                "Swift Offline Note payload certificate fail-closed tests",
+            ),
+        ),
+        (
+            test,
+            "let hexPublicKey = Data(repeating: 1, count: 33)",
+            "let hexPublicKey = Data(repeating: 1, count: 32)",
+            (
+                "Swift Offline Note payload certificate fail-closed tests",
+            ),
+        ),
+        (
+            test,
+            "let urlSafeAssertionKey = Data(repeating: 0xFF, count: 32)",
+            "let urlSafeAssertionKey = Data(repeating: 0x2F, count: 32)",
+            (
+                "Swift Offline Note payload certificate fail-closed tests",
+            ),
+        ),
+        (
+            test,
+            "func testRecursiveProofRejectsNonCanonicalBase64Encodings() throws",
+            "func testRecursiveProofAllowsNonCanonicalBase64Encodings() throws",
+            (
+                "Swift Offline recursive proof exact-base64 tests",
+            ),
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+            "func testOfflineNotePayloadRejectsInvalidAmountStrings() throws",
+            "func testOfflineNotePayloadAllowsInvalidAmountStrings() throws",
+            (
+                "Swift Offline Note payload amount strict tests",
+            ),
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+            'noteCommitment: "0x\\(inputClaim.noteCommitment)"',
+            "noteCommitment: inputClaim.noteCommitment",
+            (
+                "Swift Offline Note payload amount strict tests",
+            ),
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+            'claimHash: "0x\\(computedClaimHash)"',
+            "claimHash: computedClaimHash",
+            (
+                "Swift Offline Note payload amount strict tests",
+            ),
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+            "claimHash: computedClaimHash.uppercased()",
+            "claimHash: computedClaimHash",
+            (
+                "Swift Offline Note payload amount strict tests",
+            ),
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+            "JSONDecoder().decode(OfflinePaymentTokenInputClaim.self, from: inputData)",
+            "JSONDecoder().decode(OfflinePaymentTokenOutputClaim.self, from: inputData)",
+            (
+                "Swift Offline Note payload amount strict tests",
+            ),
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+            "JSONDecoder().decode(OfflinePaymentTokenInputClaim.self, from: mismatchedClaimHashData)",
+            "JSONDecoder().decode(OfflinePaymentTokenInputClaim.self, from: inputData)",
+            (
+                "Swift Offline Note payload amount strict tests",
+            ),
+        ),
+        (
+            test,
+            "let hexProofBytes = Data(repeating: 4, count: 33)",
+            "let hexProofBytes = Data(repeating: 4, count: 32)",
+            (
+                "Swift Offline recursive proof exact-base64 tests",
+            ),
+        ),
+        (
+            test,
+            "let urlSafeProofBytes = Data(repeating: 0xFF, count: 64)",
+            "let urlSafeProofBytes = Data(repeating: 0x2F, count: 64)",
+            (
+                "Swift Offline recursive proof exact-base64 tests",
+            ),
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_labels in mutations:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate Swift Offline Note payload certificate "
+                + target
+            )
+        mutated[target] = updated
+        detected_messages.extend(
+            detect_negative_control(
+                mutated,
+                expected_labels,
+                "Swift Offline Note payload certificate fail-closed drift",
+            )
+        )
+        mutated[target] = current
+    print("negative control rejected Swift Offline Note payload certificate fail-closed drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
 if mode == "--negative-control-swift-offline-note-v2-registration-certificate-payload":
     mutated = dict(texts)
     source = "IrohaSwift/Sources/IrohaSwift/OfflineNoteV2.swift"
@@ -50861,6 +51791,189 @@ if mode == "--negative-control-mobile-offline-note-v2-retired-ios-app-attest-pro
         print(detected_message)
     raise SystemExit(0)
 
+
+if mode == "--negative-control-swift-offline-operation-request-contract":
+    mutated = dict(texts)
+    source = "IrohaSwift/Sources/IrohaSwift/ToriiOfflineCashAPIModels.swift"
+    test = "IrohaSwift/Tests/IrohaSwiftTests/ToriiOfflineCashAPIModelsTests.swift"
+    mutations = (
+        (
+            source,
+            "operationIdFieldIndex: 6",
+            "operationIdFieldIndex: 5",
+            (
+                "Swift typed Offline operation request contract",
+            ),
+        ),
+        (
+            source,
+            "frame.paddingLength == 0",
+            "frame.paddingLength >= 0",
+            (
+                "Swift typed Offline operation request contract",
+            ),
+        ),
+        (
+            test,
+            "testRequestsRequireTheirExactSchemaAndOperationIdField",
+            "testRequestsPermitSchemaAndOperationIdFieldDrift",
+            (
+                "Swift typed Offline operation request adversarial tests",
+            ),
+        ),
+        (
+            test,
+            "testRequestsRejectNonCanonicalFramingAndTrailingPayload",
+            "testRequestsAcceptNonCanonicalFramingAndTrailingPayload",
+            (
+                "Swift typed Offline operation request adversarial tests",
+            ),
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_labels in mutations:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate Swift typed Offline operation request contract "
+                + target
+            )
+        mutated[target] = updated
+        detected_messages.extend(
+            detect_negative_control(
+                mutated,
+                expected_labels,
+                "Swift typed Offline operation request contract drift",
+            )
+        )
+        mutated[target] = current
+    print("negative control rejected Swift typed Offline operation request contract drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-swift-offline-operation-status-contract":
+    mutated = dict(texts)
+    source = "IrohaSwift/Sources/IrohaSwift/ToriiOfflineCashAPIModels.swift"
+    test = "IrohaSwift/Tests/IrohaSwiftTests/ToriiOfflineCashAPIModelsTests.swift"
+    mutations = (
+        (
+            source,
+            '"iroha_torii_shared::offline_api::OfflineOperationStatus"',
+            '"iroha_torii_shared::offline_api::OfflineOperationCompatibilityStatus"',
+            (
+                "Swift typed Offline operation status codec contract",
+            ),
+        ),
+        (
+            source,
+            "frame.paddingLength == 8",
+            "frame.paddingLength >= 0",
+            (
+                "Swift typed Offline operation status codec contract",
+            ),
+        ),
+        (
+            test,
+            "testOperationStatusRequiresExactSharedSchema",
+            "testOperationStatusAcceptsAnySharedSchema",
+            (
+                "Swift typed Offline operation status codec tests",
+            ),
+        ),
+        (
+            test,
+            "testRejectedOperationStatusMatchesRustNoritoGoldenVector",
+            "testRejectedOperationStatusAllowsGoldenVectorDrift",
+            (
+                "Swift typed Offline operation status codec tests",
+            ),
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_labels in mutations:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate Swift typed Offline operation status codec contract "
+                + target
+            )
+        mutated[target] = updated
+        detected_messages.extend(
+            detect_negative_control(
+                mutated,
+                expected_labels,
+                "Swift typed Offline operation status codec contract drift",
+            )
+        )
+        mutated[target] = current
+    print("negative control rejected Swift typed Offline operation status codec contract drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-swift-offline-operation-client-contract":
+    mutated = dict(texts)
+    source = "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"
+    test = "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift"
+    mutations = (
+        (
+            source,
+            "path: OfflineAPI.Endpoint.topUp.path",
+            'path: "/v1/offline/v2/kagemusha/topup"',
+            (
+                "Swift typed Offline operation client contract",
+            ),
+        ),
+        (
+            source,
+            '"Idempotency-Key": operationId',
+            '"Idempotency-Key": "compatibility-key"',
+            (
+                "Swift typed Offline operation client contract",
+            ),
+        ),
+        (
+            test,
+            "testOfflineOperationsUseCanonicalPathsAndDirectNoritoBodies",
+            "testOfflineOperationsUseCompatibilityPathsAndWrappedBodies",
+            (
+                "Swift typed Offline operation client tests",
+            ),
+        ),
+        (
+            test,
+            'case "/v1/offline/top-up":',
+            'case "/v1/offline/v2/kagemusha/topup":',
+            (
+                "Swift typed Offline operation client tests",
+            ),
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_labels in mutations:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate Swift typed Offline operation client contract "
+                + target
+            )
+        mutated[target] = updated
+        detected_messages.extend(
+            detect_negative_control(
+                mutated,
+                expected_labels,
+                "Swift typed Offline operation client contract drift",
+            )
+        )
+        mutated[target] = current
+    print("negative control rejected Swift typed Offline operation client contract drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-mobile-retired-qr-prefix-wording":
     mutated = dict(texts)
@@ -52768,7 +53881,7 @@ if mode == "--negative-control-non-csharp-pallas-sequence-count-prechecks":
             "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
             "paramsGSequencePayload: Self.uint64Payload(5)",
             "paramsGSequencePayload: Self.fixed32SequencePayload(count: 4, seed: 0x10)",
-            "Swift Pallas sequence count-prefix vectors",
+            "Swift Pallas sequence count-prefix and fail-closed append vectors",
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
@@ -52962,15 +54075,15 @@ if mode == "--negative-control-csharp-init-append-request-codecs":
         ),
         (
             "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
-            "RecursiveSpendAppendRequestEncoderRejectsPreviousProofOpeningAndLineageDriftBeforeNativeBridge",
-            "RecursiveSpendAppendRequestEncoderAcceptsPreviousProofOpeningAndLineageDrift",
+            "RecursiveSpendAppendRequestEncoderFailsClosedForReservedOutputAndRejectsMisplacedLineageMaterial",
+            "RecursiveSpendAppendRequestEncoderAllowsReservedOutputAndMisplacedLineageMaterial",
             "C# typed recursive spend init/append request codec tests",
         ),
         (
             "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
-            "missingPreviousOpenings",
-            "acceptedMissingPreviousOpenings",
-            "C# typed recursive spend init/append request codec tests",
+            "Assert.Contains(\"previousProofOpenEnvelopesArchive is only valid\", danglingPreviousOpenings.Message);",
+            "Assert.Contains(\"previousProofOpenEnvelopesArchive may be valid\", danglingPreviousOpenings.Message);",
+            "C# fail-closed Reserved append request codec tests",
         ),
         (
             "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
@@ -53139,7 +54252,7 @@ if mode == "--negative-control-swift-pallas-transcript-label-byte-limit":
             "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
             'String(repeating: "\\u{00e9}", count: 65)',
             'String(repeating: "x", count: 129)',
-            "Swift typed recursive spend append previous-proof Pallas diagnostics",
+            "Swift typed recursive spend append previous-proof fail-closed diagnostics",
         ),
     )
     def expected_pallas_transcript_label(old, label):
@@ -62346,6 +63459,12 @@ if mode == "--negative-control-swift-redeem-lineage-record-list-value-semantics"
         ),
         (
             "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "var mutableVerifierRecordBytes = try canonicalKagemushaVerifierRecordArchive(seed: 0x67)",
+            'var mutableVerifierRecordBytes = Self.syntheticArchive(schema: "test.VerifierRecord")',
+            "Swift typed recursive spend verifier-record byte value-semantics tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
             "mutableVerifierRecordBytes[mutableVerifierRecordBytes.index(before: mutableVerifierRecordBytes.endIndex)] ^=",
             "mutableVerifierRecordBytes.reserveCapacity(0)",
             "Swift typed recursive spend verifier-record byte value-semantics tests",
@@ -63818,14 +64937,14 @@ if mode == "--negative-control-sdk-append-output-selection-preflight":
         ),
         (
             "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
-            'kagemushaRequestCodecError("field", "outputProofCircuitId", null)',
-            'kagemushaRequestCodecError("field", "lineageKeyArtifacts", /only valid for lineage append output/)',
+            'outputProofCircuitId: "kagemusha-recursive-spend-invalid-output-v1"',
+            'outputProofCircuitId: "kagemusha-recursive-spend-accepted-output-v1"',
             "JavaScript typed recursive spend request codec tests",
         ),
         (
             "javascript/iroha_js/test/package_dist.test.js",
-            'kagemushaRequestCodecError("field", "outputProofCircuitId", null)',
-            'kagemushaRequestCodecError("field", "lineageKeyArtifacts", /only valid for lineage append output/)',
+            'outputProofCircuitId: "kagemusha-recursive-spend-invalid-output-v1"',
+            'outputProofCircuitId: "kagemusha-recursive-spend-accepted-output-v1"',
             "JavaScript package dist recursive spend lineage key artifact request coverage",
         ),
         (
@@ -63836,8 +64955,8 @@ if mode == "--negative-control-sdk-append-output-selection-preflight":
         ),
         (
             "python/iroha_python/tests/kagemusha_test.py",
-            'match="output_proof_circuit_id is not valid for the previous bundle"',
-            'match="lineage_key_artifacts are only valid for lineage append output"',
+            'output_proof_circuit_id="kagemusha-recursive-spend-invalid-output-v1"',
+            'output_proof_circuit_id="kagemusha-recursive-spend-accepted-output-v1"',
             "Python typed recursive spend request codec tests",
         ),
         (
@@ -63854,9 +64973,21 @@ if mode == "--negative-control-sdk-append-output-selection-preflight":
         ),
         (
             "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
-            '.invalidField("outputProofCircuitId")',
-            '.invalidField("lineageKeyArtifacts")',
-            "Swift typed recursive spend append output selection tests",
+            "lineageVerifierKey: nil,\n"
+            "                lineageProvingKeyArchive: nil\n"
+            "            )\n"
+            "        ) { error in\n"
+            "            XCTAssertEqual(\n"
+            "                error as? KagemushaRecursiveSpendRequestCodecError,\n"
+            '                .invalidField("outputProofCircuitId")',
+            "lineageVerifierKey: nil,\n"
+            "                lineageProvingKeyArchive: nil\n"
+            "            )\n"
+            "        ) { error in\n"
+            "            XCTAssertEqual(\n"
+            "                error as? KagemushaRecursiveSpendRequestCodecError,\n"
+            '                .invalidField("lineageVerifierKey")',
+            "Swift typed recursive spend append fail-closed output diagnostic precedence",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
@@ -63866,8 +64997,8 @@ if mode == "--negative-control-sdk-append-output-selection-preflight":
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
-            '"outputProofCircuitId is not valid for the previous bundle",',
-            '"lineageKeyArtifacts are only valid for lineage append output",',
+            "val invalidOutputWithLineageKeyMaterial = assertFailsWith<IllegalArgumentException>",
+            "val acceptedOutputWithLineageKeyMaterial = assertFailsWith<IllegalArgumentException>",
             "Kotlin typed recursive spend append output selection tests",
         ),
         (
@@ -63906,8 +65037,8 @@ if mode == "--negative-control-sdk-append-output-selection-preflight":
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
-            '"outputProofCircuitId is not valid for the previous bundle",',
-            '"lineageKeyArtifacts are only valid for lineage append output",',
+            '"kagemusha-recursive-spend-invalid-output-v1"',
+            '"kagemusha-recursive-spend-accepted-output-v1"',
             "Android Java typed recursive spend append output selection tests",
         ),
     )
@@ -70817,34 +71948,66 @@ if mode == "--negative-control-android-device-lab-assembler-identity-fields":
 
 if mode == "--negative-control-native-c-bridge-abi-version":
     mutated = dict(texts)
-    target = "crates/connect_norito_bridge/src/lib.rs"
-    original = mutated[target]
-    updated = original.replace(
-        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 17;",
-        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;",
-        1,
+    cases = (
+        (
+            "crates/connect_norito_bridge/src/lib.rs",
+            "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 18;",
+            "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;",
+            (
+                r"C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*18\s*;",
+            ),
+        ),
+        (
+            "crates/connect_norito_bridge/src/lib.rs",
+            "pub unsafe extern \"C\" fn connect_norito_kagemusha_recursive_spend_capabilities_v1(",
+            "pub unsafe extern \"C\" fn connect_norito_kagemusha_recursive_spend_capabilities_v1_removed(",
+            ("Rust C recursive Kagemusha exports drifted",),
+        ),
+        (
+            "crates/iroha_data_model/src/offline/mod.rs",
+            "KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE: bool = false;",
+            "KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE: bool = true;",
+            ("Rust ABI-18 V3 fail-closed capability contract missing",),
+        ),
+        (
+            "crates/iroha_data_model/src/offline/mod.rs",
+            "proof_backend_available: KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE,",
+            "proof_backend_available: true,",
+            ("Rust ABI-18 V3 fail-closed capability contract missing",),
+        ),
     )
-    if updated == original or "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 17;" in updated:
-        raise SystemExit("negative control failed: unable to mutate native C bridge ABI version")
-    mutated[target] = updated
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        expected_labels = (
-            r"C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*17\s*;",
-        )
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
+    detected_messages = []
+    for target, before, after, expected_labels in cases:
+        original = mutated[target]
+        updated = original.replace(before, after, 1)
+        if updated == original or before in updated:
             raise SystemExit(
-                "negative control failed: native C bridge ABI drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate ABI-18 native capability contract in "
+                + target
             )
-        print("negative control rejected native C bridge ABI drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: native C bridge ABI drift was not detected")
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: ABI-18 native capability drift was not detected for "
+                    + ", ".join(missing)
+                )
+            detected_messages.extend(first_lines_for_labels(message, expected_labels))
+        else:
+            raise SystemExit(
+                "negative control failed: ABI-18 native capability drift was not detected for "
+                + target
+            )
+        finally:
+            mutated[target] = original
+    print("negative control rejected ABI-18 native capability drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-native-bridge-zero-envelope-pallas-guard":
     mutated = dict(texts)
@@ -71650,7 +72813,7 @@ if mode:
     raise SystemExit(f"unknown mode: {mode}")
 
 run_checks(texts)
-print("recursive Kagemusha ABI-17 SDK parity is consistent")
+print("recursive Kagemusha ABI-18 SDK parity and fail-closed V3 capabilities are consistent")
 PY
 
 if [[ -z "$MODE" && "$(uname -s)" == "Darwin" ]]; then
@@ -71683,6 +72846,48 @@ if [[ -z "$MODE" && "$(uname -s)" == "Darwin" ]]; then
       "connect_norito_kagemusha_verify_recursive_spend_compact_payment_token_projection"
       "connect_norito_kagemusha_build_pallas_open_envelopes_archive"
       "connect_norito_kagemusha_build_previous_proof_open_envelopes_archive"
+      "connect_norito_kagemusha_recursive_spend_capabilities_v1"
+      "connect_norito_kagemusha_topup_finality_verify_v2"
+      "connect_norito_kagemusha_recursive_spend_artifact_begin_v3"
+      "connect_norito_kagemusha_recursive_spend_artifact_write_v3"
+      "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3"
+      "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3"
+      "connect_norito_kagemusha_recursive_spend_init_v2"
+      "connect_norito_kagemusha_recursive_spend_append_v2"
+      "connect_norito_kagemusha_recursive_spend_redeem_change_v2"
+      "connect_norito_kagemusha_recursive_spend_verify_v2"
+      "connect_norito_kagemusha_recursive_spend_redeem_v2"
+      "connect_norito_kagemusha_recursive_spend_topup_v2"
+      "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2"
+      "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2"
+      "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v2"
+      "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2"
+      "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v2"
+      "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v2"
+      "connect_norito_kagemusha_recursive_spend_build_split_intent_v2"
+      "connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2"
+      "connect_norito_kagemusha_recursive_spend_bundle_summary_v2"
+      "connect_norito_kagemusha_recursive_spend_artifact_begin_v2"
+      "connect_norito_kagemusha_recursive_spend_artifact_write_v2"
+      "connect_norito_kagemusha_recursive_spend_artifact_finalize_v2"
+      "connect_norito_kagemusha_recursive_spend_artifact_cancel_v2"
+      "connect_norito_kagemusha_recursive_spend_capabilities_v1"
+      "connect_norito_kagemusha_topup_finality_verify_v2"
+      "connect_norito_kagemusha_recursive_spend_artifact_begin_v3"
+      "connect_norito_kagemusha_recursive_spend_artifact_write_v3"
+      "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3"
+      "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3"
+      "connect_norito_kagemusha_receiver_key_reference_v2"
+      "connect_norito_kagemusha_recipient_output_derive_v2"
+      "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2"
+      "connect_norito_kagemusha_recipient_payment_request_create_v2"
+      "connect_norito_kagemusha_recipient_payment_request_verify_v2"
+      "connect_norito_kagemusha_request_authorization_signing_bytes_v2"
+      "connect_norito_kagemusha_request_authorization_create_v2"
+      "connect_norito_kagemusha_receiver_acknowledgement_payload_v2"
+      "connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2"
+      "connect_norito_kagemusha_receiver_acknowledgement_create_v2"
+      "connect_norito_kagemusha_receiver_acknowledgement_verify_v2"
     )
     BRIDGE_LIBS=(
       "$BRIDGE_ROOT/ios-arm64/libNoritoBridge.a"

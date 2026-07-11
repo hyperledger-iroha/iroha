@@ -52,7 +52,7 @@ Content-Type: application/norito+v1
 | 500 داخلی غلطی | غیر متوقع ناکامی (لاگ ان + الرٹ)۔ |
 
 ```
-GET /v1/da/proof_policies
+GET /v1/da/proof-policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ Accept: application/json | application/x-norito
 فعال پالیسی سیٹ کے ثبوت کو پابند کرنے کے لئے اضافی راؤنڈ ٹرپ کی ضرورت نہیں ہے۔
 
 ```
-GET /v1/da/proof_policy_snapshot
+GET /v1/da/proof-policies/snapshot
 Accept: application/json | application/x-norito
 ```
 

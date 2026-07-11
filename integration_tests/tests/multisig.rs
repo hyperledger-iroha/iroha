@@ -293,7 +293,7 @@ fn wait_for_multisig_proposal_status(
     proposal_id: &str,
     expected_status: &str,
 ) -> Result<JsonValue> {
-    let endpoint = format!("{torii_base}/v1/multisig/proposals/get");
+    let endpoint = format!("{torii_base}/v1/multisig/proposals/lookup");
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut last_status = None;
     let mut last_error = None;
@@ -444,7 +444,7 @@ fn collect_authority_multisig_approvals(client: &Client) -> Result<Vec<MultisigA
 
     loop {
         let response =
-            client.post_multisig_approvals_list_for_authority(&MultisigApprovalsListRequest {
+            client.query_multisig_approvals_for_authority(&MultisigApprovalsListRequest {
                 status: vec![COLLECTING_SIGNATURES_STATUS.to_owned()],
                 operation_type: Vec::new(),
                 requires_my_signature: false,
@@ -704,7 +704,7 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
 
     let canceled_list = post_torii_app_json(
         &rt,
-        &format!("{torii_base}/v1/multisig/proposals/list"),
+        &format!("{torii_base}/v1/multisig/proposals/query"),
         &MultisigProposalsListRequestDto {
             selector,
             status: vec!["CANCELED".to_owned()],

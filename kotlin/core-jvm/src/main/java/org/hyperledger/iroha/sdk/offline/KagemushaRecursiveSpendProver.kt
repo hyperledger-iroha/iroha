@@ -16,6 +16,18 @@ class KagemushaRecursiveSpendProver private constructor() {
         const val REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 6
         const val RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 7
         const val TOP_UP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 15
+        const val PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 18
+        const val PASTA_CYCLE_V3_ARTIFACT_MANIFEST_SCHEMA: String =
+            "kagemusha.offline.recursive_spend.artifact_manifest.v3"
+        const val PASTA_CYCLE_V3_MODE: String = "recursive_spend_v1"
+        const val PASTA_CYCLE_V3_PROOF_BACKEND: String = "halo2/ipa-pasta-cycle-v1"
+        const val PASTA_CYCLE_V3_TRANSCRIPT_PROFILE: String =
+            "kagemusha-pasta-cycle-poseidon-v1"
+        const val PASTA_CYCLE_V3_TRANSITION_CIRCUIT_ID: String =
+            "kagemusha-recursive-spend-transition-eq-v1"
+        const val PASTA_CYCLE_V3_STATE_CIRCUIT_ID: String =
+            "kagemusha-recursive-spend-state-ep-v1"
+        const val PASTA_CYCLE_V3_MAX_PROOF_BYTES: Int = 4_096
         const val RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 =
             "kagemusha-recursive-aggregation-v1"
         const val RECURSIVE_COMPACT_CIRCUIT_ID_V1 =
@@ -28,7 +40,8 @@ class KagemushaRecursiveSpendProver private constructor() {
             "kagemusha-recursive-spend-lineage-append-v1"
         const val COMPACT_TOKEN_MAX_HOPS: Int = 64
         const val RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1: Int = 64
-        const val RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1: Boolean = true
+        /** Reserved-lineage transition proofs remain fail-closed until the verifier is wired. */
+        const val RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1: Boolean = false
         const val RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1: Int = 1
         const val RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES: Int = 8 * 1024 * 1024
         const val RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: Int = 128
@@ -80,6 +93,15 @@ class KagemushaRecursiveSpendProver private constructor() {
                     },
                     requiredNativeBridgeAbiVersion = TOP_UP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
                 )
+        private val pastaCycleV3BackendAvailable: Boolean =
+            nativeAvailable &&
+                detectNativeAvailability(
+                    loadLibrary = {},
+                    nativeBridgeAbiVersionProbe = { nativeBridgeAbiVersion() },
+                    probeSymbol = { nativePastaCycleV3BackendAvailable() },
+                    requiredNativeBridgeAbiVersion =
+                        PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
+                )
 
         private class LineageProvingKeyArchive(
             val version: Int,
@@ -103,6 +125,10 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         @JvmStatic
         fun isTopUpNativeAvailable(): Boolean = nativeTopUpAvailable
+
+        /** Exact ABI-18/V3 proof capability; legacy ABI-6 symbol availability is insufficient. */
+        @JvmStatic
+        fun isPastaCycleV3BackendAvailable(): Boolean = pastaCycleV3BackendAvailable
 
         @JvmStatic
         fun preferredMode(): Mode? =
@@ -957,6 +983,9 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         @JvmStatic
         private external fun nativeBridgeAbiVersion(): Int
+
+        @JvmStatic
+        private external fun nativePastaCycleV3BackendAvailable(): Boolean
 
         @JvmStatic
         private external fun nativeInitSpend(requestArchive: ByteArray): ByteArray?

@@ -8,6 +8,7 @@ use std::{net::TcpStream, sync::OnceLock, thread};
 use eyre::{Error, Result, WrapErr, eyre};
 use http::header::{HeaderName, HeaderValue};
 use reqwest::blocking::Client as BlockingClient;
+pub use tungstenite::handshake::client::Response as WebSocketResponse;
 pub use tungstenite::{Error as WebSocketError, Message as WebSocketMessage};
 use tungstenite::{WebSocket, client::IntoClientRequest, stream::MaybeTlsStream};
 use url::Url;
@@ -302,14 +303,26 @@ pub struct DefaultWebSocketStreamRequest(http::Request<()>);
 impl DefaultWebSocketStreamRequest {
     /// Open [`WebSocketStream`] synchronously.
     pub fn connect(self) -> Result<WebSocketStream> {
-        let (stream, _) = tungstenite::connect(self.0)?;
+        let (stream, _) = self.connect_with_response()?;
         Ok(stream)
+    }
+
+    /// Open [`WebSocketStream`] synchronously and retain the HTTP upgrade response.
+    pub fn connect_with_response(self) -> Result<(WebSocketStream, WebSocketResponse)> {
+        Ok(tungstenite::connect(self.0)?)
     }
 
     /// Open [`AsyncWebSocketStream`].
     pub async fn connect_async(self) -> Result<AsyncWebSocketStream> {
-        let (stream, _) = tokio_tungstenite::connect_async(self.0).await?;
+        let (stream, _) = self.connect_async_with_response().await?;
         Ok(stream)
+    }
+
+    /// Open [`AsyncWebSocketStream`] and retain the HTTP upgrade response.
+    pub async fn connect_async_with_response(
+        self,
+    ) -> Result<(AsyncWebSocketStream, WebSocketResponse)> {
+        Ok(tokio_tungstenite::connect_async(self.0).await?)
     }
 }
 

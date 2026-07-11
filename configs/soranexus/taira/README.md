@@ -251,8 +251,8 @@ advertises `route=taira_tron_xor` and `asset=xor` from `/v1/sccp/manifests`.
 The repo now supports a dedicated Taira validator runtime image via the main
 `Dockerfile`:
 
-- local build helper:
-  - `scripts/build_release_image.sh --profile iroha3 --config taira`
+- attested local build helper from the sibling DPN API checkout:
+  - `dpn-api-rust/ops/taira/build-validator-image.sh`
 - manual publish workflow:
   - `.github/workflows/publish_taira_validator.yml`
 
@@ -271,12 +271,19 @@ Manual publish prerequisites:
   first `hyperledger/iroha:taira-*` and
   `docker.soramitsu.co.jp/iroha3/iroha:taira-*` tags actually exist before
   operator hosts switch to the published image path
+- the exact 40-character DPN API commit containing the reviewed validator
+  source bundle and Cargo lock; mutable branches and tags are rejected
 
 If the Docker host is memory-constrained, cap Cargo parallelism during the
 image build:
 
-- `scripts/build_release_image.sh --profile iroha3 --config taira`
-- or, for a direct Docker build, `docker build --build-arg CONFIG_PROFILE=taira --build-arg FEATURES=embedded-soracloud-runtime --build-arg CARGO_BUILD_JOBS=1 --build-arg BINARIES=irohad ...`
+- `dpn-api-rust/ops/taira/build-validator-image.sh --cargo-build-jobs 1 --binaries irohad`
+
+The DPN wrapper verifies the pinned base commit, exact binary worktree patch,
+full reconstructed source-tree digest, Rust toolchain, and reviewed Cargo lock
+before the Docker build starts. The Dockerfile independently requires the lock
+and source-tree digests, uses `cargo --locked`, rejects prebuilt Taira binaries,
+and records both digests in the image.
 
 The image ships:
 
@@ -411,7 +418,7 @@ allowlisting:
    views rather than a static file roster:
    - `iroha app nexus public-lane validators --lane 0 --summary`
    - `iroha app nexus public-lane stake --lane 0 --validator <i105-account-id> --summary`
-   - `curl -sS "${PUBLIC_TORII_ROOT}/v1/nexus/public_lanes/0/validators" | jq .`
+   - `curl -sS "${PUBLIC_TORII_ROOT}/v1/nexus/public-lanes/0/validators" | jq .`
    - `curl -sS "${PUBLIC_TORII_ROOT}/v1/sumeragi/validator-sets" | jq .`
 
 ## Public endpoints
@@ -431,13 +438,13 @@ allowlisting:
 Taira serves SoraFS-published static content primarily through immutable CID
 gateway paths on the Torii origin:
 
-- `GET /sorafs/cid/<cid>/`
+- `GET /sorafs/cid/<cid>`
 - `GET /sorafs/cid/<cid>/<path...>`
 - `GET /v1/sorafs/cid/<cid>` for lookup metadata
 
 For the Polkaswap static bundle, the browser URL is:
 
-- `${PUBLIC_TORII_ROOT}/sorafs/cid/<cid>/`
+- `${PUBLIC_TORII_ROOT}/sorafs/cid/<cid>`
 
 This keeps the chosen public node as the Torii/API origin while giving every
 public Torii node an IPFS-style address surface for static content.
@@ -456,7 +463,7 @@ Gateway behavior:
 
 Named host bindings in `sorafs_sites.json` remain available as an optional
 alias layer, but they are no longer the primary deployment path. Reserve
-`taira.sora.org` for Torii itself and serve apps from `/sorafs/cid/<cid>/` or
+`taira.sora.org` for Torii itself and serve apps from `/sorafs/cid/<cid>` or
 `<cid>.sorafs.taira.sora.org`.
 
 Named bindings are production configuration, not a runtime environment
@@ -641,7 +648,7 @@ that the same direct node serves:
 - `/v1/sccp/manifests`
 - `/v1/zk/proofs/count`
 - `/v1/sumeragi/validator-sets`
-- `/v1/nexus/public_lanes/0/{validators,stake}`
+- `/v1/nexus/public-lanes/0/{validators,stake}`
 - `/v1/bridge/messages` preflight
 - `/v1/contracts/deploy`
 - `/v1/contracts/state`
@@ -858,8 +865,10 @@ away from the shipped MCP-enabled config:
 1. Check out this repository on the validator host, for example at
    `/opt/iroha`.
 2. Build a rollout bundle from the exact runtime revision you intend to ship:
-   - `bash configs/soranexus/taira/build_taira_rollout_bundle.sh`
-   - the script refuses a dirty worktree by default and writes
+   - from the sibling DPN API checkout, run
+     `IROHA_DIR=/opt/iroha ops/taira/build-validator-bundle.sh`
+   - the wrapper accepts either the policy-pinned clean commit or the one exact
+     attested source patch, then writes
      `dist/taira-rollout/<bundle>/rollout.manifest.json` plus
      `sha256sums.txt`
    - the script runs `cargo test -p iroha_core queue::router::tests::smart_contract_deploy_rule --lib`

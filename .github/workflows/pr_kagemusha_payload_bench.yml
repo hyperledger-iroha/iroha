@@ -121,6 +121,7 @@ on:
       - "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift"
       - "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift"
       - "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift"
+      - "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift"
       - "IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift"
       - "IrohaSwift/Sources/IrohaSwift/TxBuilder.swift"
       - "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"
@@ -157,6 +158,7 @@ on:
       - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendV2Tests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift"
       - "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift"
@@ -598,6 +600,7 @@ on:
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineQrStream.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineOperation.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineOperationStatus.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/VerifyingKeyBoxCodec.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveAggregationProofBundleProver.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchives.kt"
@@ -605,11 +608,6 @@ on:
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashCodec.kt"
-      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashSetupRequest.kt"
-      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashLoadRequest.kt"
-      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashRefreshRequest.kt"
-      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashSyncRequest.kt"
-      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashRedeemRequest.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineJsonParser.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/ConfidentialNote.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyConfidentialWitness.kt"
@@ -1047,8 +1045,13 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-pallas-request-inner-envelope-preflight
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-lineage-key-package-binding
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-compact-projection-hardening
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-note-payload-certificate-fail-closed
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-note-retired-route-wording
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-note-v2-registration-certificate-payload
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-note-v2-retired-ios-app-attest-profile
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-operation-request-contract
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-operation-status-contract
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-operation-client-contract
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-retired-qr-prefix-wording
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-lineage-witness-availability-probe
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-lineage-witness-append-availability-probe
@@ -1331,7 +1334,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-payment-token-commitment-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-payment-token-commitment-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-cash-settlement-coverage
-          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-cash-request-strictness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-retired-offline-cash-http-surface
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-wallet-compact-certificate-profile
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-wallet-recursive-proof-strictness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-wallet-device-binding-alias-strictness
@@ -2509,17 +2512,9 @@ jobs:
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-offline-first-release-test-wording
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-retired-backend-profile-wording
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-offline-note-v2-retired-ios-app-attest-profile
-          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-retired-ios-app-attest-profile
-          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-retired-assertion-key-aliases
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-offline-v2-vector-platform-aliases
-          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-retired-assertion-key-aliases
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-offline-vector-platform-aliases
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-redeem
-          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-exact-fields
-          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-archive-field-shape
-          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-retired-fields
-          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-retired-redeem-aliases
-          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-auxiliary-fields
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-openapi
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-smoke
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-kagemusha-todo

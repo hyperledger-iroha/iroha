@@ -1,10 +1,13 @@
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using Hyperledger.Iroha.Offline;
 
 namespace Hyperledger.Iroha.Torii;
 
 [JsonSerializable(typeof(JsonNode))]
 [JsonSerializable(typeof(JsonObject))]
+[JsonSerializable(typeof(OfflineReadiness))]
+[JsonSerializable(typeof(OfflineReadinessBlocker))]
 [JsonSerializable(typeof(ToriiAccountAliasLookupRequest))]
 [JsonSerializable(typeof(ToriiAccountAliasLookupItem))]
 [JsonSerializable(typeof(ToriiAccountAliasLookupResponse))]

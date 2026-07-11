@@ -113,7 +113,7 @@ PLIST
   cat >"$root/dist/NoritoBridge.artifacts.json" <<JSON
 {
   "version": "1.0.0",
-  "native_bridge_abi_version": 17,
+  "native_bridge_abi_version": 18,
   "privacy_production_enabled": false,
   "source_commit": "0000000000000000000000000000000000000000",
   "source_tree_dirty": false,
@@ -121,6 +121,12 @@ PLIST
   "bridge_header_sha256": "$header_hash",
   "required_symbols": [
     "connect_norito_bridge_abi_version",
+    "connect_norito_kagemusha_recursive_spend_capabilities_v1",
+    "connect_norito_kagemusha_topup_finality_verify_v2",
+    "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
     "connect_norito_kagemusha_recursive_spend_init",
     "connect_norito_kagemusha_recursive_spend_append",
     "connect_norito_kagemusha_recursive_spend_verify",

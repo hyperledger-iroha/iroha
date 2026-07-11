@@ -49,8 +49,8 @@ fn operation_reference_has_direct_json_and_norito_representations() {
 
 #[test]
 fn operation_status_is_a_pollable_final_route() {
-    assert!(TORII_SOURCE.contains("uri::OFFLINE_OPERATION"));
-    assert!(TORII_SOURCE.contains("get(handler_offline_operation_status)"));
+    assert!(TORII_SOURCE.contains("&route_catalog::offline::OPERATION"));
+    assert!(TORII_SOURCE.contains("catalog_get(handler_offline_operation_status)"));
     assert!(OFFLINE_ISSUER_SOURCE.contains("handle_operation_status"));
     assert!(OFFLINE_ISSUER_SOURCE.contains("OfflineOperationStatus::Pending"));
     assert!(OFFLINE_ISSUER_SOURCE.contains("OfflineOperationStatus::Applied"));

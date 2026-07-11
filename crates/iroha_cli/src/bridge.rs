@@ -978,8 +978,10 @@ mod tests {
         let proof_bytes = vec![0xA5, 0x5A, 0xC3, 0x3C];
         let destination_binding = manifest.destination_binding.clone();
         let destination_binding_hash = destination_binding.binding_hash;
-        let proof_context_hash =
-            iroha_sccp::sccp_solana_proof_context_hash(inner.statement_hash, destination_binding_hash);
+        let proof_context_hash = iroha_sccp::sccp_solana_proof_context_hash(
+            inner.statement_hash,
+            destination_binding_hash,
+        );
         let platform_payload =
             iroha_sccp::SccpPlatformSubmissionPayloadV1::SolanaProgramInstruction(
                 iroha_sccp::SccpSolanaProgramSubmissionPayloadV1 {
@@ -1320,9 +1322,7 @@ mod tests {
         assert!(rendered.contains("chain=sol(3)"));
         assert!(rendered.contains("verifier_backend=solana-program-v1"));
         assert!(rendered.contains("projection=transfer"));
-        assert!(rendered.contains(
-            "recipient=solana:11111111111111111111111111111111"
-        ));
+        assert!(rendered.contains("recipient=solana:11111111111111111111111111111111"));
         assert!(rendered.contains(
             "submit=program_instruction/borsh_instruction_v1/submit_sccp_message_proof args=[proof_bytes,public_inputs,bundle_bytes,statement_hash,destination_binding_hash,proof_context_hash]"
         ));

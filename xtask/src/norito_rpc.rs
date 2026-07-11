@@ -622,7 +622,7 @@ impl RawPayloadFixture {
         let signed_bytes = signed.encode();
         let signed_base64 = BASE64.encode(&signed_bytes);
         let payload_hash_hex = blake2b256_hex(&payload_bytes);
-        let signed_hash_hex = blake2b256_hex(&signed_bytes);
+        let signed_hash_hex = signed_transaction_entrypoint_hash_hex(&signed_bytes);
 
         Ok(Fixture {
             name: self.name.clone(),
@@ -706,7 +706,17 @@ fn parse_payload_fixtures(value: &Value) -> Result<Vec<RawPayloadFixture>> {
     let arr = value
         .as_array()
         .ok_or_else(|| eyre!("fixture root must be an array"))?;
-    arr.iter().map(parse_payload_fixture).collect()
+    let fixtures = arr
+        .iter()
+        .map(parse_payload_fixture)
+        .collect::<Result<Vec<_>>>()?;
+    let mut names = HashSet::with_capacity(fixtures.len());
+    for fixture in &fixtures {
+        if !names.insert(fixture.name.as_str()) {
+            bail!("duplicate fixture name '{}'", fixture.name);
+        }
+    }
+    Ok(fixtures)
 }
 
 fn parse_payload_fixture(value: &Value) -> Result<RawPayloadFixture> {
@@ -1198,6 +1208,44 @@ impl Manifest {
     }
 
     fn validate(&self, base_dir: Option<&Path>) -> Result<()> {
+        let mut names = HashSet::with_capacity(self.fixtures.len());
+        let mut encoded_files = HashSet::with_capacity(self.fixtures.len());
+        let mut payload_hashes = HashSet::with_capacity(self.fixtures.len());
+        let mut payload_bytes_values = HashSet::with_capacity(self.fixtures.len());
+        let mut signed_hashes = HashSet::with_capacity(self.fixtures.len());
+        let mut signed_bytes_values = HashSet::with_capacity(self.fixtures.len());
+        for fixture in &self.fixtures {
+            if !names.insert(fixture.name.as_str()) {
+                bail!("duplicate fixture name '{}'", fixture.name);
+            }
+            if !encoded_files.insert(fixture.encoded_file.as_str()) {
+                bail!("duplicate fixture encoded_file '{}'", fixture.encoded_file);
+            }
+            if !payload_hashes.insert(fixture.payload_hash.as_str()) {
+                bail!("duplicate fixture payload_hash '{}'", fixture.payload_hash);
+            }
+            let payload_bytes = BASE64
+                .decode(fixture.payload_base64.as_bytes())
+                .with_context(|| format!("fixture '{}' payload base64 invalid", fixture.name))?;
+            if BASE64.encode(&payload_bytes) != fixture.payload_base64 {
+                bail!("fixture '{}' payload base64 is non-canonical", fixture.name);
+            }
+            if !payload_bytes_values.insert(payload_bytes) {
+                bail!("duplicate fixture payload bytes for '{}'", fixture.name);
+            }
+            if !signed_hashes.insert(fixture.signed_hash.as_str()) {
+                bail!("duplicate fixture signed_hash '{}'", fixture.signed_hash);
+            }
+            let signed_bytes = BASE64
+                .decode(fixture.signed_base64.as_bytes())
+                .with_context(|| format!("fixture '{}' signed base64 invalid", fixture.name))?;
+            if BASE64.encode(&signed_bytes) != fixture.signed_base64 {
+                bail!("fixture '{}' signed base64 is non-canonical", fixture.name);
+            }
+            if !signed_bytes_values.insert(signed_bytes) {
+                bail!("duplicate fixture signed bytes for '{}'", fixture.name);
+            }
+        }
         for fixture in &self.fixtures {
             fixture.validate(base_dir)?;
         }
@@ -1297,7 +1345,7 @@ impl FixtureEntry {
                 signed_bytes.len()
             );
         }
-        let signed_hash = blake2b256_hex(&signed_bytes);
+        let signed_hash = signed_transaction_entrypoint_hash_hex(&signed_bytes);
         if signed_hash != self.signed_hash {
             bail!(
                 "fixture '{}' signed hash mismatch (manifest={}, computed={})",
@@ -1333,6 +1381,20 @@ fn blake2b256_hex(bytes: &[u8]) -> String {
         .expect("finalize BLAKE2b digest");
     out[out.len() - 1] |= 1;
     hex_encode(out)
+}
+
+fn signed_transaction_entrypoint_hash_hex(canonical_bare_signed_transaction: &[u8]) -> String {
+    let mut entrypoint = Vec::with_capacity(
+        4 + norito::core::len_prefix_len(canonical_bare_signed_transaction.len())
+            + canonical_bare_signed_transaction.len(),
+    );
+    entrypoint.extend_from_slice(&0_u32.to_le_bytes());
+    norito::core::write_len_to_vec(
+        &mut entrypoint,
+        canonical_bare_signed_transaction.len() as u64,
+    );
+    entrypoint.extend_from_slice(canonical_bare_signed_transaction);
+    blake2b256_hex(&entrypoint)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1412,6 +1474,23 @@ mod tests {
     }
 
     #[test]
+    fn signed_hash_uses_compact_external_entrypoint_domain() {
+        let signed = vec![0x5a; 128];
+        let mut entrypoint = 0_u32.to_le_bytes().to_vec();
+        norito::core::write_len_to_vec(&mut entrypoint, signed.len() as u64);
+        entrypoint.extend_from_slice(&signed);
+        assert_eq!(&entrypoint[..6], &[0, 0, 0, 0, 0x80, 0x01]);
+        assert_eq!(
+            signed_transaction_entrypoint_hash_hex(&signed),
+            blake2b256_hex(&entrypoint)
+        );
+        assert_ne!(
+            signed_transaction_entrypoint_hash_hex(&signed),
+            blake2b256_hex(&signed)
+        );
+    }
+
+    #[test]
     fn filter_fixtures_errors_on_missing_entries() {
         let manifest = sample_manifest();
         let selection = vec!["delta".to_string()];
@@ -1427,6 +1506,78 @@ mod tests {
         let manifest = sample_manifest();
         let filtered = filter_fixtures(&manifest, None).expect("all fixtures");
         assert_eq!(filtered.len(), 3);
+    }
+
+    #[test]
+    fn manifest_validation_rejects_duplicate_fixture_names() {
+        let manifest = Manifest {
+            fixtures: vec![fixture("alpha"), fixture("alpha")],
+        };
+        let err = manifest
+            .validate(None)
+            .expect_err("duplicate fixture names must fail closed");
+        assert!(
+            err.to_string().contains("duplicate fixture name 'alpha'"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn manifest_validation_rejects_duplicate_encoded_files() {
+        let first = fixture("alpha");
+        let mut second = fixture("beta");
+        second.encoded_file = first.encoded_file.clone();
+        let manifest = Manifest {
+            fixtures: vec![first, second],
+        };
+        let err = manifest
+            .validate(None)
+            .expect_err("duplicate encoded files must fail closed");
+        assert!(
+            err.to_string()
+                .contains("duplicate fixture encoded_file 'alpha.norito'"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn manifest_validation_rejects_renamed_cloned_payloads() {
+        let first = fixture("alpha");
+        let mut second = fixture("beta");
+        second.payload_hash = first.payload_hash.clone();
+        second.payload_base64 = first.payload_base64.clone();
+        second.signed_hash = first.signed_hash.clone();
+        second.signed_base64 = first.signed_base64.clone();
+        let manifest = Manifest {
+            fixtures: vec![first, second],
+        };
+        let err = manifest
+            .validate(None)
+            .expect_err("renamed cloned fixture payloads must fail closed");
+        assert!(
+            err.to_string()
+                .contains("duplicate fixture payload_hash 'payload-alpha'"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn manifest_validation_rejects_noncanonical_base64() {
+        for malformed in ["YQ!!", "Y Q==", "YQ=", "YQ===", "YR=="] {
+            let mut entry = fixture("alpha");
+            entry.payload_base64 = malformed.to_string();
+            let manifest = Manifest {
+                fixtures: vec![entry],
+            };
+            let err = manifest
+                .validate(None)
+                .expect_err("invalid or non-canonical base64 must fail closed");
+            let message = err.to_string();
+            assert!(
+                message.contains("base64 invalid") || message.contains("base64 is non-canonical"),
+                "unexpected error for {malformed:?}: {err}"
+            );
+        }
     }
 
     #[test]

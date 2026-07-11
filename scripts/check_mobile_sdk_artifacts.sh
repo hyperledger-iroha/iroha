@@ -339,6 +339,12 @@ check_xcframework() {
     require_regex "$manifest" '"bridge_header_sha256"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{64}"' "NoritoBridge header hash"
     local required_symbols=(
       connect_norito_bridge_abi_version
+      connect_norito_kagemusha_recursive_spend_capabilities_v1
+      connect_norito_kagemusha_topup_finality_verify_v2
+      connect_norito_kagemusha_recursive_spend_artifact_begin_v3
+      connect_norito_kagemusha_recursive_spend_artifact_write_v3
+      connect_norito_kagemusha_recursive_spend_artifact_finalize_v3
+      connect_norito_kagemusha_recursive_spend_artifact_cancel_v3
       connect_norito_kagemusha_recursive_spend_init
       connect_norito_kagemusha_recursive_spend_append
       connect_norito_kagemusha_recursive_spend_verify

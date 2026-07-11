@@ -65,7 +65,7 @@ def _write_fixture_set(base: Path) -> tuple[Path, Path, Path]:
                         "payload_hash": MODULE.iroha_hash(payload_bytes),  # type: ignore[attr-defined]
                         "encoded_len": len(payload_bytes),
                         "signed_base64": base64.b64encode(signed_bytes).decode(),
-                        "signed_hash": MODULE.iroha_hash(signed_bytes),  # type: ignore[attr-defined]
+                        "signed_hash": MODULE.signed_transaction_entrypoint_hash(signed_bytes),  # type: ignore[attr-defined]
                         "signed_len": len(signed_bytes),
                         "creation_time_ms": creation_time_ms,
                         "chain": chain,

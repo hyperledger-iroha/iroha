@@ -193,9 +193,9 @@ elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/zk/proofs/cou
   body='{}'
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sumeragi/validator-sets" ]]; then
   body='{}'
-elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/nexus/public_lanes/0/validators" ]]; then
+elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/nexus/public-lanes/0/validators" ]]; then
   body='{}'
-elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/nexus/public_lanes/0/stake" ]]; then
+elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/nexus/public-lanes/0/stake" ]]; then
   body='{}'
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/contracts/state" ]]; then
   status="400"

@@ -210,7 +210,6 @@ impl KagemushaRecursiveSpendTransitionValuesV2 {
 #[derive(Clone, Copy)]
 pub struct KagemushaRecursiveSpendTransitionConfigV2 {
     public_advice: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    public_instance: halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>,
     amount_low_carry: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
     path_depth_selector: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
     relation: Selector,
@@ -604,7 +603,6 @@ impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
 
         KagemushaRecursiveSpendTransitionConfigV2 {
             public_advice,
-            public_instance,
             amount_low_carry,
             path_depth_selector,
             relation,
@@ -800,6 +798,7 @@ fn output_swap_for_target(outputs: &[[u8; 32]], target: [u8; 32]) -> Result<bool
 fn fill_common_statement_values(
     public: &mut [Scalar; KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS],
     statement: &KagemushaRecursiveSpendPublicStatementV2,
+    init_root: Option<[u8; 32]>,
     current_hop_domain_tag: [u8; 32],
     topup_receipt_digest: [u8; 32],
 ) -> Result<(), String> {
@@ -812,7 +811,7 @@ fn fill_common_statement_values(
                 .to_owned(),
         );
     };
-    let [topup_anchor] = statement.topup_anchors.as_slice() else {
+    let [topup_anchor_ref] = statement.topup_anchor_refs.as_slice() else {
         return Err(
             "current Kagemusha V2 transition layout cannot represent multiple top-up origins"
                 .to_owned(),
@@ -827,7 +826,7 @@ fn fill_common_statement_values(
     public[I_CURRENT_SCALE] = Scalar::from(u64::from(statement.current_note.amount.scale));
     public[I_BRANCH_PATH_BITS] = Scalar::from(path_bits_as_u64(branch_path.path_bits));
     public[I_INITIAL_ROOT] =
-        scalar_from_canonical_bytes(&topup_anchor.initial_root, "initial root")?;
+        scalar_from_canonical_bytes(&init_root.unwrap_or([0; 32]), "initial root")?;
     public[I_FINAL_ROOT] = scalar_from_canonical_bytes(&statement.final_root, "final root")?;
     public[I_CURRENT_COMMITMENT] = scalar_from_canonical_bytes(
         &statement.current_note.note_commitment,
@@ -861,7 +860,7 @@ fn fill_common_statement_values(
     write_limb_group(
         public,
         I_TOPUP_OPERATION_ID,
-        &topup_anchor.topup_operation_id,
+        &topup_anchor_ref.topup_operation_id,
     );
     write_limb_group(
         public,
@@ -873,10 +872,10 @@ fn fill_common_statement_values(
     write_limb_group(
         public,
         I_TOPUP_ANCHOR_DIGEST,
-        &canonical_poseidon_digest(&topup_anchor.topup_anchor_nullifiers)?,
+        &topup_anchor_ref.anchor_digest,
     );
     public[I_TOPUP_ANCHOR_COUNT] = Scalar::from(
-        u64::try_from(topup_anchor.topup_anchor_nullifiers.len())
+        u64::try_from(statement.topup_anchor_refs.len())
             .map_err(|_| "Kagemusha V2 top-up anchor count does not fit u64".to_owned())?,
     );
     write_limb_group(
@@ -988,7 +987,8 @@ pub fn kagemusha_recursive_spend_init_transition_values_v2(
         || anchor.amount != statement.current_note.amount
         || anchor.current_note != statement.current_note
         || anchor.finalized_root != statement.final_root
-        || statement.topup_anchors.as_slice() != std::slice::from_ref(anchor)
+        || statement.topup_anchor_refs.as_slice()
+            != std::slice::from_ref(&anchor.compact_ref().map_err(|err| err.to_string())?)
         || anchor.artifact_generation != statement.artifact_generation
         || anchor.transfer_verifier_id != step.attachment.vk_ref
         || step.attachment.vk_commitment != Some(anchor.transfer_verifier_commitment)
@@ -1003,6 +1003,7 @@ pub fn kagemusha_recursive_spend_init_transition_values_v2(
     fill_common_statement_values(
         &mut values.public,
         statement,
+        Some(anchor.initial_root),
         current_hop_domain_tag,
         anchor.anchor_digest,
     )?;
@@ -1071,7 +1072,7 @@ pub fn kagemusha_recursive_spend_append_transition_values_v2(
         || transition.operation_id != split.operation_id
         || transition.parent_max_proof_step_count != previous.proof_step_count
         || transition.parent_max_peer_hop_count != previous.peer_hop_count
-        || statement.topup_anchors != split.topup_anchors
+        || statement.topup_anchor_refs != split.topup_anchor_refs
         || statement.lineage_mode != split.lineage_mode
         || statement.artifact_generation != split.output_artifact_generation
         || statement.branch_claims
@@ -1106,6 +1107,7 @@ pub fn kagemusha_recursive_spend_append_transition_values_v2(
     fill_common_statement_values(
         &mut values.public,
         statement,
+        None,
         current_hop_domain_tag,
         parent_topup_receipt_digest,
     )?;
@@ -1294,6 +1296,7 @@ pub fn kagemusha_recursive_spend_redeem_change_transition_values_v2(
     fill_common_statement_values(
         &mut values.public,
         statement,
+        None,
         current_hop_domain_tag,
         parent_topup_receipt_digest,
     )?;
@@ -1410,6 +1413,87 @@ pub fn kagemusha_recursive_spend_transition_instance_column_v2(
     values.public.to_vec()
 }
 
+/// Validate the chain-visible binding between a V2 bundle and its proof envelope.
+///
+/// Cryptographic verification alone proves the instance columns embedded in the
+/// envelope.  Consensus admission must additionally require the final transition
+/// column to expose the digest of the exact canonical statement submitted to the
+/// ledger; otherwise a valid proof for one statement could be paired with a
+/// different host-side bundle.  This helper performs only that metadata/instance
+/// binding.  Callers must still verify the Halo2 proof with the registered key.
+pub fn ensure_kagemusha_recursive_spend_v2_proof_envelope_binding(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
+    record: &VerifyingKeyRecord,
+) -> Result<(), String> {
+    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
+
+    bundle
+        .validate_public_binding()
+        .map_err(|err| err.to_string())?;
+    let proof = &bundle.recursive_proof.proof;
+    if proof.backend.as_str() != super::ZK_BACKEND_HALO2_IPA
+        || record.public_inputs_schema_hash
+            != kagemusha_recursive_spend_v2_public_inputs_schema_hash()
+    {
+        return Err("Kagemusha V2 recursive proof schema/backend mismatch".to_owned());
+    }
+    let verifier_key = record
+        .key
+        .as_ref()
+        .ok_or_else(|| "Kagemusha V2 recursive verifier has no inline key".to_owned())?;
+    let verifier_ipa_k = super::zk1::ensure_halo2_ipa_vk_envelope_shape_any_k(
+        &verifier_key.bytes,
+        &record.circuit_id,
+    )
+    .map_err(|err| format!("Kagemusha V2 recursive verifier key is invalid: {err}"))?;
+    if verifier_ipa_k != super::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K {
+        return Err("Kagemusha V2 recursive verifier IPA domain mismatch".to_owned());
+    }
+
+    let envelope: OpenVerifyEnvelope = norito::decode_from_bytes(&proof.bytes)
+        .map_err(|_| "Kagemusha V2 recursive proof is not an OpenVerifyEnvelope".to_owned())?;
+    envelope
+        .validate_for_admission()
+        .map_err(|err| format!("Kagemusha V2 recursive proof envelope is invalid: {err}"))?;
+    if envelope.backend != BackendTag::Halo2IpaPasta
+        || envelope.circuit_id != record.circuit_id
+        || envelope.vk_hash != record.commitment
+        || envelope.public_inputs != KAGEMUSHA_RECURSIVE_SPEND_V2_PUBLIC_INPUTS_SCHEMA
+        || !envelope.aux.is_empty()
+    {
+        return Err("Kagemusha V2 recursive proof envelope metadata mismatch".to_owned());
+    }
+
+    let (_, instance_columns) =
+        super::zkparse::strict_proof_and_instances(&envelope.proof_bytes)
+            .map_err(|err| format!("Kagemusha V2 recursive proof instances are invalid: {err}"))?;
+    let transition = instance_columns.last().ok_or_else(|| {
+        "Kagemusha V2 recursive proof has no transition instance column".to_owned()
+    })?;
+    if transition.len() < KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS
+        || transition
+            .iter()
+            .skip(KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS)
+            .any(|value| *value != Scalar::from(0))
+        || transition[I_LAYOUT_VERSION]
+            != Scalar::from(KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_LAYOUT_VERSION)
+    {
+        return Err("Kagemusha V2 recursive proof transition instance shape mismatch".to_owned());
+    }
+
+    let statement_digest = bundle.statement.digest().map_err(|err| err.to_string())?;
+    let expected_digest_limbs = bytes_to_limbs(&statement_digest);
+    if transition[I_STATEMENT_DIGEST..I_STATEMENT_DIGEST + expected_digest_limbs.len()]
+        != expected_digest_limbs
+    {
+        return Err(
+            "Kagemusha V2 recursive proof is not bound to the submitted public statement"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
 type OneHopLineageCircuit<const LEN: usize> =
     super::pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice<
         LEN,
@@ -1435,7 +1519,8 @@ type AppendLineageKeygenShape<const LEN: usize> =
         { super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS },
     >;
 
-// TODO(kagemusha-v2-release):
+// TODO(kagemusha-v2-release): Replace this first-release safety boundary with
+// the compact, constraint-linked verifier composition described below.
 // `KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE` must remain false
 // until this verifier-slice composition is replaced by a compact profile. The
 // current outer rectangularization pads every lineage instance column to the
@@ -1684,39 +1769,6 @@ impl<const LEN: usize> Circuit<Scalar> for KagemushaRecursiveSpendRedeemChangeKe
     }
 }
 
-fn init_instance_columns<const LEN: usize>(
-    circuit: &KagemushaRecursiveSpendInitCircuitV2<LEN>,
-) -> Result<Vec<Vec<Scalar>>, String> {
-    let mut columns =
-        super::kagemusha_recursive_one_hop_verifier_slice_instance_columns(&circuit.lineage)?;
-    columns.push(kagemusha_recursive_spend_transition_instance_column_v2(
-        &circuit.transition.values,
-    ));
-    Ok(super::kagemusha_rectangular_pasta_instance_columns(columns))
-}
-
-fn append_instance_columns<const LEN: usize>(
-    circuit: &KagemushaRecursiveSpendAppendCircuitV2<LEN>,
-) -> Result<Vec<Vec<Scalar>>, String> {
-    let mut columns =
-        super::kagemusha_recursive_append_verifier_slice_instance_columns(&circuit.lineage)?;
-    columns.push(kagemusha_recursive_spend_transition_instance_column_v2(
-        &circuit.transition.values,
-    ));
-    Ok(super::kagemusha_rectangular_pasta_instance_columns(columns))
-}
-
-fn redeem_change_instance_columns<const LEN: usize>(
-    circuit: &KagemushaRecursiveSpendRedeemChangeCircuitV2<LEN>,
-) -> Result<Vec<Vec<Scalar>>, String> {
-    let mut columns =
-        super::kagemusha_recursive_append_verifier_slice_instance_columns(&circuit.lineage)?;
-    columns.push(kagemusha_recursive_spend_transition_instance_column_v2(
-        &circuit.transition.values,
-    ));
-    Ok(super::kagemusha_rectangular_pasta_instance_columns(columns))
-}
-
 /// Exact artifact type string accepted by V2 references.
 pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACT_TYPE_V2: &str =
     "KagemushaRecursiveSpendLineageKeyArtifactsV2";
@@ -1728,6 +1780,127 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACT_ABI_V2: u32 = 17;
 const KEY_ARTIFACT_MAGIC_V2: &[u8; 8] = b"KRV2KEY\0";
 const KEY_ARTIFACT_MAX_HEADER_BYTES_V2: usize = 64 * 1024 * 1024;
 const KEY_ARTIFACT_MAX_TOTAL_BYTES_V2: u64 = 4 * 1024 * 1024 * 1024;
+
+/// Exact artifact type selected by the ABI-18 Pasta-cycle contract.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_TYPE_V3: &str =
+    "KagemushaRecursiveSpendPastaCycleArtifactsV3";
+/// Streaming archive format version selected by the ABI-18 contract.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_VERSION_V3: u16 = 3;
+/// Framing magic for a streamed ABI-18 Pasta-cycle artifact.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V3: &[u8; 8] =
+    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_KEY_MAGIC_V3;
+
+/// Small authenticated header preceding one streamed Pasta-cycle artifact file.
+///
+/// This type deliberately carries no payload vector. Release tooling must hash
+/// and size-check the following bytes incrementally before atomically exposing
+/// them to the prover.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+pub struct KagemushaRecursiveSpendPastaCycleArtifactsV3 {
+    /// Package layout version.
+    pub version: u16,
+    /// Exact manifest schema that authorized the package.
+    pub manifest_schema: String,
+    /// Native bridge ABI required by the package.
+    pub bridge_abi_version: u32,
+    /// Exact two-layer backend profile.
+    pub proof_backend: String,
+    /// Exact circuit-native transcript profile.
+    pub transcript_profile: String,
+    /// Human-readable release generation selected by the manifest.
+    pub generation: String,
+    /// Curve/parity selected by this artifact.
+    pub parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+    /// Exact fixed circuit id for `parity`.
+    pub circuit_id: String,
+    /// Canonical `ParamsIPA` generation identifier.
+    pub parameter_generation: String,
+    /// Halo2 IPA domain exponent.
+    pub ipa_k: u32,
+    /// Kind of the following payload.
+    pub kind: iroha_data_model::offline::KagemushaPastaCycleArtifactKindV3,
+    /// Exact following payload length.
+    pub payload_size_bytes: u64,
+    /// SHA-256 of only the following payload.
+    pub payload_sha256: [u8; 32],
+}
+
+impl KagemushaRecursiveSpendPastaCycleArtifactsV3 {
+    /// Validate all small bindings before any release-sized payload is read.
+    pub fn validate_header(&self) -> Result<(), String> {
+        use iroha_data_model::offline::{
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1, KagemushaPastaCycleParityV1,
+        };
+
+        let expected_circuit = match self.parity {
+            KagemushaPastaCycleParityV1::TransitionEq => {
+                KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1
+            }
+            KagemushaPastaCycleParityV1::StateEp => {
+                KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1
+            }
+        };
+        if self.version != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_VERSION_V3
+            || self.manifest_schema != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3
+            || self.bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3
+            || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
+            || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1
+            || !iroha_data_model::offline::is_kagemusha_v3_portable_identifier(&self.generation)
+            || self.circuit_id != expected_circuit
+            || !iroha_data_model::offline::is_kagemusha_v3_portable_identifier(
+                &self.parameter_generation,
+            )
+            || self.ipa_k != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1
+            || self.payload_size_bytes == 0
+            || self.payload_size_bytes > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V3
+            || self.payload_sha256 == [0; 32]
+        {
+            return Err("Kagemusha Pasta-cycle V3 artifact header mismatch".to_owned());
+        }
+        Ok(())
+    }
+
+    /// Bind this decoded header to one exact descriptor in an authenticated manifest.
+    pub fn validate_against_manifest(
+        &self,
+        manifest: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV3,
+        descriptor: &iroha_data_model::offline::KagemushaPastaCycleArtifactV3,
+    ) -> Result<(), String> {
+        self.validate_header()?;
+        manifest.validate().map_err(|error| error.to_string())?;
+        let profile = manifest
+            .profiles
+            .iter()
+            .find(|profile| profile.parity == self.parity)
+            .ok_or_else(|| "Kagemusha Pasta-cycle V3 manifest parity mismatch".to_owned())?;
+        if self.manifest_schema != manifest.schema
+            || self.bridge_abi_version != manifest.bridge_abi_version
+            || self.proof_backend != manifest.proof_backend
+            || self.transcript_profile != manifest.transcript_profile
+            || self.generation != manifest.generation
+            || self.circuit_id != profile.circuit_id
+            || self.parameter_generation != profile.parameter_generation
+            || self.ipa_k != profile.ipa_k
+            || descriptor.kind != self.kind
+            || descriptor.payload_size_bytes != self.payload_size_bytes
+            || descriptor.payload_sha256 != self.payload_sha256
+            || !profile
+                .artifacts
+                .iter()
+                .any(|artifact| artifact == descriptor)
+        {
+            return Err("Kagemusha Pasta-cycle V3 artifact manifest binding mismatch".to_owned());
+        }
+        Ok(())
+    }
+}
 
 /// Canonical small header of the streamed V2 lineage key package.
 ///
@@ -2078,17 +2251,10 @@ impl<R: Read> Read for BoundedPayloadReader<'_, R> {
     }
 }
 
-struct LoadedLineageKeyArtifactV2 {
-    header: KagemushaRecursiveSpendLineageKeyArtifactsV2,
-    params: super::halo2_backend::PastaParams,
-    verifying_key: super::halo2_backend::VerifyingKey,
-    proving_key: super::halo2_backend::ProvingKey,
-}
-
 fn read_key_payload_for_circuit<C, R: Read>(
     reader: &mut CountingSha256Reader<R>,
     header: KagemushaRecursiveSpendLineageKeyArtifactsV2,
-) -> Result<LoadedLineageKeyArtifactV2, String>
+) -> Result<KagemushaRecursiveSpendLineageKeyArtifactsV2, String>
 where
     C: Circuit<Scalar>,
     C::Params: Default,
@@ -2115,19 +2281,14 @@ where
     {
         return Err("Kagemusha V2 proving/verifying key pair mismatch".to_owned());
     }
-    Ok(LoadedLineageKeyArtifactV2 {
-        header,
-        params,
-        verifying_key,
-        proving_key,
-    })
+    Ok(header)
 }
 
 fn read_lineage_key_artifact_v2<R: Read>(
     reference: &KagemushaRecursiveSpendArtifactReferenceV2,
     expected_role: KagemushaRecursiveSpendArtifactRoleV2,
     reader: R,
-) -> Result<LoadedLineageKeyArtifactV2, String> {
+) -> Result<KagemushaRecursiveSpendLineageKeyArtifactsV2, String> {
     reference
         .validate_for_role(expected_role)
         .map_err(|err| err.to_string())?;
@@ -2221,7 +2382,7 @@ pub fn validate_kagemusha_recursive_spend_lineage_key_artifact_v2<R: Read>(
     reference: &KagemushaRecursiveSpendArtifactReferenceV2,
     reader: R,
 ) -> Result<KagemushaRecursiveSpendLineageKeyArtifactsV2, String> {
-    Ok(read_lineage_key_artifact_v2(reference, reference.role, reader)?.header)
+    read_lineage_key_artifact_v2(reference, reference.role, reader)
 }
 
 #[cfg(test)]
@@ -2464,6 +2625,48 @@ mod tests {
     }
 
     #[test]
+    fn pasta_cycle_v3_artifact_header_binds_parity_and_release_limits() {
+        let header = KagemushaRecursiveSpendPastaCycleArtifactsV3 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_VERSION_V3,
+            manifest_schema:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3
+                    .to_owned(),
+            bridge_abi_version:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+            proof_backend:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
+                    .to_owned(),
+            transcript_profile:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1
+                    .to_owned(),
+            generation: "release-generation-1".to_owned(),
+            parity: iroha_data_model::offline::KagemushaPastaCycleParityV1::TransitionEq,
+            circuit_id:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1
+                    .to_owned(),
+            parameter_generation: "params-generation-1".to_owned(),
+            ipa_k: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
+            kind: iroha_data_model::offline::KagemushaPastaCycleArtifactKindV3::ProvingKey,
+            payload_size_bytes: 1_024,
+            payload_sha256: [0x52; 32],
+        };
+        header.validate_header().expect("valid V3 header");
+        assert_eq!(
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V3,
+            b"KRV3KEY\0"
+        );
+
+        let mut wrong_parity = header.clone();
+        wrong_parity.parity = iroha_data_model::offline::KagemushaPastaCycleParityV1::StateEp;
+        assert!(wrong_parity.validate_header().is_err());
+
+        let mut oversized = header;
+        oversized.payload_size_bytes =
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V3 + 1;
+        assert!(oversized.validate_header().is_err());
+    }
+
+    #[test]
     fn composed_append_shape_exceeds_peer_archive_budget_and_stays_disabled() {
         const PASTA_SCALAR_BYTES: usize = 32;
 
@@ -2474,7 +2677,7 @@ mod tests {
         // This deliberately ignores every public column of both non-native
         // IPA verifiers and all proof/envelope bytes. The 59 semantic columns
         // plus the V2 transition column are already rectangularly padded to
-        // the transition height by `append_instance_columns`.
+        // the transition height.
         let minimum_composed_instance_bytes =
             (super::super::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS + 1)
                 .checked_mul(KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS)

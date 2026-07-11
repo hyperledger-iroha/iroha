@@ -268,7 +268,7 @@ public final class NoritoCodecAdapterTests {
             .setCreationTimeMs(1_735_444_555_123L)
             .setPublicKeyHex("deadbeef")
             .setSignatureB64("c2ln")
-            .setFeeSponsor("sponsor@pob.cbsi")
+            .setFeeSponsor("sponsor@boi.is2")
             .setMemo("QR invoice 42")
             .setValidationFeePolicyVersion(7L)
             .setValidationFeePolicyHash("AB".repeat(32))

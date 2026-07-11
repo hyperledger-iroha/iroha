@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Union
@@ -25,6 +24,9 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     MultisigResponse,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
+    OfflineAppliedOperation,
+    OfflinePendingOperation,
+    OfflineRejectedOperation,
     ToriiCanonicalRequestAuth,
     ToriiClient,
     VpnQuoteCreateRequest,
@@ -4898,7 +4900,7 @@ def test_get_sumeragi_bls_keys_parses_map() -> None:
 
     assert mapping["ed01"] == "ff00"
     assert mapping["ed02"] is None
-    assert session.calls[0]["url"].endswith("/v1/sumeragi/bls_keys")
+    assert session.calls[0]["url"].endswith("/v1/sumeragi/bls-keys")
 
 
 def test_get_sumeragi_evidence_count_returns_int() -> None:
@@ -5727,123 +5729,589 @@ def test_trigger_registration_deletion_and_query() -> None:
 
 def _offline_readiness_payload(**overrides: Any) -> Dict[str, Any]:
     payload = {
-        "offline_telemetry": True,
-        "offline_kagemusha_recursive_compact_available": True,
-        "offline_kagemusha_recursive_compact_mode": "recursive_compact_v1",
-        "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": 7,
-        "offline_kagemusha_recursive_compact_circuit_id": "kagemusha-recursive-compact-v1",
-        "offline_kagemusha_recursive_compact_artifacts_available": False,
+        "asset_definition_id": CANONICAL_ASSET_DEFINITION_ID,
+        "evaluated_block_height": 42,
+        "evaluated_block_hash": "ab" * 32,
+        "ready": True,
+        "blockers": [],
     }
     payload.update(overrides)
     return payload
 
 
-OFFLINE_READINESS_REMOVED_ABI7_FIELDS = (
-    "offline_kagemusha_abi7",
-    "offline_kagemusha_abi7_mode",
-    "offline_kagemusha_abi7_bridge_abi_version",
-    "offline_kagemusha_abi7_circuit_id",
-    "offline_kagemusha_abi7_artifacts",
-)
-
-def test_get_offline_readiness_parses_payload() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload=_offline_readiness_payload()))
-    client = ToriiClient("http://node.test", session=session)
-
-    readiness = client.get_offline_readiness()
-
-    assert readiness.offline_kagemusha_recursive_compact_available is True
-    assert readiness.offline_kagemusha_recursive_compact_mode == "recursive_compact_v1"
-    assert readiness.offline_kagemusha_recursive_compact_required_native_bridge_abi_version == 7
-    assert readiness.offline_kagemusha_recursive_compact_circuit_id == "kagemusha-recursive-compact-v1"
-    assert readiness.offline_kagemusha_recursive_compact_artifacts_available is False
-    assert readiness.offline_telemetry is True
-    assert readiness.offline_note is None
-    assert readiness.offline_one_use_keys is None
-    assert readiness.offline_recursive_note_proof is None
-    assert readiness.offline_fountain_qr is None
-    assert readiness.offline_sync_optional is None
-    call = session.calls[0]
-    assert call["method"] == "GET"
-    assert call["url"].endswith("/v1/offline/readiness")
+OFFLINE_OPERATION_BYTES = [0x11] * 32
+OFFLINE_OPERATION_ID = "11" * 32
+OFFLINE_TRANSACTION_HASH = "22" * 32
+OFFLINE_STATUS_URI = f"/v1/offline/operations/{OFFLINE_OPERATION_ID}"
 
 
-def test_get_offline_readiness_rejects_noncanonical_abi_versions() -> None:
-    cases = [
-        (
-            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-            0,
-            "offline readiness.offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be a positive integer",
-        ),
-        (
-            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-            "007",
-            "offline readiness.offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact positive integer string",
-        ),
-        (
-            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-            "2147483648",
-            "offline readiness.offline_kagemusha_recursive_compact_required_native_bridge_abi_version must fit in signed 32-bit range",
-        ),
-        (
-            "offline_kagemusha_recursive_compact_available",
-            1,
-            "offline readiness.offline_kagemusha_recursive_compact_available must be a boolean",
-        ),
-        (
-            "offline_kagemusha_recursive_compact_circuit_id",
-            "kagemusha-recursive-compact-v1 ",
-            "offline readiness.offline_kagemusha_recursive_compact_circuit_id must not contain surrounding whitespace",
-        ),
-    ]
-
-    for field, value, message in cases:
-        session = RecordingSession()
-        session.queue(StubResponse(payload=_offline_readiness_payload(**{field: value})))
-        client = ToriiClient("http://node.test", session=session)
-
-        with pytest.raises(RuntimeError, match=re.escape(message)):
-            client.get_offline_readiness()
+def _offline_top_up_request(**overrides: Any) -> Dict[str, Any]:
+    request = {
+        "asset": CANONICAL_ASSET_ID,
+        "amount": {"atomic_units": (1 << 64) + 1, "scale": 4},
+        "current_note": {"version": 2},
+        "record_bundle": {"version": 2},
+        "pallas_open_envelopes_archive": [1, 2, 3],
+        "artifact_generation": "generation-1",
+        "operation_id": list(OFFLINE_OPERATION_BYTES),
+        "authorization": {"operation_id": list(OFFLINE_OPERATION_BYTES)},
+    }
+    request.update(overrides)
+    return request
 
 
-def test_get_offline_readiness_rejects_removed_abi7_fields() -> None:
-    for field in OFFLINE_READINESS_REMOVED_ABI7_FIELDS:
-        session = RecordingSession()
-        session.queue(StubResponse(payload=_offline_readiness_payload(**{field: True})))
-        client = ToriiClient("http://node.test", session=session)
+def _offline_redeem_request(**overrides: Any) -> Dict[str, Any]:
+    request = {
+        "bundle": {"version": 2},
+        "recipient": CANONICAL_OWNER,
+        "amount": {"atomic_units": 7, "scale": 0},
+        "redeem_proof": {"version": 1},
+        "redemption": {"version": 2},
+        "lineage_verifier_record": {"id": "lineage-vk"},
+        "block_height": 41,
+        "operation_id": list(OFFLINE_OPERATION_BYTES),
+        "authorization": {"operation_id": list(OFFLINE_OPERATION_BYTES)},
+    }
+    request.update(overrides)
+    return request
 
-        with pytest.raises(
-            RuntimeError,
-            match=re.escape(
-                f"offline readiness.{field} is not supported; "
-                "use offline_kagemusha_recursive_compact_*"
-            ),
-        ):
-            client.get_offline_readiness()
+
+def _offline_operation_reference(**overrides: Any) -> Dict[str, Any]:
+    reference = {
+        "operation_id": OFFLINE_OPERATION_ID,
+        "kind": {"kind": "top_up", "value": None},
+        "state": {"state": "pending", "value": None},
+        "transaction_hash": OFFLINE_TRANSACTION_HASH,
+        "status_uri": OFFLINE_STATUS_URI,
+        "submitted_at_ms": 1_725_000_000_123,
+    }
+    reference.update(overrides)
+    return reference
 
 
-def test_get_offline_readiness_rejects_missing_recursive_compact_family() -> None:
+def _offline_rejected_status(error: Mapping[str, Any]) -> Dict[str, Any]:
+    return {
+        "state": "rejected",
+        "value": {
+            "operation_id": OFFLINE_OPERATION_ID,
+            "kind": {"kind": "redeem", "value": None},
+            "transaction_hash": OFFLINE_TRANSACTION_HASH,
+            "error": dict(error),
+        },
+    }
+
+
+def test_get_offline_readiness_sends_exact_asset_selector_and_parses_blockers() -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
-            payload={
-                "offline_note": True,
-                "offline_one_use_keys": True,
-                "offline_recursive_note_proof": True,
-                "offline_fountain_qr": True,
-                "offline_sync_optional": True,
-                "offline_telemetry": True,
-            }
+            payload=_offline_readiness_payload(
+                ready=False,
+                blockers=[
+                    {
+                        "code": "proof_backend_unavailable",
+                        "message": "Proof backend unavailable",
+                    }
+                ],
+            )
         )
     )
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(
-        RuntimeError,
-        match="offline_kagemusha_recursive_compact_available",
+    readiness = client.get_offline_readiness(CANONICAL_ASSET_DEFINITION_ID)
+
+    assert readiness.asset_definition_id == CANONICAL_ASSET_DEFINITION_ID
+    assert readiness.evaluated_block_height == 42
+    assert readiness.evaluated_block_hash == "ab" * 32
+    assert readiness.ready is False
+    assert readiness.blockers[0].code == "proof_backend_unavailable"
+    call = session.calls[0]
+    assert call["method"] == "GET"
+    assert call["url"].endswith("/v1/offline/readiness")
+    assert call["params"] == {"asset_definition_id": CANONICAL_ASSET_DEFINITION_ID}
+    assert call["headers"]["Accept"] == "application/json"
+
+
+def test_get_offline_readiness_rejects_invalid_selector_before_network() -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+    for asset in ("", f" {CANONICAL_ASSET_DEFINITION_ID}", f"{CANONICAL_ASSET_DEFINITION_ID} "):
+        with pytest.raises(RuntimeError, match="asset_definition_id"):
+            client.get_offline_readiness(asset)
+    assert session.calls == []
+
+
+def test_get_offline_readiness_rejects_adversarial_snapshots() -> None:
+    missing_hash = _offline_readiness_payload()
+    missing_hash.pop("evaluated_block_hash")
+    payloads = [
+        missing_hash,
+        _offline_readiness_payload(asset_definition_id="different-asset"),
+        _offline_readiness_payload(
+            ready=True,
+            blockers=[{"code": "not_ready", "message": "no"}],
+        ),
+        _offline_readiness_payload(ready=False, blockers=[]),
+        _offline_readiness_payload(evaluated_block_height=-1),
+        _offline_readiness_payload(evaluated_block_hash="AB" * 32),
+        _offline_readiness_payload(evaluated_block_hash="ab" * 31),
+        _offline_readiness_payload(blockers=[{"code": "NOT-CANONICAL", "message": "no"}]),
+        _offline_readiness_payload(
+            ready=False, blockers=[{"code": "not_ready", "message": ""}]
+        ),
+        _offline_readiness_payload(
+            ready=False, blockers=[{"code": "not_ready", "message": " leading"}]
+        ),
+        _offline_readiness_payload(
+            ready=False, blockers=[{"code": "not_ready", "message": "line\nbreak"}]
+        ),
+    ]
+    for payload in payloads:
+        session = RecordingSession()
+        session.queue(StubResponse(payload=payload))
+        client = ToriiClient("http://node.test", session=session)
+        with pytest.raises(RuntimeError):
+            client.get_offline_readiness(CANONICAL_ASSET_DEFINITION_ID)
+
+
+def test_offline_readiness_uses_finite_codes_and_strips_unknown_members() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload=_offline_readiness_payload(
+                ready=False,
+                unknown_member={"attacker_controlled": True},
+                blockers=[{"code": "1_future_code", "message": "not ready"}],
+            )
+        )
+    )
+    readiness = ToriiClient("http://node.test", session=session).get_offline_readiness(
+        CANONICAL_ASSET_DEFINITION_ID
+    )
+    assert readiness.blockers[0].code == "1_future_code"
+    assert not hasattr(readiness, "unknown_member")
+
+    for code in ("", "_leading_underscore", "a" * 65):
+        invalid_session = RecordingSession()
+        invalid_session.queue(
+            StubResponse(
+                payload=_offline_readiness_payload(
+                    ready=False,
+                    blockers=[{"code": code, "message": "no"}],
+                )
+            )
+        )
+        with pytest.raises(RuntimeError):
+            ToriiClient(
+                "http://node.test", session=invalid_session
+            ).get_offline_readiness(CANONICAL_ASSET_DEFINITION_ID)
+
+
+def test_submit_offline_top_up_sends_direct_json_and_derived_idempotency_key() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            status_code=202,
+            payload=_offline_operation_reference(),
+            headers={"Location": OFFLINE_STATUS_URI},
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    reference = client.submit_offline_top_up(_offline_top_up_request())
+
+    assert reference.operation_id == OFFLINE_OPERATION_ID
+    assert reference.kind.kind == "top_up"
+    assert reference.state.state == "pending"
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"].endswith("/v1/offline/top-up")
+    assert call["headers"] == {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Idempotency-Key": OFFLINE_OPERATION_ID,
+    }
+    body = call["data"].decode("utf-8")
+    assert f'"atomic_units":{(1 << 64) + 1}' in body
+    assert "base64" not in body
+    assert "request_archive" not in body
+
+
+def test_submit_offline_redeem_uses_only_the_final_route() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            status_code=202,
+            payload=_offline_operation_reference(kind={"kind": "redeem", "value": None}),
+            headers={"Location": OFFLINE_STATUS_URI},
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    reference = client.submit_offline_redeem(_offline_redeem_request())
+
+    assert reference.kind.kind == "redeem"
+    assert session.calls[0]["url"].endswith("/v1/offline/redeem")
+    assert json.loads(session.calls[0]["data"].decode("utf-8"))["block_height"] == 41
+
+
+def test_offline_command_validation_rejects_malformed_ids_and_payloads_before_network() -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+    cyclic = _offline_top_up_request()
+    cyclic["current_note"]["self"] = cyclic["current_note"]
+    requests = [
+        {"request_archive": "whole-payload-wrapper"},
+        _offline_top_up_request(operation_id=bytes(OFFLINE_OPERATION_BYTES)),
+        _offline_top_up_request(operation_id=OFFLINE_OPERATION_BYTES[:-1]),
+        _offline_top_up_request(operation_id=[0] * 32),
+        _offline_top_up_request(operation_id=[0x11] * 31 + [256]),
+        _offline_top_up_request(authorization={"operation_id": [0x12] * 32}),
+        cyclic,
+    ]
+    for request in requests:
+        with pytest.raises(RuntimeError):
+            client.submit_offline_top_up(request)
+    with pytest.raises(RuntimeError, match="block_height"):
+        client.submit_offline_redeem(_offline_redeem_request(block_height=-1))
+    assert session.calls == []
+
+
+def test_offline_acceptance_cross_checks_reference_and_location() -> None:
+    cases = [
+        (_offline_operation_reference(operation_id="33" * 32), OFFLINE_STATUS_URI),
+        (
+            _offline_operation_reference(kind={"kind": "redeem", "value": None}),
+            OFFLINE_STATUS_URI,
+        ),
+        (
+            _offline_operation_reference(status_uri="/v1/offline/operations/legacy"),
+            OFFLINE_STATUS_URI,
+        ),
+        (_offline_operation_reference(), f"/v1/offline/operations/{'44' * 32}"),
+        (_offline_operation_reference(), None),
+    ]
+    for payload, location in cases:
+        session = RecordingSession()
+        headers = {"Location": location} if location is not None else {}
+        session.queue(StubResponse(status_code=202, payload=payload, headers=headers))
+        client = ToriiClient("http://node.test", session=session)
+        with pytest.raises(RuntimeError):
+            client.submit_offline_top_up(_offline_top_up_request())
+
+    wrong_media_session = RecordingSession()
+    wrong_media_session.queue(
+        StubResponse(
+            status_code=202,
+            payload=_offline_operation_reference(),
+            headers={"Content-Type": "text/plain", "Location": OFFLINE_STATUS_URI},
+        )
+    )
+    wrong_media_client = ToriiClient("http://node.test", session=wrong_media_session)
+    with pytest.raises(RuntimeError, match="Content-Type application/json"):
+        wrong_media_client.submit_offline_top_up(_offline_top_up_request())
+
+
+def test_get_offline_operation_status_parses_all_tagged_states() -> None:
+    statuses = [
+        (
+            {
+                "state": "pending",
+                "value": {
+                    "operation_id": OFFLINE_OPERATION_ID,
+                    "kind": {"kind": "top_up", "value": None},
+                    "transaction_hash": OFFLINE_TRANSACTION_HASH,
+                    "submitted_at_ms": 10,
+                },
+            },
+            OfflinePendingOperation,
+        ),
+        (
+            {
+                "state": "applied",
+                "value": {
+                    "operation_id": OFFLINE_OPERATION_ID,
+                    "result": {
+                        "kind": "top_up",
+                        "result": {
+                            "transaction_hash": OFFLINE_TRANSACTION_HASH,
+                            "finalized_block_height": 12,
+                            "server_time_ms": 13,
+                            "anchor": {"version": 2},
+                        },
+                    },
+                },
+            },
+            OfflineAppliedOperation,
+        ),
+        (
+            {
+                "state": "rejected",
+                "value": {
+                    "operation_id": OFFLINE_OPERATION_ID,
+                    "kind": {"kind": "redeem", "value": None},
+                    "transaction_hash": OFFLINE_TRANSACTION_HASH,
+                    "error": {
+                        "code": "offline_operation_rejected",
+                        "message": "rejected",
+                        "details": {"layer": "torii"},
+                    },
+                },
+            },
+            OfflineRejectedOperation,
+        ),
+    ]
+    for payload, expected_type in statuses:
+        session = RecordingSession()
+        session.queue(StubResponse(payload=payload))
+        client = ToriiClient("http://node.test", session=session)
+        status = client.get_offline_operation_status(OFFLINE_OPERATION_ID)
+        assert isinstance(status, expected_type)
+        assert status.operation_id == OFFLINE_OPERATION_ID
+        assert session.calls[0]["url"].endswith(OFFLINE_STATUS_URI)
+
+
+def test_offline_error_codes_use_the_global_finite_grammar() -> None:
+    accepted_session = RecordingSession()
+    accepted_session.queue(
+        StubResponse(
+            payload=_offline_rejected_status(
+                {"code": "1_future_code", "message": "future rejection"}
+            )
+        )
+    )
+    accepted = ToriiClient(
+        "http://node.test", session=accepted_session
+    ).get_offline_operation_status(OFFLINE_OPERATION_ID)
+    assert isinstance(accepted, OfflineRejectedOperation)
+    assert accepted.error.code == "1_future_code"
+
+    for code in ("", "_leading_underscore", "a" * 65):
+        session = RecordingSession()
+        session.queue(
+            StubResponse(
+                payload=_offline_rejected_status(
+                    {"code": code, "message": "invalid code"}
+                )
+            )
+        )
+        with pytest.raises(RuntimeError):
+            ToriiClient(
+                "http://node.test", session=session
+            ).get_offline_operation_status(OFFLINE_OPERATION_ID)
+
+
+def test_offline_error_messages_require_exact_non_control_text() -> None:
+    for message in ("", " leading", "trailing ", "line\nbreak", "control\u0085"):
+        session = RecordingSession()
+        session.queue(
+            StubResponse(
+                payload=_offline_rejected_status(
+                    {"code": "offline_operation_rejected", "message": message}
+                )
+            )
+        )
+        with pytest.raises(RuntimeError):
+            ToriiClient(
+                "http://node.test", session=session
+            ).get_offline_operation_status(OFFLINE_OPERATION_ID)
+
+
+def test_offline_error_details_are_closed_and_typed() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload=_offline_rejected_status(
+                {
+                    "code": "offline_operation_rejected",
+                    "message": "rejected",
+                    "unknown_envelope_member": "ignored",
+                    "details": {
+                        "layer": "torii",
+                        "reject_code": "QUEUE_FULL",
+                        "retry_after_seconds": 3,
+                        "endpoint": "/v1/offline/redeem",
+                        "field": "authorization",
+                        "expected": "fresh",
+                        "actual": "replayed",
+                        "profile": "minamoto",
+                        "chain_discriminant": 753,
+                        "tx_hash": OFFLINE_TRANSACTION_HASH,
+                        "last_status": "queued",
+                        "hint": "retry later",
+                        "unknown_detail": {"attacker_controlled": True},
+                        "queue": {
+                            "state": "saturated",
+                            "queued": 5,
+                            "capacity": 5,
+                            "saturated": True,
+                            "unknown_queue_member": "ignored",
+                        },
+                        "axt": {
+                            "code": "handle_era_stale",
+                            "reason": "stale handle era",
+                            "snapshot_version": 7,
+                            "dataspace": 8,
+                            "lane": 9,
+                            "next_min_handle_era": 10,
+                            "next_min_sub_nonce": 11,
+                            "unknown_axt_member": "ignored",
+                        },
+                    },
+                }
+            )
+        )
+    )
+    status = ToriiClient(
+        "http://node.test", session=session
+    ).get_offline_operation_status(OFFLINE_OPERATION_ID)
+    assert isinstance(status, OfflineRejectedOperation)
+    details = status.error.details
+    assert details is not None
+    assert details.layer == "torii"
+    assert details.reject_code == "QUEUE_FULL"
+    assert details.retry_after_seconds == 3
+    assert details.chain_discriminant == 753
+    assert details.queue is not None
+    assert details.queue.queued == 5
+    assert details.queue.saturated is True
+    assert details.axt is not None
+    assert details.axt.lane == 9
+    assert details.axt.next_min_sub_nonce == 11
+    assert not hasattr(details, "unknown_detail")
+    assert not hasattr(details.queue, "unknown_queue_member")
+    assert not hasattr(details.axt, "unknown_axt_member")
+
+
+def test_offline_error_details_reject_malformed_nested_types_and_ranges() -> None:
+    invalid_details = [
+        {"queue": {"state": "healthy", "queued": 0, "capacity": 1}},
+        {
+            "queue": {
+                "state": "healthy",
+                "queued": -1,
+                "capacity": 1,
+                "saturated": False,
+            }
+        },
+        {
+            "queue": {
+                "state": "healthy",
+                "queued": 0,
+                "capacity": 1,
+                "saturated": "false",
+            }
+        },
+        {"retry_after_seconds": -1},
+        {"chain_discriminant": 65_536},
+        {"axt": {"lane": 1 << 32}},
+        {"axt": {"snapshot_version": "1"}},
+        {"axt": []},
+    ]
+    for details in invalid_details:
+        session = RecordingSession()
+        session.queue(
+            StubResponse(
+                payload=_offline_rejected_status(
+                    {"code": "rejected", "message": "no", "details": details}
+                )
+            )
+        )
+        with pytest.raises(RuntimeError):
+            ToriiClient(
+                "http://node.test", session=session
+            ).get_offline_operation_status(OFFLINE_OPERATION_ID)
+
+
+def test_offline_json_decoder_rejects_duplicates_non_finite_depth_and_size() -> None:
+    valid = json.dumps(_offline_readiness_payload())
+    duplicate = valid.replace('"ready": true', '"ready": true, "ready": true')
+    non_finite = valid.replace('"evaluated_block_height": 42', '"evaluated_block_height": NaN')
+    infinity = valid.replace('"evaluated_block_height": 42', '"evaluated_block_height": Infinity')
+    deep_value = "0"
+    for _ in range(130):
+        deep_value = f"[{deep_value}]"
+    deep = valid[:-1] + f', "unknown": {deep_value}}}'
+    oversized = valid[:-1] + f', "unknown": "{"x" * (256 * 1024)}"}}'
+
+    for body in (duplicate, non_finite, infinity, deep, oversized):
+        session = RecordingSession()
+        session.queue(
+            StubResponse(
+                text=body,
+                headers={"Content-Type": "application/json"},
+            )
+        )
+        with pytest.raises(RuntimeError):
+            ToriiClient(
+                "http://node.test", session=session
+            ).get_offline_readiness(CANONICAL_ASSET_DEFINITION_ID)
+
+
+def test_offline_status_rejects_noncanonical_paths_and_adversarial_envelopes() -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+    for operation_id in (
+        "AB" * 32,
+        "00" * 32,
+        "11",
+        f"{OFFLINE_OPERATION_ID}/extra",
     ):
-        client.get_offline_readiness()
+        with pytest.raises(RuntimeError):
+            client.get_offline_operation_status(operation_id)
+    assert session.calls == []
+
+    invalid_statuses = [
+        {"state": "unknown", "value": {"operation_id": OFFLINE_OPERATION_ID}},
+        {
+            "state": "pending",
+            "value": {
+                "operation_id": "33" * 32,
+                "kind": {"kind": "top_up"},
+                "transaction_hash": OFFLINE_TRANSACTION_HASH,
+                "submitted_at_ms": 1,
+            },
+        },
+        {
+            "state": "pending",
+            "value": {
+                "operation_id": OFFLINE_OPERATION_ID,
+                "kind": {"kind": "top_up", "value": {}},
+                "transaction_hash": OFFLINE_TRANSACTION_HASH,
+                "submitted_at_ms": 1,
+            },
+        },
+        {
+            "state": "applied",
+            "value": {
+                "operation_id": OFFLINE_OPERATION_ID,
+                "result": {
+                    "kind": "redeem",
+                    "result": {
+                        "transaction_hash": OFFLINE_TRANSACTION_HASH,
+                        "finalized_block_height": 1,
+                        "server_time_ms": 2,
+                        "anchor": {},
+                    },
+                },
+            },
+        },
+        {
+            "state": "rejected",
+            "value": {
+                "operation_id": OFFLINE_OPERATION_ID,
+                "kind": {"kind": "redeem"},
+                "transaction_hash": OFFLINE_TRANSACTION_HASH,
+                "error": {"code": "INVALID-CODE", "message": "no"},
+            },
+        },
+    ]
+    for payload in invalid_statuses:
+        invalid_session = RecordingSession()
+        invalid_session.queue(StubResponse(payload=payload))
+        invalid_client = ToriiClient("http://node.test", session=invalid_session)
+        with pytest.raises(RuntimeError):
+            invalid_client.get_offline_operation_status(OFFLINE_OPERATION_ID)
 
 
 def test_status_snapshot_parses_mode_and_consensus_caps() -> None:

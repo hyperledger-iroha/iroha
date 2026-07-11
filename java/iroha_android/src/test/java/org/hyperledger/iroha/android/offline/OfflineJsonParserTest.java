@@ -10,6 +10,8 @@ public final class OfflineJsonParserTest {
 
   public static void main(final String[] args) {
     parsesOfflineReadiness();
+    ignoresUnknownOfflineReadinessMembers();
+    rejectsMalformedUtf8WithoutReplacement();
     rejectsNonCanonicalOfflineReadiness();
     parsesOfflineTransfers();
     rejectsOfflineTransferMalformedIntegerFields();
@@ -23,6 +25,7 @@ public final class OfflineJsonParserTest {
         {
           "asset_definition_id": "xor#wonderland",
           "evaluated_block_height": 18446744073709551615,
+          "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
           "ready": false,
           "blockers": [
             {"code": "offline_disabled", "message": "Offline transfers are disabled"}
@@ -33,10 +36,40 @@ public final class OfflineJsonParserTest {
         OfflineJsonParser.parseOfflineReadiness(json.getBytes(StandardCharsets.UTF_8));
     assert "xor#wonderland".equals(readiness.assetDefinitionId());
     assert new BigInteger("18446744073709551615").equals(readiness.evaluatedBlockHeight());
+    assert "abababababababababababababababababababababababababababababababab"
+        .equals(readiness.evaluatedBlockHash());
     assert !readiness.ready();
     assert readiness.blockers().size() == 1;
     assert "offline_disabled".equals(readiness.blockers().get(0).code());
     assert "Offline transfers are disabled".equals(readiness.blockers().get(0).message());
+  }
+
+  private static void ignoresUnknownOfflineReadinessMembers() {
+    final OfflineReadiness readiness =
+        parseOfflineReadiness(
+            readinessBody(
+                "\"future_top_level\": {\"ignored\": true},",
+                "\"xor#wonderland\"",
+                "7",
+                "false",
+                "[{\"code\":\"2fa_required\",\"message\":\"no\",\"future_detail\":7}]"));
+    assert readiness.blockers().size() == 1;
+    assert "2fa_required".equals(readiness.blockers().get(0).code());
+  }
+
+  private static void rejectsMalformedUtf8WithoutReplacement() {
+    final byte[] payload =
+        readinessBody("", "\"xor#wonderland\"", "7", "true", "[]")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] marker = "xor#wonderland".getBytes(StandardCharsets.US_ASCII);
+    final int offset = findSubsequence(payload, marker);
+    if (offset < 0) {
+      throw new AssertionError("readiness asset marker missing from test payload");
+    }
+    payload[offset] = (byte) 0xc3;
+    expectIllegalState(
+        () -> OfflineJsonParser.parseOfflineReadiness(payload),
+        "Offline JSON payload must be valid UTF-8");
   }
 
   private static void rejectsNonCanonicalOfflineReadiness() {
@@ -122,9 +155,6 @@ public final class OfflineJsonParserTest {
   private static MalformedReadinessCase[] malformedReadinessCases() {
     return new MalformedReadinessCase[] {
       new MalformedReadinessCase(
-          readinessBody("\"offline_telemetry\": true,", "\"xor#wonderland\"", "7", "true", "[]"),
-          "root.offline_telemetry is not a supported field"),
-      new MalformedReadinessCase(
           readinessBody("", "\"xor#wonderland\"", "\"7\"", "true", "[]"),
           "evaluated_block_height must be a JSON integer number"),
       new MalformedReadinessCase(
@@ -141,8 +171,19 @@ public final class OfflineJsonParserTest {
           "asset_definition_id must be an exact non-empty string"),
       new MalformedReadinessCase(
           readinessBody("", "\"xor#wonderland\"", "7", "true",
-              "[{\"code\":\"blocked\",\"message\":\"no\",\"extra\":1}]"),
-          "blockers[0].extra is not a supported field")
+              "[{\"code\":\"blocked\",\"message\":1}]"),
+          "blockers[0].message must be a string"),
+      new MalformedReadinessCase(
+          readinessBody("", "\"xor#wonderland\"", "7", "false",
+              "[{\"code\":\"Bad-Code\",\"message\":\"no\"}]"),
+          "code must be a 1-64 character lowercase stable identifier"),
+      new MalformedReadinessCase(
+          readinessBody("", "\"xor#wonderland\"", "7", "false", "[]"),
+          "ready must be true exactly when blockers is empty"),
+      new MalformedReadinessCase(
+          readinessBody("", "\"xor#wonderland\"", "7", "true",
+              "[{\"code\":\"blocked\",\"message\":\"no\"}]"),
+          "ready must be true exactly when blockers is empty")
     };
   }
 
@@ -210,6 +251,7 @@ public final class OfflineJsonParserTest {
           %s
           "asset_definition_id": %s,
           "evaluated_block_height": %s,
+          "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
           "ready": %s,
           "blockers": %s
         }
@@ -221,11 +263,24 @@ public final class OfflineJsonParserTest {
         blockers);
   }
 
+  private static int findSubsequence(final byte[] haystack, final byte[] needle) {
+    outer:
+    for (int offset = 0; offset <= haystack.length - needle.length; offset++) {
+      for (int index = 0; index < needle.length; index++) {
+        if (haystack[offset + index] != needle[index]) {
+          continue outer;
+        }
+      }
+      return offset;
+    }
+    return -1;
+  }
+
   private static void expectIllegalState(
       final Runnable action, final String expectedMessageFragment) {
     try {
       action.run();
-    } catch (final IllegalStateException ex) {
+    } catch (final IllegalStateException | IllegalArgumentException ex) {
       assert ex.getMessage().contains(expectedMessageFragment)
           : "unexpected message: " + ex.getMessage();
       return;

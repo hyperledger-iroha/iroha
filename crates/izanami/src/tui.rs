@@ -39,7 +39,10 @@ pub fn launch(args: IzanamiArgs) -> Result<Option<(ChaosConfig, IzanamiArgs)>> {
 fn run_app<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
-) -> Result<Outcome> {
+) -> Result<Outcome>
+where
+    B::Error: Send + Sync + 'static,
+{
     loop {
         terminal.draw(|f| app.draw(f))?;
         let evt = event::read()?;

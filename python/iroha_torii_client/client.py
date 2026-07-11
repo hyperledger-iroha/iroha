@@ -9,6 +9,8 @@ The API mirrors the app-facing endpoints exposed by Torii:
 * `/v1/zk/attachments` for uploading, listing, fetching, and deleting
   proof attachments stored on the node.
 * `/v1/zk/prover/reports` for querying background prover results.
+* `/v1/offline/*` for asset readiness and idempotent asynchronous top-up and
+  redemption operations using direct structured JSON.
 * `/v1/telemetry/peers-info` for peer telemetry snapshots (connectivity,
   config, and connected peers).
 
@@ -41,6 +43,7 @@ from typing import (
     Dict,
     Iterable,
     List,
+    Literal,
     Mapping,
     MutableMapping,
     Optional,
@@ -414,7 +417,24 @@ __all__ = [
     "KaigiRelayDetail",
     "KaigiRelayHealthSnapshot",
     "SumeragiQcEntry",
+    "OfflineReadinessBlocker",
     "OfflineReadiness",
+    "OfflineOperationKind",
+    "OfflinePendingState",
+    "OfflineOperationReference",
+    "OfflineTopUpResult",
+    "OfflineRedeemResult",
+    "OfflineTopUpOperationResult",
+    "OfflineRedeemOperationResult",
+    "OfflineAppliedResult",
+    "OfflineQueueErrorDetails",
+    "OfflineAxtErrorDetails",
+    "OfflineErrorDetails",
+    "OfflineErrorEnvelope",
+    "OfflinePendingOperation",
+    "OfflineAppliedOperation",
+    "OfflineRejectedOperation",
+    "OfflineOperationStatus",
     "SubscriptionPlanCreateResult",
     "SubscriptionPlanListItem",
     "SubscriptionPlanListPage",
@@ -2532,114 +2552,754 @@ class RbcSample:
     samples: List[RbcChunkSample]
 
 
+_OFFLINE_READINESS_PATH = "/v1/offline/readiness"
+_OFFLINE_TOP_UP_PATH = "/v1/offline/top-up"
+_OFFLINE_REDEEM_PATH = "/v1/offline/redeem"
+_OFFLINE_OPERATIONS_PATH = "/v1/offline/operations"
+_OFFLINE_OPERATION_ID_RE = re.compile(r"^(?!0{64}$)[0-9a-f]{64}$")
+_OFFLINE_TRANSACTION_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+_OFFLINE_ERROR_CODE_RE = re.compile(r"^[a-z0-9][a-z0-9_]{0,63}$")
+_OFFLINE_MAX_U32 = (1 << 32) - 1
+_OFFLINE_MAX_U64 = (1 << 64) - 1
+_OFFLINE_MAX_U128 = (1 << 128) - 1
+_OFFLINE_MAX_JSON_DEPTH = 128
+_OFFLINE_MAX_JSON_RESPONSE_BYTES = 256 * 1024
+
+
+def _offline_exact_string(value: Any, context: str, *, non_empty: bool = True) -> str:
+    if not isinstance(value, str):
+        raise RuntimeError(f"{context} must be a string")
+    if non_empty and not value:
+        raise RuntimeError(f"{context} must not be empty")
+    if value.strip() != value:
+        raise RuntimeError(f"{context} must not contain surrounding whitespace")
+    if any(0xD800 <= ord(character) <= 0xDFFF for character in value):
+        raise RuntimeError(f"{context} must not contain Unicode surrogate code points")
+    if any(ord(character) < 0x20 or 0x7F <= ord(character) <= 0x9F for character in value):
+        raise RuntimeError(f"{context} must not contain control characters")
+    return value
+
+
+def _offline_required(mapping: Mapping[str, Any], field: str, context: str) -> Any:
+    if field not in mapping:
+        raise RuntimeError(f"{context}.{field} is required")
+    return mapping[field]
+
+
+def _offline_mapping(value: Any, context: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise RuntimeError(f"{context} must be an object")
+    return value
+
+
+def _offline_unsigned(
+    value: Any,
+    context: str,
+    maximum: int,
+    *,
+    positive: bool = False,
+) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise RuntimeError(f"{context} must be an integer")
+    if value < 0 or (positive and value == 0) or value > maximum:
+        lower = 1 if positive else 0
+        raise RuntimeError(f"{context} must be between {lower} and {maximum}")
+    return value
+
+
+def _snapshot_offline_json(
+    value: Any,
+    context: str,
+    ancestors: Optional[set[int]] = None,
+    depth: int = 0,
+) -> Any:
+    if depth > _OFFLINE_MAX_JSON_DEPTH:
+        raise RuntimeError(f"{context} exceeds the maximum JSON nesting depth")
+    if value is None or isinstance(value, (str, bool)):
+        if isinstance(value, str):
+            _offline_exact_string(value, context, non_empty=False)
+        return value
+    if isinstance(value, int):
+        return _offline_unsigned(value, context, _OFFLINE_MAX_U128)
+    if isinstance(value, float):
+        raise RuntimeError(f"{context} must not contain floating-point numbers")
+
+    active = ancestors if ancestors is not None else set()
+    identity = id(value)
+    if identity in active:
+        raise RuntimeError(f"{context} must not contain a cycle")
+    active.add(identity)
+    try:
+        if isinstance(value, Mapping):
+            result: Dict[str, Any] = {}
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    raise RuntimeError(f"{context} keys must be strings")
+                _offline_exact_string(key, f"{context} key", non_empty=False)
+                result[key] = _snapshot_offline_json(
+                    item,
+                    f"{context}.{key}",
+                    active,
+                    depth + 1,
+                )
+            return result
+        if isinstance(value, (list, tuple)):
+            return [
+                _snapshot_offline_json(item, f"{context}[{index}]", active, depth + 1)
+                for index, item in enumerate(value)
+            ]
+    finally:
+        active.remove(identity)
+    raise RuntimeError(f"{context} contains an unsupported {type(value).__name__} value")
+
+
+def _offline_json_object_without_duplicates(
+    pairs: List[Tuple[str, Any]],
+) -> Dict[str, Any]:
+    result: Dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON object member `{key}`")
+        result[key] = value
+    return result
+
+
+def _offline_reject_json_constant(token: str) -> Any:
+    raise ValueError(f"non-finite JSON number `{token}` is not allowed")
+
+
+def _offline_byte_array(value: Any, context: str, exact_length: Optional[int] = None) -> List[int]:
+    if not isinstance(value, list):
+        raise RuntimeError(f"{context} must be a JSON byte array")
+    if exact_length is not None and len(value) != exact_length:
+        raise RuntimeError(f"{context} must contain exactly {exact_length} bytes")
+    for index, byte in enumerate(value):
+        if isinstance(byte, bool) or not isinstance(byte, int) or not 0 <= byte <= 255:
+            raise RuntimeError(f"{context}[{index}] must be an integer byte")
+    return value
+
+
+def _offline_operation_id_from_bytes(value: Any, context: str) -> str:
+    raw = _offline_byte_array(value, context, 32)
+    if not any(raw):
+        raise RuntimeError(f"{context} must not be all zero")
+    return bytes(raw).hex()
+
+
+def _require_offline_operation_id(value: Any, context: str = "operation_id") -> str:
+    if not isinstance(value, str) or _OFFLINE_OPERATION_ID_RE.fullmatch(value) is None:
+        raise RuntimeError(
+            f"{context} must be a non-zero lowercase 64-character hexadecimal string"
+        )
+    return value
+
+
+def _offline_transaction_hash(value: Any, context: str) -> str:
+    if not isinstance(value, str) or _OFFLINE_TRANSACTION_HASH_RE.fullmatch(value) is None:
+        raise RuntimeError(f"{context} must be a lowercase 64-character hexadecimal string")
+    return value
+
+
+def _offline_scaled_amount(value: Any, context: str) -> None:
+    amount = _offline_mapping(value, context)
+    _offline_unsigned(
+        _offline_required(amount, "atomic_units", context),
+        f"{context}.atomic_units",
+        _OFFLINE_MAX_U128,
+        positive=True,
+    )
+    _offline_unsigned(
+        _offline_required(amount, "scale", context),
+        f"{context}.scale",
+        _OFFLINE_MAX_U32,
+    )
+
+
+def _normalize_offline_command(
+    request: Mapping[str, Any],
+    context: str,
+    kind: Literal["top_up", "redeem"],
+) -> Tuple[bytes, str]:
+    snapshot = _snapshot_offline_json(request, context)
+    record = _offline_mapping(snapshot, context)
+    operation_id = _offline_operation_id_from_bytes(
+        _offline_required(record, "operation_id", context),
+        f"{context}.operation_id",
+    )
+    authorization = _offline_mapping(
+        _offline_required(record, "authorization", context),
+        f"{context}.authorization",
+    )
+    authorization_operation_id = _offline_operation_id_from_bytes(
+        _offline_required(authorization, "operation_id", f"{context}.authorization"),
+        f"{context}.authorization.operation_id",
+    )
+    if authorization_operation_id != operation_id:
+        raise RuntimeError(
+            f"{context}.authorization.operation_id must match {context}.operation_id"
+        )
+
+    if kind == "top_up":
+        _offline_exact_string(_offline_required(record, "asset", context), f"{context}.asset")
+        _offline_scaled_amount(_offline_required(record, "amount", context), f"{context}.amount")
+        _offline_mapping(
+            _offline_required(record, "current_note", context), f"{context}.current_note"
+        )
+        _offline_mapping(
+            _offline_required(record, "record_bundle", context), f"{context}.record_bundle"
+        )
+        _offline_byte_array(
+            _offline_required(record, "pallas_open_envelopes_archive", context),
+            f"{context}.pallas_open_envelopes_archive",
+        )
+        generation = _offline_exact_string(
+            _offline_required(record, "artifact_generation", context),
+            f"{context}.artifact_generation",
+        )
+        if len(generation) > 128 or any(ord(character) < 32 or ord(character) == 127 for character in generation):
+            raise RuntimeError(
+                f"{context}.artifact_generation must be at most 128 non-control characters"
+            )
+    else:
+        _offline_mapping(_offline_required(record, "bundle", context), f"{context}.bundle")
+        _offline_exact_string(
+            _offline_required(record, "recipient", context), f"{context}.recipient"
+        )
+        _offline_scaled_amount(_offline_required(record, "amount", context), f"{context}.amount")
+        _offline_mapping(
+            _offline_required(record, "redeem_proof", context), f"{context}.redeem_proof"
+        )
+        _offline_mapping(
+            _offline_required(record, "redemption", context), f"{context}.redemption"
+        )
+        _offline_mapping(
+            _offline_required(record, "lineage_verifier_record", context),
+            f"{context}.lineage_verifier_record",
+        )
+        _offline_unsigned(
+            _offline_required(record, "block_height", context),
+            f"{context}.block_height",
+            _OFFLINE_MAX_U64,
+        )
+        for field in ("lineage_witness", "offline_change"):
+            if field in record and record[field] is not None:
+                _offline_mapping(record[field], f"{context}.{field}")
+
+    encoded = json.dumps(
+        snapshot,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return encoded, operation_id
+
+
+@dataclass(frozen=True)
+class OfflineReadinessBlocker:
+    """One stable reason an asset is not ready for offline payments."""
+
+    code: str
+    message: str
+
+
 @dataclass(frozen=True)
 class OfflineReadiness:
-    """Offline readiness advertised by Torii."""
+    """Snapshot-bound offline readiness for one asset definition."""
 
-    offline_kagemusha_recursive_compact_available: bool
-    offline_kagemusha_recursive_compact_mode: str
-    offline_kagemusha_recursive_compact_required_native_bridge_abi_version: int
-    offline_kagemusha_recursive_compact_circuit_id: str
-    offline_kagemusha_recursive_compact_artifacts_available: bool
-    offline_telemetry: bool
-    offline_note: Optional[bool] = None
-    offline_one_use_keys: Optional[bool] = None
-    offline_recursive_note_proof: Optional[bool] = None
-    offline_fountain_qr: Optional[bool] = None
-    offline_sync_optional: Optional[bool] = None
+    asset_definition_id: str
+    evaluated_block_height: int
+    evaluated_block_hash: str
+    ready: bool
+    blockers: Tuple[OfflineReadinessBlocker, ...]
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "OfflineReadiness":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("offline readiness response must be an object")
-
-        def required_bool(field: str) -> bool:
-            return ToriiClient._coerce_bool(payload.get(field), f"offline readiness.{field}")
-
-        def required_string(field: str) -> str:
-            try:
-                return _require_exact_non_empty_string(
-                    payload.get(field), f"offline readiness.{field}"
-                )
-            except (TypeError, ValueError) as exc:
-                raise RuntimeError(str(exc)) from exc
-
-        def required_positive_int(field: str) -> int:
-            value = payload.get(field)
-            context = f"offline readiness.{field}"
-            if isinstance(value, bool):
-                raise RuntimeError(f"{context} must be an integer")
-            if isinstance(value, int):
-                result = value
-            elif isinstance(value, str):
-                if re.fullmatch(r"[1-9][0-9]*", value) is None:
-                    raise RuntimeError(
-                        f"{context} must be an exact positive integer string"
-                    )
-                result = int(value, 10)
-            else:
-                raise RuntimeError(f"{context} must be an integer")
-            if result <= 0:
-                raise RuntimeError(f"{context} must be a positive integer")
-            if result > 2_147_483_647:
-                raise RuntimeError(f"{context} must fit in signed 32-bit range")
-            return result
-
-        removed_abi7_fields = (
-            "offline_kagemusha_abi7",
-            "offline_kagemusha_abi7_mode",
-            "offline_kagemusha_abi7_bridge_abi_version",
-            "offline_kagemusha_abi7_circuit_id",
-            "offline_kagemusha_abi7_artifacts",
+    def from_payload(
+        cls,
+        payload: Mapping[str, Any],
+        expected_asset_definition_id: str,
+    ) -> "OfflineReadiness":
+        context = "offline readiness response"
+        record = _offline_mapping(payload, context)
+        asset_definition_id = _offline_exact_string(
+            _offline_required(record, "asset_definition_id", context),
+            f"{context}.asset_definition_id",
         )
-        for field in removed_abi7_fields:
-            if field in payload:
+        if asset_definition_id != expected_asset_definition_id:
+            raise RuntimeError(
+                f"{context}.asset_definition_id does not match the requested asset"
+            )
+        evaluated_block_height = _offline_unsigned(
+            _offline_required(record, "evaluated_block_height", context),
+            f"{context}.evaluated_block_height",
+            _OFFLINE_MAX_U64,
+        )
+        evaluated_block_hash = _offline_transaction_hash(
+            _offline_required(record, "evaluated_block_hash", context),
+            f"{context}.evaluated_block_hash",
+        )
+        ready = _offline_required(record, "ready", context)
+        if not isinstance(ready, bool):
+            raise RuntimeError(f"{context}.ready must be a boolean")
+        raw_blockers = _offline_required(record, "blockers", context)
+        if not isinstance(raw_blockers, list):
+            raise RuntimeError(f"{context}.blockers must be an array")
+        blockers: List[OfflineReadinessBlocker] = []
+        for index, raw in enumerate(raw_blockers):
+            blocker_context = f"{context}.blockers[{index}]"
+            blocker = _offline_mapping(raw, blocker_context)
+            code = _offline_exact_string(
+                _offline_required(blocker, "code", blocker_context),
+                f"{blocker_context}.code",
+            )
+            if _OFFLINE_ERROR_CODE_RE.fullmatch(code) is None:
                 raise RuntimeError(
-                    f"offline readiness.{field} is not supported; "
-                    "use offline_kagemusha_recursive_compact_*"
+                    f"{blocker_context}.code must be a stable lowercase code of 1 to 64 characters"
                 )
-
-        def decode_recursive_compact_family() -> Dict[str, Any]:
-            return {
-                "available": required_bool(
-                    "offline_kagemusha_recursive_compact_available"
-                ),
-                "mode": required_string("offline_kagemusha_recursive_compact_mode"),
-                "bridge_abi_version": required_positive_int(
-                    "offline_kagemusha_recursive_compact_required_native_bridge_abi_version"
-                ),
-                "circuit_id": required_string(
-                    "offline_kagemusha_recursive_compact_circuit_id"
-                ),
-                "artifacts": required_bool(
-                    "offline_kagemusha_recursive_compact_artifacts_available"
-                ),
-            }
-
-        recursive_compact = decode_recursive_compact_family()
-
-        def optional_bool(field: str) -> Optional[bool]:
-            if field not in payload:
-                return None
-            return ToriiClient._coerce_bool(payload.get(field), f"offline readiness.{field}")
-
+            message = _offline_required(blocker, "message", blocker_context)
+            if not isinstance(message, str):
+                raise RuntimeError(f"{blocker_context}.message must be a string")
+            _offline_exact_string(message, f"{blocker_context}.message")
+            blockers.append(OfflineReadinessBlocker(code=code, message=message))
+        if ready != (len(blockers) == 0):
+            raise RuntimeError(f"{context}.ready must be true exactly when blockers is empty")
         return cls(
-            offline_kagemusha_recursive_compact_available=recursive_compact["available"],
-            offline_kagemusha_recursive_compact_mode=recursive_compact["mode"],
-            offline_kagemusha_recursive_compact_required_native_bridge_abi_version=recursive_compact[
-                "bridge_abi_version"
-            ],
-            offline_kagemusha_recursive_compact_circuit_id=recursive_compact["circuit_id"],
-            offline_kagemusha_recursive_compact_artifacts_available=recursive_compact[
-                "artifacts"
-            ],
-            offline_telemetry=required_bool("offline_telemetry"),
-            offline_note=optional_bool("offline_note"),
-            offline_one_use_keys=optional_bool("offline_one_use_keys"),
-            offline_recursive_note_proof=optional_bool("offline_recursive_note_proof"),
-            offline_fountain_qr=optional_bool("offline_fountain_qr"),
-            offline_sync_optional=optional_bool("offline_sync_optional"),
+            asset_definition_id=asset_definition_id,
+            evaluated_block_height=evaluated_block_height,
+            evaluated_block_hash=evaluated_block_hash,
+            ready=ready,
+            blockers=tuple(blockers),
         )
+
+
+@dataclass(frozen=True)
+class OfflineOperationKind:
+    """Tagged Offline command kind from the public JSON contract."""
+
+    kind: Literal["top_up", "redeem"]
+    value: None = None
+
+
+@dataclass(frozen=True)
+class OfflinePendingState:
+    """Tagged initial state returned by a successful command submission."""
+
+    state: Literal["pending"] = "pending"
+    value: None = None
+
+
+@dataclass(frozen=True)
+class OfflineOperationReference:
+    """Reference returned by an accepted asynchronous Offline command."""
+
+    operation_id: str
+    kind: OfflineOperationKind
+    state: OfflinePendingState
+    transaction_hash: str
+    status_uri: str
+    submitted_at_ms: int
+
+
+@dataclass(frozen=True)
+class OfflineTopUpResult:
+    """Terminal result of an applied top-up."""
+
+    transaction_hash: str
+    finalized_block_height: int
+    server_time_ms: int
+    anchor: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class OfflineRedeemResult:
+    """Terminal result of an applied redemption."""
+
+    transaction_hash: str
+    finalized_block_height: int
+    server_time_ms: int
+
+
+@dataclass(frozen=True)
+class OfflineTopUpOperationResult:
+    """Tagged applied top-up result."""
+
+    result: OfflineTopUpResult
+    kind: Literal["top_up"] = "top_up"
+
+
+@dataclass(frozen=True)
+class OfflineRedeemOperationResult:
+    """Tagged applied redemption result."""
+
+    result: OfflineRedeemResult
+    kind: Literal["redeem"] = "redeem"
+
+
+OfflineAppliedResult = Union[OfflineTopUpOperationResult, OfflineRedeemOperationResult]
+
+
+@dataclass(frozen=True)
+class OfflineQueueErrorDetails:
+    """Queue-pressure metadata attached to an Offline rejection."""
+
+    state: str
+    queued: int
+    capacity: int
+    saturated: bool
+
+
+@dataclass(frozen=True)
+class OfflineAxtErrorDetails:
+    """Closed AXT policy metadata attached to an Offline rejection."""
+
+    code: Optional[str] = None
+    reason: Optional[str] = None
+    snapshot_version: Optional[int] = None
+    dataspace: Optional[int] = None
+    lane: Optional[int] = None
+    next_min_handle_era: Optional[int] = None
+    next_min_sub_nonce: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class OfflineErrorDetails:
+    """Closed structured metadata carried by an Offline error envelope."""
+
+    layer: Optional[str] = None
+    reject_code: Optional[str] = None
+    queue: Optional[OfflineQueueErrorDetails] = None
+    retry_after_seconds: Optional[int] = None
+    endpoint: Optional[str] = None
+    field: Optional[str] = None
+    expected: Optional[str] = None
+    actual: Optional[str] = None
+    profile: Optional[str] = None
+    chain_discriminant: Optional[int] = None
+    tx_hash: Optional[str] = None
+    last_status: Optional[str] = None
+    hint: Optional[str] = None
+    axt: Optional[OfflineAxtErrorDetails] = None
+
+
+@dataclass(frozen=True)
+class OfflineErrorEnvelope:
+    """Stable typed error attached to a rejected Offline operation."""
+
+    code: str
+    message: str
+    details: Optional[OfflineErrorDetails] = None
+
+
+@dataclass(frozen=True)
+class OfflinePendingOperation:
+    """Non-terminal Offline operation state."""
+
+    operation_id: str
+    kind: OfflineOperationKind
+    transaction_hash: str
+    submitted_at_ms: int
+    state: Literal["pending"] = "pending"
+
+
+@dataclass(frozen=True)
+class OfflineAppliedOperation:
+    """Applied terminal Offline operation state."""
+
+    operation_id: str
+    result: OfflineAppliedResult
+    state: Literal["applied"] = "applied"
+
+
+@dataclass(frozen=True)
+class OfflineRejectedOperation:
+    """Rejected terminal Offline operation state."""
+
+    operation_id: str
+    kind: OfflineOperationKind
+    transaction_hash: str
+    error: OfflineErrorEnvelope
+    state: Literal["rejected"] = "rejected"
+
+
+OfflineOperationStatus = Union[
+    OfflinePendingOperation,
+    OfflineAppliedOperation,
+    OfflineRejectedOperation,
+]
+
+
+def _offline_operation_kind(value: Any, context: str) -> OfflineOperationKind:
+    record = _offline_mapping(value, context)
+    kind = _offline_required(record, "kind", context)
+    if kind not in ("top_up", "redeem"):
+        raise RuntimeError(f"{context}.kind must be top_up or redeem")
+    if "value" in record and record["value"] is not None:
+        raise RuntimeError(f"{context}.value must be null when present")
+    return OfflineOperationKind(kind=kind)
+
+
+def _offline_status_uri(operation_id: str) -> str:
+    return f"{_OFFLINE_OPERATIONS_PATH}/{operation_id}"
+
+
+def _offline_operation_reference(
+    payload: Mapping[str, Any],
+    *,
+    expected_operation_id: str,
+    expected_kind: Literal["top_up", "redeem"],
+    location: Optional[str],
+) -> OfflineOperationReference:
+    context = "offline operation reference"
+    record = _offline_mapping(payload, context)
+    operation_id = _require_offline_operation_id(
+        _offline_required(record, "operation_id", context), f"{context}.operation_id"
+    )
+    if operation_id != expected_operation_id:
+        raise RuntimeError(f"{context}.operation_id does not match the submitted request")
+    kind = _offline_operation_kind(_offline_required(record, "kind", context), f"{context}.kind")
+    if kind.kind != expected_kind:
+        raise RuntimeError(f"{context}.kind does not match the submitted command")
+    raw_state = _offline_mapping(_offline_required(record, "state", context), f"{context}.state")
+    if _offline_required(raw_state, "state", f"{context}.state") != "pending":
+        raise RuntimeError(f"{context}.state.state must be pending")
+    if "value" in raw_state and raw_state["value"] is not None:
+        raise RuntimeError(f"{context}.state.value must be null when present")
+    status_uri = _offline_required(record, "status_uri", context)
+    expected_uri = _offline_status_uri(operation_id)
+    if status_uri != expected_uri:
+        raise RuntimeError(f"{context}.status_uri must equal {expected_uri}")
+    if location != expected_uri:
+        raise RuntimeError(f"Location header must equal {expected_uri}")
+    return OfflineOperationReference(
+        operation_id=operation_id,
+        kind=kind,
+        state=OfflinePendingState(),
+        transaction_hash=_offline_transaction_hash(
+            _offline_required(record, "transaction_hash", context),
+            f"{context}.transaction_hash",
+        ),
+        status_uri=status_uri,
+        submitted_at_ms=_offline_unsigned(
+            _offline_required(record, "submitted_at_ms", context),
+            f"{context}.submitted_at_ms",
+            _OFFLINE_MAX_U64,
+        ),
+    )
+
+
+def _offline_optional_error_string(
+    record: Mapping[str, Any], field: str, context: str
+) -> Optional[str]:
+    value = record.get(field)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise RuntimeError(f"{context}.{field} must be a string")
+    return _offline_exact_string(value, f"{context}.{field}", non_empty=False)
+
+
+def _offline_optional_error_unsigned(
+    record: Mapping[str, Any], field: str, context: str, maximum: int
+) -> Optional[int]:
+    value = record.get(field)
+    if value is None:
+        return None
+    return _offline_unsigned(value, f"{context}.{field}", maximum)
+
+
+def _offline_queue_error_details(value: Any, context: str) -> OfflineQueueErrorDetails:
+    record = _offline_mapping(value, context)
+    state = _offline_exact_string(
+        _offline_required(record, "state", context), f"{context}.state"
+    )
+    saturated = _offline_required(record, "saturated", context)
+    if type(saturated) is not bool:
+        raise RuntimeError(f"{context}.saturated must be a boolean")
+    return OfflineQueueErrorDetails(
+        state=state,
+        queued=_offline_unsigned(
+            _offline_required(record, "queued", context),
+            f"{context}.queued",
+            _OFFLINE_MAX_U64,
+        ),
+        capacity=_offline_unsigned(
+            _offline_required(record, "capacity", context),
+            f"{context}.capacity",
+            _OFFLINE_MAX_U64,
+        ),
+        saturated=saturated,
+    )
+
+
+def _offline_axt_error_details(value: Any, context: str) -> OfflineAxtErrorDetails:
+    record = _offline_mapping(value, context)
+    return OfflineAxtErrorDetails(
+        code=_offline_optional_error_string(record, "code", context),
+        reason=_offline_optional_error_string(record, "reason", context),
+        snapshot_version=_offline_optional_error_unsigned(
+            record, "snapshot_version", context, _OFFLINE_MAX_U64
+        ),
+        dataspace=_offline_optional_error_unsigned(
+            record, "dataspace", context, _OFFLINE_MAX_U64
+        ),
+        lane=_offline_optional_error_unsigned(record, "lane", context, _OFFLINE_MAX_U32),
+        next_min_handle_era=_offline_optional_error_unsigned(
+            record, "next_min_handle_era", context, _OFFLINE_MAX_U64
+        ),
+        next_min_sub_nonce=_offline_optional_error_unsigned(
+            record, "next_min_sub_nonce", context, _OFFLINE_MAX_U64
+        ),
+    )
+
+
+def _offline_error_details(value: Any, context: str) -> OfflineErrorDetails:
+    record = _offline_mapping(value, context)
+    queue = None
+    if record.get("queue") is not None:
+        queue = _offline_queue_error_details(record["queue"], f"{context}.queue")
+    axt = None
+    if record.get("axt") is not None:
+        axt = _offline_axt_error_details(record["axt"], f"{context}.axt")
+    return OfflineErrorDetails(
+        layer=_offline_optional_error_string(record, "layer", context),
+        reject_code=_offline_optional_error_string(record, "reject_code", context),
+        queue=queue,
+        retry_after_seconds=_offline_optional_error_unsigned(
+            record, "retry_after_seconds", context, _OFFLINE_MAX_U64
+        ),
+        endpoint=_offline_optional_error_string(record, "endpoint", context),
+        field=_offline_optional_error_string(record, "field", context),
+        expected=_offline_optional_error_string(record, "expected", context),
+        actual=_offline_optional_error_string(record, "actual", context),
+        profile=_offline_optional_error_string(record, "profile", context),
+        chain_discriminant=_offline_optional_error_unsigned(
+            record, "chain_discriminant", context, (1 << 16) - 1
+        ),
+        tx_hash=_offline_optional_error_string(record, "tx_hash", context),
+        last_status=_offline_optional_error_string(record, "last_status", context),
+        hint=_offline_optional_error_string(record, "hint", context),
+        axt=axt,
+    )
+
+
+def _offline_error(value: Any, context: str) -> OfflineErrorEnvelope:
+    record = _offline_mapping(value, context)
+    code = _offline_exact_string(
+        _offline_required(record, "code", context), f"{context}.code"
+    )
+    if _OFFLINE_ERROR_CODE_RE.fullmatch(code) is None:
+        raise RuntimeError(
+            f"{context}.code must be a stable lowercase code of 1 to 64 characters"
+        )
+    message = _offline_exact_string(
+        _offline_required(record, "message", context), f"{context}.message"
+    )
+    details = None
+    if record.get("details") is not None:
+        details = _offline_error_details(record["details"], f"{context}.details")
+    return OfflineErrorEnvelope(code=code, message=message, details=details)
+
+
+def _offline_applied_result(value: Any, context: str) -> OfflineAppliedResult:
+    record = _offline_mapping(value, context)
+    kind = _offline_required(record, "kind", context)
+    if kind not in ("top_up", "redeem"):
+        raise RuntimeError(f"{context}.kind must be top_up or redeem")
+    result_context = f"{context}.result"
+    result = _offline_mapping(_offline_required(record, "result", context), result_context)
+    transaction_hash = _offline_transaction_hash(
+        _offline_required(result, "transaction_hash", result_context),
+        f"{result_context}.transaction_hash",
+    )
+    finalized_block_height = _offline_unsigned(
+        _offline_required(result, "finalized_block_height", result_context),
+        f"{result_context}.finalized_block_height",
+        _OFFLINE_MAX_U64,
+    )
+    server_time_ms = _offline_unsigned(
+        _offline_required(result, "server_time_ms", result_context),
+        f"{result_context}.server_time_ms",
+        _OFFLINE_MAX_U64,
+    )
+    if kind == "top_up":
+        anchor = _offline_mapping(
+            _snapshot_offline_json(
+                _offline_required(result, "anchor", result_context), f"{result_context}.anchor"
+            ),
+            f"{result_context}.anchor",
+        )
+        return OfflineTopUpOperationResult(
+            OfflineTopUpResult(
+                transaction_hash=transaction_hash,
+                finalized_block_height=finalized_block_height,
+                server_time_ms=server_time_ms,
+                anchor=anchor,
+            )
+        )
+    if "anchor" in result:
+        raise RuntimeError(f"{result_context}.anchor is invalid for a redeem result")
+    return OfflineRedeemOperationResult(
+        OfflineRedeemResult(
+            transaction_hash=transaction_hash,
+            finalized_block_height=finalized_block_height,
+            server_time_ms=server_time_ms,
+        )
+    )
+
+
+def _offline_operation_status(
+    payload: Mapping[str, Any], expected_operation_id: str
+) -> OfflineOperationStatus:
+    context = "offline operation status"
+    record = _offline_mapping(payload, context)
+    state = _offline_required(record, "state", context)
+    if state not in ("pending", "applied", "rejected"):
+        raise RuntimeError(f"{context}.state must be pending, applied, or rejected")
+    value_context = f"{context}.value"
+    value = _offline_mapping(_offline_required(record, "value", context), value_context)
+    operation_id = _require_offline_operation_id(
+        _offline_required(value, "operation_id", value_context),
+        f"{value_context}.operation_id",
+    )
+    if operation_id != expected_operation_id:
+        raise RuntimeError(
+            f"{value_context}.operation_id does not match the requested operation"
+        )
+    if state == "pending":
+        return OfflinePendingOperation(
+            operation_id=operation_id,
+            kind=_offline_operation_kind(
+                _offline_required(value, "kind", value_context), f"{value_context}.kind"
+            ),
+            transaction_hash=_offline_transaction_hash(
+                _offline_required(value, "transaction_hash", value_context),
+                f"{value_context}.transaction_hash",
+            ),
+            submitted_at_ms=_offline_unsigned(
+                _offline_required(value, "submitted_at_ms", value_context),
+                f"{value_context}.submitted_at_ms",
+                _OFFLINE_MAX_U64,
+            ),
+        )
+    if state == "applied":
+        return OfflineAppliedOperation(
+            operation_id=operation_id,
+            result=_offline_applied_result(
+                _offline_required(value, "result", value_context), f"{value_context}.result"
+            ),
+        )
+    return OfflineRejectedOperation(
+        operation_id=operation_id,
+        kind=_offline_operation_kind(
+            _offline_required(value, "kind", value_context), f"{value_context}.kind"
+        ),
+        transaction_hash=_offline_transaction_hash(
+            _offline_required(value, "transaction_hash", value_context),
+            f"{value_context}.transaction_hash",
+        ),
+        error=_offline_error(
+            _offline_required(value, "error", value_context), f"{value_context}.error"
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -5694,16 +6354,122 @@ class ToriiClient:
         return self._ensure_mapping(ack, "space directory manifest revoke response")
 
     # ------------------------------------------------------------------
-    # Offline readiness
+    # First-release Offline API
     # ------------------------------------------------------------------
-    def get_offline_readiness(self) -> OfflineReadiness:
-        """Fetch Offline feature readiness."""
+    def get_offline_readiness(self, asset_definition_id: str) -> OfflineReadiness:
+        """Fetch the readiness snapshot for one exact asset definition."""
 
-        payload = self._get_json_object(
-            "/v1/offline/readiness",
-            context="offline readiness response",
+        asset = _offline_exact_string(asset_definition_id, "asset_definition_id")
+        response = self._request(
+            "GET",
+            _OFFLINE_READINESS_PATH,
+            params={"asset_definition_id": asset},
+            headers={"Accept": "application/json"},
         )
-        return OfflineReadiness.from_payload(payload)
+        self._expect_status(response, {200})
+        payload = self._offline_json_response(response, "offline readiness response")
+        return OfflineReadiness.from_payload(payload, asset)
+
+    def submit_offline_top_up(
+        self, request: Mapping[str, Any]
+    ) -> OfflineOperationReference:
+        """Submit one directly structured JSON top-up command."""
+
+        body, operation_id = _normalize_offline_command(
+            request, "submit_offline_top_up request", "top_up"
+        )
+        return self._submit_offline_command(
+            _OFFLINE_TOP_UP_PATH,
+            "top_up",
+            body,
+            operation_id,
+        )
+
+    def submit_offline_redeem(
+        self, request: Mapping[str, Any]
+    ) -> OfflineOperationReference:
+        """Submit one directly structured JSON redemption command."""
+
+        body, operation_id = _normalize_offline_command(
+            request, "submit_offline_redeem request", "redeem"
+        )
+        return self._submit_offline_command(
+            _OFFLINE_REDEEM_PATH,
+            "redeem",
+            body,
+            operation_id,
+        )
+
+    def get_offline_operation_status(
+        self, operation_id: str
+    ) -> OfflineOperationStatus:
+        """Fetch the typed state of one Offline operation."""
+
+        canonical_id = _require_offline_operation_id(operation_id)
+        response = self._request(
+            "GET",
+            f"{_OFFLINE_OPERATIONS_PATH}/{canonical_id}",
+            headers={"Accept": "application/json"},
+        )
+        self._expect_status(response, {200})
+        payload = self._offline_json_response(response, "offline operation status response")
+        return _offline_operation_status(payload, canonical_id)
+
+    def _submit_offline_command(
+        self,
+        path: str,
+        kind: Literal["top_up", "redeem"],
+        body: bytes,
+        operation_id: str,
+    ) -> OfflineOperationReference:
+        response = self._request(
+            "POST",
+            path,
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Idempotency-Key": operation_id,
+            },
+            data=body,
+        )
+        self._expect_status(response, {202})
+        payload = self._offline_json_response(response, "offline operation reference response")
+        return _offline_operation_reference(
+            payload,
+            expected_operation_id=operation_id,
+            expected_kind=kind,
+            location=response.headers.get("Location"),
+        )
+
+    @staticmethod
+    def _offline_json_response(
+        response: requests.Response, context: str
+    ) -> Mapping[str, Any]:
+        content_type = response.headers.get("Content-Type", "")
+        media_type = content_type.split(";", 1)[0].strip().lower()
+        if media_type != "application/json":
+            raise RuntimeError(f"{context} must use Content-Type application/json")
+        body = response.content
+        if len(body) > _OFFLINE_MAX_JSON_RESPONSE_BYTES:
+            raise RuntimeError(
+                f"{context} exceeds {_OFFLINE_MAX_JSON_RESPONSE_BYTES} bytes"
+            )
+        try:
+            text = body.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise RuntimeError(f"{context} must be valid UTF-8 JSON") from error
+        try:
+            payload = json.loads(
+                text,
+                object_pairs_hook=_offline_json_object_without_duplicates,
+                parse_constant=_offline_reject_json_constant,
+            )
+        except (ValueError, RecursionError) as error:
+            raise RuntimeError(f"{context} contains invalid JSON: {error}") from error
+        payload = _snapshot_offline_json(payload, context)
+        if not isinstance(payload, Mapping):
+            raise RuntimeError(f"{context} must be a JSON object")
+        return payload
 
     # ------------------------------------------------------------------
     # Sumeragi telemetry & RBC helpers
@@ -5887,9 +6653,9 @@ class ToriiClient:
         return self._parse_sumeragi_params(payload, context="sumeragi params")
 
     def get_sumeragi_bls_keys(self) -> Dict[str, Optional[str]]:
-        """Return mapping of network keys to optional BLS public keys (`GET /v1/sumeragi/bls_keys`)."""
+        """Return mapping of network keys to optional BLS public keys (`GET /v1/sumeragi/bls-keys`)."""
 
-        payload = self._request("GET", "/v1/sumeragi/bls_keys").json()
+        payload = self._request("GET", "/v1/sumeragi/bls-keys").json()
         if not isinstance(payload, Mapping):
             raise RuntimeError("sumeragi bls_keys response must be an object")
         result: Dict[str, Optional[str]] = {}

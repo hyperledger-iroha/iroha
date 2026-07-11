@@ -2,8 +2,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "app_api")]
 
-use std::sync::Arc;
+use std::{convert::Infallible, sync::Arc};
 
+use axum::body::{Body, Bytes};
 use axum::extract::connect_info::ConnectInfo;
 use axum::http::{
     HeaderValue, Method, Request, StatusCode,
@@ -29,8 +30,11 @@ fn connect_info() -> ConnectInfo<std::net::SocketAddr> {
 
 #[tokio::test]
 async fn offline_router_exposes_only_the_final_first_release_contract() {
+    const OFFLINE_COMMAND_BODY_LIMIT: u64 = 2_200_000;
+
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
-    let cfg = mk_minimal_root_cfg();
+    let mut cfg = mk_minimal_root_cfg();
+    cfg.torii.max_content_len = OFFLINE_COMMAND_BODY_LIMIT.into();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -115,7 +119,7 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
     assert_eq!(missing_readiness_query.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         missing_readiness_query.headers().get(CONTENT_TYPE),
-        Some(&HeaderValue::from_static("application/json"))
+        Some(&HeaderValue::from_static("application/json; charset=utf-8"))
     );
     let missing_query_body = missing_readiness_query
         .into_body()
@@ -202,6 +206,108 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
             missing_content_type.status(),
             StatusCode::UNSUPPORTED_MEDIA_TYPE
         );
+
+        for (content_type, expected_code) in [
+            ("application/json", "request_json_invalid"),
+            ("application/x-norito", "request_norito_invalid"),
+        ] {
+            let empty = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri(path)
+                        .header(CONTENT_TYPE, content_type)
+                        .header(ACCEPT, "application/json")
+                        .extension(connect_info())
+                        .body(axum::body::Body::empty())
+                        .expect("empty typed request"),
+                )
+                .await
+                .expect("empty typed response");
+            assert_eq!(empty.status(), StatusCode::BAD_REQUEST);
+            let body = empty
+                .into_body()
+                .collect()
+                .await
+                .expect("collect empty-body response")
+                .to_bytes();
+            let error: iroha_torii_shared::ErrorEnvelope =
+                norito::json::from_slice(&body).expect("decode empty-body error");
+            assert_eq!(error.code(), expected_code, "path={path}");
+        }
+    }
+
+    for path in ["/v1/offline/top-up", "/v1/offline/redeem"] {
+        let above_axum_default = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(path)
+                    .header(CONTENT_TYPE, "application/json")
+                    .header(ACCEPT, "application/json")
+                    .extension(connect_info())
+                    .body(Body::from(vec![
+                        b' ';
+                        usize::try_from(OFFLINE_COMMAND_BODY_LIMIT)
+                            .expect("test limit fits usize")
+                    ]))
+                    .expect("large request within the configured limit"),
+            )
+            .await
+            .expect("large in-limit response");
+        assert_eq!(
+            above_axum_default.status(),
+            StatusCode::BAD_REQUEST,
+            "{path} must use Torii's configured limit rather than Axum's 2 MiB default"
+        );
+        let body = above_axum_default
+            .into_body()
+            .collect()
+            .await
+            .expect("collect large in-limit response")
+            .to_bytes();
+        let error: iroha_torii_shared::ErrorEnvelope =
+            norito::json::from_slice(&body).expect("decode large in-limit error");
+        assert_eq!(error.code(), "request_json_invalid", "path={path}");
+
+        let body_chunks = futures::stream::iter([
+            Ok::<_, Infallible>(Bytes::from(vec![
+                b' ';
+                usize::try_from(OFFLINE_COMMAND_BODY_LIMIT)
+                    .expect("test limit fits usize")
+            ])),
+            Ok(Bytes::from_static(b" ")),
+        ]);
+        let above_configured_limit = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(path)
+                    .header(CONTENT_TYPE, "application/json")
+                    .header(ACCEPT, "application/json")
+                    .extension(connect_info())
+                    .body(Body::from_stream(body_chunks))
+                    .expect("request above the configured limit"),
+            )
+            .await
+            .expect("over-limit response");
+        assert_eq!(
+            above_configured_limit.status(),
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "path={path}"
+        );
+        let body = above_configured_limit
+            .into_body()
+            .collect()
+            .await
+            .expect("collect over-limit response")
+            .to_bytes();
+        let error: iroha_torii_shared::ErrorEnvelope =
+            norito::json::from_slice(&body).expect("decode typed over-limit error");
+        assert_eq!(error.code(), "request_payload_too_large", "path={path}");
     }
 
     let invalid_operation_id = app
@@ -242,6 +348,11 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
         (Method::POST, "/v1/offline/cash/load"),
         (Method::POST, "/v1/offline/cash/redeem"),
         (Method::POST, "/v1/offline/audit"),
+        (Method::GET, "/v1/offline/v2/readiness/"),
+        (Method::GET, "/v1/offline//v2/readiness"),
+        (Method::GET, "/v1/OFFLINE/v2/readiness"),
+        (Method::GET, "/v1/offline/%76%32/readiness"),
+        (Method::GET, "/v1/offline/v2%2Freadiness"),
     ] {
         let response = app
             .clone()
@@ -250,6 +361,7 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
                     .method(method.clone())
                     .uri(path)
                     .header(CONTENT_TYPE, "application/json")
+                    .header(ACCEPT, "application/json")
                     .extension(connect_info())
                     .body(axum::body::Body::from("{}"))
                     .expect("retired route request"),
@@ -261,5 +373,60 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
             StatusCode::NOT_FOUND,
             "retired method/path pair must be unregistered: {method} {path}"
         );
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect retired-route response")
+            .to_bytes();
+        let error: iroha_torii_shared::ErrorEnvelope =
+            norito::json::from_slice(&body).expect("decode retired-route error");
+        assert_eq!(
+            error.code(),
+            "route_not_found",
+            "normalization or parameter capture must not resolve a retired route: {method} {path}"
+        );
+    }
+
+    for (method, path) in [
+        (Method::POST, "/v1/offline/readiness".to_owned()),
+        (Method::GET, "/v1/offline/top-up".to_owned()),
+        (Method::GET, "/v1/offline/redeem".to_owned()),
+        (
+            Method::POST,
+            format!("/v1/offline/operations/{}", "11".repeat(32)),
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method.clone())
+                    .uri(path.as_str())
+                    .header(ACCEPT, "application/json")
+                    .extension(connect_info())
+                    .body(axum::body::Body::empty())
+                    .expect("wrong-method request"),
+            )
+            .await
+            .expect("wrong-method response");
+        assert_eq!(
+            response.status(),
+            StatusCode::METHOD_NOT_ALLOWED,
+            "a mounted path under the wrong method must report 405: {method} {path}"
+        );
+        assert!(
+            response.headers().contains_key(axum::http::header::ALLOW),
+            "405 must advertise the allowed method: {method} {path}"
+        );
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect wrong-method response")
+            .to_bytes();
+        let error: iroha_torii_shared::ErrorEnvelope =
+            norito::json::from_slice(&body).expect("decode wrong-method error");
+        assert_eq!(error.code(), "method_not_allowed");
     }
 }

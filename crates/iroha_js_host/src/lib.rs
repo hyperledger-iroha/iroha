@@ -99,8 +99,8 @@ use iroha_data_model::{
         Instruction as InstructionTrait, InstructionBox, JoinKaigi, LeaveKaigi, Mint, MintBox,
         RecordKaigiUsage, Register, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
         RemoveKeyValue, ReportKaigiRelayHealth, SetAssetDefinitionAlias, SetKaigiRelayManifest,
-        SetKeyValue, SetKeyValueBox, SetParameter, Transfer, TransferBox, Unregister,
-        UnregisterBox,
+        SetKeyValue, SetKeyValueBox, SetParameter, Transfer, TransferAssetBatch, TransferBox,
+        Unregister, UnregisterBox,
         bridge::{RemoveSccpRouteManifest, UpsertSccpRouteManifest},
         governance::{
             CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
@@ -8554,6 +8554,79 @@ fn parse_metadata_payload(context: &str, payload: Option<String>) -> napi::Resul
     )
 }
 
+fn transfer_asset_batch_from_json(value: json::Value) -> napi::Result<InstructionBox> {
+    let json::Value::Object(mut fields) = value else {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "TransferAssetBatch payload must be an object",
+        ));
+    };
+    let entries_value = required_value(&mut fields, "entries", "TransferAssetBatch")?;
+    if !fields.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "TransferAssetBatch contains unexpected field(s): {}",
+                fields.keys().cloned().collect::<Vec<_>>().join(", ")
+            ),
+        ));
+    }
+    let json::Value::Array(entry_values) = entries_value else {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "TransferAssetBatch.entries must be an array",
+        ));
+    };
+    let mut entries = Vec::with_capacity(entry_values.len());
+    for (index, entry_value) in entry_values.into_iter().enumerate() {
+        let context = format!("TransferAssetBatch.entries[{index}]");
+        let json::Value::Object(mut entry_fields) = entry_value else {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("{context} must be an object"),
+            ));
+        };
+        let from = parse_account_id_value(
+            required_value(&mut entry_fields, "from", &context)?,
+            &format!("{context}.from"),
+        )?;
+        let to = parse_account_id_value(
+            required_value(&mut entry_fields, "to", &context)?,
+            &format!("{context}.to"),
+        )?;
+        let asset_definition_literal = parse_string_value(
+            required_value(&mut entry_fields, "asset_definition", &context)?,
+            &format!("{context}.asset_definition"),
+        )?;
+        let asset_definition = AssetDefinitionId::parse_address_literal(&asset_definition_literal)
+            .map_err(|err| {
+                napi::Error::new(
+                    napi::Status::InvalidArg,
+                    format!("invalid {context}.asset_definition: {err}"),
+                )
+            })?;
+        let amount: Numeric =
+            json::from_value(required_value(&mut entry_fields, "amount", &context)?)
+                .map_err(norito_to_napi)?;
+        if !entry_fields.is_empty() {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                format!(
+                    "{context} contains unexpected field(s): {}",
+                    entry_fields.keys().cloned().collect::<Vec<_>>().join(", ")
+                ),
+            ));
+        }
+        entries.push(iroha_data_model::isi::TransferAssetBatchEntry::new(
+            from,
+            to,
+            asset_definition,
+            amount,
+        ));
+    }
+    Ok(InstructionBox::from(TransferAssetBatch::new(entries)))
+}
+
 #[allow(clippy::too_many_lines)] // comprehensive translation keeps instruction handling centralized
 fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
     if let Ok(instruction) = json::from_value::<InstructionBox>(value.clone()) {
@@ -8585,6 +8658,9 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     })
                     .map_err(norito_to_napi)?;
                 return Ok(InstructionBox::from(SetParameter::new(parameter)));
+            }
+            if let Some(batch_value) = map.remove("TransferAssetBatch") {
+                return transfer_asset_batch_from_json(batch_value);
             }
 
             if let Some(json::Value::Object(mut register_map)) = map.remove("Register") {
@@ -10227,6 +10303,18 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             outer.insert("Transfer".to_owned(), json::Value::Object(transfer_map));
             return Ok(json::Value::Object(outer));
         }
+    }
+
+    if let Some(batch) = instruction_ref
+        .as_any()
+        .downcast_ref::<TransferAssetBatch>()
+    {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "TransferAssetBatch".to_owned(),
+            json::to_value(batch).map_err(norito_to_napi)?,
+        );
+        return Ok(json::Value::Object(outer));
     }
 
     if let Some(burn_box) = instruction_ref.as_any().downcast_ref::<BurnBox>() {
@@ -21562,19 +21650,22 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_redeem_instruction_rejects_semantic_profile_after_public_binding()
-    {
+    fn kagemusha_recursive_spend_redeem_instruction_rejects_witnessless_semantic_profile_early() {
         let request = sample_kagemusha_recursive_spend_redeem_request_for_js_host(42);
-        request
+        let err = request
             .validate_public_binding()
-            .expect("semantic recursive spend redeem request has valid public bindings");
+            .expect_err("witnessless semantic recursive spend redeem must fail closed");
+        assert!(
+            err.to_string().contains("lineage_witness"),
+            "unexpected witnessless semantic public-binding error: {err}"
+        );
         let err = match kagemusha_recursive_spend_redeem_instruction_from_request(request) {
-            Ok(_) => panic!("semantic recursive spend redeem request must reject"),
+            Ok(_) => panic!("witnessless semantic recursive spend redeem request must reject"),
             Err(err) => err,
         };
         assert!(
-            err.to_string().contains("private-hop lineage"),
-            "unexpected semantic-profile error: {err}"
+            err.to_string().contains("lineage_witness"),
+            "unexpected witnessless semantic-profile error: {err}"
         );
 
         let wrong_amount = sample_kagemusha_recursive_spend_redeem_request_for_js_host(41);
@@ -21713,8 +21804,31 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_redeem_instruction_rejects_backend_invalid_lineage() {
-        let mut request = sample_kagemusha_recursive_spend_redeem_request_for_js_host(42);
+    fn kagemusha_recursive_spend_redeem_instruction_rejects_witnessless_and_backend_invalid_lineage()
+     {
+        let mut witnessless = sample_kagemusha_recursive_spend_redeem_request_for_js_host(42);
+        attach_strict_reserved_lineage_envelope_for_js_host(&mut witnessless);
+        witnessless.lineage_verifier_record =
+            Some(sample_kagemusha_recursive_spend_lineage_verifier_record_for_js_host());
+        let err = witnessless
+            .validate_public_binding()
+            .expect_err("witnessless reserved-lineage redeem must fail closed");
+        assert!(
+            err.to_string().contains("lineage_witness"),
+            "unexpected witnessless reserved-lineage public-binding error: {err}"
+        );
+        let err = kagemusha_recursive_spend_redeem_instruction_from_request(witnessless)
+            .expect_err("JS host must reject witnessless reserved-lineage redeem before backend");
+        assert!(
+            err.to_string().contains("lineage_witness"),
+            "unexpected witnessless reserved-lineage host error: {err}"
+        );
+
+        let (bundle, lineage_witness) =
+            sample_fast_record_backed_recursive_spend_lineage_fixture_for_js_host();
+        let mut request = sample_kagemusha_recursive_spend_redeem_request_for_js_host(7);
+        request.bundle = bundle;
+        request.lineage_witness = Some(lineage_witness);
         attach_strict_reserved_lineage_envelope_for_js_host(&mut request);
         let mut lineage_record =
             sample_kagemusha_recursive_spend_lineage_verifier_record_for_js_host();
@@ -21724,7 +21838,7 @@ mod tests {
         .expect("recursive proof envelope byte cap fits u32");
         request.lineage_verifier_record = Some(lineage_record);
         request.validate_public_binding().expect(
-            "witnessless reserved-lineage redeem validates before backend proof verification",
+            "record-backed reserved-lineage redeem validates before backend proof verification",
         );
 
         let mut wrong_record_circuit = request.clone();
@@ -21773,7 +21887,7 @@ mod tests {
 
         let err = match kagemusha_recursive_spend_redeem_instruction_from_request(request.clone()) {
             Ok(_) => {
-                panic!("JS host must reject backend-invalid witnessless reserved-lineage redeem")
+                panic!("JS host must reject backend-invalid record-backed reserved-lineage redeem")
             }
             Err(err) => err,
         };
@@ -21785,11 +21899,8 @@ mod tests {
             "unexpected backend-invalid lineage rejection: {err}"
         );
 
-        let mut missing_lineage_slice =
-            sample_kagemusha_recursive_spend_redeem_request_for_js_host(42);
+        let mut missing_lineage_slice = request.clone();
         attach_reserved_lineage_envelope_for_js_host(&mut missing_lineage_slice, false);
-        missing_lineage_slice.lineage_verifier_record =
-            Some(sample_kagemusha_recursive_spend_lineage_verifier_record_for_js_host());
         let err = match kagemusha_recursive_spend_redeem_instruction_from_request(
             missing_lineage_slice,
         ) {
@@ -21797,9 +21908,10 @@ mod tests {
             Err(err) => err,
         };
         assert!(
-            err.to_string().contains("verifier-slice")
+            err.to_string().contains("inline key")
+                || err.to_string().contains("verifier-slice")
                 || err.to_string().contains("public instance columns"),
-            "unexpected missing-verifier-slice error: {err}"
+            "unexpected record-backed lineage backend-profile error: {err}"
         );
 
         let mut missing_scalar = request.clone();
@@ -21833,8 +21945,10 @@ mod tests {
                 Err(err) => err,
             };
         assert!(
-            err.to_string()
-                .contains("failed to decode recursive spend lineage proof envelope"),
+            err.to_string().contains("inline key")
+                || err
+                    .to_string()
+                    .contains("failed to decode recursive spend lineage proof envelope"),
             "unexpected malformed-lineage-envelope error: {err}"
         );
     }
@@ -21912,6 +22026,14 @@ mod tests {
             request: iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV1,
             label: &str,
         ) {
+            let public_binding_err = match request.validate_public_binding() {
+                Ok(()) => panic!("malformed lineage witness must reject: {label}"),
+                Err(err) => err,
+            };
+            assert!(
+                !public_binding_err.to_string().is_empty(),
+                "public-binding validation must report a reason for {label}"
+            );
             let err = match kagemusha_recursive_spend_redeem_instruction_from_request(request) {
                 Ok(_) => panic!("JS host recursive redeem builder must reject {label}"),
                 Err(err) => err,
@@ -21924,10 +22046,16 @@ mod tests {
 
         let base_request = {
             let mut request = sample_kagemusha_recursive_spend_redeem_request_for_js_host(42);
-            request.lineage_witness =
-                Some(sample_kagemusha_recursive_spend_lineage_witness_for_js_host(&request.bundle));
+            let (bundle, witness) =
+                sample_fast_record_backed_recursive_spend_lineage_fixture_for_js_host();
+            request.bundle = bundle;
+            request.public_amount = 7;
+            request.lineage_witness = Some(witness);
             request
         };
+        base_request
+            .validate_public_binding()
+            .expect("JS host adversarial lineage baseline must be structurally valid");
 
         let mut missing_record = base_request.clone();
         missing_record
@@ -21973,6 +22101,28 @@ mod tests {
             .verifier_records
             .push(extra);
         assert_rejects(unreferenced_record, "unreferenced verifier record");
+
+        let mut inactive_record = base_request.clone();
+        inactive_record
+            .lineage_witness
+            .as_mut()
+            .expect("lineage witness")
+            .record_bundle
+            .verifier_records[0]
+            .record
+            .status = iroha_data_model::confidential::ConfidentialStatus::Withdrawn;
+        assert_rejects(inactive_record, "inactive verifier record");
+
+        let mut missing_inline_key = base_request.clone();
+        missing_inline_key
+            .lineage_witness
+            .as_mut()
+            .expect("lineage witness")
+            .record_bundle
+            .verifier_records[0]
+            .record
+            .key = None;
+        assert_rejects(missing_inline_key, "missing inline verifier key");
 
         let mut note_commitment_mismatch = base_request.clone();
         note_commitment_mismatch
@@ -22020,17 +22170,6 @@ mod tests {
             "final note output-commitment collision",
         );
 
-        let mut reserved_lineage_with_record_witness = base_request.clone();
-        attach_strict_reserved_lineage_envelope_for_js_host(
-            &mut reserved_lineage_with_record_witness,
-        );
-        reserved_lineage_with_record_witness.lineage_verifier_record =
-            Some(sample_kagemusha_recursive_spend_lineage_verifier_record_for_js_host());
-        assert_rejects(
-            reserved_lineage_with_record_witness,
-            "reserved lineage bundle with record-backed witness",
-        );
-
         let mut unexpected_previous_proof = base_request.clone();
         let previous = unexpected_previous_proof.bundle.recursive_proof.clone();
         unexpected_previous_proof
@@ -22044,7 +22183,16 @@ mod tests {
             "unexpected previous recursive proof for one-hop witness",
         );
 
-        assert_rejects(base_request, "malformed Pallas envelope archive");
+        let mut malformed_pallas_archive = base_request;
+        malformed_pallas_archive
+            .lineage_witness
+            .as_mut()
+            .expect("lineage witness")
+            .pallas_open_envelopes_archive = vec![0xFF, 0x00, 0x01];
+        assert_rejects(
+            malformed_pallas_archive,
+            "malformed Pallas envelope archive",
+        );
     }
 
     fn sample_hash(byte: u8) -> [u8; Hash::LENGTH] {
@@ -22515,6 +22663,51 @@ mod tests {
             lineage_proving_key_archive: None,
             block_height: None,
         }
+    }
+
+    fn sample_fast_record_backed_recursive_spend_lineage_fixture_for_js_host() -> (
+        iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+        iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1,
+    ) {
+        let request = sample_kagemusha_recursive_spend_init_request_for_js_host();
+        let evidence =
+            iroha_core::zk::kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive(
+                &request.record_bundle,
+                &request.pallas_open_envelopes_archive,
+            )
+            .expect("derive JS host record-backed recursive spend evidence");
+        let accumulator =
+            iroha_data_model::offline::kagemusha_recursive_spend_accumulator_from_initial_evidence(
+                &evidence,
+                &request.current_note,
+            )
+            .expect("derive JS host record-backed recursive spend accumulator");
+        let public_inputs =
+            iroha_data_model::offline::kagemusha_recursive_spend_public_inputs_from_accumulator(
+                &accumulator,
+            )
+            .expect("derive JS host record-backed recursive spend public inputs");
+        let public_inputs_hash = public_inputs
+            .public_inputs_hash()
+            .expect("derive JS host record-backed recursive spend public-input hash");
+        let bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+            accumulator,
+            recursive_proof: iroha_data_model::offline::KagemushaRecursiveAggregationProof {
+                verifier_key_id: VerifyingKeyId::new(
+                    "halo2/ipa",
+                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                ),
+                public_inputs,
+                public_inputs_hash,
+                proof: ProofBox::new("halo2/ipa".to_owned(), vec![0xB5; 64]),
+            },
+        };
+        let lineage_witness =
+            iroha_data_model::offline::kagemusha_recursive_spend_lineage_witness_from_init_result(
+                &request, &bundle,
+            )
+            .expect("derive JS host record-backed recursive spend lineage witness");
+        (bundle, lineage_witness)
     }
 
     fn recursive_spend_lineage_scalar_projection(byte: u8) -> [u8; Hash::LENGTH] {
@@ -23523,6 +23716,45 @@ mod tests {
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize instruction from json");
         assert_eq!(reconstructed, instruction);
+    }
+
+    #[test]
+    fn transfer_asset_batch_instruction_json_roundtrip() {
+        let source = sample_account("wonderland");
+        let destination = sample_account("looking_glass");
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("valid domain"),
+            "rose".parse().expect("valid asset name"),
+        );
+        let batch =
+            TransferAssetBatch::new(vec![iroha_data_model::isi::TransferAssetBatchEntry::new(
+                source,
+                destination,
+                asset_definition,
+                Numeric::from_str("1.25").expect("valid numeric"),
+            )]);
+        let instruction = InstructionBox::from(batch);
+
+        let mut json_value =
+            instruction_to_json_value(&instruction).expect("serialize batch instruction to json");
+        assert!(
+            json_value.get("TransferAssetBatch").is_some(),
+            "batch instruction JSON must retain its native variant"
+        );
+
+        let reconstructed = value_to_instruction(json_value.clone())
+            .expect("deserialize batch instruction from native JSON");
+        assert_eq!(reconstructed, instruction);
+
+        let malformed = json_value
+            .get_mut("TransferAssetBatch")
+            .and_then(json::Value::as_object_mut)
+            .expect("batch payload object");
+        malformed.insert("redirect".to_owned(), json::Value::Bool(true));
+        assert!(
+            value_to_instruction(json_value).is_err(),
+            "batch decoder must reject fields outside the native batch schema"
+        );
     }
 
     #[test]
@@ -25490,17 +25722,22 @@ mod tests {
         let manifest: Value = json::from_slice(&manifest_bytes)
             .unwrap_or_else(|err| panic!("failed to parse {}: {err}", manifest_path.display()));
         let names = ["ivm_transfer"];
+        let fixtures = manifest
+            .get("fixtures")
+            .and_then(Value::as_array)
+            .expect("norito fixture manifest fixtures array");
 
         for name in names {
-            let fixture = manifest
-                .get("fixtures")
-                .and_then(Value::as_array)
-                .and_then(|fixtures| {
-                    fixtures
-                        .iter()
-                        .find(|fixture| fixture.get("name").and_then(Value::as_str) == Some(name))
-                })
-                .unwrap_or_else(|| panic!("fixture {name} missing from norito fixture manifest"));
+            let matches: Vec<_> = fixtures
+                .iter()
+                .filter(|fixture| fixture.get("name").and_then(Value::as_str) == Some(name))
+                .collect();
+            assert_eq!(
+                matches.len(),
+                1,
+                "fixture {name} must occur exactly once in norito fixture manifest"
+            );
+            let fixture = matches[0];
             let signed_base64 = fixture
                 .get("signed_base64")
                 .and_then(Value::as_str)
@@ -25508,9 +25745,217 @@ mod tests {
             let signed_bytes = BASE64
                 .decode(signed_base64)
                 .unwrap_or_else(|err| panic!("failed to decode {name} signed payload: {err}"));
+            assert_eq!(
+                BASE64.encode(&signed_bytes),
+                signed_base64,
+                "fixture {name} signed_base64 must be canonical"
+            );
             decode_signed_transaction(&signed_bytes)
                 .unwrap_or_else(|err| panic!("failed to decode fixture {name}: {err}"));
         }
+    }
+
+    #[test]
+    fn external_transfer_payload_builder_and_finalizer_match_native_transaction_model() {
+        let authority_key =
+            KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Ed25519).expect("authority key");
+        let destination_key =
+            KeyPair::try_from_seed(vec![0x42; 32], Algorithm::Ed25519).expect("destination key");
+        let authority = AccountId::new(authority_key.public_key().clone());
+        let destination = AccountId::new(destination_key.public_key().clone());
+        let authority_i105 = AccountAddress::from_account_id(&authority)
+            .expect("authority address")
+            .to_i105_for_discriminant(0x02F1)
+            .expect("authority I105");
+        let destination_i105 = AccountAddress::from_account_id(&destination)
+            .expect("destination address")
+            .to_i105_for_discriminant(0x02F1)
+            .expect("destination I105");
+        let definition: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("asset definition address");
+        let source = AssetId::new(definition, authority.clone()).canonical_literal();
+
+        let built = build_transfer_asset_payload(
+            "browser-native-parity".to_owned(),
+            authority_i105.clone(),
+            source,
+            "1.25".to_owned(),
+            destination_i105,
+            Some(r#"{"memo":"native","order":2}"#.to_owned()),
+            Some(1_700_000_000_000),
+            Some(5_000),
+            Some(42),
+        )
+        .expect("build external transfer payload");
+        assert!(!built.payload_bytes.is_empty());
+        assert_eq!(built.payload_hash.len(), Hash::LENGTH);
+
+        let builder = TransactionBuilder::decode_payload(built.payload_bytes.as_ref())
+            .expect("native payload builder must emit canonical bytes");
+        assert_eq!(builder.encode_payload(), built.payload_bytes.as_ref());
+        assert_eq!(
+            builder.payload_hash_bytes().as_slice(),
+            built.payload_hash.as_ref()
+        );
+
+        let signature =
+            Signature::try_new(authority_key.private_key(), built.payload_hash.as_ref())
+                .expect("external payload signature");
+        let (_, public_key_bytes) = authority_key
+            .public_key()
+            .try_to_bytes()
+            .expect("raw Ed25519 public key");
+        let finalized = finalize_signed_transaction(JsExternalTransactionSignature {
+            payload_bytes: Buffer::from(built.payload_bytes.as_ref().to_vec()),
+            payload_hash_hex: Some(hex::encode(built.payload_hash.as_ref())),
+            signature: Buffer::from(signature.payload().to_vec()),
+            public_key: Buffer::from(public_key_bytes.to_vec()),
+            authority: Some(authority_i105),
+        })
+        .expect("finalize externally signed transaction");
+
+        let transaction = decode_signed_transaction(finalized.signed_transaction.as_ref())
+            .expect("finalized versioned transaction must decode");
+        transaction
+            .verify_signature()
+            .expect("finalized transaction signature must verify");
+        assert_eq!(transaction.authority(), &authority);
+        assert_eq!(
+            finalized.signed_transaction.as_ref(),
+            <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(
+                &transaction
+            )
+        );
+        assert_eq!(finalized.hash.as_ref(), transaction.hash().as_ref());
+    }
+
+    #[test]
+    fn external_transfer_builder_and_finalizer_reject_adversarial_inputs() {
+        let authority_key =
+            KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519).expect("authority key");
+        let other_key =
+            KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519).expect("other key");
+        let authority = AccountId::new(authority_key.public_key().clone());
+        let other = AccountId::new(other_key.public_key().clone());
+        let authority_i105 = AccountAddress::from_account_id(&authority)
+            .expect("authority address")
+            .to_i105_for_discriminant(0x02F1)
+            .expect("authority I105");
+        let other_i105 = AccountAddress::from_account_id(&other)
+            .expect("other address")
+            .to_i105_for_discriminant(0x02F1)
+            .expect("other I105");
+        let wrong_network_i105 = AccountAddress::from_account_id(&other)
+            .expect("other address")
+            .to_i105_for_discriminant(42)
+            .expect("other-network I105");
+        let definition: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("asset definition address");
+        let source = AssetId::new(definition.clone(), authority.clone()).canonical_literal();
+        let other_source = AssetId::new(definition, other.clone()).canonical_literal();
+
+        assert!(
+            build_transfer_asset_payload(
+                "browser-native-adversarial".to_owned(),
+                authority_i105.clone(),
+                source.clone(),
+                "1".to_owned(),
+                wrong_network_i105,
+                None,
+                Some(1),
+                None,
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            build_transfer_asset_payload(
+                "browser-native-adversarial".to_owned(),
+                authority_i105.clone(),
+                other_source,
+                "1".to_owned(),
+                other_i105.clone(),
+                None,
+                Some(1),
+                None,
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            build_transfer_asset_payload(
+                "browser-native-adversarial".to_owned(),
+                authority_i105.clone(),
+                source.clone(),
+                "0".to_owned(),
+                other_i105.clone(),
+                None,
+                Some(1),
+                None,
+                None,
+            )
+            .is_err()
+        );
+
+        let built = build_transfer_asset_payload(
+            "browser-native-adversarial".to_owned(),
+            authority_i105.clone(),
+            source,
+            "1".to_owned(),
+            other_i105,
+            None,
+            Some(1),
+            None,
+            None,
+        )
+        .expect("valid adversarial baseline payload");
+        let signature =
+            Signature::try_new(authority_key.private_key(), built.payload_hash.as_ref())
+                .expect("baseline signature");
+        let (_, public_key_bytes) = authority_key
+            .public_key()
+            .try_to_bytes()
+            .expect("authority public key bytes");
+        let (_, other_public_key_bytes) = other_key
+            .public_key()
+            .try_to_bytes()
+            .expect("other public key bytes");
+        let valid_input = || JsExternalTransactionSignature {
+            payload_bytes: Buffer::from(built.payload_bytes.as_ref().to_vec()),
+            payload_hash_hex: Some(hex::encode(built.payload_hash.as_ref())),
+            signature: Buffer::from(signature.payload().to_vec()),
+            public_key: Buffer::from(public_key_bytes.to_vec()),
+            authority: Some(authority_i105.clone()),
+        };
+
+        let mut mismatched_hash = valid_input();
+        mismatched_hash.payload_hash_hex = Some("00".repeat(Hash::LENGTH));
+        assert!(finalize_signed_transaction(mismatched_hash).is_err());
+
+        let mut wrong_public_key = valid_input();
+        wrong_public_key.public_key = Buffer::from(other_public_key_bytes.to_vec());
+        assert!(finalize_signed_transaction(wrong_public_key).is_err());
+
+        let mut bad_signature = valid_input();
+        bad_signature.signature[0] ^= 0x80;
+        assert!(finalize_signed_transaction(bad_signature).is_err());
+
+        let mut overlong_payload = valid_input();
+        let canonical = overlong_payload.payload_bytes.as_ref();
+        assert!(
+            canonical[0] < 0x80,
+            "fixture begins with a one-byte field length"
+        );
+        let mut overlong = Vec::with_capacity(canonical.len() + 1);
+        overlong.extend_from_slice(&[canonical[0] | 0x80, 0]);
+        overlong.extend_from_slice(&canonical[1..]);
+        overlong_payload.payload_bytes = Buffer::from(overlong);
+        overlong_payload.payload_hash_hex = None;
+        assert!(finalize_signed_transaction(overlong_payload).is_err());
+
+        assert!(finalize_signed_transaction(valid_input()).is_ok());
     }
 
     #[test]

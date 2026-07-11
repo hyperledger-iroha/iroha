@@ -12,6 +12,10 @@ Options:
   --cargo-build-jobs <n>  Optional Cargo parallelism limit passed as CARGO_BUILD_JOBS.
   --binaries "<list>"     Optional space-separated binary list passed as BINARIES.
   --use-target-prebuilt   Package existing target/deploy binaries instead of compiling them in Docker.
+  --validator-lock-sha256 <sha256>
+                          Reviewed Cargo.lock digest required for Taira builds.
+  --validator-source-tree-sha256 <sha256>
+                          Attested source-tree digest required for Taira builds.
   --tag <tag>             Docker image tag (default: hyperledger/iroha:<profile>-<version>).
   --artifacts-dir <dir>   Output directory for saved images/manifests (default: dist).
   --signing-key <path>    Optional PEM private key for signing the saved image tarball.
@@ -30,6 +34,8 @@ features=""
 cargo_build_jobs=""
 binaries=""
 use_target_prebuilt="0"
+validator_lock_sha256=""
+validator_source_tree_sha256=""
 image_tag=""
 artifacts_dir="dist"
 signing_key=""
@@ -60,6 +66,14 @@ while (($#)); do
         --use-target-prebuilt)
             use_target_prebuilt="1"
             shift 1
+            ;;
+        --validator-lock-sha256)
+            validator_lock_sha256="${2:-}"
+            shift 2
+            ;;
+        --validator-source-tree-sha256)
+            validator_source_tree_sha256="${2:-}"
+            shift 2
             ;;
         --tag)
             image_tag="${2:-}"
@@ -139,6 +153,38 @@ case "$config" in
         ;;
     taira)
         config_profile="taira"
+        if [[ "${IROHA_VALIDATOR_RELEASE_VERIFIED:-}" != "1" ]]; then
+            printf 'Taira image builds must enter through the DPN attested validator-image wrapper\n' >&2
+            exit 1
+        fi
+        if [[ ! "$validator_lock_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            printf '%s\n' '--validator-lock-sha256 must be exactly 64 lowercase hex characters' >&2
+            exit 1
+        fi
+        if [[ ! "$validator_source_tree_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            printf '%s\n' '--validator-source-tree-sha256 must be exactly 64 lowercase hex characters' >&2
+            exit 1
+        fi
+        if [[ ! -f Cargo.lock || -L Cargo.lock ]]; then
+            printf 'reviewed Taira Cargo.lock is missing or not a regular file\n' >&2
+            exit 1
+        fi
+        if command -v sha256sum >/dev/null 2>&1; then
+            actual_validator_lock_sha256="$(sha256sum Cargo.lock | awk '{print $1}')"
+        elif command -v shasum >/dev/null 2>&1; then
+            actual_validator_lock_sha256="$(shasum -a 256 Cargo.lock | awk '{print $1}')"
+        else
+            printf 'sha256sum or shasum is required to verify the Taira Cargo.lock\n' >&2
+            exit 1
+        fi
+        if [[ "$actual_validator_lock_sha256" != "$validator_lock_sha256" ]]; then
+            printf 'reviewed Taira Cargo.lock checksum mismatch\n' >&2
+            exit 1
+        fi
+        if [[ "$use_target_prebuilt" == "1" ]]; then
+            printf 'Taira images cannot use unproven target-prebuilt binaries\n' >&2
+            exit 1
+        fi
         case ",${features}," in
             *,embedded-soracloud-runtime,*)
                 ;;
@@ -165,6 +211,13 @@ docker_build_args=(
     --build-arg "FEATURES=${features}"
     --build-arg "CONFIG_PROFILE=${config_profile}"
 )
+
+if [[ "$config_profile" == "taira" ]]; then
+    docker_build_args+=(
+        --build-arg "VALIDATOR_LOCK_SHA256=${validator_lock_sha256}"
+        --build-arg "VALIDATOR_SOURCE_TREE_SHA256=${validator_source_tree_sha256}"
+    )
+fi
 
 if [[ "$use_target_prebuilt" == "1" ]]; then
     prebuilt_dir="${repo_root}/dist/docker-bin"
@@ -257,6 +310,8 @@ manifest = {
     "os": "${os_tag}",
     "arch": "${arch}",
     "features": "${features}",
+    "validator_lock_sha256": "${validator_lock_sha256}" if "${validator_lock_sha256}" else None,
+    "validator_source_tree_sha256": "${validator_source_tree_sha256}" if "${validator_source_tree_sha256}" else None,
     "image_tag": "${image_tag}",
     "image_id": "${image_id}",
     "artifacts": [

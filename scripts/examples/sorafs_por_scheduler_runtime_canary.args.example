@@ -23,8 +23,6 @@ por_report
 --runtime-route
 por_ingestion
 --runtime-route
-capacity_por_challenge
---runtime-route
 capacity_por_proof
 --runtime-route
 capacity_por_verdict

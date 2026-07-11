@@ -4,6 +4,33 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Made `build:dist` concurrency-safe and content-idempotent: explicit builds
+  stage and validate the complete ESM tree under an inter-process lock, then
+  replace `dist` only when its content changed. Consuming `file:` installs no
+  longer run a mutating `prepare` hook; release and packaged-layout workflows
+  continue to build the distribution explicitly.
+
+## [0.0.3] - 2026-07-11
+
+- Hardened Nexus custom-codec boundaries with descriptor snapshots, exact and
+  recomputed payload hashes, independently finalized canonical signed bytes,
+  conflict-checked local/Torii aliases, and pre-copy byte limits. Release
+  checks now pin `esbuild`, fail closed when it is unavailable, and enforce
+  measured Torii, browser transaction-codec, and browser Nexus-app bundle
+  ceilings. The `./nexus-app` graph no longer imports Node/native modules in a
+  browser build; its default codec and bounded Torii submit/status transport
+  are browser-safe and covered by runtime and adversarial tests. Its packed
+  declarations also compile for strict DOM consumers without ambient Node
+  types, using the runtime `buffer` package's self-contained type export.
+- Added the browser-safe `@iroha/iroha-js/transaction-codec` subpath for
+  canonical transparent Ed25519 transfer payloads, external-signing prehashes,
+  verified signed-transaction finalization, and compact pipeline hashes. The
+  codec rejects contradictory signer state, non-canonical Norito, and bounded
+  metadata violations before producing submission bytes. Canonical metadata
+  strings, pre-decode field limits, and the Rust 64-byte signed-numeric range
+  are enforced before parsing or large-integer conversion. Browser and Node
+  Ed25519 verification now match Rust strict verification, including exact
+  uncofactored equations and mixed-torsion rejection.
 - Added signed Torii alias-resolution ergonomics: `resolveAlias`,
   `resolveAliasByIndex`, and `lookupAliasesByAccount` now accept
   `canonicalAuth`, and `buildCanonicalJsonRequest` builds a signed JSON request
@@ -11,9 +38,12 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 - `ToriiClient.callContract` now requires a `gasLimit` in the request payload so
   callers always supply the on-chain gas cap; typings, README docs, and test
   coverage reflect the stricter contract.【javascript/iroha_js/src/toriiClient.js:15360】【javascript/iroha_js/index.d.ts:4477】【javascript/iroha_js/test/toriiClient.test.js:13919】【javascript/iroha_js/test/integrationTorii.test.js:2701】【javascript/iroha_js/README.md:1909】
-- Removed JS client helpers for legacy offline HTTP routes that Torii no longer
-  mounts. `getOfflineReadiness()` is
-  the supported readiness probe for `/v1/offline/readiness`.
+- Added the complete sharp first-release Offline JSON API: asset-scoped
+  `getOfflineReadiness`, directly structured `submitOfflineTopUp` and
+  `submitOfflineRedeem` commands with signed-operation-derived idempotency, and
+  typed polling through `getOfflineOperationStatus`. Node and browser clients
+  reject malformed IDs, contradictory tagged states, mismatched `Location`
+  headers, and whole-payload wrappers before exposing results.
 - Constrained the JS SDK to the first-release surface: Connect WebSocket URLs no longer accept token
   query parameters, Torii health snapshots now only parse JSON responses, the `X-Iroha-API-Token`
   alias is no longer emitted, V1 telemetry counter aliases are dropped, and account address

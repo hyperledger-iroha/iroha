@@ -15,7 +15,8 @@ fn production_source(source: &str) -> &str {
 fn redeem_is_a_typed_async_command_on_the_final_route() {
     let issuer = production_source(OFFLINE_ISSUER_SOURCE);
 
-    assert!(TORII_SOURCE.contains("uri::OFFLINE_REDEEM, post(handler_offline_redeem)"));
+    assert!(TORII_SOURCE.contains("&route_catalog::offline::REDEEM"));
+    assert!(TORII_SOURCE.contains("catalog_post(handler_offline_redeem)"));
     assert!(TORII_SOURCE.contains("offline_api::OfflineRedeemRequest"));
     assert!(TORII_SOURCE.contains("NoritoJson(request)"));
     assert!(OFFLINE_API_SOURCE.contains("as OfflineRedeemRequest"));
@@ -24,7 +25,7 @@ fn redeem_is_a_typed_async_command_on_the_final_route() {
         iroha_torii_shared::offline_api::OFFLINE_REDEEM_REQUEST_SCHEMA_NAME,
         "iroha.torii.v1.offline.redeem.request"
     );
-    assert!(issuer.contains("handle_notes_redeem"));
+    assert!(issuer.contains("handle_redeem"));
     assert!(issuer.contains("redeem_request: OfflineRedeemRequest"));
     assert!(issuer.contains("require_idempotency_key"));
     assert!(issuer.contains("OfflineOperationReference"));

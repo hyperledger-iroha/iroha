@@ -18,7 +18,7 @@ sealed class OfflineOperationStatus(
         submittedAtMs: BigInteger,
     ) : OfflineOperationStatus(operationId) {
         @JvmField
-        val transactionHash: String = requireExactNonEmptyText(transactionHash, "transactionHash")
+        val transactionHash: String = requireTransactionHash(transactionHash, "transactionHash")
 
         @JvmField
         val submittedAtMs: BigInteger = requireU64(submittedAtMs, "submittedAtMs")
@@ -38,7 +38,7 @@ sealed class OfflineOperationStatus(
         @JvmField val error: Error,
     ) : OfflineOperationStatus(operationId) {
         @JvmField
-        val transactionHash: String = requireExactNonEmptyText(transactionHash, "transactionHash")
+        val transactionHash: String = requireTransactionHash(transactionHash, "transactionHash")
     }
 
     /** Operation-specific result of an applied command. */
@@ -58,7 +58,7 @@ sealed class OfflineOperationStatus(
         @JvmField val anchor: TopUpAnchor,
     ) {
         @JvmField
-        val transactionHash: String = requireExactNonEmptyText(transactionHash, "transactionHash")
+        val transactionHash: String = requireTransactionHash(transactionHash, "transactionHash")
 
         @JvmField
         val finalizedBlockHeight: BigInteger = requireU64(finalizedBlockHeight, "finalizedBlockHeight")
@@ -74,7 +74,7 @@ sealed class OfflineOperationStatus(
         serverTimeMs: BigInteger,
     ) {
         @JvmField
-        val transactionHash: String = requireExactNonEmptyText(transactionHash, "transactionHash")
+        val transactionHash: String = requireTransactionHash(transactionHash, "transactionHash")
 
         @JvmField
         val finalizedBlockHeight: BigInteger = requireU64(finalizedBlockHeight, "finalizedBlockHeight")
@@ -86,10 +86,9 @@ sealed class OfflineOperationStatus(
     /**
      * Schema-bound top-up anchor archive.
      *
-     * The Kotlin SDK does not yet expose a field-level
-     * `KagemushaRecursiveSpendTopUpAnchorV2` decoder; callers can retain this
-     * canonical archive for the wallet prover without treating the whole
-     * operation status as an untyped payload.
+     * The internal consensus anchor remains wire-versioned. Callers can retain
+     * this canonical archive for the wallet prover without exposing that
+     * internal type name or treating the whole operation status as untyped.
      */
     class TopUpAnchor internal constructor(noritoArchive: ByteArray) {
         private val archive = noritoArchive.copyOf()
@@ -105,7 +104,7 @@ sealed class OfflineOperationStatus(
         @JvmField val details: ErrorDetails?,
     ) {
         @JvmField
-        val code: String = requireExactNonEmptyText(code, "error.code")
+        val code: String = requireStableErrorCode(code, "error.code")
 
         @JvmField
         val message: String = requireExactNonEmptyText(message, "error.message")

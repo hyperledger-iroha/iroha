@@ -219,6 +219,18 @@ public struct KagemushaRecursiveSpendTopUpInitRequestSummary: Equatable, Sendabl
     public let amount: String
 }
 
+/// Public transfer fields that a V2 finalized top-up anchor must reproduce.
+struct KagemushaRecursiveSpendV2TransferFragmentSummary: Equatable, Sendable {
+    let chainID: String
+    let assetDefinitionID: String
+    let rootBefore: Data
+    let rootAfter: Data
+    let inputNullifiers: [Data]
+    let outputCommitments: [Data]
+    let verifierKeyID: String
+    let verifierKeyCommitment: Data
+}
+
 public struct KagemushaRecursiveSpendTopUpRequest: Equatable, Sendable {
     public let assetId: String
     public let amount: String
@@ -754,6 +766,35 @@ public enum KagemushaRecursiveSpendRequestCodecs {
         _ initRequestArchive: Data
     ) throws -> KagemushaRecursiveSpendTopUpInitRequestSummary {
         try readTopUpInitRequestSummary(initRequestArchive)
+    }
+
+    /// Decode and validate the exact one-hop transfer fragment consumed by a
+    /// finalized V2 init anchor.
+    static func v2TransferFragmentSummary(
+        recordBundle: Data,
+        pallasOpenEnvelopes: Data,
+        atBlockHeight blockHeight: UInt64
+    ) throws -> KagemushaRecursiveSpendV2TransferFragmentSummary {
+        guard blockHeight > 0 else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidField("blockHeight")
+        }
+        let payload = try compactPayloadForRequest(
+            recordBundle,
+            schema: recordBundleWireName,
+            field: "recordBundle"
+        )
+        let summary = try readV2TransferFragmentSummary(
+            payload,
+            blockHeight: blockHeight
+        )
+        try requirePallasOpenEnvelopesArchive(
+            pallasOpenEnvelopes,
+            expectedEnvelopeCount: 1,
+            field: "pallasOpenEnvelopes",
+            maxBytes: KagemushaRecursiveSpendProver.nativeArchiveMaxBytes,
+            expectedVerifierCommitments: [summary.verifierKeyCommitment]
+        )
+        return summary
     }
 
     public static func decodeInitRequest(
@@ -2209,6 +2250,249 @@ extension KagemushaRecursiveSpendRequestCodecs {
         )
     }
 
+    private static func readV2TransferFragmentSummary(
+        _ recordBundlePayload: Data,
+        blockHeight: UInt64
+    ) throws -> KagemushaRecursiveSpendV2TransferFragmentSummary {
+        let field = "initRequest.recordBundle"
+        var recordBundle = CompactReader(data: recordBundlePayload)
+        let bundlePayload = try recordBundle.readField()
+        let recordsPayload = try recordBundle.readField()
+        guard recordBundle.remaining == 0 else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
+        }
+
+        var bundle = CompactReader(data: bundlePayload)
+        let chainID = try readField(&bundle, field: "\(field).chainID") {
+            try readChainIdPayload(&$0)
+        }
+        let assetBytes = try readField(&bundle, field: "\(field).asset") {
+            try $0.readFixedBytesFlexible(expectedCount: 16, field: "\(field).asset")
+        }
+        guard let assetDefinitionID = AssetDefinitionAddress.encode(uuidBytes: assetBytes) else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("\(field).asset")
+        }
+        let step = try readField(&bundle, field: "\(field).steps") { steps in
+            let count = try steps.readUInt64LE()
+            guard count == 1 else {
+                throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("\(field).steps")
+            }
+            let itemLength = try steps.readLength()
+            let item = try steps.readBytes(itemLength)
+            guard steps.remaining == 0 else {
+                throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("\(field).steps")
+            }
+            return try readV2TransferStep(item, field: "\(field).steps[0]")
+        }
+        guard bundle.remaining == 0 else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
+        }
+
+        var records = CompactReader(data: recordsPayload)
+        let recordCount = try records.readUInt64LE()
+        guard recordCount == 1 else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
+                "\(field).verifierRecords"
+            )
+        }
+        let entryLength = try records.readLength()
+        var entry = CompactReader(data: try records.readBytes(entryLength))
+        let recordID = try readField(&entry, field: "\(field).verifierRecords[0].id") {
+            try readVerifierKeyIDPayload(&$0, field: "\(field).verifierRecords[0].id")
+        }
+        let recordPayload = try entry.readField()
+        guard entry.remaining == 0, records.remaining == 0, recordID == step.verifierKeyID else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
+                "\(field).verifierRecords"
+            )
+        }
+        let record = try decodeVerifierRecordPayload(
+            recordPayload,
+            label: "\(field).verifierRecords[0].record"
+        )
+        try validateVerifierRecordLifecycle(
+            record,
+            blockHeight: blockHeight,
+            requireResolvedWindow: true,
+            label: "\(field).verifierRecords[0].record"
+        )
+        guard record.status == confidentialStatusActive,
+              record.namespace == kagemushaVerifierNamespace,
+              record.backendTag == backendTagHalo2IpaPasta,
+              record.curve == confidentialRecordCurve,
+              record.commitment == step.verifierKeyCommitment,
+              record.maxProofBytes > 0,
+              let recordKey = record.key,
+              recordKey.backend == step.verifierKey.backend,
+              recordKey.bytes == step.verifierKey.bytes,
+              record.vkLen == UInt32(recordKey.bytes.count),
+              record.commitment == (try? verifyingKeyCommitment(
+                  backend: recordKey.backend,
+                  bytes: recordKey.bytes
+              )) else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
+                "\(field).verifierRecords[0].record"
+            )
+        }
+
+        return KagemushaRecursiveSpendV2TransferFragmentSummary(
+            chainID: chainID,
+            assetDefinitionID: assetDefinitionID,
+            rootBefore: step.rootBefore,
+            rootAfter: step.rootAfter,
+            inputNullifiers: step.inputNullifiers,
+            outputCommitments: step.outputCommitments,
+            verifierKeyID: step.verifierKeyID,
+            verifierKeyCommitment: step.verifierKeyCommitment
+        )
+    }
+
+    private struct V2TransferStepSummary {
+        let rootBefore: Data
+        let rootAfter: Data
+        let inputNullifiers: [Data]
+        let outputCommitments: [Data]
+        let verifierKeyID: String
+        let verifierKeyCommitment: Data
+        let verifierKey: KagemushaVerifyingKeyBoxValue
+    }
+
+    private static func readV2TransferStep(
+        _ payload: Data,
+        field: String
+    ) throws -> V2TransferStepSummary {
+        var step = CompactReader(data: payload)
+        let rootBefore = try readField(&step, field: "\(field).rootBefore") {
+            try $0.readFixed32Flexible(field: "\(field).rootBefore")
+        }
+        let inputNullifiers = try readField(&step, field: "\(field).inputNullifiers") {
+            try readFixed32Sequence(
+                &$0,
+                field: "\(field).inputNullifiers",
+                maxCount: foldStepMaxInputs
+            )
+        }
+        let outputCommitments = try readField(&step, field: "\(field).outputCommitments") {
+            try readFixed32Sequence(
+                &$0,
+                field: "\(field).outputCommitments",
+                maxCount: foldStepMaxInputs
+            )
+        }
+        let rootAfter = try readField(&step, field: "\(field).rootAfter") {
+            try $0.readFixed32Flexible(field: "\(field).rootAfter")
+        }
+        let attachment = try readField(&step, field: "\(field).attachment") {
+            try readV2TransferAttachment(&$0, field: "\(field).attachment")
+        }
+        let verifierKey = try readField(&step, field: "\(field).verifierKey") { child in
+            try readVerifyingKeyBoxPayload(
+                try child.readBytes(child.remaining),
+                label: "\(field).verifierKey"
+            )
+        }
+        guard step.remaining == 0,
+              rootBefore.contains(where: { $0 != 0 }),
+              rootAfter.contains(where: { $0 != 0 }),
+              rootBefore != rootAfter,
+              inputNullifiers.allSatisfy({ $0.contains(where: { $0 != 0 }) }),
+              outputCommitments.allSatisfy({ $0.contains(where: { $0 != 0 }) }),
+              Set(inputNullifiers).count == inputNullifiers.count,
+              Set(outputCommitments).count == outputCommitments.count,
+              Set(inputNullifiers).isDisjoint(with: Set(outputCommitments)),
+              verifierKey.backend == attachment.backend,
+              !verifierKey.bytes.isEmpty,
+              attachment.verifierKeyCommitment == (try? verifyingKeyCommitment(
+                  backend: verifierKey.backend,
+                  bytes: verifierKey.bytes
+              )) else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
+        }
+        return V2TransferStepSummary(
+            rootBefore: rootBefore,
+            rootAfter: rootAfter,
+            inputNullifiers: inputNullifiers,
+            outputCommitments: outputCommitments,
+            verifierKeyID: attachment.verifierKeyID,
+            verifierKeyCommitment: attachment.verifierKeyCommitment,
+            verifierKey: verifierKey
+        )
+    }
+
+    private struct V2TransferAttachmentSummary {
+        let backend: String
+        let verifierKeyID: String
+        let verifierKeyCommitment: Data
+    }
+
+    private static func readV2TransferAttachment(
+        _ attachment: inout CompactReader,
+        field: String
+    ) throws -> V2TransferAttachmentSummary {
+        let backend = try readField(&attachment, readString)
+        let proof = try readField(&attachment, field: "\(field).proof") { child in
+            try readVerifyingKeyBoxPayload(
+                try child.readBytes(child.remaining),
+                label: "\(field).proof"
+            )
+        }
+        let verifierKeyID = try readField(&attachment, field: "\(field).verifierKeyID") {
+            try readVerifierKeyIDPayload(&$0, field: "\(field).verifierKeyID")
+        }
+        let commitment = try readField(&attachment, field: "\(field).verifierKeyCommitment") {
+            guard let value = try readOptionRawPayload(
+                &$0,
+                field: "\(field).verifierKeyCommitment"
+            ) else {
+                throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
+                    "\(field).verifierKeyCommitment"
+                )
+            }
+            var valueReader = CompactReader(data: value)
+            let fixed = try valueReader.readFixed32Flexible(
+                field: "\(field).verifierKeyCommitment"
+            )
+            guard valueReader.remaining == 0 else {
+                throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
+                    "\(field).verifierKeyCommitment"
+                )
+            }
+            return fixed
+        }
+        var trailingFieldCount = 0
+        while attachment.remaining > 0 {
+            _ = try attachment.readField()
+            trailingFieldCount += 1
+        }
+        let parsedID = try parseVerifierKeyId(verifierKeyID, field: "\(field).verifierKeyID")
+        guard trailingFieldCount <= 2,
+              backend == proof.backend,
+              backend == parsedID.backend,
+              !proof.bytes.isEmpty,
+              commitment.contains(where: { $0 != 0 }) else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
+        }
+        return V2TransferAttachmentSummary(
+            backend: backend,
+            verifierKeyID: verifierKeyID,
+            verifierKeyCommitment: commitment
+        )
+    }
+
+    private static func readVerifierKeyIDPayload(
+        _ reader: inout CompactReader,
+        field: String
+    ) throws -> String {
+        let backend = try readField(&reader, readString)
+        let name = try readField(&reader, readString)
+        guard reader.remaining == 0 else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
+        }
+        let value = "\(backend):\(name)"
+        _ = try parseVerifierKeyId(value, field: field)
+        return value
+    }
+
     private static func readVerifiedFoldStepCount(
         _ decoder: inout CompactReader,
         field: String
@@ -2239,7 +2523,8 @@ extension KagemushaRecursiveSpendRequestCodecs {
         _ archive: Data,
         expectedEnvelopeCount: Int,
         field: String,
-        maxBytes: Int
+        maxBytes: Int,
+        expectedVerifierCommitments: [Data]? = nil
     ) throws {
         guard !archive.isEmpty,
               archive.count <= maxBytes,
@@ -2258,17 +2543,33 @@ extension KagemushaRecursiveSpendRequestCodecs {
               Int(count64) == expectedEnvelopeCount else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
-        for _ in 0..<Int(count64) {
+        if let expectedVerifierCommitments,
+           expectedVerifierCommitments.count != Int(count64) {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
+        }
+        for index in 0..<Int(count64) {
             let itemLength = try decoder.readLength()
             let itemPayload = try decoder.readBytes(itemLength)
-            try validatePallasOpenEnvelopePayload(itemPayload, field: field)
+            let verifierCommitment = try validatePallasOpenEnvelopePayload(
+                itemPayload,
+                field: field
+            )
+            if let expectedVerifierCommitments,
+               verifierCommitment != expectedVerifierCommitments[index] {
+                throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
+                    "\(field).vk_commitment"
+                )
+            }
         }
         guard decoder.remaining == 0 else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
     }
 
-    private static func validatePallasOpenEnvelopePayload(_ payload: Data, field: String) throws {
+    private static func validatePallasOpenEnvelopePayload(
+        _ payload: Data,
+        field: String
+    ) throws -> Data {
         var reader = CompactReader(data: payload)
         let paramsN = try readField(&reader) { child in
             try readPallasIpaParams(&child, field: "\(field).params")
@@ -2287,18 +2588,19 @@ extension KagemushaRecursiveSpendRequestCodecs {
               transcriptLabel.utf8.count <= pallasOpenEnvelopeMaxTranscriptLabelBytes else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
-        try readField(&reader, field: "\(field).vk_commitment") { child in
+        let verifierCommitment = try readField(&reader, field: "\(field).vk_commitment") { child in
             try readRequiredMetadataOption(&child, field: "\(field).vk_commitment")
         }
-        try readField(&reader, field: "\(field).public_inputs_schema_hash") { child in
+        _ = try readField(&reader, field: "\(field).public_inputs_schema_hash") { child in
             try readRequiredMetadataOption(&child, field: "\(field).public_inputs_schema_hash")
         }
-        try readField(&reader, field: "\(field).domain_tag") { child in
+        _ = try readField(&reader, field: "\(field).domain_tag") { child in
             try readRequiredMetadataOption(&child, field: "\(field).domain_tag")
         }
         guard reader.remaining == 0 else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
+        return verifierCommitment
     }
 
     private static func readPallasIpaParams(
@@ -2452,7 +2754,7 @@ extension KagemushaRecursiveSpendRequestCodecs {
     private static func readRequiredMetadataOption(
         _ reader: inout CompactReader,
         field: String
-    ) throws {
+    ) throws -> Data {
         guard let payload = try readOptionRawPayload(&reader, field: field) else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
@@ -2462,6 +2764,7 @@ extension KagemushaRecursiveSpendRequestCodecs {
               value.contains(where: { $0 != 0 }) else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
+        return value
     }
 
     private static func readOptionRawPayload(

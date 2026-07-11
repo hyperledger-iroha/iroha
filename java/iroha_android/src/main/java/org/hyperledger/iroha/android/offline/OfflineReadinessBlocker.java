@@ -8,7 +8,7 @@ public final class OfflineReadinessBlocker {
   private final String message;
 
   public OfflineReadinessBlocker(final String code, final String message) {
-    this.code = requireExactText(code, "code");
+    this.code = OfflineOperationCodec.requireStableErrorCode(code, "code");
     this.message = requireExactText(message, "message");
   }
 

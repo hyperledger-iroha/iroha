@@ -4,6 +4,8 @@
 
 #[path = "../kagemusha_topup_kotlin_fixture.rs"]
 mod kagemusha_topup_kotlin_fixture;
+#[path = "../kagemusha_v2_semantic_dag_golden.rs"]
+mod kagemusha_v2_semantic_dag_golden;
 #[path = "../model_parser.rs"]
 mod model_parser;
 #[path = "../mutators.rs"]
@@ -14,6 +16,8 @@ mod norito_chain_layout;
 mod norito_golden_scaffold;
 #[path = "../norito_pointer_abi_roundtrip.rs"]
 mod norito_pointer_abi_roundtrip;
+#[path = "../offline_public_schema_golden.rs"]
+mod offline_public_schema_golden;
 #[path = "../oracle_query_roundtrip.rs"]
 mod oracle_query_roundtrip;
 #[path = "../oracle_reference_fixtures.rs"]

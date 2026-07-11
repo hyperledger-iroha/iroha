@@ -231,6 +231,29 @@ class OfflineNoteV2Test {
     fun offlineDeviceAttestationRegistrationDraftBuildsChallengeBeforeEvidence() {
         val fixture = loadFixture()
         val vector = obj(obj(fixture, "chain_vectors"), "attestation_registration")
+        val preAttestationChallenge = OfflineNoteV2.DeviceAttestationRegistrationV2
+            .preAttestationChallengeHash(
+                version = int(vector, "version"),
+                platform = string(vector, "platform"),
+                keyId = string(vector, "key_id"),
+                deviceId = string(vector, "device_id"),
+                accountId = string(vector, "account_id"),
+                assetDefinitionId = nullableString(vector, "asset_definition_id"),
+                iosTeamId = nullableString(vector, "ios_team_id"),
+                iosBundleId = nullableString(vector, "ios_bundle_id"),
+                iosEnvironment = nullableString(vector, "ios_environment"),
+                androidPackageName = nullableString(vector, "android_package_name"),
+                androidSigningCertificateSha256 =
+                    nullableString(vector, "android_signing_certificate_sha256")?.let(::hexBytes),
+                publicKey = base64Bytes(string(vector, "public_key")),
+                assertionScheme = string(vector, "assertion_scheme"),
+                assertionKeyAlgorithm = string(vector, "assertion_key_algorithm"),
+                assertionUsageCountLimit = nullableInt(vector, "assertion_usage_count_limit"),
+                oneUse = bool(vector, "one_use"),
+                recentBlockHeight = long(vector, "recent_block_height"),
+                recentBlockHash = hexBytes(string(vector, "recent_block_hash")),
+                expiresAtMs = long(vector, "expires_at_ms"),
+            )
         val draft = OfflineNoteV2.DeviceAttestationRegistrationV2(
             version = int(vector, "version"),
             platform = string(vector, "platform"),
@@ -258,6 +281,7 @@ class OfflineNoteV2Test {
         val expectedEvidence = attestationEvidence(emptyReportHash)
 
         assertEquals(string(vector, "challenge_hash"), hex(draft.canonicalChallengeHash()))
+        assertEquals(preAttestationChallenge.toList(), draft.challengeHash().toList())
         assertEquals(string(vector, "challenge_hash"), hex(draft.challengeHash()))
         assertEquals(emptyReportHash.toList(), draft.attestationReportHash().toList())
         assertEquals(ByteArray(0).toList(), draft.attestationReport().toList())

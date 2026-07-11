@@ -52,7 +52,7 @@ A carga útil é um `DaIngestRequest` codificado em Norito. Uso de respostas
 | 500 Erro interno | Falha inesperada (registrada + alerta). |
 
 ```
-GET /v1/da/proof_policies
+GET /v1/da/proof-policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ pacote de hash. Os endpoints de lista de compromissos/provas carregam o mesmo pa
 não precisa de uma viagem de ida e volta extra para vincular uma prova ao conjunto de políticas ativas.
 
 ```
-GET /v1/da/proof_policy_snapshot
+GET /v1/da/proof-policies/snapshot
 Accept: application/json | application/x-norito
 ```
 

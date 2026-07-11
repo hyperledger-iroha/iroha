@@ -16,9 +16,8 @@ public extension ToriiClient {
 
     /// Expose verifying-key server-sent events as a Combine publisher.
     func verifyingKeyEventsPublisher(filter: ToriiVerifyingKeyEventFilter = ToriiVerifyingKeyEventFilter(),
-                                     lastEventId: String? = nil,
                                      scheduler: DispatchQueue? = .main) -> AnyPublisher<ToriiVerifyingKeyEventMessage, ToriiClientError> {
-        makeStreamPublisher({ self.streamVerifyingKeyEvents(filter: filter, lastEventId: lastEventId) },
+        makeStreamPublisher({ self.streamVerifyingKeyEvents(filter: filter) },
                             scheduler: scheduler)
     }
 

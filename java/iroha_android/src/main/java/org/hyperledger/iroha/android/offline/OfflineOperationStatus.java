@@ -30,7 +30,8 @@ public abstract class OfflineOperationStatus {
         final BigInteger submittedAtMs) {
       super(operationId);
       this.kind = Objects.requireNonNull(kind, "kind");
-      this.transactionHash = requireExactText(transactionHash, "transactionHash");
+      this.transactionHash =
+          OfflineOperationCodec.requireTransactionHash(transactionHash, "transactionHash");
       this.submittedAtMs = requireU64(submittedAtMs, "submittedAtMs");
     }
 
@@ -74,7 +75,8 @@ public abstract class OfflineOperationStatus {
         final Error error) {
       super(operationId);
       this.kind = Objects.requireNonNull(kind, "kind");
-      this.transactionHash = requireExactText(transactionHash, "transactionHash");
+      this.transactionHash =
+          OfflineOperationCodec.requireTransactionHash(transactionHash, "transactionHash");
       this.error = Objects.requireNonNull(error, "error");
     }
 
@@ -134,7 +136,8 @@ public abstract class OfflineOperationStatus {
         final BigInteger finalizedBlockHeight,
         final BigInteger serverTimeMs,
         final TopUpAnchor anchor) {
-      this.transactionHash = requireExactText(transactionHash, "transactionHash");
+      this.transactionHash =
+          OfflineOperationCodec.requireTransactionHash(transactionHash, "transactionHash");
       this.finalizedBlockHeight = requireU64(finalizedBlockHeight, "finalizedBlockHeight");
       this.serverTimeMs = requireU64(serverTimeMs, "serverTimeMs");
       this.anchor = Objects.requireNonNull(anchor, "anchor");
@@ -167,7 +170,8 @@ public abstract class OfflineOperationStatus {
         final String transactionHash,
         final BigInteger finalizedBlockHeight,
         final BigInteger serverTimeMs) {
-      this.transactionHash = requireExactText(transactionHash, "transactionHash");
+      this.transactionHash =
+          OfflineOperationCodec.requireTransactionHash(transactionHash, "transactionHash");
       this.finalizedBlockHeight = requireU64(finalizedBlockHeight, "finalizedBlockHeight");
       this.serverTimeMs = requireU64(serverTimeMs, "serverTimeMs");
     }
@@ -188,10 +192,9 @@ public abstract class OfflineOperationStatus {
   /**
    * Schema-bound top-up anchor archive.
    *
-   * <p>The Java SDK does not yet expose a field-level
-   * {@code KagemushaRecursiveSpendTopUpAnchorV2} decoder. This wrapper keeps
-   * the canonical, schema-validated anchor separate from the typed operation
-   * status until that data-model codec is available.
+   * <p>The internal consensus anchor remains wire-versioned. This wrapper
+   * keeps the canonical, schema-validated archive behind a current public name
+   * instead of exposing the internal wire type through the operation status.
    */
   public static final class TopUpAnchor {
     private final byte[] archive;
@@ -212,7 +215,7 @@ public abstract class OfflineOperationStatus {
     private final ErrorDetails details;
 
     public Error(final String code, final String message, final ErrorDetails details) {
-      this.code = requireExactText(code, "error.code");
+      this.code = OfflineOperationCodec.requireStableErrorCode(code, "error.code");
       this.message = requireExactText(message, "error.message");
       this.details = details;
     }

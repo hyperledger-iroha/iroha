@@ -117,7 +117,7 @@ blake3 = { workspace = true }
 
 [dev-dependencies]
 iroha_core = { workspace = true, features = ["iroha-core-tests"] }
-serial_test = "3.2.0"
+serial_test = "3.5.0"
 tempfile = { workspace = true }
 path-absolutize = { workspace = true }
 assertables = { workspace = true }

@@ -67,8 +67,8 @@ inventory matches `provider_count`, reviewed `por-challenge-*` challenge labels
 without non-production markers whose unique inventory matches `challenge_count`,
 per-route `body_blake3_hex` response digest evidence, route, scheduler-lag, and
 report-latency threshold facts, the SQL/Parquet
-archive backend selection, governance archive handoff digest evidence, the
-manual-trigger route decision, config-backed governance metadata, reviewed
+archive backend selection, governance archive handoff digest evidence,
+config-backed governance metadata, reviewed
 policy digest input for randomness and governance-approval canaries, and
 validates every generated artifact through
 `scripts/check_sorafs_por_rollout_evidence.py` before writing.
@@ -152,8 +152,8 @@ struct PorSampleProofV1 {
 All payloads carry Norito headers for canonical decoding. Torii accepts
 authenticated provider proofs at `/v1/sorafs/capacity/por-proof` and
 trusted-threshold auditor verdicts at `/v1/sorafs/capacity/por-verdict`.
-External challenge submission is retired with `410 Gone`. The verified
-coordinator scheduler is the only permitted future production challenge
+No external challenge-submission route is mounted. The verified coordinator
+scheduler is the only permitted production challenge
 authority, and PoR automation enablement fails closed until its external
 drand/VRF inputs are implemented. Coordinator status surfaces are under
 `/v1/sorafs/por/*`.
@@ -344,8 +344,8 @@ drand, VRF, report, export, response-body, transaction, token, secret, and key
 material, under-sized provider or challenge samples, unauthenticated or
 non-Norito routes, route latency above threshold, scheduler lag above threshold,
 missing deterministic seed replay, missing drand/VRF validation, missing
-repair/governance handoff, missing `sorafs-validate por` replay, unresolved
-manual-trigger route policy, report latency above threshold, missing PoR metrics
+repair/governance handoff, missing `sorafs-validate por` replay, report latency
+above threshold, missing PoR metrics
 or alerts, critical alerts, seed replay digest drift across runtime/replay/
 reporting/observability/governance artifacts, and governance packets not bound
 to `iroha_config`. Governance approval evidence must also carry a

@@ -1,6 +1,5 @@
-//! Public Torii DTOs for the offline cash lifecycle.
+//! Public Torii DTOs for the first-release Offline lifecycle.
 
-use iroha_data_model::offline::KagemushaRecursiveSpendTopUpAnchorV2;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 
 use crate::ErrorEnvelope;
@@ -10,6 +9,12 @@ pub use iroha_data_model::offline::{
     KagemushaRecursiveSpendTopUpRequestV2 as OfflineTopUpRequest,
     OFFLINE_REDEEM_REQUEST_SCHEMA_NAME, OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
 };
+
+/// Finalized anchor returned by an applied offline top-up.
+///
+/// The underlying consensus wire type remains internally versioned, while the
+/// first-release public transport surface exposes only this current name.
+pub type OfflineTopUpAnchor = iroha_data_model::offline::KagemushaRecursiveSpendTopUpAnchorV2;
 
 /// One machine-readable reason why an asset is not ready for offline payments.
 #[derive(
@@ -31,6 +36,8 @@ pub struct OfflineReadiness {
     pub asset_definition_id: String,
     /// Committed block height whose state was evaluated.
     pub evaluated_block_height: u64,
+    /// Lowercase hash of the same committed block, usable as an attestation anchor.
+    pub evaluated_block_hash: String,
     /// Whether every requirement is satisfied at the evaluated snapshot.
     pub ready: bool,
     /// Empty when `ready` is true; otherwise the complete known blocker set.
@@ -109,7 +116,7 @@ pub struct OfflineTopUpResult {
     /// Finalized chain time in Unix milliseconds.
     pub server_time_ms: u64,
     /// Typed finalized top-up anchor consumed by the local wallet prover.
-    pub anchor: KagemushaRecursiveSpendTopUpAnchorV2,
+    pub anchor: OfflineTopUpAnchor,
 }
 
 /// Final result of an applied redemption operation.
@@ -179,13 +186,56 @@ pub enum OfflineOperationStatus {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
+
+    #[derive(Debug, JsonDeserialize, JsonSerialize, PartialEq, Eq)]
+    struct JsonDefaultByteMappingProbe {
+        fixed: [u8; 4],
+        dynamic: Vec<u8>,
+        keyed: BTreeMap<[u8; 2], u8>,
+    }
+
+    #[test]
+    fn norito_json_default_byte_and_map_key_mapping_is_exact() {
+        let probe = JsonDefaultByteMappingProbe {
+            fixed: [0x00, 0xab, 0x10, 0xff],
+            dynamic: vec![0x00, 0xab, 0x10, 0xff],
+            keyed: BTreeMap::from([([0x00, 0xff], 7)]),
+        };
+
+        let json = norito::json::to_string(&probe).expect("encode JSON mapping probe");
+        assert_eq!(
+            json,
+            r#"{"fixed":"00AB10FF","dynamic":[0,171,16,255],"keyed":{"00FF":7}}"#
+        );
+        let decoded: JsonDefaultByteMappingProbe =
+            norito::json::from_str(&json).expect("decode canonical JSON mapping probe");
+        assert_eq!(decoded, probe);
+
+        let lowercase: JsonDefaultByteMappingProbe = norito::json::from_str(
+            r#"{"fixed":"00ab10ff","dynamic":[0,171,16,255],"keyed":{"00ff":7}}"#,
+        )
+        .expect("decode lowercase hexadecimal input");
+        assert_eq!(lowercase, probe);
+
+        let error = norito::json::from_str::<JsonDefaultByteMappingProbe>(
+            r#"{"fixed":"00AB10FF","dynamic":[],"keyed":{"00FF":7,"00ff":8}}"#,
+        )
+        .expect_err("lexically distinct keys must not alias one typed map key");
+        assert!(
+            error.to_string().contains("duplicate field"),
+            "unexpected duplicate-key error: {error}"
+        );
+    }
 
     #[test]
     fn readiness_roundtrips_through_both_public_representations() {
         let readiness = OfflineReadiness {
             asset_definition_id: "xor#wonderland".to_owned(),
             evaluated_block_height: 42,
+            evaluated_block_hash: "ab".repeat(32),
             ready: false,
             blockers: vec![OfflineReadinessBlocker {
                 code: "proof_backend_unavailable".to_owned(),
@@ -202,6 +252,25 @@ mod tests {
         let decoded_norito: OfflineReadiness =
             norito::decode_from_bytes(&archive).expect("decode readiness Norito");
         assert_eq!(decoded_norito, readiness);
+    }
+
+    #[test]
+    fn readiness_json_ignores_unknown_members_without_type_confusion() {
+        let decoded: OfflineReadiness = norito::json::from_str(
+            r#"{"asset_definition_id":"xor#wonderland","evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","ready":true,"blockers":[],"future_metadata":{"opaque":1}}"#,
+        )
+        .expect("independent additive member is ignored");
+        assert_eq!(decoded.asset_definition_id, "xor#wonderland");
+        assert_eq!(decoded.evaluated_block_height, 42);
+        assert_eq!(decoded.evaluated_block_hash, "ab".repeat(32));
+        assert!(decoded.ready);
+        assert!(decoded.blockers.is_empty());
+
+        let error = norito::json::from_str::<OfflineReadiness>(
+            r#"{"asset_definition_id":"xor#wonderland","evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","ready":"true","blockers":[],"future_metadata":null}"#,
+        )
+        .expect_err("unknown members must not weaken declared-field typing");
+        assert!(error.to_string().contains("boolean"));
     }
 
     #[test]
@@ -306,12 +375,12 @@ mod tests {
 
     #[test]
     fn operation_reference_golden_vector() {
-        const EXPECTED_ARCHIVE_HEX: &str = "4e5254300000e8e2244e45e4be2a975e34957141128b00c000000000000000fe8a8b6e958d2447024140313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310400000000040000000011107472616e73616374696f6e2d6861736858572f76312f6f66666c696e652f6f7065726174696f6e732f3131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313108ffffffffffffffff";
+        const EXPECTED_ARCHIVE_HEX: &str = "4e5254300000e8e2244e45e4be2a975e34957141128b00f0000000000000001f5b5402d6dc2092024140313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310400000000040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323258572f76312f6f66666c696e652f6f7065726174696f6e732f3131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313108ffffffffffffffff";
         let reference = OfflineOperationReference {
             operation_id: "11".repeat(32),
             kind: OfflineOperationKind::TopUp,
             state: OfflineOperationState::Pending,
-            transaction_hash: "transaction-hash".to_owned(),
+            transaction_hash: "22".repeat(32),
             status_uri: format!("/v1/offline/operations/{}", "11".repeat(32)),
             submitted_at_ms: u64::MAX,
         };
@@ -325,26 +394,26 @@ mod tests {
 
     #[test]
     fn operation_status_golden_vectors() {
-        const PENDING_ARCHIVE_HEX: &str = "4e5254300000fb04214104df1bdcd39249bddd4db23a006600000000000000b3fae818809b7b8e02000000000000000000000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040000000011107472616e73616374696f6e2d6861736808ffffffffffffffff";
-        const REJECTED_ARCHIVE_HEX: &str = "4e5254300000fb04214104df1bdcd39249bddd4db23a0086000000000000008878a32fe86d887302000000000000000002000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040100000011107472616e73616374696f6e2d68617368281b1a6f66666c696e655f6f7065726174696f6e5f72656a6563746564090872656a65637465640100";
-        const APPLIED_REDEEM_ARCHIVE_HEX: &str = "4e5254300000fb04214104df1bdcd39249bddd4db23a007000000000000000451e52608aefd9710200000000000000000100000041403131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313129010000002411107472616e73616374696f6e2d6861736808ffffffffffffffff082a00000000000000";
+        const PENDING_ARCHIVE_HEX: &str = "4e5254300000fb04214104df1bdcd39249bddd4db23a009600000000000000bdfee2508f80055702000000000000000000000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323208ffffffffffffffff";
+        const REJECTED_ARCHIVE_HEX: &str = "4e5254300000fb04214104df1bdcd39249bddd4db23a00b6000000000000009322104cda8e602a020000000000000000020000004140313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310401000000414032323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232281b1a6f66666c696e655f6f7065726174696f6e5f72656a6563746564090872656a65637465640100";
+        const APPLIED_REDEEM_ARCHIVE_HEX: &str = "4e5254300000fb04214104df1bdcd39249bddd4db23a00a00000000000000092cd6b32b062b3d30200000000000000000100000041403131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313159010000005441403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323208ffffffffffffffff082a00000000000000";
         let operation_id = "11".repeat(32);
         let pending = OfflineOperationStatus::Pending {
             operation_id: operation_id.clone(),
             kind: OfflineOperationKind::TopUp,
-            transaction_hash: "transaction-hash".to_owned(),
+            transaction_hash: "22".repeat(32),
             submitted_at_ms: u64::MAX,
         };
         let rejected = OfflineOperationStatus::Rejected {
             operation_id: operation_id.clone(),
             kind: OfflineOperationKind::Redeem,
-            transaction_hash: "transaction-hash".to_owned(),
+            transaction_hash: "22".repeat(32),
             error: ErrorEnvelope::new("offline_operation_rejected", "rejected"),
         };
         let applied_redeem = OfflineOperationStatus::Applied {
             operation_id,
             result: OfflineOperationResult::Redeem(OfflineRedeemResult {
-                transaction_hash: "transaction-hash".to_owned(),
+                transaction_hash: "22".repeat(32),
                 finalized_block_height: u64::MAX,
                 server_time_ms: 42,
             }),

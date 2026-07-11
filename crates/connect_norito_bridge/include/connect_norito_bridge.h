@@ -489,7 +489,48 @@ int32_t connect_norito_kagemusha_recursive_spend_redeem(
     uint8_t** out_instruction_ptr,
     unsigned long* out_instruction_len);
 
-// ---------------- Kagemusha recursive spend V2 ----------------
+// ---------------- Kagemusha recursive spend ABI 18 / artifact V3 ----------------
+// Returns canonical Norito `KagemushaRecursiveSpendNativeCapabilitiesV1`.
+// Callers must require `proof_backend_available`; symbol presence alone is not
+// a production-readiness signal.
+int32_t connect_norito_kagemusha_recursive_spend_capabilities_v1(
+    uint8_t** out_capabilities_ptr,
+    unsigned long* out_capabilities_len);
+
+// Verifies canonical Norito `KagemushaTopUpFinalityProofV2` against a
+// canonical, pre-fetched `KagemushaTopUpFinalityRosterArtifactV2`. The final
+// argument is the exact nonzero SHA-256 selected by an authenticated manifest;
+// a generation label is not a trust anchor. Returns 0 only after the roster
+// digest, Commit-QC aggregate, and exact anchor path all verify.
+int32_t connect_norito_kagemusha_topup_finality_verify_v2(
+    const uint8_t* proof_norito_ptr,
+    unsigned long proof_norito_len,
+    const uint8_t* roster_norito_ptr,
+    unsigned long roster_norito_len,
+    const uint8_t* expected_roster_sha256_ptr,
+    unsigned long expected_roster_sha256_len);
+
+// Streams one complete published KRV3KEY package. Begin pins the canonical
+// Norito manifest to a trusted SHA-256 and selects exactly one content-
+// addressed artifact from it. Finalize re-parses and re-hashes the actual open
+// file descriptor. A finalized handle does not authorize proving until native
+// capabilities also report the audited proof backend available.
+int32_t connect_norito_kagemusha_recursive_spend_artifact_begin_v3(
+    const uint8_t* manifest_norito_ptr,
+    unsigned long manifest_norito_len,
+    const uint8_t* expected_manifest_sha256_ptr,
+    unsigned long expected_manifest_sha256_len,
+    const uint8_t* expected_artifact_sha256_ptr,
+    unsigned long expected_artifact_sha256_len,
+    uint64_t* out_handle);
+int32_t connect_norito_kagemusha_recursive_spend_artifact_write_v3(
+    uint64_t handle,
+    const uint8_t* chunk_ptr,
+    unsigned long chunk_len);
+int32_t connect_norito_kagemusha_recursive_spend_artifact_finalize_v3(uint64_t handle);
+int32_t connect_norito_kagemusha_recursive_spend_artifact_cancel_v3(uint64_t handle);
+
+// ---------------- Legacy V2 protocol scaffolding ----------------
 #define CONNECT_NORITO_KAGEMUSHA_ARTIFACT_ROLE_LINEAGE_INIT_V2 3
 #define CONNECT_NORITO_KAGEMUSHA_ARTIFACT_ROLE_LINEAGE_APPEND_V2 4
 #define CONNECT_NORITO_KAGEMUSHA_ARTIFACT_ROLE_REDEEM_CHANGE_V2 5

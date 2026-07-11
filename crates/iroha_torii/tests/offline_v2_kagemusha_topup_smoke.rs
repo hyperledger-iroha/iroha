@@ -15,7 +15,8 @@ fn production_source(source: &str) -> &str {
 fn top_up_is_a_typed_async_command_on_the_final_route() {
     let issuer = production_source(OFFLINE_ISSUER_SOURCE);
 
-    assert!(TORII_SOURCE.contains("uri::OFFLINE_TOP_UP, post(handler_offline_top_up)"));
+    assert!(TORII_SOURCE.contains("&route_catalog::offline::TOP_UP"));
+    assert!(TORII_SOURCE.contains("post(handler_offline_top_up)"));
     assert!(TORII_SOURCE.contains("offline_api::OfflineTopUpRequest"));
     assert!(TORII_SOURCE.contains("NoritoJson(request)"));
     assert!(OFFLINE_API_SOURCE.contains("as OfflineTopUpRequest"));
@@ -24,7 +25,7 @@ fn top_up_is_a_typed_async_command_on_the_final_route() {
         iroha_torii_shared::offline_api::OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
         "iroha.torii.v1.offline.top_up.request"
     );
-    assert!(issuer.contains("handle_kagemusha_topup"));
+    assert!(issuer.contains("handle_top_up"));
     assert!(issuer.contains("topup_request: OfflineTopUpRequest"));
     assert!(issuer.contains("require_idempotency_key"));
     assert!(issuer.contains("OfflineOperationReference"));
@@ -64,4 +65,16 @@ fn retired_top_up_routes_are_not_mounted() {
             "retired route must not be mounted: {retired_path}"
         );
     }
+}
+
+#[test]
+fn retries_use_bounded_recovery_and_confirmed_admission() {
+    let issuer = production_source(OFFLINE_ISSUER_SOURCE);
+
+    assert!(issuer.contains("find_pending_offline_operation_by_id"));
+    assert!(issuer.contains("get_earliest_block_height_by_offline_operation_id"));
+    assert!(!issuer.contains("while height > 0"));
+    assert!(issuer.contains("claim_submission"));
+    assert!(issuer.contains("wait_for_submission_outcome"));
+    assert!(issuer.contains("let record = submission.accept(tx_hash)"));
 }

@@ -77,7 +77,7 @@ translator: machine-google-reviewed
 | التحقق الصارم من صحة المؤشر-ABI ومزامنة المستندات | ◉ | تم فرض سياسة TLV عبر المضيف/IVM من خلال الاختبارات الذهبية والمستندات التي تم إنشاؤها. | Status.md:227; Status.md:317; Status.md:344; Status.md:366; Status.md:527 |
 | ZK syscall gating عبر CoreHost | ◉ | تقوم قوائم الانتظار لكل عملية ببوابة المظاريف التي تم التحقق منها وتفرض مطابقة التجزئة قبل تنفيذ ISI. | صناديق/iroha_core/src/smartcontracts/ivm/host.rs:213; صناديق/iroha_core/src/smartcontracts/ivm/host.rs:279 |
 | Kotodama مؤشر-مستندات ABI والقواعد | ◉ | تمت مزامنة القواعد النحوية/المستندات مع المُنشئين المباشرين وتخطيطات SCALL. | Status.md:299-301 |
-| محرك يحركه مخطط ISO 20022 وجسر Torii | ◉ | مخططات ISO 20022 الأساسية مضمنة، وتحليل XML الحتمي، و`/v1/iso20022/status/{MsgId}` API مكشوفة. | Status.md:65-70 |
+| محرك يحركه مخطط ISO 20022 وجسر Torii | ◉ | مخططات ISO 20022 الأساسية مضمنة، وتحليل XML الحتمي، و`/v1/iso20022/messages/{MsgId}` API مكشوفة. | Status.md:65-70 |
 
 ## تسريع الأجهزة
 

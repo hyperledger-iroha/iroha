@@ -46,10 +46,21 @@ extension NoritoNativeBridge {
     private typealias KagemushaV2ArtifactBeginFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong, UInt32, UnsafeMutablePointer<UInt64>?
     ) -> Int32
+    private typealias KagemushaV3ArtifactBeginFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UInt64>?
+    ) -> Int32
     private typealias KagemushaV2ArtifactWriteFn = @convention(c) (
         UInt64, UnsafePointer<UInt8>?, CUnsignedLong
     ) -> Int32
     private typealias KagemushaV2ArtifactHandleFn = @convention(c) (UInt64) -> Int32
+    private typealias KagemushaV2TopUpFinalityVerifyFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong
+    ) -> Int32
 
     func hasKagemushaRecursiveSpendV2Symbols(_ symbols: [String]) -> Bool {
         #if canImport(Darwin)
@@ -326,6 +337,40 @@ extension NoritoNativeBridge {
         )
     }
 
+    func kagemushaTopUpFinalityVerifyV2(
+        proofArchive: Data,
+        rosterArtifactArchive: Data,
+        expectedRosterSHA256: Data
+    ) throws -> Bool {
+        #if canImport(Darwin)
+        guard let function = resolveKagemushaV2Symbol(
+            "connect_norito_kagemusha_topup_finality_verify_v2",
+            as: KagemushaV2TopUpFinalityVerifyFn.self
+        ) else { return false }
+        let status = proofArchive.withUnsafeBytes { proofBuffer in
+            rosterArtifactArchive.withUnsafeBytes { rosterBuffer in
+                expectedRosterSHA256.withUnsafeBytes { digestBuffer in
+                    function(
+                        proofBuffer.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(proofBuffer.count),
+                        rosterBuffer.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(rosterBuffer.count),
+                        digestBuffer.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(digestBuffer.count)
+                    )
+                }
+            }
+        }
+        if let error = NativeBridgeError.fromStatus(status) { throw error }
+        return true
+        #else
+        _ = proofArchive
+        _ = rosterArtifactArchive
+        _ = expectedRosterSHA256
+        return false
+        #endif
+    }
+
     func kagemushaRecursiveSpendArtifactBeginV2(
         referenceArchive: Data,
         expectedRole: UInt32
@@ -382,6 +427,79 @@ extension NoritoNativeBridge {
     func kagemushaRecursiveSpendArtifactCancelV2(handle: UInt64) throws -> Bool {
         try callKagemushaV2ArtifactHandle(
             symbol: "connect_norito_kagemusha_recursive_spend_artifact_cancel_v2",
+            handle: handle
+        )
+    }
+
+    func kagemushaRecursiveSpendArtifactBeginV3(
+        manifestArchive: Data,
+        expectedManifestSHA256: Data,
+        expectedArtifactSHA256: Data
+    ) throws -> UInt64? {
+        #if canImport(Darwin)
+        guard let function = resolveKagemushaV2Symbol(
+            "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
+            as: KagemushaV3ArtifactBeginFn.self
+        ) else { return nil }
+        var handle: UInt64 = 0
+        let status = manifestArchive.withUnsafeBytes { manifestBuffer in
+            expectedManifestSHA256.withUnsafeBytes { manifestDigestBuffer in
+                expectedArtifactSHA256.withUnsafeBytes { artifactDigestBuffer in
+                    function(
+                        manifestBuffer.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(manifestBuffer.count),
+                        manifestDigestBuffer.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(manifestDigestBuffer.count),
+                        artifactDigestBuffer.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(artifactDigestBuffer.count),
+                        &handle
+                    )
+                }
+            }
+        }
+        if let error = NativeBridgeError.fromStatus(status) { throw error }
+        guard handle != 0 else { throw NativeBridgeError.invalidKagemushaVerifierOutput }
+        return handle
+        #else
+        _ = manifestArchive
+        _ = expectedManifestSHA256
+        _ = expectedArtifactSHA256
+        return nil
+        #endif
+    }
+
+    func kagemushaRecursiveSpendArtifactWriteV3(handle: UInt64, chunk: Data) throws -> Bool {
+        #if canImport(Darwin)
+        guard let function = resolveKagemushaV2Symbol(
+            "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
+            as: KagemushaV2ArtifactWriteFn.self
+        ) else { return false }
+        let status = chunk.withUnsafeBytes { buffer in
+            function(
+                handle,
+                buffer.bindMemory(to: UInt8.self).baseAddress,
+                CUnsignedLong(buffer.count)
+            )
+        }
+        if let error = NativeBridgeError.fromStatus(status) { throw error }
+        return true
+        #else
+        _ = handle
+        _ = chunk
+        return false
+        #endif
+    }
+
+    func kagemushaRecursiveSpendArtifactFinalizeV3(handle: UInt64) throws -> Bool {
+        try callKagemushaV2ArtifactHandle(
+            symbol: "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
+            handle: handle
+        )
+    }
+
+    func kagemushaRecursiveSpendArtifactCancelV3(handle: UInt64) throws -> Bool {
+        try callKagemushaV2ArtifactHandle(
+            symbol: "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
             handle: handle
         )
     }

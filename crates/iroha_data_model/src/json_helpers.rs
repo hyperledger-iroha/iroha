@@ -171,6 +171,27 @@ pub mod fixed_bytes {
     }
 }
 
+/// Serialize fixed-size `u64` limb arrays as canonical JSON arrays.
+#[cfg(feature = "json")]
+#[allow(dead_code)]
+pub mod fixed_u64_limbs {
+    use super::*;
+
+    pub fn serialize<const N: usize>(limbs: &[u64; N], out: &mut String) {
+        JsonSerialize::json_serialize(&limbs.as_slice().to_vec(), out);
+    }
+
+    pub fn deserialize<const N: usize>(parser: &mut Parser<'_>) -> Result<[u64; N], json::Error> {
+        let limbs = Vec::<u64>::json_deserialize(parser)?;
+        limbs.try_into().map_err(|limbs: Vec<u64>| {
+            json::Error::Message(format!(
+                "expected exactly {N} u64 limbs, got {}",
+                limbs.len()
+            ))
+        })
+    }
+}
+
 /// Serialize and deserialize fixed-size byte arrays as hex strings.
 #[cfg(feature = "json")]
 #[allow(dead_code)]
@@ -380,6 +401,34 @@ mod tests {
     struct Base64Wrapper {
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
         data: Vec<u8>,
+    }
+
+    #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
+    struct FixedU64LimbsWrapper {
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_u64_limbs")
+        )]
+        limbs: [u64; 4],
+    }
+
+    #[test]
+    fn fixed_u64_limbs_roundtrip_and_reject_wrong_length() {
+        let wrapper = FixedU64LimbsWrapper {
+            limbs: [0, 1, 42, u64::MAX],
+        };
+
+        let encoded = json::to_json(&wrapper).expect("serialize fixed u64 limbs");
+        let decoded: FixedU64LimbsWrapper =
+            json::from_str(&encoded).expect("decode fixed u64 limbs");
+        assert_eq!(decoded, wrapper);
+
+        let error = json::from_str::<FixedU64LimbsWrapper>(r#"{"limbs":[1,2,3]}"#)
+            .expect_err("wrong fixed limb count must fail");
+        assert!(
+            error.to_string().contains("expected exactly 4 u64 limbs"),
+            "unexpected fixed-limb error: {error}"
+        );
     }
 
     #[test]

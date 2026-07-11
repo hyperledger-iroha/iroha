@@ -54,8 +54,25 @@ import {
   evmSccpDestinationBindingHash,
   tronSccpDestinationBindingHash,
 } from "./sccp.js";
+import { snapshotValidationFeePolicyVerificationContext } from "./validationFeePolicy.js";
+import {
+  OFFLINE_OPERATIONS_PATH,
+  OFFLINE_READINESS_PATH,
+  OFFLINE_REDEEM_PATH,
+  OFFLINE_TOP_UP_PATH,
+  normalizeOfflineOperationReference,
+  normalizeOfflineOperationStatus,
+  normalizeOfflineReadinessResponse,
+  normalizeOfflineRedeemRequest,
+  normalizeOfflineTopUpRequest,
+  parseOfflineJson,
+  requireOfflineAssetDefinitionId,
+  requireOfflineJsonContentType,
+  requireOfflineOperationId,
+} from "./offlineApi.js";
 
 const DEFAULT_PAGE_SIZE = 100;
+const VALIDATION_FEE_VERIFICATION_CONTEXTS = new WeakMap();
 
 const DEFAULT_SUCCESS_STATUSES = ["Approved", "Committed", "Applied"];
 const DEFAULT_FAILURE_STATUSES = ["Rejected", "Expired"];
@@ -1084,7 +1101,6 @@ function sortJsonForErrorMessage(value) {
  *
  * @typedef {Object} EventStreamOptions
  * @property {string | Record<string, unknown>} [filter]
- * @property {string} [lastEventId]
  * @property {AbortSignal} [signal]
  *
  * @typedef {Object} IterableListOptions
@@ -1133,6 +1149,10 @@ function sortJsonForErrorMessage(value) {
  * @property {number | null | undefined} [retry]
  * @property {string | null} raw
  */
+export function getTrustedValidationFeeVerificationContext(client) {
+  return VALIDATION_FEE_VERIFICATION_CONTEXTS.get(client) ?? null;
+}
+
 export class ToriiClient {
   /**
    * @param {string} baseUrl Base Torii URL (e.g. http://localhost:8080).
@@ -1155,6 +1175,7 @@ export class ToriiClient {
  * @param {object} [options.sorafsAliasPolicy] Override SoraFS alias cache TTLs (seconds).
  * @param {(warning: {alias: string | null, evaluation: {state: string | null, statusLabel: string | null, rotationDue: boolean, ageSeconds: number | null, generatedAtUnix: number | null, expiresAtUnix: number | null, expiresInSeconds: number | null, servable: boolean}}) => void} [options.onSorafsAliasWarning]
  * @param {(manifest: Buffer, payload: Buffer, options: Record<string, unknown>) => unknown} [options.generateDaProofSummary] Custom proof summary generator (tests).
+ * @param {object} [options.validationFeeVerificationContext] Immutable, out-of-band validation-fee trust anchor.
  * @param {object} [options.__nativeBinding] Custom native binding (tests).
  */
   constructor(baseUrl, options = {}) {
@@ -1181,6 +1202,16 @@ export class ToriiClient {
       );
     }
     this._nativeBinding = opts.__nativeBinding;
+    const validationFeeVerificationContext =
+      opts.validationFeeVerificationContext === undefined
+        ? null
+        : snapshotValidationFeePolicyVerificationContext(
+            opts.validationFeeVerificationContext,
+          );
+    VALIDATION_FEE_VERIFICATION_CONTEXTS.set(
+      this,
+      validationFeeVerificationContext,
+    );
     if (
       opts.sorafsGatewayFetch !== undefined &&
       typeof opts.sorafsGatewayFetch !== "function"
@@ -1222,6 +1253,7 @@ export class ToriiClient {
     delete overrides.onSorafsAliasWarning;
     delete overrides.sorafsGatewayFetch;
     delete overrides.generateDaProofSummary;
+    delete overrides.validationFeeVerificationContext;
     delete overrides.__nativeBinding;
     this._config = resolveToriiClientConfig({
       config: opts.config,
@@ -2405,37 +2437,6 @@ export class ToriiClient {
   }
 
   /**
-   * Evaluate the mock alias VOPRF helper (`POST /v1/aliases/voprf/evaluate`).
-   * @param {string} blindedElementHex hex-encoded blinded element.
-   * @returns {Promise<import("./index").AliasVoprfEvaluateResponse>}
-   */
-  async evaluateAliasVoprf(blindedElementHex) {
-    const payload = {
-      blinded_element_hex: requireHexString(blindedElementHex, "blindedElementHex"),
-    };
-    const response = await this._request("POST", "/v1/aliases/voprf/evaluate", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-    await this._expectStatus(response, [200]);
-    const json = await this._maybeJson(response);
-    if (
-      !json ||
-      typeof json.evaluated_element_hex !== "string" ||
-      typeof json.backend !== "string"
-    ) {
-      throw new Error("Unexpected alias VOPRF response payload");
-    }
-    return {
-      evaluated_element_hex: json.evaluated_element_hex,
-      backend: json.backend,
-    };
-  }
-
-  /**
    * Resolve an ISO bridge alias (`POST /v1/aliases/resolve`).
    * Returns null when the alias is missing (404). Throws when the runtime is disabled (503).
   * @param {string} alias
@@ -2479,7 +2480,7 @@ export class ToriiClient {
   }
 
   /**
-   * Resolve an ISO bridge alias by deterministic index (`POST /v1/aliases/resolve_index`).
+   * Resolve an ISO bridge alias by deterministic index (`POST /v1/aliases/resolve-index`).
    * Returns null when the index is unknown (404). Throws when the runtime is disabled (503).
    * @param {number | string | bigint} index
    * @param {{signal?: AbortSignal, canonicalAuth?: CanonicalRequestAuth}} [options]
@@ -2499,7 +2500,7 @@ export class ToriiClient {
       "resolveAliasByIndex options",
     );
     const canonicalAuth = ToriiClient._normalizeCanonicalAuth(rest.canonicalAuth);
-    const response = await this._request("POST", "/v1/aliases/resolve_index", {
+    const response = await this._request("POST", "/v1/aliases/resolve-index", {
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
@@ -2523,7 +2524,7 @@ export class ToriiClient {
   }
 
   /**
-   * List aliases bound to a canonical account id (`POST /v1/aliases/by_account`).
+   * List aliases bound to a canonical account id (`POST /v1/aliases/by-account`).
    * Returns null when the account is unknown (404).
    * @param {string} accountId
    * @param {{dataspace?: string, domain?: string, signal?: AbortSignal, canonicalAuth?: CanonicalRequestAuth}} [options]
@@ -2549,7 +2550,7 @@ export class ToriiClient {
       rest.domain === undefined
         ? undefined
         : requireNonEmptyString(rest.domain, "lookupAliasesByAccount.options.domain");
-    const response = await this._request("POST", "/v1/aliases/by_account", {
+    const response = await this._request("POST", "/v1/aliases/by-account", {
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
@@ -4146,49 +4147,6 @@ export class ToriiClient {
   }
 
   /**
-   * Record a PoR challenge issued by governance (`POST /v1/sorafs/capacity/por-challenge`).
-   * @param {{challenge?: string | ArrayBuffer | ArrayBufferView | Buffer, challengeB64?: string, signal?: AbortSignal}} [input]
-   * @returns {Promise<SorafsPorSubmissionResponse>}
-   */
-  async recordSorafsPorChallenge(input = {}) {
-    const normalizedInput = ensureRecord(
-      input ?? {},
-      "recordSorafsPorChallenge input",
-    );
-    const { signal } = normalizeSignalOption(
-      normalizedInput,
-      "recordSorafsPorChallenge",
-    );
-    const { signal: _ignored, ...record } = normalizedInput;
-    assertSupportedOptionKeys(
-      record,
-      new Set(["challenge", "challenge_b64", "challengeB64"]),
-      "recordSorafsPorChallenge input",
-    );
-    const payload = {
-      challenge_b64: normalizeRequiredBase64Payload(
-        record.challenge ?? record.challenge_b64 ?? record.challengeB64,
-        "recordSorafsPorChallenge.challenge",
-      ),
-    };
-    const response = await this._request(
-      "POST",
-      "/v1/sorafs/capacity/por-challenge",
-      {
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(payload),
-        signal,
-      },
-    );
-    await this._expectStatus(response, [200]);
-    const json = await this._maybeJson(response);
-    if (!json) {
-      throw new Error("sorafs capacity por-challenge endpoint returned no payload");
-    }
-    return normalizeSorafsPorSubmissionResponse(json, "sorafs por challenge response");
-  }
-
-  /**
    * Record a PoR proof submitted by a provider (`POST /v1/sorafs/capacity/por-proof`).
    * @param {{proof?: string | ArrayBuffer | ArrayBufferView | Buffer, proofB64?: string, signal?: AbortSignal}} [input]
    * @returns {Promise<SorafsPorSubmissionResponse>}
@@ -4264,45 +4222,6 @@ export class ToriiClient {
       throw new Error("sorafs capacity por-verdict endpoint returned no payload");
     }
     return normalizeSorafsPorVerdictResponse(json);
-  }
-
-  /**
-   * Record a PoR probe observation (`POST /v1/sorafs/capacity/por`).
-   * @param {{success: boolean, signal?: AbortSignal}} [input]
-   * @returns {Promise<SorafsPorObservationResponse>}
-   */
-  async submitSorafsPorObservation(input = {}) {
-    const normalizedInput = ensureRecord(
-      input ?? {},
-      "submitSorafsPorObservation input",
-    );
-    const { signal } = normalizeSignalOption(
-      normalizedInput,
-      "submitSorafsPorObservation",
-    );
-    const { signal: _ignored, ...record } = normalizedInput;
-    assertSupportedOptionKeys(
-      record,
-      new Set(["success"]),
-      "submitSorafsPorObservation input",
-    );
-    const payload = {
-      success: requireBooleanLike(
-        record.success,
-        "submitSorafsPorObservation.success",
-      ),
-    };
-    const response = await this._request("POST", "/v1/sorafs/capacity/por", {
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(payload),
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const json = await this._maybeJson(response);
-    if (!json) {
-      throw new Error("sorafs capacity por endpoint returned no payload");
-    }
-    return normalizeSorafsPorObservationResponse(json);
   }
 
   /**
@@ -6822,7 +6741,7 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch a commit QC record for a block hash (`GET /v1/sumeragi/commit_qc/{hash}`).
+   * Fetch a commit QC record for a block hash (`GET /v1/sumeragi/commit-qcs/{block_hash}`).
    * @param {string} blockHashHex 32-byte block hash (hex; `0x`/`blake2b32:` prefixes accepted).
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<ToriiSumeragiCommitQcRecord>}
@@ -6839,7 +6758,7 @@ export class ToriiClient {
     );
     const response = await this._request(
       "GET",
-      `/v1/sumeragi/commit_qc/${normalizedHash}`,
+      `/v1/sumeragi/commit-qcs/${normalizedHash}`,
       {
         headers: { Accept: "application/json" },
         signal,
@@ -6873,7 +6792,7 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch network→BLS key mapping (`GET /v1/sumeragi/bls_keys`).
+   * Fetch network→BLS key mapping (`GET /v1/sumeragi/bls-keys`).
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<Record<string, string | null>>}
    */
@@ -6882,7 +6801,7 @@ export class ToriiClient {
       options,
       "getSumeragiBlsKeys",
     );
-    const response = await this._request("GET", "/v1/sumeragi/bls_keys", {
+    const response = await this._request("GET", "/v1/sumeragi/bls-keys", {
       headers: { Accept: "application/json" },
       signal,
     });
@@ -7377,10 +7296,11 @@ export class ToriiClient {
    * @returns {AsyncGenerator<SseEvent<T>, void, unknown>}
    */
   streamEvents(options) {
-    const { signal, lastEventId } = normalizeEventStreamOptions(
+    const { signal } = normalizeEventStreamOptions(
       options,
       "streamEvents",
       ["filter"],
+      false,
     );
     const params = {};
     const filterValue =
@@ -7391,7 +7311,6 @@ export class ToriiClient {
     }
     return this._streamSse("/v1/events/sse", {
       params: Object.keys(params).length > 0 ? params : undefined,
-      lastEventId,
       signal,
     });
   }
@@ -7403,7 +7322,7 @@ export class ToriiClient {
    * @returns {AsyncGenerator<SseEvent<T>, void, unknown>}
    */
   streamContractEvents(options = {}) {
-    const { signal, lastEventId } = normalizeEventStreamOptions(
+    const { signal } = normalizeEventStreamOptions(
       options,
       "streamContractEvents",
       [
@@ -7419,6 +7338,7 @@ export class ToriiClient {
         "untilTimestampMs",
         "resultOk",
       ],
+      false,
     );
     const params = {};
     if (options && typeof options === "object") {
@@ -7469,7 +7389,6 @@ export class ToriiClient {
     }
     return this._streamSse("/v1/contracts/events/sse", {
       params: Object.keys(params).length > 0 ? params : undefined,
-      lastEventId,
       signal,
     });
   }
@@ -8139,6 +8058,186 @@ export class ToriiClient {
   }
 
   /**
+   * Execute a deployed contract call against the current state without submitting it
+   * (`POST /v1/contracts/call/simulate`).
+   * @param {object} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async simulateContractCall(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "simulateContractCall");
+    const payload = normalizeContractCallSimulateRequest(request);
+    const response = await this._request("POST", "/v1/contracts/call/simulate", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("contract call simulation endpoint returned no payload");
+    }
+    return normalizeContractCallSimulateResponse(body);
+  }
+
+  /**
+   * Derive the node-authoritative `IvmProved` payload for one ZK-mode IVM
+   * execution (`POST /v1/zk/ivm/derive`).
+   * @param {object} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<{proved: object}>}
+   */
+  async deriveIvmProved(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "deriveIvmProved");
+    const payload = normalizeZkIvmExecutionRequest(request, {
+      context: "deriveIvmProved",
+      includeProved: false,
+    });
+    const response = await this._request("POST", "/v1/zk/ivm/derive", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("IVM derive endpoint returned no payload");
+    }
+    return normalizeZkIvmDeriveResponse(body);
+  }
+
+  /**
+   * Start an asynchronous proof job for a ZK-mode IVM execution
+   * (`POST /v1/zk/ivm/prove`). When `proved` is supplied, the node rejects the
+   * job unless its independently derived payload is identical.
+   * @param {object} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<{job_id: string}>}
+   */
+  async startIvmProve(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "startIvmProve");
+    const payload = normalizeZkIvmExecutionRequest(request, {
+      context: "startIvmProve",
+      includeProved: true,
+    });
+    const response = await this._request("POST", "/v1/zk/ivm/prove", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200, 202]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("IVM prove endpoint returned no payload");
+    }
+    return normalizeZkIvmProveJobCreatedResponse(body);
+  }
+
+  /**
+   * Read an asynchronous IVM proof job (`GET /v1/zk/ivm/prove/{job_id}`).
+   * @param {string} jobId
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async getIvmProveJob(jobId, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "getIvmProveJob");
+    const normalizedJobId = normalizeIvmProveJobId(jobId, "jobId");
+    const response = await this._request(
+      "GET",
+      `/v1/zk/ivm/prove/${encodeURIComponent(normalizedJobId)}`,
+      {
+        headers: { Accept: "application/json" },
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("IVM prove job endpoint returned no payload");
+    }
+    return normalizeZkIvmProveJobResponse(body);
+  }
+
+  /**
+   * Poll an IVM proof job until it returns the proved payload and attachment.
+   * @param {string} jobId
+   * @param {{signal?: AbortSignal, intervalMs?: number, timeoutMs?: number|null}} [options]
+   * @returns {Promise<object>}
+   */
+  async waitForIvmProveJob(jobId, options = {}) {
+    const record = ensureRecord(options, "waitForIvmProveJob options");
+    const signal = record.signal;
+    const intervalMs =
+      record.intervalMs === undefined
+        ? 1_000
+        : ToriiClient._normalizeUnsignedInteger(
+            record.intervalMs,
+            "waitForIvmProveJob.intervalMs",
+            { allowZero: true },
+          );
+    const timeoutMs =
+      record.timeoutMs === undefined
+        ? 60_000
+        : record.timeoutMs === null
+          ? null
+          : ToriiClient._normalizeUnsignedInteger(
+              record.timeoutMs,
+              "waitForIvmProveJob.timeoutMs",
+              { allowZero: true },
+            );
+    const deadline = timeoutMs === null ? Number.POSITIVE_INFINITY : Date.now() + timeoutMs;
+    const normalizedJobId = normalizeIvmProveJobId(jobId, "jobId");
+
+    for (;;) {
+      throwIfAborted(signal);
+      const job = await this.getIvmProveJob(normalizedJobId, { signal });
+      if (job.status === "done") {
+        if (!job.proved || !job.attachment) {
+          throw new Error(`IVM prove job ${normalizedJobId} completed without proved payload and attachment`);
+        }
+        return job;
+      }
+      if (job.status === "error") {
+        throw new Error(
+          `IVM prove job ${normalizedJobId} failed: ${job.error ?? "unknown prover error"}`,
+        );
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`timed out waiting for IVM prove job ${normalizedJobId}`);
+      }
+      if (intervalMs > 0) {
+        await delay(intervalMs, signal);
+      }
+    }
+  }
+
+  /**
+   * Start and await one IVM proof job.
+   * @param {object} request
+   * @param {{signal?: AbortSignal, intervalMs?: number, timeoutMs?: number|null}} [options]
+   * @returns {Promise<object>}
+   */
+  async proveIvmAndWait(request = {}, options = {}) {
+    const record = ensureRecord(options, "proveIvmAndWait options");
+    const { signal, intervalMs, timeoutMs } = record;
+    const created = await this.startIvmProve(request, { signal });
+    return this.waitForIvmProveJob(created.job_id, {
+      signal,
+      ...(intervalMs === undefined ? {} : { intervalMs }),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    });
+  }
+
+  /**
    * Propose a generic multisig instruction batch (`POST /v1/multisig/propose`).
    * Sends the whole request DTO as native Norito (`application/x-norito`).
    * @param {object} request
@@ -8246,7 +8345,7 @@ export class ToriiClient {
   }
 
   /**
-   * List nonterminal multisig proposals for a selector (`POST /v1/multisig/proposals/list`).
+   * List nonterminal multisig proposals for a selector (`POST /v1/multisig/proposals/query`).
    * @param {object} request
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
@@ -8257,7 +8356,7 @@ export class ToriiClient {
       request,
       "listMultisigProposals request",
     );
-    const response = await this._request("POST", "/v1/multisig/proposals/list", {
+    const response = await this._request("POST", "/v1/multisig/proposals/query", {
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
@@ -8274,7 +8373,7 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch one multisig proposal by proposal id or instructions hash (`POST /v1/multisig/proposals/get`).
+   * Fetch one multisig proposal by proposal id or instructions hash (`POST /v1/multisig/proposals/lookup`).
    * @param {object} request
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
@@ -8282,7 +8381,7 @@ export class ToriiClient {
   async getMultisigProposal(request = {}, options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getMultisigProposal");
     const payload = normalizeMultisigProposalLookupRequest(request);
-    const response = await this._request("POST", "/v1/multisig/proposals/get", {
+    const response = await this._request("POST", "/v1/multisig/proposals/lookup", {
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
@@ -8841,23 +8940,85 @@ export class ToriiClient {
     return normalizeSubscriptionActionResponse(body, "recordSubscriptionUsage response");
   }
 
-  /**
-   * Fetch Offline feature readiness (`GET /v1/offline/readiness`).
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiOfflineReadinessResponse>}
-   */
-  async getOfflineReadiness(options = {}) {
+  /** Fetch the readiness snapshot for one asset definition. */
+  async getOfflineReadiness(assetDefinitionId, options = {}) {
+    const asset = requireOfflineAssetDefinitionId(assetDefinitionId);
     const { signal } = normalizeSignalOnlyOption(options, "getOfflineReadiness");
-    const response = await this._request("GET", "/v1/offline/readiness", {
+    const response = await this._request("GET", OFFLINE_READINESS_PATH, {
+      params: { asset_definition_id: asset },
       headers: { Accept: "application/json" },
       signal,
     });
     await this._expectStatus(response, [200]);
-    const body = await this._maybeJson(response);
+    requireOfflineJsonContentType(
+      this._getHeader(response, "content-type"),
+      "offline readiness response",
+    );
+    const body = await this._offlineJson(response, "offline readiness response");
     if (!body) {
       throw new Error("offline readiness response missing JSON body");
     }
-    return normalizeOfflineReadinessResponse(body, "offline readiness response");
+    return normalizeOfflineReadinessResponse(body, asset);
+  }
+
+  /** Submit one directly structured JSON top-up command. */
+  async submitOfflineTopUp(request, options = {}) {
+    const command = normalizeOfflineTopUpRequest(request);
+    return this._submitOfflineCommand(OFFLINE_TOP_UP_PATH, "top_up", command, options);
+  }
+
+  /** Submit one directly structured JSON redemption command. */
+  async submitOfflineRedeem(request, options = {}) {
+    const command = normalizeOfflineRedeemRequest(request);
+    return this._submitOfflineCommand(OFFLINE_REDEEM_PATH, "redeem", command, options);
+  }
+
+  /** Fetch the typed state of one offline operation. */
+  async getOfflineOperationStatus(operationId, options = {}) {
+    const canonicalId = requireOfflineOperationId(operationId);
+    const { signal } = normalizeSignalOnlyOption(options, "getOfflineOperationStatus");
+    const response = await this._request(
+      "GET",
+      `${OFFLINE_OPERATIONS_PATH}/${canonicalId}`,
+      { headers: { Accept: "application/json" }, signal },
+    );
+    await this._expectStatus(response, [200]);
+    requireOfflineJsonContentType(
+      this._getHeader(response, "content-type"),
+      "offline operation status response",
+    );
+    const body = await this._offlineJson(response, "offline operation status response");
+    if (!body) {
+      throw new Error("offline operation status response missing JSON body");
+    }
+    return normalizeOfflineOperationStatus(body, canonicalId);
+  }
+
+  async _submitOfflineCommand(path, expectedKind, command, options) {
+    const { signal } = normalizeSignalOnlyOption(options, `submitOffline${expectedKind === "top_up" ? "TopUp" : "Redeem"}`);
+    const response = await this._request("POST", path, {
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "Idempotency-Key": command.operationId,
+      },
+      body: command.body,
+      signal,
+    });
+    await this._expectStatus(response, [202]);
+    requireOfflineJsonContentType(
+      this._getHeader(response, "content-type"),
+      "offline operation reference response",
+    );
+    const body = await this._offlineJson(response, "offline operation reference response");
+    if (!body) {
+      throw new Error("offline operation reference response missing JSON body");
+    }
+    return normalizeOfflineOperationReference(body, {
+      expectedOperationId: command.operationId,
+      expectedKind,
+      location: this._getHeader(response, "location"),
+    });
   }
 
   /**
@@ -8962,7 +9123,7 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch ISO 20022 message status (`GET /v1/iso20022/status/{msg_id}`).
+   * Fetch ISO 20022 message status (`GET /v1/iso20022/messages/{msg_id}`).
    * @param {string} messageId
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<Record<string, unknown> | null>}
@@ -8972,7 +9133,7 @@ export class ToriiClient {
     const { signal, retryProfile } = normalizeIsoStatusOptions(options, "getIsoMessageStatus");
     const response = await this._request(
       "GET",
-      `/v1/iso20022/status/${encodeURIComponent(normalizedId)}`,
+      `/v1/iso20022/messages/${encodeURIComponent(normalizedId)}`,
       { headers: { Accept: "application/json" }, signal, retryProfile },
     );
     await this._expectStatus(response, [200]);
@@ -10307,6 +10468,21 @@ export class ToriiClient {
     } catch {
       return null;
     }
+  }
+
+  async _offlineJson(response, context) {
+    const contentType = this._getHeader(response, "content-type");
+    if (!contentType || !contentType.toLowerCase().includes("application/json")) {
+      return null;
+    }
+    if (typeof response.text === "function") {
+      const text = await response.text();
+      return text ? parseOfflineJson(text, context) : null;
+    }
+    if (typeof response.json === "function") {
+      return response.json();
+    }
+    return null;
   }
 
   async _listIterable(
@@ -22014,6 +22190,230 @@ function normalizeContractCallResponse(payload) {
   return normalized;
 }
 
+function normalizeContractCallSimulateRequest(input) {
+  const record = ensureRecord(input, "contractCall simulation request");
+  const normalized = {
+    authority: ToriiClient._normalizeAccountId(
+      record.authority,
+      "contractCall simulation.authority",
+    ),
+    ...normalizeContractTargetSelector(record, "contractCall simulation"),
+  };
+  if (record.entrypoint !== undefined && record.entrypoint !== null) {
+    normalized.entrypoint = requireNonEmptyString(
+      record.entrypoint,
+      "contractCall simulation.entrypoint",
+    );
+  }
+  if (record.payload !== undefined) {
+    normalized.payload = cloneJsonValue(
+      record.payload,
+      "contractCall simulation.payload",
+    );
+  }
+  const gasAsset = record.gas_asset_id ?? record.gasAssetId;
+  if (gasAsset !== undefined && gasAsset !== null) {
+    normalized.gas_asset_id = ToriiClient._normalizeAssetId(
+      gasAsset,
+      "contractCall simulation.gasAssetId",
+    );
+  }
+  const feeSponsor = record.fee_sponsor ?? record.feeSponsor;
+  if (feeSponsor !== undefined && feeSponsor !== null) {
+    normalized.fee_sponsor = ToriiClient._normalizeAccountId(
+      feeSponsor,
+      "contractCall simulation.feeSponsor",
+    );
+  }
+  normalized.gas_limit = ToriiClient._normalizeUnsignedInteger(
+    record.gas_limit ?? record.gasLimit,
+    "contractCall simulation.gasLimit",
+    { allowZero: false },
+  );
+  return normalized;
+}
+
+function normalizeContractCallSimulateResponse(payload) {
+  const record = ensureRecord(payload, "contractCall simulation response");
+  const normalized = {
+    ok: Boolean(record.ok),
+    dataspace: requireNonEmptyString(
+      record.dataspace,
+      "contractCall simulation response.dataspace",
+    ),
+    contract_address:
+      record.contract_address === undefined || record.contract_address === null
+        ? null
+        : requireNonEmptyString(
+            record.contract_address,
+            "contractCall simulation response.contract_address",
+          ),
+    code_hash_hex: normalizeHex32String(
+      record.code_hash_hex,
+      "contractCall simulation response.code_hash_hex",
+    ),
+    abi_hash_hex: normalizeHex32String(
+      record.abi_hash_hex,
+      "contractCall simulation response.abi_hash_hex",
+    ),
+    entrypoint: requireNonEmptyString(
+      record.entrypoint,
+      "contractCall simulation response.entrypoint",
+    ),
+    normalized_payload:
+      record.normalized_payload === undefined || record.normalized_payload === null
+        ? null
+        : cloneJsonValue(
+            record.normalized_payload,
+            "contractCall simulation response.normalized_payload",
+          ),
+    gas_limit: ToriiClient._normalizeUnsignedInteger(
+      record.gas_limit,
+      "contractCall simulation response.gas_limit",
+      { allowZero: false },
+    ),
+    gas_used: ToriiClient._normalizeUnsignedInteger(
+      record.gas_used,
+      "contractCall simulation response.gas_used",
+      { allowZero: true },
+    ),
+    queued_instructions: Array.isArray(record.queued_instructions)
+      ? record.queued_instructions.map((instruction, index) =>
+          cloneJsonValue(
+            instruction,
+            `contractCall simulation response.queued_instructions[${index}]`,
+          ),
+        )
+      : (() => {
+          throw new TypeError(
+            "contractCall simulation response.queued_instructions must be an array",
+          );
+        })(),
+    result:
+      record.result === undefined || record.result === null
+        ? null
+        : cloneJsonValue(record.result, "contractCall simulation response.result"),
+    error:
+      record.error === undefined || record.error === null
+        ? null
+        : requireNonEmptyString(
+            record.error,
+            "contractCall simulation response.error",
+          ),
+    vm_diagnostic:
+      record.vm_diagnostic === undefined || record.vm_diagnostic === null
+        ? null
+        : cloneJsonValue(
+            record.vm_diagnostic,
+            "contractCall simulation response.vm_diagnostic",
+          ),
+  };
+  return normalized;
+}
+
+function normalizeZkIvmExecutionRequest(input, { context, includeProved }) {
+  const record = ensureRecord(input, `${context} request`);
+  const vkRef = record.vk_ref ?? record.vkRef;
+  const metadata = record.metadata ?? {};
+  const normalized = {
+    vk_ref: normalizeVerifyingKeyId(vkRef, `${context}.vk_ref`),
+    authority: ToriiClient._normalizeAccountId(
+      record.authority,
+      `${context}.authority`,
+    ),
+    metadata: cloneJsonValue(
+      ensureRecord(metadata, `${context}.metadata`),
+      `${context}.metadata`,
+    ),
+    bytecode: normalizeRequiredBase64Payload(
+      record.bytecode,
+      `${context}.bytecode`,
+    ),
+  };
+  if (includeProved) {
+    const proved = record.proved;
+    if (proved !== undefined && proved !== null) {
+      normalized.proved = cloneJsonValue(
+        ensureRecord(proved, `${context}.proved`),
+        `${context}.proved`,
+      );
+    }
+  }
+  return normalized;
+}
+
+function normalizeZkIvmDeriveResponse(payload) {
+  const record = ensureRecord(payload, "IVM derive response");
+  return {
+    proved: cloneJsonValue(
+      ensureRecord(record.proved, "IVM derive response.proved"),
+      "IVM derive response.proved",
+    ),
+  };
+}
+
+function normalizeIvmProveJobId(value, context) {
+  const normalized = requireNonEmptyString(value, context);
+  if (!/^[0-9a-fA-F]{32}$/u.test(normalized)) {
+    throw new TypeError(`${context} must be a 16-byte hexadecimal IVM prove job id`);
+  }
+  return normalized.toLowerCase();
+}
+
+function normalizeZkIvmProveJobCreatedResponse(payload) {
+  const record = ensureRecord(payload, "IVM prove job response");
+  return {
+    job_id: normalizeIvmProveJobId(
+      record.job_id,
+      "IVM prove job response.job_id",
+    ),
+  };
+}
+
+function normalizeZkIvmProveJobResponse(payload) {
+  const record = ensureRecord(payload, "IVM prove job status response");
+  const status = requireNonEmptyString(
+    record.status,
+    "IVM prove job status response.status",
+  ).toLowerCase();
+  if (!new Set(["pending", "running", "done", "error"]).has(status)) {
+    throw new TypeError(
+      "IVM prove job status response.status must be pending, running, done, or error",
+    );
+  }
+  return {
+    job_id: normalizeIvmProveJobId(
+      record.job_id,
+      "IVM prove job status response.job_id",
+    ),
+    status,
+    error:
+      record.error === undefined || record.error === null
+        ? null
+        : requireNonEmptyString(
+            record.error,
+            "IVM prove job status response.error",
+          ),
+    proved:
+      record.proved === undefined || record.proved === null
+        ? null
+        : cloneJsonValue(
+            ensureRecord(record.proved, "IVM prove job status response.proved"),
+            "IVM prove job status response.proved",
+          ),
+    attachment:
+      record.attachment === undefined || record.attachment === null
+        ? null
+        : cloneJsonValue(
+            ensureRecord(
+              record.attachment,
+              "IVM prove job status response.attachment",
+            ),
+            "IVM prove job status response.attachment",
+          ),
+  };
+}
+
 function normalizeMultisigAccountSelector(input, context) {
   const record = ensureRecord(input, context);
   const multisigAccountId = pickOverride(
@@ -27150,17 +27550,6 @@ function normalizeSorafsPorVerdictResponse(
   return normalizeSorafsPorSubmissionResponse(payload, context);
 }
 
-function normalizeSorafsPorObservationResponse(
-  payload,
-  context = "sorafs por observation response",
-) {
-  const record = ensureRecord(payload ?? {}, context);
-  return {
-    status: requireNonEmptyString(record.status, `${context}.status`),
-    success: requireBooleanLike(record.success, `${context}.success`),
-  };
-}
-
 function normalizeIsoWeekLabel(input, name) {
   const path = normalizeErrorPath(name);
   if (typeof input === "string") {
@@ -28670,10 +29059,19 @@ function normalizeTransactionQueryOptions(options, context) {
   };
 }
 
-function normalizeEventStreamOptions(options, context, allowedExtraKeys = []) {
+function normalizeEventStreamOptions(
+  options,
+  context,
+  allowedExtraKeys = [],
+  allowLastEventId = true,
+) {
   const { signal } = normalizeSignalOption(options, context);
   const normalized = options ?? {};
-  const allowedKeys = new Set(["signal", "lastEventId", ...allowedExtraKeys]);
+  const allowedKeys = new Set([
+    "signal",
+    ...(allowLastEventId ? ["lastEventId"] : []),
+    ...allowedExtraKeys,
+  ]);
   assertSupportedOptionKeys(normalized, allowedKeys, `${context} options`);
   let lastEventId;
   if (normalized.lastEventId !== undefined) {
@@ -30801,79 +31199,6 @@ function normalizeSubscriptionListItem(value, context) {
 function normalizeSubscriptionGetResponse(payload) {
   const record = ensureRecord(payload, "subscription get response");
   return normalizeSubscriptionListItem(record, "subscription get response");
-}
-
-function normalizeOfflineReadinessResponse(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  const hasOwn = (key) => Object.prototype.hasOwnProperty.call(record, key);
-  const removedAbi7Keys = [
-    "offline_kagemusha_abi7",
-    "offline_kagemusha_abi7_mode",
-    "offline_kagemusha_abi7_bridge_abi_version",
-    "offline_kagemusha_abi7_circuit_id",
-    "offline_kagemusha_abi7_artifacts",
-  ];
-  for (const key of removedAbi7Keys) {
-    if (hasOwn(key)) {
-      throw new TypeError(`${context}.${key} is not supported; use offline_kagemusha_recursive_compact_*`);
-    }
-  }
-
-  const requireExactBoolean = (value, field) => {
-    if (typeof value !== "boolean") {
-      throw new TypeError(`${context}.${field} must be boolean`);
-    }
-    return value;
-  };
-  const decodeRecursiveCompactFamily = () => ({
-    available: requireExactBoolean(
-      record.offline_kagemusha_recursive_compact_available,
-      "offline_kagemusha_recursive_compact_available",
-    ),
-    mode: requireExactNonEmptyString(
-      record.offline_kagemusha_recursive_compact_mode,
-      `${context}.offline_kagemusha_recursive_compact_mode`,
-    ),
-    bridgeAbiVersion: requireExactPositiveIntegerLike(
-      record.offline_kagemusha_recursive_compact_required_native_bridge_abi_version,
-      `${context}.offline_kagemusha_recursive_compact_required_native_bridge_abi_version`,
-    ),
-    circuitId: requireExactNonEmptyString(
-      record.offline_kagemusha_recursive_compact_circuit_id,
-      `${context}.offline_kagemusha_recursive_compact_circuit_id`,
-    ),
-    artifacts: requireExactBoolean(
-      record.offline_kagemusha_recursive_compact_artifacts_available,
-      "offline_kagemusha_recursive_compact_artifacts_available",
-    ),
-  });
-
-  const recursiveCompact = decodeRecursiveCompactFamily();
-  const normalized = {
-    ...record,
-    offline_kagemusha_recursive_compact_available: recursiveCompact.available,
-    offline_kagemusha_recursive_compact_mode: recursiveCompact.mode,
-    offline_kagemusha_recursive_compact_required_native_bridge_abi_version:
-      recursiveCompact.bridgeAbiVersion,
-    offline_kagemusha_recursive_compact_circuit_id: recursiveCompact.circuitId,
-    offline_kagemusha_recursive_compact_artifacts_available: recursiveCompact.artifacts,
-    offline_telemetry: requireExactBoolean(
-      record.offline_telemetry,
-      "offline_telemetry",
-    ),
-  };
-  for (const key of [
-    "offline_note",
-    "offline_one_use_keys",
-    "offline_recursive_note_proof",
-    "offline_fountain_qr",
-    "offline_sync_optional",
-  ]) {
-    if (Object.prototype.hasOwnProperty.call(record, key)) {
-      normalized[key] = coerceBoolean(record[key], `${context}.${key}`);
-    }
-  }
-  return normalized;
 }
 
 function normalizeConnectSessionResponse(payload, context) {

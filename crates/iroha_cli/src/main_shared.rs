@@ -4319,7 +4319,7 @@ mod multisig {
         offset: u64,
         limit: Option<u64>,
     ) -> Result<Vec<iroha::client::MultisigApprovalEntry>> {
-        let mut fetch_page = |request| client.post_multisig_approvals_list_for_authority(&request);
+        let mut fetch_page = |request| client.query_multisig_approvals_for_authority(&request);
         collect_multisig_approvals_with(fetch_size, offset, limit, &mut fetch_page)
     }
 

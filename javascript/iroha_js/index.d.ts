@@ -10638,7 +10638,6 @@ export interface BlockListOptions {
 
 export interface EventStreamOptions {
   filter?: string | Record<string, unknown>;
-  lastEventId?: string;
   signal?: AbortSignal;
 }
 
@@ -10654,7 +10653,6 @@ export interface ContractEventStreamOptions {
   sinceTimestampMs?: NumericLike;
   untilTimestampMs?: NumericLike;
   resultOk?: boolean;
-  lastEventId?: string;
   signal?: AbortSignal;
 }
 
@@ -10934,11 +10932,6 @@ export interface RetailRecipientLookupResponse {
   alias_fqn?: string;
   fi_id?: string;
   full_name?: string;
-}
-
-export interface AliasVoprfEvaluateResponse {
-  evaluated_element_hex: string;
-  backend: string;
 }
 
 export interface RbcSampleRequestOptions {
@@ -12817,6 +12810,8 @@ export interface ToriiClientOptions extends ToriiClientRetryOptions {
   fetchImpl?: typeof fetch;
   config?: ToriiClientConfigSource;
   allowInsecure?: boolean;
+  /** Immutable out-of-band trust anchor required by validation-fee submission. */
+  validationFeeVerificationContext?: ValidationFeePolicyVerificationContext;
   sorafsAliasPolicy?: SorafsAliasPolicyOptions;
   onSorafsAliasWarning?: (warning: SorafsAliasWarning) => void;
   sorafsGatewayFetch?: typeof sorafsGatewayFetch;
@@ -13878,20 +13873,158 @@ export interface SubscriptionActionResponse {
   tx_hash_hex: string;
 }
 
-export interface ToriiOfflineReadinessResponse {
-  offline_kagemusha_recursive_compact_available: boolean;
-  offline_kagemusha_recursive_compact_mode: string;
-  offline_kagemusha_recursive_compact_required_native_bridge_abi_version: number;
-  offline_kagemusha_recursive_compact_circuit_id: string;
-  offline_kagemusha_recursive_compact_artifacts_available: boolean;
-  offline_telemetry: boolean;
-  offline_note?: boolean;
-  offline_one_use_keys?: boolean;
-  offline_recursive_note_proof?: boolean;
-  offline_fountain_qr?: boolean;
-  offline_sync_optional?: boolean;
-  [key: string]: unknown;
+export type OfflineByteArray = ReadonlyArray<number>;
+export type OfflineJsonUnsignedInteger = number | bigint;
+
+export interface OfflineScaledAmountJson {
+  atomic_units: OfflineJsonUnsignedInteger;
+  scale: OfflineJsonUnsignedInteger;
 }
+
+export interface OfflineAuthorizationJson extends Record<string, unknown> {
+  operation_id: OfflineByteArray;
+}
+
+export interface OfflineTopUpRequestJson extends Record<string, unknown> {
+  asset: string;
+  amount: OfflineScaledAmountJson;
+  current_note: Record<string, unknown>;
+  record_bundle: Record<string, unknown>;
+  pallas_open_envelopes_archive: OfflineByteArray;
+  artifact_generation: string;
+  operation_id: OfflineByteArray;
+  authorization: OfflineAuthorizationJson;
+}
+
+export interface OfflineRedeemRequestJson extends Record<string, unknown> {
+  bundle: Record<string, unknown>;
+  recipient: string;
+  amount: OfflineScaledAmountJson;
+  redeem_proof: Record<string, unknown>;
+  redemption: Record<string, unknown>;
+  lineage_witness?: Record<string, unknown> | null;
+  lineage_verifier_record: Record<string, unknown>;
+  offline_change?: Record<string, unknown> | null;
+  block_height: OfflineJsonUnsignedInteger;
+  operation_id: OfflineByteArray;
+  authorization: OfflineAuthorizationJson;
+}
+
+export interface ToriiOfflineReadinessBlocker {
+  code: string;
+  message: string;
+}
+
+export interface ToriiOfflineReadinessResponse {
+  asset_definition_id: string;
+  evaluated_block_height: number | bigint;
+  evaluated_block_hash: string;
+  ready: boolean;
+  blockers: ToriiOfflineReadinessBlocker[];
+}
+
+export type OfflineOperationKindTag = {
+  kind: "top_up" | "redeem";
+  value: null;
+};
+
+export type OfflinePendingStateTag = {
+  state: "pending";
+  value: null;
+};
+
+export interface OfflineOperationReference {
+  operation_id: string;
+  kind: OfflineOperationKindTag;
+  state: OfflinePendingStateTag;
+  transaction_hash: string;
+  status_uri: string;
+  submitted_at_ms: number | bigint;
+}
+
+export interface OfflineTopUpResult {
+  transaction_hash: string;
+  finalized_block_height: number | bigint;
+  server_time_ms: number | bigint;
+  anchor: Record<string, unknown>;
+}
+
+export interface OfflineRedeemResult {
+  transaction_hash: string;
+  finalized_block_height: number | bigint;
+  server_time_ms: number | bigint;
+}
+
+export type OfflineOperationResult =
+  | { kind: "top_up"; result: OfflineTopUpResult }
+  | { kind: "redeem"; result: OfflineRedeemResult };
+
+export interface OfflineQueueErrorDetails {
+  state: string;
+  queued: number | bigint;
+  capacity: number | bigint;
+  saturated: boolean;
+}
+
+export interface OfflineAxtErrorDetails {
+  code?: string;
+  reason?: string;
+  snapshot_version?: number | bigint;
+  dataspace?: number | bigint;
+  lane?: number | bigint;
+  next_min_handle_era?: number | bigint;
+  next_min_sub_nonce?: number | bigint;
+}
+
+export interface OfflineErrorDetails {
+  layer?: string;
+  reject_code?: string;
+  queue?: OfflineQueueErrorDetails;
+  retry_after_seconds?: number | bigint;
+  endpoint?: string;
+  field?: string;
+  expected?: string;
+  actual?: string;
+  profile?: string;
+  chain_discriminant?: number | bigint;
+  tx_hash?: string;
+  last_status?: string;
+  hint?: string;
+  axt?: OfflineAxtErrorDetails;
+}
+
+export interface OfflineErrorEnvelope {
+  code: string;
+  message: string;
+  details?: OfflineErrorDetails;
+}
+
+export type OfflineOperationStatus =
+  | {
+      state: "pending";
+      value: {
+        operation_id: string;
+        kind: OfflineOperationKindTag;
+        transaction_hash: string;
+        submitted_at_ms: number | bigint;
+      };
+    }
+  | {
+      state: "applied";
+      value: {
+        operation_id: string;
+        result: OfflineOperationResult;
+      };
+    }
+  | {
+      state: "rejected";
+      value: {
+        operation_id: string;
+        kind: OfflineOperationKindTag;
+        transaction_hash: string;
+        error: OfflineErrorEnvelope;
+      };
+    };
 
 export interface ToriiStatusPayload {
   observed_at_ms: number;
@@ -15592,6 +15725,212 @@ export interface IvmProvedTransactionAssemblyInput {
   privateKeyAlgorithm?: string | null;
 }
 
+export type ValidationFeePolicyByteSource =
+  | Uint8Array
+  | ArrayBuffer
+  | ArrayBufferView
+  | readonly number[]
+  | string;
+
+export interface ValidationFeePolicyV1 {
+  schema_version: number;
+  network_id: string;
+  genesis_hash: ValidationFeePolicyByteSource;
+  policy_version: NumericLike;
+  previous_policy_hash: ValidationFeePolicyByteSource | null;
+  ds_asset_id: string;
+  ds_scale: number;
+  fee_minor_units: NumericLike;
+  treasury_account_id: string;
+  charging_mode: "PER_QUALIFYING_TRANSFER_INSTRUCTION";
+  effective_from_height: NumericLike;
+  expires_after_height: NumericLike | null;
+  governance_keyset_id: string;
+  exemption_classes: readonly string[];
+}
+
+export interface ValidationFeePolicySignatureV1 {
+  signer_public_key?: ValidationFeePolicyByteSource;
+  public_key?: ValidationFeePolicyByteSource;
+  signature:
+    | ValidationFeePolicyByteSource
+    | {
+        payload?: ValidationFeePolicyByteSource;
+        bytes?: ValidationFeePolicyByteSource;
+        signature?: ValidationFeePolicyByteSource;
+      };
+}
+
+export interface SignedValidationFeePolicyV1 {
+  policy: ValidationFeePolicyV1;
+  signatures: readonly ValidationFeePolicySignatureV1[];
+}
+
+export interface ValidationFeeGovernanceKeyV1 {
+  public_key: ValidationFeePolicyByteSource;
+  weight: NumericLike;
+}
+
+export interface ValidationFeeGovernanceKeysetV1 {
+  keyset_id: string;
+  threshold: NumericLike;
+  keys?: readonly ValidationFeeGovernanceKeyV1[];
+  public_keys?: readonly ValidationFeePolicyByteSource[];
+  public_keys_hex?: readonly string[];
+}
+
+export interface ValidationFeePolicyRegistryEntryV1 {
+  policy_version: NumericLike;
+  policy_hash: ValidationFeePolicyByteSource;
+  previous_policy_hash: ValidationFeePolicyByteSource | null;
+}
+
+export interface ValidationFeePolicyRegistryV1 {
+  active_policy_hash: ValidationFeePolicyByteSource;
+  active_policy_version: NumericLike;
+  registered_policies: readonly ValidationFeePolicyRegistryEntryV1[];
+}
+
+export interface ValidationFeePolicyVerificationContext {
+  networkId?: string;
+  network_id?: string;
+  genesisHash?: ValidationFeePolicyByteSource;
+  genesis_hash?: ValidationFeePolicyByteSource;
+  currentHeight?: NumericLike;
+  current_height?: NumericLike;
+  governanceKeyset?: ValidationFeeGovernanceKeysetV1;
+  governance_keyset?: ValidationFeeGovernanceKeysetV1;
+  governanceKeysets?: readonly ValidationFeeGovernanceKeysetV1[];
+  governance_keysets?: readonly ValidationFeeGovernanceKeysetV1[];
+  policyRegistry?: ValidationFeePolicyRegistryV1;
+  policy_registry?: ValidationFeePolicyRegistryV1;
+  /** Active-policy verification is mandatory; `false` is rejected. */
+  requireActive?: true;
+  /** Snake-case alias for `requireActive`; `false` is rejected. */
+  require_active?: true;
+}
+
+export interface VerifiedValidationFeePolicy {
+  policy: ValidationFeePolicyV1;
+  policyHashHex: string;
+  policyVersion: bigint;
+  validSignatureCount: number;
+  validSignatureWeight: bigint;
+  registry: {
+    activePolicyVersion: bigint;
+    activePolicyHashHex: string;
+    registeredPolicyCount: number;
+  };
+}
+
+export interface IvmValidationFeePolicyIntent {
+  signedPolicy?: SignedValidationFeePolicyV1;
+  signed_policy?: SignedValidationFeePolicyV1;
+  /** Per-call trust overrides are rejected; configure the ToriiClient instead. */
+  verificationContext?: never;
+  /** Per-call trust overrides are rejected; configure the ToriiClient instead. */
+  verification_context?: never;
+  /** Optional assertion checked against the count derived from the proved overlay. */
+  qualifyingTransferCount?: NumericLike;
+  /** Snake-case alias for `qualifyingTransferCount`. */
+  qualifying_transfer_count?: NumericLike;
+  feeInstructionIndex?: NumericLike;
+  fee_instruction_index?: NumericLike;
+  feeTransferEntryIndex?: NumericLike | null;
+  fee_transfer_entry_index?: NumericLike | null;
+}
+
+export interface RequiredIvmOverlayTransfer {
+  sourceAssetHoldingId?: string;
+  source_asset_holding_id?: string;
+  sourceAssetId?: string;
+  source_asset_id?: string;
+  quantity: NumericLike;
+  destinationAccountId?: string;
+  destination_account_id?: string;
+}
+
+export interface IvmProvedContractCallInput {
+  chainId: string;
+  chain_id?: string;
+  authority: string;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+  private_key?: Buffer | ArrayBuffer | ArrayBufferView;
+  privateKeyAlgorithm?: string | null;
+  private_key_algorithm?: string | null;
+  vkRef: IvmVerifyingKeyRef;
+  vk_ref?: IvmVerifyingKeyRef;
+  contractAddress?: string;
+  contract_address?: string;
+  contractAlias?: string;
+  contract_alias?: string;
+  entrypoint?: string | null;
+  payload?: JsonValue;
+  gasLimit: NumericLike;
+  gas_limit?: NumericLike;
+  gasAssetId?: string | null;
+  gas_asset_id?: string | null;
+  feeSponsor?: string | null;
+  fee_sponsor?: string | null;
+  metadata?: MetadataLike;
+  validationFeePolicy?: IvmValidationFeePolicyIntent | null;
+  validation_fee_policy?: IvmValidationFeePolicyIntent | null;
+  requiredOverlayTransfer?: RequiredIvmOverlayTransfer | null;
+  required_overlay_transfer?: RequiredIvmOverlayTransfer | null;
+  creationTimeMs?: number | null;
+  creation_time_ms?: number | null;
+  ttlMs?: number | null;
+  ttl_ms?: number | null;
+  nonce?: number | null;
+}
+
+/** Input for the strict validation-fee submission helper. */
+export type ValidationFeeIvmProvedContractCallInput = Omit<
+  IvmProvedContractCallInput,
+  "validationFeePolicy" | "validation_fee_policy"
+> &
+  (
+    | {
+        validationFeePolicy: IvmValidationFeePolicyIntent;
+        validation_fee_policy?: never;
+      }
+    | {
+        validationFeePolicy?: never;
+        validation_fee_policy: IvmValidationFeePolicyIntent;
+      }
+  );
+
+export interface IvmProvedContractCallOptions {
+  signal?: AbortSignal;
+  proofIntervalMs?: number;
+  proofTimeoutMs?: number | null;
+  waitForCommit?: boolean;
+  transactionIntervalMs?: number;
+  transactionTimeoutMs?: number | null;
+  transactionStatusScope?: "local" | "auto" | "global";
+}
+
+export interface IvmProvedContractCallResult {
+  hash: string;
+  signedTransaction: Buffer;
+  submission: unknown;
+  status: ToriiPipelineStatus | null;
+  simulation: ContractCallSimulateResponse;
+  metadata: { [key: string]: JsonValue };
+  proved: IvmProvedPayload;
+  attachment: { [key: string]: JsonValue };
+  proofJobId: string;
+  requiredOverlayTransfer: JsonValue | null;
+  validationFeePolicy: {
+    policyVersion: number;
+    policyHash: string;
+    qualifyingTransferCount: number;
+    feeInstructionIndex: number;
+    feeTransferEntryIndex: number | null;
+    feeQuantity: string;
+  } | null;
+}
+
 export interface MintAssetInput {
   chainId: string;
   authority: string;
@@ -16660,6 +16999,81 @@ export interface ContractCallResponse {
   signing_message_b64: string | null;
 }
 
+export interface ContractCallSimulateRequest {
+  authority: string;
+  contractAddress?: string;
+  contract_address?: string;
+  contractAlias?: string;
+  contract_alias?: string;
+  entrypoint?: string | null;
+  payload?: JsonValue;
+  gasAssetId?: string | null;
+  gas_asset_id?: string | null;
+  feeSponsor?: string | null;
+  fee_sponsor?: string | null;
+  gasLimit: NumericLike;
+  gas_limit?: NumericLike;
+}
+
+export interface ContractCallSimulateResponse {
+  ok: boolean;
+  dataspace: string;
+  contract_address: string | null;
+  code_hash_hex: string;
+  abi_hash_hex: string;
+  entrypoint: string;
+  normalized_payload: JsonValue | null;
+  gas_limit: number;
+  gas_used: number;
+  queued_instructions: JsonValue[];
+  result: JsonValue | null;
+  error: string | null;
+  vm_diagnostic: JsonValue | null;
+}
+
+export interface IvmVerifyingKeyRef {
+  backend: string;
+  name: string;
+}
+
+export interface IvmProvedPayload {
+  bytecode: string;
+  overlay: JsonValue[];
+  events_commitment: string;
+  gas_policy_commitment: string;
+}
+
+export interface ZkIvmExecutionRequest {
+  vkRef?: IvmVerifyingKeyRef;
+  vk_ref?: IvmVerifyingKeyRef;
+  authority: string;
+  metadata?: { [key: string]: JsonValue };
+  bytecode: string | ArrayBufferView | ArrayBuffer | Buffer;
+  proved?: IvmProvedPayload | null;
+}
+
+export interface ZkIvmDeriveResponse {
+  proved: IvmProvedPayload;
+}
+
+export interface ZkIvmProveJobCreatedResponse {
+  job_id: string;
+}
+
+export interface ZkIvmProveJobResponse {
+  job_id: string;
+  status: "pending" | "running" | "done" | "error";
+  error: string | null;
+  proved: IvmProvedPayload | null;
+  attachment: { [key: string]: JsonValue } | null;
+}
+
+export interface ZkIvmProveWaitOptions {
+  signal?: AbortSignal;
+  intervalMs?: number;
+  timeoutMs?: number | null;
+}
+
 export interface ContractManifestRecord {
   manifest: {
     code_hash: string | null | undefined;
@@ -16741,11 +17155,6 @@ export interface SorafsPorSubmissionResponse {
 
 export interface SorafsPorVerdictResponse {
   status: string;
-}
-
-export interface SorafsPorObservationResponse {
-  status: string;
-  success: boolean;
 }
 
 export interface DaManifestFetchResponse {
@@ -18542,6 +18951,22 @@ export declare class ToriiBrowserClient {
     request: Record<string, unknown>,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
+  getOfflineReadiness(
+    assetDefinitionId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiOfflineReadinessResponse>;
+  submitOfflineTopUp(
+    request: OfflineTopUpRequestJson,
+    options?: { signal?: AbortSignal },
+  ): Promise<OfflineOperationReference>;
+  submitOfflineRedeem(
+    request: OfflineRedeemRequestJson,
+    options?: { signal?: AbortSignal },
+  ): Promise<OfflineOperationReference>;
+  getOfflineOperationStatus(
+    operationId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<OfflineOperationStatus>;
   getSumeragiStatus(options?: Record<string, unknown>): Promise<unknown>;
   getSumeragiTelemetry(options?: Record<string, unknown>): Promise<unknown>;
   listKaigiRelays(options?: Record<string, unknown>): Promise<unknown>;
@@ -18773,9 +19198,6 @@ export declare class ToriiClient {
     payload: ToriiVerifyingKeyUpdatePayload,
     options?: { signal?: AbortSignal },
   ): Promise<void>;
-  evaluateAliasVoprf(
-    blindedElementHex: string,
-  ): Promise<AliasVoprfEvaluateResponse>;
   resolveAlias(
     alias: string,
     options?: CanonicalRequestOptions,
@@ -18967,11 +19389,6 @@ export declare class ToriiClient {
     observedSecs: number;
     signal?: AbortSignal;
   }): Promise<SorafsUptimeObservationResponse>;
-  recordSorafsPorChallenge(input: {
-    challenge?: string | ArrayBuffer | ArrayBufferView | Buffer;
-    challengeB64?: string;
-    signal?: AbortSignal;
-  }): Promise<SorafsPorSubmissionResponse>;
   recordSorafsPorProof(input: {
     proof?: string | ArrayBuffer | ArrayBufferView | Buffer;
     proofB64?: string;
@@ -18982,10 +19399,6 @@ export declare class ToriiClient {
     verdictB64?: string;
     signal?: AbortSignal;
   }): Promise<SorafsPorVerdictResponse>;
-  submitSorafsPorObservation(input: {
-    success: boolean;
-    signal?: AbortSignal;
-  }): Promise<SorafsPorObservationResponse>;
   getSorafsPorStatus(options?: SorafsPorStatusOptions): Promise<Buffer>;
   exportSorafsPorStatus(options?: SorafsPorExportOptions): Promise<Buffer>;
   getSorafsPorWeeklyReport(
@@ -19611,6 +20024,30 @@ export declare class ToriiClient {
     request: ContractCallRequest,
     options?: { signal?: AbortSignal },
   ): Promise<ContractCallResponse>;
+  simulateContractCall(
+    request: ContractCallSimulateRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ContractCallSimulateResponse>;
+  deriveIvmProved(
+    request: ZkIvmExecutionRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ZkIvmDeriveResponse>;
+  startIvmProve(
+    request: ZkIvmExecutionRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ZkIvmProveJobCreatedResponse>;
+  getIvmProveJob(
+    jobId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ZkIvmProveJobResponse>;
+  waitForIvmProveJob(
+    jobId: string,
+    options?: ZkIvmProveWaitOptions,
+  ): Promise<ZkIvmProveJobResponse>;
+  proveIvmAndWait(
+    request: ZkIvmExecutionRequest,
+    options?: ZkIvmProveWaitOptions,
+  ): Promise<ZkIvmProveJobResponse>;
   proposeMultisig(
     request: MultisigProposeRequest,
     options?: { signal?: AbortSignal },
@@ -19730,9 +20167,22 @@ export declare class ToriiClient {
     request: SubscriptionUsageRequest,
     options?: { signal?: AbortSignal },
   ): Promise<SubscriptionActionResponse>;
-  getOfflineReadiness(options?: {
-    signal?: AbortSignal;
-  }): Promise<ToriiOfflineReadinessResponse>;
+  getOfflineReadiness(
+    assetDefinitionId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiOfflineReadinessResponse>;
+  submitOfflineTopUp(
+    request: OfflineTopUpRequestJson,
+    options?: { signal?: AbortSignal },
+  ): Promise<OfflineOperationReference>;
+  submitOfflineRedeem(
+    request: OfflineRedeemRequestJson,
+    options?: { signal?: AbortSignal },
+  ): Promise<OfflineOperationReference>;
+  getOfflineOperationStatus(
+    operationId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<OfflineOperationStatus>;
 }
 
 export interface NoritoRpcClientOptions {
@@ -20023,7 +20473,7 @@ export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1: "kag
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1: "kagemusha-recursive-spend-lineage-append-v1";
 export const KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS: 64;
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1: 64;
-export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1: true;
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1: false;
 export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1: 1;
 export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES: 8388608;
 export const KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: 128;
@@ -20891,6 +21341,61 @@ export function buildRemoveSccpRouteManifestTransaction(
 export function buildIvmProvedTransaction(
   input: IvmProvedTransactionAssemblyInput,
 ): SignedTransactionResult;
+
+export const VALIDATION_FEE_POLICY_SCHEMA_VERSION: 1;
+export const VALIDATION_FEE_DS_SCALE: 2;
+export const VALIDATION_FEE_INITIAL_MINOR_UNITS: 10n;
+export const VALIDATION_FEE_POLICY_HASH_DOMAIN: string;
+export const VALIDATION_FEE_POLICY_SIGNATURE_DOMAIN: string;
+export const VALIDATION_FEE_POLICY_TYPE_NAME: string;
+export const VALIDATION_FEE_CHARGING_MODE: "PER_QUALIFYING_TRANSFER_INSTRUCTION";
+export const VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS: "TREASURY_PAYOUT";
+
+export class ValidationFeePolicyError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string);
+}
+
+export function encodeValidationFeePolicyNorito(
+  policy: ValidationFeePolicyV1,
+): Uint8Array;
+export function validationFeePolicyHash(policy: ValidationFeePolicyV1): string;
+export function validationFeePolicyLedgerSignaturePayload(
+  policy: ValidationFeePolicyV1,
+): Uint8Array;
+export function verifyValidationFeePolicyRegistry(
+  registry: ValidationFeePolicyRegistryV1,
+  policy: ValidationFeePolicyV1,
+): {
+  activePolicyVersion: bigint;
+  activePolicyHashHex: string;
+  registeredPolicyCount: number;
+};
+export function verifySignedValidationFeePolicy(
+  signedPolicy: SignedValidationFeePolicyV1,
+  context: ValidationFeePolicyVerificationContext,
+): VerifiedValidationFeePolicy;
+export function validationFeeQuantity(
+  policy: ValidationFeePolicyV1,
+  qualifyingTransferCount: NumericLike,
+): string;
+
+/** Generic proof-bound submission helper; validation-fee policy is optional. */
+export function submitIvmProvedContractCall(
+  client: ToriiClient,
+  input: IvmProvedContractCallInput,
+  options?: IvmProvedContractCallOptions,
+): Promise<IvmProvedContractCallResult>;
+
+/**
+ * Strict proof-bound submission helper that requires and independently verifies
+ * a signed active validation-fee policy before signing or submission.
+ */
+export function submitValidationFeeIvmProvedContractCall(
+  client: ToriiClient,
+  input: ValidationFeeIvmProvedContractCallInput,
+  options?: IvmProvedContractCallOptions,
+): Promise<IvmProvedContractCallResult>;
 
 export function buildKagemushaInstructionArchiveInstruction(
   input: KagemushaInstructionArchiveInput,
@@ -22389,3 +22894,4 @@ export function privateUploadedModelReceiptInstruction(
 ): SoracloudTxInstruction;
 
 export * from "./nexus-app";
+export * from "./transaction-codec.js";

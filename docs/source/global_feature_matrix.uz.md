@@ -77,7 +77,7 @@ Legend: `◉` toʻliq amalga oshirildi · `○` asosan amalga oshirildi · `▲`
 | Pointer-ABI qat'iy tekshirish va hujjat sinxronlash | ◉ | TLV siyosati xost/IVM boʻylab oltin testlar va yaratilgan hujjatlar bilan qoʻllaniladi. | status.md:227; status.md:317; status.md:344; status.md:366; status.md:527 |
 | CoreHost | orqali ZK syscall gating ◉ | Har bir operatsiya uchun navbatlar tekshirilgan konvertlarni o'tkazadi va ISI bajarilishidan oldin xesh mosligini ta'minlaydi. | crates/iroha_core/src/smartcontracts/ivm/host.rs:213; crates/iroha_core/src/smartcontracts/ivm/host.rs:279 |
 | Kotodama ko'rsatkichi-ABI hujjatlari va grammatika | ◉ | Grammatika/hujjatlar jonli konstruktorlar va SCALL xaritalari bilan sinxronlangan. | status.md:299-301 |
-| ISO 20022 sxemasiga asoslangan dvigatel va Torii ko'prigi | ◉ | Oʻrnatilgan kanonik ISO 20022 sxemalari, deterministik XML tahlili va `/v1/iso20022/status/{MsgId}` API ochilgan. | status.md:65-70 |
+| ISO 20022 sxemasiga asoslangan dvigatel va Torii ko'prigi | ◉ | Oʻrnatilgan kanonik ISO 20022 sxemalari, deterministik XML tahlili va `/v1/iso20022/messages/{MsgId}` API ochilgan. | status.md:65-70 |
 
 ## Uskuna tezlashuvi
 

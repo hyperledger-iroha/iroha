@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_cli.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3d851bd6de4000a88f81c57dc6a4930fab02afd8f1821986c795cf66f4d879b9
+source_hash: fc20998fca316551789fe0ff556aa978a929dfd3797fca2a4d850d40edc65c88
 source_last_modified: "2026-06-25T16:00:00+00:00"
 translation_last_reviewed: 2026-06-25
 title: SoraFS CLI
@@ -25,7 +25,10 @@ local testing and CI.
 - `car pack` — produce a CAR archive, chunk-fetch plan, and JSON summary for CI.
 - `manifest build` — translate the CAR summary into a Norito manifest.
 - `manifest submit` — POST manifests (and optional alias proofs) to Torii,
-  recomputing the chunk digest from a plan when provided.
+  recomputing the chunk digest from a plan when provided; when the dedicated
+  `/v1/sorafs/pin/register` route is unavailable, the CLI falls back to a
+  signed `/v1/pipeline/transactions` submit automatically and waits for a terminal pipeline
+  status so queued-but-rejected publishes do not look successful.
 - `proof verify` — validate CAR responses against a manifest and emit the
   PoR-ready digests required for registry admission.
 - `manifest sign` — emit a keyless (OIDC-backed) signature bundle so pipelines
@@ -124,6 +127,12 @@ If you need deterministic fixtures to diff against, grab the bundle under
 
 Key behaviours:
 
+- Transaction fallback confirmation: when `manifest submit` has to use the
+  generic `/v1/pipeline/transactions` endpoint, it polls `/v1/pipeline/transactions/status`
+  until the transaction reaches `Committed`/`Applied` or fails with
+  `Rejected`/`Expired`. Rejections surface the explorer message when Torii
+  exposes `/v1/explorer/transactions/{hash}`.
+
 - `--chunker-handle` defaults to `sorafs.sf1@1.0.0`. Pass an explicit handle to
   switch chunking profiles once the registry grows additional entries.
 - The manifest builder reads the JSON emitted by `car pack`, applies optional
@@ -145,6 +154,9 @@ Key behaviours:
   scope required by your Fulcio policy.
 - `proof verify` rebuilds the PoR store, reports the deterministic chunk digest,
   and surfaces the payload/CAR digests so CI can gate registry submission.
+  Supply `--chunk-plan` for directory or multi-file payloads so verification
+  reuses the exact packed chunk boundaries instead of reconstructing a
+  single-file plan from the manifest alone.
 - `manifest verify-signature` accepts either a bundle or raw signature/public
   key pair, checks the embedded metadata (chunk digests, token hashes) against
   locally recomputed summaries, and ensures the Ed25519 signature matches the
@@ -233,7 +245,7 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   --manifest artifacts/manifest.to \
   --chunk-plan artifacts/chunk_plan.json \
   --torii-url https://localhost:8080 \
-  --submitted-epoch=42 \
+  --resolve-submitted-epoch=true \
   --authority=<i105-account-id> \
   --private-key=ed25519:0123...cafe \
   --summary-out artifacts/manifest.submit.json \
@@ -242,6 +254,9 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
 
 - Provide either `--chunk-plan` (preferred) or an explicit
   `--chunk-digest-sha3` to satisfy registry validation.
+- Use `--submitted-epoch=<N>` to pin an explicit epoch, or
+  `--resolve-submitted-epoch=true` to query `<torii-url>/status` and resolve it
+  automatically.
 - Use `--private-key-file` when the credential is stored on disk. The CLI trims
   whitespace automatically.
 - Alias bindings require `--alias-namespace`, `--alias-name`, and
@@ -249,6 +264,9 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
 - The pin-registration request includes `manifest_b64`, a base64 copy of the
   Norito `ManifestV1`, so Torii can validate governance proofs, digest,
   chunker, content length, and pin policy before queueing the transaction.
+- If `<torii-url>/v1/sorafs/pin/register` is not routed on the target node, the
+  CLI automatically derives `chain_id` from the read-side registry endpoints and
+  submits the same `RegisterPinManifest` instruction through `/v1/pipeline/transactions`.
 - Non-success HTTP responses bubble up as errors with the original body so CI
   can halt on policy violations.
 
@@ -259,6 +277,7 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   proof verify \
   --manifest artifacts/manifest.to \
   --car artifacts/payload.car \
+  --chunk-plan artifacts/chunk_plan.json \
   --summary-out artifacts/manifest.verify.json
 ```
 
@@ -285,8 +304,10 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
 `--emit-events=false`) and emits an aggregate summary that tracks success,
 failure, latency, and—when `--por-root-hex` is provided—local verification
 results. Requests address manifests by `manifest_digest_hex` (BLAKE3-256 of the
-canonical manifest) so proof streams remain deterministic across gateways. The
-summary JSON mirrors the Torii Prometheus metrics that the gateway
+canonical manifest) so proof streams remain deterministic across gateways.
+PoR `--samples` defaults to `32` and must stay in `1..=500`; Torii rejects
+oversized proof-stream requests before manifest lookup. The summary JSON
+mirrors the Torii Prometheus metrics that the gateway
 exports (`torii_sorafs_proof_stream_events_total`,
 `torii_sorafs_proof_stream_latency_ms`, and
 `torii_sorafs_proof_stream_inflight`) and feeds the example Grafana dashboard in
@@ -339,7 +360,7 @@ The primary CLI now exposes the orchestrator facade directly:
 sorafs_cli fetch \
   --plan artifacts/payload_plan.json \
   --manifest-id 7bb2…9d31 \
-  --provider name=alpha,provider-id=9f5c…73aa,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw-alpha.example.org/,stream-token="$(cat alpha.token)" \
+  --provider name=alpha,provider-id=9f5c…73aa,gateway-key="$(cat alpha.gateway-key.hex)",base-url=https://gw-alpha.example.org/,stream-token="$(cat alpha.token)" \
   --output artifacts/payload.bin \
   --json-out artifacts/fetch_summary.json \
   --local-proxy-manifest-out artifacts/proxy_manifest.json \
@@ -352,8 +373,11 @@ sorafs_cli fetch \
 ```
 
 Input flags mirror the developer tool: every `--provider` entry supplies a
-manifest-scoped stream token, the Torii base URL, and the canonical provider
-identifier. The command derives a scoreboard from the token metadata, applies
+manifest-scoped stream token, the trusted 32-byte Ed25519 gateway public key as
+64 hex characters, the Torii base URL, and the canonical provider identifier.
+The key is mandatory and verifies the token before any request is sent; do not
+copy it from the same unauthenticated token response. The command derives a
+scoreboard from the token metadata, applies
 the optional `--max-peers` cap, and threads the retry policy through the
 orchestrator. A machine-readable summary is emitted to stdout (and, when
 `--json-out` is provided, to disk) containing:
@@ -391,7 +415,13 @@ orchestrator. A machine-readable summary is emitted to stdout (and, when
 - Guard directory endpoints may now carry a `"tags"` array—mark SoraNet exits
   capable of proxying Norito streaming traffic with `"norito-stream"` so the
   orchestrator prioritises those URLs when preparing privacy routes.
-- `--local-proxy-manifest-out=PATH` captures the QUIC proxy manifest (certificate, ALPN, guard cache key, cache-tagging salt, telemetry hints, and Kaigi room policy hint) emitted by the orchestrator. Feed the manifest to the browser extension or SDK adapters; the JSON summary mirrors the same payload under `local_proxy_manifest`.
+- `--local-proxy-manifest-out=PATH` captures the QUIC proxy manifest
+  (certificate, ALPN, guard cache key, cache-tagging salt, telemetry hints, and
+  Kaigi room policy hint) emitted by the orchestrator. It requires a
+  `local_proxy` config with `emit_browser_manifest = true` and a CLI binary
+  built with the `local-quic-proxy` feature. Feed the manifest to the browser
+  extension or SDK adapters; the JSON summary mirrors the same payload under
+  `local_proxy_manifest`.
 - `--local-proxy-kaigi-spool=PATH`/`--local-proxy-kaigi-policy=public|authenticated` override the Kaigi spool directory and advertised room policy for a single run, matching the Norito overrides.
 
 - `chunk_count`, `assembled_bytes`, and `payload` (base64) for quick integrity
@@ -399,7 +429,12 @@ orchestrator. A machine-readable summary is emitted to stdout (and, when
 - `provider_reports`, mirroring the multi-source fetch outcome with success /
   failure counts and the disabled flag for each provider.
 - `chunk_receipts`, recording which provider ultimately served every chunk.
-- `local_proxy_manifest`, populated when `local_proxy` is enabled in the orchestrator config. The object mirrors the browser handshake manifest (certificate PEM, ALPN label, guard cache key, cache-tagging salt, telemetry hints) and the same payload is written to `--local-proxy-manifest-out=PATH` for browser extensions.
+- `local_proxy_manifest`, populated when `local_proxy` is enabled in the
+  orchestrator config, `emit_browser_manifest` is true, and local QUIC proxy
+  runtime support is compiled in. The object mirrors the browser handshake
+  manifest (certificate PEM, ALPN label, guard cache key, cache-tagging salt,
+  telemetry hints) and the same payload is written to
+  `--local-proxy-manifest-out=PATH` for browser extensions.
 - `manifest_digest_hex`, `manifest_payload_digest_hex`, `manifest_car_digest_hex`, `manifest_content_length`, `manifest_chunk_count`, `manifest_chunk_profile_handle`, and `manifest_governance` surface the manifest metadata downloaded from the gateway. These fields mirror the manifest response returned by `/v1/sorafs/storage/manifest/{id}`, confirm that the orchestrator rebuilt the CAR archive against the expected payload, and expose the council signatures bundled with the manifest (`manifest_governance.council_signatures`).
 - `car_archive` now contains the assembled CAR diagnostics (`payload_digest_hex`, `archive_digest_hex`, `cid_hex`, `root_cids_hex`, `size`) alongside `verified=true` and `por_leaf_count`, proving that the CAR bytes emitted by the gateway match the manifest digests and PoR tree recorded on ingest.
 - `ineligible_providers`, listing any aliases filtered out by capability or
@@ -511,7 +546,7 @@ iroha app sorafs gateway merkle proof \
     entry so auditors can map registry indexes back to the source file.
 - `account_id` entries are validated locally as encoded account literals
   (canonical I105 only). Alias, UAID, opaque, and
-  `` literals are rejected by the validator.
+  `@domain` literals are rejected by the validator.
 - `merkle proof` recomputes the tree for the given denylist and produces a
   membership proof for the zero-based `--index` requested. The JSON artefact
   stores the root, the entry metadata, and the audit path (sibling hashes,
@@ -644,26 +679,13 @@ filters accept the canonical labels (`pending`, `verified`, `failed`,
 `repaired`, `forced`) and the CLI validates the manifest/provider digests before
 dispatching the request so typos fail fast in CI.
 
-### Trigger manual challenges
+### Challenge authority
 
-```bash
-sorafs_cli por trigger \
-  --torii-url https://torii.local \
-  --manifest 7bb2…9d31 \
-  --provider d09c…73aa \
-  --reason=latency_probe \
-  --samples=48 \
-  --auth-token artifacts/challenge_token.to
-```
-
-The CLI reads a council-signed `ChallengeAuthTokenV1`, confirms the target
-manifest/provider pair is permitted, and submits the legacy Norito
-`ManualPorChallengeV1` request shape to `POST /v1/sorafs/por/trigger`. Torii now
-deliberately retires that route with a fail-closed `410 Gone` JSON response
-containing `route_state = "retired"`; live challenge admission must use governed
-`PorChallengeV1` submission through `/v1/sorafs/capacity/por-challenge` or the
-scheduler runtime. Responses are surfaced verbatim so auditors capture the
-retirement state or any future governance error codes.
+Torii exposes no manual or externally supplied challenge-ingress route. The
+coordinator scheduler is the sole challenge authority, and PoR automation fails
+closed until authenticated external drand/VRF feeds are configured. Operators
+inspect scheduler output with the status, report, and export commands; they do
+not submit challenges through the CLI.
 
 ### Export GovernanceLog verdicts
 

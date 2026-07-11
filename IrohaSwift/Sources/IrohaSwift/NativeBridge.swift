@@ -229,7 +229,23 @@ enum NoritoBridgeLoader {
         validateBridge(at: path, allowUntrustedLocation: allowUntrustedLocation)
     }
 
-    private static func validateBridge(at path: String, allowUntrustedLocation: Bool) -> ValidationStatus {
+    static func validateForTests(
+        at path: String,
+        allowUntrustedLocation: Bool,
+        pinnedHashesForTests: [String: String]
+    ) -> ValidationStatus {
+        validateBridge(
+            at: path,
+            allowUntrustedLocation: allowUntrustedLocation,
+            pinnedHashes: pinnedHashesForTests
+        )
+    }
+
+    private static func validateBridge(
+        at path: String,
+        allowUntrustedLocation: Bool,
+        pinnedHashes: [String: String] = expectedHashes
+    ) -> ValidationStatus {
         let url = URL(fileURLWithPath: path)
         guard FileManager.default.fileExists(atPath: url.path) else {
             return .missing(path: path)
@@ -245,7 +261,7 @@ enum NoritoBridgeLoader {
         if let version = manifest?.version, version != expectedVersion {
             return .versionMismatch(path: path, expected: expectedVersion, actual: version)
         }
-        guard let expectedHash = manifest?.hashes[identifier] ?? expectedHashes[identifier] else {
+        guard let expectedHash = manifest?.hashes[identifier] ?? pinnedHashes[identifier] else {
             return .pathDenied(path: path)
         }
 
@@ -4521,7 +4537,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    /// Whether ABI 17 exposes every reserved V2 negotiation stub.
+    /// Whether ABI 18 exposes the V3 capability and reserved proof stubs.
     ///
     /// This does not mean the V2 proof backend is available; every stub must
     /// return the canonical unavailable status until that backend is enabled.

@@ -73,7 +73,7 @@ Notes:
 - `tools/list.cursor` is a numeric string offset; invalid values fall back to `0`.
 - `tools/call_batch` is best-effort per item (one failed call does not fail sibling calls).
 - `tools/call_async` validates only envelope shape immediately; execution errors appear later in job state.
-- `jsonrpc` should be `"2.0"`; omitted `jsonrpc` is accepted for compatibility.
+- `jsonrpc` is required and must be the string `"2.0"`.
 
 ## Auth and forwarding
 
@@ -107,12 +107,18 @@ JSON-RPC layer:
 
 ## Tool naming
 
-OpenAPI-derived tools use stable route-based names:
+OpenAPI-derived tools use stable route-based names, but are generated only for
+exact method/path pairs explicitly enabled in the route catalog's MCP
+projection for this build:
 
 - `torii.<method>_<path...>`
-- Example: `torii.get_v1_accounts`
+- Example: `torii.get_health`
 
-Curated aliases are also exposed under `iroha.*` and `connect.*`.
+Purpose-built tools are separately allowlisted under `iroha.*` and `connect.*`.
+An OpenAPI entry by itself does not create a tool. Feature-disabled,
+diagnostic, streaming, and non-projected operations fail closed. Calls must use
+an exact name returned by `tools/list`; `operationId` and retired convenience
+spellings are not accepted as hidden aliases.
 
 Musubi package-registry aliases are exposed under `iroha.musubi.*`:
 

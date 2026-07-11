@@ -662,11 +662,11 @@ EXPECTED_ABI6_HOP_POLICY = {
     "preferred_append_output": [
         {
             "previous_hop_count": 1,
-            "circuit_id": "kagemusha-recursive-spend-lineage-append-v1",
+            "circuit_id": "kagemusha-recursive-aggregation-v1",
         },
         {
             "previous_hop_count": 63,
-            "circuit_id": "kagemusha-recursive-spend-lineage-append-v1",
+            "circuit_id": "kagemusha-recursive-aggregation-v1",
         },
         {
             "previous_hop_count": 64,
@@ -679,8 +679,8 @@ EXPECTED_ABI6_HOP_POLICY = {
     ],
     "append_witnessless": [
         {"previous_hop_count": 0, "allowed": False},
-        {"previous_hop_count": 1, "allowed": True},
-        {"previous_hop_count": 63, "allowed": True},
+        {"previous_hop_count": 1, "allowed": False},
+        {"previous_hop_count": 63, "allowed": False},
         {"previous_hop_count": 64, "allowed": False},
     ],
     "redeem_witnessless": [
@@ -693,20 +693,20 @@ EXPECTED_ABI6_HOP_POLICY = {
         {
             "circuit_id": "kagemusha-recursive-spend-lineage-onehop-v1",
             "hop_count": 1,
-            "allowed": True,
-            "requires_lineage_witness": False,
+            "allowed": False,
+            "requires_lineage_witness": True,
         },
         {
             "circuit_id": "kagemusha-recursive-spend-lineage-append-v1",
             "hop_count": 2,
-            "allowed": True,
-            "requires_lineage_witness": False,
+            "allowed": False,
+            "requires_lineage_witness": True,
         },
         {
             "circuit_id": "kagemusha-recursive-spend-lineage-append-v1",
             "hop_count": 64,
-            "allowed": True,
-            "requires_lineage_witness": False,
+            "allowed": False,
+            "requires_lineage_witness": True,
         },
         {
             "circuit_id": "kagemusha-recursive-aggregation-v1",

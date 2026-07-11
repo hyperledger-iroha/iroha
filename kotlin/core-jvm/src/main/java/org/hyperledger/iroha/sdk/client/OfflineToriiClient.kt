@@ -9,8 +9,10 @@ import java.util.LinkedHashMap
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
+import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.offline.OfflineJsonParser
 import org.hyperledger.iroha.sdk.offline.OfflineOperationCodec
+import org.hyperledger.iroha.sdk.offline.OfflineOperationKind
 import org.hyperledger.iroha.sdk.offline.OfflineOperationReference
 import org.hyperledger.iroha.sdk.offline.OfflineOperationStatus
 import org.hyperledger.iroha.sdk.offline.OfflineReadiness
@@ -43,15 +45,28 @@ class OfflineToriiClient private constructor(builder: Builder) {
         )
     }
 
-    fun submitTopUp(request: OfflineTopUpRequest): CompletableFuture<OfflineOperationReference> =
-        executeNoritoPost(OFFLINE_TOP_UP_PATH, request.operationId, request.noritoArchive())
+    /** Submit the final first-release Offline top-up request. */
+    fun submitOfflineTopUp(request: OfflineTopUpRequest): CompletableFuture<OfflineOperationReference> =
+        executeNoritoPost(
+            OFFLINE_TOP_UP_PATH,
+            request.operationId,
+            request.noritoArchive(),
+            OfflineOperationKind.TOP_UP,
+        )
 
-    fun submitRedeem(request: OfflineRedeemRequest): CompletableFuture<OfflineOperationReference> =
-        executeNoritoPost(OFFLINE_REDEEM_PATH, request.operationId, request.noritoArchive())
+    /** Submit the final first-release Offline redemption request. */
+    fun submitOfflineRedeem(request: OfflineRedeemRequest): CompletableFuture<OfflineOperationReference> =
+        executeNoritoPost(
+            OFFLINE_REDEEM_PATH,
+            request.operationId,
+            request.noritoArchive(),
+            OfflineOperationKind.REDEEM,
+        )
 
-    fun getOperationStatus(operationId: String): CompletableFuture<OfflineOperationStatus> {
+    /** Fetch the final first-release Offline operation status resource. */
+    fun getOfflineOperationStatus(operationId: String): CompletableFuture<OfflineOperationStatus> {
         val canonicalId = org.hyperledger.iroha.sdk.offline.requireOperationId(operationId)
-        return executeNoritoGet("$OFFLINE_OPERATIONS_PATH/$canonicalId")
+        return executeNoritoGet("$OFFLINE_OPERATIONS_PATH/$canonicalId", canonicalId)
     }
 
     fun executor(): HttpTransportExecutor = executor
@@ -59,7 +74,10 @@ class OfflineToriiClient private constructor(builder: Builder) {
     private fun <T> executeGet(path: String, parser: (ByteArray) -> T): CompletableFuture<T> {
         val request = buildGetRequest(path)
         notifyRequest(request)
-        return executeHttpRequest(request, 200, parser)
+        return executeHttpRequest(request, 200) { response ->
+            requireResponseMediaType(response, "application/json")
+            parser(response.body)
+        }
     }
 
     private fun buildGetRequest(path: String): TransportRequest {
@@ -81,16 +99,38 @@ class OfflineToriiClient private constructor(builder: Builder) {
         path: String,
         idempotencyKey: String,
         body: ByteArray,
+        expectedKind: OfflineOperationKind,
     ): CompletableFuture<OfflineOperationReference> {
         val request = buildNoritoRequest(path, "POST", body, idempotencyKey)
         notifyRequest(request)
-        return executeHttpRequest(request, 202, OfflineOperationCodec::decodeReference)
+        return executeHttpRequest(request, 202) { response ->
+            requireResponseMediaType(response, NORITO_MEDIA_TYPE)
+            val reference = OfflineOperationCodec.decodeReference(response.body)
+            require(reference.operationId == idempotencyKey && reference.kind == expectedKind) {
+                "Offline operation reference does not match the submitted command"
+            }
+            val location = requireSingleResponseHeader(response.headers, "Location")
+            require(location == reference.statusUri) {
+                "Offline operation response Location does not match its typed statusUri"
+            }
+            reference
+        }
     }
 
-    private fun executeNoritoGet(path: String): CompletableFuture<OfflineOperationStatus> {
+    private fun executeNoritoGet(
+        path: String,
+        expectedOperationId: String,
+    ): CompletableFuture<OfflineOperationStatus> {
         val request = buildNoritoRequest(path, "GET", null, null)
         notifyRequest(request)
-        return executeHttpRequest(request, 200, OfflineOperationCodec::decodeStatus)
+        return executeHttpRequest(request, 200) { response ->
+            requireResponseMediaType(response, NORITO_MEDIA_TYPE)
+            val status = OfflineOperationCodec.decodeStatus(response.body)
+            require(status.operationId == expectedOperationId) {
+                "Offline operation status operationId does not match the requested resource"
+            }
+            status
+        }
     }
 
     private fun buildNoritoRequest(
@@ -145,7 +185,7 @@ class OfflineToriiClient private constructor(builder: Builder) {
     private fun <T> executeHttpRequest(
         request: TransportRequest,
         expectedStatus: Int,
-        parser: (ByteArray) -> T,
+        parser: (TransportResponse) -> T,
     ): CompletableFuture<T> {
         val future = CompletableFuture<T>()
         executor.execute(request).whenComplete { response, throwable ->
@@ -166,7 +206,7 @@ class OfflineToriiClient private constructor(builder: Builder) {
                 return@whenComplete
             }
             try {
-                val parsed = parser(response.body)
+                val parsed = parser(response)
                 notifyResponse(request, clientResponse)
                 future.complete(parsed)
             } catch (ex: RuntimeException) {
@@ -223,6 +263,25 @@ class OfflineToriiClient private constructor(builder: Builder) {
         private fun findHeader(headers: Map<String, String>, name: String): String? {
             for (key in headers.keys) if (key.equals(name, ignoreCase = true)) return key
             return null
+        }
+
+        private fun requireSingleResponseHeader(
+            headers: Map<String, List<String>>,
+            name: String,
+        ): String {
+            val values = headers.entries
+                .filter { (headerName, _) -> headerName.equals(name, ignoreCase = true) }
+                .flatMap { (_, headerValues) -> headerValues }
+            require(values.size == 1) { "$name response header must occur exactly once" }
+            return values.single()
+        }
+
+        private fun requireResponseMediaType(response: TransportResponse, expected: String) {
+            val raw = requireSingleResponseHeader(response.headers, "Content-Type")
+            val mediaType = raw.substringBefore(';').trim()
+            require(mediaType.equals(expected, ignoreCase = true)) {
+                "Offline response Content-Type must be $expected"
+            }
         }
     }
 }

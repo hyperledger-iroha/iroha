@@ -725,7 +725,7 @@ pub async fn handle_v1_sumeragi_phases(
     Ok(crate::utils::respond_with_format(payload, format))
 }
 
-/// GET /v1/sumeragi/bls_keys — map of network public keys -> BLS public keys (hex strings)
+/// GET /v1/sumeragi/bls-keys — map of network public keys -> BLS public keys (hex strings)
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_bls_keys(
     State(state): State<Arc<CoreState>>,
@@ -772,7 +772,7 @@ pub async fn handle_v1_sumeragi_leader(
             epoch_seed: seed_opt.map(hex::encode),
         },
     };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -860,7 +860,7 @@ pub async fn handle_v1_sumeragi_collectors(
                 epoch_seed: epoch_seed_hex,
             },
         };
-        let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+        let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
             Ok(fmt) => fmt,
             Err(resp) => return Ok(resp),
         };
@@ -948,7 +948,7 @@ pub async fn handle_v1_sumeragi_collectors(
             epoch_seed: epoch_seed_hex,
         },
     };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -991,7 +991,7 @@ pub async fn handle_v1_sumeragi_params(
         mode_activation_height: sp.mode_activation_height,
         chain_height: u64::try_from(state.committed_height()).unwrap_or(u64::MAX),
     };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -1622,7 +1622,7 @@ mod evidence_submit_tests {
 }
 
 #[cfg(feature = "app_api")]
-/// GET /v1/sumeragi/new_view/sse — SSE stream of NEW_VIEW counts polled periodically.
+/// GET /v1/sumeragi/new-view/sse — SSE stream of NEW_VIEW counts polled periodically.
 pub fn handle_v1_new_view_sse(
     poll_ms: u64,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
@@ -2563,6 +2563,14 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry(
             "rbc_chunk_expired_total",
             snap.dedup_evictions.rbc_chunk_expired_total,
+        ),
+        json_entry(
+            "lane_block_artifact_capacity_total",
+            snap.dedup_evictions.lane_block_artifact_capacity_total,
+        ),
+        json_entry(
+            "lane_block_artifact_expired_total",
+            snap.dedup_evictions.lane_block_artifact_expired_total,
         ),
     ]);
     let consensus_message_handling_entries = Value::Array(
@@ -5990,7 +5998,7 @@ pub async fn handle_v1_sumeragi_status(
     accept: Option<axum::http::HeaderValue>,
     nexus_enabled: bool,
 ) -> Result<Response> {
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
@@ -6761,7 +6769,7 @@ fn rbc_status_summary_has_complete_delivery(summary: &rbc_status::Summary) -> bo
         && summary.received_chunks == summary.total_chunks
 }
 
-/// GET /v1/sumeragi/commit_qc/{hash} — return full commit QC record for a block hash (if present)
+/// GET /v1/sumeragi/commit-qcs/{block_hash} — return the full commit QC record for a block hash.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_commit_qc(
     State(state): State<std::sync::Arc<CoreState>>,

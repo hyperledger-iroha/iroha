@@ -349,6 +349,28 @@ final class OfflineNoteV2Tests: XCTestCase {
     func testOfflineDeviceAttestationRegistrationDraftBuildsChallengeBeforeEvidence() throws {
         let fixture = try Self.loadFixture()
         let vector = fixture.chainVectors.attestationRegistration
+        let preAttestationChallenge = try OfflineDeviceAttestationRegistration
+            .preAttestationChallengeHash(
+                version: vector.version,
+                platform: vector.platform,
+                keyId: vector.keyId,
+                deviceId: vector.deviceId,
+                accountId: vector.accountId,
+                assetDefinitionId: vector.assetDefinitionId,
+                iosTeamId: vector.iosTeamId,
+                iosBundleId: vector.iosBundleId,
+                iosEnvironment: vector.iosEnvironment,
+                androidPackageName: vector.androidPackageName,
+                androidSigningCertificateSha256: try vector.androidSigningCertificateSha256.map(Self.hex),
+                publicKey: try Self.base64(vector.publicKey),
+                assertionScheme: vector.assertionScheme,
+                assertionKeyAlgorithm: vector.assertionKeyAlgorithm,
+                assertionUsageCountLimit: vector.assertionUsageCountLimit,
+                oneUse: vector.oneUse,
+                recentBlockHeight: vector.recentBlockHeight,
+                recentBlockHash: try Self.hex(vector.recentBlockHash),
+                expiresAtMs: vector.expiresAtMs
+            )
         let draft = try OfflineDeviceAttestationRegistration(
             version: vector.version,
             platform: vector.platform,
@@ -375,6 +397,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         let expectedEvidence = Self.attestationEvidence(attestationReportHash: emptyReportHash)
 
         XCTAssertEqual(try draft.canonicalChallengeHash().hexLowercased(), vector.challengeHash)
+        XCTAssertEqual(preAttestationChallenge, draft.challengeHash)
         XCTAssertEqual(draft.challengeHash.hexLowercased(), vector.challengeHash)
         XCTAssertEqual(draft.attestationReportHash, emptyReportHash)
         XCTAssertEqual(draft.attestationReport, Data())
@@ -423,21 +446,33 @@ final class OfflineNoteV2Tests: XCTestCase {
             keypair: keypair,
             creationTimeMs: creationTimeMs
         ))
+        let registrationRequest = RegisterOfflineDeviceAttestationRequest(
+            chainId: chainId,
+            authority: authority,
+            registration: registrationModel,
+            ttlMs: 60_000
+        )
         let registerAttestation = try SwiftTransactionEncoder.encodeRegisterOfflineDeviceAttestation(
-            request: RegisterOfflineDeviceAttestationRequest(
-                chainId: chainId,
-                authority: authority,
-                registration: registrationModel,
-                ttlMs: 60_000
-            ),
+            request: registrationRequest,
             keypair: keypair,
             creationTimeMs: creationTimeMs
         )
+        let unsigned = try SwiftTransactionEncoder.encodeUnsignedRegisterOfflineDeviceAttestation(
+            request: registrationRequest,
+            creationTimeMs: creationTimeMs
+        )
+        let externalSignature = try SigningKey.ed25519(
+            privateKey: keypair.privateKeyBytes
+        ).sign(unsigned.signingHash)
+        let externallySigned = try unsigned.signed(signature: externalSignature)
+        XCTAssertEqual(externallySigned.norito, registerAttestation.norito)
+        XCTAssertEqual(externallySigned.transactionHash, registerAttestation.transactionHash)
 
         XCTAssertEqual(registerAttestation.norito.first, 1)
         XCTAssertEqual(Data(registerAttestation.norito.dropFirst()), registerAttestation.signedTransaction)
         XCTAssertEqual(registerAttestation.transactionHash.count, 32)
         XCTAssertNil(registerAttestation.payload)
+        XCTAssertCanonicalExternalEntrypointHash(registerAttestation)
 
         let registerInstruction = try Self.parseSingleOfflineNoteV2Instruction(registerAttestation)
         XCTAssertEqual(registerInstruction.wireName, OfflineNoteV2TypeNames.registerDeviceAttestationInstruction)

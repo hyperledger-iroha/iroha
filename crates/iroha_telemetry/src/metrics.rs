@@ -8214,11 +8214,13 @@ pub struct Metrics {
     pub soranet_reward_adjustment_nanos_total: IntCounterVec,
     /// Dispute lifecycle counters grouped by action label.
     pub soranet_reward_disputes_total: IntCounterVec,
-    /// Torii HTTP requests grouped by content type, method, and status.
+    /// Torii HTTP requests grouped by catalog route metadata and bounded response outcome.
     pub torii_http_requests_total: IntCounterVec,
-    /// Torii HTTP request latency in seconds grouped by content type and method.
+    /// Torii HTTP request latency in seconds grouped by catalog route metadata.
     pub torii_http_request_duration_seconds: HistogramVec,
-    /// Torii HTTP response payload size (bytes) grouped by content type, method, and status.
+    /// Torii HTTP request payload size (bytes) grouped by catalog route metadata.
+    pub torii_http_request_bytes_total: IntCounterVec,
+    /// Torii HTTP response payload size (bytes) grouped by catalog route metadata and outcome.
     pub torii_http_response_bytes_total: IntCounterVec,
     /// Torii API-token-gated endpoint hits grouped by endpoint and bounded token state.
     pub torii_api_token_hits_total: IntCounterVec,
@@ -14293,26 +14295,66 @@ impl Default for Metrics {
         let torii_http_requests_total = IntCounterVec::new(
             Opts::new(
                 "torii_http_requests_total",
-                "Torii HTTP requests grouped by response content type, method, and status",
+                "Torii HTTP requests grouped by stable route metadata, representation, method, and outcome",
             ),
-            &["content_type", "method", "status"],
+            &[
+                "route_id",
+                "route_template",
+                "surface",
+                "representation",
+                "error_code",
+                "content_type",
+                "method",
+                "status",
+            ],
         )
         .expect("Infallible");
         let torii_http_request_duration_seconds = HistogramVec::new(
             HistogramOpts::new(
                 "torii_http_request_duration_seconds",
-                "Torii HTTP request latency (seconds) grouped by content type and method",
+                "Torii HTTP request latency (seconds) grouped by stable route metadata and representation",
             )
             .buckets(prometheus::exponential_buckets(0.005, 2.0, 13).expect("inputs are valid")),
-            &["content_type", "method"],
+            &[
+                "route_id",
+                "route_template",
+                "surface",
+                "representation",
+                "content_type",
+                "method",
+            ],
+        )
+        .expect("Infallible");
+        let torii_http_request_bytes_total = IntCounterVec::new(
+            Opts::new(
+                "torii_http_request_bytes_total",
+                "Torii HTTP request payload size (bytes) grouped by stable route metadata and representation",
+            ),
+            &[
+                "route_id",
+                "route_template",
+                "surface",
+                "representation",
+                "content_type",
+                "method",
+            ],
         )
         .expect("Infallible");
         let torii_http_response_bytes_total = IntCounterVec::new(
             Opts::new(
                 "torii_http_response_bytes_total",
-                "Torii HTTP response payload size (bytes) grouped by content type, method, and status",
+                "Torii HTTP response payload size (bytes) grouped by stable route metadata, representation, method, and outcome",
             ),
-            &["content_type", "method", "status"],
+            &[
+                "route_id",
+                "route_template",
+                "surface",
+                "representation",
+                "error_code",
+                "content_type",
+                "method",
+                "status",
+            ],
         )
         .expect("Infallible");
         let torii_api_token_hits_total = IntCounterVec::new(
@@ -14473,6 +14515,7 @@ impl Default for Metrics {
         .expect("Infallible");
         register_guarded(&registry, &torii_http_requests_total);
         register_guarded(&registry, &torii_http_request_duration_seconds);
+        register_guarded(&registry, &torii_http_request_bytes_total);
         register_guarded(&registry, &torii_http_response_bytes_total);
         register_guarded(&registry, &torii_api_token_hits_total);
         register_guarded(&registry, &torii_content_requests_total);
@@ -16111,6 +16154,7 @@ impl Default for Metrics {
             soranet_reward_disputes_total,
             torii_http_requests_total,
             torii_http_request_duration_seconds,
+            torii_http_request_bytes_total,
             torii_http_response_bytes_total,
             torii_api_token_hits_total,
             torii_content_requests_total,

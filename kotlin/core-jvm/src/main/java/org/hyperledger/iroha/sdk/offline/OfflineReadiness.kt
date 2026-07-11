@@ -8,7 +8,7 @@ class OfflineReadinessBlocker(
     message: String,
 ) {
     @JvmField
-    val code: String = requireExactText(code, "code")
+    val code: String = requireStableErrorCode(code, "code")
 
     @JvmField
     val message: String = requireExactText(message, "message")
@@ -23,6 +23,7 @@ class OfflineReadinessBlocker(
 class OfflineReadiness(
     assetDefinitionId: String,
     evaluatedBlockHeight: BigInteger,
+    evaluatedBlockHash: String,
     @JvmField val ready: Boolean,
     blockers: List<OfflineReadinessBlocker>,
 ) {
@@ -37,18 +38,27 @@ class OfflineReadiness(
     }
 
     @JvmField
-    val blockers: List<OfflineReadinessBlocker> = blockers.toList()
+    val evaluatedBlockHash: String = requireLowercaseHash(evaluatedBlockHash)
+
+    @JvmField
+    val blockers: List<OfflineReadinessBlocker> = blockers.toList().also {
+        require(ready == it.isEmpty()) {
+            "ready must be true exactly when blockers is empty"
+        }
+    }
 
     override fun equals(other: Any?): Boolean =
         other is OfflineReadiness &&
             assetDefinitionId == other.assetDefinitionId &&
             evaluatedBlockHeight == other.evaluatedBlockHeight &&
+            evaluatedBlockHash == other.evaluatedBlockHash &&
             ready == other.ready &&
             blockers == other.blockers
 
     override fun hashCode(): Int {
         var result = assetDefinitionId.hashCode()
         result = 31 * result + evaluatedBlockHeight.hashCode()
+        result = 31 * result + evaluatedBlockHash.hashCode()
         result = 31 * result + ready.hashCode()
         result = 31 * result + blockers.hashCode()
         return result
@@ -61,5 +71,12 @@ class OfflineReadiness(
 
 private fun requireExactText(value: String, field: String): String {
     require(value.isNotEmpty() && value == value.trim()) { "$field must be exact non-empty text" }
+    return value
+}
+
+private fun requireLowercaseHash(value: String): String {
+    require(value.length == 64 && value.all { it in '0'..'9' || it in 'a'..'f' }) {
+        "evaluatedBlockHash must be exact lowercase 32-byte hexadecimal"
+    }
     return value
 }

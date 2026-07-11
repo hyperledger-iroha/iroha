@@ -322,6 +322,27 @@ async fn router_builds_under_current_features() {
         ));
     }
 
+    #[cfg(all(feature = "app_api", not(feature = "telemetry")))]
+    {
+        for path in [
+            "/v1/kaigi/relays",
+            "/v1/kaigi/relays/relay-id",
+            "/v1/kaigi/relays/health",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(Uri::from_static(path))
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+        }
+    }
+
     #[cfg(feature = "connect")]
     {
         let resp = app

@@ -2,9 +2,9 @@
   "bls_domain": "bls-iroha2:npos-sumeragi:v2",
   "chain": "00000000-0000-0000-0000-000000000753",
   "chain_discriminant": 753,
-  "consensus_fingerprint": "0xf7afd9e2b8b8ea35cc03525b47cd4a82a9ae99cff46ac1f4598f0afee4cfaff8",
+  "consensus_fingerprint": "0xd3bd5cc9f067c52aa03855154c047e8abe2c5b3981c8b3b1f07acb180f7d5434",
   "consensus_mode": "Npos",
-  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"ReedSolomon16"},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024},"nexus_amx_context_hash":"665A05BCB05D0184F2F4EE132895FFF845CCD035D75F9D454390D521140C6CD9"},
+  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"ReedSolomon16"},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024},"nexus_amx_context_hash":"1779C88CBA1B2BF425369DB7DDD7BA852B53CB2488264AADBD8D648701E067D7"},
   "crypto": {
     "allowed_curve_ids": [
       1,
@@ -236,8 +236,7 @@
         "sumeragi": {
           "block_time_ms": 100,
           "commit_time_ms": 100,
-          "min_finality_ms": 100,
-          "next_mode": "Npos"
+          "min_finality_ms": 100
         }
       },
       "topology": []

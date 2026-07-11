@@ -84,11 +84,11 @@ use sorafs_manifest::{
     ChunkingProfileV1, DagCodecId, GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1,
     GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
     GovernanceLogSignatureV1, GovernanceSignatureAlgorithm, MANIFEST_DAG_CODEC, ManifestBuildError,
-    ManifestBuilder, ManifestV1, ManualPorChallengeV1, PinPolicy, PorChallengeOutcome,
-    PorChallengeStatusV1, PorReportIsoWeek, PorWeeklyReportV1, ReputationMerkleProofV1,
-    ReputationSnapshotV1, StorageClass, ValidationOutcomeV1,
-    chunker_registry as manifest_chunker_registry, governance_dag_block_cid_v1,
-    validate_governance_dag_head_against_chain_v1, validate_governance_log_node_bytes,
+    ManifestBuilder, ManifestV1, PinPolicy, PorChallengeOutcome, PorChallengeStatusV1,
+    PorReportIsoWeek, PorWeeklyReportV1, ReputationMerkleProofV1, ReputationSnapshotV1,
+    StorageClass, ValidationOutcomeV1, chunker_registry as manifest_chunker_registry,
+    governance_dag_block_cid_v1, validate_governance_dag_head_against_chain_v1,
+    validate_governance_log_node_bytes,
 };
 use sorafs_orchestrator::{
     AnonymityPolicy, FetchSession, OrchestratorConfig, RolloutPhase, TransportPolicy,
@@ -116,8 +116,6 @@ const DEFAULT_CHUNKER_HANDLE: &str = "sorafs.sf1@1.0.0";
 const DEFAULT_IDENTITY_TOKEN_ENV: &str = "SIGSTORE_ID_TOKEN";
 const DEFAULT_MANIFEST_SUBMIT_CONFIRM_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_MANIFEST_SUBMIT_CONFIRM_POLL_MS: u64 = 1_000;
-const POR_TRIGGER_REQUEST_VERSION_V1: u8 = 1;
-const CHALLENGE_AUTH_TOKEN_VERSION_V1: u8 = 1;
 const CONTEXT_APPEAL_QUOTE: &str = "sorafs_cli appeal quote";
 const CONTEXT_APPEAL_SETTLE: &str = "sorafs_cli appeal settle";
 const CONTEXT_APPEAL_DISBURSE: &str = "sorafs_cli appeal disburse";
@@ -333,88 +331,6 @@ fn parse_appeal_verdict(value: &str) -> Result<AppealVerdict, String> {
         }
     };
     Ok(verdict)
-}
-
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize)]
-struct ChallengeAuthScopeV1 {
-    manifest_digest: [u8; 32],
-    #[norito(default)]
-    providers: Vec<[u8; 32]>,
-    #[norito(default)]
-    max_requests: u16,
-}
-
-impl<'a> DecodeFromSlice<'a> for ChallengeAuthScopeV1 {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        norito::core::decode_field_canonical(bytes)
-    }
-}
-
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize)]
-struct ChallengeAuthTokenV1 {
-    version: u8,
-    token_id: String,
-    operator_account: String,
-    expires_at: u64,
-    #[norito(default)]
-    scopes: Vec<ChallengeAuthScopeV1>,
-    #[norito(default)]
-    justification: Option<String>,
-}
-
-impl<'a> DecodeFromSlice<'a> for ChallengeAuthTokenV1 {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        norito::core::decode_field_canonical(bytes)
-    }
-}
-
-impl ChallengeAuthTokenV1 {
-    fn validate(&self, manifest: &[u8; 32], provider: &[u8; 32]) -> Result<(), String> {
-        if self.version != CHALLENGE_AUTH_TOKEN_VERSION_V1 {
-            return Err(format!(
-                "unsupported challenge auth token version {}; expected {CHALLENGE_AUTH_TOKEN_VERSION_V1}",
-                self.version
-            ));
-        }
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|err| format!("system clock before UNIX_EPOCH: {err}"))?
-            .as_secs();
-        if now >= self.expires_at {
-            return Err(format!(
-                "challenge auth token `{}` expired at {}",
-                self.token_id, self.expires_at
-            ));
-        }
-        if self
-            .scopes
-            .iter()
-            .any(|scope| scope.allows(manifest, provider))
-        {
-            Ok(())
-        } else {
-            Err("challenge auth token does not permit this manifest/provider pair".to_string())
-        }
-    }
-}
-
-impl ChallengeAuthScopeV1 {
-    fn allows(&self, manifest: &[u8; 32], provider: &[u8; 32]) -> bool {
-        if &self.manifest_digest != manifest {
-            return false;
-        }
-        if self.providers.is_empty() {
-            return true;
-        }
-        self.providers.iter().any(|candidate| candidate == provider)
-    }
-}
-
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize)]
-struct ManualPorTriggerRequestV1 {
-    version: u8,
-    challenge: ManualPorChallengeV1,
-    auth_token: ChallengeAuthTokenV1,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -678,7 +594,6 @@ fn run() -> Result<(), String> {
             };
             match sub.as_str() {
                 "status" => por_status(args.collect()),
-                "trigger" => por_trigger(args.collect()),
                 "export" => por_export(args.collect()),
                 "report" => por_report(args.collect()),
                 _ => Err(por_usage()),
@@ -1944,7 +1859,7 @@ fn gateway_url_for_cid(gateway_base_url: &str, cid_base32: &str) -> Result<Strin
     let base = Url::parse(gateway_base_url)
         .map_err(|err| format!("invalid gateway base URL `{gateway_base_url}`: {err}"))?;
     Ok(base
-        .join(&format!("sorafs/cid/{cid_base32}/"))
+        .join(&format!("sorafs/cid/{cid_base32}"))
         .map_err(|err| format!("failed to build gateway CID URL: {err}"))?
         .to_string())
 }
@@ -2718,177 +2633,6 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
-fn por_trigger(raw_args: Vec<String>) -> Result<(), String> {
-    let mut torii_url: Option<String> = None;
-    let mut manifest_hex: Option<String> = None;
-    let mut provider_hex: Option<String> = None;
-    let mut reason: Option<String> = None;
-    let mut auth_token_path: Option<PathBuf> = None;
-    let mut requested_samples: Option<u16> = None;
-    let mut deadline_secs: Option<u32> = None;
-
-    for arg in raw_args {
-        if arg == "--help" || arg == "-h" {
-            return Err(por_usage());
-        }
-        let (key, value) = arg
-            .split_once('=')
-            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
-        match key {
-            "--torii-url" => torii_url = Some(value.to_string()),
-            "--manifest" => manifest_hex = Some(value.to_ascii_lowercase()),
-            "--provider" => provider_hex = Some(value.to_ascii_lowercase()),
-            "--reason" => reason = Some(value.to_string()),
-            "--auth-token" => auth_token_path = Some(PathBuf::from(value)),
-            "--samples" => {
-                let parsed = value
-                    .trim()
-                    .parse::<u16>()
-                    .map_err(|err| format!("invalid `--samples` value: {err}"))?;
-                if parsed == 0 {
-                    return Err("`--samples` must be greater than zero".into());
-                }
-                requested_samples = Some(parsed);
-            }
-            "--deadline-secs" => {
-                let parsed = value
-                    .trim()
-                    .parse::<u32>()
-                    .map_err(|err| format!("invalid `--deadline-secs` value: {err}"))?;
-                if parsed == 0 {
-                    return Err("`--deadline-secs` must be greater than zero".into());
-                }
-                deadline_secs = Some(parsed);
-            }
-            _ => {
-                return Err(format!(
-                    "unrecognised option `{key}` for `sorafs_cli por trigger`"
-                ));
-            }
-        }
-    }
-
-    let torii_url = torii_url.ok_or_else(|| {
-        "missing required `--torii-url=URL` for `sorafs_cli por trigger`".to_string()
-    })?;
-    let manifest_hex = manifest_hex.ok_or_else(|| {
-        "missing required `--manifest=HEX32` for `sorafs_cli por trigger`".to_string()
-    })?;
-    let provider_hex = provider_hex.ok_or_else(|| {
-        "missing required `--provider=HEX32` for `sorafs_cli por trigger`".to_string()
-    })?;
-    let reason = reason.ok_or_else(|| {
-        "missing required `--reason=TEXT` for `sorafs_cli por trigger`".to_string()
-    })?;
-    let token_path = auth_token_path.ok_or_else(|| {
-        "missing required `--auth-token=PATH` for `sorafs_cli por trigger`".to_string()
-    })?;
-
-    let manifest_digest =
-        parse_digest_hex(&manifest_hex).map_err(|err| format!("invalid manifest digest: {err}"))?;
-    let provider_id =
-        parse_digest_hex(&provider_hex).map_err(|err| format!("invalid provider digest: {err}"))?;
-    if reason.trim().is_empty() {
-        return Err("`--reason` must not be empty".into());
-    }
-
-    let challenge = ManualPorChallengeV1 {
-        version: sorafs_manifest::MANUAL_POR_CHALLENGE_VERSION_V1,
-        manifest_digest,
-        provider_id,
-        requested_samples,
-        requested_deadline_secs: deadline_secs,
-        reason,
-    };
-    challenge
-        .validate()
-        .map_err(|err| format!("manual PoR challenge invalid: {err}"))?;
-
-    let token_bytes = fs::read(&token_path).map_err(|err| {
-        format!(
-            "failed to read challenge auth token `{}`: {err}",
-            token_path.display()
-        )
-    })?;
-    let token: ChallengeAuthTokenV1 = match decode_from_bytes(&token_bytes) {
-        Ok(token) => token,
-        Err(norito::Error::SchemaMismatch) => {
-            let view = norito::core::from_bytes_view(&token_bytes)
-                .map_err(|err| format!("failed to decode challenge auth token: {err}"))?;
-            let payload = view.as_bytes();
-            let (token, used) =
-                norito::core::decode_field_canonical::<ChallengeAuthTokenV1>(payload)
-                    .map_err(|err| format!("failed to decode challenge auth token: {err}"))?;
-            if used != payload.len() {
-                return Err(format!(
-                    "failed to decode challenge auth token: trailing bytes after canonical payload ({used} of {} bytes consumed)",
-                    payload.len()
-                ));
-            }
-            token
-        }
-        Err(err) => return Err(format!("failed to decode challenge auth token: {err}")),
-    };
-    token
-        .validate(&challenge.manifest_digest, &challenge.provider_id)
-        .map_err(|err| format!("challenge auth token rejected: {err}"))?;
-
-    let request = ManualPorTriggerRequestV1 {
-        version: POR_TRIGGER_REQUEST_VERSION_V1,
-        challenge,
-        auth_token: token,
-    };
-    let body = to_bytes(&request)
-        .map_err(|err| format!("failed to encode manual challenge request: {err}"))?;
-
-    let endpoint = Url::parse(&torii_url)
-        .map_err(|err| format!("invalid `--torii-url` value `{torii_url}`: {err}"))?
-        .join("v1/sorafs/por/trigger")
-        .map_err(|err| format!("failed to resolve PoR trigger endpoint: {err}"))?;
-
-    let client = HttpClient::builder()
-        .build()
-        .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
-    let response = client
-        .post(endpoint.clone())
-        .header(CONTENT_TYPE, "application/x-norito")
-        .header("Accept", "application/json, application/x-norito")
-        .body(body)
-        .send()
-        .map_err(|err| format!("failed to submit manual PoR challenge to `{endpoint}`: {err}"))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .map_err(|err| format!("failed to read manual challenge response: {err}"))?;
-    if !status.is_success() {
-        return Err(format!(
-            "manual PoR challenge request failed with status {status}: {}",
-            body_snippet(&body)
-        ));
-    }
-    if body.is_empty() {
-        println!("manual PoR challenge submitted successfully.");
-        return Ok(());
-    }
-    println!("{}", render_por_trigger_response(&body)?);
-    Ok(())
-}
-
-fn render_por_trigger_response(body: &[u8]) -> Result<String, String> {
-    if let Ok(value) = norito::json::from_slice::<Value>(body) {
-        let pretty = to_string_pretty(&value)
-            .map_err(|err| format!("failed to format manual challenge response JSON: {err}"))?;
-        Ok(pretty)
-    } else if let Ok(text) = std::str::from_utf8(body) {
-        Ok(text.trim().to_string())
-    } else {
-        Ok(format!(
-            "manual PoR challenge accepted ({} bytes response payload).",
-            body.len()
-        ))
-    }
-}
-
 fn por_export(raw_args: Vec<String>) -> Result<(), String> {
     let mut torii_url: Option<String> = None;
     let mut out_path: Option<PathBuf> = None;
@@ -3401,7 +3145,6 @@ fn usage() -> String {
   sorafs_cli reputation watch --torii-url=URL [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
   sorafs_cli reputation verify --snapshot=PATH [--provider-id=ID --proof=PATH] [--summary-out=PATH]
   sorafs_cli por status --torii-url=URL [--manifest=HEX32] [--provider=HEX32] [--epoch=N] [--status=pending|verified|failed|repaired|forced] [--format=table|json]
-  sorafs_cli por trigger --torii-url=URL --manifest=HEX32 --provider=HEX32 --reason=TEXT --auth-token=PATH [--samples=N] [--deadline-secs=N]
   sorafs_cli por export --torii-url=URL --out=PATH [--start-epoch=N] [--end-epoch=N]
   sorafs_cli por report --torii-url=URL --week=YYYY-Www [--format=markdown|json]
   sorafs_cli proxy set-mode --orchestrator-config=PATH --mode=bridge|metadata-only [--json-out=PATH] [--config-out=PATH] [--dry-run]
@@ -3667,7 +3410,6 @@ fn insert_telemetry_source(summary: &mut Value, telemetry_source: Option<&str>) 
 fn por_usage() -> String {
     "Usage:
   sorafs_cli por status --torii-url=URL [--manifest=HEX32] [--provider=HEX32] [--epoch=N] [--status=pending|verified|failed|repaired|forced] [--limit=N] [--page-token=TOKEN] [--format=table|json]
-  sorafs_cli por trigger --torii-url=URL --manifest=HEX32 --provider=HEX32 --reason=TEXT --auth-token=PATH [--samples=N] [--deadline-secs=N]
   sorafs_cli por export --torii-url=URL --out=PATH [--start-epoch=N] [--end-epoch=N]
   sorafs_cli por report --torii-url=URL --week=YYYY-Www [--format=markdown|json]"
         .to_string()
@@ -19129,24 +18871,6 @@ mod tests {
         let expected = AccountId::new(fixture_keypair(0x5A).public_key().clone());
 
         assert_eq!(account, expected);
-    }
-
-    #[test]
-    fn render_por_trigger_response_formats_json_and_fallbacks() {
-        let rendered = render_por_trigger_response(br#"{"status":"ok","accepted":true}"#)
-            .expect("render JSON");
-        let parsed: Value = norito::json::from_str(&rendered).expect("parse rendered JSON");
-        assert_eq!(parsed.get("status").and_then(Value::as_str), Some("ok"));
-        assert_eq!(parsed.get("accepted").and_then(Value::as_bool), Some(true));
-
-        let text = render_por_trigger_response(b" accepted\n").expect("render text");
-        assert_eq!(text, "accepted");
-
-        let binary = render_por_trigger_response(&[0xFF, 0x00]).expect("render binary fallback");
-        assert_eq!(
-            binary,
-            "manual PoR challenge accepted (2 bytes response payload)."
-        );
     }
 
     #[test]

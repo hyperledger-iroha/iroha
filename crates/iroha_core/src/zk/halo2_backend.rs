@@ -362,16 +362,18 @@ mod tests {
             let cell = layouter.assign_region(
                 || "public value",
                 |mut region| {
-                    assign_advice_compat(
+                    let cell = assign_advice_compat(
                         &mut region,
                         || "value",
                         advice,
                         0,
                         || Value::known(self.value),
-                    )
+                    )?;
+                    Ok(cell.cell())
                 },
             )?;
-            layouter.constrain_instance(cell.cell(), instance, 0)
+            layouter.constrain_instance(cell, instance, 0);
+            Ok(())
         }
     }
 

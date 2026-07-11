@@ -30,7 +30,7 @@ MCP is disabled by default. Enable it under `torii.mcp`.
 
 For public SORA/Torii deployments intended to be used from Codex, the
 recommended policy is a curated writer profile that exposes only the stable
-`iroha.*` aliases:
+purpose-built `iroha.*` tools:
 
 ```json
 {
@@ -46,7 +46,7 @@ recommended policy is a curated writer profile that exposes only the stable
 ```
 
 This keeps the public tool catalog small and task-oriented while hiding the
-full raw `torii.*` OpenAPI-derived namespace and all operator routes.
+catalog-projected `torii.*` namespace and all operator routes.
 
 ### Configuration Fields
 - `enabled`: master switch for `/v1/mcp`.
@@ -60,7 +60,7 @@ full raw `torii.*` OpenAPI-derived namespace and all operator routes.
 - `async_job_ttl_secs` / `async_job_max_entries`: in-memory retention policy for `tools/call_async` jobs.
 
 Profile behavior:
-- `read_only`: GET/HEAD/OPTIONS and read-style aliases only.
+- `read_only`: read-only and instruction-builder tools only.
 - `writer`: includes mutating non-operator tools.
 - `operator`: includes operator tools as well.
 
@@ -98,9 +98,8 @@ store deployment credentials in repo config, plugin manifests, or
 documentation examples tied to real secrets.
 
 ## Protocol Behavior
-- `jsonrpc` is recommended as `"2.0"`.
-- If `jsonrpc` is present as a string and is not `"2.0"`, request is rejected as `invalid_request`.
-- If `jsonrpc` is omitted, request is accepted for compatibility.
+- `jsonrpc` is required and must be the string `"2.0"`.
+- Missing, non-string, or different `jsonrpc` values are rejected as `invalid_request`.
 - POST accepts either a single request object or a non-empty request array (batch).
 - Empty batch is rejected as `invalid_request`.
 - Unknown method is `method_not_found`.
@@ -147,7 +146,7 @@ HTTP behavior:
 Torii accepts the notification when:
 - `method == "notifications/initialized"`
 - `id` is omitted
-- `jsonrpc` is either omitted or `"2.0"`
+- `jsonrpc == "2.0"`
 
 ### `ping`
 Returns an empty result object so MCP clients can use the standard lifecycle
@@ -224,16 +223,22 @@ Async job records are in-memory only and are pruned by TTL/capacity.
 Pruning is performed lazily on async job inserts and `tools/jobs/get` reads.
 
 ## Tool Names And Discovery
-Tool names are stable and generated from HTTP method + path for OpenAPI-derived routes:
+Tool names are stable and generated from HTTP method + path for
+OpenAPI-derived routes, but only when the catalog explicitly enables that
+exact method/path pair in its MCP projection for the compiled feature set:
 - format: `torii.<method>_<path...>`
-- example: `torii.get_v1_accounts`
+- example: `torii.get_health`
 
-Additional curated aliases are provided under `connect.*` and `iroha.*`.
+Additional purpose-built tools are explicitly allowlisted under `connect.*`
+and `iroha.*`. OpenAPI presence alone never publishes a tool. Uncatalogued,
+feature-disabled, diagnostic, streaming, and non-projected operations fail
+closed. `tools/call` accepts only exact names returned by `tools/list`; Torii
+does not resolve `operationId` or retired convenience-name aliases.
 
-For public Codex-facing deployments, prefer publishing only `iroha.*` aliases.
+For public Codex-facing deployments, prefer publishing only `iroha.*` tools.
 Those names are curated for live account, asset, contract, governance, and
 transaction workflows and are substantially easier for an agent to use than the
-full raw `torii.*` catalog.
+lower-level catalog-projected `torii.*` tools.
 
 Streaming/internal paths are intentionally excluded from MCP tool generation (for example SSE/WS stream routes and `/v1/mcp` itself).
 
@@ -257,7 +262,7 @@ Body/headers behavior:
 - When `body_base64` is used and `content_type` is omitted, Torii defaults to Norito MIME.
 - `arguments.headers` entries for `content-length`, `host`, and `connection` are ignored.
 
-Many `iroha.*` alias tools also accept flat shortcut keys (for example `account_id`, `hash`, `definition_id`, `limit`, `offset`).
+Many purpose-built `iroha.*` tools also accept flat shortcut keys (for example `account_id`, `hash`, `definition_id`, `limit`, `offset`).
 Rely on each tool’s `inputSchema` for authoritative accepted fields.
 
 The live-network write-oriented aliases intentionally support the existing
@@ -402,21 +407,13 @@ supported `iroha.*` tools.
   "id": 3,
   "method": "tools/call",
   "params": {
-    "name": "torii.get_v1_accounts_account_id_transactions",
-    "arguments": {
-      "path": {
-        "account_id": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
-      },
-      "query": {
-        "limit": 20,
-        "offset": 0
-      }
-    }
+    "name": "torii.get_health",
+    "arguments": {}
   }
 }
 ```
 
-### Call Alias Tool With Flat Arguments
+### Call Purpose-Built Tool With Flat Arguments
 ```json
 {
   "jsonrpc": "2.0",

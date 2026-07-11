@@ -770,8 +770,11 @@ if #available(iOS 15, macOS 12, *) {
 
 Fine-tune the lifecycle events by flipping the `includeCreated`, `includeDeleted`,
 `includeExtended`, `includeShortened`, `includeMetadataInserted`, and
-`includeMetadataRemoved` switches on the filter. Provide `lastEventId:` when calling
-`streamTriggerEvents` to propagate Torii’s `Last-Event-ID` header and resume seamlessly.
+`includeMetadataRemoved` switches on the filter. The verifying-key, proof, and
+trigger helpers use the canonical live-only `/v1/events/sse` feed: they accept no
+resume cursor, and reconnecting can leave a gap. Terminal `stream_error` events
+are surfaced as typed stream failures instead of being treated as continuation
+points.
 
 ## Fixture Parity
 

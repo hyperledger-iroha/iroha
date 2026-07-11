@@ -1,28 +1,20 @@
 package org.hyperledger.iroha.sdk.offline
 
 import java.math.BigInteger
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
 import org.hyperledger.iroha.sdk.client.JsonEncoder
 import org.hyperledger.iroha.sdk.client.JsonNumbers
 import org.hyperledger.iroha.sdk.client.JsonParser
 
 object OfflineJsonParser {
-    private val readinessFields = setOf(
-        "asset_definition_id",
-        "evaluated_block_height",
-        "ready",
-        "blockers",
-    )
-    private val readinessBlockerFields = setOf("code", "message")
-
     @JvmStatic
     fun parseOfflineReadiness(payload: ByteArray): OfflineReadiness {
         val root = parse(payload)
         val obj = expectObject(root, "root")
-        rejectUnknownFields(obj, readinessFields, "root")
         val blockers = asArray(obj["blockers"], "blockers").mapIndexed { index, value ->
             val path = "blockers[$index]"
             val blocker = expectObject(value, path)
-            rejectUnknownFields(blocker, readinessBlockerFields, path)
             OfflineReadinessBlocker(
                 asExactReadinessString(blocker["code"], "$path.code"),
                 asExactReadinessString(blocker["message"], "$path.message"),
@@ -31,6 +23,11 @@ object OfflineJsonParser {
         return OfflineReadiness(
             asExactReadinessString(obj["asset_definition_id"], "asset_definition_id"),
             asReadinessU64(obj["evaluated_block_height"], "evaluated_block_height"),
+            asExactLowercaseHex(
+                obj["evaluated_block_hash"],
+                "evaluated_block_hash",
+                32,
+            ),
             asBoolean(obj["ready"], "ready"),
             blockers,
         )
@@ -44,23 +41,9 @@ object OfflineJsonParser {
     }
 
     @JvmStatic
-    fun parseCashEnvelope(payload: ByteArray): OfflineCashEnvelope {
-        val obj = expectObject(parse(payload), "root")
-        return parseCashEnvelopeObject(obj, "root")
-    }
-
-    @JvmStatic
     fun parseCashState(payload: ByteArray): OfflineCashState {
         val obj = expectObject(parse(payload), "root")
         return parseCashStateObject(obj, "root")
-    }
-
-    @JvmStatic
-    fun parseCashReadiness(payload: ByteArray): OfflineCashReadiness {
-        val obj = expectObject(parse(payload), "root")
-        val flag = obj["offline_recursive_stark"]
-        check(flag is Boolean) { "offline_recursive_stark is not a boolean" }
-        return OfflineCashReadiness(flag)
     }
 
     @JvmStatic
@@ -79,17 +62,6 @@ object OfflineJsonParser {
     fun parseStarkEnvelope(payload: ByteArray): OfflineStarkVerifyEnvelope {
         val obj = expectObject(parse(payload), "root")
         return parseStarkEnvelopeObject(obj, "root")
-    }
-
-    private fun parseCashEnvelopeObject(obj: Map<String, Any>, path: String): OfflineCashEnvelope {
-        val state = parseCashStateObject(
-            expectObject(obj["lineage_state"], "$path.lineage_state"),
-            "$path.lineage_state",
-        )
-        val settlement = obj["settlement"]?.let {
-            parseMutationSettlementObject(expectObject(it, "$path.settlement"), "$path.settlement")
-        }
-        return OfflineCashEnvelope(state, settlement)
     }
 
     private fun parseCashStateObject(obj: Map<String, Any>, path: String): OfflineCashState =
@@ -357,7 +329,16 @@ object OfflineJsonParser {
     }
 
     private fun parse(payload: ByteArray): Any {
-        val json = String(payload, Charsets.UTF_8).trim()
+        val json = try {
+            Charsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(payload))
+                .toString()
+                .trim()
+        } catch (error: java.nio.charset.CharacterCodingException) {
+            throw IllegalStateException("Offline JSON payload must be valid UTF-8", error)
+        }
         check(json.isNotEmpty()) { "Empty JSON payload" }
         return JsonParser.parse(json) as Any
     }
@@ -391,6 +372,14 @@ object OfflineJsonParser {
         return value
     }
 
+    private fun asExactLowercaseHex(value: Any?, path: String, bytes: Int): String {
+        val text = asExactReadinessString(value, path)
+        check(text.length == bytes * 2 && text.all { it in '0'..'9' || it in 'a'..'f' }) {
+            "$path must be exact lowercase $bytes-byte hexadecimal"
+        }
+        return text
+    }
+
     private fun asReadinessU64(value: Any?, path: String): BigInteger {
         val parsed = when (value) {
             is BigInteger -> value
@@ -416,12 +405,6 @@ object OfflineJsonParser {
     private fun asBoolean(value: Any?, path: String): Boolean {
         check(value is Boolean) { "$path must be a boolean" }
         return value
-    }
-
-    private fun rejectUnknownFields(obj: Map<String, Any>, allowed: Set<String>, path: String) {
-        for (field in obj.keys) {
-            check(field in allowed) { "$path.$field is not a supported field" }
-        }
     }
 
     private fun asBytes(value: Any?, path: String): ByteArray {

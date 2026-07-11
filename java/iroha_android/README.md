@@ -650,13 +650,14 @@ server-sent event feeds and surface parsed frames via the listener interface:
 ToriiEventStreamClient streams = httpTransport.newEventStreamClient();
 ToriiEventStream stream =
     streams.openSseStream(
-        "/v1/pipeline/events",
-        ToriiEventStreamOptions.builder()
-            .putQueryParameter("selector", "blocks")
-            .build(),
+        "/v1/events/sse",
+        ToriiEventStreamOptions.defaultOptions(),
         new ToriiEventStreamListener() {
           @Override
           public void onEvent(ServerSentEvent event) {
+            event.terminalStreamError().ifPresent(error -> {
+              throw error;
+            });
             System.out.println(event.event() + ": " + event.data());
           }
         });
@@ -671,13 +672,25 @@ emit the same hashed-authority metadata recorded for HTTP submissions. When the
 transport supports streaming responses (OkHttp/JDK/URLConnection), frames are
 parsed as they arrive; other executors buffer the response before parsing.
 
+The canonical `/v1/events/sse` and `/v1/contracts/events/sse` feeds are
+live-only and have no replay log. The client rejects every case variant of
+`Last-Event-ID` before HTTP dispatch for exactly those paths; replay-capable
+custom streams may still receive that header. Raw listeners receive terminal
+`event: stream_error` frames. Call `ServerSentEvent.terminalStreamError()`
+before category filtering to project one into a strict `ToriiStreamException`
+with its stable code, server message, optional unsigned dropped-message count,
+replay flag, and raw JSON. Malformed or schema-expanded terminal envelopes fail
+closed as `ToriiStreamProtocolException`. The typed pipeline-status stream does
+this projection automatically. Reconnecting to a canonical feed starts a new
+live subscription and can have a gap.
+
 Use `ToriiEventStreamSubscription` when a long-lived component needs automatic
 reconnects:
 
 ```java
 ToriiEventStreamSubscription subscription =
     ToriiEventStreamSubscription.builder(
-            streams, "/v1/pipeline/events", ToriiEventStreamOptions.defaultOptions(), listener)
+            streams, "/v1/events/sse", ToriiEventStreamOptions.defaultOptions(), listener)
         .setInitialBackoff(Duration.ofSeconds(1))
         .setMaxBackoff(Duration.ofSeconds(30))
         .addObserver(new ToriiEventStreamObserver() {
@@ -1266,21 +1279,20 @@ Use
 `canRedeemWitnessless(circuitId, hopCount)` or
 `requiresLineageWitnessForRedeem(circuitId, hopCount)` before online redeem
 construction. `RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` is `64`, and
-`RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1` is `true`, so
-witnessless Reserved-lineage online redemption is available for lineage bundles
-inside the 64-hop cap.
-Use `canAppendWitnesslessLineage(previousHopCount)` before attempting a
-witnessless Reserved-lineage append; it returns `true` for previous hop counts
-`1..63`.
+`RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1` is `false`. The hop
+constant is only the protocol bound: witnessless Reserved-lineage redeem and
+append fail closed for every circuit and hop count, and redeem requires a
+record-backed lineage witness.
+`canAppendWitnesslessLineage(previousHopCount)` therefore returns `false` for
+every input while transition verification is unavailable.
 Use `preferredAppendOutputCircuitId(previousHopCount)` as the default append
-output selector; it selects Reserved-lineage append for previous hop counts `1..63`.
+output selector; it selects semantic recursive aggregation.
 Use `canProveAppendOutputCircuitId(outputCircuitId, previousHopCount)` before
 selecting an append output circuit; semantic recursive append returns true
-through hop 64, and Reserved-lineage append returns true for previous hop
-counts `1..63`.
-The semantic append path is bounded by `COMPACT_TOKEN_MAX_HOPS`; witnessless
-Reserved-lineage append and redeem use the separate
-`RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` cap.
+for previous hop counts `1..63`, while Reserved-lineage append is not currently
+provable. The semantic append path is bounded by `COMPACT_TOKEN_MAX_HOPS`; the
+separate `RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` remains a protocol
+bound and does not enable witnessless admission.
 Use `canSelectAppendOutputCircuitId(previousProofCircuitId, outputCircuitId,
 previousHopCount)` to apply the previous-proof transition rule before
 serializing an append request.

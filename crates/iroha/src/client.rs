@@ -46,8 +46,14 @@ use iroha_data_model::{
 use iroha_logger::prelude::*;
 pub use iroha_telemetry::metrics::{Status, TxGossipSnapshot, Uptime};
 use iroha_torii_shared::{
-    AccountReadResponse, ErrorEnvelope, PipelineTransactionStatusResponse,
-    TriggerCompletionListResponse, uri as torii_uri,
+    AccountReadResponse, ErrorEnvelope, NORITO_V1_WEBSOCKET_SUBPROTOCOL,
+    PipelineTransactionStatusResponse, TriggerCompletionListResponse,
+    offline_api::{
+        OfflineOperationKind, OfflineOperationReference, OfflineOperationResult,
+        OfflineOperationState, OfflineOperationStatus, OfflineReadiness, OfflineRedeemRequest,
+        OfflineTopUpRequest,
+    },
+    uri as torii_uri,
 };
 use iroha_version::codec::EncodeVersioned;
 use norito::{
@@ -5098,6 +5104,287 @@ impl Client {
             .map_err(|error| eyre!("{context}: failed to decode JSON payload: {error}"))
     }
 
+    fn parse_negotiated_typed_response<T>(
+        response: &Response<Vec<u8>>,
+        expected_status: StatusCode,
+        context: &'static str,
+    ) -> Result<T>
+    where
+        T: norito::json::JsonDeserializeOwned,
+        for<'de> T: norito::NoritoDeserialize<'de>,
+    {
+        if response.status() != expected_status {
+            return Err(ResponseReport::with_msg(context, response)
+                .unwrap_or_else(core::convert::identity)
+                .into());
+        }
+
+        let content_type = Self::response_content_type(response);
+        let media_type = content_type
+            .split(';')
+            .next()
+            .map(str::trim)
+            .unwrap_or_default();
+        if Self::is_json_content_type(content_type) {
+            return norito::json::from_slice(response.body())
+                .map_err(|error| eyre!("{context}: failed to decode JSON payload: {error}"));
+        }
+        if media_type.eq_ignore_ascii_case(APPLICATION_NORITO) {
+            return decode_from_bytes(response.body())
+                .map_err(|error| eyre!("{context}: failed to decode Norito payload: {error}"));
+        }
+        Err(eyre!(
+            "{context}: invalid content-type `{content_type}` (expected application/json or application/x-norito)"
+        ))
+    }
+
+    fn require_lower_hex_32(value: &str, field: &'static str) -> Result<()> {
+        if value.len() == Hash::LENGTH * 2
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Ok(());
+        }
+        Err(eyre!(
+            "{field} must be exactly 64 lowercase hexadecimal characters"
+        ))
+    }
+
+    fn validate_offline_operation_reference(
+        response: &Response<Vec<u8>>,
+        reference: &OfflineOperationReference,
+        operation_id: &str,
+        expected_kind: OfflineOperationKind,
+        submitted_at_ms: u64,
+    ) -> Result<()> {
+        Self::require_lower_hex_32(&reference.operation_id, "operation_id")?;
+        if reference.operation_id != operation_id {
+            return Err(eyre!(
+                "offline operation response id does not match the signed request"
+            ));
+        }
+        if reference.kind != expected_kind || reference.state != OfflineOperationState::Pending {
+            return Err(eyre!(
+                "offline operation response kind or initial state does not match the request"
+            ));
+        }
+        Self::require_lower_hex_32(&reference.transaction_hash, "transaction_hash")?;
+        if reference.submitted_at_ms != submitted_at_ms {
+            return Err(eyre!(
+                "offline operation response submission time does not match the signed request"
+            ));
+        }
+
+        let expected_status_uri = format!("/v1/offline/operations/{operation_id}");
+        if reference.status_uri != expected_status_uri {
+            return Err(eyre!(
+                "offline operation response contains a non-canonical status URI"
+            ));
+        }
+        let location = response
+            .headers()
+            .get(http::header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .ok_or_else(|| eyre!("offline operation response is missing Location"))?;
+        if location != expected_status_uri {
+            return Err(eyre!(
+                "offline operation Location does not match the typed status URI"
+            ));
+        }
+        let retry_after = response
+            .headers()
+            .get(http::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|seconds| *seconds > 0)
+            .ok_or_else(|| eyre!("offline operation response has no valid Retry-After"))?;
+        let _ = retry_after;
+        Ok(())
+    }
+
+    fn validate_offline_operation_status(
+        status: &OfflineOperationStatus,
+        expected_operation_id: &str,
+    ) -> Result<()> {
+        let (operation_id, transaction_hash) = match status {
+            OfflineOperationStatus::Pending {
+                operation_id,
+                transaction_hash,
+                ..
+            }
+            | OfflineOperationStatus::Rejected {
+                operation_id,
+                transaction_hash,
+                ..
+            } => (operation_id, transaction_hash),
+            OfflineOperationStatus::Applied {
+                operation_id,
+                result,
+            } => {
+                let transaction_hash = match result {
+                    OfflineOperationResult::TopUp(result) => &result.transaction_hash,
+                    OfflineOperationResult::Redeem(result) => &result.transaction_hash,
+                };
+                (operation_id, transaction_hash)
+            }
+        };
+        Self::require_lower_hex_32(operation_id, "operation_id")?;
+        if operation_id != expected_operation_id {
+            return Err(eyre!(
+                "offline operation status id does not match the requested resource"
+            ));
+        }
+        Self::require_lower_hex_32(transaction_hash, "transaction_hash")
+    }
+
+    /// Evaluate whether one asset definition is ready for offline payments.
+    ///
+    /// A normal not-ready domain state is returned as `Ok` with `ready == false`.
+    ///
+    /// # Errors
+    /// Returns an error for transport failures, non-success responses, malformed negotiated
+    /// representations, or a response that is not bound to the requested asset definition.
+    pub fn get_offline_readiness(
+        &self,
+        asset_definition_id: &AssetDefinitionId,
+    ) -> Result<OfflineReadiness> {
+        let asset_definition_id = asset_definition_id.to_string();
+        let mut url = join_torii_url(&self.torii_url, torii_uri::OFFLINE_READINESS);
+        url.query_pairs_mut()
+            .append_pair("asset_definition_id", &asset_definition_id);
+        let response = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", self.wire_format_preference.accept_header()),
+        )?;
+        let readiness: OfflineReadiness = Self::parse_negotiated_typed_response(
+            &response,
+            StatusCode::OK,
+            "Failed to evaluate offline readiness",
+        )?;
+        if readiness.asset_definition_id != asset_definition_id {
+            return Err(eyre!(
+                "offline readiness response is not bound to the requested asset definition"
+            ));
+        }
+        Self::require_lower_hex_32(&readiness.evaluated_block_hash, "evaluated_block_hash")?;
+        if readiness.ready != readiness.blockers.is_empty() {
+            return Err(eyre!(
+                "offline readiness response has an inconsistent ready/blockers state"
+            ));
+        }
+        Ok(readiness)
+    }
+
+    /// Submit a signed online-to-offline top-up operation.
+    ///
+    /// The signed operation ID is also sent as the HTTP idempotency key. Identical retries return
+    /// the original operation resource; a changed request under that key is rejected by Torii.
+    ///
+    /// # Errors
+    /// Returns an error when local request binding validation, encoding, transport, response
+    /// decoding, or response-to-request binding validation fails.
+    pub fn submit_offline_top_up(
+        &self,
+        request: &OfflineTopUpRequest,
+    ) -> Result<OfflineOperationReference> {
+        request
+            .validate_public_binding()
+            .wrap_err("invalid offline top-up request")?;
+        self.submit_offline_operation(
+            torii_uri::OFFLINE_TOP_UP,
+            request,
+            request.operation_id,
+            request.authorization.issued_at_ms,
+            OfflineOperationKind::TopUp,
+        )
+    }
+
+    /// Submit a signed offline redemption operation.
+    ///
+    /// The signed operation ID is also sent as the HTTP idempotency key. Identical retries return
+    /// the original operation resource; a changed request under that key is rejected by Torii.
+    ///
+    /// # Errors
+    /// Returns an error when local request binding validation, encoding, transport, response
+    /// decoding, or response-to-request binding validation fails.
+    pub fn submit_offline_redeem(
+        &self,
+        request: &OfflineRedeemRequest,
+    ) -> Result<OfflineOperationReference> {
+        request
+            .validate_public_binding()
+            .wrap_err("invalid offline redemption request")?;
+        self.submit_offline_operation(
+            torii_uri::OFFLINE_REDEEM,
+            request,
+            request.operation_id,
+            request.authorization.issued_at_ms,
+            OfflineOperationKind::Redeem,
+        )
+    }
+
+    fn submit_offline_operation<T>(
+        &self,
+        path: &str,
+        request: &T,
+        operation_id: [u8; 32],
+        submitted_at_ms: u64,
+        kind: OfflineOperationKind,
+    ) -> Result<OfflineOperationReference>
+    where
+        T: norito::NoritoSerialize,
+    {
+        if operation_id == [0; 32] {
+            return Err(eyre!("offline operation_id must not be zero"));
+        }
+        let operation_id = bytes_to_hex(&operation_id);
+        let body = to_bytes(request).wrap_err("failed to encode offline request as Norito")?;
+        let url = join_torii_url(&self.torii_url, path);
+        let response = self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header("Content-Type", APPLICATION_NORITO)
+                .header("Accept", self.wire_format_preference.accept_header())
+                .header("Idempotency-Key", &operation_id)
+                .body(body),
+        )?;
+        let reference: OfflineOperationReference = Self::parse_negotiated_typed_response(
+            &response,
+            StatusCode::ACCEPTED,
+            "Failed to submit offline operation",
+        )?;
+        Self::validate_offline_operation_reference(
+            &response,
+            &reference,
+            &operation_id,
+            kind,
+            submitted_at_ms,
+        )?;
+        Ok(reference)
+    }
+
+    /// Fetch the current state of one offline operation.
+    ///
+    /// # Errors
+    /// Returns an error for a malformed operation ID, transport failure, non-success response,
+    /// malformed negotiated representation, or a response bound to another operation.
+    pub fn get_offline_operation(&self, operation_id: &str) -> Result<OfflineOperationStatus> {
+        Self::require_lower_hex_32(operation_id, "operation_id")?;
+        let path = torii_uri::OFFLINE_OPERATION.replace("{operation_id}", operation_id);
+        let url = join_torii_url(&self.torii_url, &path);
+        let response = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", self.wire_format_preference.accept_header()),
+        )?;
+        let status: OfflineOperationStatus = Self::parse_negotiated_typed_response(
+            &response,
+            StatusCode::OK,
+            "Failed to fetch offline operation",
+        )?;
+        Self::validate_offline_operation_status(&status, operation_id)?;
+        Ok(status)
+    }
+
     fn build_evidence_request_body(evidence_hex: &str) -> Result<Vec<u8>> {
         let mut payload = norito::json::Map::new();
         payload.insert(
@@ -5255,14 +5542,14 @@ impl Client {
             .collect())
     }
 
-    /// GET `/v1/nexus/public_lanes/{lane}/validators` — lifecycle snapshot for public-lane validators.
+    /// GET `/v1/nexus/public-lanes/{lane}/validators` — lifecycle snapshot for public-lane validators.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_public_lane_validators(&self, lane_id: LaneId) -> Result<JsonValue> {
         let url = join_torii_url(
             &self.torii_url,
-            &format!("v1/nexus/public_lanes/{}/validators", lane_id.as_u32()),
+            &format!("v1/nexus/public-lanes/{}/validators", lane_id.as_u32()),
         );
         let req = self.default_request(HttpMethod::GET, url);
         let resp = self.send_builder(req)?;
@@ -5276,7 +5563,7 @@ impl Client {
         norito::json::from_slice(resp.body()).map_err(Into::into)
     }
 
-    /// GET `/v1/nexus/public_lanes/{lane}/stake` — bonded stake per validator/staker.
+    /// GET `/v1/nexus/public-lanes/{lane}/stake` — bonded stake per validator/staker.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -5287,7 +5574,7 @@ impl Client {
     ) -> Result<JsonValue> {
         let url = join_torii_url(
             &self.torii_url,
-            &format!("v1/nexus/public_lanes/{}/stake", lane_id.as_u32()),
+            &format!("v1/nexus/public-lanes/{}/stake", lane_id.as_u32()),
         );
         let mut req = self.default_request(HttpMethod::GET, url);
         if let Some(value) = validator {
@@ -5307,7 +5594,7 @@ impl Client {
         norito::json::from_slice(resp.body()).map_err(Into::into)
     }
 
-    /// GET `/v1/nexus/public_lanes/{lane}/rewards/pending` — pending rewards for an account.
+    /// GET `/v1/nexus/public-lanes/{lane}/rewards/pending` — pending rewards for an account.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -5322,7 +5609,7 @@ impl Client {
         }
         let url = join_torii_url(
             &self.torii_url,
-            &format!("v1/nexus/public_lanes/{}/rewards/pending", lane_id.as_u32()),
+            &format!("v1/nexus/public-lanes/{}/rewards/pending", lane_id.as_u32()),
         );
         let mut req = self
             .default_request(HttpMethod::GET, url)
@@ -5341,14 +5628,14 @@ impl Client {
         norito::json::from_slice(resp.body()).map_err(Into::into)
     }
 
-    /// GET `/v1/sumeragi/commit_qc/:hash` — full commit QC record for a parent block hash.
+    /// GET `/v1/sumeragi/commit-qcs/{block_hash}` — full commit QC record for a parent block hash.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_sumeragi_commit_qc_json(&self, hash_hex: &str) -> Result<norito::json::Value> {
         let url = join_torii_url(
             &self.torii_url,
-            &format!("v1/sumeragi/commit_qc/{hash_hex}"),
+            &format!("v1/sumeragi/commit-qcs/{hash_hex}"),
         );
         let resp = self
             .default_request(HttpMethod::GET, url)
@@ -5635,6 +5922,274 @@ fn mk_response(status: StatusCode, body: Vec<u8>, content_type: Option<&str>) ->
         builder = builder.header("content-type", ct);
     }
     builder.body(body).unwrap()
+}
+
+#[cfg(test)]
+mod offline_client_tests {
+    use std::sync::{Arc, Mutex};
+
+    use norito::derive::NoritoSerialize;
+
+    use super::{evidence_http_tests::*, *};
+    use crate::http::Response as HttpResponse;
+
+    #[derive(NoritoSerialize)]
+    struct CommandFixture {
+        nonce: u64,
+    }
+
+    fn header<'a>(snapshot: &'a RequestSnapshot, name: &str) -> Option<&'a str> {
+        snapshot
+            .headers
+            .iter()
+            .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
+
+    fn operation_reference(
+        operation_id: &str,
+        kind: OfflineOperationKind,
+    ) -> OfflineOperationReference {
+        OfflineOperationReference {
+            operation_id: operation_id.to_owned(),
+            kind,
+            state: OfflineOperationState::Pending,
+            transaction_hash: "22".repeat(32),
+            status_uri: format!("/v1/offline/operations/{operation_id}"),
+            submitted_at_ms: 42,
+        }
+    }
+
+    fn accepted_response(reference: &OfflineOperationReference) -> HttpResponse<Vec<u8>> {
+        HttpResponse::builder()
+            .status(StatusCode::ACCEPTED)
+            .header("content-type", APPLICATION_NORITO)
+            .header("location", &reference.status_uri)
+            .header("retry-after", "1")
+            .body(norito::to_bytes(reference).expect("encode operation reference"))
+            .expect("response")
+    }
+
+    #[test]
+    fn readiness_request_is_typed_negotiated_and_asset_bound() {
+        let asset_definition_id: AssetDefinitionId =
+            "xor#wonderland".parse().expect("asset definition id");
+        let readiness = OfflineReadiness {
+            asset_definition_id: asset_definition_id.to_string(),
+            evaluated_block_height: 19,
+            evaluated_block_hash: "ab".repeat(32),
+            ready: false,
+            blockers: vec![iroha_torii_shared::offline_api::OfflineReadinessBlocker {
+                code: "issuer_key_missing".to_owned(),
+                message: "issuer key is unavailable".to_owned(),
+            }],
+        };
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/json; charset=utf-8")
+            .body(norito::json::to_vec(&readiness).expect("encode readiness"))
+            .expect("response");
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let result = with_mock_http(respond_with(&snapshots, response), || {
+            client_with_base_url(base_url()).get_offline_readiness(&asset_definition_id)
+        })
+        .expect("readiness response");
+
+        assert!(!result.ready);
+        let snapshots = snapshots.lock().expect("snapshots");
+        assert_eq!(snapshots.len(), 1);
+        let snapshot = &snapshots[0];
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(snapshot.url.path(), torii_uri::OFFLINE_READINESS);
+        assert_eq!(
+            snapshot
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "asset_definition_id")
+                .map(|(_, value)| value.into_owned()),
+            Some(asset_definition_id.to_string())
+        );
+        assert_single_accept_header(snapshot, ACCEPT_NORITO_PREFERRED);
+    }
+
+    #[test]
+    fn readiness_rejects_cross_asset_and_inconsistent_states() {
+        let requested: AssetDefinitionId = "xor#wonderland".parse().expect("asset definition id");
+        for readiness in [
+            OfflineReadiness {
+                asset_definition_id: "rose#wonderland".to_owned(),
+                evaluated_block_height: 1,
+                evaluated_block_hash: "ab".repeat(32),
+                ready: true,
+                blockers: Vec::new(),
+            },
+            OfflineReadiness {
+                asset_definition_id: requested.to_string(),
+                evaluated_block_height: 1,
+                evaluated_block_hash: "ab".repeat(32),
+                ready: true,
+                blockers: vec![iroha_torii_shared::offline_api::OfflineReadinessBlocker {
+                    code: "forged".to_owned(),
+                    message: "forged".to_owned(),
+                }],
+            },
+            OfflineReadiness {
+                asset_definition_id: requested.to_string(),
+                evaluated_block_height: 1,
+                evaluated_block_hash: "AB".repeat(32),
+                ready: true,
+                blockers: Vec::new(),
+            },
+        ] {
+            let response = HttpResponse::builder()
+                .status(StatusCode::OK)
+                .header("content-type", APPLICATION_NORITO)
+                .body(norito::to_bytes(&readiness).expect("encode readiness"))
+                .expect("response");
+            let error = with_mock_http(
+                respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+                || client_with_base_url(base_url()).get_offline_readiness(&requested),
+            )
+            .expect_err("forged readiness response must fail closed");
+            assert!(
+                error.to_string().contains("offline readiness response")
+                    || error.to_string().contains("evaluated_block_hash"),
+                "unexpected error: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn command_submission_uses_direct_norito_and_signed_idempotency_key() {
+        let fixture = CommandFixture { nonce: 7 };
+        let operation_bytes = [0x11; 32];
+        let operation_id = bytes_to_hex(&operation_bytes);
+        for (path, kind) in [
+            (torii_uri::OFFLINE_TOP_UP, OfflineOperationKind::TopUp),
+            (torii_uri::OFFLINE_REDEEM, OfflineOperationKind::Redeem),
+        ] {
+            let reference = operation_reference(&operation_id, kind);
+            let response = accepted_response(&reference);
+            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let returned = with_mock_http(respond_with(&snapshots, response), || {
+                client_with_base_url(base_url()).submit_offline_operation(
+                    path,
+                    &fixture,
+                    operation_bytes,
+                    42,
+                    kind,
+                )
+            })
+            .expect("accepted operation");
+            assert_eq!(returned, reference);
+
+            let snapshots = snapshots.lock().expect("snapshots");
+            assert_eq!(snapshots.len(), 1);
+            let snapshot = &snapshots[0];
+            assert_eq!(snapshot.method, HttpMethod::POST);
+            assert_eq!(snapshot.url.path(), path);
+            assert_eq!(header(snapshot, "content-type"), Some(APPLICATION_NORITO));
+            assert_eq!(
+                header(snapshot, "idempotency-key"),
+                Some(operation_id.as_str())
+            );
+            assert_single_accept_header(snapshot, ACCEPT_NORITO_PREFERRED);
+            assert_eq!(
+                snapshot.body,
+                norito::to_bytes(&fixture).expect("encode command fixture")
+            );
+        }
+    }
+
+    #[test]
+    fn command_submission_rejects_zero_ids_and_forged_response_binding() {
+        let fixture = CommandFixture { nonce: 7 };
+        let client = client_with_base_url(base_url());
+        let zero_error = client
+            .submit_offline_operation(
+                torii_uri::OFFLINE_TOP_UP,
+                &fixture,
+                [0; 32],
+                42,
+                OfflineOperationKind::TopUp,
+            )
+            .expect_err("zero operation id must fail before transport");
+        assert!(zero_error.to_string().contains("must not be zero"));
+
+        let operation_bytes = [0x11; 32];
+        let operation_id = bytes_to_hex(&operation_bytes);
+        let mut forged = operation_reference(&operation_id, OfflineOperationKind::Redeem);
+        forged.submitted_at_ms = 43;
+        let response = accepted_response(&forged);
+        let error = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || {
+                client_with_base_url(base_url()).submit_offline_operation(
+                    torii_uri::OFFLINE_TOP_UP,
+                    &fixture,
+                    operation_bytes,
+                    42,
+                    OfflineOperationKind::TopUp,
+                )
+            },
+        )
+        .expect_err("cross-kind forged response must fail closed");
+        assert!(error.to_string().contains("kind or initial state"));
+    }
+
+    #[test]
+    fn operation_status_request_validates_path_id_and_payload_binding() {
+        let operation_id = "11".repeat(32);
+        let status = OfflineOperationStatus::Pending {
+            operation_id: operation_id.clone(),
+            kind: OfflineOperationKind::TopUp,
+            transaction_hash: "22".repeat(32),
+            submitted_at_ms: 42,
+        };
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(norito::to_bytes(&status).expect("encode status"))
+            .expect("response");
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        with_mock_http(respond_with(&snapshots, response), || {
+            client_with_base_url(base_url()).get_offline_operation(&operation_id)
+        })
+        .expect("operation status");
+        let snapshots = snapshots.lock().expect("snapshots");
+        assert_eq!(
+            snapshots[0].url.path(),
+            format!("/v1/offline/operations/{operation_id}")
+        );
+        assert_single_accept_header(&snapshots[0], ACCEPT_NORITO_PREFERRED);
+
+        let malformed = client_with_base_url(base_url())
+            .get_offline_operation("../redeem")
+            .expect_err("path injection must fail locally");
+        assert!(malformed.to_string().contains("64 lowercase hexadecimal"));
+    }
+
+    #[test]
+    fn negotiated_decoder_rejects_retired_and_missing_media_types() {
+        let readiness = OfflineReadiness {
+            asset_definition_id: "xor#wonderland".to_owned(),
+            evaluated_block_height: 1,
+            evaluated_block_hash: "ab".repeat(32),
+            ready: true,
+            blockers: Vec::new(),
+        };
+        let body = norito::json::to_vec(&readiness).expect("encode readiness");
+        for content_type in [Some("text/json"), Some("application/octet-stream"), None] {
+            let response = mk_response(StatusCode::OK, body.clone(), content_type);
+            let error = Client::parse_negotiated_typed_response::<OfflineReadiness>(
+                &response,
+                StatusCode::OK,
+                "offline response",
+            )
+            .expect_err("unadvertised representation must fail closed");
+            assert!(error.to_string().contains("invalid content-type"));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -6332,7 +6887,7 @@ mod evidence_http_tests {
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(
             snapshot.url.as_str(),
-            "http://mock.local/v1/multisig/proposals/list"
+            "http://mock.local/v1/multisig/proposals/query"
         );
         let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
         assert_eq!(
@@ -6590,7 +7145,7 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn post_multisig_approvals_list_for_authority_builds_signed_request() {
+    fn query_multisig_approvals_for_authority_builds_signed_request() {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{\"items\":[],\"next_cursor\":null}");
@@ -6604,8 +7159,8 @@ mod evidence_http_tests {
 
         with_mock_http(respond_with(&snapshots, response), || {
             let resp = client
-                .post_multisig_approvals_list_for_authority(&request)
-                .expect("post multisig approvals list");
+                .query_multisig_approvals_for_authority(&request)
+                .expect("query multisig approvals");
             assert!(resp.items.is_empty());
             assert!(resp.next_cursor.is_none());
         });
@@ -6616,7 +7171,7 @@ mod evidence_http_tests {
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(
             snapshot.url.as_str(),
-            "http://mock.local/v1/multisig/approvals/list_for_authority"
+            "http://mock.local/v1/multisig/approvals/query-for-authority"
         );
         let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
         assert_eq!(
@@ -6642,7 +7197,7 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn post_multisig_approvals_get_for_authority_builds_signed_request() {
+    fn lookup_multisig_approval_for_authority_builds_signed_request() {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let account_id = AccountId::new(checked_random_keypair().public_key().clone());
@@ -6659,8 +7214,8 @@ mod evidence_http_tests {
 
         with_mock_http(respond_with(&snapshots, response), || {
             let resp = client
-                .post_multisig_approvals_get_for_authority(&request)
-                .expect("post multisig approvals get");
+                .lookup_multisig_approval_for_authority(&request)
+                .expect("lookup multisig approval");
             assert_eq!(resp.item.multisig_account_id, account_id);
             assert_eq!(resp.item.proposal_id, "hash");
         });
@@ -6671,7 +7226,7 @@ mod evidence_http_tests {
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(
             snapshot.url.as_str(),
-            "http://mock.local/v1/multisig/approvals/get_for_authority"
+            "http://mock.local/v1/multisig/approvals/lookup-for-authority"
         );
         let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
         assert_eq!(
@@ -12009,22 +12564,6 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// Convenience: POST `/v1/aliases/voprf/evaluate` with a hex-encoded blinded element.
-    ///
-    /// # Errors
-    /// Returns an error if request construction, NORITO serialization, or the HTTP call fails.
-    pub fn post_alias_voprf_hex(&self, blinded_hex: &str) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/aliases/voprf/evaluate");
-        let body = norito::json::to_vec(&norito::json!({
-            "blinded_element_hex": blinded_hex,
-        }))?;
-        self.default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()
-    }
-
     /// Convenience: POST `/v1/aliases/resolve` with an alias string.
     ///
     /// # Errors
@@ -12039,12 +12578,12 @@ impl Client {
             .send()
     }
 
-    /// Convenience: POST `/v1/aliases/resolve_index` with an index payload.
+    /// Convenience: POST `/v1/aliases/resolve-index` with an index payload.
     ///
     /// # Errors
     /// Returns an error if request construction, NORITO serialization, or the HTTP call fails.
     pub fn post_alias_resolve_index(&self, index: u64) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/aliases/resolve_index");
+        let url = join_torii_url(&self.torii_url, "v1/aliases/resolve-index");
         let body = norito::json::to_vec(&norito::json!({ "index": index }))?;
         self.default_request(HttpMethod::POST, url)
             .header("Content-Type", APPLICATION_JSON)
@@ -12053,7 +12592,7 @@ impl Client {
             .send()
     }
 
-    /// Convenience: POST `/v1/aliases/by_account` with a canonical account id and optional
+    /// Convenience: POST `/v1/aliases/by-account` with a canonical account id and optional
     /// alias-scope filters.
     ///
     /// # Errors
@@ -12064,7 +12603,7 @@ impl Client {
         dataspace: Option<&str>,
         domain: Option<&str>,
     ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/aliases/by_account");
+        let url = join_torii_url(&self.torii_url, "v1/aliases/by-account");
         let body = norito::json::to_vec(&norito::json!({
             "account_id": account_id,
             "dataspace": dataspace,
@@ -12105,7 +12644,7 @@ impl Client {
             .send()
     }
 
-    /// Convenience: POST `/v1/multisig/proposals/list` for a multisig account id.
+    /// Convenience: POST `/v1/multisig/proposals/query` for a multisig account id.
     ///
     /// # Errors
     /// Returns an error if request construction, JSON serialization, the HTTP call,
@@ -12115,7 +12654,7 @@ impl Client {
         multisig_account_id: &iroha_data_model::account::AccountId,
         statuses: &[&str],
     ) -> Result<MultisigProposalsListResponse> {
-        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/list");
+        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/query");
         let status = statuses
             .iter()
             .map(|value| (*value).to_owned())
@@ -12178,18 +12717,18 @@ impl Client {
         Ok(decoded)
     }
 
-    /// Convenience: signed POST `/v1/multisig/approvals/list_for_authority` for the caller authority.
+    /// Convenience: signed POST `/v1/multisig/approvals/query-for-authority` for the caller authority.
     ///
     /// # Errors
     /// Returns an error if request construction, JSON serialization, the HTTP call,
     /// or response decoding fails.
-    pub fn post_multisig_approvals_list_for_authority(
+    pub fn query_multisig_approvals_for_authority(
         &self,
         request: &MultisigApprovalsListRequest,
     ) -> Result<MultisigApprovalsListResponse> {
         let body = norito::json::to_vec(request)
-            .wrap_err("failed to encode multisig approvals list request")?;
-        let url = join_torii_url(&self.torii_url, "v1/multisig/approvals/list_for_authority");
+            .wrap_err("failed to encode multisig approvals query request")?;
+        let url = join_torii_url(&self.torii_url, "v1/multisig/approvals/query-for-authority");
         let response = self.send_builder(
             self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_JSON)
@@ -12197,27 +12736,30 @@ impl Client {
         )?;
         if response.status() != StatusCode::OK {
             return Err(
-                ResponseReport::with_msg("failed to list multisig approvals", &response)
+                ResponseReport::with_msg("failed to query multisig approvals", &response)
                     .unwrap_or_else(core::convert::identity)
                     .into(),
             );
         }
         norito::json::from_slice(response.body())
-            .wrap_err("failed to decode multisig approvals list response")
+            .wrap_err("failed to decode multisig approvals query response")
     }
 
-    /// Convenience: signed POST `/v1/multisig/approvals/get_for_authority` for the caller authority.
+    /// Convenience: signed POST `/v1/multisig/approvals/lookup-for-authority` for the caller authority.
     ///
     /// # Errors
     /// Returns an error if request construction, JSON serialization, the HTTP call,
     /// or response decoding fails.
-    pub fn post_multisig_approvals_get_for_authority(
+    pub fn lookup_multisig_approval_for_authority(
         &self,
         request: &MultisigApprovalsGetRequest,
     ) -> Result<MultisigApprovalsGetResponse> {
         let body = norito::json::to_vec(request)
-            .wrap_err("failed to encode multisig approvals get request")?;
-        let url = join_torii_url(&self.torii_url, "v1/multisig/approvals/get_for_authority");
+            .wrap_err("failed to encode multisig approval lookup request")?;
+        let url = join_torii_url(
+            &self.torii_url,
+            "v1/multisig/approvals/lookup-for-authority",
+        );
         let response = self.send_builder(
             self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_JSON)
@@ -12225,13 +12767,13 @@ impl Client {
         )?;
         if response.status() != StatusCode::OK {
             return Err(
-                ResponseReport::with_msg("failed to get multisig approval", &response)
+                ResponseReport::with_msg("failed to look up multisig approval", &response)
                     .unwrap_or_else(core::convert::identity)
                     .into(),
             );
         }
         norito::json::from_slice(response.body())
-            .wrap_err("failed to decode multisig approvals get response")
+            .wrap_err("failed to decode multisig approval lookup response")
     }
 
     /// Convenience: GET `/v1/sorafs/pin` to list manifests in the pin registry.
@@ -12623,13 +13165,13 @@ impl Client {
         DaManifestBundle::from_json(&value)
     }
 
-    /// Fetch the active DA commitment proof-policy bundle from `/v1/da/proof_policies`.
+    /// Fetch the active DA commitment proof-policy bundle from `/v1/da/proof-policies`.
     ///
     /// # Errors
     ///
     /// Returns an error if the HTTP request fails or the response cannot be decoded.
     pub fn get_da_proof_policies(&self) -> Result<DaProofPolicyBundle> {
-        let url = join_torii_url(&self.torii_url, "v1/da/proof_policies");
+        let url = join_torii_url(&self.torii_url, "v1/da/proof-policies");
         let response = self
             .default_request(HttpMethod::GET, url)
             .header("Accept", APPLICATION_JSON)
@@ -12646,13 +13188,13 @@ impl Client {
             .wrap_err("failed to decode DA proof policies response")
     }
 
-    /// Fetch a stable DA proof-policy snapshot from `/v1/da/proof_policy_snapshot`.
+    /// Fetch a stable DA proof-policy snapshot from `/v1/da/proof-policies/snapshot`.
     ///
     /// # Errors
     ///
     /// Returns an error if the HTTP request fails or the response cannot be decoded.
     pub fn get_da_proof_policy_snapshot(&self) -> Result<DaProofPolicyBundle> {
-        let url = join_torii_url(&self.torii_url, "v1/da/proof_policy_snapshot");
+        let url = join_torii_url(&self.torii_url, "v1/da/proof-policies/snapshot");
         let response = self
             .default_request(HttpMethod::GET, url)
             .header("Accept", APPLICATION_JSON)
@@ -12760,7 +13302,7 @@ impl Client {
             .wrap_err("failed to decode DA commitment verify response")
     }
 
-    /// Query pin intent records from `/v1/da/pin_intents`.
+    /// Query pin intent records from `/v1/da/pin-intents`.
     ///
     /// # Errors
     ///
@@ -12771,7 +13313,7 @@ impl Client {
     ) -> Result<Vec<DaPinIntentWithLocation>> {
         let body =
             norito::json::to_vec(request).wrap_err("failed to encode DA pin intent request")?;
-        let url = join_torii_url(&self.torii_url, "v1/da/pin_intents");
+        let url = join_torii_url(&self.torii_url, "v1/da/pin-intents");
         let response = self
             .default_request(HttpMethod::POST, url)
             .header("Content-Type", APPLICATION_JSON)
@@ -12790,7 +13332,7 @@ impl Client {
             .wrap_err("failed to decode DA pin intent list response")
     }
 
-    /// Build a pin intent proof from `/v1/da/pin_intents/prove`.
+    /// Build a pin intent proof from `/v1/da/pin-intents/prove`.
     ///
     /// # Errors
     ///
@@ -12801,7 +13343,7 @@ impl Client {
     ) -> Result<Option<DaPinIntentWithLocation>> {
         let body = norito::json::to_vec(request)
             .wrap_err("failed to encode DA pin intent proof request")?;
-        let url = join_torii_url(&self.torii_url, "v1/da/pin_intents/prove");
+        let url = join_torii_url(&self.torii_url, "v1/da/pin-intents/prove");
         let response = self
             .default_request(HttpMethod::POST, url)
             .header("Content-Type", APPLICATION_JSON)
@@ -12820,7 +13362,7 @@ impl Client {
             .wrap_err("failed to decode DA pin intent proof response")
     }
 
-    /// Verify a pin intent proof against `/v1/da/pin_intents/verify`.
+    /// Verify a pin intent proof against `/v1/da/pin-intents/verify`.
     ///
     /// # Errors
     ///
@@ -12830,7 +13372,7 @@ impl Client {
         proof: &DaPinIntentWithLocation,
     ) -> Result<DaPinIntentVerifyResponse> {
         let body = norito::json::to_vec(proof).wrap_err("failed to encode DA pin intent proof")?;
-        let url = join_torii_url(&self.torii_url, "v1/da/pin_intents/verify");
+        let url = join_torii_url(&self.torii_url, "v1/da/pin-intents/verify");
         let response = self
             .default_request(HttpMethod::POST, url)
             .header("Content-Type", APPLICATION_JSON)
@@ -19139,10 +19681,25 @@ pub mod stream_api {
         http_default::DefaultWebSocketRequestBuilder,
     };
 
+    fn validate_selected_subprotocol(response: &http_default::WebSocketResponse) -> Result<()> {
+        let selected = response
+            .headers()
+            .get(::http::header::SEC_WEBSOCKET_PROTOCOL)
+            .and_then(|value| value.to_str().ok());
+        if selected == Some(NORITO_V1_WEBSOCKET_SUBPROTOCOL) {
+            Ok(())
+        } else {
+            Err(eyre!(
+                "Torii WebSocket did not select required subprotocol `{NORITO_V1_WEBSOCKET_SUBPROTOCOL}`"
+            ))
+        }
+    }
+
     /// Iterator for getting messages from the `WebSocket` stream.
     pub(super) struct SyncIterator<E> {
         stream: WebSocketStream,
         handler: E,
+        terminated: bool,
     }
 
     impl<E> SyncIterator<E> {
@@ -19164,13 +19721,15 @@ pub mod stream_api {
                 next: next_handler,
             } = Init::<http_default::DefaultWebSocketRequestBuilder>::init(handler);
 
-            let mut stream = req.build()?.connect()?;
+            let (mut stream, response) = req.build()?.connect_with_response()?;
+            validate_selected_subprotocol(&response)?;
             stream.send(WebSocketMessage::Binary(first_message.into()))?;
 
             trace!("`SyncIterator` created successfully");
             Ok(SyncIterator {
                 stream,
                 handler: next_handler,
+                terminated: false,
             })
         }
     }
@@ -19179,30 +19738,57 @@ pub mod stream_api {
         type Item = Result<E::Event>;
 
         fn next(&mut self) -> Option<Self::Item> {
+            if self.terminated {
+                return None;
+            }
             loop {
                 match self.stream.read() {
                     Ok(WebSocketMessage::Binary(message)) => {
                         match self.handler.message(message.to_vec()) {
                             Ok(event) => return Some(Ok(event)),
                             Err(err) => {
-                                let preview_len = message.len().min(32);
-                                let preview = hex::encode(&message[..preview_len]);
-                                let full_hex = hex::encode(&message);
-                                tracing::warn!(
-                                        ?err,
-                                    frame_len = message.len(),
-                                    frame_head_hex = %preview,
-                                    frame_hex = %full_hex,
-                                    "dropping malformed event frame"
-                                );
+                                self.terminated = true;
+                                return Some(Err(eyre!(
+                                    "failed to decode Torii WebSocket binary message: {err}"
+                                )));
                             }
                         }
                     }
-                    Ok(_) => (),
+                    Ok(WebSocketMessage::Close(frame)) => {
+                        self.terminated = true;
+                        return match frame {
+                            Some(frame) if u16::from(frame.code) == 1000 => None,
+                            Some(frame) => Some(Err(eyre!(
+                                "Torii WebSocket stream closed with code {}: {}",
+                                u16::from(frame.code),
+                                frame.reason
+                            ))),
+                            None => Some(Err(eyre!(
+                                "Torii WebSocket stream closed without a status code"
+                            ))),
+                        };
+                    }
+                    Ok(WebSocketMessage::Ping(_) | WebSocketMessage::Pong(_)) => (),
+                    Ok(WebSocketMessage::Text(_)) => {
+                        self.terminated = true;
+                        return Some(Err(eyre!(
+                            "Torii WebSocket sent an unexpected text data frame"
+                        )));
+                    }
+                    Ok(WebSocketMessage::Frame(_)) => {
+                        self.terminated = true;
+                        return Some(Err(eyre!(
+                            "Torii WebSocket exposed an unexpected raw frame"
+                        )));
+                    }
                     Err(WebSocketError::ConnectionClosed | WebSocketError::AlreadyClosed) => {
+                        self.terminated = true;
                         return None;
                     }
-                    Err(err) => return Some(Err(err.into())),
+                    Err(err) => {
+                        self.terminated = true;
+                        return Some(Err(err.into()));
+                    }
                 }
             }
         }
@@ -19240,6 +19826,7 @@ pub mod stream_api {
     pub struct AsyncStream<E> {
         stream: AsyncWebSocketStream,
         handler: E,
+        terminated: bool,
     }
 
     impl<E> AsyncStream<E> {
@@ -19262,7 +19849,8 @@ pub mod stream_api {
                 next: next_handler,
             } = Init::<http_default::DefaultWebSocketRequestBuilder>::init(handler);
 
-            let mut stream = req.build()?.connect_async().await?;
+            let (mut stream, response) = req.build()?.connect_async_with_response().await?;
+            validate_selected_subprotocol(&response)?;
             stream
                 .send(WebSocketMessage::Binary(first_message.into()))
                 .await?;
@@ -19271,6 +19859,7 @@ pub mod stream_api {
             Ok(AsyncStream {
                 stream,
                 handler: next_handler,
+                terminated: false,
             })
         }
     }
@@ -19299,33 +19888,116 @@ pub mod stream_api {
             mut self: std::pin::Pin<&mut Self>,
             cx: &mut std::task::Context<'_>,
         ) -> std::task::Poll<Option<Self::Item>> {
+            if self.terminated {
+                return std::task::Poll::Ready(None);
+            }
             loop {
                 break match futures_util::ready!(self.stream.poll_next_unpin(cx)) {
                     Some(Ok(WebSocketMessage::Binary(message))) => {
                         match self.handler.message(message.to_vec()) {
                             Ok(event) => std::task::Poll::Ready(Some(Ok(event))),
                             Err(err) => {
-                                let preview_len = message.len().min(32);
-                                let preview = hex::encode(&message[..preview_len]);
-                                let full_hex = hex::encode(&message);
-                                tracing::warn!(
-                                    ?err,
-                                    frame_len = message.len(),
-                                    frame_head_hex = %preview,
-                                    frame_hex = %full_hex,
-                                    "dropping malformed event frame"
-                                );
-                                continue;
+                                self.terminated = true;
+                                std::task::Poll::Ready(Some(Err(eyre!(
+                                    "failed to decode Torii WebSocket binary message: {err}"
+                                ))))
                             }
                         }
                     }
-                    Some(Ok(_)) => continue,
-                    Some(Err(err)) => std::task::Poll::Ready(Some(Err(err.into()))),
-                    None => std::task::Poll::Ready(None),
+                    Some(Ok(WebSocketMessage::Close(frame))) => {
+                        self.terminated = true;
+                        let error = match frame {
+                            Some(frame) if u16::from(frame.code) == 1000 => None,
+                            Some(frame) => Some(eyre!(
+                                "Torii WebSocket stream closed with code {}: {}",
+                                u16::from(frame.code),
+                                frame.reason
+                            )),
+                            None => {
+                                Some(eyre!("Torii WebSocket stream closed without a status code"))
+                            }
+                        };
+                        std::task::Poll::Ready(error.map(Err))
+                    }
+                    Some(Ok(WebSocketMessage::Ping(_) | WebSocketMessage::Pong(_))) => continue,
+                    Some(Ok(WebSocketMessage::Text(_))) => {
+                        self.terminated = true;
+                        std::task::Poll::Ready(Some(Err(eyre!(
+                            "Torii WebSocket sent an unexpected text data frame"
+                        ))))
+                    }
+                    Some(Ok(WebSocketMessage::Frame(_))) => {
+                        self.terminated = true;
+                        std::task::Poll::Ready(Some(Err(eyre!(
+                            "Torii WebSocket exposed an unexpected raw frame"
+                        ))))
+                    }
+                    Some(Err(err)) => {
+                        self.terminated = true;
+                        std::task::Poll::Ready(Some(Err(err.into())))
+                    }
+                    None => {
+                        self.terminated = true;
+                        std::task::Poll::Ready(None)
+                    }
                 };
             }
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn upgrade_response(protocol: Option<&str>) -> http_default::WebSocketResponse {
+            let mut builder = ::http::Response::builder().status(101);
+            if let Some(protocol) = protocol {
+                builder = builder.header(::http::header::SEC_WEBSOCKET_PROTOCOL, protocol);
+            }
+            builder.body(None).expect("upgrade response")
+        }
+
+        #[test]
+        fn selected_subprotocol_must_match_exactly() {
+            validate_selected_subprotocol(&upgrade_response(Some(NORITO_V1_WEBSOCKET_SUBPROTOCOL)))
+                .expect("canonical protocol");
+
+            for protocol in [None, Some("IROHA-NORITO-V1"), Some("other-protocol")] {
+                let error = validate_selected_subprotocol(&upgrade_response(protocol))
+                    .expect_err("missing or different protocol must fail");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("did not select required subprotocol")
+                );
+            }
+        }
+    }
+}
+
+fn canonical_norito_websocket_headers(
+    mut headers: HashMap<String, String>,
+) -> Result<HashMap<String, String>> {
+    for (name, value) in &headers {
+        if name.eq_ignore_ascii_case("last-event-id") {
+            return Err(eyre!(
+                "Last-Event-ID is unsupported on canonical Norito WebSocket streams"
+            ));
+        }
+        if name.eq_ignore_ascii_case("sec-websocket-protocol")
+            && value != NORITO_V1_WEBSOCKET_SUBPROTOCOL
+        {
+            return Err(eyre!(
+                "conflicting Sec-WebSocket-Protocol `{value}`; expected `{NORITO_V1_WEBSOCKET_SUBPROTOCOL}`"
+            ));
+        }
+    }
+    headers.retain(|name, _| !name.eq_ignore_ascii_case("sec-websocket-protocol"));
+    headers.insert(
+        "Sec-WebSocket-Protocol".to_owned(),
+        NORITO_V1_WEBSOCKET_SUBPROTOCOL.to_owned(),
+    );
+    Ok(headers)
 }
 
 /// Logic related to Events API client implementation.
@@ -19362,9 +20034,12 @@ pub mod events_api {
                 headers: HashMap<String, String>,
                 url: Url,
             ) -> Result<Self> {
+                if filters.is_empty() {
+                    return Err(eyre!("event WebSocket requires at least one filter"));
+                }
                 Ok(Self {
                     url: transform_ws_url(url)?,
-                    headers,
+                    headers: canonical_norito_websocket_headers(headers)?,
                     filters,
                 })
             }
@@ -19444,7 +20119,7 @@ mod blocks_api {
             ) -> Result<Self> {
                 Ok(Self {
                     height,
-                    headers,
+                    headers: canonical_norito_websocket_headers(headers)?,
                     url: transform_ws_url(url)?,
                 })
             }
@@ -20145,6 +20820,66 @@ mod tests {
             .message(bytes)
             .expect("decode event message");
         assert_eq!(decoded_event, event);
+    }
+
+    #[test]
+    fn canonical_websocket_headers_bind_the_norito_subprotocol() {
+        let mut headers = HashMap::from([("X-API-Token".to_owned(), "secret".to_owned())]);
+        headers.insert(
+            "sec-websocket-protocol".to_owned(),
+            NORITO_V1_WEBSOCKET_SUBPROTOCOL.to_owned(),
+        );
+        let headers = canonical_norito_websocket_headers(headers).expect("canonical headers");
+        assert_eq!(
+            headers.get("Sec-WebSocket-Protocol").map(String::as_str),
+            Some(NORITO_V1_WEBSOCKET_SUBPROTOCOL)
+        );
+        assert_eq!(
+            headers.get("X-API-Token").map(String::as_str),
+            Some("secret")
+        );
+        assert_eq!(
+            headers
+                .keys()
+                .filter(|name| name.eq_ignore_ascii_case("sec-websocket-protocol"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn canonical_websocket_headers_reject_conflicts_and_resume_headers() {
+        let conflicting = HashMap::from([(
+            "Sec-WebSocket-Protocol".to_owned(),
+            "other-protocol".to_owned(),
+        )]);
+        let error = canonical_norito_websocket_headers(conflicting)
+            .expect_err("conflicting protocol must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("conflicting Sec-WebSocket-Protocol")
+        );
+
+        let resume = HashMap::from([("LAST-EVENT-ID".to_owned(), "cursor".to_owned())]);
+        let error = canonical_norito_websocket_headers(resume)
+            .expect_err("SSE resume header must fail on WebSocket");
+        assert!(error.to_string().contains("Last-Event-ID is unsupported"));
+    }
+
+    #[test]
+    fn events_websocket_rejects_empty_filter_set_before_connecting() {
+        let error = match events_api::flow::Init::new(
+            Vec::new(),
+            HashMap::new(),
+            "http://127.0.0.1:8080/v1/events/ws"
+                .parse()
+                .expect("valid URL"),
+        ) {
+            Ok(_) => panic!("empty filter set must fail"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("at least one filter"));
     }
 
     #[test]
@@ -20988,7 +21723,7 @@ mod tests {
         let store = snapshots.lock().expect("lock snapshots");
         assert_eq!(store.len(), 1);
         assert_eq!(store[0].method, HttpMethod::GET);
-        assert_eq!(store[0].url.path(), "/v1/da/proof_policies");
+        assert_eq!(store[0].url.path(), "/v1/da/proof-policies");
     }
 
     #[test]
@@ -21012,7 +21747,7 @@ mod tests {
         let store = snapshots.lock().expect("lock snapshots");
         assert_eq!(store.len(), 1);
         assert_eq!(store[0].method, HttpMethod::GET);
-        assert_eq!(store[0].url.path(), "/v1/da/proof_policy_snapshot");
+        assert_eq!(store[0].url.path(), "/v1/da/proof-policies/snapshot");
     }
 
     #[test]
@@ -21151,7 +21886,7 @@ mod tests {
         let store = snapshots.lock().expect("lock snapshots");
         assert_eq!(store.len(), 1);
         assert_eq!(store[0].method, HttpMethod::POST);
-        assert_eq!(store[0].url.path(), "/v1/da/pin_intents");
+        assert_eq!(store[0].url.path(), "/v1/da/pin-intents");
         let posted: DaPinIntentQueryRequest =
             norito::json::from_slice(&store[0].body).expect("decode posted pin query");
         assert_eq!(posted.storage_ticket, request.storage_ticket);
@@ -21188,7 +21923,7 @@ mod tests {
         let store = snapshots.lock().expect("lock snapshots");
         assert_eq!(store.len(), 1);
         assert_eq!(store[0].method, HttpMethod::POST);
-        assert_eq!(store[0].url.path(), "/v1/da/pin_intents/prove");
+        assert_eq!(store[0].url.path(), "/v1/da/pin-intents/prove");
     }
 
     #[test]
@@ -21213,7 +21948,7 @@ mod tests {
         let store = snapshots.lock().expect("lock snapshots");
         assert_eq!(store.len(), 1);
         assert_eq!(store[0].method, HttpMethod::POST);
-        assert_eq!(store[0].url.path(), "/v1/da/pin_intents/verify");
+        assert_eq!(store[0].url.path(), "/v1/da/pin-intents/verify");
         let posted: DaPinIntentWithLocation =
             norito::json::from_slice(&store[0].body).expect("decode posted pin proof");
         assert_eq!(posted, proof);
@@ -21757,7 +22492,7 @@ mod tests {
             .first()
             .cloned()
             .expect("snapshot captured");
-        assert_eq!(snapshot.url.path(), "/v1/nexus/public_lanes/7/validators");
+        assert_eq!(snapshot.url.path(), "/v1/nexus/public-lanes/7/validators");
         assert_eq!(snapshot.url.query(), None);
     }
 
@@ -21824,7 +22559,7 @@ mod tests {
             .first()
             .cloned()
             .expect("snapshot captured");
-        assert_eq!(snapshot.url.path(), "/v1/nexus/public_lanes/1/stake");
+        assert_eq!(snapshot.url.path(), "/v1/nexus/public-lanes/1/stake");
         assert!(snapshot.url.query_pairs().any(|pair| pair
             == (
                 "validator".into(),
@@ -21855,7 +22590,7 @@ mod tests {
             .expect("snapshot captured");
         assert_eq!(
             snapshot.url.path(),
-            "/v1/nexus/public_lanes/0/rewards/pending"
+            "/v1/nexus/public-lanes/0/rewards/pending"
         );
         let pairs: Vec<_> = snapshot.url.query_pairs().collect();
         assert!(pairs.contains(&(

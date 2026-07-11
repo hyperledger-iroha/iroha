@@ -46,6 +46,8 @@ use std::{
 pub mod confidential_v2;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod halo2_backend;
+/// Offline-verifiable consensus finality for Kagemusha top-up anchors.
+pub mod kagemusha_finality;
 /// Fail-closed boundary for a future circuit-authenticated Axiom IPA recursive verifier.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod kagemusha_recursion_adapter;
@@ -1014,8 +1016,8 @@ pub const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES: usize =
     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES;
 /// Rejection reason used when a semantic recursive spend proof reaches chain redemption.
 pub const KAGEMUSHA_RECURSIVE_SPEND_CHAIN_ADMISSION_REQUIRES_LINEAGE_PROOF: &str = "recursive Kagemusha spend redemption requires a recursive proof that verifies the private-hop lineage in-circuit; semantic kagemusha-recursive-aggregation-v1 proofs are admission-neutral only";
-/// Diagnostic returned when a lineage proof is outside the witnessless cap.
-pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_ADMISSION_UNAVAILABLE: &str = "recursive Kagemusha spend witnessless chain admission requires a Reserved-lineage proof inside the configured hop cap; attach a record-backed lineage witness for redemption";
+/// Diagnostic returned while circuit-authenticated witnessless lineage admission is unavailable.
+pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_ADMISSION_UNAVAILABLE: &str = "recursive Kagemusha spend witnessless chain admission is unavailable because circuit-authenticated recursion is not wired; attach a record-backed lineage witness for redemption";
 /// Maximum transcript label length accepted for Kagemusha Pallas opening envelopes.
 pub const KAGEMUSHA_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: usize = 128;
 /// Maximum encoded proof payload accepted for each checked Kagemusha private hop.
@@ -9861,12 +9863,6 @@ pub fn kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes_bound_t
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
-fn kagemusha_confidential_v2_public_inputs_schema_hash() -> [u8; 32] {
-    iroha_crypto::Hash::new(confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1)
-        .into()
-}
-
-#[cfg(feature = "zk-halo2-ipa")]
 fn kagemusha_confidential_public_inputs_schema_hash_for_step(
     step: &KagemushaFoldProofStep<'_>,
 ) -> Result<[u8; 32], String> {
@@ -10627,17 +10623,17 @@ fn ensure_kagemusha_recursive_spend_lineage_witnessless_append_available(
             "Kagemusha recursive spend lineage append output must contain at least 2 hops (found {output_hop_count})"
         ));
     }
-    if !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 {
-        return Err(format!(
-            "Kagemusha recursive spend lineage append witnessless admission is disabled by policy for {output_hop_count} hops"
-        ));
-    }
     if output_hop_count
         > iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
     {
         return Err(format!(
             "Kagemusha recursive spend lineage append exceeds witnessless Reserved-lineage hop cap (requested {output_hop_count} hops, supported {} witnessless hops)",
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1,
+        ));
+    }
+    if !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 {
+        return Err(format!(
+            "Kagemusha recursive spend lineage append witnessless admission is unavailable because circuit-authenticated recursion is not wired for {output_hop_count} hops; produce a semantic append and attach a record-backed lineage witness at redemption"
         ));
     }
     Ok(())
@@ -13282,7 +13278,7 @@ fn prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_env
         );
     let append_output_selection_error = || {
         format!(
-            "Kagemusha recursive spend append cannot select output proof circuit `{}` after previous proof circuit `{}` at hop {}; Reserved-lineage output is available only for supported transitions inside the configured witnessless hop cap",
+            "Kagemusha recursive spend append cannot select output proof circuit `{}` after previous proof circuit `{}` at hop {}; witnessless Reserved-lineage output requires circuit-authenticated recursion and a supported transition inside the configured hop cap",
             output_proof_circuit_id,
             previous_bundle.recursive_proof.verifier_key_id.name,
             previous_bundle.accumulator.hop_count,
@@ -15639,16 +15635,18 @@ pub fn preverify_kagemusha_recursive_spend_bundle(
 /// The semantic v1 recursive spend bundle is intentionally admission-neutral:
 /// its transparent proof constrains the public accumulator columns but does not
 /// verify every private hop proof and accumulator transition in-circuit.
-/// Reserved-lineage proofs are admission-capable when their public inputs,
-/// verifier-slice profile, and hop count are inside the configured witnessless
-/// cap. Ledger execution still verifies the final proof against an active
-/// verifier record before consuming nullifiers or minting public assets.
+/// Reserved-lineage proofs are not witnessless-admission capable until their
+/// circuit authenticates the complete inner proof, transcript, verifier key,
+/// public instances, and accumulator transition. Until then ledger execution
+/// requires a record-backed lineage witness before consuming nullifiers or
+/// minting public assets.
 ///
 /// # Errors
 ///
 /// Returns an error when the bundle is semantic/admission-neutral, the
-/// Reserved-lineage proof profile is malformed, the hop count exceeds the
-/// witnessless cap, or the proof circuit is not accepted for lineage admission.
+/// Reserved-lineage proof profile is malformed, circuit-authenticated recursion
+/// is unavailable, the hop count exceeds the witnessless cap, or the proof
+/// circuit is not accepted for lineage admission.
 pub fn ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(
     bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
 ) -> Result<(), String> {
@@ -42638,8 +42636,14 @@ mod kagemusha_folded_real_prover_tests {
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
             vec![0xA1; 64],
         );
-        ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(&bundle)
-            .expect("metadata-valid one-hop lineage profile must be chain-admission capable");
+        let err = ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(&bundle)
+            .expect_err(
+                "metadata-valid one-hop lineage profile must remain fail-closed until circuit-authenticated recursion is wired",
+            );
+        assert_eq!(
+            err,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_ADMISSION_UNAVAILABLE
+        );
 
         let mut zero_envelope_vk = bundle.clone();
         mutate_open_verify_envelope(&mut zero_envelope_vk.recursive_proof.proof, |envelope| {
@@ -42724,8 +42728,13 @@ mod kagemusha_folded_real_prover_tests {
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
             vec![0xA3; 64],
         );
-        ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(&two_hop_bundle).expect(
-            "metadata-valid two-hop append lineage profile must be chain-admission capable",
+        let err = ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(&two_hop_bundle)
+            .expect_err(
+                "metadata-valid two-hop append lineage profile must remain fail-closed until circuit-authenticated recursion is wired",
+            );
+        assert_eq!(
+            err,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_ADMISSION_UNAVAILABLE
         );
 
         let mut append_instance_splice = two_hop_bundle.clone();
@@ -43752,10 +43761,19 @@ mod kagemusha_folded_real_prover_tests {
             "unexpected one-hop append availability error: {err}"
         );
 
-        ensure_kagemusha_recursive_spend_lineage_witnessless_append_available(2)
-            .expect("two-hop Reserved-lineage append is enabled");
-        ensure_kagemusha_recursive_spend_lineage_witnessless_append_available(64)
-            .expect("64-hop Reserved-lineage append is inside the policy cap");
+        for hop_count in [2, 64] {
+            let err =
+                ensure_kagemusha_recursive_spend_lineage_witnessless_append_available(hop_count)
+                    .expect_err(
+                        "in-cap Reserved-lineage append must fail while recursion is not wired",
+                    );
+            assert!(
+                err.contains("circuit-authenticated recursion is not wired")
+                    && err.contains(&format!("{hop_count} hops"))
+                    && err.contains("record-backed lineage witness"),
+                "unexpected unavailable append error: {err}"
+            );
+        }
 
         let err = ensure_kagemusha_recursive_spend_lineage_witnessless_append_available(65)
             .expect_err("append output beyond the cap must reject");
@@ -43763,6 +43781,106 @@ mod kagemusha_folded_real_prover_tests {
             err.contains("exceeds witnessless Reserved-lineage hop cap"),
             "unexpected over-cap append availability error: {err}"
         );
+    }
+
+    #[test]
+    fn reserved_lineage_profiles_require_witness_at_all_in_cap_boundaries() {
+        let accumulators = recursive_spend_accumulators(64);
+        let cases = [
+            (
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+                false,
+                1_u32,
+            ),
+            (KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID, true, 2),
+            (
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
+                true,
+                63,
+            ),
+            (
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
+                true,
+                64,
+            ),
+        ];
+
+        for (circuit_id, append_profile, hop_count) in cases {
+            let accumulator = accumulators
+                .get(usize::try_from(hop_count - 1).expect("hop index fits usize"))
+                .expect("boundary accumulator exists")
+                .clone();
+            let mut recursive_proof = recursive_spend_proof(&accumulator);
+            recursive_proof.verifier_key_id.name = circuit_id.to_owned();
+            let mut bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+                accumulator,
+                recursive_proof,
+            };
+            let case_label = format!("reserved-lineage-{circuit_id}-{hop_count}");
+            if append_profile {
+                bind_recursive_spend_append_lineage_public_inputs(
+                    &mut bundle,
+                    case_label.as_bytes(),
+                    u8::try_from(hop_count).expect("boundary hop fits u8"),
+                );
+                attach_recursive_spend_zk1_halo2_envelope_with_append_lineage_slice(
+                    &mut bundle,
+                    fixed_bytes(format!("{case_label}-vk").as_bytes()),
+                    circuit_id,
+                    vec![u8::try_from(hop_count).expect("boundary hop fits u8"); 64],
+                );
+            } else {
+                bundle
+                    .recursive_proof
+                    .public_inputs
+                    .recursive_verifier_scalar_projection_digest =
+                    recursive_spend_lineage_scalar_projection(
+                        u8::try_from(hop_count).expect("boundary hop fits u8"),
+                    );
+                bundle.recursive_proof.public_inputs_hash = bundle
+                    .recursive_proof
+                    .public_inputs
+                    .public_inputs_hash()
+                    .expect("boundary lineage public-input hash");
+                attach_recursive_spend_zk1_halo2_envelope_with_lineage_slice(
+                    &mut bundle,
+                    fixed_bytes(format!("{case_label}-vk").as_bytes()),
+                    circuit_id,
+                    vec![u8::try_from(hop_count).expect("boundary hop fits u8"); 64],
+                );
+            }
+
+            let err = ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(&bundle)
+                .expect_err("Reserved-lineage admission must fail without a lineage witness");
+            assert_eq!(
+                err, KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_ADMISSION_UNAVAILABLE,
+                "unexpected {circuit_id} hop-{hop_count} admission error"
+            );
+
+            let verify_result =
+                kagemusha_recursive_spend_verify_result_with_lineage_record(&bundle, None)
+                    .expect("missing-witness verify result");
+            assert!(!verify_result.valid, "{circuit_id} hop {hop_count}");
+            assert!(
+                !verify_result.chain_admissible,
+                "{circuit_id} hop {hop_count}"
+            );
+            assert!(
+                !verify_result.witnessless_redeem_supported,
+                "{circuit_id} hop {hop_count}"
+            );
+            assert!(
+                verify_result.lineage_witness_required_for_redeem,
+                "{circuit_id} hop {hop_count}"
+            );
+            assert!(
+                verify_result
+                    .reason
+                    .contains("requires a lineage verifier record"),
+                "unexpected {circuit_id} hop-{hop_count} verify reason: {}",
+                verify_result.reason
+            );
+        }
     }
 
     #[test]
@@ -43853,10 +43971,6 @@ mod kagemusha_folded_real_prover_tests {
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
             vec![0xE1; 64],
         );
-        let previous_archive = previous_recursive_spend_proof_pallas_open_envelope_archive(
-            &previous_bundle,
-            "append-window-previous-proof",
-        );
         let semantic_vk_box = recursive_aggregation_vk_box();
         let mut record = recursive_aggregation_record(&semantic_vk_box);
         record.circuit_id = KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID.to_owned();
@@ -43891,11 +44005,11 @@ mod kagemusha_folded_real_prover_tests {
             prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
                 &previous_bundle,
                 Some(&record),
-                &previous_archive,
+                &[],
                 &record_bundle,
                 &[0xFE],
                 current_note.clone(),
-                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
                 &output_vk,
                 None,
             )
@@ -43910,11 +44024,11 @@ mod kagemusha_folded_real_prover_tests {
             prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_height(
                 &previous_bundle,
                 Some(&record),
-                &previous_archive,
+                &[],
                 &record_bundle,
                 &[0xFE],
                 current_note.clone(),
-                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
                 &output_vk,
                 None,
                 1,
@@ -43926,11 +44040,11 @@ mod kagemusha_folded_real_prover_tests {
             prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_height(
                 &previous_bundle,
                 Some(&record),
-                &previous_archive,
+                &[],
                 &record_bundle,
                 &[0xFE],
                 current_note.clone(),
-                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
                 &output_vk,
                 None,
                 2,
@@ -43944,11 +44058,11 @@ mod kagemusha_folded_real_prover_tests {
             prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_height(
                 &previous_bundle,
                 Some(&record),
-                &previous_archive,
+                &[],
                 &record_bundle,
                 &[0xFE],
                 current_note,
-                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
                 &output_vk,
                 None,
                 4,
@@ -44190,14 +44304,20 @@ mod kagemusha_folded_real_prover_tests {
             &lineage_record,
         )
         .expect("two-hop append lineage profile must pass verifier-record preverification");
-        ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(&two_hop_lineage_bundle)
-            .expect("two-hop append lineage profile must pass chain-admission prechecks");
+        let err = ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(
+            &two_hop_lineage_bundle,
+        )
+        .expect_err("two-hop append lineage profile must require a record-backed lineage witness");
+        assert_eq!(
+            err,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_ADMISSION_UNAVAILABLE
+        );
         assert!(
-            iroha_data_model::offline::can_redeem_kagemusha_recursive_spend_witnessless(
+            !iroha_data_model::offline::can_redeem_kagemusha_recursive_spend_witnessless(
                 &two_hop_lineage_bundle.recursive_proof.verifier_key_id.name,
                 two_hop_lineage_bundle.accumulator.hop_count,
             ),
-            "metadata-valid two-hop append lineage profile must remain witnessless-redeem capable"
+            "metadata-valid two-hop append lineage profile must remain fail-closed until circuit-authenticated recursion is wired"
         );
     }
 
@@ -47681,8 +47801,7 @@ mod kagemusha_folded_real_prover_tests {
 
     #[test]
     #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
-    fn kagemusha_recursive_spend_lineage_init_append_from_record_archives_proves_reserved_lineage_output()
-     {
+    fn kagemusha_recursive_spend_lineage_init_proves_then_unwired_append_fails_closed() {
         let (chain_id, asset, first_hop, second_hop, hop_record) =
             sample_confidential_v2_two_hop_lineage();
         let first_record_bundle =
@@ -47763,114 +47882,42 @@ mod kagemusha_folded_real_prover_tests {
         )
         .expect("one-hop Reserved-lineage verify result");
         assert!(one_hop_verify_result.valid);
-        assert!(one_hop_verify_result.chain_admissible);
-        assert!(one_hop_verify_result.witnessless_redeem_supported);
-        assert!(!one_hop_verify_result.lineage_witness_required_for_redeem);
+        assert!(!one_hop_verify_result.chain_admissible);
+        assert!(!one_hop_verify_result.witnessless_redeem_supported);
+        assert!(one_hop_verify_result.lineage_witness_required_for_redeem);
+        assert!(
+            one_hop_verify_result
+                .chain_admission_reason
+                .contains("circuit-authenticated recursion is not wired"),
+            "{}",
+            one_hop_verify_result.chain_admission_reason
+        );
 
         let previous_proof_open_envelope_archive =
             previous_recursive_spend_proof_pallas_open_envelope_archive(
                 &first_lineage_bundle,
                 "lineage-append-previous-proof",
             );
-        let append_lineage_vk_box =
-            kagemusha_recursive_spend_lineage_append_vk_box_from_pallas_open_envelope_archive(
-                &second_envelope_archive,
-            )
-            .expect("append Reserved-lineage verifier key");
-        let append_lineage_proving_key =
-            derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_from_pallas_open_envelope_archive(
-                &append_lineage_vk_box,
-                &second_envelope_archive,
-            )
-            .expect("append Reserved-lineage proving key archive");
-        let appended_lineage_bundle =
-            prove_kagemusha_recursive_spend_lineage_append_from_record_bundle_and_pallas_open_envelope_archive(
+        let unavailable_output_vk =
+            VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), Vec::new());
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
                 &first_lineage_bundle,
                 Some(&one_hop_lineage_record),
                 &previous_proof_open_envelope_archive,
                 &second_record_bundle,
                 &second_envelope_archive,
                 second_note,
-                Some(&append_lineage_proving_key),
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
+                &unavailable_output_vk,
+                None,
             )
-            .expect("real Reserved-lineage recursive spend append proof");
-        assert_eq!(appended_lineage_bundle.accumulator.hop_count, 2);
-        assert_eq!(
-            appended_lineage_bundle.recursive_proof.verifier_key_id.name,
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID
-        );
-        assert_ne!(
-            appended_lineage_bundle
-                .recursive_proof
-                .public_inputs
-                .append_opening_preflight_digest,
-            [0u8; 32]
-        );
-        assert_ne!(
-            appended_lineage_bundle
-                .recursive_proof
-                .public_inputs
-                .append_boundary_digest,
-            [0u8; 32]
-        );
-        assert_ne!(
-            appended_lineage_bundle
-                .recursive_proof
-                .public_inputs
-                .recursive_verifier_scalar_projection_digest,
-            [0u8; 32]
-        );
-        ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(&appended_lineage_bundle)
-            .expect("two-hop Reserved-lineage append proof is witnessless chain-admissible");
-        let append_lineage_record = kagemusha_recursive_spend_lineage_append_vk_record(
-            KAGEMUSHA_VERIFIER_NAMESPACE,
-            22,
-            appended_lineage_bundle
-                .recursive_proof
-                .public_inputs
-                .verifier_opening_len,
-        )
-        .expect("append Reserved-lineage verifier record");
-        assert_eq!(
-            append_lineage_record.circuit_id,
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID
-        );
-        assert_ne!(
-            one_hop_lineage_record.circuit_id, append_lineage_record.circuit_id,
-            "Reserved-lineage one-hop and append verifier records must coexist under distinct circuit ids"
-        );
-        preverify_kagemusha_recursive_spend_bundle_with_record(
-            &appended_lineage_bundle,
-            &append_lineage_record,
-        )
-        .expect("append Reserved-lineage proof preverification");
-        assert!(verify_kagemusha_recursive_spend_bundle_with_record(
-            &appended_lineage_bundle,
-            &append_lineage_record
-        ));
-        let append_verify_result = kagemusha_recursive_spend_verify_result_with_lineage_record(
-            &appended_lineage_bundle,
-            Some(&append_lineage_record),
-        )
-        .expect("append Reserved-lineage verify result");
-        assert!(append_verify_result.valid);
-        assert!(append_verify_result.chain_admissible);
-        assert!(append_verify_result.witnessless_redeem_supported);
-        assert!(!append_verify_result.lineage_witness_required_for_redeem);
-
+            .expect_err("Reserved-lineage append must fail before proof or archive processing");
         assert!(
-            !verify_kagemusha_recursive_spend_bundle_with_record(
-                &appended_lineage_bundle,
-                &one_hop_lineage_record
-            ),
-            "one-hop Reserved-lineage verifier record must not verify append proofs"
-        );
-        assert!(
-            !verify_kagemusha_recursive_spend_bundle_with_record(
-                &first_lineage_bundle,
-                &append_lineage_record
-            ),
-            "append Reserved-lineage verifier record must not verify one-hop proofs"
+            err.contains("cannot select output proof circuit")
+                && err.contains("circuit-authenticated recursion is not wired")
+                && err.contains("record-backed lineage witness"),
+            "unexpected unwired Reserved-lineage append error: {err}"
         );
     }
 
@@ -48220,11 +48267,11 @@ mod kagemusha_folded_real_prover_tests {
                 &recursive_vk,
                 None,
             )
-            .expect_err("Reserved-lineage output append must require previous-proof openings");
+            .expect_err("unwired Reserved-lineage output append must fail closed");
         assert!(
-            err.contains("previous recursive proof open-envelope archive")
-                && err.contains("required"),
-            "unexpected missing previous-proof archive for Reserved-lineage output: {err}"
+            err.contains("circuit-authenticated recursion is not wired")
+                && err.contains("record-backed lineage witness"),
+            "unexpected unwired Reserved-lineage output error: {err}"
         );
 
         let err =
@@ -48427,7 +48474,7 @@ mod kagemusha_folded_real_prover_tests {
                 "previous-proof domain metadata mismatch must reject",
             ),
         ];
-        for (archive, expected, description) in previous_proof_archive_cases {
+        for (archive, _expected, description) in previous_proof_archive_cases {
             let err =
                 prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
                     &first_bundle,
@@ -48442,8 +48489,9 @@ mod kagemusha_folded_real_prover_tests {
                 )
                 .expect_err(description);
             assert!(
-                err.contains(expected),
-                "{description}: expected `{expected}`, found `{err}`"
+                err.contains("circuit-authenticated recursion is not wired")
+                    && err.contains("record-backed lineage witness"),
+                "{description}: unwired Reserved-lineage output must reject before archive inspection: {err}"
             );
         }
 
@@ -48496,8 +48544,9 @@ mod kagemusha_folded_real_prover_tests {
             )
             .expect_err("over-count previous-proof archive must reject");
         assert!(
-            err.contains("requires exactly one envelope"),
-            "unexpected over-count previous-proof archive error: {err}"
+            err.contains("circuit-authenticated recursion is not wired")
+                && err.contains("record-backed lineage witness"),
+            "unwired Reserved-lineage output must reject before over-count archive inspection: {err}"
         );
 
         let mut lineage_previous = first_bundle.clone();
@@ -48579,11 +48628,11 @@ mod kagemusha_folded_real_prover_tests {
                 &recursive_vk,
                 None,
             )
-            .expect_err("Reserved-lineage output append must require previous-proof openings for lineage previous proofs");
+            .expect_err("unwired Reserved-lineage output append must fail before archive checks");
         assert!(
-            err.contains("previous recursive proof open-envelope archive")
-                && err.contains("required for Reserved-lineage output append"),
-            "unexpected missing previous-proof archive error: {err}"
+            err.contains("circuit-authenticated recursion is not wired")
+                && err.contains("record-backed lineage witness"),
+            "unexpected unwired Reserved-lineage append error: {err}"
         );
 
         let matching_lineage_previous_proof_archive =
@@ -48600,10 +48649,11 @@ mod kagemusha_folded_real_prover_tests {
                 &recursive_vk,
                 None,
             )
-            .expect_err("Reserved-lineage append output must reject an invalid previous-proof opening");
+            .expect_err("unwired Reserved-lineage output must reject before opening verification");
         assert!(
-            err.contains("previous recursive proof open-envelope 0 witness derivation failed"),
-            "unexpected reserved-previous Reserved-lineage output archive error: {err}"
+            err.contains("circuit-authenticated recursion is not wired")
+                && err.contains("record-backed lineage witness"),
+            "unexpected unwired reserved-previous output error: {err}"
         );
 
         let err =
@@ -51830,7 +51880,12 @@ mod kagemusha_folded_real_prover_tests {
         assert_eq!(metadata.vk_commitment, Some(hash_vk(&hop.vk_box)));
         assert_eq!(
             metadata.public_inputs_schema_hash,
-            Some(kagemusha_confidential_v2_public_inputs_schema_hash())
+            Some(
+                iroha_crypto::Hash::new(
+                    confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+                )
+                .into()
+            )
         );
         assert_ne!(metadata.domain_tag, Some([0u8; 32]));
         let envelope =

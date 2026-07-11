@@ -671,28 +671,13 @@ filters accept the canonical labels (`pending`, `verified`, `failed`,
 `repaired`, `forced`) and the CLI validates the manifest/provider digests before
 dispatching the request so typos fail fast in CI.
 
-### Trigger manual challenges
+### Challenge authority
 
-```bash
-sorafs_cli por trigger \
-  --torii-url https://torii.local \
-  --manifest 7bb2…9d31 \
-  --provider d09c…73aa \
-  --reason=latency_probe \
-  --samples=48 \
-  --auth-token artifacts/challenge_token.to
-```
-
-The CLI reads a council-signed `ChallengeAuthTokenV1`, confirms the target
-manifest/provider pair is permitted, and submits the legacy Norito
-`ManualPorChallengeV1` request shape to `POST /v1/sorafs/por/trigger`. Torii now
-deliberately retires that route with a fail-closed `410 Gone` JSON response
-containing `route_state = "retired"`; externally supplied challenges are also
-retired. The verified coordinator scheduler is reserved as the only future
-challenge authority, and Torii currently fails PoR automation startup closed
-until authenticated external drand/VRF feeds are configured. Responses are
-surfaced verbatim so auditors capture the retirement state or any future
-governance error codes.
+Torii exposes no manual or externally supplied challenge-ingress route. The
+coordinator scheduler is the sole challenge authority, and PoR automation fails
+closed until authenticated external drand/VRF feeds are configured. Operators
+inspect scheduler output with the status, report, and export commands; they do
+not submit challenges through the CLI.
 
 ### Export GovernanceLog verdicts
 

@@ -2,6 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { ed25519 } from "@noble/curves/ed25519";
 
 import {
   buildRegisterMultisigInstruction,
@@ -12,18 +13,11 @@ import { MultisigSpecBuilder } from "../src/multisig.js";
 import { AccountAddress } from "../src/address.js";
 
 const DOMAIN = "wonderland";
-const ALICE_KEY = Buffer.from(
-  "B935AAF1F4E44B3DB79E5E5A9BA4569E6F3E2310C219F3DDD56D3277828D5480",
-  "hex",
-);
-const BOB_KEY = Buffer.from(
-  "641297079357229F295938A4B5A333DE35069BF47B9D0704E45805713D13C201",
-  "hex",
-);
-const CONTROLLER_KEY = Buffer.from(
-  "B7D3A8A20C1EF77F6C2B7B4AA3AA7B4D52A7B2FAF77F0F45B1A16E7A8E0B3C01",
-  "hex",
-);
+const deterministicPublicKey = (seedByte) =>
+  Buffer.from(ed25519.getPublicKey(Buffer.alloc(32, seedByte)));
+const ALICE_KEY = deterministicPublicKey(0x11);
+const BOB_KEY = deterministicPublicKey(0x22);
+const CONTROLLER_KEY = deterministicPublicKey(0x44);
 const ALICE_ID = AccountAddress.fromAccount({ publicKey: ALICE_KEY }).toI105();
 const BOB_ID = AccountAddress.fromAccount({ publicKey: BOB_KEY }).toI105();
 const CONTROLLER_ID = AccountAddress.fromAccount({ publicKey: CONTROLLER_KEY,

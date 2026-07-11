@@ -71,13 +71,26 @@ class TransactionFixtureParityTest {
 
     @Test
     fun `transaction fixture manifest remains canonical for kotlin codec`() {
-        val payloadFixturesByName = AndroidFixtureSupport.loadPayloadFixtures().associateBy { it.name }
+        val payloadFixtures = AndroidFixtureSupport.loadPayloadFixtures()
+        val manifestFixtures = AndroidFixtureSupport.loadManifestFixtures()
+        assertEquals(
+            payloadFixtures.map { it.name }.toSet(),
+            manifestFixtures.map { it.name }.toSet(),
+            "transaction_payloads.json and manifest must contain exactly the same fixture names",
+        )
+        val payloadFixturesByName = payloadFixtures.associateBy { it.name }
 
-        for (fixture in AndroidFixtureSupport.loadManifestFixtures()) {
+        for (fixture in manifestFixtures) {
             val encodedPath = AndroidFixtureSupport.resolveSharedResource(fixture.encodedFile)
             val encodedBytes = Files.readAllBytes(encodedPath)
-            val payloadBytes = Base64.getDecoder().decode(fixture.payloadBase64)
-            val signedBytes = Base64.getDecoder().decode(fixture.signedBase64)
+            val payloadBytes = AndroidFixtureSupport.decodeCanonicalBase64(
+                fixture.payloadBase64,
+                "${fixture.name}.payload_base64",
+            )
+            val signedBytes = AndroidFixtureSupport.decodeCanonicalBase64(
+                fixture.signedBase64,
+                "${fixture.name}.signed_base64",
+            )
 
             assertEquals(
                 fixture.encodedLen,
@@ -133,11 +146,14 @@ class TransactionFixtureParityTest {
                 "${fixture.name}: Kotlin payload re-encoding drift",
             )
 
-            payloadFixturesByName[fixture.name]?.let { sourceFixture ->
-                sourceFixture.encodedBase64?.let { expected ->
-                    assertEquals(expected, fixture.payloadBase64, "${fixture.name}: manifest payload mismatch")
-                }
+            val sourceFixture = checkNotNull(payloadFixturesByName[fixture.name]) {
+                "${fixture.name}: manifest fixture missing payload source"
             }
+            assertEquals(
+                sourceFixture.encodedBase64,
+                fixture.payloadBase64,
+                "${fixture.name}: manifest payload mismatch",
+            )
 
             val signedParts = decodeSignedParts(fixture.name, signedBytes)
             assertContentEquals(
@@ -208,6 +224,36 @@ class TransactionFixtureParityTest {
                 decodedVersioned.signature(),
                 "${fixture.name}: decoded versioned signature mismatch",
             )
+        }
+    }
+
+    @Test
+    fun `fixture support rejects renamed clones and noncanonical base64`() {
+        val first = TransactionManifestFixture(
+            name = "first",
+            chain = "00000001",
+            authority = "authority",
+            creationTimeMs = 1,
+            timeToLiveMs = null,
+            nonce = null,
+            payloadBase64 = "AA==",
+            payloadHash = "payload-hash",
+            encodedFile = "first.norito",
+            encodedLen = 1,
+            signedBase64 = "AQ==",
+            signedHash = "signed-hash",
+            signedLen = 1,
+        )
+        val renamedClone = first.copy(name = "renamed-clone", encodedFile = "renamed-clone.norito")
+        val cloneError = assertFailsWith<IllegalStateException> {
+            AndroidFixtureSupport.validateManifestFixtureIdentities(listOf(first, renamedClone))
+        }
+        assertEquals(true, cloneError.message?.contains("Duplicate fixture payload_hash"))
+
+        for (malformed in listOf("YQ!!", "Y Q==", "YQ=", "YQ===", "YR==")) {
+            assertFailsWith<IllegalStateException>("must reject $malformed") {
+                AndroidFixtureSupport.decodeCanonicalBase64(malformed, "adversarial.fixture")
+            }
         }
     }
 

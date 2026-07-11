@@ -53,6 +53,7 @@ import org.hyperledger.iroha.android.client.stream.ToriiEventStreamClient;
 import org.hyperledger.iroha.android.client.stream.ToriiEventStream;
 import org.hyperledger.iroha.android.client.stream.ToriiEventStreamListener;
 import org.hyperledger.iroha.android.client.stream.ToriiEventStreamOptions;
+import org.hyperledger.iroha.android.client.stream.ToriiStreamException;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
 import org.hyperledger.iroha.android.client.HttpTransportExecutor;
@@ -1430,9 +1431,11 @@ public final class HttpClientTransport implements IrohaClient {
               });
     }
 
-    final ToriiEventStream stream =
-        newEventStreamClient()
-            .openSseStream(
+    final ToriiEventStream stream;
+    try {
+      stream =
+          newEventStreamClient()
+              .openSseStream(
                 "/v1/events/sse",
                 streamOptions.build(),
                 new ToriiEventStreamListener() {
@@ -1443,6 +1446,12 @@ public final class HttpClientTransport implements IrohaClient {
                       return;
                     }
                     try {
+                      final Optional<ToriiStreamException> terminalError =
+                          event.terminalStreamError();
+                      if (terminalError.isPresent()) {
+                        future.completeExceptionally(terminalError.get());
+                        return;
+                      }
                       final Map<String, Object> payload = parsePipelineEventPayload(event.data());
                       if (!isTransactionPipelineEvent(payload)) {
                         return;
@@ -1477,6 +1486,10 @@ public final class HttpClientTransport implements IrohaClient {
                     future.completeExceptionally(error);
                   }
                 });
+    } catch (final RuntimeException error) {
+      future.completeExceptionally(error);
+      return;
+    }
     streamRef.set(stream);
   }
 

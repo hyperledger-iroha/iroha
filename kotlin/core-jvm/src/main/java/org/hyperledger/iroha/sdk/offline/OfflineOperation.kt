@@ -1,6 +1,8 @@
 package org.hyperledger.iroha.sdk.offline
 
 import java.math.BigInteger
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import org.hyperledger.iroha.sdk.norito.CRC64
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
@@ -74,10 +76,10 @@ class OfflineOperationReference(
     val operationId: String = requireOperationId(operationId)
 
     @JvmField
-    val transactionHash: String = requireExactNonEmptyText(transactionHash, "transactionHash")
+    val transactionHash: String = requireTransactionHash(transactionHash, "transactionHash")
 
     @JvmField
-    val statusUri: String = requireExactNonEmptyText(statusUri, "statusUri")
+    val statusUri: String = requireOperationStatusUri(statusUri, operationId)
 
     @JvmField
     val submittedAtMs: BigInteger = requireU64(submittedAtMs, "submittedAtMs")
@@ -477,9 +479,9 @@ object OfflineOperationCodec {
 }
 
 private const val TOP_UP_REQUEST_SCHEMA =
-    "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV2"
+    "iroha.torii.v1.offline.top_up.request"
 private const val REDEEM_REQUEST_SCHEMA =
-    "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV2"
+    "iroha.torii.v1.offline.redeem.request"
 private val LOWER_HEX = "0123456789abcdef".toCharArray()
 
 private class CanonicalOfflineRequest(
@@ -555,6 +557,30 @@ internal fun requireOperationId(value: String): String {
     return value
 }
 
+internal fun requireTransactionHash(value: String, field: String): String {
+    require(value.length == 64 && value.all { it in '0'..'9' || it in 'a'..'f' }) {
+        "$field must be exactly 32 bytes encoded as lowercase hexadecimal"
+    }
+    return value
+}
+
+internal fun requireOperationStatusUri(value: String, operationId: String): String {
+    val expected = "/v1/offline/operations/${requireOperationId(operationId)}"
+    require(value == expected) { "statusUri must equal the canonical operation resource $expected" }
+    return value
+}
+
+internal fun requireStableErrorCode(value: String, field: String): String {
+    require(
+        value.length in 1..64 &&
+            (value.first() in 'a'..'z' || value.first() in '0'..'9') &&
+            value.all { it in 'a'..'z' || it in '0'..'9' || it == '_' },
+    ) {
+        "$field must be a 1-64 character lowercase stable identifier"
+    }
+    return value
+}
+
 internal fun requireExactNonEmptyText(value: String, field: String): String {
     require(value.isNotEmpty() && value == value.trim()) { "$field must be exact non-empty text" }
     return value
@@ -600,8 +626,18 @@ private fun writeString(encoder: NoritoEncoder, value: String) {
 private fun readString(decoder: NoritoDecoder): String {
     val length = decoder.readLength(true)
     require(length <= Int.MAX_VALUE) { "Offline operation string length overflow" }
+    val bytes = decoder.readBytes(length.toInt())
+    val value = try {
+        StandardCharsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(bytes))
+            .toString()
+    } catch (error: java.nio.charset.CharacterCodingException) {
+        throw IllegalArgumentException("Offline operation string must be valid UTF-8", error)
+    }
     return requireExactNonEmptyText(
-        String(decoder.readBytes(length.toInt()), StandardCharsets.UTF_8),
+        value,
         "Offline operation string",
     )
 }

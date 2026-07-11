@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.tx;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -10,11 +11,13 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Pattern;
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters;
 import org.bouncycastle.crypto.signers.Ed25519Signer;
@@ -92,6 +95,51 @@ public final class TransactionFixtureManifestTests {
     assertSchemaMatches(manifest);
   }
 
+  @Test
+  public void rejectDuplicateFixtureNames() throws Exception {
+    final Path manifestPath = resolveFixturePath("transaction_fixtures.manifest.json");
+    final Map<String, Object> manifest = loadManifest(manifestPath);
+    final List<Object> fixtures = new ArrayList<>(asList(manifest.get("fixtures"), "fixtures"));
+    fixtures.add(fixtures.get(0));
+    try {
+      assertUniqueFixtureIdentities(fixtures);
+      throw new AssertionError("Duplicate fixture names must fail closed");
+    } catch (IllegalStateException expected) {
+      assertTrue(expected.getMessage().contains("Duplicate fixture name"));
+    }
+  }
+
+  @Test
+  public void rejectRenamedClonedFixturePayloads() throws Exception {
+    final Path manifestPath = resolveFixturePath("transaction_fixtures.manifest.json");
+    final Map<String, Object> manifest = loadManifest(manifestPath);
+    final List<Object> fixtures = new ArrayList<>(asList(manifest.get("fixtures"), "fixtures"));
+    final Map<String, Object> clone =
+        new LinkedHashMap<>(asMap(fixtures.get(0), "fixture"));
+    clone.put("name", "renamed-clone");
+    clone.put("encoded_file", "renamed-clone.norito");
+    fixtures.add(clone);
+    try {
+      assertUniqueFixtureIdentities(fixtures);
+      throw new AssertionError("Renamed cloned fixture payloads must fail closed");
+    } catch (IllegalStateException expected) {
+      assertTrue(expected.getMessage().contains("Duplicate fixture payload_hash"));
+    }
+  }
+
+  @Test
+  public void rejectInvalidAndNonCanonicalBase64() {
+    for (final String malformed :
+        Arrays.asList("YQ!!", "Y Q==", "YQ=", "YQ===", "YR==")) {
+      try {
+        decodeBase64(malformed, "adversarial.fixture");
+        throw new AssertionError("Malformed base64 must fail closed: " + malformed);
+      } catch (IllegalStateException expected) {
+        assertTrue(expected.getMessage().contains("base64"));
+      }
+    }
+  }
+
   public static void main(final String[] args) throws Exception {
     runValidation();
   }
@@ -108,10 +156,19 @@ public final class TransactionFixtureManifestTests {
     if (fixtures.isEmpty()) {
       throw new IllegalStateException("Manifest must contain at least one fixture");
     }
+    assertUniqueFixtureIdentities(fixtures);
 
     // Map fixtures from transaction_payloads.json by name for cross checks.
     final Map<String, TransactionPayloadFixtures.Fixture> payloadFixtures =
         loadPayloadFixtures(manifestPath.getParent());
+    final Set<String> manifestNames = new HashSet<>();
+    for (final Object entry : fixtures) {
+      manifestNames.add(requireString(asMap(entry, "fixture").get("name"), "fixture.name"));
+    }
+    assertEquals(
+        "Manifest and transaction_payloads.json must contain exactly the same fixture names",
+        payloadFixtures.keySet(),
+        manifestNames);
 
     for (Object entry : fixtures) {
       validateFixture(entry, manifestPath, payloadFixtures, manifestSigningKey);
@@ -123,6 +180,53 @@ public final class TransactionFixtureManifestTests {
         canonicalChecked);
     System.out.println("[IrohaAndroid] Transaction fixture manifest tests passed.");
     System.out.println("[IrohaAndroid] Canonical checks: " + canonicalChecked + " checked.");
+  }
+
+  private static void assertUniqueFixtureIdentities(final List<Object> fixtures) {
+    final Set<String> names = new HashSet<>();
+    final Set<String> encodedFiles = new HashSet<>();
+    final Set<String> payloadHashes = new HashSet<>();
+    final Set<ByteBuffer> payloadBytesValues = new HashSet<>();
+    final Set<String> signedHashes = new HashSet<>();
+    final Set<ByteBuffer> signedBytesValues = new HashSet<>();
+    for (final Object entry : fixtures) {
+      final Map<String, Object> map = asMap(entry, "fixture");
+      final String name = requireString(map.get("name"), "fixture.name");
+      final String encodedFile =
+          requireString(map.get("encoded_file"), name + ".encoded_file");
+      final String payloadHash =
+          requireString(map.get("payload_hash"), name + ".payload_hash");
+      final String payloadBase64 =
+          requireString(map.get("payload_base64"), name + ".payload_base64");
+      final String signedHash =
+          requireString(map.get("signed_hash"), name + ".signed_hash");
+      final String signedBase64 =
+          requireString(map.get("signed_base64"), name + ".signed_base64");
+      if (!names.add(name)) {
+        throw new IllegalStateException("Duplicate fixture name: " + name);
+      }
+      if (!encodedFiles.add(encodedFile)) {
+        throw new IllegalStateException("Duplicate fixture encoded_file: " + encodedFile);
+      }
+      if (!payloadHashes.add(payloadHash)) {
+        throw new IllegalStateException("Duplicate fixture payload_hash: " + payloadHash);
+      }
+      final ByteBuffer payloadBytes =
+          ByteBuffer.wrap(decodeBase64(payloadBase64, name + ".payload_base64"))
+              .asReadOnlyBuffer();
+      if (!payloadBytesValues.add(payloadBytes)) {
+        throw new IllegalStateException("Duplicate fixture payload bytes: " + name);
+      }
+      if (!signedHashes.add(signedHash)) {
+        throw new IllegalStateException("Duplicate fixture signed_hash: " + signedHash);
+      }
+      final ByteBuffer signedBytes =
+          ByteBuffer.wrap(decodeBase64(signedBase64, name + ".signed_base64"))
+              .asReadOnlyBuffer();
+      if (!signedBytesValues.add(signedBytes)) {
+        throw new IllegalStateException("Duplicate fixture signed bytes: " + name);
+      }
+    }
   }
 
   private static void validateFixture(
@@ -233,7 +337,11 @@ public final class TransactionFixtureManifestTests {
 
   private static byte[] decodeBase64(final String value, final String fieldName) {
     try {
-      return Base64.getDecoder().decode(value);
+      final byte[] decoded = Base64.getDecoder().decode(value);
+      if (!Base64.getEncoder().encodeToString(decoded).equals(value)) {
+        throw new IllegalStateException(fieldName + " is not canonical base64");
+      }
+      return decoded;
     } catch (final IllegalArgumentException ex) {
       throw new IllegalStateException(fieldName + " is not valid base64", ex);
     }
@@ -1217,7 +1325,9 @@ public final class TransactionFixtureManifestTests {
     final List<TransactionPayloadFixtures.Fixture> fixtures = TransactionPayloadFixtures.load(payloadPath);
     final Map<String, TransactionPayloadFixtures.Fixture> map = new LinkedHashMap<>();
     for (TransactionPayloadFixtures.Fixture fixture : fixtures) {
-      map.put(fixture.name(), fixture);
+      if (map.put(fixture.name(), fixture) != null) {
+        throw new IllegalStateException("Duplicate fixture name: " + fixture.name());
+      }
     }
     return map;
   }
