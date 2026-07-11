@@ -1405,7 +1405,7 @@ impl V2LaneWorkAdapter {
             }
             return V2LaneIngressOutcome::Rejected;
         }
-        match self.kura.persist_pending_certified_merge_entry(entry) {
+        match self.kura.persist_pending_certified_merge_entry(&entry) {
             Ok(persisted_hash) if persisted_hash == entry_hash => {
                 let (affected, _) = self.merge_sidecars.finish_completed(
                     entry_hash,
