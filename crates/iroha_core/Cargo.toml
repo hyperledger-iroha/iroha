@@ -192,6 +192,9 @@ yasna = "0.5.2"
 indexmap = "2.12.0"
 arc-swap = "1.7.1"
 
+[target.'cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android", target_os = "redox"))'.dependencies]
+rustix = { version = "1.1.4", features = ["fs"] }
+
 [dev-dependencies]
 criterion = { workspace = true }
 iroha_test_samples = { workspace = true }

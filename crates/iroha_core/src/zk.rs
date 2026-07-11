@@ -9063,7 +9063,10 @@ fn validate_kagemusha_fold_attachment(step: &KagemushaFoldProofStep<'_>) -> Resu
                 confidential_v2::ensure_confidential_unshield_v3_canonical_vk_box(step.vk_box)?;
             }
             _ => {
-                return Err("Kagemusha fold verifier key circuit is unsupported".to_owned());
+                return Err(
+                    "Kagemusha fold verifier key circuit is unsupported or non-canonical"
+                        .to_owned(),
+                );
             }
         }
     }
@@ -9263,7 +9266,12 @@ fn validate_kagemusha_fold_verifier_record(
             confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID => {
                 confidential_v2::ensure_confidential_unshield_v3_canonical_vk_box(step.vk_box)?;
             }
-            _ => return Err("Kagemusha fold verifier key circuit is unsupported".to_owned()),
+            _ => {
+                return Err(
+                    "Kagemusha fold verifier key circuit is unsupported or non-canonical"
+                        .to_owned(),
+                );
+            }
         }
     }
     let commitment = hash_vk(step.vk_box);
@@ -53197,7 +53205,7 @@ mod kagemusha_folded_real_prover_tests {
             kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
                 .expect_err("confidential-transfer-v2 circuit aliases must fail");
         assert!(
-            err.contains("canonical confidential-transfer-v2"),
+            err.contains("circuit id") || err.contains("canonical confidential-transfer-v2"),
             "unexpected alias-record error: {err}"
         );
 
@@ -53465,7 +53473,14 @@ mod kagemusha_folded_real_prover_tests {
         });
         let err = kagemusha_verified_fold_step(&mutated.as_step())
             .expect_err("schema mutation must reject before proof verification");
-        assert!(err.contains("schema"), "unexpected error: {err}");
+        assert!(
+            err.contains("schema") || err.contains("must expose canonical"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !err.contains("verification failed"),
+            "metadata must reject before proof verification: {err}"
+        );
 
         let (_, _, mut alias, _) = sample_confidential_v2_verified_hop();
         mutate_open_verify_envelope(&mut alias.attachment.proof, |envelope| {

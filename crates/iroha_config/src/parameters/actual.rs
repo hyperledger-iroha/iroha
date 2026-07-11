@@ -3850,7 +3850,7 @@ pub struct LaneRoutingMatcher {
 }
 
 /// Derived per-lane configuration used by state storage and tooling.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaneConfig {
     entries: Vec<LaneConfigEntry>,
     by_id: BTreeMap<LaneId, usize>,
@@ -3950,7 +3950,7 @@ impl LaneConfig {
 }
 
 /// Derived configuration for a single lane.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaneConfigEntry {
     /// Lane identifier.
     pub lane_id: LaneId,

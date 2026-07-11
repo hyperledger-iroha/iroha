@@ -1391,6 +1391,9 @@ impl LaneCatalog {
         lane_count: NonZeroU32,
         mut lanes: Vec<LaneConfig>,
     ) -> Result<Self, LaneCatalogError> {
+        if lanes.is_empty() {
+            return Err(LaneCatalogError::EmptyCatalog);
+        }
         let mut seen_ids = BTreeSet::new();
         let mut seen_aliases = BTreeSet::new();
 
@@ -2379,6 +2382,13 @@ mod tests {
             err,
             LaneCatalogError::DuplicateLaneAlias(alias) if alias == "beta"
         ));
+    }
+
+    #[test]
+    fn lane_catalog_constructor_rejects_empty_catalog() {
+        let error = LaneCatalog::new(NonZeroU32::new(1).expect("non-zero bound"), Vec::new())
+            .expect_err("validated catalogs must never be empty");
+        assert_eq!(error, LaneCatalogError::EmptyCatalog);
     }
 }
 
