@@ -11,7 +11,7 @@ use base64::{
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
 };
 use iroha_config::parameters::actual;
-use iroha_core::state::WorldReadOnly;
+use iroha_core::state::{StateReadOnly, WorldReadOnly};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
     ValidationFail,
@@ -35,6 +35,7 @@ use iroha_data_model::{
     transaction::{Executable, SignedTransaction, TransactionBuilder, TransactionEntrypoint},
 };
 use iroha_primitives::numeric::Numeric;
+use mv::storage::StorageReadOnly;
 use norito::json::{self, Map, Value};
 use p256::PublicKey as P256PublicKey;
 use sha2::{Digest as _, Sha256};
@@ -645,7 +646,7 @@ where
     })?;
     let canonical = norito::to_bytes(&decoded).map_err(|err| Error::SerializationFailure {
         context: "offline_v2_canonical_archive",
-        source: err,
+        source: err.into(),
     })?;
     if canonical != bytes {
         return Err(validation_owned(
@@ -879,7 +880,10 @@ async fn wait_for_kagemusha_v2_finality(
                         format!(
                             "Kagemusha V2 transaction reached terminal status {}: {}",
                             entry.kind.as_str(),
-                            entry.rejection.as_deref().unwrap_or("no rejection reason")
+                            entry.rejection.as_ref().map_or_else(
+                                || "no rejection reason".to_owned(),
+                                ToString::to_string,
+                            )
                         ),
                     ));
                 }
@@ -960,7 +964,7 @@ fn kagemusha_v2_terminal_response(
         .transpose()
         .map_err(|source| Error::SerializationFailure {
             context: "offline_v2_topup_anchor_response",
-            source,
+            source: source.into(),
         })?;
     let response = KagemushaV2TerminalFinalityResponse {
         version: 2,
