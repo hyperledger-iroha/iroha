@@ -11071,7 +11071,7 @@ fn zk_ivm_prove_job_response_body(
         let proved = proved.ok_or_else(|| invalid("done job is missing proved payload"))?;
         let proved_json =
             encode_zk_ivm_proved_json_bounded(&proved).map_err(|message| invalid(&message))?;
-        let attachment = attachment
+        let attachment: ZkIvmProofAttachmentJsonDto = attachment
             .ok_or_else(|| invalid("done job is missing proof attachment"))?
             .try_into()
             .map_err(|message: String| invalid(&message))?;
