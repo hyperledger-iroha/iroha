@@ -490,7 +490,6 @@ fn contract_test_app(
                         state.clone(),
                         iroha_torii::NoritoJson(req),
                     )
-                    .await
                 }
             }),
         )
