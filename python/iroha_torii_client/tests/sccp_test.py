@@ -51,6 +51,10 @@ AUTHORITY = "sorauﾛ1Nヱﾐﾚﾗﾗﾁ9SHyｾｼF2ﾚbヱAｦiﾇｺﾂpﾆWy
 MESSAGE_ID = HASH(0x11)
 MESSAGE_BUNDLE_NORITO_TYPE = "iroha_sccp::TairaSccpMessageProofV1"
 PROOF_REQUEST_NORITO_TYPE = "iroha_sccp::SccpGroth16Bn254ProofRequestV1"
+DESTINATION_ARTIFACT_NORITO_TYPE = "iroha_sccp::SccpGroth16Bn254ProofArtifactV1"
+NATIVE_INBOUND_PROOF_NORITO_TYPE = (
+    "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1"
+)
 
 
 def _b64(value: bytes) -> str:
@@ -91,6 +95,14 @@ def _sccp_norito_frame(
             payload,
         )
     )
+
+
+def _destination_artifact_b64(*, padding: int = 0) -> str:
+    return _b64(_sccp_norito_frame(DESTINATION_ARTIFACT_NORITO_TYPE, padding=padding))
+
+
+def _native_inbound_proof_b64(*, padding: int = 0) -> str:
+    return _b64(_sccp_norito_frame(NATIVE_INBOUND_PROOF_NORITO_TYPE, padding=padding))
 
 
 def _network(profile: str) -> Dict[str, Any]:
@@ -815,15 +827,15 @@ def test_registry_validates_full_key_and_rejects_retired_or_aliased_routes() -> 
     (
         (
             "bsc-mainnet",
-            "738b46db08128caa0eaf9057d954c7a12be2187f8bbbf66594baf6752a4b0718",
-            "6f561e66f6f74e00f86c9fd54070fd5ff2d36aba9dfde80a741e4e7e2a8c8402",
-            "88bc0064a81e6c936a0f27d99b21da445629eed8bb324c9eff2ddec9741d9f01",
+            "b8c0540590c95348b5234027c70e753fb2834fc22493c67079b8c14312431239",
+            "5369bb48aa1bdef7c17e3a38d8669631b93c834fd5ac4b4bd1ef08678d86f461",
+            "c5d13b32a8f0c7be668f8b4423816c927ccbb3729dd9080eec6b6061bb575016",
         ),
         (
             "tron-nile",
-            "b9e6ae731072b5e6e52160abb6c0c83f1313268bbdeccdaecfb5b32d2cb98b3d",
-            "9e501456cc73fa74f2c0abecc4b772e71384abbd4ce6529495e499369bb9ef56",
-            "a11f3b3eea542c957517c6e76f3fd5306cc0448f1bc3449850bff279b1570622",
+            "0f15fe67b6252648354d962c0ee184d3a55827810a5ee02419b4523f14410df0",
+            "422606bd36a4c24627689eb2ef2e937eecbc2a6686c991efca8824eabbb0dee3",
+            "e05aa92a264afffc2b9130c7764dbc356da4ec9198b17e52ff804544e7b917c8",
         ),
     ),
 )
@@ -1141,6 +1153,12 @@ def test_bundle_and_proof_request_are_closed_and_query_free() -> None:
     wrong_anchor["sora_finality_anchor_hash"] = PREFIX_HASH(0x99)
     with pytest.raises(ValueError, match="sora_finality_anchor_hash"):
         normalize_sccp_proof_request(wrong_anchor)
+    archived_identity = _proof_request()
+    archived_identity["sora_finality_anchor"]["chain_id_hash"] = sccp._keccak_256(  # noqa: SLF001
+        bytes.fromhex("809574f5fee75e69bfcf52451e42d50f")
+    ).hex().upper()
+    with pytest.raises(ValueError, match="Taira chain commitment"):
+        normalize_sccp_proof_request(archived_identity)
 
 
 def test_submit_dtos_have_no_redundant_public_key_or_caller_selected_route() -> None:
@@ -1150,7 +1168,7 @@ def test_submit_dtos_have_no_redundant_public_key_or_caller_selected_route() -> 
             "authority": AUTHORITY,
             "signature_b64": base64.b64encode(bytes([1]) * 64).decode("ascii"),
             "transaction_payload_b64": transaction_payload_b64,
-            "destination_proof_b64": "Ag==",
+            "destination_proof_b64": _destination_artifact_b64(),
             "creation_time_ms": 10,
         }
     )
@@ -1164,7 +1182,7 @@ def test_submit_dtos_have_no_redundant_public_key_or_caller_selected_route() -> 
     assert proof["transaction_payload_b64"] == transaction_payload_b64
     assert list(
         normalize_bridge_message_submit_payload(
-            {"authority": AUTHORITY, "native_proof_b64": "Aw=="}
+            {"authority": AUTHORITY, "native_proof_b64": _native_inbound_proof_b64()}
         )
     ) == ["authority", "native_proof_b64"]
     native = normalize_bridge_message_submit_payload(
@@ -1172,7 +1190,7 @@ def test_submit_dtos_have_no_redundant_public_key_or_caller_selected_route() -> 
             "authority": AUTHORITY,
             "signature_b64": "AQ==",
             "transaction_payload_b64": transaction_payload_b64,
-            "native_proof_b64": "Aw==",
+            "native_proof_b64": _native_inbound_proof_b64(),
             "creation_time_ms": 10,
         }
     )
@@ -1188,11 +1206,11 @@ def test_submit_authorities_require_exact_canonical_i105() -> None:
     noncanonical = "n753" + AUTHORITY.removeprefix("sora")
     with pytest.raises(ValueError, match="exact canonical rendering"):
         normalize_bridge_proof_submit_payload(
-            {"authority": noncanonical, "destination_proof_b64": "AQ=="}
+            {"authority": noncanonical, "destination_proof_b64": _destination_artifact_b64()}
         )
     with pytest.raises(ValueError, match="exact canonical rendering"):
         normalize_bridge_message_submit_payload(
-            {"authority": noncanonical, "native_proof_b64": "AQ=="}
+            {"authority": noncanonical, "native_proof_b64": _native_inbound_proof_b64()}
         )
 
 
@@ -1213,7 +1231,11 @@ def test_submit_authorities_require_exact_canonical_i105() -> None:
 def test_proof_submit_rejects_retired_fields(field: str, value: Any) -> None:
     with pytest.raises(ValueError, match="retired"):
         normalize_bridge_proof_submit_payload(
-            {"authority": AUTHORITY, "destination_proof_b64": "AQ==", field: value}
+            {
+                "authority": AUTHORITY,
+                "destination_proof_b64": _destination_artifact_b64(),
+                field: value,
+            }
         )
 
 
@@ -1223,6 +1245,38 @@ def test_proof_submit_rejects_noncanonical_base64(artifact: str) -> None:
         normalize_bridge_proof_submit_payload(
             {"authority": AUTHORITY, "destination_proof_b64": artifact}
         )
+
+
+def test_submit_artifacts_require_exact_schema_and_zero_alignment_padding() -> None:
+    normalize_bridge_proof_submit_payload(
+        {"authority": AUTHORITY, "destination_proof_b64": _destination_artifact_b64()}
+    )
+    normalize_bridge_message_submit_payload(
+        {"authority": AUTHORITY, "native_proof_b64": _native_inbound_proof_b64()}
+    )
+    with pytest.raises(ValueError, match="schema hash"):
+        normalize_bridge_proof_submit_payload(
+            {"authority": AUTHORITY, "destination_proof_b64": _native_inbound_proof_b64()}
+        )
+    with pytest.raises(ValueError, match="schema hash"):
+        normalize_bridge_message_submit_payload(
+            {"authority": AUTHORITY, "native_proof_b64": _destination_artifact_b64()}
+        )
+    for padding in (1, 8, 64):
+        with pytest.raises(ValueError, match="alignment padding"):
+            normalize_bridge_proof_submit_payload(
+                {
+                    "authority": AUTHORITY,
+                    "destination_proof_b64": _destination_artifact_b64(padding=padding),
+                }
+            )
+        with pytest.raises(ValueError, match="alignment padding"):
+            normalize_bridge_message_submit_payload(
+                {
+                    "authority": AUTHORITY,
+                    "native_proof_b64": _native_inbound_proof_b64(padding=padding),
+                }
+            )
 
 
 @pytest.mark.parametrize(
@@ -1250,7 +1304,7 @@ def test_proof_submit_rejects_mixed_or_malformed_signing_state(
         normalize_bridge_proof_submit_payload(
             {
                 "authority": AUTHORITY,
-                "destination_proof_b64": "AQ==",
+                "destination_proof_b64": _destination_artifact_b64(),
                 **signing_state,
             }
         )
@@ -1262,7 +1316,7 @@ def test_proof_submit_rejects_nonpositive_or_ambiguous_time(timestamp: Any) -> N
         normalize_bridge_proof_submit_payload(
             {
                 "authority": AUTHORITY,
-                "destination_proof_b64": "AQ==",
+                "destination_proof_b64": _destination_artifact_b64(),
                 "creation_time_ms": timestamp,
             }
         )
@@ -1340,9 +1394,8 @@ def test_torii_exact_endpoints_and_content_negotiation() -> None:
     assert all(call["stream"] is True for call in session.calls)
 
 
-@pytest.mark.parametrize("padding", [0, 64])
-def test_torii_sccp_norito_preflight_accepts_canonical_padding(padding: int) -> None:
-    frame = _sccp_norito_frame(PROOF_REQUEST_NORITO_TYPE, padding=padding)
+def test_torii_sccp_norito_preflight_accepts_exact_type_padding() -> None:
+    frame = _sccp_norito_frame(PROOF_REQUEST_NORITO_TYPE)
     response = StubResponse(raw=frame, content_type="application/x-norito")
     client = ToriiClient(
         "https://example.invalid", session=RecordingSession([response])
@@ -1377,6 +1430,9 @@ def test_torii_sccp_norito_preflight_rejects_malformed_and_cross_type_frames() -
         ("declared payload too long", bytes(declared_long)),
         ("declared payload too short", bytes(declared_short)),
         ("checksum", mutate(31, canonical[31] ^ 0x01)),
+        ("one-byte noncanonical padding", _sccp_norito_frame(PROOF_REQUEST_NORITO_TYPE, padding=1)),
+        ("eight-byte noncanonical padding", _sccp_norito_frame(PROOF_REQUEST_NORITO_TYPE, padding=8)),
+        ("64-byte noncanonical padding", _sccp_norito_frame(PROOF_REQUEST_NORITO_TYPE, padding=64)),
         (
             "65-byte padding",
             _sccp_norito_frame(PROOF_REQUEST_NORITO_TYPE, padding=65),
@@ -1513,7 +1569,7 @@ def test_torii_sccp_error_response_uses_the_same_actual_byte_bound() -> None:
             64 * 1024 * 1024,
             "application/json",
             lambda client: client.submit_bridge_proof(
-                authority=AUTHORITY, destination_proof_b64="AQ=="
+                authority=AUTHORITY, destination_proof_b64=_destination_artifact_b64()
             ),
         ),
     ],
@@ -1590,14 +1646,17 @@ def test_torii_rejects_invalid_recent_queries_without_io(
 def test_torii_proof_submit_sends_only_closed_artifact_fields() -> None:
     session = RecordingSession([StubResponse(_prepared_response(creation_time_ms=42))])
     client = ToriiClient("https://example.invalid", session=session)
+    destination_artifact = _destination_artifact_b64()
     assert client.submit_bridge_proof(
-        authority=AUTHORITY, destination_proof_b64="AQ==", creation_time_ms=42
+        authority=AUTHORITY,
+        destination_proof_b64=destination_artifact,
+        creation_time_ms=42,
     ).submitted is False
     call = session.calls[0]
     assert call["url"] == "https://example.invalid/v1/bridge/proofs/submit"
     assert json.loads(call["data"]) == {
         "authority": AUTHORITY,
-        "destination_proof_b64": "AQ==",
+        "destination_proof_b64": destination_artifact,
         "creation_time_ms": 42,
     }
 
@@ -1613,12 +1672,15 @@ def test_torii_prepare_then_submit_resends_byte_identical_transaction_payload() 
     )
     session = RecordingSession([StubResponse(prepared), StubResponse(submitted)])
     client = ToriiClient("https://example.invalid", session=session)
+    destination_artifact = _destination_artifact_b64()
     preparation = client.submit_bridge_proof(
-        authority=AUTHORITY, destination_proof_b64="AQ==", creation_time_ms=42
+        authority=AUTHORITY,
+        destination_proof_b64=destination_artifact,
+        creation_time_ms=42,
     )
     submission = client.submit_bridge_proof(
         authority=AUTHORITY,
-        destination_proof_b64="AQ==",
+        destination_proof_b64=destination_artifact,
         signature_b64=_b64(bytes([7]) * 64),
         transaction_payload_b64=preparation.transaction_payload_b64,
         creation_time_ms=preparation.creation_time_ms,
@@ -1641,13 +1703,13 @@ def test_torii_rejects_response_state_that_contradicts_request() -> None:
     prepare_session = RecordingSession([StubResponse(submitted)])
     with pytest.raises(ValueError, match="signing state"):
         ToriiClient("https://example.invalid", session=prepare_session).submit_bridge_proof(
-            authority=AUTHORITY, destination_proof_b64="AQ=="
+            authority=AUTHORITY, destination_proof_b64=_destination_artifact_b64()
         )
     signed_session = RecordingSession([StubResponse(_prepared_response(creation_time_ms=42))])
     with pytest.raises(ValueError, match="signing state"):
         ToriiClient("https://example.invalid", session=signed_session).submit_bridge_proof(
             authority=AUTHORITY,
-            destination_proof_b64="AQ==",
+            destination_proof_b64=_destination_artifact_b64(),
             signature_b64="AQ==",
             transaction_payload_b64="Ag==",
             creation_time_ms=42,
@@ -1658,14 +1720,14 @@ def test_torii_rejects_wrong_content_type_and_duplicate_submit_response() -> Non
     plain = RecordingSession([StubResponse(_prepared_response(), content_type="text/plain")])
     with pytest.raises(TypeError, match="application/json"):
         ToriiClient("https://example.invalid", session=plain).submit_bridge_proof(
-            authority=AUTHORITY, destination_proof_b64="AQ=="
+            authority=AUTHORITY, destination_proof_b64=_destination_artifact_b64()
         )
     canonical = json.dumps(_prepared_response())
     duplicate = canonical.replace("{", '{"submitted":false,', 1).encode()
     session = RecordingSession([StubResponse(raw=duplicate)])
     with pytest.raises(ValueError, match="duplicate"):
         ToriiClient("https://example.invalid", session=session).submit_bridge_proof(
-            authority=AUTHORITY, destination_proof_b64="AQ=="
+            authority=AUTHORITY, destination_proof_b64=_destination_artifact_b64()
         )
 
 

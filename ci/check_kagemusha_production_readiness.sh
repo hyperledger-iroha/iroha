@@ -7888,7 +7888,7 @@ TEXT_REQUIREMENTS = {
         "build_proof_attachment_from_json_rejects_empty_proof_bytes",
     ),
     "crates/connect_norito_bridge/src/lib.rs": (
-        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 15;",
+        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 17;",
         "KagemushaRecursiveCompactUnavailable",
         "prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive",
         "is_kagemusha_recursive_compact_unavailable_error",

@@ -13,6 +13,7 @@ import {
   buildRegisterAccountInstruction,
   buildRegisterAssetDefinitionInstruction,
   buildGrantAccountPermissionInstruction,
+  buildSetAccountKeyValueInstruction,
   buildSetAssetDefinitionAliasInstruction,
   buildTransferAssetInstruction,
   buildTransferDomainInstruction,
@@ -899,6 +900,45 @@ test("buildGrantAccountPermissionInstruction defaults payload", () => {
   assert.deepEqual(encodeAndDecode(instruction), canonicalizeClone(instruction));
 });
 
+test("buildSetAccountKeyValueInstruction produces canonical Norito payload", () => {
+  const sourceTxHash = "ab".repeat(32);
+  const instruction = buildSetAccountKeyValueInstruction({
+    accountId: ACCOUNT_ID,
+    key: `pk_cbuae_settlement_${sourceTxHash}`,
+    value: {
+      protocol: "pk-cbuae-settlement",
+      version: 1,
+      source_tx_hash: sourceTxHash,
+    },
+  });
+  assert.deepEqual(instruction, {
+    SetKeyValue: {
+      Account: {
+        object: ACCOUNT_ID_CANONICAL,
+        key: `pk_cbuae_settlement_${sourceTxHash}`,
+        value: {
+          protocol: "pk-cbuae-settlement",
+          version: 1,
+          source_tx_hash: sourceTxHash,
+        },
+      },
+    },
+  });
+  assert.deepEqual(encodeAndDecode(instruction), canonicalizeClone(instruction));
+});
+
+baseTest("buildSetAccountKeyValueInstruction rejects non-JSON marker values", () => {
+  assert.throws(
+    () =>
+      buildSetAccountKeyValueInstruction({
+        accountId: ACCOUNT_ID,
+        key: "marker",
+        value: undefined,
+      }),
+    /value/i,
+  );
+});
+
 test("buildSetAssetDefinitionAliasInstruction supports clearing aliases", () => {
   assert.deepEqual(
     buildSetAssetDefinitionAliasInstruction({
@@ -1446,7 +1486,7 @@ baseTest("smart-contract schema builder enforces canonical flat-preorder V1 tape
 
   for (const [name, fields, children] of [
     ["AccountView", ["id", "metadata"], [leaf("AccountId"), leaf("Json")]],
-    ["AssetView", ["id", "amount"], [leaf("AssetId"), leaf("Amount")]],
+    ["AssetView", ["id", "amount"], [leaf("AssetId"), leaf("Quantity")]],
     [
       "AssetDefinitionView",
       ["id", "name", "description", "owned_by", "total_quantity", "metadata"],
@@ -1456,7 +1496,7 @@ baseTest("smart-contract schema builder enforces canonical flat-preorder V1 tape
         { kind: "Option", value: null },
         leaf("String"),
         leaf("AccountId"),
-        leaf("Amount"),
+        leaf("Quantity"),
         leaf("Json"),
       ],
     ],

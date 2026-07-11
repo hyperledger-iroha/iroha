@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Dict, Mapping, NoReturn, Optional, Sequence, Tuple, Union
 
+from .norito_frame import validate_norito_frame
+
 SCCP_DOMAIN_SORA = 0
 SCCP_DOMAIN_ETH = 1
 SCCP_DOMAIN_BSC = 2
@@ -42,12 +44,16 @@ _PUBLIC_SIGNAL_SCHEMA_HASH = bytes.fromhex(
     "7567439f41173d6745a3d51923cb70371acc7d66f23cefb4100d6d5d7a432cbb"
 )
 _SORA_TAIRA_CHAIN_ID_HASH = bytes.fromhex(
-    "3f139c4b2a31457994d17be5ce922d87fc702939116359f0e47314ab36a7f588"
+    "cf1cfc0f57b0bfa4c21882a9870317a1f4812f86533897095e3944be34c5bba7"
 )
-_SORA_TAIRA_CHAIN_ID = bytes.fromhex("809574f5fee75e69bfcf52451e42d50f")
+_SORA_TAIRA_CHAIN_ID = bytes.fromhex("fc56984b2be7431d840e21514d1883f0")
 _MAX_WIRE_BYTES = 16 * 1024 * 1024
 _MAX_DESTINATION_ARTIFACT_BYTES = _MAX_WIRE_BYTES + 64 * 1024
 _MAX_DETACHED_SIGNATURE_BYTES = 16 * 1024
+_DESTINATION_ARTIFACT_TYPE_NAME = "iroha_sccp::SccpGroth16Bn254ProofArtifactV1"
+_NATIVE_INBOUND_PROOF_TYPE_NAME = (
+    "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1"
+)
 _MAX_U64 = (1 << 64) - 1
 _MAX_U128 = (1 << 128) - 1
 _CLOSED_DOMAINS = frozenset(
@@ -1955,10 +1961,16 @@ def normalize_bridge_proof_submit_payload(value: Any) -> Dict[str, Any]:
         "bridge proof submit",
         frozenset({"authority", "destination_proof_b64"}),
     )
-    _canonical_base64(
+    destination_proof = _canonical_base64(
         record["destination_proof_b64"],
         "bridge proof submit.destination_proof_b64",
         maximum_bytes=_MAX_DESTINATION_ARTIFACT_BYTES,
+    )
+    validate_norito_frame(
+        destination_proof,
+        context="bridge proof submit.destination_proof_b64",
+        expected_type_name=_DESTINATION_ARTIFACT_TYPE_NAME,
+        expected_padding_length=0,
     )
     creation_time = (
         None
@@ -1992,7 +2004,15 @@ def normalize_bridge_message_submit_payload(value: Any) -> Dict[str, Any]:
         "bridge message submit",
         frozenset({"authority", "native_proof_b64"}),
     )
-    _canonical_base64(record["native_proof_b64"], "bridge message submit.native_proof_b64")
+    native_proof = _canonical_base64(
+        record["native_proof_b64"], "bridge message submit.native_proof_b64"
+    )
+    validate_norito_frame(
+        native_proof,
+        context="bridge message submit.native_proof_b64",
+        expected_type_name=_NATIVE_INBOUND_PROOF_TYPE_NAME,
+        expected_padding_length=0,
+    )
     creation_time = (
         None
         if "creation_time_ms" not in record

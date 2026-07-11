@@ -1862,19 +1862,22 @@ impl Actor {
                 budget_exhausted = true;
                 break;
             }
-            if let Some(pending) = self.pending.pending_blocks.remove(&key.0) {
+            if let Some(mut pending) = self.pending.pending_blocks.remove(&key.0) {
                 self.subsystems.validation.inflight.remove(&key.0);
                 self.subsystems.validation.superseded_results.remove(&key.0);
                 let roster_len = commit_roster.len();
                 let vote_count = qc
                     .as_ref()
                     .map_or(0, |qc| qc_voting_signer_count(qc, roster_len));
-                let (requeued, failures, _duplicate_failures, _gossip_hashes) =
-                    requeue_block_transactions(
-                        self.queue.as_ref(),
-                        self.state.as_ref(),
-                        pending.block.external_entrypoints_cloned(),
-                    );
+                let mut report = requeue_block_transactions(
+                    self.queue.as_ref(),
+                    self.state.as_ref(),
+                    pending.block.external_entrypoints_cloned(),
+                );
+                let requeued = report.newly_queued;
+                let failures = report.failures();
+                let available_or_restored = report.available_or_owned();
+                let retained_for_retry = report.requires_retry();
                 if relay_backpressure {
                     debug!(
                         height = key.1,
@@ -1955,7 +1958,9 @@ impl Actor {
                     quorum_timeout_ms = quorum_timeout.as_millis(),
                     vote_count,
                     requeued,
+                    available_or_restored,
                     failures,
+                    retained_for_retry,
                     vote_rx_depth = queue_depths.vote_rx,
                     block_payload_rx_depth = queue_depths.block_payload_rx,
                     rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
@@ -1965,6 +1970,11 @@ impl Actor {
                     background_rx_depth = queue_depths.background_rx,
                     "prevote quorum stalled; rebroadcasting and rotating view"
                 );
+                if retained_for_retry {
+                    let retry_payload = report.take_retryable_entrypoints();
+                    pending.mark_requeue_pending(now, PENDING_REQUEUE_BASE_BACKOFF, retry_payload);
+                    self.pending.pending_blocks.insert(key.0, pending);
+                }
                 self.trigger_view_change_with_cause(
                     key.1,
                     key.2,
@@ -2580,20 +2590,29 @@ impl Actor {
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;
         }
-        let (requeued, failures, _duplicate_failures, _gossip_hashes) =
-            if !effective_has_reschedule_votes || drop_pending {
-                // Avoid conflicting proposals once votes exist (precommit or commit), unless we've
-                // already retried with availability evidence and need to unblock proposal assembly.
-                requeue_block_transactions(
-                    self.queue.as_ref(),
-                    self.state.as_ref(),
-                    pending.block.external_entrypoints_cloned(),
-                )
-            } else {
-                (0, 0, 0, Vec::new())
-            };
+        let mut report = if !effective_has_reschedule_votes || drop_pending {
+            // Avoid conflicting proposals once votes exist (precommit or commit), unless we've
+            // already retried with availability evidence and need to unblock proposal assembly.
+            requeue_block_transactions(
+                self.queue.as_ref(),
+                self.state.as_ref(),
+                pending.block.external_entrypoints_cloned(),
+            )
+        } else {
+            RequeueBlockTransactionsReport::default()
+        };
+        let requeued = report.newly_queued;
+        let failures = report.failures();
+        // A retryable queue-admission result remains owned by this pending block and is therefore
+        // actionable work even though it is not yet resident in the queue.
+        let available_or_restored = report.available_or_owned();
+        let retained_for_retry = report.requires_retry();
+        if retained_for_retry {
+            let retry_payload = report.take_retryable_entrypoints();
+            pending.mark_requeue_pending(now, PENDING_REQUEUE_BASE_BACKOFF, retry_payload);
+        }
         if !drop_pending
-            && requeued == 0
+            && available_or_restored == 0
             && self
                 .quorum_retransmit_targets_for_missing_votes(
                     block_hash,
@@ -2720,7 +2739,7 @@ impl Actor {
             now,
         );
         let action_taken = drop_pending
-            || requeued > 0
+            || available_or_restored > 0
             || manifest_gate_pending
             || emitted_local_vote
             || rebroadcast.local_vote
@@ -2805,6 +2824,9 @@ impl Actor {
                 .validation
                 .superseded_results
                 .remove(&block_hash);
+            if retained_for_retry {
+                self.pending.pending_blocks.insert(block_hash, pending);
+            }
         } else {
             // Keep the pending block and cached certificates so late commit certificates
             // can still finalize it. Do not refresh frontier progress here: votes/RBC already
@@ -2855,7 +2877,9 @@ impl Actor {
             votes = vote_count,
             min_votes = min_votes_for_commit,
             requeued,
+            available_or_restored,
             failures,
+            retained_for_retry,
             vote_rx_depth = queue_depths.vote_rx,
             block_payload_rx_depth = queue_depths.block_payload_rx,
             rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,

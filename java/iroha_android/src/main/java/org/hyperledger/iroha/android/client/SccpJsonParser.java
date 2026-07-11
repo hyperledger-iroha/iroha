@@ -228,22 +228,22 @@ public final class SccpJsonParser {
       upperHex(
           keccak(
               new byte[] {
-                (byte) 0x80,
-                (byte) 0x95,
-                0x74,
-                (byte) 0xf5,
-                (byte) 0xfe,
+                (byte) 0xfc,
+                0x56,
+                (byte) 0x98,
+                0x4b,
+                0x2b,
                 (byte) 0xe7,
-                0x5e,
-                0x69,
-                (byte) 0xbf,
-                (byte) 0xcf,
-                0x52,
-                0x45,
-                0x1e,
-                0x42,
-                (byte) 0xd5,
-                0x0f
+                0x43,
+                0x1d,
+                (byte) 0x84,
+                0x0e,
+                0x21,
+                0x51,
+                0x4d,
+                0x18,
+                (byte) 0x83,
+                (byte) 0xf0
               }));
   private static final List<String> PUBLIC_SIGNAL_LABELS =
       List.of(

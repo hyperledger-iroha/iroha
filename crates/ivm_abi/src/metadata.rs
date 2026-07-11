@@ -47,6 +47,52 @@ pub const HEADER_SIZE: usize = 17;
 /// Literal table section marker placed immediately after the metadata header
 /// when compiled bytecode includes literal fixups.
 pub const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
+/// Bit shift of the ABI-v1 literal kind in an `LTLB` table descriptor.
+pub const LITERAL_KIND_SHIFT: u32 = 56;
+/// Mask selecting the section-relative offset in an ABI-v1 literal descriptor.
+pub const LITERAL_OFFSET_MASK: u64 = (1_u64 << LITERAL_KIND_SHIFT) - 1;
+
+/// Canonical kinds carried by ABI-v1 indexed-literal table descriptors.
+///
+/// Each descriptor is one little-endian `u64`: the high byte is this kind and
+/// the low 56 bits are an offset relative to the `LTLB` marker. Keeping the
+/// kind in the authenticated table prevents `LDLIT` and `LDI64` from giving
+/// the same bytes two incompatible interpretations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum LiteralKindV1 {
+    /// A complete pointer-ABI TLV envelope.
+    PointerTlv = 0,
+    /// Exactly eight little-endian bytes representing a signed `i64`.
+    I64 = 1,
+}
+
+impl TryFrom<u8> for LiteralKindV1 {
+    type Error = VMError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::PointerTlv),
+            1 => Ok(Self::I64),
+            _ => Err(VMError::InvalidMetadata),
+        }
+    }
+}
+
+/// Encode one canonical ABI-v1 `LTLB` table descriptor.
+#[must_use]
+pub const fn encode_literal_descriptor(kind: LiteralKindV1, relative_offset: u64) -> Option<u64> {
+    if relative_offset > LITERAL_OFFSET_MASK {
+        return None;
+    }
+    Some(((kind as u64) << LITERAL_KIND_SHIFT) | relative_offset)
+}
+
+/// Decode one canonical ABI-v1 `LTLB` table descriptor.
+pub fn decode_literal_descriptor(raw: u64) -> Result<(LiteralKindV1, u64), VMError> {
+    let kind = LiteralKindV1::try_from((raw >> LITERAL_KIND_SHIFT) as u8)?;
+    Ok((kind, raw & LITERAL_OFFSET_MASK))
+}
 /// Embedded contract interface section marker used by self-describing contract artifacts.
 pub const CONTRACT_INTERFACE_SECTION_MAGIC: [u8; 4] = *b"CNTR";
 /// Embedded contract debug section marker used by self-describing contract artifacts.
@@ -113,9 +159,9 @@ pub struct EmbeddedStateFieldDescriptor {
 /// Compact durable-state type schema embedded in contract artifacts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EmbeddedStateType {
-    I64,
-    U128,
-    Amount,
+    Int,
+    Decimal,
+    Quantity,
     Bool,
     String,
     Bytes,
@@ -148,9 +194,9 @@ pub enum EmbeddedStateType {
     },
 }
 
-const EMBEDDED_STATE_TYPE_TAG_I64: u8 = 0;
-const EMBEDDED_STATE_TYPE_TAG_U128: u8 = 1;
-const EMBEDDED_STATE_TYPE_TAG_AMOUNT: u8 = 2;
+const EMBEDDED_STATE_TYPE_TAG_INT: u8 = 0;
+const EMBEDDED_STATE_TYPE_TAG_DECIMAL: u8 = 1;
+const EMBEDDED_STATE_TYPE_TAG_QUANTITY: u8 = 2;
 const EMBEDDED_STATE_TYPE_TAG_BOOL: u8 = 3;
 const EMBEDDED_STATE_TYPE_TAG_STRING: u8 = 4;
 const EMBEDDED_STATE_TYPE_TAG_BYTES: u8 = 5;
@@ -229,9 +275,9 @@ fn validate_embedded_state_type_iterative(
                 }
                 pending.push((element, child_depth, true));
             }
-            EmbeddedStateType::I64
-            | EmbeddedStateType::U128
-            | EmbeddedStateType::Amount
+            EmbeddedStateType::Int
+            | EmbeddedStateType::Decimal
+            | EmbeddedStateType::Quantity
             | EmbeddedStateType::Bool
             | EmbeddedStateType::String
             | EmbeddedStateType::Bytes
@@ -345,9 +391,9 @@ fn encode_embedded_state_type_payload(value: &EmbeddedStateType) -> Result<Vec<u
                     EmbeddedStateType::List { element, .. } => {
                         pending.push(Event::Enter(element));
                     }
-                    EmbeddedStateType::I64
-                    | EmbeddedStateType::U128
-                    | EmbeddedStateType::Amount
+                    EmbeddedStateType::Int
+                    | EmbeddedStateType::Decimal
+                    | EmbeddedStateType::Quantity
                     | EmbeddedStateType::Bool
                     | EmbeddedStateType::String
                     | EmbeddedStateType::Bytes
@@ -367,9 +413,9 @@ fn encode_embedded_state_type_payload(value: &EmbeddedStateType) -> Result<Vec<u
                     EmbeddedStateType::Struct { fields, .. } => fields.len(),
                     EmbeddedStateType::StateMap { .. } | EmbeddedStateType::Result { .. } => 2,
                     EmbeddedStateType::Option(_) | EmbeddedStateType::List { .. } => 1,
-                    EmbeddedStateType::I64
-                    | EmbeddedStateType::U128
-                    | EmbeddedStateType::Amount
+                    EmbeddedStateType::Int
+                    | EmbeddedStateType::Decimal
+                    | EmbeddedStateType::Quantity
                     | EmbeddedStateType::Bool
                     | EmbeddedStateType::String
                     | EmbeddedStateType::Bytes
@@ -395,14 +441,14 @@ fn encode_embedded_state_type_payload(value: &EmbeddedStateType) -> Result<Vec<u
                 let mut child = children.into_iter();
                 let mut payload = Vec::new();
                 match value {
-                    EmbeddedStateType::I64 => {
-                        EMBEDDED_STATE_TYPE_TAG_I64.serialize(&mut payload)?
+                    EmbeddedStateType::Int => {
+                        EMBEDDED_STATE_TYPE_TAG_INT.serialize(&mut payload)?
                     }
-                    EmbeddedStateType::U128 => {
-                        EMBEDDED_STATE_TYPE_TAG_U128.serialize(&mut payload)?
+                    EmbeddedStateType::Decimal => {
+                        EMBEDDED_STATE_TYPE_TAG_DECIMAL.serialize(&mut payload)?
                     }
-                    EmbeddedStateType::Amount => {
-                        EMBEDDED_STATE_TYPE_TAG_AMOUNT.serialize(&mut payload)?
+                    EmbeddedStateType::Quantity => {
+                        EMBEDDED_STATE_TYPE_TAG_QUANTITY.serialize(&mut payload)?
                     }
                     EmbeddedStateType::Bool => {
                         EMBEDDED_STATE_TYPE_TAG_BOOL.serialize(&mut payload)?
@@ -578,9 +624,9 @@ fn decode_embedded_state_type_payload(encoded: &[u8]) -> Result<EmbeddedStateTyp
                 let (tag, tag_used) = <u8 as DecodeFromSlice>::decode_from_slice(&encoded)?;
                 let payload = &encoded[tag_used..];
                 let (constructor, children, consumed) = match tag {
-                    EMBEDDED_STATE_TYPE_TAG_I64
-                    | EMBEDDED_STATE_TYPE_TAG_U128
-                    | EMBEDDED_STATE_TYPE_TAG_AMOUNT
+                    EMBEDDED_STATE_TYPE_TAG_INT
+                    | EMBEDDED_STATE_TYPE_TAG_DECIMAL
+                    | EMBEDDED_STATE_TYPE_TAG_QUANTITY
                     | EMBEDDED_STATE_TYPE_TAG_BOOL
                     | EMBEDDED_STATE_TYPE_TAG_STRING
                     | EMBEDDED_STATE_TYPE_TAG_BYTES
@@ -594,9 +640,9 @@ fn decode_embedded_state_type_payload(encoded: &[u8]) -> Result<EmbeddedStateTyp
                     | EMBEDDED_STATE_TYPE_TAG_JSON => {
                         expect_payload_consumed(0, payload.len(), "EmbeddedStateType")?;
                         let value = match tag {
-                            EMBEDDED_STATE_TYPE_TAG_I64 => EmbeddedStateType::I64,
-                            EMBEDDED_STATE_TYPE_TAG_U128 => EmbeddedStateType::U128,
-                            EMBEDDED_STATE_TYPE_TAG_AMOUNT => EmbeddedStateType::Amount,
+                            EMBEDDED_STATE_TYPE_TAG_INT => EmbeddedStateType::Int,
+                            EMBEDDED_STATE_TYPE_TAG_DECIMAL => EmbeddedStateType::Decimal,
+                            EMBEDDED_STATE_TYPE_TAG_QUANTITY => EmbeddedStateType::Quantity,
                             EMBEDDED_STATE_TYPE_TAG_BOOL => EmbeddedStateType::Bool,
                             EMBEDDED_STATE_TYPE_TAG_STRING => EmbeddedStateType::String,
                             EMBEDDED_STATE_TYPE_TAG_BYTES => EmbeddedStateType::Bytes,
@@ -1015,11 +1061,11 @@ pub struct ParsedProgramMetadata {
 pub struct ParsedLiteralSection {
     /// Absolute artifact offset of the `LTLB` marker.
     pub start: usize,
-    /// Absolute artifact offset of the first `u64` literal-table entry.
+    /// Absolute artifact offset of the first `u64` literal-table descriptor.
     pub entries_start: usize,
-    /// Absolute artifact offset of the first typed literal TLV.
+    /// Absolute artifact offset of the first typed literal payload.
     pub data_start: usize,
-    /// Exclusive absolute artifact offset of typed literal data, before alignment padding.
+    /// Exclusive absolute artifact offset of literal data, before alignment padding.
     pub data_end: usize,
     /// Number of indexed literal entries.
     pub count: usize,
@@ -1303,6 +1349,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn literal_descriptors_roundtrip_kind_and_full_offset_domain() {
+        for kind in [LiteralKindV1::PointerTlv, LiteralKindV1::I64] {
+            for offset in [0, 1, 0x00ff_ffff, LITERAL_OFFSET_MASK] {
+                let raw = encode_literal_descriptor(kind, offset).expect("encodable offset");
+                assert_eq!(decode_literal_descriptor(raw), Ok((kind, offset)));
+            }
+        }
+        assert!(encode_literal_descriptor(LiteralKindV1::I64, LITERAL_OFFSET_MASK + 1).is_none());
+        assert!(decode_literal_descriptor(0xff00_0000_0000_0000).is_err());
+    }
+
+    #[test]
     fn contract_code_hash_binds_header_and_body() {
         let mut artifact = vec![0_u8; HEADER_SIZE + 4];
         let original = contract_code_hash(&artifact);
@@ -1354,7 +1412,7 @@ mod tests {
                         key: Box::new(EmbeddedStateType::AccountId),
                         value: Box::new(EmbeddedStateType::Tuple(vec![
                             EmbeddedStateType::AssetDefinitionId,
-                            EmbeddedStateType::Amount,
+                            EmbeddedStateType::Quantity,
                         ])),
                     },
                 },
@@ -1375,7 +1433,7 @@ mod tests {
                     name: "recent_amounts".to_owned(),
                     ty: EmbeddedStateType::List {
                         element: Box::new(EmbeddedStateType::Option(Box::new(
-                            EmbeddedStateType::Amount,
+                            EmbeddedStateType::Quantity,
                         ))),
                         capacity: 16,
                     },
@@ -1479,7 +1537,7 @@ mod tests {
 
         let state_map = EmbeddedStateType::StateMap {
             key: Box::new(EmbeddedStateType::AccountId),
-            value: Box::new(EmbeddedStateType::Amount),
+            value: Box::new(EmbeddedStateType::Quantity),
         };
         let encoded_map =
             encode_embedded_state_type_payload(&state_map).expect("encode root StateMap");
@@ -1492,14 +1550,14 @@ mod tests {
             .expect_err("decoded List element cannot hide a StateMap resource handle");
         assert!(error.to_string().contains("resource handles"));
 
-        decode_embedded_state_type_payload(&[EMBEDDED_STATE_TYPE_TAG_AMOUNT])
+        decode_embedded_state_type_payload(&[EMBEDDED_STATE_TYPE_TAG_QUANTITY])
             .expect("rejections must not poison a later valid decode");
     }
 
     #[test]
     fn embedded_list_uses_stable_tag_and_validates_capacity() {
         let value = EmbeddedStateType::List {
-            element: Box::new(EmbeddedStateType::Amount),
+            element: Box::new(EmbeddedStateType::Quantity),
             capacity: 64,
         };
         let mut payload = encode_embedded_state_type_payload(&value).expect("encode List schema");
@@ -1523,7 +1581,7 @@ mod tests {
             element: Box::new(EmbeddedStateType::Option(Box::new(
                 EmbeddedStateType::StateMap {
                     key: Box::new(EmbeddedStateType::AccountId),
-                    value: Box::new(EmbeddedStateType::Amount),
+                    value: Box::new(EmbeddedStateType::Quantity),
                 },
             ))),
             capacity: 4,

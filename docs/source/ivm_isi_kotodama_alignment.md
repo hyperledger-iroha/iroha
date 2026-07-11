@@ -70,7 +70,7 @@ Terminology
   metadata, raw pointers, direct syscall variants, and opaque instruction
   submission are rejected.
 - Codegen emits pointer-ABI TLVs for ledger syscalls and host helpers:
-  - `MintAsset` sets x10=account, x11=asset, x12=&Amount, then
+  - `MintAsset` sets x10=account, x11=asset, x12=&QuantityValueV1, then
     calls `SYSCALL_MINT_ASSET`.
   - `BurnAsset`, `TransferAsset`, batch transfers, roles, permissions, triggers,
     contract lifecycle helpers, and selected query/sysvar helpers follow the
@@ -158,7 +158,7 @@ ISI matches native execution semantics.
 
 Use Norito-framed pointer-ABI TLVs for structured arguments. VM registers carry
 pointers to values such as `AccountId`, `AssetDefinitionId`, `Name`, `Json`,
-`NftId`, and `Amount`, while the host decodes them with the same
+`NftId`, and `QuantityValueV1`, while the host decodes them with the same
 Norito-backed data-model types used by native ISI.
 
 ### C. Keep syscall naming and coverage aligned with ISI/Data Model
@@ -170,9 +170,12 @@ permission path as native execution.
 
 ### D. Preserve gas and error consistency
 
-Gas costs must be input-size predictable and platform-independent. Host-side ISI
-errors should continue to normalize into deterministic VM errors or status
-register conventions without committing partial state.
+Gas costs must be input-size predictable and platform-independent. Exact
+numeric operations use the staged 64-bit logical-limb formulas in
+[`kotodama_numeric_v1.md`](./kotodama_numeric_v1.md), so compact small values
+cost less than wide values without making gas depend on a host bigint backend.
+Host-side ISI errors should continue to normalize into deterministic VM errors
+or status register conventions without committing partial state.
 
 ### E. Preserve deterministic acceleration behavior
 
@@ -201,14 +204,14 @@ This is a readable subset. The canonical list is
 - `SYSCALL_REGISTER_ASSET(id: ptr AssetDefinitionId)` → ISI
   `Register<AssetDefinition>`
 - `SYSCALL_MINT_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId,
-  amount: ptr Amount)` → ISI `Mint<Numeric, Asset>`
+  amount: ptr QuantityValueV1)` → ISI `Mint<Quantity, Asset>`
 - `SYSCALL_BURN_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId,
-  amount: ptr Amount)` → ISI `Burn<Numeric, Asset>`
+  amount: ptr QuantityValueV1)` → ISI `Burn<Quantity, Asset>`
 - `SYSCALL_TRANSFER_V1(from: ptr AccountId, to: ptr AccountId,
-  asset: ptr AssetDefinitionId, amount: ptr Amount)` → batch-internal ISI
+  asset: ptr AssetDefinitionId, amount: ptr QuantityValueV1)` → batch-internal ISI
   `Transfer<Asset>`
 - `SYSCALL_TRANSFER_ASSET_SCOPED(from: ptr AccountId, to: ptr AccountId,
-  asset: ptr AssetDefinitionId, amount: ptr Amount,
+  asset: ptr AssetDefinitionId, amount: ptr QuantityValueV1,
   dataspace: ptr DataSpaceId)` → standalone ISI `Transfer<Asset>`
 - `SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes<TransferAssetBatch>)` → ISI
   `TransferAssetBatch`

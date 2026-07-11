@@ -42,7 +42,7 @@ pub enum EntrypointReturnDecodeError {
     RecordTooLarge {
         /// Exact encoded size, or a guaranteed lower bound detected before cloning.
         bytes: usize,
-        /// V1 encoded record limit.
+        /// Active encoded-record limit (the V1 cap or a lower caller-affordability bound).
         max_bytes: usize,
     },
     /// Canonical Norito encoding or decoding failed inside the bounded envelope.
@@ -95,30 +95,36 @@ pub enum EntrypointReturnDecodeError {
 
 struct ReturnRecordBudget {
     lower_bound_bytes: usize,
+    max_bytes: usize,
 }
 
 impl Default for ReturnRecordBudget {
     fn default() -> Self {
-        Self {
-            // Every framed record necessarily contains the Norito header and
-            // its 32-byte schema-binding hash before any atom payload.
-            lower_bound_bytes: norito::core::Header::SIZE + iroha_crypto::Hash::LENGTH,
-        }
+        Self::new(MAX_ENTRYPOINT_RETURN_RECORD_BYTES)
     }
 }
 
 impl ReturnRecordBudget {
+    fn new(max_bytes: usize) -> Self {
+        Self {
+            // Every framed record necessarily contains the Norito header and
+            // its 32-byte schema-binding hash before any atom payload.
+            lower_bound_bytes: norito::core::Header::SIZE + iroha_crypto::Hash::LENGTH,
+            max_bytes: max_bytes.min(MAX_ENTRYPOINT_RETURN_RECORD_BYTES),
+        }
+    }
+
     fn reserve(&mut self, bytes: usize) -> Result<(), EntrypointReturnDecodeError> {
         let next = self.lower_bound_bytes.checked_add(bytes).ok_or(
             EntrypointReturnDecodeError::RecordTooLarge {
                 bytes: usize::MAX,
-                max_bytes: MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
+                max_bytes: self.max_bytes,
             },
         )?;
-        if next > MAX_ENTRYPOINT_RETURN_RECORD_BYTES {
+        if next > self.max_bytes {
             return Err(EntrypointReturnDecodeError::RecordTooLarge {
                 bytes: next,
-                max_bytes: MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
+                max_bytes: self.max_bytes,
             });
         }
         self.lower_bound_bytes = next;
@@ -144,13 +150,13 @@ impl ReturnRecordBudget {
             .checked_add(payload_bytes)
             .ok_or(EntrypointReturnDecodeError::RecordTooLarge {
                 bytes: usize::MAX,
-                max_bytes: MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
+                max_bytes: self.max_bytes,
             })?;
         // Charge the atom discriminant and the entire owned TLV before cloning.
         self.reserve(envelope_bytes.checked_add(1).ok_or(
             EntrypointReturnDecodeError::RecordTooLarge {
                 bytes: usize::MAX,
-                max_bytes: MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
+                max_bytes: self.max_bytes,
             },
         )?)?;
         Ok(envelope_bytes)
@@ -277,7 +283,7 @@ fn expected_pointer_type(kind: EntrypointValueKindV1) -> Option<PointerType> {
     Some(match kind {
         EntrypointValueKindV1::Int | EntrypointValueKindV1::Bool => return None,
         EntrypointValueKindV1::U128 => PointerType::NoritoBytes,
-        EntrypointValueKindV1::Amount => PointerType::Amount,
+        EntrypointValueKindV1::Amount => PointerType::Quantity,
         EntrypointValueKindV1::String | EntrypointValueKindV1::Blob => PointerType::Blob,
         EntrypointValueKindV1::Json => PointerType::Json,
         EntrypointValueKindV1::Name => PointerType::Name,
@@ -1221,24 +1227,26 @@ fn schema_hash(schema: &EntrypointValueTypeV1) -> Result<[u8; 32], EntrypointRet
 
 fn exact_record_bytes(
     record: &EntrypointReturnRecordV1,
+    max_bytes: usize,
 ) -> Result<Vec<u8>, EntrypointReturnDecodeError> {
+    let max_bytes = max_bytes.min(MAX_ENTRYPOINT_RETURN_RECORD_BYTES);
     // The bare length walk allocates no output buffer. It prevents an already
     // materialized adversarial record from forcing an oversized framed encode.
     let bare_bytes = record.encoded_len();
-    if bare_bytes > MAX_ENTRYPOINT_RETURN_RECORD_BYTES {
+    if bare_bytes > max_bytes {
         return Err(EntrypointReturnDecodeError::RecordTooLarge {
             bytes: bare_bytes,
-            max_bytes: MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
+            max_bytes,
         });
     }
     let encoded =
         norito::to_bytes(record).map_err(|error| EntrypointReturnDecodeError::RecordEncoding {
             reason: error.to_string(),
         })?;
-    if encoded.len() > MAX_ENTRYPOINT_RETURN_RECORD_BYTES {
+    if encoded.len() > max_bytes {
         return Err(EntrypointReturnDecodeError::RecordTooLarge {
             bytes: encoded.len(),
-            max_bytes: MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
+            max_bytes,
         });
     }
     Ok(encoded)
@@ -1247,12 +1255,13 @@ fn exact_record_bytes(
 fn collect_entrypoint_return_record(
     vm: &IVM,
     schema: &EntrypointValueTypeV1,
+    max_bytes: usize,
 ) -> Result<EntrypointReturnRecordV1, EntrypointReturnDecodeError> {
     let words = schema
         .word_count()
         .filter(|words| *words <= MAX_ENTRYPOINT_RETURN_WORDS)
         .ok_or(EntrypointReturnDecodeError::InvalidSchema)?;
-    let mut budget = ReturnRecordBudget::default();
+    let mut budget = ReturnRecordBudget::new(max_bytes);
     let mut cursor = RegisterCursor {
         vm,
         register: FIRST_RETURN_REGISTER,
@@ -1291,8 +1300,8 @@ pub fn encode_entrypoint_return_record(
     vm: &IVM,
     schema: &EntrypointValueTypeV1,
 ) -> Result<EntrypointReturnRecordV1, EntrypointReturnDecodeError> {
-    let record = collect_entrypoint_return_record(vm, schema)?;
-    let _ = exact_record_bytes(&record)?;
+    let record = collect_entrypoint_return_record(vm, schema, MAX_ENTRYPOINT_RETURN_RECORD_BYTES)?;
+    let _ = exact_record_bytes(&record, MAX_ENTRYPOINT_RETURN_RECORD_BYTES)?;
     Ok(record)
 }
 
@@ -1304,8 +1313,21 @@ pub fn encode_entrypoint_return_record_bytes(
     vm: &IVM,
     schema: &EntrypointValueTypeV1,
 ) -> Result<Vec<u8>, EntrypointReturnDecodeError> {
-    let record = collect_entrypoint_return_record(vm, schema)?;
-    exact_record_bytes(&record)
+    encode_entrypoint_return_record_bytes_bounded(vm, schema, MAX_ENTRYPOINT_RETURN_RECORD_BYTES)
+}
+
+/// Validate public return registers and encode a canonical record without
+/// cloning pointer payloads beyond `max_bytes`.
+///
+/// This is used by nested-call dispatch after converting the caller's gas
+/// escrow into an affordable response-byte bound.
+pub(crate) fn encode_entrypoint_return_record_bytes_bounded(
+    vm: &IVM,
+    schema: &EntrypointValueTypeV1,
+    max_bytes: usize,
+) -> Result<Vec<u8>, EntrypointReturnDecodeError> {
+    let record = collect_entrypoint_return_record(vm, schema, max_bytes)?;
+    exact_record_bytes(&record, max_bytes)
 }
 
 fn pointer_payload<'a>(
@@ -1754,7 +1776,7 @@ pub fn render_entrypoint_return_record(
     schema: &EntrypointValueTypeV1,
     record: &EntrypointReturnRecordV1,
 ) -> Result<Value, EntrypointReturnDecodeError> {
-    let _ = exact_record_bytes(record)?;
+    let _ = exact_record_bytes(record, MAX_ENTRYPOINT_RETURN_RECORD_BYTES)?;
     render_entrypoint_return_record_validated(schema, record)
 }
 
@@ -1782,7 +1804,7 @@ pub fn decode_entrypoint_return_record(
             reason: error.to_string(),
         }
     })?;
-    if exact_record_bytes(&record)?.as_slice() != payload {
+    if exact_record_bytes(&record, MAX_ENTRYPOINT_RETURN_RECORD_BYTES)?.as_slice() != payload {
         return Err(EntrypointReturnDecodeError::RecordEncoding {
             reason: "record is not the byte-exact canonical Norito encoding".to_owned(),
         });
@@ -1803,8 +1825,8 @@ pub fn decode_entrypoint_return(
     vm: &IVM,
     schema: &EntrypointValueTypeV1,
 ) -> Result<Value, EntrypointReturnDecodeError> {
-    let record = collect_entrypoint_return_record(vm, schema)?;
-    let _ = exact_record_bytes(&record)?;
+    let record = collect_entrypoint_return_record(vm, schema, MAX_ENTRYPOINT_RETURN_RECORD_BYTES)?;
+    let _ = exact_record_bytes(&record, MAX_ENTRYPOINT_RETURN_RECORD_BYTES)?;
     render_entrypoint_return_record_validated(schema, &record)
 }
 
@@ -1968,8 +1990,12 @@ mod tests {
         let tuple_schema = nested_tuple_schema(levels);
         assert!(tuple_schema.validate());
         vm.set_register(FIRST_RETURN_REGISTER, 7);
-        let tuple_record = collect_entrypoint_return_record(&vm, &tuple_schema)
-            .expect("collect the maximum-depth product without native recursion");
+        let tuple_record = collect_entrypoint_return_record(
+            &vm,
+            &tuple_schema,
+            MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
+        )
+        .expect("collect the maximum-depth product without native recursion");
         assert_eq!(tuple_record.atoms, vec![EntrypointValueAtomV1::Int(7)]);
 
         let list_schema = nested_list_schema(levels);
@@ -1981,8 +2007,9 @@ mod tests {
                 .expect("allocate one nested active list item");
         }
         vm.set_register(FIRST_RETURN_REGISTER, list_word);
-        let list_record = collect_entrypoint_return_record(&vm, &list_schema)
-            .expect("collect the maximum-depth flat List tape without native recursion");
+        let list_record =
+            collect_entrypoint_return_record(&vm, &list_schema, MAX_ENTRYPOINT_RETURN_RECORD_BYTES)
+                .expect("collect the maximum-depth flat List tape without native recursion");
         assert_eq!(list_record.atoms.len(), levels + 1);
         assert!(
             list_record.atoms[..levels]
@@ -2003,8 +2030,12 @@ mod tests {
                 .expect("allocate one nested active Option payload");
         }
         vm.set_register(FIRST_RETURN_REGISTER, option_word);
-        let option_record = collect_entrypoint_return_record(&vm, &option_schema)
-            .expect("collect the maximum-depth active Option chain without native recursion");
+        let option_record = collect_entrypoint_return_record(
+            &vm,
+            &option_schema,
+            MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
+        )
+        .expect("collect the maximum-depth active Option chain without native recursion");
         assert_eq!(option_record.atoms.len(), levels + 1);
         assert!(
             option_record.atoms[..levels]
@@ -2032,7 +2063,11 @@ mod tests {
         vm.set_register(FIRST_RETURN_REGISTER, pointer);
 
         assert!(matches!(
-            collect_entrypoint_return_record(&vm, &schema),
+            collect_entrypoint_return_record(
+                &vm,
+                &schema,
+                MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
+            ),
             Err(EntrypointReturnDecodeError::InvalidValue {
                 kind: "Option",
                 reason,
@@ -2210,7 +2245,8 @@ mod tests {
             "record plus its canonical NoritoBytes TLV must fill exactly one boundary envelope"
         );
         assert_eq!(
-            exact_record_bytes(&record).expect("exact-cap record"),
+            exact_record_bytes(&record, MAX_ENTRYPOINT_RETURN_RECORD_BYTES)
+                .expect("exact-cap record"),
             encoded
         );
         decode_entrypoint_return_record(&schema, &encoded)
@@ -2238,7 +2274,7 @@ mod tests {
         let oversized_payload = vec![0x5A; payload_len + 1];
         *envelope = test_tlv(PointerType::Blob, &oversized_payload);
         assert!(matches!(
-            exact_record_bytes(&oversized),
+            exact_record_bytes(&oversized, MAX_ENTRYPOINT_RETURN_RECORD_BYTES),
             Err(EntrypointReturnDecodeError::RecordTooLarge {
                 max_bytes: MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
                 ..
@@ -2290,6 +2326,33 @@ mod tests {
             budget.lower_bound_bytes, charged_after_first,
             "a rejected pointer must not advance the clone budget"
         );
+    }
+
+    #[test]
+    fn caller_affordability_bound_rejects_pointer_before_payload_clone() {
+        let schema = leaf(EntrypointValueKindV1::Blob);
+        let payload = vec![0xA5; 64 * 1024];
+        let envelope = test_tlv(PointerType::Blob, &payload);
+        let mut vm = IVM::new(10_000);
+        let pointer = vm
+            .alloc_heap(u64::try_from(envelope.len()).expect("TLV length fits u64"))
+            .expect("allocate child return TLV");
+        vm.store_bytes(pointer, &envelope)
+            .expect("store child return TLV");
+        vm.set_register(FIRST_RETURN_REGISTER, pointer);
+
+        let affordable_record_bytes = 1024;
+        assert!(matches!(
+            encode_entrypoint_return_record_bytes_bounded(
+                &vm,
+                &schema,
+                affordable_record_bytes,
+            ),
+            Err(EntrypointReturnDecodeError::RecordTooLarge {
+                max_bytes,
+                ..
+            }) if max_bytes == affordable_record_bytes
+        ));
     }
 
     #[test]
@@ -2483,7 +2546,7 @@ mod tests {
         let schema = list(2, list(2, leaf(EntrypointValueKindV1::Amount)));
         let mut vm = IVM::new(10_000);
         let amount_payload = norito::to_bytes(&Numeric::new(125, 2)).expect("Amount payload");
-        let amount_pointer = input_tlv(&mut vm, PointerType::Amount, &amount_payload);
+        let amount_pointer = input_tlv(&mut vm, PointerType::Quantity, &amount_payload);
         let inner_layout = ListLayoutV1::try_new(2, 1).expect("inner layout");
         let first = ivm::list::allocate_words(&mut vm, inner_layout, &[vec![amount_pointer]])
             .expect("first inner list");
@@ -2518,7 +2581,7 @@ mod tests {
         assert!(matches!(
             encode_entrypoint_return_record(&vm, &schema),
             Err(EntrypointReturnDecodeError::PointerType {
-                expected: PointerType::Amount,
+                expected: PointerType::Quantity,
                 actual: PointerType::Blob,
                 ..
             })
@@ -2538,7 +2601,7 @@ mod tests {
         let schema = list(3, element);
         let mut vm = IVM::new(10_000);
         let amount_payload = norito::to_bytes(&Numeric::new(125, 2)).expect("Amount payload");
-        let amount = input_tlv(&mut vm, PointerType::Amount, &amount_payload);
+        let amount = input_tlv(&mut vm, PointerType::Quantity, &amount_payload);
         let result_layout = SumLayoutV1::try_new(1, 1).expect("Result layout");
         let option_layout = SumLayoutV1::option(1).expect("Option layout");
         let ok =

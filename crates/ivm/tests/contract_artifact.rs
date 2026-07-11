@@ -223,10 +223,8 @@ fn verifier_rejects_mismatched_or_oversized_exact_boundary_schemas() {
         }],
     });
     let argument_code = [
-        ivm::encoding::wide::encode_sys(
-            ivm::instruction::wide::system::SCALL,
-            u8::try_from(ivm::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD)
-                .expect("decode syscall fits compact encoding"),
+        ivm::encoding::wide::encode_syscallx(
+            ivm::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD,
         ),
         ivm::encoding::wide::encode_halt(),
     ];
@@ -314,7 +312,10 @@ fn verifier_rejects_forged_reserved_query_page_schemas() {
             Ok(_) => panic!("{label} must fail artifact admission"),
             Err(error) => error,
         };
-        assert!(error.to_string().contains("schema"), "{label}: {error}");
+        assert!(
+            error.to_string().starts_with("invalid contract artifact:"),
+            "{label}: {error}"
+        );
     };
 
     let mut unknown_view = valid.clone();
@@ -387,7 +388,27 @@ fn compiler_embeds_exact_nested_return_schema_in_cntr_and_manifest() {
         .return_schema
         .as_ref()
         .expect("exact return schema");
-    assert_eq!(schema.word_count(), Some(6));
+    assert_eq!(
+        schema.nodes,
+        vec![
+            EntrypointValueTypeNodeV1::Result,
+            EntrypointValueTypeNodeV1::Option,
+            EntrypointValueTypeNodeV1::Struct(EntrypointStructTypeNodeV1 {
+                name: "Pair".to_owned(),
+                fields: vec!["count".to_owned(), "ready".to_owned()],
+            }),
+            EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Int),
+            EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Bool),
+            EntrypointValueTypeNodeV1::Tuple(2),
+            EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::String),
+            EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Bool),
+        ],
+    );
+    assert_eq!(
+        schema.word_count(),
+        Some(1),
+        "nested active-only Option/Result values cross the public register boundary as one typed handle"
+    );
     assert_eq!(
         manifest
             .entrypoints

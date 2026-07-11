@@ -6,11 +6,11 @@ const MIN_ENTRYPOINT_LIST_CAPACITY_V1 = 1;
 const MAX_ENTRYPOINT_LIST_CAPACITY_V1 = 64;
 
 const LEAF_TYPE_NAMES = new Map([
-  ["Int", "i64"],
-  ["U128", "u128"],
+  ["Int", "int"],
+  ["Decimal", "decimal"],
+  ["Quantity", "quantity"],
   ["Bool", "bool"],
   ["String", "string"],
-  ["Amount", "Amount"],
   ["Json", "Json"],
   ["Name", "Name"],
   ["AccountId", "AccountId"],
@@ -24,7 +24,7 @@ const LEAF_TYPE_NAMES = new Map([
 
 const CORE_QUERY_VIEWS = new Map([
   ["AccountView", { fields: ["id", "metadata"], children: ["AccountId", "Json"] }],
-  ["AssetView", { fields: ["id", "amount"], children: ["AssetId", "Amount"] }],
+  ["AssetView", { fields: ["id", "amount"], children: ["AssetId", "quantity"] }],
   [
     "AssetDefinitionView",
     {
@@ -34,7 +34,7 @@ const CORE_QUERY_VIEWS = new Map([
         "string",
         "Option<string>",
         "AccountId",
-        "Amount",
+        "quantity",
         "Json",
       ],
     },
@@ -260,7 +260,7 @@ export function analyzeEntrypointValueTypeV1(value, context = "entrypoint value 
             items?.kind !== "List" ||
             items.capacity !== 64 ||
             items.listElementCoreView === undefined ||
-            nextOffset?.canonicalName !== "Option<i64>"
+            nextOffset?.canonicalName !== "Option<int>"
           ) {
             fail(context, "contains a forged QueryPage schema");
           }

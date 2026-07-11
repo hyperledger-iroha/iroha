@@ -35,7 +35,7 @@ tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
 tungstenite = { workspace = true }
 futures-util = { version = "0.3.31" }
 base64 = { workspace = true }
-anyhow = "1.0.100"
+anyhow = "1.0.103"
 hex = { workspace = true }
 
 [features]

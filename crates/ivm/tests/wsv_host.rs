@@ -245,7 +245,7 @@ fn test_json_get_amount_reads_decimal_strings() {
         .memory
         .validate_tlv(unwrap_some_word(&vm))
         .expect("Amount tlv");
-    assert_eq!(tlv.type_id, PointerType::Amount);
+    assert_eq!(tlv.type_id, PointerType::Quantity);
     let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode Amount");
     assert_eq!(value, "0.00001".parse::<Numeric>().expect("parse Amount"));
 }

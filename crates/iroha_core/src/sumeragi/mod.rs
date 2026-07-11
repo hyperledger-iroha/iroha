@@ -37,6 +37,7 @@ use norito::codec::Encode as _;
 
 use crate::{
     kura::BlockCount,
+    merge_sidecar::{CertifiedMergeSidecarMessage, MergeCandidateMessage},
     state::{State, StateReadOnly, StateView, WorldReadOnly},
 };
 
@@ -842,6 +843,7 @@ mod tests {
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
+            lane_incarnation: Hash::new(b"sumeragi-lane-fixture-incarnation"),
             proposal_height: 12,
             previous_lane_block_height: 11,
             previous_lane_block_descriptor_hash: Some(Hash::prehashed([0xA1; Hash::LENGTH])),
@@ -877,6 +879,7 @@ mod tests {
             .expect("lane-block fixture vote signature");
         crate::lane_consensus::LaneBlockVoteV1 {
             body,
+            payload_availability_vote: None,
             signer: PeerId::new(keypair.public_key().clone()),
             bls_signature: signature.payload().to_vec(),
         }
@@ -891,6 +894,7 @@ mod tests {
             validator_set: proposal.descriptor.validator_set,
             signers_bitmap: vec![1],
             bls_aggregate_signature: vec![0xAB; 48],
+            payload_availability_qc: None,
         }
     }
 
@@ -3004,6 +3008,34 @@ mod tests {
     }
 
     #[test]
+    fn lane_block_artifact_dedup_window_is_short_and_non_sliding() {
+        let mut cache = BlockPayloadDedupCache::new(4, BLOCK_PAYLOAD_DEDUP_CACHE_TTL);
+        let t0 = Instant::now();
+        let key = BlockPayloadDedupKey::LaneBlockArtifact {
+            artifact_hash: Hash::new(b"fixed-window-lane-artifact"),
+        };
+
+        assert!(cache.insert(key, t0).inserted);
+        assert!(
+            !cache
+                .insert(
+                    key,
+                    t0 + LANE_BLOCK_ARTIFACT_DEDUP_CACHE_TTL - Duration::from_millis(1),
+                )
+                .inserted,
+            "an exact retry inside the lane-artifact window must be suppressed"
+        );
+        let after_original_window =
+            t0 + LANE_BLOCK_ARTIFACT_DEDUP_CACHE_TTL + Duration::from_millis(1);
+        let outcome = cache.insert(key, after_original_window);
+        assert!(
+            outcome.inserted,
+            "duplicates must not slide the deadline and suppress post-prune recovery forever"
+        );
+        assert_eq!(outcome.evicted_expired, 1);
+    }
+
+    #[test]
     fn block_payload_dedup_partitions_by_kind() {
         let mut cache = BlockPayloadDedupCache::new(2, Duration::from_secs(30));
         let now = Instant::now();
@@ -3210,6 +3242,7 @@ mod tests {
         let commitment = LaneBlockCommitment {
             block_height: 1,
             lane_id: LaneId::new(0),
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 0,
             total_local_micro: 0,
@@ -5377,6 +5410,125 @@ mod tests {
             LaneBlockQueueFixture::Qc,
             true,
         );
+    }
+
+    fn assert_exact_duplicate_lane_block_artifact_does_not_wait_on_full_queue(
+        fixture: LaneBlockQueueFixture,
+    ) {
+        const CAP: usize = 1;
+        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(CAP);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(CAP);
+        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
+            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
+        ));
+        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+            )));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+        let target_rx = match fixture.queue_kind() {
+            status::WorkerQueueKind::Votes => &vote_rx,
+            status::WorkerQueueKind::Blocks => &block_rx,
+            other => panic!("unexpected lane-block queue kind: {other:?}"),
+        };
+
+        let original = fixture.message();
+        let original_sender = checked_peer();
+        assert!(
+            handle.try_incoming_block_message_from(original_sender.clone(), original.clone()),
+            "first lane-block artifact should fill its target ingress queue"
+        );
+
+        // The retransmit may arrive through a different peer because lane artifacts are relayed.
+        // Its encoded artifact bytes, not its transport source, define an exact duplicate.
+        let relay_sender = checked_peer();
+        let (done_tx, done_rx) = mpsc::channel();
+        let handle_clone = handle.clone();
+        let duplicate = original.clone();
+        let relay_sender_clone = relay_sender.clone();
+        let join = std::thread::spawn(move || {
+            let accepted =
+                handle_clone.try_incoming_block_message_from(relay_sender_clone, duplicate);
+            let _ = done_tx.send(accepted);
+        });
+
+        let duplicate_accepted = match done_rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(accepted) => accepted,
+            Err(err) => {
+                // Ensure a regression fails cleanly instead of leaving a blocked test thread.
+                let _ = target_rx
+                    .recv()
+                    .expect("drain target queue to release duplicate sender");
+                let accepted = done_rx
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("duplicate sender should finish after target queue drains");
+                join.join().expect("join duplicate lane-block sender");
+                panic!(
+                    "exact duplicate lane-block artifact blocked on a full queue: {err}; \
+                     accepted after drain={accepted}"
+                );
+            }
+        };
+        join.join().expect("join duplicate lane-block sender");
+        assert!(
+            !duplicate_accepted,
+            "exact duplicate lane-block artifact must be rejected before enqueue"
+        );
+
+        for _ in 0..(TEST_CHANNEL_CAP * 4) {
+            assert!(
+                !handle.try_incoming_block_message_from(relay_sender.clone(), original.clone()),
+                "periodic exact retransmits must not consume additional queue capacity"
+            );
+        }
+
+        let received = target_rx
+            .try_recv()
+            .expect("only the first lane-block artifact should remain queued");
+        assert_eq!(received.sender, Some(original_sender));
+        assert!(fixture.matches(&received.message));
+        assert!(
+            target_rx.try_recv().is_err(),
+            "duplicate must not be queued"
+        );
+
+        let distinct = fixture.message();
+        assert!(
+            handle.try_incoming_block_message_from(relay_sender.clone(), distinct),
+            "a distinct lane-block artifact must not be suppressed"
+        );
+        let received = target_rx
+            .try_recv()
+            .expect("distinct lane-block artifact should be queued");
+        assert_eq!(received.sender, Some(relay_sender));
+        assert!(fixture.matches(&received.message));
+    }
+
+    #[test]
+    fn exact_duplicate_lane_block_artifacts_do_not_fill_block_or_vote_ingress() {
+        for fixture in [
+            LaneBlockQueueFixture::Proposal,
+            LaneBlockQueueFixture::Vote,
+            LaneBlockQueueFixture::Qc,
+        ] {
+            assert_exact_duplicate_lane_block_artifact_does_not_wait_on_full_queue(fixture);
+        }
     }
 
     #[test]
@@ -11102,6 +11254,7 @@ mod tests {
         let commitment = LaneBlockCommitment {
             block_height: 1,
             lane_id: LaneId::new(0),
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 0,
             total_local_micro: 0,
@@ -12546,7 +12699,6 @@ pub mod collectors;
 pub mod consensus;
 pub mod da;
 pub mod election;
-pub mod engine;
 pub mod epoch;
 pub mod epoch_report;
 pub(crate) mod evidence;
@@ -12560,9 +12712,29 @@ pub(crate) mod penalties;
 pub mod rbc_sampling;
 pub mod rbc_status;
 pub mod rbc_store;
+pub(crate) mod safety_wal;
 pub(crate) mod smt;
 pub(crate) mod stake_snapshot;
 pub mod status;
+pub(crate) mod v2;
+pub(crate) mod v2_apply;
+pub(crate) mod v2_block_sync;
+pub(crate) mod v2_body_store;
+pub(crate) mod v2_candidate;
+pub(crate) mod v2_chunks;
+pub(crate) mod v2_context;
+pub(crate) mod v2_context_store;
+pub use v2_context::{
+    GenesisV2Bootstrap, V2GenesisBootstrapError, freeze_staged_genesis_v2,
+    signed_genesis_voting_peers, staged_genesis_nexus_amx_context_hash,
+};
+pub(crate) mod v2_effects;
+pub(crate) mod v2_lane_work;
+pub(crate) mod v2_recovery;
+pub(crate) mod v2_runner;
+pub(crate) mod v2_runtime;
+pub(crate) mod v2_transport;
+pub(crate) mod v2_worker;
 pub(crate) mod vnext;
 pub mod witness;
 pub use evidence::EvidenceValidationContext;
@@ -12612,6 +12784,9 @@ pub struct GenesisWithPubKey {
     pub genesis: Option<GenesisBlock>,
     /// Public key used to sign the genesis payload.
     pub public_key: PublicKey,
+    /// Verified, uncommitted height-one context derived from fresh genesis.
+    /// Absent only on the preserved non-empty-storage restart path.
+    pub v2_bootstrap: Option<GenesisV2Bootstrap>,
 }
 
 /// Configuration for the persisted RBC session store.
@@ -12823,13 +12998,20 @@ enum BlockPayloadDedupKey {
         idx: u32,
         bytes_hash: CryptoHash,
     },
+    LaneBlockArtifact {
+        artifact_hash: CryptoHash,
+    },
 }
 
 const VOTE_DEDUP_CACHE_CAP: usize = 8192;
 const VOTE_DEDUP_CACHE_TTL: Duration = Duration::from_secs(60);
 const BLOCK_PAYLOAD_DEDUP_CACHE_CAP: usize = 8192;
 const BLOCK_PAYLOAD_DEDUP_CACHE_TTL: Duration = Duration::from_secs(120);
-const BLOCK_PAYLOAD_DEDUP_KIND_COUNT: usize = 11;
+/// Exact lane artifacts are replayed on a bounded cadence for liveness. Keep a
+/// short, fixed (non-sliding) dedup window so a session pruned during a view
+/// change can accept byte-identical votes/QCs again after Kura reconstruction.
+const LANE_BLOCK_ARTIFACT_DEDUP_CACHE_TTL: Duration = Duration::from_secs(2);
+const BLOCK_PAYLOAD_DEDUP_KIND_COUNT: usize = 12;
 const BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND: usize =
     if BLOCK_PAYLOAD_DEDUP_CACHE_CAP / BLOCK_PAYLOAD_DEDUP_KIND_COUNT == 0 {
         1
@@ -12945,6 +13127,18 @@ fn push_optional_hash(buf: &mut Vec<u8>, hash: Option<CryptoHash>) {
     }
 }
 
+fn lane_block_artifact_dedup_key(message: &BlockMessage) -> Option<BlockPayloadDedupKey> {
+    matches!(
+        message,
+        BlockMessage::LaneBlockProposal(_)
+            | BlockMessage::LaneBlockVote(_)
+            | BlockMessage::LaneBlockQc(_)
+    )
+    .then(|| BlockPayloadDedupKey::LaneBlockArtifact {
+        artifact_hash: CryptoHash::new(message.encode()),
+    })
+}
+
 #[derive(Debug)]
 struct DedupEntry {
     last_seen: Instant,
@@ -12996,6 +13190,34 @@ where
             entry.last_seen = now;
             self.entries.insert(key.clone(), entry);
             self.lru.insert((order, key));
+            return DedupInsertOutcome {
+                inserted: false,
+                evicted_capacity: 0,
+                evicted_expired,
+            };
+        }
+
+        let evicted_capacity = self.evict_capacity();
+        let order = self.next_order();
+        self.entries.insert(
+            key.clone(),
+            DedupEntry {
+                last_seen: now,
+                order,
+            },
+        );
+        self.lru.insert((order, key));
+        DedupInsertOutcome {
+            inserted: true,
+            evicted_capacity,
+            evicted_expired,
+        }
+    }
+
+    /// Insert under a fixed suppression window that duplicate arrivals do not extend.
+    fn insert_fixed_window(&mut self, key: T, now: Instant) -> DedupInsertOutcome {
+        let evicted_expired = self.evict_expired(now);
+        if self.entries.contains_key(&key) {
             return DedupInsertOutcome {
                 inserted: false,
                 evicted_capacity: 0,
@@ -13114,6 +13336,7 @@ struct BlockPayloadDedupCache {
     fetch_pending_block: DedupCache<BlockPayloadDedupKey>,
     certified_block_fetch: DedupCache<BlockPayloadDedupKey>,
     rbc_chunk: DedupCache<BlockPayloadDedupKey>,
+    lane_block_artifact: DedupCache<BlockPayloadDedupKey>,
 }
 
 impl BlockPayloadDedupCache {
@@ -13130,6 +13353,10 @@ impl BlockPayloadDedupCache {
             fetch_pending_block: DedupCache::new(cap_per_kind, ttl),
             certified_block_fetch: DedupCache::new(cap_per_kind, ttl),
             rbc_chunk: DedupCache::new(cap_per_kind, ttl),
+            lane_block_artifact: DedupCache::new(
+                cap_per_kind,
+                ttl.min(LANE_BLOCK_ARTIFACT_DEDUP_CACHE_TTL),
+            ),
         }
     }
 
@@ -13155,6 +13382,9 @@ impl BlockPayloadDedupCache {
                 self.certified_block_fetch.insert(key, now)
             }
             BlockPayloadDedupKey::RbcChunk { .. } => self.rbc_chunk.insert(key, now),
+            BlockPayloadDedupKey::LaneBlockArtifact { .. } => {
+                self.lane_block_artifact.insert_fixed_window(key, now)
+            }
         }
     }
 
@@ -13176,6 +13406,7 @@ impl BlockPayloadDedupCache {
                 self.certified_block_fetch.remove(key)
             }
             BlockPayloadDedupKey::RbcChunk { .. } => self.rbc_chunk.remove(key),
+            BlockPayloadDedupKey::LaneBlockArtifact { .. } => self.lane_block_artifact.remove(key),
         }
     }
 
@@ -13202,6 +13433,9 @@ impl BlockPayloadDedupCache {
                 self.certified_block_fetch.contains(key)
             }
             BlockPayloadDedupKey::RbcChunk { .. } => self.rbc_chunk.contains(key),
+            BlockPayloadDedupKey::LaneBlockArtifact { .. } => {
+                self.lane_block_artifact.contains(key)
+            }
         }
     }
 
@@ -13218,6 +13452,7 @@ impl BlockPayloadDedupCache {
         self.fetch_pending_block.clear();
         self.certified_block_fetch.clear();
         self.rbc_chunk.clear();
+        self.lane_block_artifact.clear();
     }
 
     #[cfg(test)]
@@ -13233,6 +13468,7 @@ impl BlockPayloadDedupCache {
             + self.fetch_pending_block.len()
             + self.certified_block_fetch.len()
             + self.rbc_chunk.len()
+            + self.lane_block_artifact.len()
     }
 
     #[cfg(test)]
@@ -13254,6 +13490,7 @@ impl BlockPayloadDedupCache {
                 self.certified_block_fetch.len()
             }
             BlockPayloadDedupKey::RbcChunk { .. } => self.rbc_chunk.len(),
+            BlockPayloadDedupKey::LaneBlockArtifact { .. } => self.lane_block_artifact.len(),
         }
     }
 }
@@ -13263,6 +13500,14 @@ impl BlockPayloadDedupCache {
 enum LaneRelayMessage {
     Envelope(LaneRelayEnvelope),
     MergeSignature(MergeCommitteeSignature),
+    CertifiedMergeSidecar {
+        sender: PeerId,
+        message: CertifiedMergeSidecarMessage,
+    },
+    MergeCandidate {
+        sender: PeerId,
+        message: MergeCandidateMessage,
+    },
     NativeAmx {
         sender: PeerId,
         message: crate::native_amx::NativeAmxMessage,
@@ -13291,6 +13536,12 @@ impl InboundBlockMessage {
             enqueued_at: None,
             queue: None,
         }
+    }
+
+    /// Consume ingress metadata and return the normalized message plus its
+    /// authenticated outer sender.
+    pub(crate) fn into_message_and_sender(self) -> (BlockMessage, Option<PeerId>) {
+        (self.message, self.sender)
     }
 
     fn with_enqueue_metadata(mut self, queue: status::WorkerQueueKind) -> Self {
@@ -13446,6 +13697,7 @@ pub struct SumeragiHandle {
     vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>>,
     block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
     frontier_block_sync_hint: Arc<FrontierBlockSyncHint>,
+    ingress_ready: Arc<AtomicBool>,
     state: Option<Arc<State>>,
 }
 
@@ -13483,8 +13735,16 @@ impl SumeragiHandle {
             vote_dedup,
             block_payload_dedup,
             frontier_block_sync_hint,
+            // Low-level unit fixtures construct handles directly. Production
+            // start replaces this with a shared, initially closed replay gate.
+            ingress_ready: Arc::new(AtomicBool::new(true)),
             state: None,
         }
+    }
+
+    fn with_ingress_ready(mut self, ingress_ready: Arc<AtomicBool>) -> Self {
+        self.ingress_ready = ingress_ready;
+        self
     }
 
     fn with_wake(mut self, wake: mpsc::SyncSender<()>) -> Self {
@@ -13501,6 +13761,10 @@ impl SumeragiHandle {
         if let Some(wake) = self.wake.as_ref() {
             let _ = wake.try_send(());
         }
+    }
+
+    fn ingress_is_ready(&self) -> bool {
+        self.ingress_ready.load(Ordering::Acquire)
     }
 
     fn committed_height_hint(&self) -> Option<u64> {
@@ -13652,6 +13916,9 @@ impl SumeragiHandle {
                 status::DedupEvictionKind::BlockBodyResponse
             }
             BlockPayloadDedupKey::RbcChunk { .. } => status::DedupEvictionKind::RbcChunk,
+            BlockPayloadDedupKey::LaneBlockArtifact { .. } => {
+                status::DedupEvictionKind::LaneBlockArtifact
+            }
         };
         let mut guard = lock_block_payload_dedup_cache(&self.block_payload_dedup);
         let outcome = guard.insert(key, Instant::now());
@@ -13680,43 +13947,12 @@ impl SumeragiHandle {
     /// Enqueue an incoming block message without blocking the caller.
     /// Returns `true` if the message was accepted by the queue.
     ///
-    /// Note: this is a best-effort enqueue that drops messages when queues are saturated
-    /// to avoid stalling upstream relays. Block-sync updates and critical payload messages
-    /// (block creation, exact body repair, proposals, RBC INIT, and RBC chunks),
-    /// certified-block fetches, consensus-priority/commit-QC-only pending-block fetches,
-    /// standalone lane-block proposal/vote/QC evidence, plus RBC READY/DELIVER and QC
-    /// votes/certificates, always use blocking semantics because dropping them can stall
-    /// consensus or lane-block recovery.
+    /// Note: this is a best-effort enqueue for messages that tolerate queue
+    /// saturation. [`BlockMessage::requires_blocking_ingress`] is the canonical
+    /// classification for liveness-critical consensus and recovery artifacts.
     pub fn try_incoming_block_message(&self, msg: BlockMessage) -> bool {
         let msg = msg.normalize();
-        let blocking = matches!(
-            &msg,
-            BlockMessage::BlockSyncUpdate(_)
-                | BlockMessage::BlockCreated(_)
-                | BlockMessage::BlockBodyResponse(_)
-                | BlockMessage::FetchBlockBody(_)
-                | BlockMessage::CertifiedBlockFetch(_)
-                | BlockMessage::FetchPendingBlock(message::FetchPendingBlock {
-                    priority: Some(message::FetchPendingBlockPriority::Consensus),
-                    ..
-                })
-                | BlockMessage::FetchPendingBlock(message::FetchPendingBlock {
-                    commit_qc_only: Some(true),
-                    ..
-                })
-                | BlockMessage::Proposal(_)
-                | BlockMessage::LaneBlockProposal(_)
-                | BlockMessage::LaneBlockVote(_)
-                | BlockMessage::LaneBlockQc(_)
-                | BlockMessage::QcVote(_)
-                | BlockMessage::Qc(_)
-                | BlockMessage::VrfCommit(_)
-                | BlockMessage::VrfReveal(_)
-                | BlockMessage::RbcInit(_)
-                | BlockMessage::RbcChunk(_)
-                | BlockMessage::RbcReady(_)
-                | BlockMessage::RbcDeliver(_)
-        );
+        let blocking = msg.requires_blocking_ingress();
         let mode = if blocking {
             IngressMode::Blocking
         } else {
@@ -13729,34 +13965,7 @@ impl SumeragiHandle {
     /// Returns `true` if the message was accepted by the queue.
     pub fn try_incoming_block_message_from(&self, sender: PeerId, msg: BlockMessage) -> bool {
         let msg = msg.normalize();
-        let blocking = matches!(
-            &msg,
-            BlockMessage::BlockSyncUpdate(_)
-                | BlockMessage::BlockCreated(_)
-                | BlockMessage::BlockBodyResponse(_)
-                | BlockMessage::FetchBlockBody(_)
-                | BlockMessage::CertifiedBlockFetch(_)
-                | BlockMessage::FetchPendingBlock(message::FetchPendingBlock {
-                    priority: Some(message::FetchPendingBlockPriority::Consensus),
-                    ..
-                })
-                | BlockMessage::FetchPendingBlock(message::FetchPendingBlock {
-                    commit_qc_only: Some(true),
-                    ..
-                })
-                | BlockMessage::Proposal(_)
-                | BlockMessage::LaneBlockProposal(_)
-                | BlockMessage::LaneBlockVote(_)
-                | BlockMessage::LaneBlockQc(_)
-                | BlockMessage::QcVote(_)
-                | BlockMessage::Qc(_)
-                | BlockMessage::VrfCommit(_)
-                | BlockMessage::VrfReveal(_)
-                | BlockMessage::RbcInit(_)
-                | BlockMessage::RbcChunk(_)
-                | BlockMessage::RbcReady(_)
-                | BlockMessage::RbcDeliver(_)
-        );
+        let blocking = msg.requires_blocking_ingress();
         let mode = if blocking {
             IngressMode::Blocking
         } else {
@@ -13772,6 +13981,12 @@ impl SumeragiHandle {
         sender: Option<PeerId>,
         mode: IngressMode,
     ) -> bool {
+        if !self.ingress_is_ready() {
+            iroha_logger::debug!(
+                "rejecting Sumeragi ingress until context and safety WAL replay complete"
+            );
+            return false;
+        }
         let inbound = InboundBlockMessage::new(msg, sender);
         let log_drop = |kind: &'static str,
                         queue: status::WorkerQueueKind,
@@ -13988,11 +14203,80 @@ impl SumeragiHandle {
                     mode,
                 )
             }
-            BlockMessage::LaneBlockVote(vote) => enqueue_with_mode(
+            lane_message @ (BlockMessage::LaneBlockProposal(_)
+            | BlockMessage::LaneBlockVote(_)
+            | BlockMessage::LaneBlockQc(_)) => {
+                let (tx, kind, queue) = match &lane_message {
+                    BlockMessage::LaneBlockVote(_) => {
+                        (&self.votes, "LaneBlockVote", status::WorkerQueueKind::Votes)
+                    }
+                    BlockMessage::LaneBlockProposal(_) => (
+                        &self.block,
+                        "LaneBlockProposal",
+                        status::WorkerQueueKind::Blocks,
+                    ),
+                    BlockMessage::LaneBlockQc(_) => {
+                        (&self.block, "LaneBlockQc", status::WorkerQueueKind::Blocks)
+                    }
+                    _ => unreachable!("lane-block match arm only accepts lane artifacts"),
+                };
+                let dedup_key = lane_block_artifact_dedup_key(&lane_message)
+                    .expect("lane-block match arm must produce a dedup key");
+                if !self.dedup_block_payload(dedup_key) {
+                    iroha_logger::debug!(
+                        kind,
+                        "dropping exact duplicate lane-block artifact from network"
+                    );
+                    return false;
+                }
+                // Lane sessions intentionally retransmit unresolved proposal/vote/QC evidence on
+                // a bounded actor cadence. Suppress exact retransmissions before a blocking
+                // enqueue so a stalled session cannot fill the shared block or vote ingress queue
+                // and starve the body/QC repair needed to finish that session.
+                let accepted = enqueue_with_mode(
+                    tx,
+                    InboundBlockMessage::new(lane_message, sender),
+                    kind,
+                    queue,
+                    mode,
+                );
+                if !accepted {
+                    self.release_block_payload_dedup(&dedup_key);
+                }
+                accepted
+            }
+            BlockMessage::LaneBlockNewViewVote(vote) => enqueue_with_mode(
                 &self.votes,
-                InboundBlockMessage::new(BlockMessage::LaneBlockVote(vote), sender),
-                "LaneBlockVote",
+                InboundBlockMessage::new(BlockMessage::LaneBlockNewViewVote(vote), sender),
+                "LaneBlockNewViewVote",
                 status::WorkerQueueKind::Votes,
+                mode,
+            ),
+            BlockMessage::LaneExecutablePayload(payload) => enqueue_with_mode(
+                &self.block_payload,
+                InboundBlockMessage::new(BlockMessage::LaneExecutablePayload(payload), sender),
+                "LaneExecutablePayload",
+                status::WorkerQueueKind::BlockPayload,
+                mode,
+            ),
+            BlockMessage::LaneExecutablePayloadHandoff(handoff) => enqueue_with_mode(
+                &self.block_payload,
+                InboundBlockMessage::new(
+                    BlockMessage::LaneExecutablePayloadHandoff(handoff),
+                    sender,
+                ),
+                "LaneExecutablePayloadHandoff",
+                status::WorkerQueueKind::BlockPayload,
+                mode,
+            ),
+            BlockMessage::LaneBlockNewViewCertificate(certificate) => enqueue_with_mode(
+                &self.block_payload,
+                InboundBlockMessage::new(
+                    BlockMessage::LaneBlockNewViewCertificate(certificate),
+                    sender,
+                ),
+                "LaneBlockNewViewCertificate",
+                status::WorkerQueueKind::BlockPayload,
                 mode,
             ),
             BlockMessage::Qc(cert) => {
@@ -14534,6 +14818,9 @@ impl SumeragiHandle {
         msg: ControlFlow,
         mode: IngressMode,
     ) -> bool {
+        if !self.ingress_is_ready() {
+            return false;
+        }
         match mode {
             IngressMode::Blocking => {
                 self.wake();
@@ -14593,6 +14880,9 @@ impl SumeragiHandle {
         envelope: LaneRelayEnvelope,
         mode: IngressMode,
     ) -> bool {
+        if !self.ingress_is_ready() {
+            return false;
+        }
         match mode {
             IngressMode::Blocking => {
                 self.wake();
@@ -14652,6 +14942,9 @@ impl SumeragiHandle {
         signature: MergeCommitteeSignature,
         mode: IngressMode,
     ) -> bool {
+        if !self.ingress_is_ready() {
+            return false;
+        }
         match mode {
             IngressMode::Blocking => {
                 self.wake();
@@ -14698,6 +14991,62 @@ impl SumeragiHandle {
         }
     }
 
+    /// Enqueue an authenticated certified merge-sidecar request or chunk.
+    ///
+    /// Sidecar chunks are retryable and therefore always use non-blocking
+    /// ingress so a saturated transfer queue cannot stall the network relay.
+    pub fn try_incoming_certified_merge_sidecar(
+        &self,
+        sender: PeerId,
+        message: CertifiedMergeSidecarMessage,
+    ) -> bool {
+        let relay = LaneRelayMessage::CertifiedMergeSidecar { sender, message };
+        match self.lane_relay.try_send(relay) {
+            Ok(()) => {
+                status::record_worker_queue_enqueue(status::WorkerQueueKind::LaneRelay);
+                self.wake();
+                true
+            }
+            Err(mpsc::TrySendError::Full(_)) => {
+                status::record_worker_queue_drop(status::WorkerQueueKind::LaneRelay);
+                iroha_logger::warn!(
+                    "Sumeragi actor dropped certified merge-sidecar traffic due to queue saturation"
+                );
+                false
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                status::record_worker_queue_drop(status::WorkerQueueKind::LaneRelay);
+                iroha_logger::warn!(
+                    "Sumeragi actor dropped certified merge-sidecar traffic because its queue is disconnected"
+                );
+                false
+            }
+        }
+    }
+
+    /// Enqueue authenticated round-leader merge-candidate transport traffic.
+    pub fn try_incoming_merge_candidate(
+        &self,
+        sender: PeerId,
+        message: MergeCandidateMessage,
+    ) -> bool {
+        let relay = LaneRelayMessage::MergeCandidate { sender, message };
+        match self.lane_relay.try_send(relay) {
+            Ok(()) => {
+                status::record_worker_queue_enqueue(status::WorkerQueueKind::LaneRelay);
+                self.wake();
+                true
+            }
+            Err(mpsc::TrySendError::Full(_)) | Err(mpsc::TrySendError::Disconnected(_)) => {
+                status::record_worker_queue_drop(status::WorkerQueueKind::LaneRelay);
+                iroha_logger::warn!(
+                    "Sumeragi actor dropped merge-candidate transport traffic due to queue unavailability"
+                );
+                false
+            }
+        }
+    }
+
     /// Enqueue an inbound native AMX control-plane message for processing.
     pub fn incoming_native_amx(
         &self,
@@ -14723,6 +15072,9 @@ impl SumeragiHandle {
         message: crate::native_amx::NativeAmxMessage,
         mode: IngressMode,
     ) -> bool {
+        if !self.ingress_is_ready() {
+            return false;
+        }
         let relay_message = || LaneRelayMessage::NativeAmx {
             sender: sender.clone(),
             message: message.clone(),
@@ -15259,8 +15611,15 @@ pub struct SumeragiStartArgs {
 
 impl SumeragiStartArgs {
     /// Launch the Sumeragi actor, returning handles for control and supervision.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error before allocating ingress channels or spawning the
+    /// worker unless the configured live protocol is the authoritative
+    /// Sumeragi v2 runtime shipped by this release.
     #[allow(clippy::too_many_lines)]
-    pub fn start(self, shutdown_signal: ShutdownSignal) -> (SumeragiHandle, Child) {
+    pub fn start(self, shutdown_signal: ShutdownSignal) -> Result<(SumeragiHandle, Child)> {
+        ensure_authoritative_consensus_runtime(self.config.protocol_version)?;
         let SumeragiStartArgs {
             config,
             common_config,
@@ -15308,6 +15667,7 @@ impl SumeragiStartArgs {
                 BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
                 BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
             )));
+        let ingress_ready = Arc::new(AtomicBool::new(false));
 
         let handle = SumeragiHandle::new(
             block_payload_tx.clone(),
@@ -15320,6 +15680,7 @@ impl SumeragiStartArgs {
             Arc::clone(&vote_dedup),
             Arc::clone(&block_payload_dedup),
         )
+        .with_ingress_ready(Arc::clone(&ingress_ready))
         .with_wake(wake_tx.clone())
         .with_state(Arc::clone(&state));
         let frontier_block_sync_hint = handle.frontier_block_sync_hint();
@@ -15352,6 +15713,7 @@ impl SumeragiStartArgs {
             vote_dedup,
             block_payload_dedup,
             frontier_block_sync_hint,
+            ingress_ready,
             vote_rx,
             block_payload_rx,
             block_rx,
@@ -15369,10 +15731,10 @@ impl SumeragiStartArgs {
             move || actor.run(),
         ));
 
-        (
+        Ok((
             handle,
             Child::new(join_handle, OnShutdown::Wait(Duration::from_secs(5))),
-        )
+        ))
     }
 }
 
@@ -15400,6 +15762,7 @@ struct SumeragiWorker {
     vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>>,
     block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
     frontier_block_sync_hint: Arc<FrontierBlockSyncHint>,
+    ingress_ready: Arc<AtomicBool>,
     vote_rx: mpsc::Receiver<InboundBlockMessage>,
     block_payload_rx: mpsc::Receiver<InboundBlockMessage>,
     block_rx: mpsc::Receiver<InboundBlockMessage>,
@@ -15410,6 +15773,65 @@ struct SumeragiWorker {
     wake_rx: mpsc::Receiver<()>,
     shutdown_signal: ShutdownSignal,
     rbc_status_handle: rbc_status::Handle,
+}
+
+fn is_authoritative_v2_protocol(protocol_version: u32) -> bool {
+    protocol_version == u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION)
+}
+
+fn ensure_authoritative_consensus_runtime(protocol_version: u32) -> Result<()> {
+    let expected = u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION);
+    if !is_authoritative_v2_protocol(protocol_version) {
+        return Err(eyre::eyre!(
+            "live consensus protocol {protocol_version} is unsupported; this build requires Sumeragi v2 ({expected})"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod authoritative_runtime_gate_tests {
+    use std::sync::atomic::Ordering;
+
+    use super::{
+        BlockMessage, ensure_authoritative_consensus_runtime, is_authoritative_v2_protocol,
+        test_sumeragi_handle,
+    };
+
+    #[test]
+    fn v2_is_the_only_authoritative_runtime() {
+        let version = u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION);
+        assert!(is_authoritative_v2_protocol(version));
+        ensure_authoritative_consensus_runtime(version)
+            .expect("the complete v2 runner must be admitted");
+        assert!(!is_authoritative_v2_protocol(version.saturating_add(1)));
+        assert!(ensure_authoritative_consensus_runtime(version.saturating_add(1)).is_err());
+    }
+
+    #[test]
+    fn legacy_protocol_is_not_a_live_fallback() {
+        let error = ensure_authoritative_consensus_runtime(1)
+            .expect_err("v1 is decode-only and cannot be selected for live consensus");
+
+        assert!(
+            error
+                .to_string()
+                .contains("live consensus protocol 1 is unsupported")
+        );
+    }
+
+    #[test]
+    fn ingress_stays_closed_until_replay_owner_acknowledges_ready() {
+        let (handle, receiver) = test_sumeragi_handle(1);
+        handle.ingress_ready.store(false, Ordering::Release);
+
+        assert!(!handle.incoming_block_message(BlockMessage::invalid_wire_sentinel()));
+        assert!(receiver.try_recv().is_err());
+
+        handle.ingress_ready.store(true, Ordering::Release);
+        assert!(handle.incoming_block_message(BlockMessage::invalid_wire_sentinel()));
+        assert!(receiver.try_recv().is_ok());
+    }
 }
 
 /// Rate-limit ticks by the minimum gap so queue backlogs do not throttle consensus progress.
@@ -17557,6 +17979,10 @@ mod worker_iteration_warn_tests {
 impl SumeragiWorker {
     #[allow(clippy::too_many_lines)]
     fn run(self) {
+        if is_authoritative_v2_protocol(self.config.protocol_version) {
+            v2_runner::run(self);
+            return;
+        }
         let startup_trace_started_at = Instant::now();
         log_sumeragi_startup_trace("sumeragi.worker.run.enter", startup_trace_started_at);
         let Self {
@@ -17593,7 +18019,16 @@ impl SumeragiWorker {
             vote_dedup: _vote_dedup,
             block_payload_dedup,
             frontier_block_sync_hint,
+            ingress_ready: _,
         } = self;
+        if let Err(error) = ensure_authoritative_consensus_runtime(config.protocol_version) {
+            iroha_logger::error!(
+                ?error,
+                protocol_version = config.protocol_version,
+                "Sumeragi consensus startup failed closed"
+            );
+            return;
+        }
         let fallback_params = iroha_data_model::parameter::system::SumeragiParameters::default();
         let msg_channel_cap_block_payload = config.queues.block_payload;
         let msg_channel_cap_votes = config.queues.votes;

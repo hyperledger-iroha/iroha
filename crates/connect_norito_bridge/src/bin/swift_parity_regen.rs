@@ -297,7 +297,7 @@ fn run() -> Result<(), String> {
         let payload_base64 = BASE64.encode(&payload_bytes);
         let signed_base64 = BASE64.encode(&signed_bytes);
         let payload_hash = format!("{}", HashOf::<TransactionPayload>::new(&payload));
-        let signed_hash = format!("{}", HashOf::<SignedTransaction>::new(&signed));
+        let signed_hash = signed.hash().to_string();
 
         let fixture = FixtureOutput {
             name: entry.name,

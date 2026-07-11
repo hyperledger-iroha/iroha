@@ -35,7 +35,7 @@ public final class SccpV1 {
     out.write(network.tag());
     writeU32(out, network.domainId());
     switch (network) {
-      case SORA_TAIRA -> write(out, decodeLowerHex("809574f5fee75e69bfcf52451e42d50f"));
+      case SORA_TAIRA -> write(out, decodeLowerHex("fc56984b2be7431d840e21514d1883f0"));
       case ETHEREUM_MAINNET -> writeUnsignedLe(out, BigInteger.ONE, 8);
       case ETHEREUM_SEPOLIA -> writeUnsignedLe(out, BigInteger.valueOf(11_155_111L), 8);
       case BSC_MAINNET -> writeUnsignedLe(out, BigInteger.valueOf(56), 8);

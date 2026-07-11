@@ -794,11 +794,12 @@ fn decode_receipt(
     ))
 }
 
-/// Canonicalize and filter receipts against the current cursor and sealed set.
+/// Canonicalize and filter receipts against the current committed cursor.
 ///
-/// This enforces monotonic sequencing per `(lane, epoch)`, drops stale or sealed
-/// receipts, and returns the next contiguous slice that must be sealed before a
-/// later sequence can appear.
+/// This enforces monotonic sequencing per `(lane, epoch)`, drops stale receipts,
+/// and returns the next contiguous slice after the canonical cursor. Proposal
+/// assembly must not advance this floor: an abandoned proposal remains eligible
+/// for a later view until its block is committed.
 ///
 /// # Errors
 ///
@@ -808,18 +809,8 @@ fn decode_receipt(
 pub fn plan_committable_receipts(
     lane_config: &LaneConfig,
     cursor_snapshot: &BTreeMap<LaneEpoch, u64>,
-    sealed: &BTreeSet<iroha_data_model::da::commitment::DaCommitmentKey>,
     receipts: Vec<DaReceiptEntry>,
 ) -> Result<Vec<DaReceiptEntry>, DaReceiptQueueError> {
-    let mut sealed_highest: BTreeMap<LaneEpoch, u64> = BTreeMap::new();
-    for key in sealed {
-        let lane_epoch = LaneEpoch::new(key.lane_id, key.epoch);
-        sealed_highest
-            .entry(lane_epoch)
-            .and_modify(|seq| *seq = (*seq).max(key.sequence))
-            .or_insert(key.sequence);
-    }
-
     let mut grouped: BTreeMap<LaneEpoch, BTreeMap<u64, DaReceiptEntry>> = BTreeMap::new();
     for entry in receipts {
         if lane_config.entry(entry.lane_epoch.lane_id).is_none() {
@@ -829,15 +820,6 @@ pub fn plan_committable_receipts(
                 sequence = entry.sequence,
                 "skipping stale DA receipt for lane not present in the configured catalog"
             );
-            continue;
-        }
-
-        let key = iroha_data_model::da::commitment::DaCommitmentKey {
-            lane_id: entry.lane_epoch.lane_id,
-            epoch: entry.lane_epoch.epoch,
-            sequence: entry.sequence,
-        };
-        if sealed.contains(&key) {
             continue;
         }
 
@@ -875,15 +857,7 @@ pub fn plan_committable_receipts(
 
     let mut planned = Vec::new();
     for (lane_epoch, entries) in grouped {
-        let base_floor = match (
-            cursor_snapshot.get(&lane_epoch),
-            sealed_highest.get(&lane_epoch),
-        ) {
-            (Some(committed), Some(sealed_seq)) => Some((*committed).max(*sealed_seq)),
-            (Some(committed), None) => Some(*committed),
-            (None, Some(sealed_seq)) => Some(*sealed_seq),
-            (None, None) => None,
-        };
+        let base_floor = cursor_snapshot.get(&lane_epoch).copied();
         let mut expected = base_floor.map_or_else(
             || *entries.keys().next().unwrap_or(&0),
             |highest| highest.saturating_add(1),
@@ -1816,10 +1790,9 @@ mod tests {
             receipt: sample_receipt(lane.as_u32(), 1, 5),
         };
         let lane_config = lane_config_for(lane);
-        let sealed = BTreeSet::new();
         let cursors = cursor_snapshot(lane, 1, 1);
 
-        let result = plan_committable_receipts(&lane_config, &cursors, &sealed, vec![receipt]);
+        let result = plan_committable_receipts(&lane_config, &cursors, vec![receipt]);
         assert!(matches!(
             result,
             Err(DaReceiptQueueError::MissingSequence { expected: 2, .. })
@@ -1849,7 +1822,6 @@ mod tests {
         let result = plan_committable_receipts(
             &lane_config,
             &BTreeMap::new(),
-            &BTreeSet::new(),
             vec![unknown_entry, known_entry],
         )
         .expect("unknown lane receipts should be skipped");
@@ -1858,16 +1830,9 @@ mod tests {
     }
 
     #[test]
-    fn plan_committable_receipts_skips_sealed_and_stale() {
+    fn plan_committable_receipts_abandoned_proposal_does_not_advance_floor() {
         let lane = LaneId::new(3);
         let base_receipt = sample_receipt(lane.as_u32(), 9, 1);
-        let mut sealed = BTreeSet::new();
-        sealed.insert(
-            iroha_data_model::da::commitment::DaCommitmentKey::from_record(&sample_record(
-                &base_receipt,
-                1,
-            )),
-        );
         let receipts = vec![
             DaReceiptEntry {
                 lane_epoch: LaneEpoch::new(lane, 9),
@@ -1884,37 +1849,45 @@ mod tests {
         ];
 
         let lane_config = lane_config_for(lane);
-        let cursors = cursor_snapshot(lane, 9, 1);
-        let planned = plan_committable_receipts(&lane_config, &cursors, &sealed, receipts).unwrap();
-        assert_eq!(planned.len(), 1);
-        assert_eq!(planned[0].sequence, 2);
+        let cursors = BTreeMap::new();
+        let first = plan_committable_receipts(&lane_config, &cursors, receipts.clone()).unwrap();
+        let reproposal = plan_committable_receipts(&lane_config, &cursors, receipts).unwrap();
+        assert_eq!(
+            first.iter().map(|entry| entry.sequence).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(reproposal, first);
     }
 
     #[test]
-    fn plan_committable_receipts_skips_sealed_sequence_with_ticket_mismatch() {
+    fn plan_committable_receipts_starts_after_committed_cursor() {
         let lane = LaneId::new(5);
-        let receipt = sample_receipt(lane.as_u32(), 2, 1);
-        let mut sealed_record = sample_record(&receipt, 1);
-        sealed_record.storage_ticket = StorageTicketId::new([0x99; 32]);
-        let mut sealed = BTreeSet::new();
-        sealed
-            .insert(iroha_data_model::da::commitment::DaCommitmentKey::from_record(&sealed_record));
+        let receipt_one = sample_receipt(lane.as_u32(), 2, 1);
+        let receipt_two = sample_receipt(lane.as_u32(), 2, 2);
 
         let lane_config = lane_config_for(lane);
         let planned = plan_committable_receipts(
             &lane_config,
-            &BTreeMap::new(),
-            &sealed,
-            vec![DaReceiptEntry {
-                lane_epoch: LaneEpoch::new(lane, 2),
-                sequence: 1,
-                manifest_hash: ManifestDigest::new(*receipt.manifest_hash.as_bytes()),
-                receipt,
-            }],
+            &cursor_snapshot(lane, 2, 1),
+            vec![
+                DaReceiptEntry {
+                    lane_epoch: LaneEpoch::new(lane, 2),
+                    sequence: 1,
+                    manifest_hash: ManifestDigest::new(*receipt_one.manifest_hash.as_bytes()),
+                    receipt: receipt_one,
+                },
+                DaReceiptEntry {
+                    lane_epoch: LaneEpoch::new(lane, 2),
+                    sequence: 2,
+                    manifest_hash: ManifestDigest::new(*receipt_two.manifest_hash.as_bytes()),
+                    receipt: receipt_two,
+                },
+            ],
         )
         .expect("plan receipts");
 
-        assert!(planned.is_empty());
+        assert_eq!(planned.len(), 1);
+        assert_eq!(planned[0].sequence, 2);
     }
 
     #[test]
@@ -2042,10 +2015,9 @@ mod tests {
             },
         ];
         let lane_config = lane_config_for(lane);
-        let sealed = BTreeSet::new();
         let cursors = BTreeMap::new();
 
-        let result = plan_committable_receipts(&lane_config, &cursors, &sealed, entries);
+        let result = plan_committable_receipts(&lane_config, &cursors, entries);
         assert!(matches!(
             result,
             Err(DaReceiptQueueError::ManifestConflict { sequence: 1, .. })
@@ -2074,10 +2046,9 @@ mod tests {
             },
         ];
         let lane_config = lane_config_for(lane);
-        let sealed = BTreeSet::new();
         let cursors = BTreeMap::new();
 
-        let result = plan_committable_receipts(&lane_config, &cursors, &sealed, entries);
+        let result = plan_committable_receipts(&lane_config, &cursors, entries);
         assert!(matches!(
             result,
             Err(DaReceiptQueueError::StorageTicketConflict { sequence: 1, .. })
@@ -2108,10 +2079,9 @@ mod tests {
             },
         ];
         let lane_config = lane_config_for(lane);
-        let sealed = BTreeSet::new();
         let cursors = BTreeMap::new();
 
-        let result = plan_committable_receipts(&lane_config, &cursors, &sealed, entries);
+        let result = plan_committable_receipts(&lane_config, &cursors, entries);
         assert!(matches!(
             result,
             Err(DaReceiptQueueError::ReceiptEvidenceConflict { sequence: 1, .. })

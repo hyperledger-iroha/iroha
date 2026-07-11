@@ -21783,7 +21783,7 @@
     },
     "/v1/zk/vk/{backend}/{name}": {
       "get": {
-        "description": "Fetch a verification key by backend and name.",
+        "description": "Fetch a verification key by backend and name. The response includes namespace and owner_manifest_id identity metadata plus record_norito_base64, the standard-base64 canonical Norito VerifyingKeyRecord archive used by SDK proof-attachment builders.",
         "parameters": [
           {
             "description": "Verification backend label.",

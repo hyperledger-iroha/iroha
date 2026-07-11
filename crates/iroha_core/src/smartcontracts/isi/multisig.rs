@@ -6,7 +6,7 @@ use std::{
     sync::LazyLock,
 };
 
-use iroha_crypto::HashOf;
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     ValidationFail,
     account::{AccountId, MultisigMember, MultisigPolicy, rekey::AccountRekeyRecord},
@@ -21,8 +21,9 @@ use iroha_data_model::{
     role::{Role, RoleId},
 };
 use iroha_executor_data_model::isi::multisig::{
-    DEFAULT_MULTISIG_TTL_MS, MultisigAccountState, MultisigApprove, MultisigCancel,
-    MultisigInstructionBox, MultisigProposalState, MultisigProposalTerminalState,
+    DEFAULT_MULTISIG_TTL_MS, MultisigAccountState, MultisigApprovalOutcomeStatusV1,
+    MultisigApprovalOutcomeV1, MultisigApprove, MultisigCancel, MultisigInstructionBox,
+    MultisigProposalState, MultisigProposalTerminalExecutionStateV1, MultisigProposalTerminalState,
     MultisigProposalTerminalStatus, MultisigProposalValue, MultisigPropose, MultisigRegister,
     MultisigSpec,
 };
@@ -42,6 +43,8 @@ const MULTISIG: &str = "multisig";
 const MULTISIG_ACCOUNT_STATE: &str = "account";
 const MULTISIG_PROPOSAL_STATE: &str = "proposal";
 const MULTISIG_PROPOSAL_TERMINAL_STATE: &str = "proposal-terminal";
+const MULTISIG_PROPOSAL_TERMINAL_EXECUTION_STATE: &str = "proposal-terminal-execution";
+const MULTISIG_APPROVAL_OUTCOME_STATE: &str = "approval-outcome";
 const MULTISIG_SIGNATORY_INDEX_STATE: &str = "signatory";
 const MULTISIG_SIGNATORY: &str = "MULTISIG_SIGNATORY";
 const DOMAINLESS_NAMESPACE: &str = "domainless";
@@ -82,6 +85,27 @@ pub fn execute_multisig_instruction(
             execute_cancel(state_transaction, authority, &instruction)
         }
     }
+}
+
+/// Return the concrete instructions a live multisig approval can execute.
+///
+/// This read-only projection is used by non-bypassable deferred-execution admission. Missing,
+/// expired, terminal, or malformed proposals cannot execute instructions and therefore resolve to
+/// `None`.
+pub(crate) fn live_proposal_instructions_for_approval(
+    state_transaction: &StateTransaction<'_, '_>,
+    approve: &MultisigApprove,
+) -> Option<(AccountId, Vec<InstructionBox>)> {
+    let proposal = proposal_state(
+        state_transaction,
+        &approve.account,
+        &approve.instructions_hash,
+    )
+    .ok()?;
+    if now_ms(state_transaction) >= proposal.expires_at_ms || proposal.is_relayed == Some(true) {
+        return None;
+    }
+    Some((proposal.multisig_account_id, proposal.instructions))
 }
 
 pub(crate) fn is_reserved_multisig_metadata_key(key: &Name) -> bool {
@@ -328,6 +352,32 @@ fn multisig_proposal_terminal_state_key(
         instructions_hash
     ))
     .expect("multisig proposal terminal state path must be a valid name")
+}
+
+fn multisig_proposal_terminal_execution_state_key(
+    terminal_entrypoint_hash: [u8; Hash::LENGTH],
+    multisig_account: &AccountId,
+    instructions_hash: &HashOf<Vec<InstructionBox>>,
+) -> Name {
+    let terminal_entrypoint_hash = Hash::prehashed(terminal_entrypoint_hash);
+    Name::from_str(&format!(
+        "{MULTISIG}{DELIMITER}{MULTISIG_PROPOSAL_TERMINAL_EXECUTION_STATE}{DELIMITER}{terminal_entrypoint_hash}{DELIMITER}{}{DELIMITER}{instructions_hash}",
+        HashOf::new(multisig_account),
+    ))
+    .expect("multisig proposal terminal execution path must be a valid name")
+}
+
+fn multisig_approval_outcome_state_key(
+    entrypoint_hash: [u8; Hash::LENGTH],
+    entrypoint_account: &AccountId,
+    instructions_hash: &HashOf<Vec<InstructionBox>>,
+) -> Name {
+    let entrypoint_hash = Hash::prehashed(entrypoint_hash);
+    Name::from_str(&format!(
+        "{MULTISIG}{DELIMITER}{MULTISIG_APPROVAL_OUTCOME_STATE}{DELIMITER}{entrypoint_hash}{DELIMITER}{}{DELIMITER}{instructions_hash}",
+        HashOf::new(entrypoint_account),
+    ))
+    .expect("multisig approval outcome path must be a valid name")
 }
 
 fn account_role_suffix(account: &AccountId) -> String {
@@ -1608,7 +1658,12 @@ fn execute_propose(
 
     let now_ms = now_ms(state_transaction);
     if proposal_state(state_transaction, &multisig_account, &instructions_hash).is_ok() {
-        if let Err(err) = prune_expired(state_transaction, &multisig_account, &instructions_hash) {
+        if let Err(err) = prune_expired(
+            state_transaction,
+            &multisig_account,
+            &instructions_hash,
+            &instruction.account,
+        ) {
             iroha_logger::error!(
                 proposer = %proposer,
                 multisig_account = %multisig_account,
@@ -1756,7 +1811,12 @@ fn execute_approve(
             "not qualified to approve multisig".to_owned(),
         ));
     }
-    if let Err(err) = prune_expired(state_transaction, &multisig_account, &instructions_hash) {
+    if let Err(err) = prune_expired(
+        state_transaction,
+        &multisig_account,
+        &instructions_hash,
+        &instruction.account,
+    ) {
         iroha_logger::error!(
             multisig_account = %multisig_account,
             instructions_hash = %instructions_hash,
@@ -1770,6 +1830,13 @@ fn execute_approve(
     let Ok(mut proposal_state) =
         proposal_state(state_transaction, &multisig_account, &instructions_hash)
     else {
+        store_multisig_approval_outcome(
+            state_transaction,
+            &instruction.account,
+            &multisig_account,
+            &instructions_hash,
+            MultisigApprovalOutcomeStatusV1::NotExecuted,
+        )?;
         let log = Log::new(
             Level::INFO,
             format!(
@@ -1781,23 +1848,17 @@ fn execute_approve(
             .map_err(ValidationFail::InstructionFailed);
     };
     if let Some(true) = proposal_state.is_relayed {
+        store_multisig_approval_outcome(
+            state_transaction,
+            &instruction.account,
+            &multisig_account,
+            &instructions_hash,
+            MultisigApprovalOutcomeStatusV1::NotExecuted,
+        )?;
         return Ok(());
     }
 
     upsert_subject_approval(&mut proposal_state.approvals, approver);
-    iroha_logger::info!(
-        multisig_account = %multisig_account,
-        instructions_hash = %instructions_hash,
-        approvals = proposal_state.approvals.len(),
-        "multisig approval storing updated proposal state"
-    );
-    store_multisig_proposal_state(state_transaction, &proposal_state)?;
-    iroha_logger::info!(
-        multisig_account = %multisig_account,
-        instructions_hash = %instructions_hash,
-        "multisig approval stored updated proposal state"
-    );
-
     let approved_weight = approved_weight_by_subject(&spec, &proposal_state.approvals);
     let is_authenticated = approved_weight >= u32::from(spec.quorum.get());
     iroha_logger::info!(
@@ -1809,7 +1870,37 @@ fn execute_approve(
         "multisig approval evaluated quorum"
     );
 
+    if !is_authenticated {
+        iroha_logger::info!(
+            multisig_account = %multisig_account,
+            instructions_hash = %instructions_hash,
+            approvals = proposal_state.approvals.len(),
+            "multisig approval storing updated proposal state"
+        );
+        store_multisig_proposal_state(state_transaction, &proposal_state)?;
+        store_multisig_approval_outcome(
+            state_transaction,
+            &instruction.account,
+            &multisig_account,
+            &instructions_hash,
+            MultisigApprovalOutcomeStatusV1::NotExecuted,
+        )?;
+        iroha_logger::info!(
+            multisig_account = %multisig_account,
+            instructions_hash = %instructions_hash,
+            "multisig approval stored updated proposal state"
+        );
+        return Ok(());
+    }
+
     if is_authenticated {
+        crate::validation_fee::enforce_deferred_instruction_list(
+            &multisig_account,
+            proposal_state.instructions.as_slice(),
+            state_transaction,
+        )
+        .map_err(|reason| ValidationFail::NotPermitted(reason.to_string()))?;
+
         match proposal_state.is_relayed {
             None => {
                 iroha_logger::info!(
@@ -1821,6 +1912,7 @@ fn execute_approve(
                     state_transaction,
                     &proposal_state,
                     MultisigProposalTerminalStatus::Finalized,
+                    &instruction.account,
                 )?;
                 prune_down(state_transaction, &multisig_account, &instructions_hash)?;
                 iroha_logger::info!(
@@ -1831,6 +1923,11 @@ fn execute_approve(
             }
             Some(false) => {
                 proposal_state.is_relayed = Some(true);
+                maybe_store_relayed_proposal_execution_state(
+                    state_transaction,
+                    &proposal_state,
+                    &instruction.account,
+                )?;
                 store_multisig_proposal_state(state_transaction, &proposal_state)?;
             }
             _ => unreachable!("proposal_state.is_relayed checked above"),
@@ -1871,6 +1968,14 @@ fn execute_approve(
                 "multisig approval finished authenticated instruction"
             );
         }
+
+        store_multisig_approval_outcome(
+            state_transaction,
+            &instruction.account,
+            &multisig_account,
+            &instructions_hash,
+            MultisigApprovalOutcomeStatusV1::Executed,
+        )?;
     }
 
     Ok(())
@@ -1896,7 +2001,12 @@ fn execute_cancel(
         ));
     }
 
-    prune_expired(state_transaction, &multisig_account, &instructions_hash)?;
+    prune_expired(
+        state_transaction,
+        &multisig_account,
+        &instructions_hash,
+        &instruction.account,
+    )?;
 
     let proposal_state = proposal_state(state_transaction, &multisig_account, &instructions_hash)?;
     if let Some(true) = proposal_state.is_relayed {
@@ -1909,6 +2019,7 @@ fn execute_cancel(
         state_transaction,
         &proposal_state,
         MultisigProposalTerminalStatus::Canceled,
+        &instruction.account,
     )?;
     prune_down(state_transaction, &multisig_account, &instructions_hash)
 }
@@ -1969,6 +2080,7 @@ fn prune_expired(
     state_transaction: &mut StateTransaction<'_, '_>,
     multisig_account: &AccountId,
     instructions_hash: &HashOf<Vec<InstructionBox>>,
+    entrypoint_account: &AccountId,
 ) -> Result<(), ValidationFail> {
     let proposal_state = proposal_state(state_transaction, multisig_account, instructions_hash)?;
 
@@ -1984,6 +2096,7 @@ fn prune_expired(
                 state_transaction,
                 &approve.account,
                 &approve.instructions_hash,
+                &approve.account,
             );
         }
     }
@@ -1992,6 +2105,7 @@ fn prune_expired(
         state_transaction,
         &proposal_state,
         MultisigProposalTerminalStatus::Expired,
+        entrypoint_account,
     )?;
     prune_down(state_transaction, multisig_account, instructions_hash)
 }
@@ -2743,6 +2857,96 @@ fn store_multisig_proposal_terminal_state(
     Ok(())
 }
 
+fn store_multisig_proposal_terminal_execution_state(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    terminal_state: &MultisigProposalTerminalState,
+    entrypoint_account: &AccountId,
+) -> Result<(), ValidationFail> {
+    let Some(terminal_entrypoint_hash) = state_transaction
+        .tx_call_hash
+        .as_ref()
+        .map(|hash| *hash.as_ref())
+    else {
+        // Some unit-level execution helpers do not install a transaction call hash. There is no
+        // transaction identity to bind immutable evidence to in that context.
+        return Ok(());
+    };
+    let execution_state = MultisigProposalTerminalExecutionStateV1::new(
+        terminal_state.clone(),
+        entrypoint_account.clone(),
+        state_transaction.block_height(),
+        terminal_entrypoint_hash,
+    );
+    let bytes = norito::to_bytes(&execution_state).map_err(multisig_state_encode_error)?;
+    let execution_key = multisig_proposal_terminal_execution_state_key(
+        terminal_entrypoint_hash,
+        entrypoint_account,
+        &terminal_state.instructions_hash,
+    );
+    if let Some(existing) = state_transaction
+        .world
+        .smart_contract_state
+        .get(&execution_key)
+    {
+        if existing.as_slice() != bytes {
+            return Err(ValidationFail::InternalError(format!(
+                "conflicting immutable multisig terminal execution state at `{execution_key}`"
+            )));
+        }
+    } else {
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(execution_key, bytes);
+    }
+    Ok(())
+}
+
+fn store_multisig_approval_outcome(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    entrypoint_account: &AccountId,
+    resolved_multisig_account: &AccountId,
+    instructions_hash: &HashOf<Vec<InstructionBox>>,
+    status: MultisigApprovalOutcomeStatusV1,
+) -> Result<(), ValidationFail> {
+    let Some(entrypoint_hash) = state_transaction
+        .tx_call_hash
+        .as_ref()
+        .map(|hash| *hash.as_ref())
+    else {
+        // Unit-level helpers without a transaction identity cannot emit durable approval evidence.
+        return Ok(());
+    };
+    let outcome = MultisigApprovalOutcomeV1::new(
+        entrypoint_account.clone(),
+        resolved_multisig_account.clone(),
+        *instructions_hash,
+        status,
+        state_transaction.block_height(),
+        entrypoint_hash,
+    );
+    let bytes = norito::to_bytes(&outcome).map_err(multisig_state_encode_error)?;
+    let outcome_key =
+        multisig_approval_outcome_state_key(entrypoint_hash, entrypoint_account, instructions_hash);
+    if let Some(existing) = state_transaction
+        .world
+        .smart_contract_state
+        .get(&outcome_key)
+    {
+        if existing.as_slice() != bytes {
+            return Err(ValidationFail::InternalError(format!(
+                "conflicting immutable multisig approval outcome at `{outcome_key}`"
+            )));
+        }
+    } else {
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(outcome_key, bytes);
+    }
+    Ok(())
+}
+
 fn proposal_state(
     state_transaction: &StateTransaction<'_, '_>,
     multisig_account: &AccountId,
@@ -2783,6 +2987,7 @@ fn maybe_store_terminal_proposal_state(
     state_transaction: &mut StateTransaction<'_, '_>,
     proposal_state: &MultisigProposalState,
     status: MultisigProposalTerminalStatus,
+    entrypoint_account: &AccountId,
 ) -> Result<(), ValidationFail> {
     if proposal_state.is_relayed.is_some() || proposal_is_cancel_wrapper(proposal_state) {
         return Ok(());
@@ -2794,7 +2999,32 @@ fn maybe_store_terminal_proposal_state(
         status,
         now_ms(state_transaction),
     );
+    store_multisig_proposal_terminal_execution_state(
+        state_transaction,
+        &terminal_state,
+        entrypoint_account,
+    )?;
     store_multisig_proposal_terminal_state(state_transaction, &terminal_state)
+}
+
+fn maybe_store_relayed_proposal_execution_state(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    proposal_state: &MultisigProposalState,
+    entrypoint_account: &AccountId,
+) -> Result<(), ValidationFail> {
+    debug_assert_eq!(proposal_state.is_relayed, Some(true));
+    let terminal_state = MultisigProposalTerminalState::new(
+        proposal_state.multisig_account_id.clone(),
+        proposal_state.instructions_hash,
+        proposal_state_value(proposal_state),
+        MultisigProposalTerminalStatus::Finalized,
+        now_ms(state_transaction),
+    );
+    store_multisig_proposal_terminal_execution_state(
+        state_transaction,
+        &terminal_state,
+        entrypoint_account,
+    )
 }
 
 fn move_multisig_proposals(
@@ -4115,12 +4345,50 @@ mod tests {
             "existing approvals should survive add-signatory rekey"
         );
 
+        let approval_entrypoint_hash = Hash::prehashed([0xd1; Hash::LENGTH]);
+        state_transaction.tx_call_hash = Some(approval_entrypoint_hash);
         execute_approve(
             &mut state_transaction,
             &signer2_id,
             &MultisigApprove::new(updated_account.clone(), instructions_hash),
         )
         .expect("approval through rekeyed account");
+
+        let outcome_key = multisig_approval_outcome_state_key(
+            *approval_entrypoint_hash.as_ref(),
+            &updated_account,
+            &instructions_hash,
+        );
+        let outcome_bytes = state_transaction
+            .world
+            .smart_contract_state
+            .get(&outcome_key)
+            .expect("rekeyed approval should leave an exact outcome");
+        let outcome = norito::decode_from_bytes::<MultisigApprovalOutcomeV1>(outcome_bytes)
+            .expect("rekeyed approval outcome should decode");
+        assert_eq!(outcome.entrypoint_account_id, updated_account);
+        assert_eq!(outcome.resolved_multisig_account_id, updated_account);
+        assert_eq!(outcome.status, MultisigApprovalOutcomeStatusV1::Executed);
+
+        let terminal_execution_key = multisig_proposal_terminal_execution_state_key(
+            *approval_entrypoint_hash.as_ref(),
+            &updated_account,
+            &instructions_hash,
+        );
+        let terminal_execution_bytes = state_transaction
+            .world
+            .smart_contract_state
+            .get(&terminal_execution_key)
+            .expect("rekeyed finalization should use its signed lookup account");
+        let terminal_execution = norito::decode_from_bytes::<
+            MultisigProposalTerminalExecutionStateV1,
+        >(terminal_execution_bytes)
+        .expect("rekeyed terminal execution should decode");
+        assert_eq!(terminal_execution.entrypoint_account_id, updated_account);
+        assert_eq!(
+            terminal_execution.terminal.multisig_account_id,
+            updated_account
+        );
         match proposal_value(&state_transaction, &updated_account, &instructions_hash) {
             Ok(proposal) => {
                 assert!(
@@ -6021,9 +6289,239 @@ seiyaku TriggerDispatch {
         let propose = MultisigPropose::new(multisig_id.clone(), instructions, None);
         execute_propose(&mut state_transaction, &signer1_id, &propose).expect("signatory propose");
 
+        let pending_entrypoint_hash = Hash::prehashed([0xa4; Hash::LENGTH]);
+        state_transaction.tx_call_hash = Some(pending_entrypoint_hash);
+        let pending_approve = MultisigApprove::new(multisig_id.clone(), instructions_hash);
+        execute_approve(&mut state_transaction, &signer1_id, &pending_approve)
+            .expect("duplicate subject approval should remain below quorum");
+        let pending_outcome_key = multisig_approval_outcome_state_key(
+            *pending_entrypoint_hash.as_ref(),
+            &multisig_id,
+            &instructions_hash,
+        );
+        let pending_outcome_bytes = state_transaction
+            .world
+            .smart_contract_state
+            .get(&pending_outcome_key)
+            .expect("successful pre-quorum approval should leave an exact outcome");
+        let pending_outcome =
+            norito::decode_from_bytes::<MultisigApprovalOutcomeV1>(pending_outcome_bytes)
+                .expect("pre-quorum approval outcome should decode");
+        assert_eq!(
+            pending_outcome.status,
+            MultisigApprovalOutcomeStatusV1::NotExecuted
+        );
+        assert_eq!(pending_outcome.entrypoint_account_id, multisig_id);
+        assert_eq!(pending_outcome.resolved_multisig_account_id, multisig_id);
+
+        let terminal_entrypoint_hash = Hash::prehashed([0xa5; Hash::LENGTH]);
+        state_transaction.tx_call_hash = Some(terminal_entrypoint_hash);
         let approve = MultisigApprove::new(multisig_id.clone(), instructions_hash);
         execute_approve(&mut state_transaction, &signer2_id, &approve)
             .expect("signatory approve without roles");
+
+        let execution_key = multisig_proposal_terminal_execution_state_key(
+            *terminal_entrypoint_hash.as_ref(),
+            &multisig_id,
+            &instructions_hash,
+        );
+        let execution_bytes = state_transaction
+            .world
+            .smart_contract_state
+            .get(&execution_key)
+            .expect("finalized proposal should leave transaction-bound terminal state")
+            .clone();
+        let execution_state =
+            norito::decode_from_bytes::<MultisigProposalTerminalExecutionStateV1>(&execution_bytes)
+                .expect("transaction-bound terminal state should decode");
+        assert_eq!(execution_state.terminal_block_height, 1);
+        assert_eq!(execution_state.entrypoint_account_id, multisig_id);
+        assert_eq!(
+            execution_state.terminal_entrypoint_hash,
+            *terminal_entrypoint_hash.as_ref()
+        );
+        let executed_outcome_key = multisig_approval_outcome_state_key(
+            *terminal_entrypoint_hash.as_ref(),
+            &multisig_id,
+            &instructions_hash,
+        );
+        let executed_outcome_bytes = state_transaction
+            .world
+            .smart_contract_state
+            .get(&executed_outcome_key)
+            .expect("quorum approval should leave an exact executed outcome");
+        let executed_outcome =
+            norito::decode_from_bytes::<MultisigApprovalOutcomeV1>(executed_outcome_bytes)
+                .expect("executed approval outcome should decode");
+        assert_eq!(
+            executed_outcome.status,
+            MultisigApprovalOutcomeStatusV1::Executed
+        );
+        assert_eq!(executed_outcome.entrypoint_account_id, multisig_id);
+        assert_eq!(executed_outcome.resolved_multisig_account_id, multisig_id);
+
+        let mut conflicting_state = execution_state.terminal;
+        conflicting_state.terminal_at_ms = conflicting_state.terminal_at_ms.saturating_add(1);
+        let err = store_multisig_proposal_terminal_execution_state(
+            &mut state_transaction,
+            &conflicting_state,
+            &multisig_id,
+        )
+        .expect_err("transaction-bound terminal state must be append-only");
+        assert!(
+            matches!(err, ValidationFail::InternalError(message) if message.contains("conflicting immutable multisig terminal execution state"))
+        );
+        assert_eq!(
+            state_transaction
+                .world
+                .smart_contract_state
+                .get(&execution_key),
+            Some(&execution_bytes),
+            "conflicting write must not alter transaction-bound terminal state"
+        );
+    }
+
+    #[test]
+    fn relayed_multisig_execution_leaves_only_transaction_bound_terminal_state() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(
+            World::new(),
+            kura,
+            query_handle,
+            ChainId::from("multisig-relayed-terminal-state"),
+        );
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_transaction = block.transaction();
+
+        let relay_account = new_account_id(&checked_keypair());
+        let relay_instructions = vec![InstructionBox::from(Log::new(
+            Level::INFO,
+            "relay execution".to_owned(),
+        ))];
+        let relay_instructions_hash = HashOf::new(&relay_instructions);
+        let relay_state = MultisigProposalState::new(
+            relay_account.clone(),
+            relay_instructions_hash,
+            relay_instructions,
+            1,
+            u64::MAX,
+            BTreeSet::from([relay_account.clone()]),
+            Some(true),
+        );
+        let terminal_entrypoint_hash = Hash::prehashed([0xb7; Hash::LENGTH]);
+        state_transaction.tx_call_hash = Some(terminal_entrypoint_hash);
+
+        maybe_store_relayed_proposal_execution_state(
+            &mut state_transaction,
+            &relay_state,
+            &relay_account,
+        )
+        .expect("relayed execution should persist immutable evidence");
+
+        let execution_key = multisig_proposal_terminal_execution_state_key(
+            *terminal_entrypoint_hash.as_ref(),
+            &relay_account,
+            &relay_instructions_hash,
+        );
+        let execution_bytes = state_transaction
+            .world
+            .smart_contract_state
+            .get(&execution_key)
+            .expect("relayed execution should leave transaction-bound terminal state");
+        let execution_state =
+            norito::decode_from_bytes::<MultisigProposalTerminalExecutionStateV1>(execution_bytes)
+                .expect("relayed terminal execution state should decode");
+        assert_eq!(
+            execution_state.terminal.status,
+            MultisigProposalTerminalStatus::Finalized
+        );
+        assert_eq!(execution_state.terminal.proposal.is_relayed, Some(true));
+        assert_eq!(execution_state.entrypoint_account_id, relay_account);
+        assert_eq!(execution_state.terminal_block_height, 1);
+        assert_eq!(
+            execution_state.terminal_entrypoint_hash,
+            *terminal_entrypoint_hash.as_ref()
+        );
+        assert!(
+            state_transaction
+                .world
+                .smart_contract_state
+                .get(&multisig_proposal_terminal_state_key(
+                    &relay_account,
+                    &relay_instructions_hash,
+                ))
+                .is_none(),
+            "relayed lifecycle state remains active and must not create the mutable terminal key"
+        );
+    }
+
+    #[test]
+    fn terminal_state_rekey_does_not_fabricate_transaction_bound_execution_evidence() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(
+            World::new(),
+            kura,
+            query_handle,
+            ChainId::from("multisig-terminal-rekey-evidence"),
+        );
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_transaction = block.transaction();
+
+        let old_account = new_account_id(&checked_keypair());
+        let new_account = new_account_id(&checked_keypair());
+        let instructions = vec![InstructionBox::from(Log::new(
+            Level::INFO,
+            "historical execution".to_owned(),
+        ))];
+        let instructions_hash = HashOf::new(&instructions);
+        let terminal_state = MultisigProposalTerminalState::new(
+            old_account.clone(),
+            instructions_hash,
+            MultisigProposalValue::new(
+                instructions,
+                1,
+                u64::MAX,
+                BTreeSet::from([old_account.clone()]),
+                None,
+            ),
+            MultisigProposalTerminalStatus::Finalized,
+            2,
+        );
+        store_multisig_proposal_terminal_state(&mut state_transaction, &terminal_state)
+            .expect("historical terminal state should store");
+
+        let rekey_entrypoint_hash = Hash::prehashed([0xc9; Hash::LENGTH]);
+        state_transaction.tx_call_hash = Some(rekey_entrypoint_hash);
+        move_multisig_proposals(&mut state_transaction, &old_account, &new_account)
+            .expect("terminal state should move during rekey");
+
+        let moved_bytes = state_transaction
+            .world
+            .smart_contract_state
+            .get(&multisig_proposal_terminal_state_key(
+                &new_account,
+                &instructions_hash,
+            ))
+            .expect("rekeyed terminal state should exist");
+        let moved_state = norito::decode_from_bytes::<MultisigProposalTerminalState>(moved_bytes)
+            .expect("rekeyed terminal state should decode");
+        assert_eq!(moved_state.multisig_account_id, new_account);
+        assert!(
+            state_transaction
+                .world
+                .smart_contract_state
+                .get(&multisig_proposal_terminal_execution_state_key(
+                    *rekey_entrypoint_hash.as_ref(),
+                    &new_account,
+                    &instructions_hash,
+                ))
+                .is_none(),
+            "rekeying historical lifecycle state must not create execution evidence"
+        );
     }
 
     #[test]

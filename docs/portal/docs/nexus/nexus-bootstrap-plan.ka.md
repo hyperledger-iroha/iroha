@@ -4,7 +4,7 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-bootstrap-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: aa25c267f36e3245866776d5149039e1b9833407a84126d66a21cf5296e51414
+source_hash: 1859a31eac02d839cfb032c9a2bea520272c8310554f1fbc4e3691fc35cd7318
 source_last_modified: "2025-12-29T18:16:35.135788+00:00"
 translation_last_reviewed: 2026-02-07
 id: nexus-bootstrap-plan
@@ -32,7 +32,7 @@ translator: machine-google-reviewed
 ## ქსელის გარემო
 - მართეთ ორი Nexus გარემო განსხვავებული ქსელის პრეფიქსებით:
 - **Sora Nexus (mainnet)** – წარმოების ქსელის პრეფიქსი `nexus`, კანონიკური მმართველობის ჰოსტინგი და SoraFS/SoraNet piggyback სერვისები (ჯაჭვის ID `0x02F1` / UU000001).
-- **Sora Taira (ტესტი ქსელი)** – დადგმული ქსელის პრეფიქსი `taira`, მაგისტრალური ქსელის კონფიგურაციის ასახვა ინტეგრაციის ტესტირებისთვის და წინასწარ გამოშვების ვალიდაციისთვის (ჯაჭვის UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Taira (ტესტი ქსელი)** – დადგმული ქსელის პრეფიქსი `taira`, მაგისტრალური ქსელის კონფიგურაციის ასახვა ინტეგრაციის ტესტირებისთვის და წინასწარ გამოშვების ვალიდაციისთვის (ჯაჭვის UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - შეინახეთ გენეზისის ცალკეული ფაილები, მართვის გასაღებები და ინფრასტრუქტურის კვალი თითოეული გარემოსთვის. Taira მოქმედებს როგორც დამადასტურებელი საფუძველი SoraFS/SoraNet-ის ყველა გამოშვებისთვის Nexus-ზე დაწინაურებამდე.
 - CI/CD მილსადენები ჯერ უნდა განლაგდეს Taira-ზე, შეასრულოს კვამლის ავტომატური ტესტები და მოითხოვოს ხელით დაწინაურება Nexus-ზე შემოწმების გავლის შემდეგ.
 - საცნობარო კონფიგურაციის პაკეტები მუშაობს `configs/soranexus/nexus/` (mainnet) და `configs/soranexus/taira/` (ტესტი ქსელი), თითოეული შეიცავს `config.toml`, `genesis.json` და Torii ნიმუშებს.

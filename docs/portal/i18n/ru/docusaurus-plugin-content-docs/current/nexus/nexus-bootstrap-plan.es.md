@@ -33,7 +33,7 @@ translation_last_reviewed: 2026-02-07
 ## Энторнос де красный
 - Операции ввода Nexus с красными отличительными префиксами:
 - **Sora Nexus (основная сеть)** - красный код производства `nexus`, Hospedando la gobernanza canonica и servicios piggyback de SoraFS/SoraNet (идентификатор цепи `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - красный префикс промежуточного `testus`, который обеспечивает настройку основной сети для проверки интеграции и проверки предварительной версии (цепочка UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - красный префикс промежуточного `testus`, который обеспечивает настройку основной сети для проверки интеграции и проверки предварительной версии (цепочка UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - Mantener archives Genesis Separados, llaves de gobernanza y huellas de infraestructura para cada entorno. Испытайте действие как банковский сбор всех развертываний SoraFS/SoraNet перед продвижением Nexus.
 - Конвейеры CI/CD должны быть отключены в первую очередь в Testus, автоматически запускать дымовые тесты и запрашивать руководство по продвижению Nexus, чтобы пройти все проверки.
 - Пакеты конфигурации ссылок активны в `configs/soranexus/nexus/` (основная сеть) и `configs/soranexus/testus/` (тестовая сеть), включая `config.toml`, `genesis.json` и каталоги доступа Torii в пример.

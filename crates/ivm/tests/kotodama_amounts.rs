@@ -45,7 +45,7 @@ fn execute_rounded(mode: &str) -> Numeric {
     let tlv = vm
         .validate_tlv(vm.register(10))
         .expect("returned Amount pointer");
-    assert_eq!(tlv.type_id, PointerType::Amount);
+    assert_eq!(tlv.type_id, PointerType::Quantity);
     norito::decode_from_bytes(tlv.payload).expect("decode returned canonical Amount")
 }
 

@@ -205,6 +205,35 @@ fn cli_rejects_conflicting_profile_flags() {
 }
 
 #[test]
+fn cli_rejects_noncanonical_operator_inputs() {
+    let tempdir = tempdir().expect("tempdir");
+    let payload_path = tempdir.path().join("payload.bin");
+    write_payload(&payload_path, 4096);
+
+    for (arg, expected) in [
+        ("--profile-id=01", "canonical unsigned decimal"),
+        ("--profile= sorafs.sf1@1.0.0", "whitespace"),
+        ("--por-sample=0", "greater than zero"),
+        ("--por-sample=03", "canonical unsigned decimal"),
+        ("--por-sample-seed=0X2a", "canonical unsigned"),
+        ("--por-sample-seed=0x02", "canonical unsigned"),
+        ("--por-proof=01:0:0", "canonical unsigned decimal"),
+    ] {
+        let output = cargo_bin_cmd!("sorafs_chunk_store")
+            .arg(&payload_path)
+            .arg(arg)
+            .output()
+            .expect("run chunk store CLI");
+        assert!(!output.status.success(), "{arg} should fail");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(expected),
+            "expected {expected:?} for {arg}, got {stderr}"
+        );
+    }
+}
+
+#[test]
 fn cli_writes_por_json() {
     let fixture = FixtureProfile::SF1_V1.generate_vectors();
     let mut file = named_temp_file("tempfile");
@@ -557,6 +586,37 @@ fn manifest_cli_writes_report_to_json_out() {
             .expect("chunk_count"),
         1
     );
+}
+
+#[test]
+fn manifest_cli_rejects_noncanonical_operator_inputs() {
+    let tempdir = tempdir().expect("tempdir");
+    let payload_path = tempdir.path().join("payload.bin");
+    write_payload(&payload_path, 4096);
+
+    for (arg, expected, include_payload) in [
+        ("--profile-id=01", "canonical unsigned decimal", true),
+        ("--profile= sorafs.sf1@1.0.0", "whitespace", true),
+        ("--por-sample=0", "greater than zero", true),
+        ("--por-sample=03", "canonical unsigned decimal", true),
+        ("--por-sample-seed=0X2a", "canonical unsigned", true),
+        ("--por-sample-seed=0x02", "canonical unsigned", true),
+        ("--por-proof=01:0:0", "canonical unsigned decimal", true),
+        ("--promote-profile= sorafs.sf1@1.0.0", "whitespace", false),
+        ("--promote-profile=01", "canonical unsigned decimal", false),
+    ] {
+        let mut cmd = cargo_bin_cmd!("sorafs_manifest_chunk_store");
+        if include_payload {
+            cmd.arg(&payload_path);
+        }
+        let output = cmd.arg(arg).output().expect("run manifest chunk store CLI");
+        assert!(!output.status.success(), "{arg} should fail");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(expected),
+            "expected {expected:?} for {arg}, got {stderr}"
+        );
+    }
 }
 
 #[test]

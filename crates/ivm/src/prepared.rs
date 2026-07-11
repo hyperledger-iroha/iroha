@@ -8,7 +8,7 @@ use iroha_data_model::smart_contract::manifest::ContractManifest;
 use crate::{
     ProgramMetadata, VMError,
     instruction::wide,
-    ivm::PreparedProgram,
+    ivm::{DecodedLiteralTable, PreparedProgram},
     ivm_cache::DecodedOp,
     metadata::{EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor},
 };
@@ -172,7 +172,7 @@ pub(crate) struct PreparedContractParts {
     pub(crate) code_offset: usize,
     pub(crate) code_hash: Hash,
     pub(crate) contract_interface: Arc<EmbeddedContractInterfaceV1>,
-    pub(crate) literal_pointers: Arc<[u64]>,
+    pub(crate) literal_table: DecodedLiteralTable,
     pub(crate) decoded: Arc<[DecodedOp]>,
     pub(crate) prepared_program: PreparedProgram,
     pub(crate) control_flow: PreparedControlFlow,
@@ -188,7 +188,7 @@ struct PreparedContractInner {
     code_hash: Hash,
     contract_interface: Arc<EmbeddedContractInterfaceV1>,
     entrypoints: BTreeMap<String, PreparedEntrypointIndex>,
-    literal_pointers: Arc<[u64]>,
+    literal_table: DecodedLiteralTable,
     decoded: Arc<[DecodedOp]>,
     prepared_program: PreparedProgram,
     control_flow: PreparedControlFlow,
@@ -242,7 +242,7 @@ impl PreparedContract {
                 code_hash: parts.code_hash,
                 contract_interface: parts.contract_interface,
                 entrypoints,
-                literal_pointers: parts.literal_pointers,
+                literal_table: parts.literal_table,
                 decoded: parts.decoded,
                 prepared_program: parts.prepared_program,
                 control_flow: parts.control_flow,
@@ -366,8 +366,8 @@ impl PreparedContract {
         self.inner.instruction_entry_pc
     }
 
-    pub(crate) fn literal_pointers(&self) -> &Arc<[u64]> {
-        &self.inner.literal_pointers
+    pub(crate) fn literal_table(&self) -> &DecodedLiteralTable {
+        &self.inner.literal_table
     }
 
     pub(crate) fn decoded(&self) -> &Arc<[DecodedOp]> {

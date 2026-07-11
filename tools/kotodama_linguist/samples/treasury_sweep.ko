@@ -4,7 +4,7 @@ seiyaku TreasurySweep {
         EmptyTreasury = 1,
     }
 
-    state LastSweepHeight: i64;
+    state int LastSweepHeight;
     hajimari() {
         LastSweepHeight = 0;
     }

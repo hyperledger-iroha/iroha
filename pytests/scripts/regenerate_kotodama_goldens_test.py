@@ -66,6 +66,45 @@ def test_unique_builds_rejects_stem_collisions() -> None:
         goldens.unique_builds(rows)
 
 
+def test_output_inventory_maps_compiler_artifacts_and_ignores_data() -> None:
+    sources = [Path("contracts/demo.ko"), Path("contracts/alias.ko")]
+    outputs = [
+        Path("contracts/demo.to"),
+        Path("published/alias.to"),
+        Path("fixtures/norito_payload.to"),
+        Path("fixtures/hand_authored_ivm.to"),
+    ]
+    rows = [
+        goldens.Golden("standard", sources[0], outputs[0]),
+        goldens.Golden("standard", sources[1], outputs[1]),
+    ]
+
+    assert goldens.compiler_owned_outputs(sources, outputs) == outputs[:2]
+    goldens.validate_output_inventory(rows, sources, outputs)
+
+    with pytest.raises(goldens.GoldenError, match="missing explicit golden map rows"):
+        goldens.validate_output_inventory(rows[:1], sources, outputs)
+
+    wrong_source = [
+        rows[0],
+        goldens.Golden("standard", sources[0], outputs[1]),
+    ]
+    with pytest.raises(goldens.GoldenError, match="invalid source mappings"):
+        goldens.validate_output_inventory(wrong_source, sources, outputs)
+
+
+def test_repository_compiler_owned_outputs_have_explicit_source_rows() -> None:
+    root = goldens.repository_root()
+    rows = goldens.read_map(root / goldens.MAP_PATH)
+    sources = goldens.tracked_sources(root)
+    outputs = goldens.tracked_outputs(root)
+
+    goldens.validate_output_inventory(rows, sources, outputs)
+    assert set(goldens.compiler_owned_outputs(sources, outputs)) == {
+        row.destination for row in rows
+    }
+
+
 def test_noop_output_requires_exact_fresh_notices() -> None:
     goldens.validate_noop_build_output("fresh a.to\nfresh b.to\n", 2)
     with pytest.raises(goldens.GoldenError, match="performed compilation"):

@@ -214,7 +214,7 @@ final class OfflineTransferWidgetTests: XCTestCase {
             "-1",
             "1e3",
             "1,000",
-            "SBD 125",
+            "DS 125",
             "0x10",
             "1_000",
             "1/2",
@@ -1575,21 +1575,21 @@ final class OfflineTransferWidgetTests: XCTestCase {
         try OfflineNoteTransferTextPayloadCodec.encodeReceiveRequest(
             try OfflineReceiveRequestPayload(
                 invoiceId: "invoice-1",
-                accountId: "recipient@pob.cbsi",
-                assetDefinitionId: "sbd",
+                accountId: "recipient@leumi.is2",
+                assetDefinitionId: "ds",
                 amount: "1.00",
                 recipientKeyCertificate: OfflineCompactKeyCertificate(
                     platform: OfflineNoteV2Constants.iosAppAttestPlatform,
                     keyId: "key-1",
                     deviceId: "device-1",
-                    accountId: "recipient@pob.cbsi",
+                    accountId: "recipient@leumi.is2",
                     publicKey: Data(repeating: 0x11, count: 32).base64EncodedString(),
                     issuerSignatureBase64: Data(repeating: 0x22, count: 64).base64EncodedString()
                 ),
                 generatedAtMs: 1_706_000_000_000,
                 displayTtlMs: 300_000,
-                chainId: "minamoto-cbsi",
-                assetId: "sbd#cbsi",
+                chainId: "boi-testnet",
+                assetId: "ds#boi.is2",
                 outputCommitment: String(repeating: "a", count: 64)
             )
         )

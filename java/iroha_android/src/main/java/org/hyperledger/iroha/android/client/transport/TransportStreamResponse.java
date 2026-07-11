@@ -81,11 +81,17 @@ public final class TransportStreamResponse implements AutoCloseable {
     }
     final Map<String, List<String>> copy = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
     for (final Map.Entry<String, List<String>> entry : source.entrySet()) {
-      final List<String> values =
+      final List<String> incoming =
           entry.getValue() == null
               ? Collections.emptyList()
-              : Collections.unmodifiableList(new ArrayList<>(entry.getValue()));
-      copy.put(entry.getKey(), values);
+              : new ArrayList<>(entry.getValue());
+      final List<String> values = new ArrayList<>();
+      final List<String> existing = copy.get(entry.getKey());
+      if (existing != null) {
+        values.addAll(existing);
+      }
+      values.addAll(incoming);
+      copy.put(entry.getKey(), Collections.unmodifiableList(values));
     }
     return copy;
   }

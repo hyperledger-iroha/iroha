@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-pragma solidity 0.8.24;
+pragma solidity 0.7.4;
 
 /**
  * @title TairaXorEvmToken
  * @dev Shared ERC20-compatible wrapped XOR implementation for concrete EVM
  * SCCP routes. The sole mint/burn route is immutable from construction; there
  * is no owner, initialization window, bridge setter, or upgrade hook.
+ * Deployment tooling binds the token to a precomputed route address before
+ * deploying the route at that exact address.
  */
 abstract contract TairaXorEvmToken {
     string public constant name = "TAIRA XOR";
@@ -27,7 +29,6 @@ abstract contract TairaXorEvmToken {
 
     constructor(address routeBridge) {
         require(routeBridge != address(0), "Bridge address is required");
-        require(msg.sender == routeBridge, "Bridge must create token");
         bridge = routeBridge;
     }
 

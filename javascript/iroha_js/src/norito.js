@@ -6592,10 +6592,10 @@ function decodeEntrypointListTypeNodeValue(payload, context) {
 
 const ENTRYPOINT_VALUE_KIND_NAMES = Object.freeze([
   "Int",
-  "U128",
+  "Decimal",
+  "Quantity",
   "Bool",
   "String",
-  "Amount",
   "Json",
   "Name",
   "AccountId",
@@ -7218,6 +7218,7 @@ function schemaHashForTypeName(typeName) {
  *   context?: string,
  *   expectedSchemaHash?: ArrayBufferView | ArrayBuffer | Buffer,
  *   expectedTypeName?: string,
+ *   expectedPaddingLength?: number,
  *   requireNonEmptyPayload?: boolean,
  * }} [options]
  * @returns {{payload: Buffer, schemaHash: Buffer, flags: number}}
@@ -7299,6 +7300,22 @@ export function validateNoritoFrame(bytes, options = {}) {
     throw new Error(
       `${context} exceeds the ${NORITO_MAX_HEADER_PADDING}-byte Norito header-padding bound`,
     );
+  }
+  if (options.expectedPaddingLength !== undefined) {
+    if (
+      !Number.isInteger(options.expectedPaddingLength) ||
+      options.expectedPaddingLength < 0 ||
+      options.expectedPaddingLength > NORITO_MAX_HEADER_PADDING
+    ) {
+      throw new TypeError(
+        `${context} expected padding length must be an integer from 0 through ${NORITO_MAX_HEADER_PADDING}`,
+      );
+    }
+    if (paddingLength !== options.expectedPaddingLength) {
+      throw new Error(
+        `${context} must contain exactly ${options.expectedPaddingLength} bytes of header padding`,
+      );
+    }
   }
   const payloadStart = NORITO_FRAME_HEADER_LENGTH + paddingLength;
   const padding = buffer.subarray(NORITO_FRAME_HEADER_LENGTH, payloadStart);

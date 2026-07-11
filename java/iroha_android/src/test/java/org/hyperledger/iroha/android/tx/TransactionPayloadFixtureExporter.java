@@ -1,12 +1,16 @@
 package org.hyperledger.iroha.android.tx;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
 import org.bouncycastle.crypto.signers.Ed25519Signer;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
@@ -48,7 +52,15 @@ public final class TransactionPayloadFixtureExporter {
     final Ed25519PrivateKeyParameters privateKey =
         new Ed25519PrivateKeyParameters(hexToBytes(SIGNING_SEED_HEX), 0);
     final byte[] publicKey = privateKey.generatePublicKey().getEncoded();
-    final List<Object> manifestFixtures = new java.util.ArrayList<>(entries.size());
+    final List<Object> manifestFixtures = new ArrayList<>(entries.size());
+    final List<Path> pendingPaths = new ArrayList<>(entries.size());
+    final List<byte[]> pendingPayloads = new ArrayList<>(entries.size());
+    final Set<String> names = new HashSet<>();
+    final Set<String> encodedFiles = new HashSet<>();
+    final Set<String> payloadHashes = new HashSet<>();
+    final Set<ByteBuffer> payloadBytes = new HashSet<>();
+    final Set<String> signedHashes = new HashSet<>();
+    final Set<ByteBuffer> signedPayloadBytes = new HashSet<>();
 
     for (Object entry : entries) {
       if (!(entry instanceof Map)) {
@@ -58,6 +70,9 @@ public final class TransactionPayloadFixtureExporter {
       final Map<String, Object> map = (Map<String, Object>) entry;
       final TransactionPayloadFixtures.Fixture fixture =
           TransactionPayloadFixtures.Fixture.fromObject(map);
+      if (!names.add(fixture.name())) {
+        throw new IllegalStateException("Duplicate fixture name: " + fixture.name());
+      }
       if (!fixture.isDecodable()) {
         throw new IllegalStateException(fixture.name() + ": fixture missing structured payload");
       }
@@ -75,7 +90,24 @@ public final class TransactionPayloadFixtureExporter {
       final String signedHashHex = SignedTransactionHasher.hashCanonicalHex(signedBytes);
       final String encodedFile = fixture.name() + ".norito";
 
-      Files.write(outputDir.resolve(encodedFile), encoded);
+      if (!encodedFiles.add(encodedFile)) {
+        throw new IllegalStateException("Duplicate fixture encoded_file: " + encodedFile);
+      }
+      if (!payloadHashes.add(payloadHashHex)) {
+        throw new IllegalStateException("Duplicate fixture payload_hash: " + payloadHashHex);
+      }
+      if (!payloadBytes.add(ByteBuffer.wrap(encoded).asReadOnlyBuffer())) {
+        throw new IllegalStateException("Duplicate fixture payload bytes: " + fixture.name());
+      }
+      if (!signedHashes.add(signedHashHex)) {
+        throw new IllegalStateException("Duplicate fixture signed_hash: " + signedHashHex);
+      }
+      if (!signedPayloadBytes.add(ByteBuffer.wrap(signedBytes).asReadOnlyBuffer())) {
+        throw new IllegalStateException("Duplicate fixture signed bytes: " + fixture.name());
+      }
+
+      pendingPaths.add(outputDir.resolve(encodedFile));
+      pendingPayloads.add(encoded);
       rewriteFixtureEntry(map, fixture, payloadBase64, payloadHashHex, signedBase64, signedHashHex);
       manifestFixtures.add(
           manifestEntry(
@@ -88,6 +120,10 @@ public final class TransactionPayloadFixtureExporter {
               signedHashHex,
               signedBytes.length));
       System.out.println(fixture.name() + "=" + payloadBase64);
+    }
+
+    for (int i = 0; i < pendingPaths.size(); i++) {
+      Files.write(pendingPaths.get(i), pendingPayloads.get(i));
     }
 
     Files.writeString(path, toPrettyJson(entries) + "\n", StandardCharsets.UTF_8);

@@ -708,8 +708,8 @@ I18NT0000000037X-ҡа баҫтырыу хәҙер күп сығанаҡлы дә
    cargo run -p sorafs_car --bin sorafs_fetch -- \
      --plan "$OUT/portal.plan.json" \
      --manifest-json "$OUT/portal.manifest.json" \
-     --gateway-provider name=docs-us,provider-id="$DOCS_US_PROVIDER_ID",base-url="$DOCS_US_GATEWAY",stream-token="$DOCS_US_STREAM_TOKEN" \
-     --gateway-provider name=docs-eu,provider-id="$DOCS_EU_PROVIDER_ID",base-url="$DOCS_EU_GATEWAY",stream-token="$DOCS_EU_STREAM_TOKEN" \
+     --gateway-provider name=docs-us,provider-id="$DOCS_US_PROVIDER_ID",gateway-key="$DOCS_US_GATEWAY_KEY",base-url="$DOCS_US_GATEWAY",stream-token="$DOCS_US_STREAM_TOKEN" \
+     --gateway-provider name=docs-eu,provider-id="$DOCS_EU_PROVIDER_ID",gateway-key="$DOCS_EU_GATEWAY_KEY",base-url="$DOCS_EU_GATEWAY",stream-token="$DOCS_EU_STREAM_TOKEN" \
      --scoreboard-out "$FETCH_OUT/scoreboard.json" \
      --provider-metrics-out "$FETCH_OUT/providers.ndjson" \
      --json-out "$FETCH_OUT/fetch.json" \

@@ -13,7 +13,12 @@ use iroha_data_model::{
     account::AccountId,
     prelude::{AssetDefinitionId, AssetId, DataSpaceId, DomainId, Name, NftId},
 };
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{
+    bigint::BigInt,
+    json::Json,
+    numeric::{Numeric, Quantity},
+    numeric_abi::{DecimalValueV1, IntValueV1, QuantityValueV1},
+};
 use ivm_abi::entrypoint::{
     EntrypointArgumentRecordV1, EntrypointArgumentSchemaV1, EntrypointValueAtomV1,
     EntrypointValueKindV1, EntrypointValueTypeNodeV1, EntrypointValueTypeV1,
@@ -419,14 +424,17 @@ fn schema_materialization_bound(
             .fields
             .iter()
             .try_fold(SchemaMaterializationBound::ZERO, |total, field| {
-                let field = value_materialization_bound(&field.ty)?;
+                let field_bound = value_materialization_bound(&field.ty)?;
                 Ok::<_, VMError>(SchemaMaterializationBound {
-                    words: total.words.saturating_add(field.words),
+                    words: total.words.saturating_add(field_bound.words),
                     pointer_envelopes: add_pointer_envelopes(
                         total.pointer_envelopes,
-                        field.pointer_envelopes,
+                        field_bound.pointer_envelopes,
                     ),
-                    raw_heap_bytes: add_raw_heap_bytes(total.raw_heap_bytes, field.raw_heap_bytes),
+                    raw_heap_bytes: add_raw_heap_bytes(
+                        total.raw_heap_bytes,
+                        field_bound.raw_heap_bytes,
+                    ),
                 })
             })?;
     if usize::try_from(bound.words).ok() != schema.word_count()
@@ -458,10 +466,10 @@ fn aligned_allocation_bytes(length: usize) -> u64 {
 }
 
 fn pointer_copy_allocation_upper_bound(record_bytes: usize, pointer_envelopes: u64) -> u64 {
-    let record_bytes = u64::try_from(record_bytes).unwrap_or(u64::MAX);
+    let record_bytes_u64 = u64::try_from(record_bytes).unwrap_or(u64::MAX);
     let envelope_bytes = u64::try_from(TLV_ENVELOPE_BYTES).unwrap_or(u64::MAX);
-    let record_pointer_limit = record_bytes.checked_div(envelope_bytes).unwrap_or(0);
-    record_bytes.saturating_add(
+    let record_pointer_limit = record_bytes_u64.checked_div(envelope_bytes).unwrap_or(0);
+    record_bytes_u64.saturating_add(
         pointer_envelopes
             .min(record_pointer_limit)
             .saturating_mul(7),
@@ -578,11 +586,16 @@ fn encode_tlv(pointer_type: PointerType, payload: &[u8]) -> Result<Vec<u8>, VMEr
     Ok(out)
 }
 
-fn decode_i64(value: &njson::Value) -> Result<i64, VMError> {
+fn decode_int(value: &njson::Value) -> Result<BigInt, VMError> {
     match value {
-        njson::Value::Number(njson::native::Number::I64(value)) => Ok(*value),
-        njson::Value::Number(njson::native::Number::U64(value)) => {
-            i64::try_from(*value).map_err(|_| VMError::DecodeError)
+        njson::Value::Number(njson::native::Number::I64(value)) => Ok(BigInt::from(*value)),
+        njson::Value::Number(njson::native::Number::U64(value)) => Ok(BigInt::from(*value)),
+        njson::Value::String(raw) => {
+            let parsed: BigInt = raw.parse().map_err(|_| VMError::DecodeError)?;
+            if parsed.to_string() != *raw {
+                return Err(VMError::DecodeError);
+            }
+            Ok(parsed)
         }
         _ => Err(VMError::DecodeError),
     }
@@ -593,15 +606,6 @@ fn decode_u64(value: &njson::Value) -> Result<u64, VMError> {
         njson::Value::Number(number) => number.as_u64().ok_or(VMError::DecodeError),
         _ => Err(VMError::DecodeError),
     }
-}
-
-fn decode_u128(value: &njson::Value) -> Result<Numeric, VMError> {
-    let raw = value.as_str().ok_or(VMError::DecodeError)?;
-    let value = raw.parse::<u128>().map_err(|_| VMError::DecodeError)?;
-    if value.to_string() != raw {
-        return Err(VMError::DecodeError);
-    }
-    Ok(Numeric::new(value, 0))
 }
 
 fn decode_canonical_string<T>(
@@ -634,17 +638,17 @@ fn decode_numeric(value: &njson::Value) -> Result<Numeric, VMError> {
 
 fn decode_blob(value: &njson::Value) -> Result<Vec<u8>, VMError> {
     let raw = value.as_str().ok_or(VMError::DecodeError)?;
-    let raw = raw.strip_prefix("0x").ok_or(VMError::DecodeError)?;
-    if raw.len() % 2 != 0 {
+    let hex_body = raw.strip_prefix("0x").ok_or(VMError::DecodeError)?;
+    if hex_body.len() % 2 != 0 {
         return Err(VMError::DecodeError);
     }
-    if raw
+    if hex_body
         .bytes()
         .any(|byte| !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte))
     {
         return Err(VMError::DecodeError);
     }
-    hex::decode(raw).map_err(|_| VMError::DecodeError)
+    hex::decode(hex_body).map_err(|_| VMError::DecodeError)
 }
 
 fn encode_leaf_atom(
@@ -655,11 +659,21 @@ fn encode_leaf_atom(
         encode_tlv(pointer_type, &payload).map(EntrypointValueAtomV1::Pointer)
     };
     Ok(match kind {
-        EntrypointValueKindV1::Int => EntrypointValueAtomV1::Int(decode_i64(value)?),
-        EntrypointValueKindV1::U128 => encoded_pointer(
-            PointerType::NoritoBytes,
-            to_bytes(&decode_u128(value)?).map_err(|_| VMError::NoritoInvalid)?,
-        )?,
+        EntrypointValueKindV1::Int => EntrypointValueAtomV1::Pointer(
+            crate::numeric_tlv::encode_int(&decode_int(value)?)?,
+        ),
+        EntrypointValueKindV1::Decimal => {
+            let decimal = DecimalValueV1::try_from_numeric(decode_numeric(value)?)
+                .map_err(|_| VMError::DecodeError)?;
+            EntrypointValueAtomV1::Pointer(crate::numeric_tlv::encode_decimal(
+                decimal.as_numeric(),
+            )?)
+        }
+        EntrypointValueKindV1::Quantity => {
+            let quantity = Quantity::try_from_numeric(decode_numeric(value)?)
+                .map_err(|_| VMError::DecodeError)?;
+            EntrypointValueAtomV1::Pointer(crate::numeric_tlv::encode_quantity(&quantity)?)
+        }
         EntrypointValueKindV1::Bool => {
             EntrypointValueAtomV1::Bool(value.as_bool().ok_or(VMError::DecodeError)?)
         }
@@ -671,29 +685,20 @@ fn encode_leaf_atom(
                 .as_bytes()
                 .to_vec(),
         )?,
-        EntrypointValueKindV1::Amount => {
-            let amount = decode_numeric(value)?
-                .canonicalize_amount()
-                .map_err(|_| VMError::DecodeError)?;
-            encoded_pointer(
-                PointerType::Amount,
-                to_bytes(&amount).map_err(|_| VMError::NoritoInvalid)?,
-            )?
-        }
         EntrypointValueKindV1::Json => encoded_pointer(
             PointerType::Json,
             to_bytes(&Json::from_norito_value_ref(value).map_err(|_| VMError::DecodeError)?)
                 .map_err(|_| VMError::NoritoInvalid)?,
         )?,
         EntrypointValueKindV1::Name => {
-            let value = decode_canonical_string(
+            let name = decode_canonical_string(
                 value,
                 |raw| Name::from_str(raw).map_err(|_| VMError::DecodeError),
                 ToString::to_string,
             )?;
             encoded_pointer(
                 PointerType::Name,
-                to_bytes(&value).map_err(|_| VMError::NoritoInvalid)?,
+                to_bytes(&name).map_err(|_| VMError::NoritoInvalid)?,
             )?
         }
         EntrypointValueKindV1::AccountId => {
@@ -702,14 +707,14 @@ fn encode_leaf_atom(
             if parsed.canonical() != raw {
                 return Err(VMError::DecodeError);
             }
-            let value = parsed.into_account_id();
+            let account_id = parsed.into_account_id();
             encoded_pointer(
                 PointerType::AccountId,
-                to_bytes(&value).map_err(|_| VMError::NoritoInvalid)?,
+                to_bytes(&account_id).map_err(|_| VMError::NoritoInvalid)?,
             )?
         }
         EntrypointValueKindV1::AssetDefinitionId => {
-            let value = decode_canonical_string(
+            let asset_definition_id = decode_canonical_string(
                 value,
                 |raw| {
                     AssetDefinitionId::parse_address_literal(raw).map_err(|_| VMError::DecodeError)
@@ -718,47 +723,47 @@ fn encode_leaf_atom(
             )?;
             encoded_pointer(
                 PointerType::AssetDefinitionId,
-                to_bytes(&value).map_err(|_| VMError::NoritoInvalid)?,
+                to_bytes(&asset_definition_id).map_err(|_| VMError::NoritoInvalid)?,
             )?
         }
         EntrypointValueKindV1::AssetId => {
-            let value = decode_canonical_string(
+            let asset_id = decode_canonical_string(
                 value,
                 |raw| AssetId::parse_literal(raw).map_err(|_| VMError::DecodeError),
                 AssetId::canonical_literal,
             )?;
             encoded_pointer(
                 PointerType::AssetId,
-                to_bytes(&value).map_err(|_| VMError::NoritoInvalid)?,
+                to_bytes(&asset_id).map_err(|_| VMError::NoritoInvalid)?,
             )?
         }
         EntrypointValueKindV1::DomainId => {
-            let value = decode_canonical_string(
+            let domain_id = decode_canonical_string(
                 value,
                 |raw| DomainId::parse_fully_qualified(raw).map_err(|_| VMError::DecodeError),
                 ToString::to_string,
             )?;
             encoded_pointer(
                 PointerType::DomainId,
-                to_bytes(&value).map_err(|_| VMError::NoritoInvalid)?,
+                to_bytes(&domain_id).map_err(|_| VMError::NoritoInvalid)?,
             )?
         }
         EntrypointValueKindV1::NftId => {
-            let value = decode_canonical_string(
+            let nft_id = decode_canonical_string(
                 value,
                 |raw| NftId::from_str(raw).map_err(|_| VMError::DecodeError),
                 ToString::to_string,
             )?;
             encoded_pointer(
                 PointerType::NftId,
-                to_bytes(&value).map_err(|_| VMError::NoritoInvalid)?,
+                to_bytes(&nft_id).map_err(|_| VMError::NoritoInvalid)?,
             )?
         }
         EntrypointValueKindV1::DataSpaceId => {
-            let value = DataSpaceId::new(decode_u64(value)?);
+            let dataspace_id = DataSpaceId::new(decode_u64(value)?);
             encoded_pointer(
                 PointerType::DataSpaceId,
-                to_bytes(&value).map_err(|_| VMError::NoritoInvalid)?,
+                to_bytes(&dataspace_id).map_err(|_| VMError::NoritoInvalid)?,
             )?
         }
         EntrypointValueKindV1::Blob => encoded_pointer(PointerType::Blob, decode_blob(value)?)?,
@@ -878,7 +883,7 @@ fn decode_argument_node(
             tag: bool,
         },
         FinishList {
-            items: usize,
+            item_count_usize: usize,
         },
     }
 
@@ -978,7 +983,7 @@ fn decode_argument_node(
                             node_start.checked_add(1).ok_or(VMError::DecodeError)?;
                         let _ = argument_subtree_end(nodes, element_start)?;
                         tasks.push(Task::FinishList {
-                            items: values.len(),
+                            item_count_usize: values.len(),
                         });
                         for value in values.iter().rev() {
                             tasks.push(Task::Visit {
@@ -997,13 +1002,13 @@ fn decode_argument_node(
                     .len()
                     .checked_sub(children)
                     .ok_or(VMError::DecodeError)?;
-                let children = results.split_off(split);
-                let capacity = children
+                let child_results = results.split_off(split);
+                let capacity = child_results
                     .iter()
                     .try_fold(0_usize, |total, child| total.checked_add(child.len()))
                     .ok_or(VMError::DecodeError)?;
                 let mut product = Vec::with_capacity(capacity);
-                for child in children {
+                for child in child_results {
                     product.extend(child);
                 }
                 results.push(product);
@@ -1015,20 +1020,21 @@ fn decode_argument_node(
                 sum.extend(child);
                 results.push(sum);
             }
-            Task::FinishList { items } => {
+            Task::FinishList { item_count_usize } => {
                 let split = results
                     .len()
-                    .checked_sub(items)
+                    .checked_sub(item_count_usize)
                     .ok_or(VMError::DecodeError)?;
-                let items = results.split_off(split);
-                let item_count = u8::try_from(items.len()).map_err(|_| VMError::DecodeError)?;
-                let capacity = items
+                let item_results = results.split_off(split);
+                let item_count =
+                    u8::try_from(item_results.len()).map_err(|_| VMError::DecodeError)?;
+                let capacity = item_results
                     .iter()
                     .try_fold(1_usize, |total, item| total.checked_add(item.len()))
                     .ok_or(VMError::DecodeError)?;
                 let mut list = Vec::with_capacity(capacity);
                 list.push(EntrypointValueAtomV1::List(item_count));
-                for item in items {
+                for item in item_results {
                     list.extend(item);
                 }
                 results.push(list);
@@ -1079,8 +1085,8 @@ pub fn argument_record_from_json(
     let expected_words = schema.word_count().ok_or(VMError::DecodeError)?;
     let mut atoms = Vec::with_capacity(expected_words);
     for field in &schema.fields {
-        let value = object.get(&field.name).ok_or(VMError::DecodeError)?;
-        decode_argument_value(&field.ty, value, &mut atoms)?;
+        let field_value = object.get(&field.name).ok_or(VMError::DecodeError)?;
+        decode_argument_value(&field.ty, field_value, &mut atoms)?;
     }
     if !schema.validate_atoms(&atoms) {
         return Err(VMError::DecodeError);
@@ -1159,9 +1165,10 @@ fn quote_argument_envelope_lengths(vm: &IVM) -> Result<(usize, usize), VMError> 
 
 fn expected_pointer_type(kind: EntrypointValueKindV1) -> Option<PointerType> {
     Some(match kind {
-        EntrypointValueKindV1::Int | EntrypointValueKindV1::Bool => return None,
-        EntrypointValueKindV1::U128 => PointerType::NoritoBytes,
-        EntrypointValueKindV1::Amount => PointerType::Amount,
+        EntrypointValueKindV1::Bool => return None,
+        EntrypointValueKindV1::Int => PointerType::Int,
+        EntrypointValueKindV1::Decimal => PointerType::Decimal,
+        EntrypointValueKindV1::Quantity => PointerType::Quantity,
         EntrypointValueKindV1::String | EntrypointValueKindV1::Blob => PointerType::Blob,
         EntrypointValueKindV1::Json => PointerType::Json,
         EntrypointValueKindV1::Name => PointerType::Name,
@@ -1187,18 +1194,15 @@ where
 
 fn validate_pointer_payload(kind: EntrypointValueKindV1, payload: &[u8]) -> Result<(), VMError> {
     match kind {
-        EntrypointValueKindV1::Int | EntrypointValueKindV1::Bool => {
-            return Err(VMError::DecodeError);
+        EntrypointValueKindV1::Bool => return Err(VMError::DecodeError),
+        EntrypointValueKindV1::Int => {
+            IntValueV1::decode_frame(payload).map_err(|_| VMError::DecodeError)?;
         }
-        EntrypointValueKindV1::U128 => {
-            let value: Numeric = decode_canonical_norito(payload)?;
-            if value.scale() != 0 || value.try_mantissa_u128().is_none() {
-                return Err(VMError::DecodeError);
-            }
+        EntrypointValueKindV1::Decimal => {
+            DecimalValueV1::decode_frame(payload).map_err(|_| VMError::DecodeError)?;
         }
-        EntrypointValueKindV1::Amount => {
-            let value: Numeric = decode_canonical_norito(payload)?;
-            value.validate_amount().map_err(|_| VMError::DecodeError)?;
+        EntrypointValueKindV1::Quantity => {
+            QuantityValueV1::decode_frame(payload).map_err(|_| VMError::DecodeError)?;
         }
         EntrypointValueKindV1::String => {
             std::str::from_utf8(payload).map_err(|_| VMError::DecodeError)?;
@@ -1314,8 +1318,7 @@ fn validate_argument_atoms(
                 let atom = atoms.get(cursor).ok_or(VMError::DecodeError)?;
                 cursor = cursor.checked_add(1).ok_or(VMError::DecodeError)?;
                 match (kind, atom) {
-                    (EntrypointValueKindV1::Int, EntrypointValueAtomV1::Int(_))
-                    | (EntrypointValueKindV1::Bool, EntrypointValueAtomV1::Bool(_)) => {}
+                    (EntrypointValueKindV1::Bool, EntrypointValueAtomV1::Bool(_)) => {}
                     (kind, EntrypointValueAtomV1::Pointer(envelope)) if kind.is_pointer() => {
                         validate_pointer_atom(policy, *kind, envelope)?;
                     }
@@ -1630,17 +1633,6 @@ fn plan_argument_atoms(
                         });
                         frame.roots.push(index);
                     }
-                }
-                EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Int) => {
-                    let EntrypointValueAtomV1::Int(value) =
-                        atoms.get(cursor).ok_or(VMError::DecodeError)?
-                    else {
-                        return Err(VMError::DecodeError);
-                    };
-                    cursor = cursor.checked_add(1).ok_or(VMError::DecodeError)?;
-                    let index = decoded.len();
-                    decoded.push(DecodedArgument::Scalar(*value as u64));
-                    frame.roots.push(index);
                 }
                 EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Bool) => {
                     let EntrypointValueAtomV1::Bool(value) =
@@ -2014,6 +2006,15 @@ mod tests {
             .chunks_exact(size_of::<u64>())
             .map(|word| u64::from_le_bytes(word.try_into().expect("argument word")))
             .collect()
+    }
+
+    #[test]
+    fn argument_record_binding_v1_golden() {
+        let canonical_record = hex::decode("000102ff").expect("decode golden record bytes");
+        assert_eq!(
+            hex::encode(argument_record_binding(&canonical_record)),
+            "cd493a895d6fe36feff1ef895b7b2a190ea2df652ec39e30e85d8f61b599f8e5"
+        );
     }
 
     #[test]
@@ -2792,7 +2793,7 @@ mod tests {
                 "inner list element must contain one Amount pointer word"
             );
             let amount = vm.validate_tlv(inner[0][0]).expect("valid Amount TLV");
-            assert_eq!(amount.type_id, PointerType::Amount);
+            assert_eq!(amount.type_id, PointerType::Quantity);
             let numeric: Numeric = decode_from_bytes(amount.payload).expect("decode Amount");
             numeric.validate_amount().expect("canonical Amount");
         }
@@ -3083,7 +3084,7 @@ mod tests {
             crate::sum::read_words(&vm, first[0], result_layout).expect("read first Result");
         assert!(ok);
         let amount = vm.validate_tlv(amount[0]).expect("Amount TLV");
-        assert_eq!(amount.type_id, PointerType::Amount);
+        assert_eq!(amount.type_id, PointerType::Quantity);
         let amount: Numeric = decode_from_bytes(amount.payload).expect("decode Amount");
         assert_eq!(amount, Numeric::new(125, 2));
 

@@ -1347,7 +1347,7 @@ mod tests {
         cross_sora.source.lane.source = SccpNetworkV1::SoraTaira;
         assert_eq!(
             verify_sccp_native_inbound_message_proof_v1(&cross_sora, &identity, trust_anchor),
-            Err(SccpNativeAdmissionErrorV1::BackendMismatch)
+            Err(SccpNativeAdmissionErrorV1::InvalidLane)
         );
 
         let mut cross_network = proof.clone();

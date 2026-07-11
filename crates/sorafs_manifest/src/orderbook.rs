@@ -36,6 +36,8 @@ pub const SETTLEMENT_RECEIPT_VERSION_V1: u8 = 1;
 pub const ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1: u8 = 1;
 /// Number of bytes in one GiB.
 pub const BYTES_PER_GIB: u64 = 1_073_741_824;
+/// Domain separator for canonical V1 order identifiers.
+pub const ORDERBOOK_ORDER_ID_DOMAIN_V1: &[u8] = b"sorafs.orderbook.order-id.v1";
 const ORDERBOOK_TRADE_ID_DOMAIN_V1: &[u8] = b"sorafs.orderbook.trade-id.v1";
 const ORDERBOOK_ORDER_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.orderbook.order-signature.v1";
 const ORDERBOOK_CANCEL_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.orderbook.cancel-signature.v1";
@@ -170,6 +172,19 @@ impl OrderRequestV1 {
             });
         }
         validate_digest(self.order_id, OrderbookValidationError::InvalidOrderId)?;
+        if self.owner_account.is_empty() {
+            return Err(OrderbookValidationError::EmptyOwnerAccount);
+        }
+        if self.nonce == 0 {
+            return Err(OrderbookValidationError::ZeroNonce);
+        }
+        let expected_order_id = derive_orderbook_order_id_v1(&self.owner_account, self.nonce);
+        if self.order_id != expected_order_id {
+            return Err(OrderbookValidationError::OrderIdDerivationMismatch {
+                order_id: self.order_id,
+                expected_order_id,
+            });
+        }
         if self.price_per_gib.is_zero() {
             return Err(OrderbookValidationError::ZeroPrice);
         }
@@ -182,19 +197,30 @@ impl OrderRequestV1 {
                 quantity_gib: self.quantity_gib,
             });
         }
-        if self.owner_account.is_empty() {
-            return Err(OrderbookValidationError::EmptyOwnerAccount);
-        }
         if self.expiry_unix == 0 {
             return Err(OrderbookValidationError::InvalidTimestamp);
-        }
-        if self.nonce == 0 {
-            return Err(OrderbookValidationError::ZeroNonce);
         }
         validate_fee_bps(self.maker_fee_bps)?;
         validate_fee_bps(self.taker_fee_bps)?;
         self.signature.validate()
     }
+}
+
+/// Derive the canonical identifier for an orderbook order.
+///
+/// V1 hashes the SoraFS order-id domain separator, the nonce in little-endian
+/// form, and the canonical owner-account bytes. The V1 payload has no chain-id
+/// or market-domain field, so this identifier is intentionally not chain
+/// bound; authenticated request and ledger admission layers must provide that
+/// domain separation. Binding the account rather than its current controller
+/// key preserves the identifier across account-key rotation.
+#[must_use]
+pub fn derive_orderbook_order_id_v1(owner_account: &[u8], nonce: u64) -> [u8; 32] {
+    let mut hasher = Hasher::new();
+    hasher.update(ORDERBOOK_ORDER_ID_DOMAIN_V1);
+    hasher.update(&nonce.to_le_bytes());
+    hasher.update(owner_account);
+    *hasher.finalize().as_bytes()
 }
 
 /// Canonical order-cancel payload.
@@ -389,6 +415,19 @@ pub struct OrderBookEntryV1 {
     pub sequence: u64,
 }
 
+/// Highest committed orderbook operation nonce for one canonical owner.
+///
+/// Order submissions and cancellations share one nonce namespace. Runtimes
+/// retain only this high-water value per owner so replay protection does not
+/// grow with the number of operations performed by that owner.
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+pub struct OrderbookOwnerNonceHighWaterV1 {
+    /// Canonical owner account bytes.
+    pub owner_account: Vec<u8>,
+    /// Highest order or cancellation nonce committed for the owner.
+    pub highest_nonce: u64,
+}
+
 /// Deterministic result of matching a full order-book snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderBookMatchOutcomeV1 {
@@ -414,6 +453,8 @@ pub struct OrderbookRuntimeSnapshotV1 {
     pub next_sequence: u64,
     /// Unix timestamp (seconds) when the snapshot was generated.
     pub generated_at_unix: u64,
+    /// Per-owner committed nonce high-waters, strictly sorted by owner bytes.
+    pub owner_nonce_high_waters: Vec<OrderbookOwnerNonceHighWaterV1>,
     /// Open orders with their canonical local admission sequence.
     pub open_orders: Vec<OrderBookEntryV1>,
     /// Trade events already emitted by the local matcher.
@@ -438,10 +479,52 @@ impl OrderbookRuntimeSnapshotV1 {
             return Err(OrderbookValidationError::InvalidTimestamp);
         }
 
+        let mut owner_nonce_high_waters = BTreeMap::new();
+        let mut previous_owner: Option<&[u8]> = None;
+        for entry in &self.owner_nonce_high_waters {
+            if entry.owner_account.is_empty() {
+                return Err(OrderbookValidationError::EmptyOwnerAccount);
+            }
+            if entry.highest_nonce == 0 {
+                return Err(OrderbookValidationError::ZeroNonce);
+            }
+            if let Some(previous) = previous_owner {
+                match previous.cmp(entry.owner_account.as_slice()) {
+                    std::cmp::Ordering::Less => {}
+                    std::cmp::Ordering::Equal => {
+                        return Err(OrderbookValidationError::DuplicateOwnerNonceHighWater {
+                            owner_account: entry.owner_account.clone(),
+                        });
+                    }
+                    std::cmp::Ordering::Greater => {
+                        return Err(OrderbookValidationError::UnsortedOwnerNonceHighWaters);
+                    }
+                }
+            }
+            previous_owner = Some(entry.owner_account.as_slice());
+            owner_nonce_high_waters.insert(entry.owner_account.as_slice(), entry.highest_nonce);
+        }
+
         let mut open_order_ids = BTreeSet::new();
         let mut sequences = BTreeSet::new();
         for entry in &self.open_orders {
             entry.order.validate()?;
+            let Some(highest_nonce) =
+                owner_nonce_high_waters.get(entry.order.owner_account.as_slice())
+            else {
+                return Err(OrderbookValidationError::SnapshotOpenOrderNonceMissing {
+                    order_id: entry.order.order_id,
+                });
+            };
+            if entry.order.nonce > *highest_nonce {
+                return Err(
+                    OrderbookValidationError::SnapshotOpenOrderNonceExceedsHighWater {
+                        order_id: entry.order.order_id,
+                        nonce: entry.order.nonce,
+                        highest_nonce: *highest_nonce,
+                    },
+                );
+            }
             if !open_order_ids.insert(entry.order.order_id) {
                 return Err(OrderbookValidationError::DuplicateOrderId {
                     order_id: entry.order.order_id,
@@ -1335,6 +1418,16 @@ pub enum OrderbookValidationError {
     /// Order identifier is all zeroes.
     #[error("order id must not be zero")]
     InvalidOrderId,
+    /// Order identifier does not match the canonical owner-and-nonce derivation.
+    #[error(
+        "order id {order_id:02x?} does not match canonical owner-and-nonce id {expected_order_id:02x?}"
+    )]
+    OrderIdDerivationMismatch {
+        /// Identifier carried by the order.
+        order_id: [u8; 32],
+        /// Canonical identifier derived from owner account and nonce.
+        expected_order_id: [u8; 32],
+    },
     /// Maker order identifier is all zeroes.
     #[error("maker order id must not be zero")]
     InvalidMakerOrderId,
@@ -1473,6 +1566,33 @@ pub enum OrderbookValidationError {
     DuplicateOrderSequence {
         /// Repeated sequence.
         sequence: u64,
+    },
+    /// An owner appears more than once in the snapshot nonce high-water list.
+    #[error("duplicate owner nonce high-water for account {owner_account:02x?}")]
+    DuplicateOwnerNonceHighWater {
+        /// Repeated canonical owner account bytes.
+        owner_account: Vec<u8>,
+    },
+    /// Snapshot owner nonce high-waters are not in canonical owner-byte order.
+    #[error("snapshot owner nonce high-waters must be strictly sorted by owner account bytes")]
+    UnsortedOwnerNonceHighWaters,
+    /// An open order has no durable nonce high-water for its owner.
+    #[error("snapshot open order {order_id:02x?} has no owner nonce high-water")]
+    SnapshotOpenOrderNonceMissing {
+        /// Open order missing a corresponding owner nonce record.
+        order_id: [u8; 32],
+    },
+    /// An open order carries a nonce above its owner's saved high-water.
+    #[error(
+        "snapshot open order {order_id:02x?} nonce {nonce} exceeds owner high-water {highest_nonce}"
+    )]
+    SnapshotOpenOrderNonceExceedsHighWater {
+        /// Open order with an impossible nonce.
+        order_id: [u8; 32],
+        /// Nonce stored on the open order.
+        nonce: u64,
+        /// Highest committed nonce stored for the owner.
+        highest_nonce: u64,
     },
     /// Snapshot open-order sequence is outside the restore window.
     #[error("snapshot order sequence {sequence} must be less than next sequence {next_sequence}")]
@@ -1741,17 +1861,19 @@ mod tests {
     }
 
     fn order() -> OrderRequestV1 {
+        let owner_account = account(3);
+        let nonce = 1;
         OrderRequestV1 {
             version: ORDERBOOK_ORDER_VERSION_V1,
-            order_id: id(1),
+            order_id: derive_orderbook_order_id_v1(&owner_account, nonce),
             side: OrderSideV1::Bid,
             tier: OrderTierV1::Hot,
             price_per_gib: XorAmount::from_micro(1_500_000),
             quantity_gib: 10,
             remaining_gib: 10,
-            owner_account: account(3),
+            owner_account,
             expiry_unix: 1_800_000_000,
-            nonce: 1,
+            nonce,
             maker_fee_bps: 5,
             taker_fee_bps: 10,
             signature: signature(),
@@ -1765,14 +1887,18 @@ mod tests {
         quantity_gib: u64,
     ) -> OrderRequestV1 {
         let mut order = order();
-        order.order_id = id(seed);
         order.side = side;
         order.price_per_gib = XorAmount::from_micro(price_per_gib_micro);
         order.quantity_gib = quantity_gib;
         order.remaining_gib = quantity_gib;
         order.owner_account = account(seed);
         order.nonce = u64::from(seed);
+        refresh_order_id(&mut order);
         order
+    }
+
+    fn refresh_order_id(order: &mut OrderRequestV1) {
+        order.order_id = derive_orderbook_order_id_v1(&order.owner_account, order.nonce);
     }
 
     fn book_entry(order: OrderRequestV1, sequence: u64) -> OrderBookEntryV1 {
@@ -1816,6 +1942,10 @@ mod tests {
             version: ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
             next_sequence: 3,
             generated_at_unix: 1_800_000_250,
+            owner_nonce_high_waters: vec![OrderbookOwnerNonceHighWaterV1 {
+                owner_account: open.owner_account.clone(),
+                highest_nonce: open.nonce,
+            }],
             open_orders: vec![book_entry(open, 2)],
             trades: vec![trade],
             settlement_channels: vec![channel],
@@ -1846,15 +1976,6 @@ mod tests {
         fn range(&mut self, upper_exclusive: u64) -> u64 {
             self.next_u64() % upper_exclusive
         }
-    }
-
-    fn generated_order_id(scenario: u8, index: u8) -> [u8; 32] {
-        let mut out = [0u8; 32];
-        out[0] = 0xD0;
-        out[1] = scenario;
-        out[2] = index;
-        out[31] = 1;
-        out
     }
 
     fn generated_account(scenario: u8, index: u8) -> Vec<u8> {
@@ -2054,6 +2175,56 @@ mod tests {
     }
 
     #[test]
+    fn order_id_derivation_binds_owner_and_nonce() {
+        let owner = account(3);
+        let order_id = derive_orderbook_order_id_v1(&owner, 1);
+        assert_eq!(order_id, order().order_id);
+        assert!(order_id.iter().any(|byte| *byte != 0));
+        assert_ne!(order_id, derive_orderbook_order_id_v1(&owner, 2));
+        assert_ne!(order_id, derive_orderbook_order_id_v1(&account(4), 1));
+    }
+
+    #[test]
+    fn order_id_derivation_matches_cross_sdk_golden_vector() {
+        assert_eq!(
+            hex::encode(derive_orderbook_order_id_v1(b"buyer@sora", 7)),
+            "9d91ad7700ca0c4762e031f9231aa38dd4502c6048c6ffa31d365e3c4e080b69"
+        );
+    }
+
+    #[test]
+    fn order_rejects_same_owner_retired_id_reuse_at_higher_nonce() {
+        let original = order();
+        let mut reused = original.clone();
+        reused.nonce = original.nonce + 1;
+        let expected_order_id = derive_orderbook_order_id_v1(&reused.owner_account, reused.nonce);
+
+        assert_eq!(
+            reused.validate(),
+            Err(OrderbookValidationError::OrderIdDerivationMismatch {
+                order_id: original.order_id,
+                expected_order_id,
+            })
+        );
+    }
+
+    #[test]
+    fn order_rejects_cross_owner_retired_id_reuse() {
+        let original = order();
+        let mut reused = original.clone();
+        reused.owner_account = account(4);
+        let expected_order_id = derive_orderbook_order_id_v1(&reused.owner_account, reused.nonce);
+
+        assert_eq!(
+            reused.validate(),
+            Err(OrderbookValidationError::OrderIdDerivationMismatch {
+                order_id: original.order_id,
+                expected_order_id,
+            })
+        );
+    }
+
+    #[test]
     fn order_rejects_invalid_remaining_quantity() {
         let mut order = order();
         order.remaining_gib = 11;
@@ -2063,6 +2234,23 @@ mod tests {
                 remaining_gib: 11,
                 quantity_gib: 10,
             })
+        );
+    }
+
+    #[test]
+    fn order_and_cancel_reject_zero_nonce() {
+        let mut invalid_order = order();
+        invalid_order.nonce = 0;
+        assert_eq!(
+            invalid_order.validate(),
+            Err(OrderbookValidationError::ZeroNonce)
+        );
+
+        let mut invalid_cancel = cancel();
+        invalid_cancel.nonce = 0;
+        assert_eq!(
+            invalid_cancel.validate(),
+            Err(OrderbookValidationError::ZeroNonce)
         );
     }
 
@@ -2146,6 +2334,15 @@ mod tests {
             verify_order_request_signature_v1(&tampered),
             Err(OrderbookValidationError::SignatureVerification { .. })
         ));
+
+        let mut nonce_tampered = sign_order(order(), 0x15);
+        nonce_tampered.nonce += 1;
+        nonce_tampered.order_id =
+            derive_orderbook_order_id_v1(&nonce_tampered.owner_account, nonce_tampered.nonce);
+        assert!(matches!(
+            verify_order_request_signature_v1(&nonce_tampered),
+            Err(OrderbookValidationError::SignatureVerification { .. })
+        ));
     }
 
     #[test]
@@ -2223,15 +2420,15 @@ mod tests {
     fn match_orders_creates_trade_and_remaining_quantities() {
         let mut maker = order();
         maker.side = OrderSideV1::Ask;
-        maker.order_id = id(11);
         maker.owner_account = account(11);
+        refresh_order_id(&mut maker);
         maker.price_per_gib = XorAmount::from_micro(1_500_000);
         maker.remaining_gib = 10;
         maker.maker_fee_bps = 5;
         let mut taker = order();
         taker.side = OrderSideV1::Bid;
-        taker.order_id = id(12);
         taker.owner_account = account(12);
+        refresh_order_id(&mut taker);
         taker.price_per_gib = XorAmount::from_micro(1_600_000);
         taker.quantity_gib = 4;
         taker.remaining_gib = 4;
@@ -2256,13 +2453,13 @@ mod tests {
     fn match_orders_rejects_non_crossing_prices() {
         let mut maker = order();
         maker.side = OrderSideV1::Ask;
-        maker.order_id = id(11);
         maker.owner_account = account(11);
+        refresh_order_id(&mut maker);
         maker.price_per_gib = XorAmount::from_micro(1_500_000);
         let mut taker = order();
         taker.side = OrderSideV1::Bid;
-        taker.order_id = id(12);
         taker.owner_account = account(12);
+        refresh_order_id(&mut taker);
         taker.price_per_gib = XorAmount::from_micro(1_400_000);
 
         assert_eq!(
@@ -2279,6 +2476,9 @@ mod tests {
         let bid = book_order(21, OrderSideV1::Bid, 2_000_000, 10);
         let low_ask = book_order(22, OrderSideV1::Ask, 900_000, 4);
         let high_ask = book_order(23, OrderSideV1::Ask, 1_000_000, 3);
+        let bid_id = bid.order_id;
+        let low_ask_id = low_ask.order_id;
+        let high_ask_id = high_ask.order_id;
         let outcome = match_order_book_v1(
             &[
                 book_entry(high_ask, 1),
@@ -2290,8 +2490,8 @@ mod tests {
         .expect("book should match");
 
         assert_eq!(outcome.fills.len(), 2);
-        assert_eq!(outcome.fills[0].trade.maker_order_id, id(22));
-        assert_eq!(outcome.fills[0].trade.taker_order_id, id(21));
+        assert_eq!(outcome.fills[0].trade.maker_order_id, low_ask_id);
+        assert_eq!(outcome.fills[0].trade.taker_order_id, bid_id);
         assert_eq!(
             outcome.fills[0].trade.price_per_gib,
             XorAmount::from_micro(900_000)
@@ -2299,8 +2499,8 @@ mod tests {
         assert_eq!(outcome.fills[0].trade.filled_gib, 4);
         assert_eq!(outcome.fills[0].maker_remaining_gib, 0);
         assert_eq!(outcome.fills[0].taker_remaining_gib, 6);
-        assert_eq!(outcome.fills[1].trade.maker_order_id, id(23));
-        assert_eq!(outcome.fills[1].trade.taker_order_id, id(21));
+        assert_eq!(outcome.fills[1].trade.maker_order_id, high_ask_id);
+        assert_eq!(outcome.fills[1].trade.taker_order_id, bid_id);
         assert_eq!(
             outcome.fills[1].trade.price_per_gib,
             XorAmount::from_micro(1_000_000)
@@ -2321,7 +2521,7 @@ mod tests {
         );
         assert_eq!(outcome.expired_order_ids, Vec::<[u8; 32]>::new());
         assert_eq!(outcome.remaining_orders.len(), 1);
-        assert_eq!(outcome.remaining_orders[0].order_id, id(21));
+        assert_eq!(outcome.remaining_orders[0].order_id, bid_id);
         assert_eq!(outcome.remaining_orders[0].remaining_gib, 3);
     }
 
@@ -2342,17 +2542,19 @@ mod tests {
                     OrderSideV1::Ask => 850_000 + price_step * 80_000,
                 };
                 let quantity_gib = 1 + rng.range(12);
+                let owner_account = generated_account(scenario, index_u8);
+                let nonce = u64::from(scenario) * 1_000 + index as u64 + 1;
                 let mut order = OrderRequestV1 {
                     version: ORDERBOOK_ORDER_VERSION_V1,
-                    order_id: generated_order_id(scenario, index_u8),
+                    order_id: derive_orderbook_order_id_v1(&owner_account, nonce),
                     side,
                     tier,
                     price_per_gib: XorAmount::from_micro(u128::from(price_micro)),
                     quantity_gib,
                     remaining_gib: quantity_gib,
-                    owner_account: generated_account(scenario, index_u8),
+                    owner_account,
                     expiry_unix: now_unix + 1 + rng.range(600),
-                    nonce: u64::from(scenario) * 1_000 + index as u64 + 1,
+                    nonce,
                     maker_fee_bps: rng.range(40) as u16,
                     taker_fee_bps: rng.range(40) as u16,
                     signature: signature(),
@@ -2388,17 +2590,19 @@ mod tests {
                     OrderSideV1::Ask => 900_000 + price_step * 65_000,
                 };
                 let quantity_gib = 1 + rng.range(16);
+                let owner_account = generated_account(scenario.wrapping_add(80), index_u8);
+                let nonce = u64::from(scenario) * 10_000 + index as u64 + 1;
                 let mut order = OrderRequestV1 {
                     version: ORDERBOOK_ORDER_VERSION_V1,
-                    order_id: generated_order_id(scenario.wrapping_add(80), index_u8),
+                    order_id: derive_orderbook_order_id_v1(&owner_account, nonce),
                     side,
                     tier,
                     price_per_gib: XorAmount::from_micro(u128::from(price_micro)),
                     quantity_gib,
                     remaining_gib: quantity_gib,
-                    owner_account: generated_account(scenario.wrapping_add(80), index_u8),
+                    owner_account,
                     expiry_unix: now_unix + 10 + rng.range(900),
-                    nonce: u64::from(scenario) * 10_000 + index as u64 + 1,
+                    nonce,
                     maker_fee_bps: rng.range(60) as u16,
                     taker_fee_bps: rng.range(60) as u16,
                     signature: signature(),
@@ -2431,6 +2635,8 @@ mod tests {
         let mut expired_ask = book_order(31, OrderSideV1::Ask, 1_000_000, 5);
         expired_ask.expiry_unix = 1_699_999_999;
         let live_bid = book_order(32, OrderSideV1::Bid, 2_000_000, 5);
+        let expired_ask_id = expired_ask.order_id;
+        let live_bid_id = live_bid.order_id;
 
         let outcome = match_order_book_v1(
             &[book_entry(live_bid, 2), book_entry(expired_ask, 1)],
@@ -2439,21 +2645,23 @@ mod tests {
         .expect("expired orders should be skipped");
 
         assert!(outcome.fills.is_empty());
-        assert_eq!(outcome.expired_order_ids, vec![id(31)]);
+        assert_eq!(outcome.expired_order_ids, vec![expired_ask_id]);
         assert_eq!(outcome.remaining_orders.len(), 1);
-        assert_eq!(outcome.remaining_orders[0].order_id, id(32));
+        assert_eq!(outcome.remaining_orders[0].order_id, live_bid_id);
         assert_eq!(outcome.remaining_orders[0].remaining_gib, 5);
     }
 
     #[test]
     fn match_order_book_rejects_duplicate_order_ids() {
         let bid = book_order(41, OrderSideV1::Bid, 2_000_000, 5);
-        let mut ask = book_order(42, OrderSideV1::Ask, 1_000_000, 5);
-        ask.order_id = bid.order_id;
+        let duplicate_id = bid.order_id;
+        let ask = bid.clone();
 
         assert_eq!(
             match_order_book_v1(&[book_entry(bid, 1), book_entry(ask, 2)], 1_700_000_000),
-            Err(OrderbookValidationError::DuplicateOrderId { order_id: id(41) })
+            Err(OrderbookValidationError::DuplicateOrderId {
+                order_id: duplicate_id
+            })
         );
     }
 
@@ -2472,15 +2680,15 @@ mod tests {
     fn open_settlement_channel_for_trade_locks_trade_value_and_fees() {
         let mut maker = order();
         maker.side = OrderSideV1::Ask;
-        maker.order_id = id(11);
         maker.owner_account = account(11);
+        refresh_order_id(&mut maker);
         maker.price_per_gib = XorAmount::from_micro(1_500_000);
         maker.remaining_gib = 4;
         maker.maker_fee_bps = 5;
         let mut taker = order();
         taker.side = OrderSideV1::Bid;
-        taker.order_id = id(12);
         taker.owner_account = account(12);
+        refresh_order_id(&mut taker);
         taker.price_per_gib = XorAmount::from_micro(1_600_000);
         taker.remaining_gib = 4;
         taker.taker_fee_bps = 10;
@@ -2571,6 +2779,85 @@ mod tests {
             norito::decode_from_bytes(&bytes).expect("decode runtime snapshot");
 
         assert_eq!(decoded, snapshot);
+    }
+
+    #[test]
+    fn orderbook_runtime_snapshot_rejects_missing_open_order_nonce_high_water() {
+        let mut snapshot = runtime_snapshot();
+        let order_id = snapshot.open_orders[0].order.order_id;
+        snapshot.owner_nonce_high_waters.clear();
+
+        assert_eq!(
+            snapshot.validate(),
+            Err(OrderbookValidationError::SnapshotOpenOrderNonceMissing { order_id })
+        );
+    }
+
+    #[test]
+    fn orderbook_runtime_snapshot_rejects_open_order_above_nonce_high_water() {
+        let mut snapshot = runtime_snapshot();
+        let order = &snapshot.open_orders[0].order;
+        let order_id = order.order_id;
+        let nonce = order.nonce;
+        snapshot.owner_nonce_high_waters[0].highest_nonce = nonce - 1;
+
+        assert_eq!(
+            snapshot.validate(),
+            Err(
+                OrderbookValidationError::SnapshotOpenOrderNonceExceedsHighWater {
+                    order_id,
+                    nonce,
+                    highest_nonce: nonce - 1,
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn orderbook_runtime_snapshot_rejects_duplicate_owner_nonce_high_water() {
+        let mut snapshot = runtime_snapshot();
+        let duplicate = snapshot.owner_nonce_high_waters[0].clone();
+        let owner_account = duplicate.owner_account.clone();
+        snapshot.owner_nonce_high_waters.push(duplicate);
+
+        assert_eq!(
+            snapshot.validate(),
+            Err(OrderbookValidationError::DuplicateOwnerNonceHighWater { owner_account })
+        );
+    }
+
+    #[test]
+    fn orderbook_runtime_snapshot_rejects_unsorted_owner_nonce_high_waters() {
+        let mut snapshot = runtime_snapshot();
+        snapshot.owner_nonce_high_waters.insert(
+            0,
+            OrderbookOwnerNonceHighWaterV1 {
+                owner_account: account(10),
+                highest_nonce: 1,
+            },
+        );
+
+        assert_eq!(
+            snapshot.validate(),
+            Err(OrderbookValidationError::UnsortedOwnerNonceHighWaters)
+        );
+    }
+
+    #[test]
+    fn orderbook_runtime_snapshot_rejects_invalid_owner_nonce_high_water_shape() {
+        let mut empty_owner = runtime_snapshot();
+        empty_owner.owner_nonce_high_waters[0].owner_account.clear();
+        assert_eq!(
+            empty_owner.validate(),
+            Err(OrderbookValidationError::EmptyOwnerAccount)
+        );
+
+        let mut zero_nonce = runtime_snapshot();
+        zero_nonce.owner_nonce_high_waters[0].highest_nonce = 0;
+        assert_eq!(
+            zero_nonce.validate(),
+            Err(OrderbookValidationError::ZeroNonce)
+        );
     }
 
     #[test]

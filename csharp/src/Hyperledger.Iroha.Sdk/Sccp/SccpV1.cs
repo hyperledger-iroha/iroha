@@ -645,7 +645,7 @@ public static class SccpV1
         switch (network)
         {
             case SccpNetworkV1.SoraTaira:
-                output.Write(Convert.FromHexString("809574f5fee75e69bfcf52451e42d50f"));
+                output.Write(Convert.FromHexString("fc56984b2be7431d840e21514d1883f0"));
                 break;
             case SccpNetworkV1.EthereumMainnet:
                 WriteUInt64(output, 1);

@@ -182,13 +182,17 @@ services cannot accumulate attacker-controlled ASTs without bound.
 
 ## Performance gate
 
-`crates/ivm/benches/bench_kotodama.rs` measures parsing, semantic analysis, IR
-lowering, end-to-end code generation, cold execution, and warm prepared
-execution separately. The runtime samples explicitly select the embedded CNTR
-entrypoint, use the canonical Norito argument record, and validate the result
-before Criterion starts sampling. The warm sample prepares and loads its
-immutable contract once, builds its reset template once, and measures only
-dirty-state reset plus invocation.
+`crates/ivm/benches/bench_kotodama.rs` measures the canonical compiler pipeline
+at every opaque phase boundary: lossless parsing, resolved-HIR construction,
+typed/effect HIR, transport-IR lowering, SSA construction, SSA optimization,
+de-SSA, final code generation, and end-to-end compilation. Later phases use
+Criterion batched setup, so cloning or reconstructing their trusted input is
+not charged to the phase under test. The same suite measures cold execution
+and warm prepared execution separately. Runtime samples explicitly select the
+embedded CNTR entrypoint, use the canonical Norito argument record, and
+validate the result before Criterion starts sampling. The warm sample prepares
+and loads its immutable contract once, builds its reset template once, and
+measures only dirty-state reset plus invocation.
 
 The canonical golden pipeline also applies deterministic artifact gates before
 publishing anything. Every compiler-generated instruction region must contain
@@ -209,16 +213,25 @@ An authenticated second build in the same pipeline must report every source as
 `fresh` and preserve every generated file's modification time, proving that a
 no-op graph performs zero compilation and zero rewrites.
 
-Capture a reference on the same controlled runner, then compare a candidate:
+Capture the pre-reset comparison workloads and candidate on the same controlled
+runner. Use one shared `CARGO_TARGET_DIR`, but separate base and candidate
+checkouts:
 
 ```console
-cargo bench -p ivm --bench bench_kotodama
+# In the base checkout:
+cargo bench -p ivm --bench bench_kotodama -- --save-baseline base
+cargo bench -p iroha_core --bench kotodama_runtime_cache -- --save-baseline base
+
+# Remove only Criterion `new` directories so candidate evidence cannot be reused.
+find "$CARGO_TARGET_DIR/criterion" -type d -name new -prune -exec rm -rf {} +
+
+# In the candidate checkout:
+cargo bench -p ivm --bench bench_kotodama -- --save-baseline candidate
+cargo bench -p iroha_core --bench kotodama_runtime_cache -- --save-baseline candidate
+cargo bench -p iroha_core --bench queries -- \
+  typed_core_query_ --save-baseline candidate
 python3 scripts/check_kotodama_perf.py \
-  --write-baseline target/kotodama-perf-baseline.json
-# Build and benchmark the candidate on the same runner.
-cargo bench -p ivm --bench bench_kotodama
-python3 scripts/check_kotodama_perf.py \
-  --baseline target/kotodama-perf-baseline.json
+  --criterion-dir "$CARGO_TARGET_DIR/criterion" --threshold 0.05
 ```
 
 The checker fails closed on missing/malformed samples or benchmark coverage
@@ -228,11 +241,14 @@ set a tighter threshold with `--threshold`. The
 candidate, measures both on the same runner with Criterion's named baseline,
 and applies this checker to every representative median. Timing baselines are
 deliberately runner-local; they are not portable across CPU models or loaded
-hosts. CI requires every pre-existing regression workload on the checked-out
-base and compares it with the candidate; it never manufactures a candidate
-self-baseline. New V1 List, Amount, and typed-query workloads are mandatory
-candidate evidence without pretending that an older base contains equivalent
-samples. The List comprehension runtime has a separate zero-slowdown gate
-against its manual-loop baseline; the general five-percent allowance cannot
-loosen that parity requirement. Missing required base samples, candidate
-samples, or coverage fail closed.
+hosts. CI requires every pre-reset comparable workload on the checked-out base
+and the complete V1 workload inventory on the candidate; it never manufactures
+a candidate self-baseline. Stable parse, semantic, lowering, code-generation,
+and runtime identities receive the five-percent regression ceiling. New List,
+Amount, pipeline-phase, and all-five typed-query samples fail closed when
+missing, and the typed-query benchmarks assert one host query, one decode, and
+a projection smaller than the raw query envelope on every iteration. The List
+comprehension runtime has a separate zero-slowdown gate against its manual-loop
+baseline; the general five-percent allowance cannot loosen that parity
+requirement. Missing required base samples, candidate samples, or coverage fail
+closed.

@@ -77,10 +77,10 @@ cargo run -p musubi -- init --namespace dex.universal --name swap-core --dapp
 cargo run -p musubi -- add std.universal/math --version '^1.0.0' --alias arith
 cargo run -p musubi -- install --config client.toml
 cargo run -p musubi -- install --config client.toml --fetch --provider-payload math.payload
-cargo run -p musubi -- install --config client.toml --fetch --gateway-provider 'name=hot-a,provider-id=1111111111111111111111111111111111111111111111111111111111111111,base-url=https://gw.example,stream-token=BASE64,package=arith'
+cargo run -p musubi -- install --config client.toml --fetch --gateway-provider 'name=hot-a,provider-id=1111111111111111111111111111111111111111111111111111111111111111,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64,package=arith'
 cargo run -p musubi -- cache import arith --source-root ../math
 cargo run -p musubi -- cache fetch arith --provider-payload math.payload
-cargo run -p musubi -- cache fetch arith --config client.toml --gateway-provider 'name=hot-a,provider-id=1111111111111111111111111111111111111111111111111111111111111111,base-url=https://gw.example,stream-token=BASE64'
+cargo run -p musubi -- cache fetch arith --config client.toml --gateway-provider 'name=hot-a,provider-id=1111111111111111111111111111111111111111111111111111111111111111,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64'
 cargo run -p musubi -- pack --car-out source.car --sorafs-manifest-out manifest.norito --source-plan-out source-plan.norito
 cargo run -p musubi -- build src/lib.ko --manifest-out target/lib.contract.json
 cargo run -p musubi -- search swap --config client.toml
@@ -110,7 +110,7 @@ archive plan. Local payload files use `--provider-payload <path>`. Live gateway
 fetch uses one or more `--gateway-provider` specs:
 
 ```text
-name=<alias>,provider-id=<64-hex>,base-url=<url>,stream-token=<base64>[,privacy-url=<url>][,package=<alias-or-ref-or-id>][,manifest=<64-hex>]
+name=<alias>,provider-id=<64-hex>,gateway-key=<64-hex>,base-url=<https-origin>,stream-token=<base64>[,privacy-url=<https-origin/privacy/events>][,package=<alias-or-ref-or-id>][,manifest=<64-hex>]
 ```
 
 `--provider-payload` and `--gateway-provider` are mutually exclusive for one
@@ -122,9 +122,12 @@ scope each gateway provider with `package=<dependency-alias>`,
 archive for a lockfile node. Runtime gateway options include
 `--gateway-client-id`, `--gateway-retry-budget`, `--gateway-max-peers`,
 `--gateway-telemetry-region`, and `--gateway-scoreboard-out`. Gateway
-`base-url` and `privacy-url` values must use `https://` by default. Local
-test gateways can use `http://localhost`, `http://127.0.0.1`, or
-`http://[::1]` only when `--gateway-allow-insecure-localhost` is supplied.
+`gateway-key` is the pinned Ed25519 key that verifies the stream token and must
+come from authenticated provider inventory. `base-url` must be an HTTPS port-443
+origin with a root path; `privacy-url`, when present, must be the same strict
+kind of public origin with the exact `/privacy/events` path. Plaintext HTTP,
+localhost/private/reserved addresses, non-root base paths, redirects,
+credentials, queries, and fragments are rejected in every build.
 Stream tokens are runtime credentials; they are not written into `Musubi.lock`.
 `build` resolves calls such as `arith::add()` through explicit lockfile aliases,
 type-checks each module before linking, and assigns deterministic internal

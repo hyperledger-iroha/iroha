@@ -1972,6 +1972,7 @@ mod tests {
             result_hash: result.hash(),
             result_proof: MerkleProof::from_audit_path(0, vec![]),
             result,
+            merge_inclusion: None,
         }
     }
 

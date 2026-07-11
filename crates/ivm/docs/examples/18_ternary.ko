@@ -1,6 +1,6 @@
 // Ternary conditional example (choose the smaller value).
 seiyaku TernaryDemo {
-    kotoage fn choose_min(a: i64, b: i64) -> i64 authorize("Entry") {
+    kotoage fn choose_min(int a, int b) -> int authorize("Entry") {
         let value = (a < b) ? a : b;
         return value;
     }

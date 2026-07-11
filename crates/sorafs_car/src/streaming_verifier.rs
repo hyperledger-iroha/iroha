@@ -3,8 +3,10 @@
 //! This module provides a state-machine based verifier that can process CAR bytes incrementally.
 //! It validates the CAR header, section headers, and payload chunks against a trusted manifest.
 //! It is designed to be used in network streams where backpressure is required.
-
-use std::convert::TryInto;
+//! This state machine is an integrity and resource-bounding preflight: callers
+//! making an admission decision must still run [`crate::verifier::CarVerifier`]
+//! on the completed archive (or compare against a canonical writer) so DAG and
+//! index canonicality are enforced rather than inferred from a signed digest.
 
 use blake3::Hasher;
 use sorafs_manifest::ManifestV1;
@@ -14,10 +16,17 @@ use crate::{
     verifier::CarVerifyError,
 };
 
+/// Maximum CID prefix retained while waiting for a complete section CID.
+///
+/// SoraFS v1 CIDs use two short varints, a BLAKE3 multihash prefix, and a
+/// 32-byte digest. This defensive ceiling prevents a forged section length
+/// from turning an incomplete CID into an unbounded buffer.
+const MAX_STREAMING_CID_SIZE: usize = 128;
+
 /// Configuration for the streaming verifier.
 #[derive(Debug, Clone)]
 pub struct StreamingVerifierConfig {
-    /// Maximum allowed size for a single chunk.
+    /// Maximum allowed payload size for any raw chunk or DAG-CBOR section.
     pub max_chunk_size: usize,
 }
 
@@ -119,10 +128,26 @@ impl StreamingCarVerifier {
                 "verifier is in error state",
             ));
         }
+        let remaining = self.manifest.car_size.saturating_sub(self.processed_bytes);
+        let allowed = usize::try_from(remaining)
+            .unwrap_or(usize::MAX)
+            .min(bytes.len());
+        let bytes = &bytes[..allowed];
+        if bytes.is_empty() {
+            return Ok(0);
+        }
+
         if let State::Complete = &self.state {
             // Consume trailing index bytes while preserving the archive digest.
             self.archive_hasher.update(bytes);
-            self.processed_bytes = self.processed_bytes.saturating_add(bytes.len() as u64);
+            self.processed_bytes = self
+                .processed_bytes
+                .checked_add(u64::try_from(bytes.len()).map_err(|_| {
+                    CarVerifyError::InternalInvariant("stream input length exceeded u64")
+                })?)
+                .ok_or(CarVerifyError::InternalInvariant(
+                    "processed CAR byte count overflowed u64",
+                ))?;
             return Ok(bytes.len());
         }
 
@@ -177,9 +202,12 @@ impl StreamingCarVerifier {
 
                     if *buffered == HEADER_LEN {
                         // Parse offsets
-                        let data_offset_bytes: [u8; 8] = self.buffer[16..24].try_into().unwrap();
-                        let data_size_bytes: [u8; 8] = self.buffer[24..32].try_into().unwrap();
-                        let index_offset_bytes: [u8; 8] = self.buffer[32..40].try_into().unwrap();
+                        let mut data_offset_bytes = [0u8; 8];
+                        data_offset_bytes.copy_from_slice(&self.buffer[16..24]);
+                        let mut data_size_bytes = [0u8; 8];
+                        data_size_bytes.copy_from_slice(&self.buffer[24..32]);
+                        let mut index_offset_bytes = [0u8; 8];
+                        index_offset_bytes.copy_from_slice(&self.buffer[32..40]);
 
                         self.data_offset = u64::from_le_bytes(data_offset_bytes);
                         self.data_size = u64::from_le_bytes(data_size_bytes);
@@ -199,6 +227,10 @@ impl StreamingCarVerifier {
                             self.transition(State::Error(CarVerifyError::InvalidIndexOffset));
                             return Err(CarVerifyError::InvalidIndexOffset);
                         }
+                        if self.index_offset > self.manifest.car_size {
+                            self.transition(State::Error(CarVerifyError::InvalidIndexOffset));
+                            return Err(CarVerifyError::InvalidIndexOffset);
+                        }
 
                         self.buffer.clear();
                         self.transition(State::HeaderLen { buffered: 0 });
@@ -213,19 +245,36 @@ impl StreamingCarVerifier {
                         return Err(CarVerifyError::HeaderTruncated);
                     }
 
-                    if let Ok((len, _)) = crate::verifier::decode_uleb128(&self.buffer) {
-                        let len = match usize::try_from(len) {
-                            Ok(len) => len,
-                            Err(_) => {
-                                self.transition(State::Error(CarVerifyError::HeaderTruncated));
-                                return Err(CarVerifyError::HeaderTruncated);
+                    match crate::verifier::decode_uleb128(&self.buffer) {
+                        Ok((len, _)) => {
+                            let len = match usize::try_from(len) {
+                                Ok(len) => len,
+                                Err(_) => {
+                                    self.transition(State::Error(CarVerifyError::HeaderTruncated));
+                                    return Err(CarVerifyError::HeaderTruncated);
+                                }
+                            };
+                            if len > crate::verifier::MAX_CARV1_HEADER_SIZE {
+                                let err = CarVerifyError::InvalidCarv1Header(
+                                    "header exceeds maximum size",
+                                );
+                                self.transition(State::Error(err));
+                                return Err(CarVerifyError::InvalidCarv1Header(
+                                    "header exceeds maximum size",
+                                ));
                             }
-                        };
-                        self.buffer.clear();
-                        self.transition(State::HeaderBody { len, buffered: 0 });
-                    } else if *buffered > 10 {
-                        self.transition(State::Error(CarVerifyError::VarintOverflow));
-                        return Err(CarVerifyError::VarintOverflow);
+                            self.buffer.clear();
+                            self.transition(State::HeaderBody { len, buffered: 0 });
+                        }
+                        Err(crate::verifier::Uleb128Error::Truncated) => {}
+                        Err(crate::verifier::Uleb128Error::Overflow) => {
+                            self.transition(State::Error(CarVerifyError::VarintOverflow));
+                            return Err(CarVerifyError::VarintOverflow);
+                        }
+                        Err(crate::verifier::Uleb128Error::NonCanonical) => {
+                            self.transition(State::Error(CarVerifyError::NonCanonicalVarint));
+                            return Err(CarVerifyError::NonCanonicalVarint);
+                        }
                     }
                 }
                 State::HeaderBody { len, buffered } => {
@@ -269,14 +318,15 @@ impl StreamingCarVerifier {
                         return Err(CarVerifyError::TruncatedSection { section_index });
                     }
 
-                    if let Ok((len, _)) = crate::verifier::decode_uleb128(&self.buffer) {
-                        if len == 0 {
-                            let section_index = self.section_index;
-                            self.transition(State::Error(CarVerifyError::TruncatedSection {
-                                section_index,
-                            }));
-                            return Err(CarVerifyError::TruncatedSection { section_index });
-                        } else {
+                    match crate::verifier::decode_uleb128(&self.buffer) {
+                        Ok((len, _)) => {
+                            if len == 0 {
+                                let section_index = self.section_index;
+                                self.transition(State::Error(CarVerifyError::TruncatedSection {
+                                    section_index,
+                                }));
+                                return Err(CarVerifyError::TruncatedSection { section_index });
+                            }
                             let len = match usize::try_from(len) {
                                 Ok(len) => len,
                                 Err(_) => {
@@ -290,9 +340,15 @@ impl StreamingCarVerifier {
                             self.buffer.clear();
                             self.transition(State::SectionCid { len, buffered: 0 });
                         }
-                    } else if *buffered > 10 {
-                        self.transition(State::Error(CarVerifyError::VarintOverflow));
-                        return Err(CarVerifyError::VarintOverflow);
+                        Err(crate::verifier::Uleb128Error::Truncated) => {}
+                        Err(crate::verifier::Uleb128Error::Overflow) => {
+                            self.transition(State::Error(CarVerifyError::VarintOverflow));
+                            return Err(CarVerifyError::VarintOverflow);
+                        }
+                        Err(crate::verifier::Uleb128Error::NonCanonical) => {
+                            self.transition(State::Error(CarVerifyError::NonCanonicalVarint));
+                            return Err(CarVerifyError::NonCanonicalVarint);
+                        }
                     }
                 }
                 State::SectionCid { len, buffered } => {
@@ -354,10 +410,30 @@ impl StreamingCarVerifier {
                                 }));
                                 return Err(CarVerifyError::TruncatedSection { section_index });
                             };
-                            if info.codec == RAW_CODEC && payload_len > self.config.max_chunk_size {
+                            let max_payload_size = if info.codec == RAW_CODEC {
+                                self.config
+                                    .max_chunk_size
+                                    .min(self.manifest.chunking.max_size as usize)
+                            } else {
+                                self.config.max_chunk_size
+                            };
+                            if info.codec == RAW_CODEC && payload_len == 0 {
+                                let err = CarVerifyError::InvalidPlanChunkLength {
+                                    chunk_index: self.chunk_index,
+                                    length: 0,
+                                    max: max_payload_size,
+                                };
+                                self.transition(State::Error(err));
+                                return Err(CarVerifyError::InvalidPlanChunkLength {
+                                    chunk_index: self.chunk_index,
+                                    length: 0,
+                                    max: max_payload_size,
+                                });
+                            }
+                            if payload_len > max_payload_size {
                                 let section_index = self.section_index;
                                 let len = payload_len as u64;
-                                let max = self.config.max_chunk_size as u64;
+                                let max = max_payload_size as u64;
                                 self.transition(State::Error(CarVerifyError::ChunkSizeExceeded {
                                     section_index,
                                     len,
@@ -379,7 +455,7 @@ impl StreamingCarVerifier {
                                 buffered: 0,
                             });
                         }
-                        Err(_) if *buffered >= *len => {
+                        Err(_) if *buffered >= *len || *buffered >= MAX_STREAMING_CID_SIZE => {
                             self.transition(State::Error(CarVerifyError::TruncatedCid {
                                 section_index: self.section_index,
                             }));
@@ -401,7 +477,15 @@ impl StreamingCarVerifier {
                     if *is_raw_chunk {
                         // Only raw chunks contribute to payload digest/length.
                         self.payload_hasher.update(&[b]);
-                        self.payload_bytes = self.payload_bytes.saturating_add(1);
+                        let Some(next_payload_bytes) = self.payload_bytes.checked_add(1) else {
+                            self.transition(State::Error(CarVerifyError::InternalInvariant(
+                                "streamed payload byte count overflowed u64",
+                            )));
+                            return Err(CarVerifyError::InternalInvariant(
+                                "streamed payload byte count overflowed u64",
+                            ));
+                        };
+                        self.payload_bytes = next_payload_bytes;
                     }
 
                     *buffered += 1;
@@ -448,9 +532,25 @@ impl StreamingCarVerifier {
                                     actual: self.payload_bytes,
                                 });
                             }
-                            self.chunk_index += 1;
+                            let Some(next_chunk_index) = self.chunk_index.checked_add(1) else {
+                                self.transition(State::Error(CarVerifyError::InternalInvariant(
+                                    "streamed chunk count overflowed usize",
+                                )));
+                                return Err(CarVerifyError::InternalInvariant(
+                                    "streamed chunk count overflowed usize",
+                                ));
+                            };
+                            self.chunk_index = next_chunk_index;
                         }
-                        self.section_index += 1;
+                        let Some(next_section_index) = self.section_index.checked_add(1) else {
+                            self.transition(State::Error(CarVerifyError::InternalInvariant(
+                                "streamed section count overflowed usize",
+                            )));
+                            return Err(CarVerifyError::InternalInvariant(
+                                "streamed section count overflowed usize",
+                            ));
+                        };
+                        self.section_index = next_section_index;
                         self.buffer.clear();
                         self.transition(State::SectionLen { buffered: 0 });
                     }
@@ -466,7 +566,14 @@ impl StreamingCarVerifier {
             }
         }
 
-        self.processed_bytes += consumed as u64;
+        self.processed_bytes = self
+            .processed_bytes
+            .checked_add(u64::try_from(consumed).map_err(|_| {
+                CarVerifyError::InternalInvariant("stream input length exceeded u64")
+            })?)
+            .ok_or(CarVerifyError::InternalInvariant(
+                "processed CAR byte count overflowed u64",
+            ))?;
         Ok(consumed)
     }
 

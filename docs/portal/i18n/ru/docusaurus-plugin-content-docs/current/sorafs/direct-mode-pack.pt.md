@@ -70,7 +70,7 @@ cargo test -p sorafs_car --features cli fetch_command_respects_direct_transports
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
-  --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
+  --provider name=gw-regulated,provider-id=001122...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64
 ```- Сценарий восстановления флагов CLI и архивов конфигурации ключ=значение (veja `docs/examples/sorafs_direct_mode_smoke.conf`). Preencha или дайджест проявляют себя как рекламные объявления с ценностями производства перед просмотром.
 - `--policy` под именем `docs/examples/sorafs_direct_mode_policy.json`, а также JSON-файл ордера-производителя для `sorafs_orchestrator::bindings::config_to_json`, который может помочь. Если CLI работает с политикой через `--orchestrator-config=PATH`, вы можете запускать воспроизведение с настройкой флагов вручную.
 - Когда `sorafs_cli` не существует `PATH`, или помогите ему собрать часть ящика `sorafs_orchestrator` (выпуск для каждого файла) для того, чтобы курить или выполнять сантехнические работы в прямом режиме.

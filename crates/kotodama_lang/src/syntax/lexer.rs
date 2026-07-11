@@ -1,7 +1,7 @@
 //! Lossless, recovering Kotodama lexer.
 
 use crate::{
-    diagnostic::{Diagnostic, DiagnosticFix, DiagnosticPhase, SourcePosition, SourceSpan},
+    diagnostic::{Diagnostic, DiagnosticPhase, SourcePosition, SourceSpan},
     lexer::{TokenKind, V1_PUNCTUATION_KINDS, v1_keyword_kind},
     source::{FrontendBudget, SourceFile, TextRange},
 };
@@ -27,7 +27,7 @@ fn diagnostic(
 ) -> Diagnostic {
     let start = source.line_column(range.start);
     let end = source.line_column(range.end);
-    let mut diagnostic = Diagnostic::error(
+    Diagnostic::error(
         code,
         DiagnosticPhase::Lex,
         message,
@@ -43,80 +43,7 @@ fn diagnostic(
             },
             byte_range: Some(range),
         }),
-    );
-    if let Some((span, replacement)) = amount_lexical_fix(source, code, range) {
-        diagnostic.fix = Some(DiagnosticFix { span, replacement });
-    }
-    diagnostic
-}
-
-fn amount_lexical_fix(
-    source: &SourceFile,
-    code: &str,
-    range: TextRange,
-) -> Option<(SourceSpan, String)> {
-    let spelling = source.slice(range)?;
-    match code {
-        "E_AMOUNT_SUFFIX_SEPARATED" => {
-            let tail = source.text().get(range.end as usize..)?;
-            let whitespace = tail.len() - tail.trim_start_matches(char::is_whitespace).len();
-            let suffix = tail.get(whitespace..)?;
-            if !suffix.starts_with("amt")
-                || suffix[3..]
-                    .chars()
-                    .next()
-                    .is_some_and(|character| character.is_ascii_alphanumeric() || character == '_')
-            {
-                return None;
-            }
-            let fix_range = TextRange::new(
-                range.start,
-                range
-                    .end
-                    .saturating_add(u32::try_from(whitespace + 3).ok()?),
-            );
-            Some((
-                SourceSpan::from_range(source, fix_range),
-                format!("{spelling}amt"),
-            ))
-        }
-        "E_AMOUNT_SUFFIX" => {
-            if spelling.contains('.')
-                && spelling
-                    .chars()
-                    .last()
-                    .is_some_and(|character| character.is_ascii_digit() || character == '_')
-            {
-                return Some((
-                    SourceSpan::from_range(source, range),
-                    format!("{spelling}amt"),
-                ));
-            }
-            let suffix_start = spelling
-                .char_indices()
-                .find_map(|(index, character)| character.is_ascii_alphabetic().then_some(index))?;
-            let (number, suffix) = spelling.split_at(suffix_start);
-            if number.is_empty()
-                || !number
-                    .chars()
-                    .all(|character| character.is_ascii_digit() || matches!(character, '_' | '.'))
-                || !suffix
-                    .chars()
-                    .all(|character| character.is_ascii_alphabetic())
-            {
-                return None;
-            }
-            Some((
-                SourceSpan::from_range(source, range),
-                format!("{number}amt"),
-            ))
-        }
-        "E_AMOUNT_MALFORMED" if spelling.ends_with(".amt") => Some((
-            SourceSpan::from_range(source, range),
-            format!("{}0amt", spelling.trim_end_matches("amt")),
-        )),
-        _ => None,
-    }
+    )
 }
 
 fn keyword_kind(text: &str) -> SyntaxKind {
@@ -172,7 +99,7 @@ impl LexicalError {
 #[derive(Clone, Copy)]
 enum ScannedNumber {
     Integer,
-    Amount,
+    Decimal,
     Invalid(LexicalError),
 }
 
@@ -238,10 +165,9 @@ impl<'source> Scanner<'source> {
         }
     }
 
-    /// Scan an integer or exact decimal Amount token.
+    /// Scan an unsuffixed integer or exact base-10 decimal token.
     fn scan_number(&mut self) -> ScannedNumber {
         if self.starts_with("0x") || self.starts_with("0X") {
-            let start = self.pos;
             self.pos += 2;
             while self
                 .current()
@@ -249,24 +175,9 @@ impl<'source> Scanner<'source> {
             {
                 self.bump();
             }
-            if self.rest().starts_with("mt")
-                && self.text[start..]
-                    .split(|character: char| {
-                        !(character.is_ascii_alphanumeric() || character == '_')
-                    })
-                    .next()
-                    .is_some_and(|token| token.ends_with("amt"))
-            {
-                self.scan_identifier();
-                return ScannedNumber::Invalid(LexicalError::new(
-                    "E_AMOUNT_MALFORMED",
-                    "Amount literals use base-10 digits; hexadecimal Amount spelling is invalid",
-                ));
-            }
-            return ScannedNumber::Integer;
+            return self.finish_integer();
         }
         if self.starts_with("0b") || self.starts_with("0B") {
-            let start = self.pos;
             self.pos += 2;
             while self
                 .current()
@@ -274,18 +185,7 @@ impl<'source> Scanner<'source> {
             {
                 self.bump();
             }
-            if self.text[start..]
-                .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
-                .next()
-                .is_some_and(|token| token.ends_with("amt"))
-            {
-                self.scan_identifier();
-                return ScannedNumber::Invalid(LexicalError::new(
-                    "E_AMOUNT_MALFORMED",
-                    "Amount literals use base-10 digits; binary Amount spelling is invalid",
-                ));
-            }
-            return ScannedNumber::Integer;
+            return self.finish_integer();
         }
         while self
             .current()
@@ -299,11 +199,11 @@ impl<'source> Scanner<'source> {
             let after_dot = self.rest()[1..].chars().next();
             if after_dot.is_some_and(|character| character.is_ascii_digit() || character == '_') {
                 has_fraction = true;
-            } else if self.rest()[1..].starts_with("amt") {
-                self.pos += 1 + "amt".len();
+            } else {
+                self.bump();
                 return ScannedNumber::Invalid(LexicalError::new(
-                    "E_AMOUNT_MALFORMED",
-                    "Amount literals require at least one fractional digit after `.`",
+                    "E_DECIMAL_MALFORMED",
+                    "decimal literals require at least one digit after `.`",
                 ));
             }
         }
@@ -317,65 +217,58 @@ impl<'source> Scanner<'source> {
             }
         }
 
-        if self.starts_with("amt") {
-            self.pos += "amt".len();
-            if self
+        let mut has_exponent = false;
+        if matches!(self.current(), Some('e' | 'E')) {
+            has_exponent = true;
+            self.bump();
+            if matches!(self.current(), Some('+' | '-')) {
+                self.bump();
+            }
+            let exponent_start = self.pos;
+            while self
                 .current()
-                .is_some_and(|character| character.is_ascii_alphanumeric() || character == '_')
+                .is_some_and(|character| character.is_ascii_digit() || character == '_')
             {
-                self.scan_identifier();
+                self.bump();
+            }
+            if self.pos == exponent_start {
                 return ScannedNumber::Invalid(LexicalError::new(
-                    "E_AMOUNT_SUFFIX",
-                    "the Amount suffix must be exactly lowercase `amt`",
+                    "E_DECIMAL_EXPONENT",
+                    "decimal exponent requires at least one digit",
                 ));
             }
-            return ScannedNumber::Amount;
         }
 
         if self
             .current()
             .is_some_and(|character| character.is_ascii_alphabetic())
         {
-            let suffix_start = self.pos;
             self.scan_identifier();
-            let suffix = &self.text[suffix_start..self.pos];
-            let amount_like = has_fraction
-                || suffix.eq_ignore_ascii_case("amt")
-                || suffix.starts_with("am")
-                || suffix.ends_with("amt");
-            if amount_like {
-                return ScannedNumber::Invalid(LexicalError::new(
-                    "E_AMOUNT_SUFFIX",
-                    "the Amount suffix must be exactly lowercase `amt` and touch the digits",
-                ));
-            }
-            self.pos = suffix_start;
-        }
-
-        if has_fraction {
-            let rest = self.rest();
-            let trimmed = rest.trim_start_matches(char::is_whitespace);
-            let separated_suffix = trimmed.len() != rest.len()
-                && trimmed.starts_with("amt")
-                && !trimmed["amt".len()..]
-                    .chars()
-                    .next()
-                    .is_some_and(|character| character.is_ascii_alphanumeric() || character == '_');
             return ScannedNumber::Invalid(LexicalError::new(
-                if separated_suffix {
-                    "E_AMOUNT_SUFFIX_SEPARATED"
-                } else {
-                    "E_AMOUNT_SUFFIX"
-                },
-                if separated_suffix {
-                    "the `amt` suffix must immediately follow the Amount digits"
-                } else {
-                    "decimal fractions require the adjacent lowercase `amt` suffix"
-                },
+                "E_RETIRED_NUMERIC_SUFFIX",
+                "numeric literal suffixes are not part of Kotodama V1; use an unsuffixed literal in an int, decimal, or quantity context",
             ));
         }
+        if has_fraction || has_exponent {
+            ScannedNumber::Decimal
+        } else {
+            ScannedNumber::Integer
+        }
+    }
 
-        ScannedNumber::Integer
+    fn finish_integer(&mut self) -> ScannedNumber {
+        if self
+            .current()
+            .is_some_and(|character| character.is_ascii_alphabetic())
+        {
+            self.scan_identifier();
+            ScannedNumber::Invalid(LexicalError::new(
+                "E_RETIRED_NUMERIC_SUFFIX",
+                "numeric literal suffixes are not part of Kotodama V1; use an unsuffixed literal in an int, decimal, or quantity context",
+            ))
+        } else {
+            ScannedNumber::Integer
+        }
     }
 
     fn scan_quoted(&mut self, prefix_bytes: usize) -> bool {
@@ -541,7 +434,7 @@ impl<'source> Scanner<'source> {
         } else if character.is_ascii_digit() {
             match self.scan_number() {
                 ScannedNumber::Integer => (SyntaxKind::Number, None),
-                ScannedNumber::Amount => (SyntaxKind::Amount, None),
+                ScannedNumber::Decimal => (SyntaxKind::Decimal, None),
                 ScannedNumber::Invalid(error) => (SyntaxKind::ErrorToken, Some(error)),
             }
         } else if self.starts_with("++") {
@@ -801,7 +694,7 @@ mod tests {
         let amount = lexed
             .tokens
             .iter()
-            .find(|token| token.kind == SyntaxKind::Amount)
+            .find(|token| token.kind == SyntaxKind::Decimal)
             .expect("Amount token");
         assert_eq!(source.slice(amount.range), Some("1.250_0amt"));
         assert_eq!(amount.range.start, 2);

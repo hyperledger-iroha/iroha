@@ -53,8 +53,15 @@ pub enum PointerType {
     SoracloudRequest = 0x000E,
     /// Soracloud host response envelope.
     SoracloudResponse = 0x000F,
-    /// Canonical non-negative Kotodama `Amount` payload.
-    Amount = 0x0010,
+    /// Permanently retired pre-release `Amount` ID. It is known so diagnostics
+    /// can distinguish it from an unknown ID, but no ABI policy permits it.
+    RetiredAmount = 0x0010,
+    /// Canonical Kotodama `int` value.
+    Int = 0x0011,
+    /// Canonical exact Kotodama `decimal` value.
+    Decimal = 0x0012,
+    /// Canonical non-negative nominal Kotodama `quantity` value.
+    Quantity = 0x0013,
     /// Test-only pointer type used to exercise policy failures.
     #[cfg(test)]
     TestOnly = 0x0FFE,
@@ -78,7 +85,10 @@ impl PointerType {
             0x000D => Some(Self::ProofBlob),
             0x000E => Some(Self::SoracloudRequest),
             0x000F => Some(Self::SoracloudResponse),
-            0x0010 => Some(Self::Amount),
+            0x0010 => Some(Self::RetiredAmount),
+            0x0011 => Some(Self::Int),
+            0x0012 => Some(Self::Decimal),
+            0x0013 => Some(Self::Quantity),
             #[cfg(test)]
             0x0FFE => Some(Self::TestOnly),
             _ => None,
@@ -103,7 +113,10 @@ impl PointerType {
             Self::ProofBlob,
             Self::SoracloudRequest,
             Self::SoracloudResponse,
-            Self::Amount,
+            Self::RetiredAmount,
+            Self::Int,
+            Self::Decimal,
+            Self::Quantity,
             #[cfg(test)]
             Self::TestOnly,
         ]
@@ -151,7 +164,7 @@ pub fn validate_tlv_bytes(bytes: &[u8]) -> Result<Tlv<'_>, VMError> {
         .checked_add(len)
         .and_then(|x| x.checked_add(iroha_crypto::Hash::LENGTH))
         .ok_or(VMError::NoritoInvalid)?;
-    if bytes.len() < total {
+    if bytes.len() != total {
         return Err(VMError::NoritoInvalid);
     }
 
@@ -195,7 +208,9 @@ fn allowed_types_for_policy(policy: SyscallPolicy) -> &'static HashSet<PointerTy
             PointerType::ProofBlob,
             PointerType::SoracloudRequest,
             PointerType::SoracloudResponse,
-            PointerType::Amount,
+            PointerType::Int,
+            PointerType::Decimal,
+            PointerType::Quantity,
         ])
     });
     let SyscallPolicy::AbiV1 = policy;
@@ -275,7 +290,13 @@ pub fn render_pointer_types_markdown_table() -> String {
             PointerType::SoracloudResponse as u16,
             PointerType::SoracloudResponse,
         ),
-        (PointerType::Amount as u16, PointerType::Amount),
+        (
+            PointerType::RetiredAmount as u16,
+            PointerType::RetiredAmount,
+        ),
+        (PointerType::Int as u16, PointerType::Int),
+        (PointerType::Decimal as u16, PointerType::Decimal),
+        (PointerType::Quantity as u16, PointerType::Quantity),
     ];
     all.sort_by_key(|(id, _)| *id);
 
@@ -298,7 +319,10 @@ pub fn render_pointer_types_markdown_table() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{PointerPolicyGuard, SyscallPolicy, current_policy};
+    use super::{
+        PointerPolicyGuard, PointerType, SyscallPolicy, VMError, current_policy,
+        is_type_allowed_for_policy, validate_tlv_bytes,
+    };
 
     #[test]
     fn pointer_policy_guard_sets_and_restores() {
@@ -319,5 +343,43 @@ mod tests {
             assert_eq!(current_policy(), Some((SyscallPolicy::AbiV1, 7)));
         }
         assert_eq!(current_policy(), Some((SyscallPolicy::AbiV1, 1)));
+    }
+
+    #[test]
+    fn retired_amount_is_known_but_never_allowed() {
+        assert_eq!(PointerType::from_u16(0x0010), Some(PointerType::RetiredAmount));
+        assert!(!is_type_allowed_for_policy(
+            SyscallPolicy::AbiV1,
+            PointerType::RetiredAmount
+        ));
+        for ty in [PointerType::Int, PointerType::Decimal, PointerType::Quantity] {
+            assert!(is_type_allowed_for_policy(SyscallPolicy::AbiV1, ty));
+        }
+    }
+
+    #[test]
+    fn envelope_rejects_truncation_and_trailing_bytes() {
+        let payload = b"canonical";
+        let mut envelope = Vec::new();
+        envelope.extend_from_slice(&(PointerType::Int as u16).to_be_bytes());
+        envelope.push(1);
+        envelope.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        envelope.extend_from_slice(payload);
+        envelope.extend_from_slice(iroha_crypto::Hash::new(payload).as_ref());
+        assert!(validate_tlv_bytes(&envelope).is_ok());
+
+        let mut truncated = envelope.clone();
+        truncated.pop();
+        assert!(matches!(
+            validate_tlv_bytes(&truncated),
+            Err(VMError::NoritoInvalid)
+        ));
+
+        let mut trailing = envelope;
+        trailing.push(0);
+        assert!(matches!(
+            validate_tlv_bytes(&trailing),
+            Err(VMError::NoritoInvalid)
+        ));
     }
 }

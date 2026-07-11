@@ -187,7 +187,7 @@ impl Actor {
         self.reset_mode_flip_state();
         self.apply_mode_specific_state(target)?;
         self.consensus_mode = target;
-        self.finalize_mode_flip_status();
+        self.finalize_mode_flip_status()?;
         self.pending_mode_flip = None;
         self.record_mode_flip_success();
         Ok(())
@@ -251,10 +251,6 @@ impl Actor {
         self.subsystems.propose.collector_redundant_limit = redundant_r.max(1);
         self.pending.missing_block_requests.clear();
         self.pending.missing_commit_qc_requests.clear();
-        self.subsystems.da_rbc.da.da_bundles.clear();
-        self.subsystems.da_rbc.da.da_pin_bundles.clear();
-        self.subsystems.da_rbc.da.sealed_commitments.clear();
-        self.subsystems.da_rbc.da.sealed_pin_intents.clear();
         self.new_view_rebroadcast_log.clear();
         self.proposal_rebroadcast_log.clear();
         self.payload_rebroadcast_log.clear();
@@ -344,7 +340,7 @@ impl Actor {
         Ok(())
     }
 
-    fn finalize_mode_flip_status(&mut self) {
+    fn finalize_mode_flip_status(&mut self) -> Result<()> {
         self.highest_qc = None;
         self.locked_qc = None;
         super::status::set_highest_qc(0, 0);
@@ -372,22 +368,7 @@ impl Actor {
         );
         #[cfg(feature = "telemetry")]
         self.telemetry.set_mode_activation_lag(None);
-        let config_caps = self.recompute_consensus_caps();
-        let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
-        let world = self.state.world_view();
-        let (_mode_tag, _bls_domain, consensus_caps) =
-            super::consensus::compute_consensus_handshake_caps_from_world(
-                &world,
-                height,
-                &self.common_config,
-                &self.config,
-                &config_caps,
-            );
-        // Do not forcibly disconnect peers during an on-chain cutover. Nodes may reach the
-        // activation height at slightly different times; keeping existing connections alive
-        // prevents a lagging peer from being locked out before it can apply the same flip and
-        // catch up via block sync.
-        self.network.update_consensus_caps(consensus_caps, false);
+        self.refresh_consensus_handshake_caps(true)
     }
 
     fn record_mode_flip_success(&self) {

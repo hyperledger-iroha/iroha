@@ -9,7 +9,7 @@ use sorafs_manifest::{
     ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1, ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderCancelV1,
     OrderRequestV1, OrderbookRuntimeSnapshotV1, SETTLEMENT_CHANNEL_VERSION_V1,
     SETTLEMENT_RECEIPT_VERSION_V1, SettlementChannelV1, SettlementReceiptV1, TradeEventV1,
-    trade_escrow_requirement_v1,
+    derive_orderbook_order_id_v1, trade_escrow_requirement_v1,
 };
 
 const FIXTURES_ROOT: &str = concat!(
@@ -46,7 +46,10 @@ fn order_request_fixture_decodes_and_validates() {
         .validate()
         .expect("order request fixture must validate");
     assert_eq!(order.version, ORDERBOOK_ORDER_VERSION_V1);
-    assert_eq!(order.order_id, [0x71; 32]);
+    assert_eq!(
+        order.order_id,
+        derive_orderbook_order_id_v1(&order.owner_account, order.nonce)
+    );
     assert_eq!(order.quantity_gib, 64);
     assert_eq!(order.remaining_gib, 64);
     assert_eq!(
@@ -65,7 +68,10 @@ fn order_cancel_fixture_decodes_and_validates() {
         .validate()
         .expect("order cancel fixture must validate");
     assert_eq!(cancel.version, ORDERBOOK_CANCEL_VERSION_V1);
-    assert_eq!(cancel.order_id, [0x71; 32]);
+    assert_eq!(
+        cancel.order_id,
+        derive_orderbook_order_id_v1(&cancel.owner_account, 7)
+    );
     assert_eq!(
         norito::to_bytes(&cancel).expect("fixture should re-encode"),
         bytes
@@ -138,8 +144,20 @@ fn runtime_snapshot_fixture_decodes_and_validates() {
     assert_eq!(snapshot.version, ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1);
     assert_eq!(snapshot.next_sequence, 4);
     assert_eq!(snapshot.generated_at_unix, 1_700_000_130);
+    assert_eq!(snapshot.owner_nonce_high_waters.len(), 1);
+    assert_eq!(
+        snapshot.owner_nonce_high_waters[0].owner_account,
+        b"provider@sora"
+    );
+    assert_eq!(snapshot.owner_nonce_high_waters[0].highest_nonce, 9);
     assert_eq!(snapshot.open_orders.len(), 1);
-    assert_eq!(snapshot.open_orders[0].order.order_id, [0x73; 32]);
+    assert_eq!(
+        snapshot.open_orders[0].order.order_id,
+        derive_orderbook_order_id_v1(
+            &snapshot.open_orders[0].order.owner_account,
+            snapshot.open_orders[0].order.nonce,
+        )
+    );
     assert_eq!(snapshot.open_orders[0].sequence, 3);
     assert_eq!(snapshot.trades.len(), 1);
     assert_eq!(snapshot.trades[0].trade_id, [0x83; 32]);

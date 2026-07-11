@@ -393,7 +393,9 @@ fn validate_expr(expr: &TypedExpr, functions: &HashSet<String>) -> Result<(), Se
             validate_expr(left, functions)?;
             validate_expr(right, functions)
         }
-        ExprKind::Unary { expr: inner, .. } | ExprKind::NumericCast { expr: inner } => {
+        ExprKind::Unary { expr: inner, .. }
+        | ExprKind::NumericCast { expr: inner }
+        | ExprKind::NumericTryCast { expr: inner } => {
             reject_secret_ordinary_operation(&[inner])?;
             validate_expr(inner, functions)
         }
@@ -506,9 +508,8 @@ fn validate_expr(expr: &TypedExpr, functions: &HashSet<String>) -> Result<(), Se
             reject_secret_key(index)?;
             validate_expr(index, functions)
         }
-        ExprKind::Number(_)
-        | ExprKind::Decimal(_)
-        | ExprKind::AmountLiteral { .. }
+        ExprKind::IntLiteral(_)
+        | ExprKind::DecimalLiteral { .. }
         | ExprKind::OptionNone
         | ExprKind::Bool(_)
         | ExprKind::String(_)
@@ -527,6 +528,7 @@ fn expression_contains_secret(expr: &TypedExpr) -> bool {
         }
         ExprKind::Unary { expr, .. }
         | ExprKind::NumericCast { expr }
+        | ExprKind::NumericTryCast { expr }
         | ExprKind::OptionSome { value: expr }
         | ExprKind::ResultOk { value: expr }
         | ExprKind::ResultErr { error: expr }
@@ -603,9 +605,8 @@ fn expression_contains_secret(expr: &TypedExpr) -> bool {
         ExprKind::Index { target, index } => {
             expression_contains_secret(target) || expression_contains_secret(index)
         }
-        ExprKind::Number(_)
-        | ExprKind::Decimal(_)
-        | ExprKind::AmountLiteral { .. }
+        ExprKind::IntLiteral(_)
+        | ExprKind::DecimalLiteral { .. }
         | ExprKind::OptionNone
         | ExprKind::Bool(_)
         | ExprKind::String(_)

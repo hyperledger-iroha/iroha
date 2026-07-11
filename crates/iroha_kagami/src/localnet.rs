@@ -3884,7 +3884,7 @@ mod tests {
         base::toml::TomlSource, kura::FsyncMode, logger::Directives, parameters::actual,
     };
     use iroha_data_model::{
-        block::{consensus::PROTO_VERSION, decode_framed_signed_block},
+        block::{consensus_v2::PROTOCOL_VERSION, decode_framed_signed_block},
         isi::{GrantBox, MintBox, SetParameter, TransferBox},
         parameter::{
             Parameter,
@@ -5413,6 +5413,7 @@ mod tests {
         bls_domain: String,
         wire_proto_versions: Vec<u32>,
         consensus_fingerprint: String,
+        sumeragi_v2: iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
     }
 
     #[test]
@@ -5473,7 +5474,8 @@ mod tests {
 
         let meta = found.expect("handshake metadata must be present");
         assert!(
-            meta.wire_proto_versions.contains(&PROTO_VERSION),
+            meta.wire_proto_versions
+                .contains(&u32::from(PROTOCOL_VERSION)),
             "missing expected wire proto version"
         );
         assert!(

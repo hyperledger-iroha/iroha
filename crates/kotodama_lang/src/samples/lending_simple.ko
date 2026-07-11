@@ -6,26 +6,26 @@ seiyaku LendingSimple {
     }
 
     // Compute collateralization ratio in basis points (bps = 1/100 of a percent).
-    fn collateral_ratio_bps(collateral_value: Amount, debt_value: Amount) -> Amount {
-        let zero = Amount::from_i64(0);
+    fn collateral_ratio_bps(quantity collateral_value, quantity debt_value) -> quantity {
+        let zero = 0;
         if debt_value == zero {
-            return Amount::from_i64(1_000_000);
+            return 1_000_000;
         }
         // effectively infinite
-        let bps_scale = Amount::from_i64(10_000);
+        let bps_scale = 10_000;
         let ratio = (collateral_value * bps_scale) / debt_value;
         return ratio;
     }
 
     // Borrow after checking ratio >= min_ratio_bps.
     kotoage fn borrow(
-        user: AccountId,
-        _vault_account: AccountId,
-        debt_asset: AssetDefinitionId,
-        amount: Amount,
-        collateral_value: Amount,
-        current_debt_value: Amount,
-        min_ratio_bps: Amount,
+        AccountId user,
+        AccountId _vault_account,
+        AssetDefinitionId debt_asset,
+        quantity amount,
+        quantity collateral_value,
+        quantity current_debt_value,
+        quantity min_ratio_bps,
     ) authorize("Admin") {
         let new_debt_value = current_debt_value + amount;
         let ratio = collateral_ratio_bps(
@@ -39,10 +39,10 @@ seiyaku LendingSimple {
 
     // Repay by transferring tokens from user to vault and burning.
     kotoage fn repay(
-        user: AccountId,
-        vault_account: AccountId,
-        debt_asset: AssetDefinitionId,
-        amount: Amount,
+        AccountId user,
+        AccountId vault_account,
+        AssetDefinitionId debt_asset,
+        quantity amount,
     ) authorize("Admin") {
         ledger::asset::transfer(
             source: user,

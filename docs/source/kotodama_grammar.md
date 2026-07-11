@@ -106,7 +106,9 @@ grammar rather than in this rendered copy or an editor grammar.
 identifier      = (ASCII-letter | "_") (ASCII-letter | ASCII-digit | "_")* ;
 integer-literal = decimal-literal | hexadecimal-literal | binary-literal ;
 decimal-literal = ASCII-digit (ASCII-digit | "_")* ;
-amount-literal  = decimal-literal ("." decimal-literal)? "amt" ;
+exact-decimal-literal = decimal-literal
+                        (("." decimal-literal) exponent? | exponent) ;
+exponent        = ("e" | "E") ("+" | "-")? decimal-literal ;
 hexadecimal-literal = "0x" hex-digit (hex-digit | "_")* ;
 binary-literal  = "0b" ("0" | "1" | "_")+ ;
 string-literal  = '"' string-character* '"' ;
@@ -116,8 +118,10 @@ comment         = "//" non-newline-character* ;
 
 String escapes are `\\`, `\"`, `\n`, `\r`, `\t`, `\0`, `\xNN`, and
 `\u{...}`. Raw and raw-byte strings preserve their contents without escape
-processing. Decimal fractions are available only through the adjacent `amt`
-suffix; exponent notation is not a V1 numeric literal.
+processing. Decimal fractions and decimal exponents are exact: they never
+create a binary floating-point value. Separators are permitted only between
+digits. Spellings such as `1.`, `.5`, `1__0`, and an exponent without digits
+are invalid. V1 has no numeric suffixes.
 
 The compiler applies the same mandatory frontend budgets in every driver: at
 most 1 MiB (1,048,576 UTF-8 bytes) per source file, 250,000 significant tokens
@@ -159,15 +163,15 @@ typed calls (`AccountId::parse("...")`, `Json::parse("{...}")`); bytes use
 
 ```ebnf
 struct          = "struct" identifier "{" (field (("," | ";") field)* ("," | ";")?)? "}" ;
-field           = identifier ":" type ;
+field           = type identifier ;
 
 error-enum      = "error" "enum" identifier "{"
                   error-variant (("," | ";") error-variant)* ("," | ";")?
                   "}" ;
 error-variant   = identifier "=" integer-literal ;
 
-constant        = "const" identifier ":" type "=" expression ";" ;
-state           = "state" identifier ":" type ";" ;
+constant        = "const" type identifier "=" expression ";" ;
+state           = "state" type identifier ";" ;
 
 function        = "fn" identifier parameters return-type? block ;
 kotoage         = kotoage-keyword "fn" identifier parameters return-type?
@@ -181,7 +185,7 @@ kaizen          = kaizen-keyword parameters block ;
 kaizen-keyword  = "kaizen" | "改善" ;
 authorization   = "authorize" "(" string-literal ")" ;
 parameters      = "(" (parameter ("," parameter)*)? ")" ;
-parameter       = identifier ":" type ;
+parameter       = type identifier ;
 return-type     = "->" type ;
 
 trigger         = "trigger" identifier "->" trigger-call "{"
@@ -200,7 +204,13 @@ data-matcher    = identifier (identifier | string-literal) ";" ;
 pipeline-filter = "pipeline" ("transaction" | "block") "approved"? ;
 ```
 
-Every parameter, field, constant, and state declaration has an explicit type. Every error variant has an explicit, non-zero `u32` code, and names and codes are unique within the enum. Missing types, unknown types, duplicate declarations, reserved names, ambiguous resolution, recursive value types, duplicate parameters, and shadowing are compile errors.
+Every parameter, field, constant, and state declaration has an explicit type.
+Declaration types always precede names; the retired `name: Type` form is a
+syntax error with a type-first diagnostic. Every error variant has an explicit,
+non-zero code representable as `int`, and names and codes are unique within the
+enum. Missing types, unknown types, duplicate declarations, reserved names,
+ambiguous resolution, recursive value types, duplicate parameters, and
+shadowing are compile errors.
 
 A `kotoage fn`/`言挙げ fn` mutates or submits ledger state and always declares
 caller authorization. Authorization is checked at runtime and is separate from
@@ -296,8 +306,8 @@ pointer or numeric zero as a request to re-read JSON trigger arguments.
 `let` creates an immutable local. `var` creates a mutable local. Assigning to a `let`, parameter, constant, or immutable field is an error. Redeclaring or shadowing a name in an enclosing scope is an error.
 
 ```ebnf
-binding         = "let" identifier (":" type)? "=" expression ";"
-                | "var" identifier (":" type)? "=" expression ";" ;
+binding         = "let" (type identifier | identifier) "=" expression ";"
+                | "var" (type identifier | identifier) "=" expression ";" ;
 assignment      = place ("=" | "+=" | "-=" | "*=" | "/=" | "%=") expression ";" ;
 ```
 
@@ -308,12 +318,12 @@ uninitialized-local state in V1.
 
 The V1 type vocabulary is:
 
-- `i64`
-- `u128`
+- `int`
+- `decimal`
+- `quantity`
 - `bool`
 - `string`
 - `bytes`
-- `Amount`
 - `Json`
 - typed Iroha identifiers, including `AccountId`, `AssetDefinitionId`, `AssetId`, `NftId`, `DomainId`, `DataSpaceId`, and `Name`
 - declared structs and tuples
@@ -325,14 +335,15 @@ The V1 type vocabulary is:
   `DomainView`, `NftView`, and `QueryPage<View>` query projections
 - `Secret<T>` inside ZK contracts, subject to the information-flow rules below
 
-`Opaque`, `int`, `number`, `fixed_u128`, `String`, `Blob`, `Bytes`, `Balance`, and in-memory `Map` are not types in V1.
+`i64`, `u128`, `Amount`, `float`, `num`, `number`, `Opaque`, `fixed_u128`,
+`String`, `Blob`, `Bytes`, `Balance`, and in-memory `Map` are not types in V1.
 Unit is an internal function-return state, not a source type: `()` and `(T)` are
 errors in type position. Omit the return type for a Unit-returning function;
 source tuple types always contain at least two elements.
 
 ```ebnf
-type            = "i64" | "u128" | "bool" | "string" | "bytes"
-                | "Amount" | "Json" | iroha-id-type | identifier
+type            = "int" | "decimal" | "quantity" | "bool" | "string" | "bytes"
+                | "Json" | iroha-id-type | identifier
                 | tuple-type | "Option" "<" type ">"
                 | "Result" "<" type "," type ">"
                 | "List" "<" type "," capacity ">"
@@ -347,21 +358,20 @@ iroha-id-type   = "AccountId" | "AssetDefinitionId" | "AssetId"
                 | "NftId" | "DomainId" | "DataSpaceId" | "Name" ;
 ```
 
-There are no implicit conversions. Numeric operations require identical operand
-types. Boolean values are not integers, and `Amount` remains nominally distinct
-from `u128` even though both use a canonical Norito numeric payload at the ABI.
-Pointer-ABI constructors return their declared typed ID or data type and cannot
-be substituted for one another.
+Boolean values are not integers. `quantity` is a nominal non-negative decimal
+and cannot be substituted for `decimal`, even though both use exact base-10
+arithmetic. Whole-number literals default to `int` and may be checked exactly
+against an expected `decimal` or `quantity`; fractional and exponent literals
+default to `decimal` and may be checked exactly against an expected `quantity`.
+Negative contextual quantities are rejected at compile time.
 
-An unsuffixed integer literal (or one suffixed with adjacent `i64`) has type
-`i64`. A `u128` literal requires the adjacent `u128` suffix and may cover the
-complete range `0..=340282366920938463463374607431768211455`. Values above that
-range are lexical errors; a separated spelling such as `1 u128` is not a
-suffix. Canonical explicit conversions are `u128::from_i64(value)`,
-`Amount::from_i64(value)`, `Amount::from_u128(value)`, and
-`numeric::to_i64(value)`. Converting a negative `i64` to an unsigned type
-fails; there is no implicit literal, assignment, argument, return, comparison,
-or arithmetic conversion.
+Mixed `int`/`decimal` arithmetic and comparison promote `int` to `decimal`
+exactly. All other cross-type conversions are named and checked. In particular,
+`quantity::try_from_decimal`, `decimal::from_quantity`, and exact, truncating,
+or explicitly rounded decimal-to-int conversions make domain changes visible.
+There is no implicit assignment, argument, return, or ledger-boundary
+conversion involving `quantity`. Pointer-ABI constructors return their exact
+declared type and cannot be substituted for one another.
 
 ## Control flow and expressions
 
@@ -369,7 +379,7 @@ V1 supports `if`/`else`, `return`, and compiler-proven bounded `for` loops. It r
 
 Collection iteration is deterministic and limited to 64 items. `StateMap`
 iteration follows canonical Norito key order and must use `.take(end)` or
-`.range(start, end)` with non-negative `i64` literals whose resulting span is
+`.range(start, end)` with non-negative `int` literals whose resulting span is
 at most 64. The former `#[bounded(N)]` spelling is not V1 syntax; `#[test]` is
 the only source attribute and is accepted only by test-mode tooling. `break`
 and `continue` are valid only inside an accepted bounded loop.
@@ -389,8 +399,8 @@ if-let-statement = "if" "let" sum-pattern "=" expression block
 for-statement   = "for" identifier "in" "range" "(" expression ")" block
                 | "for" "(" identifier "," identifier ")" "in"
                   bounded-collection block ;
-bounded-collection = expression "." ("take" "(" i64-literal ")"
-                   | "range" "(" i64-literal "," i64-literal ")") ;
+bounded-collection = expression "." ("take" "(" integer-literal ")"
+                   | "range" "(" integer-literal "," integer-literal ")") ;
 
 expression      = conditional ;
 conditional     = logical-or ("?" expression ":" expression)? ;
@@ -402,15 +412,13 @@ multiplicative  = unary (("*" | "/" | "%") unary)* ;
 unary           = ("!" | "-") unary | postfix ;
 postfix         = primary (("." identifier) | ("[" expression "]")
                 | call-arguments | "?")* ;
-primary         = i64-literal | u128-literal | amount-literal
+primary         = integer-literal | exact-decimal-literal
                 | string-literal | bytes-literal
                 | "true" | "false" | qualified-name
                 | qualified-name call-arguments | "(" expression ")"
                 | tuple-expression | struct-literal | list-literal
                 | list-comprehension | if-expression | if-let-expression
                 | match-expression | sum-constructor | native-json ;
-i64-literal     = integer-literal ("i64")? ;
-u128-literal    = integer-literal "u128" ;
 qualified-name  = identifier ("::" identifier)* ;
 call-arguments  = "(" (positional-arguments | named-arguments)? ")" ;
 positional-arguments = expression ("," expression)* ","? ;
@@ -464,26 +472,30 @@ any collection traversal that could exceed 64 items.
 
 ## Arithmetic
 
-Arithmetic is checked by default. Overflow, underflow, division by zero, remainder by zero, and negating `i64::MIN` produce a deterministic seiyaku error and revert effects. Compile-time folding follows the same rules.
+Arithmetic is checked by default. Overflow, quantity underflow, division by
+zero, remainder by zero, and negating the minimum `int` produce deterministic
+seiyaku failures and revert effects. Compile-time folding calls the same exact
+arithmetic implementation as runtime execution.
 
 Intentional modular arithmetic is written with explicit operations such as `math::wrapping_add`, `math::wrapping_sub`, `math::wrapping_mul`, and `math::wrapping_neg`. Ordinary operators never silently wrap.
 
-Relational operators use signed ordering for `i64` and unsigned ordering for
-`u128`. `numeric::neg` is not defined for `u128`. The ABI validates every
-numeric arithmetic operand and result against the `u128` integer domain, so a
-crafted arbitrary-precision `Numeric` payload cannot widen source-level
-`u128`; subtraction underflow, addition or multiplication overflow, and zero
-divisors fail deterministically.
+`int` is the signed range `-2^4095..=2^4095-1`; its compact encoding does not
+change its semantic bounds. Division truncates toward zero, and remainder has
+the dividend's sign. `min_int / -1` and the paired remainder operation fail
+with overflow. Explicit wrapping helpers operate modulo `2^4096`.
 
-`Amount` literals use an adjacent lowercase `amt` suffix, for example `10amt`
-and `1.25amt`. They are non-negative canonical decimal values with a 512-bit
-mantissa and scale 0 through 28; trailing fractional zeros are removed and
-zero always has scale 0. `Amount` is distinct from `u128`. `+`, `-`, and `*`
-are checked. Plain `/` succeeds only for an exact finite decimal result within
-scale 28. Intentional rounding is written
-`amount.div_round(divisor: ..., scale: ..., mode: Rounding::floor|ceil|nearest_even)`.
-Invalid constant arithmetic is diagnosed during compilation; runtime failures
-remain deterministic VM errors.
+`decimal` and `quantity` use a signed 4,096-bit mantissa and canonical decimal
+scale `0..=28`; `quantity` additionally rejects negative values. Trailing
+fractional zeros are removed and zero always has scale zero. Ordinary
+arithmetic computes the exact mathematical result with conceptual unbounded
+intermediates, normalizes it, and then checks the final bounds. Plain decimal
+division succeeds only for a canonical exact result representable through
+scale 28; repeating results and terminating results needing more precision are
+distinct failures. Rounded operations require an output scale and one of the
+seven stable modes documented in
+[`kotodama_numeric_v1.md`](./kotodama_numeric_v1.md). They never round
+implicitly. Invalid constant arithmetic is diagnosed during compilation;
+runtime failures use the same stable numeric faults.
 
 ## Bounded lists
 
@@ -517,10 +529,10 @@ capacity. `take(0)` returns an empty list with the minimum valid static capacity
 
 ```kotodama
 seiyaku NativeJsonExample {
-    view fn build(account_id: AccountId, label: string) -> Json {
+    view fn build(AccountId account_id, string label) -> Json {
         json {
             owner: account_id,
-            amount: 1.25amt,
+            amount: 1.25,
             labels: json ["primary", label],
         }
     }
@@ -530,11 +542,12 @@ seiyaku NativeJsonExample {
 JSON object keys are identifiers or string literals, duplicates are errors,
 and encoded keys are sorted canonically regardless of source order. Each
 object or array node contains at most 64 entries or elements. JSON
-construction recursively accepts booleans, integers, `Amount`, strings,
-canonical IDs, `Json`, `Option`, and `List`; bytes become lowercase `0x` hex.
-`Result` and arbitrary structs require explicit handling. Typed getters return
-`Option<T>` and the amount getter is `.get_amount(key)`; `.get_numeric` is
-retired.
+construction recursively accepts booleans, `int`, `decimal`, `quantity`,
+strings, canonical IDs, `Json`, `Option`, and `List`; bytes become lowercase
+`0x` hex. `Result` and arbitrary structs require explicit handling. Typed
+getters return `Option<T>` and use `.get_int(key)`, `.get_decimal(key)`, and
+`.get_quantity(key)` for the three numeric domains. Retired numeric getter
+spellings are errors.
 
 ## Typed core ledger queries
 
@@ -543,42 +556,42 @@ field names, declaration order, and types:
 
 ```text
 AccountView {
-    id: AccountId,
-    metadata: Json,
+    AccountId id,
+    Json metadata,
 }
 AssetView {
-    id: AssetId,
-    amount: Amount,
+    AssetId id,
+    quantity amount,
 }
 AssetDefinitionView {
-    id: AssetDefinitionId,
-    name: string,
-    description: Option<string>,
-    owned_by: AccountId,
-    total_quantity: Amount,
-    metadata: Json,
+    AssetDefinitionId id,
+    string name,
+    Option<string> description,
+    AccountId owned_by,
+    quantity total_quantity,
+    Json metadata,
 }
 DomainView {
-    id: DomainId,
-    owned_by: AccountId,
-    metadata: Json,
+    DomainId id,
+    AccountId owned_by,
+    Json metadata,
 }
 NftView {
-    id: NftId,
-    owned_by: AccountId,
-    content: Json,
+    NftId id,
+    AccountId owned_by,
+    Json content,
 }
 QueryPage<T> {
-    items: List<T, 64>,
-    next_offset: Option<i64>,
+    List<T, 64> items,
+    Option<int> next_offset,
 }
 ```
 
 `ledger::query::account`, `asset`, `asset_definition`, `domain`, and `nft`
 accept their exact typed ID and return `Option<View>`. Their plural forms
 `accounts`, `assets`, `asset_definitions`, `domains`, and `nfts` require named
-`offset: i64` and `limit: i64` arguments and return `QueryPage<View>` with
-`items: List<View, 64>` and `next_offset: Option<i64>`. Offset is non-negative,
+`int offset` and `int limit` arguments and return `QueryPage<View>` with
+`List<View, 64> items` and `Option<int> next_offset`. Offset is non-negative,
 limit is 1 through 64, ordering is canonical ID order, and `next_offset` is
 present only when another page exists. Other specialist query families remain
 explicit byte APIs; the typed balance API is unchanged.
@@ -589,7 +602,27 @@ Scalar seiyaku state must be initialized by `hajimari`/`始まり` on every
 successful `hajimari`/`始まり` path before it can be observed. `StateMap` is
 host-backed and does not require allocation in `hajimari`.
 
-`StateMap.get` returns `Option<V>`; absence is not represented by a zero, empty string, or implicit default. Rvalue indexing such as `map[key]` and compound indexed assignment such as `map[key] += value` are errors because both would read a possibly absent value without handling `Option<V>`. Simple `map[key] = value` remains the canonical per-key write form. The flat spelling `get(map, key)` is not a StateMap operation; only the receiver form `map.get(key)` invokes the intrinsic, while an unrelated user-declared function named `get` resolves normally. `StateMap.remove(key)` returns the removed `Option<V>` and is not permitted in views. Every scalar or aggregate state root and every `StateMap` value is encoded once as one canonical, schema-bound record under one durable key. Its domain-separated schema hash covers the exact type and named-field layout; mismatched schemas, malformed typed leaves, invalid active-only sums, and null active pointers are rejected. Nested `StateMap` values and unsupported leaves are compile errors. V1 map keys may be `i64`, `u128`, `Amount`, `bool`, `string`, `bytes`, or a typed Iroha identifier; aggregate, `Json`, optional, result, secret, and nested-map keys are rejected. Physical V1 key paths use reversible lowercase hexadecimal canonical-Norito bytes, so path order is canonical key-byte order without hash-collision ambiguity. Keys and map bases are capped at 4 KiB, and iteration pages are canonical and limited to 64 items.
+`StateMap.get` returns `Option<V>`; absence is not represented by a zero, empty
+string, or implicit default. Rvalue indexing such as `map[key]` and compound
+indexed assignment such as `map[key] += value` are errors because both would
+read a possibly absent value without handling `Option<V>`. Simple
+`map[key] = value` remains the canonical per-key write form. The flat spelling
+`get(map, key)` is not a StateMap operation; only the receiver form
+`map.get(key)` invokes the intrinsic, while an unrelated user-declared function
+named `get` resolves normally. `StateMap.remove(key)` returns the removed
+`Option<V>` and is not permitted in views. Every scalar or aggregate state root
+and every `StateMap` value is encoded once as one canonical, schema-bound record
+under one durable key. Its domain-separated schema hash covers the exact type
+and named-field layout; mismatched schemas, malformed typed leaves, invalid
+active-only sums, and null active pointers are rejected. Nested `StateMap`
+values and unsupported leaves are compile errors. V1 map keys may be `int`,
+`decimal`, `quantity`, `bool`, `string`, `bytes`, or a typed Iroha identifier;
+aggregate, `Json`, optional, result, secret, and nested-map keys are rejected.
+Numeric keys are canonicalized before hashing and ordering, so equivalent
+decimal spellings cannot create distinct keys. Physical V1 key paths use
+reversible lowercase hexadecimal canonical-Norito bytes, so path order is
+canonical key-byte order without hash-collision ambiguity. Keys and map bases
+are capped at 4 KiB, and iteration pages are canonical and limited to 64 items.
 
 Compiler-derived access metadata is advisory until independently verified from bytecode. Unknown, dynamic, incomplete, or transitively unresolved access forces conservative scheduler serialization.
 
@@ -604,13 +637,13 @@ seiyaku Vault {
         NotReady = 2,
     }
 
-    state balance: i64;
+    state int balance;
 
     hajimari() {
         balance = 0;
     }
 
-    kotoage fn deposit(amount: i64) authorize("CanDeposit") {
+    kotoage fn deposit(int amount) authorize("CanDeposit") {
         require(amount > 0, VaultError::ZeroDeposit);
         balance = balance + amount;
     }
@@ -665,7 +698,11 @@ not exist.
 
 ## Secrets and ZK contracts
 
-A ZK seiyaku explicitly requests the ZK execution capability through its build configuration. Private input is represented only as `Secret<T>`. The V1 private-input syscall supplies one 64-bit word, so `Secret<i64>` is the only concrete secret payload in this release.
+A ZK seiyaku explicitly requests the ZK execution capability through its build
+configuration. Private input is represented only as `Secret<T>`. The V1
+private-input syscall supplies one 64-bit word, which is promoted exactly into
+`Secret<int>`; this input channel therefore supplies only that subset of the
+full `int` domain.
 
 Secret values may flow only to approved commitment, proof, and cryptographic declassification operations. The V1 declassifiers are `crypto::poseidon2`, `crypto::poseidon6`, `crypto::pubkgen`, and `crypto::valcom`; when one scalar input is secret, every scalar input must be secret. Their result is public.
 
@@ -771,19 +808,19 @@ Nodes validate direct control-flow targets, allowed ABI-v1 syscalls, pointer-ABI
 
 ```kotodama
 seiyaku Counter {
-    state value: i64;
+    state int value;
 
     hajimari() {
         value = 0;
     }
 
-    kotoage fn increment(delta: i64) -> i64 authorize("CanIncrementCounter") {
-        let next = value + delta;
+    kotoage fn increment(int delta) -> int authorize("CanIncrementCounter") {
+        let int next = value + delta;
         value = next;
         return next;
     }
 
-    view fn current() -> i64 {
+    view fn current() -> int {
         return value;
     }
 }

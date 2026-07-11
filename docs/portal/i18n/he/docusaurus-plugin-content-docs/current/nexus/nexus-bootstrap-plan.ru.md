@@ -33,7 +33,7 @@ translation_last_reviewed: 2026-02-07
 ## Сетевые окружения
 - Эксплуатируйте два окружения Nexus с разными сетевыми префиксами:
 - **Sora Nexus (mainnet)** - префикс продакшн сети `nexus`, размещает каноническое управление и piggyback SoraFS/SoraNet (מזהה שרשרת `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - префикс staging сети `testus`, зеркалирует mainnet конфигурацию для интеграционных телистов ивививид `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - префикс staging сети `testus`, зеркалирует mainnet конфигурацию для интеграционных телистов ивививид `fc56984b-2be7-431d-840e-21514d1883f0`).
 - Держите отдельные genesis файлы, מפתחות ממשל инфраструктурные טביעות רגל для каждого окружения. Testus служит полигоном для всех השקות SoraFS/SoraNet перед продвижением в Nexus.
 - צינורות CI/CD ניתנים לבדיקה ב-Testus, בצע בדיקות עשן או בדיקות עשן ב-I018NT0140X. прохождения проверок.
 - חבילות Референсные конфигурационные лежат в `configs/soranexus/nexus/` (mainnet) ו-`configs/soranexus/testus/` (testnet), каждая содержат об080зит `configs/soranexus/nexus/` об080зит `configs/soranexus/testus/` `genesis.json` וכניסה לקטלוגים Torii.

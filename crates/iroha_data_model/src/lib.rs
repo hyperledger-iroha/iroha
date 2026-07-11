@@ -336,7 +336,7 @@ pub mod prelude {
     };
     pub use iroha_primitives::{
         json::Json,
-        numeric::{Numeric, NumericSpec, numeric},
+        numeric::{Numeric, NumericOperationError, NumericSpec, Quantity, numeric},
     };
 
     pub use super::{
@@ -364,8 +364,9 @@ pub mod prelude {
             DataSpaceCatalog, DataSpaceCatalogError, DataSpaceId, DataSpaceMetadata,
             DomainCommittee, DomainEndorsement, DomainEndorsementPolicy, DomainEndorsementScope,
             DomainEndorsementSignature, LaneCatalog, LaneCatalogError, LaneConfig, LaneId,
-            LaneIdError, LaneLifecyclePlan, LaneRelayEnvelope, LaneRelayEnvelopeRef,
-            LaneStorageProfile, LaneStorageProfileParseError, LaneVisibility,
+            LaneIdError, LaneLifecycleIncarnationEntry, LaneLifecycleParameterV1,
+            LaneLifecyclePlan, LaneLifecycleStatusError, LaneLifecycleStatusV1, LaneRelayEnvelope,
+            LaneRelayEnvelopeRef, LaneStorageProfile, LaneStorageProfileParseError, LaneVisibility,
             LaneVisibilityParseError, VerifiedLaneRelayRecord, VerifiedNexusFeeBudgetRecord,
         },
         nft::prelude::*,

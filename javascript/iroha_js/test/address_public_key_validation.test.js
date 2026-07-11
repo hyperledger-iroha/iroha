@@ -21,6 +21,7 @@ const NON_CANONICAL_IDENTITY = Buffer.from(
   "EEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF7F",
   "hex",
 );
+const INVALID_COMPRESSED_KEY = Buffer.alloc(32, 0x02);
 
 test("fromAccount enforces curve-specific public key length", () => {
   const shortKey = VALID_KEY.subarray(1);
@@ -77,5 +78,15 @@ test("fromCanonicalBytes rejects non-canonical ed25519 encodings", () => {
       error instanceof AccountAddressError &&
       error.code === AccountAddressErrorCode.INVALID_PUBLIC_KEY &&
       /non-canonical/i.test(error.message),
+  );
+});
+
+test("fromAccount rejects canonical-range bytes that do not decompress", () => {
+  assert.throws(
+    () => AccountAddress.fromAccount({ publicKey: INVALID_COMPRESSED_KEY }),
+    (error) =>
+      error instanceof AccountAddressError &&
+      error.code === AccountAddressErrorCode.INVALID_PUBLIC_KEY &&
+      /compressed ed25519/i.test(error.message),
   );
 });

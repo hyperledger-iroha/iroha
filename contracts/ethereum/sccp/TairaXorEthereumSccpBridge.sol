@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-pragma solidity 0.8.24;
+pragma solidity 0.7.4;
+pragma experimental ABIEncoderV2;
 
 import "../../evm/sccp/TairaXorExactEvmSccpBridge.sol";
-import "./TairaXOR.sol";
-
-/** Concrete exact XOR route that atomically creates its Ethereum token. */
+/** Concrete exact XOR route bound to one predeployed Ethereum token. */
 contract TairaXorEthereumSccpBridge is TairaXorExactEvmSccpBridge {
     constructor(
+        address tokenAddress,
         VerifierPolicyV1 memory configuredVerifierPolicy,
         uint8 configuredEthereumProfile,
         uint32 configuredRouteRevision
     ) TairaXorExactEvmSccpBridge(
-        address(new TairaXOR(address(this))),
+        tokenAddress,
         configuredVerifierPolicy,
         1,
         configuredEthereumProfile,

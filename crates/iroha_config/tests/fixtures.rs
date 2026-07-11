@@ -4,6 +4,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
+    num::NonZeroUsize,
     path::{Path, PathBuf},
     str::FromStr,
     sync::{Mutex, MutexGuard, Once},
@@ -869,9 +870,19 @@ fn minimal_config_snapshot() {
                         "chunk_range_fetch",
                         "vendor_reserved",
                     ],
+                    replay_checkpoint_path: "sorafs_discovery/provider_advert_replay.to",
+                    replay_checkpoint_max_entries: 65536,
                     admission: Some(
                         SorafsAdmission {
                             envelopes_dir: "tests/fixtures/sorafs_admission",
+                            trusted_council_keys: [
+                                PublicKey(
+                                    ed25519(
+                                        "ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56",
+                                    ),
+                                ),
+                            ],
+                            signature_threshold: 1,
                         },
                     ),
                     publish: SorafsPublishDiscovery {
@@ -888,6 +899,11 @@ fn minimal_config_snapshot() {
                     max_parallel_fetches: 32,
                     max_pins: 10000,
                     por_sample_interval_secs: 600,
+                    runtime: SorafsRuntimeRetention {
+                        event_history_limit: 4096,
+                        state_entry_limit: 65536,
+                        checkpoint_max_bytes: Bytes(67108864),
+                    },
                     alias: None,
                     adverts: SorafsAdvertOverrides {
                         stake_pointer: None,
@@ -1021,6 +1037,11 @@ fn minimal_config_snapshot() {
                     enforce_admission: true,
                     enforce_capabilities: false,
                     salt_schedule_dir: None,
+                    site_bindings: SorafsGatewaySiteBindings {
+                        path: None,
+                        max_bytes: Bytes(1048576),
+                        max_sites: 1024,
+                    },
                     cdn_policy_path: None,
                     rate_limit: SorafsGatewayRateLimit {
                         max_requests: Some(
@@ -1077,7 +1098,28 @@ fn minimal_config_snapshot() {
                     epoch_interval_secs: 3600,
                     response_window_secs: 900,
                     governance_dag_dir: "./storage/sorafs/governance",
-                    randomness_seed: None,
+                    drand: SorafsPorDrand {
+                        scheme: "",
+                        chain_hash: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                        public_key: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                        genesis_time: 0,
+                        period_secs: 0,
+                        endpoints: [],
+                        quorum: 2,
+                        max_endpoints: 8,
+                        connect_timeout: 3s,
+                        request_timeout: 5s,
+                        max_body_bytes: 4096,
+                        max_beacon_age_secs: 30,
+                        max_future_skew_secs: 3,
+                        state_path: "./storage/sorafs/governance/drand-high-water.to",
+                    },
+                    vrf_state_path: "./storage/sorafs/governance/provider-vrf-state.to",
+                    vrf_submission_deadline_secs: 300,
+                    vrf_max_entries: 65536,
+                    vrf_retention_epochs: 168,
+                    vrf_max_clock_skew_secs: 60,
+                    auditor_signature_threshold: 1,
                 },
                 sorafs_appeal_finance_settlement: SorafsAppealFinanceSettlement {
                     submitter_signers: [],
@@ -1284,10 +1326,12 @@ fn minimal_config_snapshot() {
                 fsync_interval: 50ms,
             },
             sumeragi: Sumeragi {
+                protocol_version: 2,
+                round_timeout: 10s,
                 role: Validator,
                 consensus_mode: Permissioned,
                 mode_flip: SumeragiModeFlip {
-                    enabled: true,
+                    enabled: false,
                 },
                 collectors: SumeragiCollectors {
                     k: 1,
@@ -1295,11 +1339,15 @@ fn minimal_config_snapshot() {
                     parallel_topology_fanout: 1,
                 },
                 block: SumeragiBlock {
-                    max_transactions: None,
+                    max_transactions: Some(
+                        512,
+                    ),
                     max_ivm_transactions: None,
                     fast_finality_max_transactions: None,
                     fast_gas_limit_per_block: None,
-                    max_payload_bytes: None,
+                    max_payload_bytes: Some(
+                        16777216,
+                    ),
                     proposal_queue_scan_multiplier: 4,
                 },
                 queues: SumeragiQueues {
@@ -1354,7 +1402,7 @@ fn minimal_config_snapshot() {
                     max_factor_bps: 20000,
                 },
                 resilience: SumeragiResilience {
-                    enabled: true,
+                    enabled: false,
                     profile: Balanced,
                     max_redundant_send_r: 13,
                     max_parallel_topology_fanout: 8,
@@ -1501,7 +1549,7 @@ fn minimal_config_snapshot() {
                         slashing_delay_blocks: 259200,
                     },
                     epoch_length_blocks: 3600,
-                    use_stake_snapshot_roster: false,
+                    use_stake_snapshot_roster: true,
                 },
                 adaptive_observability: AdaptiveObservability {
                     enabled: false,
@@ -3027,6 +3075,16 @@ fn sumeragi_rejects_zero_rbc_payload_chunks_per_tick() {
 }
 
 #[test]
+fn sumeragi_v2_round_timeout_requires_exact_one_fifth_interval() {
+    let result = load_config_from_fixtures("bad.sumeragi_round_timeout_not_divisible.toml");
+    let report = result.expect_err("non-divisible round timeout must be rejected");
+    assert_contains!(
+        format!("{report:?}"),
+        "sumeragi.round_timeout_ms must be exactly divisible by 5",
+    );
+}
+
+#[test]
 fn nexus_lane_relay_emergency_requires_nexus_enabled() {
     use iroha_config::parameters::user::{LaneRelayEmergency, Nexus};
     use iroha_config_base::util::Emitter;
@@ -4085,6 +4143,14 @@ fn sorafs_telemetry_unknown_field_rejected() {
     );
 }
 
+#[test]
+fn sorafs_site_binding_zero_entry_limit_is_rejected() {
+    assert!(
+        load_config_from_fixtures("bad.sorafs_site_bindings_zero_sites.toml").is_err(),
+        "site binding entry limits must remain non-zero"
+    );
+}
+
 /// Aims the purpose of checking that every single provided env variable is consumed and parsed
 /// into a valid config.
 #[test]
@@ -4143,6 +4209,11 @@ fn full_config_parses_fine() {
             "vendor_reserved".to_string()
         ]
     );
+    assert_eq!(
+        sorafs.replay_checkpoint_path,
+        PathBuf::from("sorafs_discovery/test-provider-advert-replay.to")
+    );
+    assert_eq!(sorafs.replay_checkpoint_max_entries.get(), 4_096);
     let admission = sorafs
         .admission
         .as_ref()
@@ -4151,10 +4222,19 @@ fn full_config_parses_fine() {
         admission.envelopes_dir,
         PathBuf::from("tests/fixtures/sorafs_admission")
     );
+    assert_eq!(admission.trusted_council_keys.len(), 1);
+    assert_eq!(admission.signature_threshold.get(), 1);
 
     let alias_policy = cfg.torii.sorafs_alias_cache;
     assert_eq!(alias_policy.positive_ttl.as_secs(), 600);
     assert_eq!(alias_policy.refresh_window.as_secs(), 120);
+    let site_bindings = &cfg.torii.sorafs_gateway.site_bindings;
+    assert_eq!(
+        site_bindings.path,
+        Some(PathBuf::from("site-bindings/test.json"))
+    );
+    assert_eq!(site_bindings.max_bytes.get(), 4_096);
+    assert_eq!(site_bindings.max_sites.get(), 7);
     let storage = &cfg.torii.sorafs_storage;
     assert!(storage.enabled, "torii.sorafs.storage.enabled not parsed");
     assert_eq!(storage.data_dir, PathBuf::from("./storage/sorafs"));
@@ -4285,8 +4365,15 @@ fn taira_config_enables_untrusted_cid_hosting() {
         block
             .get("max_ivm_transactions")
             .and_then(TomlValue::as_integer),
-        Some(32),
-        "Taira profile should cap IVM-heavy proposal size"
+        None,
+        "Sumeragi v2 profiles must not use the retired IVM transaction-count cap"
+    );
+    assert_eq!(
+        block
+            .get("max_payload_bytes")
+            .and_then(TomlValue::as_integer),
+        Some(16 * 1024 * 1024),
+        "Taira profile should cap proposal payload bytes"
     );
     assert_eq!(
         block
@@ -4863,13 +4950,53 @@ fn torii_transport_trusted_proxy_cidrs_default_to_empty() {
 #[test]
 fn sumeragi_timeout_defaults_target_one_second() {
     use defaults::sumeragi::npos;
+    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
+    use iroha_config_base::read::ConfigReader;
 
+    assert_eq!(defaults::sumeragi::PROTOCOL_VERSION, 2);
+    assert_eq!(defaults::sumeragi::ROUND_TIMEOUT_MS, 10_000);
+    assert_eq!(defaults::sumeragi::RETRANSMIT_DIVISOR, 5);
+    assert_eq!(
+        defaults::sumeragi::BLOCK_MAX_TRANSACTIONS.map(NonZeroUsize::get),
+        Some(512),
+    );
+    assert_eq!(
+        defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES.map(NonZeroUsize::get),
+        Some(16 * 1024 * 1024),
+    );
+    assert!(!defaults::sumeragi::RESILIENCE_ENABLED);
+    assert!(defaults::sumeragi::USE_STAKE_SNAPSHOT_ROSTER);
     assert_eq!(npos::BLOCK_TIME_MS, 1_000);
     assert_eq!(npos::TIMEOUT_PROPOSE_MS, 350);
     assert_eq!(npos::TIMEOUT_PREVOTE_MS, 450);
     assert_eq!(npos::TIMEOUT_PRECOMMIT_MS, 550);
     assert_eq!(npos::TIMEOUT_COMMIT_MS, 850);
     assert_eq!(npos::TIMEOUT_DA_MS, 750);
+
+    let cfg: Actual = ConfigReader::new()
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<User>()
+        .expect("user config")
+        .parse()
+        .expect("actual config");
+    assert_eq!(cfg.sumeragi.protocol_version, 2);
+    assert_eq!(cfg.sumeragi.round_timeout, Duration::from_secs(10));
+    assert_eq!(cfg.sumeragi.retransmit_interval(), Duration::from_secs(2));
+    assert_eq!(
+        cfg.sumeragi.block.max_transactions.map(NonZeroUsize::get),
+        Some(512),
+    );
+    assert_eq!(
+        cfg.sumeragi.block.max_payload_bytes.map(NonZeroUsize::get),
+        Some(16 * 1024 * 1024),
+    );
+    cfg.sumeragi
+        .v2_config(
+            Duration::from_secs(1),
+            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+        )
+        .expect("default parsed configuration must satisfy the v2 contract");
 }
 // type alias used through fixtures for newer error-stack API
 type Result<T, E> = core::result::Result<T, Report<E>>;

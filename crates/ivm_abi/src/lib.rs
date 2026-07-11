@@ -14,6 +14,7 @@ pub mod instruction;
 pub mod json;
 pub mod list;
 pub mod metadata;
+pub mod numeric;
 pub mod pointer_abi;
 pub mod state_value;
 pub mod sum;

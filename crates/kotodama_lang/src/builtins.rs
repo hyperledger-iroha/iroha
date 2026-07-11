@@ -1787,6 +1787,8 @@ impl Builtin {
             | Self::SoracloudReadConfig
             | Self::SoracloudReadSecretEnvelope => BuiltinAccess::Dynamic,
             Self::GetPrivateInput
+            | Self::CommitOutput
+            | Self::SetExecutionDepth
             | Self::DebugPrint
             | Self::DebugLog
             | Self::Info
@@ -2875,6 +2877,14 @@ mod tests {
             Builtin::GetPrivateInput.syscall(),
             Some(ivm_abi::syscalls::SYSCALL_GET_PRIVATE_INPUT)
         );
+    }
+
+    #[test]
+    fn vm_local_host_operations_do_not_claim_ledger_access() {
+        for builtin in [Builtin::CommitOutput, Builtin::SetExecutionDepth] {
+            assert_eq!(builtin.effects(), BuiltinEffects::HOST, "{builtin:?}");
+            assert_eq!(builtin.spec().access, BuiltinAccess::None, "{builtin:?}");
+        }
     }
 
     #[test]

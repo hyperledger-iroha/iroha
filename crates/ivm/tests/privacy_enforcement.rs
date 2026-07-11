@@ -2,10 +2,15 @@
 
 mod common;
 
+use std::{any::Any, cell::Cell};
+
 use iroha_crypto::Hash;
 use ivm::{
-    IVM, Instruction, Memory, ProgramMetadata, VMError, encoding, host::DefaultHost, instruction,
-    pedersen_commit_truncated, pointer_abi::PointerType, syscalls,
+    IVM, Instruction, Memory, ProgramMetadata, VMError, encoding,
+    host::{DefaultHost, IVMHost},
+    instruction, pedersen_commit_truncated,
+    pointer_abi::PointerType,
+    syscalls,
 };
 
 fn meta_with_mode(mode: u8) -> ProgramMetadata {
@@ -35,6 +40,35 @@ fn scall(number: u32) -> u32 {
         instruction::wide::system::SCALL,
         u8::try_from(number).expect("test syscall fits compact SCALL"),
     )
+}
+
+fn blob_tlv(payload: &[u8]) -> Vec<u8> {
+    let mut envelope = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
+    envelope.extend_from_slice(&(PointerType::Blob as u16).to_be_bytes());
+    envelope.push(1);
+    envelope.extend_from_slice(
+        &u32::try_from(payload.len())
+            .expect("test TLV payload fits u32")
+            .to_be_bytes(),
+    );
+    envelope.extend_from_slice(payload);
+    let hash: [u8; Hash::LENGTH] = Hash::new(payload).into();
+    envelope.extend_from_slice(&hash);
+    envelope
+}
+
+fn mark_one_private_stack_byte(vm: &mut IVM, address: u64) {
+    vm.set_register(1, address);
+    vm.set_register(2, 0xA5A5_A5A5_A5A5_A5A5);
+    vm.registers.set_tag(2, true);
+    vm.execute_instruction(Instruction::Store {
+        rs: 2,
+        addr_reg: 1,
+        offset: 0,
+    })
+    .expect("store private stack word");
+    vm.store_bytes(address + 1, &[0; 7])
+        .expect("leave exactly one private byte");
 }
 
 #[test]
@@ -723,22 +757,99 @@ fn private_stack_envelope_cannot_be_published_through_a_public_pointer() {
 }
 
 #[test]
+fn megabyte_public_tlv_privacy_preflight_checks_ranges_before_gas_debit() {
+    struct ExpensivePrepareHost {
+        prepares: Cell<u32>,
+        calls: Cell<u32>,
+    }
+
+    impl IVMHost for ExpensivePrepareHost {
+        fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+            self.prepares.set(self.prepares.get() + 1);
+            Ok(1_000_000)
+        }
+
+        fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+            self.calls.set(self.calls.get() + 1);
+            Ok(1_000_000)
+        }
+
+        fn as_any(&mut self) -> &mut dyn Any
+        where
+            Self: 'static,
+        {
+            self
+        }
+    }
+
+    let run = |private_byte_offset: Option<usize>| {
+        let program = raw_zk_program(&[scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV)]);
+        let mut vm = IVM::new(64);
+        vm.load_program(&program).expect("load low-gas ZK syscall");
+        let envelope = blob_tlv(&vec![0x5A; 1024 * 1024]);
+        let pointer = Memory::STACK_START;
+        vm.store_bytes(pointer, &envelope)
+            .expect("store one-megabyte public stack TLV");
+        if let Some(offset) = private_byte_offset {
+            mark_one_private_stack_byte(
+                &mut vm,
+                pointer + u64::try_from(offset).expect("offset fits u64"),
+            );
+        }
+        vm.set_register(10, pointer);
+        let mut host = ExpensivePrepareHost {
+            prepares: Cell::new(0),
+            calls: Cell::new(0),
+        };
+        let result = vm.run_with_host(&mut host);
+        (
+            result,
+            host.prepares.get(),
+            host.calls.get(),
+            envelope.len(),
+        )
+    };
+
+    let (public_result, public_prepares, public_calls, envelope_len) = run(None);
+    assert_eq!(public_result, Err(VMError::OutOfGas));
+    assert_eq!(public_prepares, 1);
+    assert_eq!(public_calls, 0);
+
+    let (unrelated_result, unrelated_prepares, unrelated_calls, _) = run(Some(envelope_len));
+    assert_eq!(unrelated_result, Err(VMError::OutOfGas));
+    assert_eq!(unrelated_prepares, 1);
+    assert_eq!(unrelated_calls, 0);
+
+    let overlapping_offset = 7 + 512 * 1024;
+    let (overlap_result, overlap_prepares, overlap_calls, _) = run(Some(overlapping_offset));
+    assert_eq!(overlap_result, Err(VMError::PrivacyViolation));
+    assert_eq!(overlap_prepares, 0);
+    assert_eq!(overlap_calls, 0);
+}
+
+#[test]
 fn private_store_outside_the_stack_is_rejected() {
-    let program = raw_zk_program(&[
-        encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 10, 0, 0),
-        scall(syscalls::SYSCALL_GET_PRIVATE_INPUT),
-        encoding::wide::encode_store(instruction::wide::memory::STORE64, 1, 10, 0),
-    ]);
-    let mut vm = IVM::new(10_000);
-    vm.set_host(DefaultHost::with_private_inputs(vec![42]));
-    vm.load_program(&program).unwrap();
-    vm.set_register(1, Memory::OUTPUT_START);
+    for address in [
+        Memory::HEAP_START,
+        Memory::INPUT_START,
+        Memory::OUTPUT_START,
+    ] {
+        let program = raw_zk_program(&[
+            encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 10, 0, 0),
+            scall(syscalls::SYSCALL_GET_PRIVATE_INPUT),
+            encoding::wide::encode_store(instruction::wide::memory::STORE64, 1, 10, 0),
+        ]);
+        let mut vm = IVM::new(10_000);
+        vm.set_host(DefaultHost::with_private_inputs(vec![42]));
+        vm.load_program(&program).unwrap();
+        vm.set_register(1, address);
 
-    let error = vm
-        .run()
-        .expect_err("private output and heap stores must trap");
+        let error = vm
+            .run()
+            .expect_err("private stores outside the stack must trap");
 
-    assert!(matches!(error, VMError::PrivacyViolation));
+        assert!(matches!(error, VMError::PrivacyViolation));
+    }
 }
 
 #[test]
@@ -765,6 +876,58 @@ fn partial_public_overwrite_does_not_declassify_a_private_stack_word() {
         .expect_err("mixed-visibility words must trap");
 
     assert!(matches!(error, VMError::PrivacyViolation));
+}
+
+#[test]
+fn complete_public_overwrite_clears_private_stack_range() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_zk_mode(true);
+    vm.set_register(1, Memory::STACK_START);
+    vm.set_register(2, 0xCAFE_BABE_DEAD_BEEF);
+    vm.registers.set_tag(2, true);
+    vm.execute_instruction(Instruction::Store {
+        rs: 2,
+        addr_reg: 1,
+        offset: 0,
+    })
+    .unwrap();
+
+    vm.store_u64(Memory::STACK_START, 7).unwrap();
+    vm.execute_instruction(Instruction::Load {
+        rd: 3,
+        addr_reg: 1,
+        offset: 0,
+    })
+    .expect("complete public overwrite declassifies the whole word");
+
+    assert_eq!(vm.register(3), 7);
+    assert!(!vm.registers.tag(3));
+}
+
+#[test]
+fn execution_proof_commit_preserves_private_stack_ranges() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_zk_mode(true);
+    vm.set_register(1, Memory::STACK_START);
+    vm.set_register(2, 0xCAFE_BABE_DEAD_BEEF);
+    vm.registers.set_tag(2, true);
+    vm.execute_instruction(Instruction::Store {
+        rs: 2,
+        addr_reg: 1,
+        offset: 0,
+    })
+    .unwrap();
+
+    let _proof = vm.execution_proof();
+    vm.execute_instruction(Instruction::Load {
+        rd: 3,
+        addr_reg: 1,
+        offset: 0,
+    })
+    .expect("proof commitment must not discard privacy metadata");
+
+    assert_eq!(vm.register(3), 0xCAFE_BABE_DEAD_BEEF);
+    assert!(vm.registers.tag(3));
 }
 
 #[test]

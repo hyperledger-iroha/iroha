@@ -31,8 +31,8 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_ROOT = ROOT / "fixtures" / "sccp" / "release_evidence_v1"
 FIXTURE_EVIDENCE = FIXTURE_ROOT / "evidence.json"
 FIXTURE_POLICY = FIXTURE_ROOT / "test-trust-policy.json"
-FIXTURE_RELEASE_ID = "sccp-v1-typed-fixture-20260710"
-FIXTURE_POLICY_ID = "sccp-v1-fixture-policy-20260710"
+FIXTURE_RELEASE_ID = "sccp-v1-typed-fixture-20260711"
+FIXTURE_POLICY_ID = "sccp-v1-fixture-policy-20260711"
 FIXTURE_ROLE_IDS = ("fixture-release-engineering", "fixture-release-security")
 FIXTURE_ATTESTOR_IDS = (
     "fixture-ethereum-mainnet-state-attestor",

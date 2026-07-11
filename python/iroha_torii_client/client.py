@@ -53,6 +53,7 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 import requests
 
+from .norito_frame import validate_norito_frame
 from .sccp import (
     SccpBridgeSubmitResponse,
     SccpCapabilities,
@@ -86,106 +87,6 @@ _SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME = "iroha_sccp::TairaSccpMessageProofV1"
 _SCCP_PROOF_REQUEST_NORITO_TYPE_NAME = (
     "iroha_sccp::SccpGroth16Bn254ProofRequestV1"
 )
-_NORITO_HEADER_BYTES = 40
-_NORITO_MAX_HEADER_PADDING_BYTES = 64
-_NORITO_COMPACT_LEN_FLAG = 0x02
-_NORITO_PACKED_STRUCT_FLAG = 0x04
-_NORITO_FIELD_BITSET_FLAG = 0x20
-_NORITO_SUPPORTED_FLAGS_MASK = (
-    0x01
-    | _NORITO_COMPACT_LEN_FLAG
-    | _NORITO_PACKED_STRUCT_FLAG
-    | _NORITO_FIELD_BITSET_FLAG
-)
-_NORITO_CRC64_MASK = 0xFFFF_FFFF_FFFF_FFFF
-_NORITO_CRC64_REFLECTED_POLY = 0xC96C_5795_D787_0F42
-
-
-def _build_norito_crc64_table() -> Tuple[int, ...]:
-    table: List[int] = []
-    for value in range(256):
-        crc = value
-        for _ in range(8):
-            crc = (
-                (crc >> 1) ^ _NORITO_CRC64_REFLECTED_POLY
-                if crc & 1
-                else crc >> 1
-            )
-        table.append(crc)
-    return tuple(table)
-
-
-_NORITO_CRC64_TABLE = _build_norito_crc64_table()
-
-
-def _norito_crc64_xz(payload: bytes) -> int:
-    crc = _NORITO_CRC64_MASK
-    for byte in payload:
-        crc = _NORITO_CRC64_TABLE[(crc ^ byte) & 0xFF] ^ (crc >> 8)
-    return (crc ^ _NORITO_CRC64_MASK) & _NORITO_CRC64_MASK
-
-
-def _norito_schema_hash_for_type_name(type_name: str) -> bytes:
-    return hashlib.sha256(
-        b"norito:v1:type-name\0" + type_name.encode("utf-8")
-    ).digest()[:16]
-
-
-def _validate_sccp_norito_frame(
-    body: bytes, *, context: str, expected_type_name: str
-) -> None:
-    """Preflight one opaque SCCP response as a canonical uncompressed Norito frame."""
-
-    if len(body) < _NORITO_HEADER_BYTES:
-        raise ValueError(
-            f"{context} is shorter than the {_NORITO_HEADER_BYTES}-byte Norito header"
-        )
-    if body[:4] != b"NRT0":
-        raise ValueError(f"{context} is not an NRT0 frame")
-    major, minor = body[4], body[5]
-    if major != 0 or minor != 0:
-        raise ValueError(f"{context} uses unsupported NRT0 version {major}.{minor}")
-
-    schema_hash = body[6:22]
-    if schema_hash == b"\0" * 16:
-        raise ValueError(f"{context} uses the reserved all-zero schema hash")
-    expected_schema_hash = _norito_schema_hash_for_type_name(expected_type_name)
-    if schema_hash != expected_schema_hash:
-        raise ValueError(f"{context} schema hash did not match the expected type")
-    if body[22] != 0:
-        raise ValueError(f"{context} must use uncompressed Norito payload encoding")
-
-    payload_length = int.from_bytes(body[23:31], "little")
-    if payload_length == 0:
-        raise ValueError(f"{context} must contain a non-empty Norito payload")
-    expected_checksum = int.from_bytes(body[31:39], "little")
-    flags = body[39]
-    if flags & ~_NORITO_SUPPORTED_FLAGS_MASK:
-        raise ValueError(f"{context} uses unsupported Norito header flags 0x{flags:02x}")
-    required_bitset_flags = _NORITO_PACKED_STRUCT_FLAG | _NORITO_COMPACT_LEN_FLAG
-    if (
-        flags & _NORITO_FIELD_BITSET_FLAG
-        and flags & required_bitset_flags != required_bitset_flags
-    ):
-        raise ValueError(f"{context} uses an invalid Norito header flag combination")
-
-    padding_length = len(body) - _NORITO_HEADER_BYTES - payload_length
-    if padding_length < 0:
-        raise ValueError(f"{context} payload length exceeds the available frame bytes")
-    if padding_length > _NORITO_MAX_HEADER_PADDING_BYTES:
-        raise ValueError(
-            f"{context} exceeds the {_NORITO_MAX_HEADER_PADDING_BYTES}-byte "
-            "Norito header-padding bound"
-        )
-    payload_start = _NORITO_HEADER_BYTES + padding_length
-    if any(body[_NORITO_HEADER_BYTES:payload_start]):
-        raise ValueError(f"{context} contains non-zero alignment padding or trailing bytes")
-    payload_end = payload_start + payload_length
-    payload = body[payload_start:payload_end]
-    if len(payload) != payload_length or payload_end != len(body):
-        raise ValueError(f"{context} contains trailing bytes outside the declared payload")
-    if _norito_crc64_xz(payload) != expected_checksum:
-        raise ValueError(f"{context} CRC64 mismatch")
 
 
 BASE58_ALPHABET = tuple("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
@@ -4531,10 +4432,11 @@ class ToriiClient:
             body = _read_bounded_sccp_response_body(
                 response, maximum_body_bytes, context
             )
-            _validate_sccp_norito_frame(
+            validate_norito_frame(
                 body,
                 context=f"{context} response",
                 expected_type_name=expected_norito_type_name,
+                expected_padding_length=0,
             )
             return body
         if re.fullmatch(r"application/json(?:\s*;.*)?", content_type, re.IGNORECASE) is None:

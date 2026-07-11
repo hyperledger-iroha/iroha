@@ -32,7 +32,7 @@ import {
   generateDaProofSummary,
   emitDaProofSummaryArtifact,
 } from "./dataAvailability.js";
-import { sorafsGatewayFetch } from "./sorafs.js";
+import { normaliseGatewayProvider, sorafsGatewayFetch } from "./sorafs.js";
 import { buildPacs008Message, buildPacs009Message } from "./isoBridge.js";
 import { looksLikeIban, normalizeIban } from "./identifiers.js";
 import {
@@ -68,8 +68,10 @@ import {
   parseSccpJsonObject,
   parseSccpBridgeSubmitResponseJson,
 } from "./sccp.js";
+import { snapshotValidationFeePolicyVerificationContext } from "./validationFeePolicy.js";
 
 const DEFAULT_PAGE_SIZE = 100;
+const VALIDATION_FEE_VERIFICATION_CONTEXTS = new WeakMap();
 
 const DEFAULT_SUCCESS_STATUSES = ["Approved", "Committed", "Applied"];
 const DEFAULT_FAILURE_STATUSES = ["Rejected", "Expired"];
@@ -1116,6 +1118,10 @@ function sortJsonForErrorMessage(value) {
  * @property {number | null | undefined} [retry]
  * @property {string | null} raw
  */
+export function getTrustedValidationFeeVerificationContext(client) {
+  return VALIDATION_FEE_VERIFICATION_CONTEXTS.get(client) ?? null;
+}
+
 export class ToriiClient {
   /**
    * @param {string} baseUrl Base Torii URL (e.g. http://localhost:8080).
@@ -1138,6 +1144,7 @@ export class ToriiClient {
  * @param {object} [options.sorafsAliasPolicy] Override SoraFS alias cache TTLs (seconds).
  * @param {(warning: {alias: string | null, evaluation: {state: string | null, statusLabel: string | null, rotationDue: boolean, ageSeconds: number | null, generatedAtUnix: number | null, expiresAtUnix: number | null, expiresInSeconds: number | null, servable: boolean}}) => void} [options.onSorafsAliasWarning]
  * @param {(manifest: Buffer, payload: Buffer, options: Record<string, unknown>) => unknown} [options.generateDaProofSummary] Custom proof summary generator (tests).
+ * @param {object} [options.validationFeeVerificationContext] Immutable, out-of-band validation-fee trust anchor.
  * @param {object} [options.__nativeBinding] Custom native binding (tests).
  */
   constructor(baseUrl, options = {}) {
@@ -1164,6 +1171,16 @@ export class ToriiClient {
       );
     }
     this._nativeBinding = opts.__nativeBinding;
+    const validationFeeVerificationContext =
+      opts.validationFeeVerificationContext === undefined
+        ? null
+        : snapshotValidationFeePolicyVerificationContext(
+            opts.validationFeeVerificationContext,
+          );
+    VALIDATION_FEE_VERIFICATION_CONTEXTS.set(
+      this,
+      validationFeeVerificationContext,
+    );
     if (
       opts.sorafsGatewayFetch !== undefined &&
       typeof opts.sorafsGatewayFetch !== "function"
@@ -1205,6 +1222,7 @@ export class ToriiClient {
     delete overrides.onSorafsAliasWarning;
     delete overrides.sorafsGatewayFetch;
     delete overrides.generateDaProofSummary;
+    delete overrides.validationFeeVerificationContext;
     delete overrides.__nativeBinding;
     this._config = resolveToriiClientConfig({
       config: opts.config,
@@ -8135,6 +8153,186 @@ export class ToriiClient {
       throw new Error("contract call endpoint returned no payload");
     }
     return normalizeContractCallResponse(body);
+  }
+
+  /**
+   * Execute a deployed contract call against the current state without submitting it
+   * (`POST /v1/contracts/call/simulate`).
+   * @param {object} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async simulateContractCall(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "simulateContractCall");
+    const payload = normalizeContractCallSimulateRequest(request);
+    const response = await this._request("POST", "/v1/contracts/call/simulate", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("contract call simulation endpoint returned no payload");
+    }
+    return normalizeContractCallSimulateResponse(body);
+  }
+
+  /**
+   * Derive the node-authoritative `IvmProved` payload for one ZK-mode IVM
+   * execution (`POST /v1/zk/ivm/derive`).
+   * @param {object} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<{proved: object}>}
+   */
+  async deriveIvmProved(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "deriveIvmProved");
+    const payload = normalizeZkIvmExecutionRequest(request, {
+      context: "deriveIvmProved",
+      includeProved: false,
+    });
+    const response = await this._request("POST", "/v1/zk/ivm/derive", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("IVM derive endpoint returned no payload");
+    }
+    return normalizeZkIvmDeriveResponse(body);
+  }
+
+  /**
+   * Start an asynchronous proof job for a ZK-mode IVM execution
+   * (`POST /v1/zk/ivm/prove`). When `proved` is supplied, the node rejects the
+   * job unless its independently derived payload is identical.
+   * @param {object} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<{job_id: string}>}
+   */
+  async startIvmProve(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "startIvmProve");
+    const payload = normalizeZkIvmExecutionRequest(request, {
+      context: "startIvmProve",
+      includeProved: true,
+    });
+    const response = await this._request("POST", "/v1/zk/ivm/prove", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200, 202]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("IVM prove endpoint returned no payload");
+    }
+    return normalizeZkIvmProveJobCreatedResponse(body);
+  }
+
+  /**
+   * Read an asynchronous IVM proof job (`GET /v1/zk/ivm/prove/{job_id}`).
+   * @param {string} jobId
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async getIvmProveJob(jobId, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "getIvmProveJob");
+    const normalizedJobId = normalizeIvmProveJobId(jobId, "jobId");
+    const response = await this._request(
+      "GET",
+      `/v1/zk/ivm/prove/${encodeURIComponent(normalizedJobId)}`,
+      {
+        headers: { Accept: "application/json" },
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("IVM prove job endpoint returned no payload");
+    }
+    return normalizeZkIvmProveJobResponse(body);
+  }
+
+  /**
+   * Poll an IVM proof job until it returns the proved payload and attachment.
+   * @param {string} jobId
+   * @param {{signal?: AbortSignal, intervalMs?: number, timeoutMs?: number|null}} [options]
+   * @returns {Promise<object>}
+   */
+  async waitForIvmProveJob(jobId, options = {}) {
+    const record = ensureRecord(options, "waitForIvmProveJob options");
+    const signal = record.signal;
+    const intervalMs =
+      record.intervalMs === undefined
+        ? 1_000
+        : ToriiClient._normalizeUnsignedInteger(
+            record.intervalMs,
+            "waitForIvmProveJob.intervalMs",
+            { allowZero: true },
+          );
+    const timeoutMs =
+      record.timeoutMs === undefined
+        ? 60_000
+        : record.timeoutMs === null
+          ? null
+          : ToriiClient._normalizeUnsignedInteger(
+              record.timeoutMs,
+              "waitForIvmProveJob.timeoutMs",
+              { allowZero: true },
+            );
+    const deadline = timeoutMs === null ? Number.POSITIVE_INFINITY : Date.now() + timeoutMs;
+    const normalizedJobId = normalizeIvmProveJobId(jobId, "jobId");
+
+    for (;;) {
+      throwIfAborted(signal);
+      const job = await this.getIvmProveJob(normalizedJobId, { signal });
+      if (job.status === "done") {
+        if (!job.proved || !job.attachment) {
+          throw new Error(`IVM prove job ${normalizedJobId} completed without proved payload and attachment`);
+        }
+        return job;
+      }
+      if (job.status === "error") {
+        throw new Error(
+          `IVM prove job ${normalizedJobId} failed: ${job.error ?? "unknown prover error"}`,
+        );
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`timed out waiting for IVM prove job ${normalizedJobId}`);
+      }
+      if (intervalMs > 0) {
+        await delay(intervalMs, signal);
+      }
+    }
+  }
+
+  /**
+   * Start and await one IVM proof job.
+   * @param {object} request
+   * @param {{signal?: AbortSignal, intervalMs?: number, timeoutMs?: number|null}} [options]
+   * @returns {Promise<object>}
+   */
+  async proveIvmAndWait(request = {}, options = {}) {
+    const record = ensureRecord(options, "proveIvmAndWait options");
+    const { signal, intervalMs, timeoutMs } = record;
+    const created = await this.startIvmProve(request, { signal });
+    return this.waitForIvmProveJob(created.job_id, {
+      signal,
+      ...(intervalMs === undefined ? {} : { intervalMs }),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    });
   }
 
   /**
@@ -18853,10 +19051,10 @@ function normalizeManifestValueKind(value, context) {
   const kind = requireNonEmptyString(record.kind, `${context}.kind`);
   const allowed = new Set([
     "Int",
-    "U128",
+    "Decimal",
+    "Quantity",
     "Bool",
     "String",
-    "Amount",
     "Json",
     "Name",
     "AccountId",
@@ -21045,6 +21243,230 @@ function normalizeContractCallResponse(payload) {
     "contractCall response.operation_receipt",
   );
   return normalized;
+}
+
+function normalizeContractCallSimulateRequest(input) {
+  const record = ensureRecord(input, "contractCall simulation request");
+  const normalized = {
+    authority: ToriiClient._normalizeAccountId(
+      record.authority,
+      "contractCall simulation.authority",
+    ),
+    ...normalizeContractTargetSelector(record, "contractCall simulation"),
+  };
+  if (record.entrypoint !== undefined && record.entrypoint !== null) {
+    normalized.entrypoint = requireNonEmptyString(
+      record.entrypoint,
+      "contractCall simulation.entrypoint",
+    );
+  }
+  if (record.payload !== undefined) {
+    normalized.payload = cloneJsonValue(
+      record.payload,
+      "contractCall simulation.payload",
+    );
+  }
+  const gasAsset = record.gas_asset_id ?? record.gasAssetId;
+  if (gasAsset !== undefined && gasAsset !== null) {
+    normalized.gas_asset_id = ToriiClient._normalizeAssetId(
+      gasAsset,
+      "contractCall simulation.gasAssetId",
+    );
+  }
+  const feeSponsor = record.fee_sponsor ?? record.feeSponsor;
+  if (feeSponsor !== undefined && feeSponsor !== null) {
+    normalized.fee_sponsor = ToriiClient._normalizeAccountId(
+      feeSponsor,
+      "contractCall simulation.feeSponsor",
+    );
+  }
+  normalized.gas_limit = ToriiClient._normalizeUnsignedInteger(
+    record.gas_limit ?? record.gasLimit,
+    "contractCall simulation.gasLimit",
+    { allowZero: false },
+  );
+  return normalized;
+}
+
+function normalizeContractCallSimulateResponse(payload) {
+  const record = ensureRecord(payload, "contractCall simulation response");
+  const normalized = {
+    ok: Boolean(record.ok),
+    dataspace: requireNonEmptyString(
+      record.dataspace,
+      "contractCall simulation response.dataspace",
+    ),
+    contract_address:
+      record.contract_address === undefined || record.contract_address === null
+        ? null
+        : requireNonEmptyString(
+            record.contract_address,
+            "contractCall simulation response.contract_address",
+          ),
+    code_hash_hex: normalizeHex32String(
+      record.code_hash_hex,
+      "contractCall simulation response.code_hash_hex",
+    ),
+    abi_hash_hex: normalizeHex32String(
+      record.abi_hash_hex,
+      "contractCall simulation response.abi_hash_hex",
+    ),
+    entrypoint: requireNonEmptyString(
+      record.entrypoint,
+      "contractCall simulation response.entrypoint",
+    ),
+    normalized_payload:
+      record.normalized_payload === undefined || record.normalized_payload === null
+        ? null
+        : cloneJsonValue(
+            record.normalized_payload,
+            "contractCall simulation response.normalized_payload",
+          ),
+    gas_limit: ToriiClient._normalizeUnsignedInteger(
+      record.gas_limit,
+      "contractCall simulation response.gas_limit",
+      { allowZero: false },
+    ),
+    gas_used: ToriiClient._normalizeUnsignedInteger(
+      record.gas_used,
+      "contractCall simulation response.gas_used",
+      { allowZero: true },
+    ),
+    queued_instructions: Array.isArray(record.queued_instructions)
+      ? record.queued_instructions.map((instruction, index) =>
+          cloneJsonValue(
+            instruction,
+            `contractCall simulation response.queued_instructions[${index}]`,
+          ),
+        )
+      : (() => {
+          throw new TypeError(
+            "contractCall simulation response.queued_instructions must be an array",
+          );
+        })(),
+    result:
+      record.result === undefined || record.result === null
+        ? null
+        : cloneJsonValue(record.result, "contractCall simulation response.result"),
+    error:
+      record.error === undefined || record.error === null
+        ? null
+        : requireNonEmptyString(
+            record.error,
+            "contractCall simulation response.error",
+          ),
+    vm_diagnostic:
+      record.vm_diagnostic === undefined || record.vm_diagnostic === null
+        ? null
+        : cloneJsonValue(
+            record.vm_diagnostic,
+            "contractCall simulation response.vm_diagnostic",
+          ),
+  };
+  return normalized;
+}
+
+function normalizeZkIvmExecutionRequest(input, { context, includeProved }) {
+  const record = ensureRecord(input, `${context} request`);
+  const vkRef = record.vk_ref ?? record.vkRef;
+  const metadata = record.metadata ?? {};
+  const normalized = {
+    vk_ref: normalizeVerifyingKeyId(vkRef, `${context}.vk_ref`),
+    authority: ToriiClient._normalizeAccountId(
+      record.authority,
+      `${context}.authority`,
+    ),
+    metadata: cloneJsonValue(
+      ensureRecord(metadata, `${context}.metadata`),
+      `${context}.metadata`,
+    ),
+    bytecode: normalizeRequiredBase64Payload(
+      record.bytecode,
+      `${context}.bytecode`,
+    ),
+  };
+  if (includeProved) {
+    const proved = record.proved;
+    if (proved !== undefined && proved !== null) {
+      normalized.proved = cloneJsonValue(
+        ensureRecord(proved, `${context}.proved`),
+        `${context}.proved`,
+      );
+    }
+  }
+  return normalized;
+}
+
+function normalizeZkIvmDeriveResponse(payload) {
+  const record = ensureRecord(payload, "IVM derive response");
+  return {
+    proved: cloneJsonValue(
+      ensureRecord(record.proved, "IVM derive response.proved"),
+      "IVM derive response.proved",
+    ),
+  };
+}
+
+function normalizeIvmProveJobId(value, context) {
+  const normalized = requireNonEmptyString(value, context);
+  if (!/^[0-9a-fA-F]{32}$/u.test(normalized)) {
+    throw new TypeError(`${context} must be a 16-byte hexadecimal IVM prove job id`);
+  }
+  return normalized.toLowerCase();
+}
+
+function normalizeZkIvmProveJobCreatedResponse(payload) {
+  const record = ensureRecord(payload, "IVM prove job response");
+  return {
+    job_id: normalizeIvmProveJobId(
+      record.job_id,
+      "IVM prove job response.job_id",
+    ),
+  };
+}
+
+function normalizeZkIvmProveJobResponse(payload) {
+  const record = ensureRecord(payload, "IVM prove job status response");
+  const status = requireNonEmptyString(
+    record.status,
+    "IVM prove job status response.status",
+  ).toLowerCase();
+  if (!new Set(["pending", "running", "done", "error"]).has(status)) {
+    throw new TypeError(
+      "IVM prove job status response.status must be pending, running, done, or error",
+    );
+  }
+  return {
+    job_id: normalizeIvmProveJobId(
+      record.job_id,
+      "IVM prove job status response.job_id",
+    ),
+    status,
+    error:
+      record.error === undefined || record.error === null
+        ? null
+        : requireNonEmptyString(
+            record.error,
+            "IVM prove job status response.error",
+          ),
+    proved:
+      record.proved === undefined || record.proved === null
+        ? null
+        : cloneJsonValue(
+            ensureRecord(record.proved, "IVM prove job status response.proved"),
+            "IVM prove job status response.proved",
+          ),
+    attachment:
+      record.attachment === undefined || record.attachment === null
+        ? null
+        : cloneJsonValue(
+            ensureRecord(
+              record.attachment,
+              "IVM prove job status response.attachment",
+            ),
+            "IVM prove job status response.attachment",
+          ),
+  };
 }
 
 function normalizeMultisigAccountSelector(input, context) {
@@ -25907,36 +26329,33 @@ function normalizeDaGatewayProviders(value, context) {
   }
   return value.map((entry, index) => {
     const record = ensureRecord(entry, `${context}[${index}]`);
-    const name = requireNonEmptyString(
-      record.name,
-      `${context}[${index}].name`,
-    ).trim();
-    const providerIdHex = normalizeHex32String(
-      record.providerIdHex ??
+    const native = normaliseGatewayProvider({
+      name: record.name,
+      providerIdHex:
+        record.providerIdHex ??
         record.provider_id_hex ??
         record.providerId ??
         record.provider_id,
-      `${context}[${index}].providerIdHex`,
-    );
-    const baseUrl = requireNonEmptyString(
-      record.baseUrl,
-      `${context}[${index}].baseUrl`,
-    );
-    const streamTokenB64 = normalizeBase64Token(
-      record.streamTokenB64 ??
+      gatewayPublicKeyHex:
+        record.gatewayPublicKeyHex ??
+        record.gateway_public_key_hex ??
+        record.gatewayPublicKey ??
+        record.gateway_public_key,
+      baseUrl: record.baseUrl,
+      streamTokenB64:
+        record.streamTokenB64 ??
         record.stream_token_b64 ??
         record.streamToken ??
         record.stream_token,
-      `${context}[${index}].streamTokenB64`,
-    );
-    const privacyEventsUrl =
-      record.privacyEventsUrl ?? null;
+      privacyEventsUrl: record.privacyEventsUrl ?? record.privacy_events_url,
+    });
     return {
-      name,
-      providerIdHex,
-      baseUrl,
-      streamTokenB64,
-      privacyEventsUrl: privacyEventsUrl ?? null,
+      name: native.name,
+      providerIdHex: native.provider_id_hex,
+      gatewayPublicKeyHex: native.gateway_public_key_hex,
+      baseUrl: native.base_url,
+      streamTokenB64: native.stream_token_b64,
+      privacyEventsUrl: native.privacy_events_url ?? null,
     };
   });
 }
@@ -27233,6 +27652,7 @@ async function readSccpNoritoResponse(
   validateNoritoFrame(body, {
     context: `${label} response`,
     expectedTypeName,
+    expectedPaddingLength: 0,
     requireNonEmptyPayload: true,
   });
   return body;

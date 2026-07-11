@@ -11,13 +11,13 @@ use std::num::NonZeroUsize;
 use iroha_config::parameters::{
     actual::{
         LaneProfile, Network as Config, RelayMode, SoranetHandshake as ActualSoranetHandshake,
-        SoranetPrivacy, SoranetVpn,
+        SoranetPow, SoranetPrivacy, SoranetVpn,
     },
     defaults::network::{PEER_GOSSIP_PERIOD, RELAY_TTL},
 };
 use iroha_config_base::WithOrigin;
 use iroha_crypto::KeyPair;
-use iroha_data_model::prelude::ChainId;
+use iroha_data_model::prelude::{ChainId, PeerId};
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_p2p::{
     ConfidentialFeatureDigest, ConfidentialHandshakeCaps, ConsensusConfigCaps,
@@ -39,6 +39,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Dummy {
 
 fn sample_consensus_config_caps() -> ConsensusConfigCaps {
     ConsensusConfigCaps {
+        nexus_policy_digest: [0xA5; 32],
+        v2_config_fingerprint: [0xC3; 32],
         collectors_k: 1,
         redundant_send_r: iroha_config::parameters::defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
         da_enabled: true,
@@ -54,14 +56,41 @@ fn sample_consensus_config_caps() -> ConsensusConfigCaps {
     }
 }
 
+#[test]
+fn consensus_config_caps_wire_roundtrip_preserves_admission_digests() {
+    let expected = sample_consensus_config_caps();
+    let encoded = expected.encode();
+    let mut cursor = encoded.as_slice();
+    let decoded = ConsensusConfigCaps::decode(&mut cursor).expect("decode consensus config caps");
+
+    assert!(
+        cursor.is_empty(),
+        "decoder must consume the complete caps wire payload"
+    );
+    assert_eq!(decoded, expected);
+    assert_eq!(decoded.nexus_policy_digest, [0xA5; 32]);
+    assert_eq!(decoded.v2_config_fingerprint, [0xC3; 32]);
+}
+
 fn cfg(addr: iroha_primitives::addr::SocketAddr) -> Config {
+    // Consensus-capability tests must not spend their handshake budget on the
+    // independent SoraNet admission puzzle; dedicated puzzle tests cover it.
+    let soranet_handshake = ActualSoranetHandshake {
+        pow: SoranetPow {
+            required: false,
+            puzzle: None,
+            ..SoranetPow::default()
+        },
+        ..ActualSoranetHandshake::default()
+    };
+
     Config {
         address: WithOrigin::inline(addr.clone()),
         public_address: WithOrigin::inline(addr),
         relay_mode: RelayMode::Disabled,
         relay_hub_addresses: Vec::new(),
         relay_ttl: RELAY_TTL,
-        soranet_handshake: ActualSoranetHandshake::default(),
+        soranet_handshake,
         soranet_privacy: SoranetPrivacy::default(),
         soranet_vpn: SoranetVpn::default(),
         lane_profile: LaneProfile::Core,
@@ -185,6 +214,34 @@ fn cfg(addr: iroha_primitives::addr::SocketAddr) -> Config {
     }
 }
 
+const MATCH_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const MISMATCH_OBSERVATION: Duration = Duration::from_secs(1);
+
+async fn assert_peer_connects(network: &NetworkHandle<Dummy>, expected: &PeerId) {
+    let mut online = network.online_peers_receiver();
+    tokio::time::timeout(
+        MATCH_CONNECT_TIMEOUT,
+        online.wait_for(|peers| peers.iter().any(|peer| peer.id() == expected)),
+    )
+    .await
+    .expect("matching peer did not connect before the deadline")
+    .expect("online peers channel closed while waiting for a matching peer");
+}
+
+async fn assert_peer_stays_offline(network: &NetworkHandle<Dummy>, forbidden: &PeerId) {
+    let mut online = network.online_peers_receiver();
+    match tokio::time::timeout(
+        MISMATCH_OBSERVATION,
+        online.wait_for(|peers| peers.iter().any(|peer| peer.id() == forbidden)),
+    )
+    .await
+    {
+        Err(_) => {}
+        Ok(Ok(_)) => panic!("mismatched peer entered the online set"),
+        Ok(Err(error)) => panic!("online peers channel closed unexpectedly: {error}"),
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn consensus_caps_match_connects() {
     let chain = ChainId::from("caps-test");
@@ -195,13 +252,13 @@ async fn consensus_caps_match_connects() {
     let config_caps = sample_consensus_config_caps();
 
     let caps = ConsensusHandshakeCaps {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
-        proto_version: 1,
+        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
+        proto_version: 2,
         consensus_fingerprint: [1u8; 32],
         config: config_caps.clone(),
     };
 
-    let (mut net1, _ch1) = match NetworkHandle::<Dummy>::start(
+    let (net1, _ch1) = match NetworkHandle::<Dummy>::start(
         kp1.clone(),
         cfg(addr1.clone()),
         Some(chain.clone()),
@@ -232,12 +289,7 @@ async fn consensus_caps_match_connects() {
     net1.update_topology(UpdateTopology([p2.id().clone()].into_iter().collect()));
     net1.update_peers_addresses(UpdatePeers(vec![(p2.id().clone(), addr2.clone())]));
 
-    // Wait a bit; in constrained env this may not connect, but test still compiles
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    let _ = net1
-        .wait_online_peers_update(std::collections::HashSet::len)
-        .await
-        .expect("online peers channel closed");
+    assert_peer_connects(&net1, p2.id()).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -250,14 +302,14 @@ async fn consensus_caps_mismatch_rejected() {
     let config_caps = sample_consensus_config_caps();
 
     let caps_ok = ConsensusHandshakeCaps {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
-        proto_version: 1,
+        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
+        proto_version: 2,
         consensus_fingerprint: [2u8; 32],
         config: config_caps.clone(),
     };
     let caps_bad = ConsensusHandshakeCaps {
-        mode_tag: "iroha2-consensus::npos-sumeragi@v1".to_string(), // mismatch
-        proto_version: 1,
+        mode_tag: "iroha2-consensus::npos-sumeragi@v2".to_string(), // mismatch
+        proto_version: 2,
         consensus_fingerprint: [2u8; 32],
         config: config_caps,
     };
@@ -293,13 +345,7 @@ async fn consensus_caps_mismatch_rejected() {
     net1.update_topology(UpdateTopology([p2.id().clone()].into_iter().collect()));
     net1.update_peers_addresses(UpdatePeers(vec![(p2.id().clone(), addr2.clone())]));
 
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    let online = net1.online_peers(std::collections::HashSet::len);
-    // Either zero or still zero in constrained env; mismatch must not establish a connection.
-    assert!(
-        online == 0 || online == 1,
-        "env-dependent; mismatch must not connect"
-    );
+    assert_peer_stays_offline(&net1, p2.id()).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -312,17 +358,17 @@ async fn consensus_config_caps_mismatch_rejected() {
 
     let config_caps = sample_consensus_config_caps();
     let mut mismatched = config_caps.clone();
-    mismatched.collectors_k = 2;
+    mismatched.v2_config_fingerprint = [0xD4; 32];
 
     let caps_ok = ConsensusHandshakeCaps {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
-        proto_version: 1,
+        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
+        proto_version: 2,
         consensus_fingerprint: [3u8; 32],
         config: config_caps,
     };
     let caps_bad = ConsensusHandshakeCaps {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
-        proto_version: 1,
+        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
+        proto_version: 2,
         consensus_fingerprint: [3u8; 32],
         config: mismatched,
     };
@@ -358,12 +404,7 @@ async fn consensus_config_caps_mismatch_rejected() {
     net1.update_topology(UpdateTopology([p2.id().clone()].into_iter().collect()));
     net1.update_peers_addresses(UpdatePeers(vec![(p2.id().clone(), addr2.clone())]));
 
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    let online = net1.online_peers(std::collections::HashSet::len);
-    assert!(
-        online == 0 || online == 1,
-        "env-dependent; mismatch must not connect"
-    );
+    assert_peer_stays_offline(&net1, p2.id()).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -389,7 +430,7 @@ async fn confidential_caps_match_connects() {
         features: features.clone(),
     };
 
-    let (mut net1, _ch1) = match NetworkHandle::<Dummy>::start(
+    let (net1, _ch1) = match NetworkHandle::<Dummy>::start(
         kp1.clone(),
         cfg(addr1.clone()),
         Some(chain.clone()),
@@ -420,11 +461,7 @@ async fn confidential_caps_match_connects() {
     net1.update_topology(UpdateTopology([p2.id().clone()].into_iter().collect()));
     net1.update_peers_addresses(UpdatePeers(vec![(p2.id().clone(), addr2.clone())]));
 
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    let _ = net1
-        .wait_online_peers_update(std::collections::HashSet::len)
-        .await
-        .expect("online peers channel closed");
+    assert_peer_connects(&net1, p2.id()).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -487,12 +524,7 @@ async fn confidential_caps_mismatch_rejected() {
     net1.update_topology(UpdateTopology([p2.id().clone()].into_iter().collect()));
     net1.update_peers_addresses(UpdatePeers(vec![(p2.id().clone(), addr2.clone())]));
 
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    let online = net1.online_peers(std::collections::HashSet::len);
-    assert!(
-        online == 0 || online == 1,
-        "env-dependent; confidential mismatch must not connect"
-    );
+    assert_peer_stays_offline(&net1, p2.id()).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -555,12 +587,7 @@ async fn confidential_caps_backend_mismatch_rejected() {
     net1.update_topology(UpdateTopology([p2.id().clone()].into_iter().collect()));
     net1.update_peers_addresses(UpdatePeers(vec![(p2.id().clone(), addr2.clone())]));
 
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    let online = net1.online_peers(std::collections::HashSet::len);
-    assert!(
-        online == 0 || online == 1,
-        "env-dependent; confidential backend mismatch must not connect"
-    );
+    assert_peer_stays_offline(&net1, p2.id()).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -630,12 +657,7 @@ async fn confidential_caps_features_mismatch_rejected() {
     net1.update_topology(UpdateTopology([p2.id().clone()].into_iter().collect()));
     net1.update_peers_addresses(UpdatePeers(vec![(p2.id().clone(), addr2.clone())]));
 
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    let online = net1.online_peers(std::collections::HashSet::len);
-    assert!(
-        online == 0 || online == 1,
-        "env-dependent; confidential feature mismatch must not connect"
-    );
+    assert_peer_stays_offline(&net1, p2.id()).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -800,7 +822,7 @@ async fn crypto_caps_match_connects() {
         require_sm_openssl_preview_match: true,
     };
 
-    let (mut net1, _ch1) = match NetworkHandle::<Dummy>::start_with_crypto(
+    let (net1, _ch1) = match NetworkHandle::<Dummy>::start_with_crypto(
         kp1.clone(),
         cfg(addr1.clone()),
         Some(chain.clone()),
@@ -833,11 +855,7 @@ async fn crypto_caps_match_connects() {
     net1.update_topology(UpdateTopology([p2.id().clone()].into_iter().collect()));
     net1.update_peers_addresses(UpdatePeers(vec![(p2.id().clone(), addr2.clone())]));
 
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    let _ = net1
-        .wait_online_peers_update(std::collections::HashSet::len)
-        .await
-        .expect("online peers channel closed");
+    assert_peer_connects(&net1, p2.id()).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -894,12 +912,7 @@ async fn crypto_caps_mismatch_rejected() {
     net1.update_topology(UpdateTopology([p2.id().clone()].into_iter().collect()));
     net1.update_peers_addresses(UpdatePeers(vec![(p2.id().clone(), addr2.clone())]));
 
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    let online = net1.online_peers(std::collections::HashSet::len);
-    assert!(
-        online == 0 || online == 1,
-        "env-dependent; crypto mismatch must not connect"
-    );
+    assert_peer_stays_offline(&net1, p2.id()).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -923,7 +936,7 @@ async fn crypto_caps_mismatch_allowed_when_permissive() {
         require_sm_openssl_preview_match: false,
     };
 
-    let (mut net1, _ch1) = match NetworkHandle::<Dummy>::start_with_crypto(
+    let (net1, _ch1) = match NetworkHandle::<Dummy>::start_with_crypto(
         kp1.clone(),
         cfg(addr1.clone()),
         Some(chain.clone()),
@@ -956,18 +969,5 @@ async fn crypto_caps_mismatch_allowed_when_permissive() {
     net1.update_topology(UpdateTopology([p2.id().clone()].into_iter().collect()));
     net1.update_peers_addresses(UpdatePeers(vec![(p2.id().clone(), addr2.clone())]));
 
-    let online = tokio::time::timeout(Duration::from_millis(1_500), async {
-        loop {
-            let online = net1
-                .wait_online_peers_update(std::collections::HashSet::len)
-                .await
-                .expect("online peers channel closed");
-            if online >= 1 {
-                break online;
-            }
-        }
-    })
-    .await
-    .expect("permissive configuration should allow mismatched peers to connect");
-    assert!(online >= 1);
+    assert_peer_connects(&net1, p2.id()).await;
 }

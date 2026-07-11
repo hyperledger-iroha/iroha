@@ -378,6 +378,32 @@ export function signOrderbookPayload(kind, bytes, privateKey) {
   throw new Error("Native binding returned a non-buffer orderbook signing payload");
 }
 
+/**
+ * Derive the canonical V1 orderbook order id from owner-account bytes and nonce.
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} ownerAccount
+ * @param {number | bigint | string} nonce
+ * @returns {Buffer}
+ */
+export function deriveOrderbookOrderId(ownerAccount, nonce) {
+  const owner = toBuffer(ownerAccount);
+  if (owner.length === 0) {
+    throw new RangeError("ownerAccount must not be empty");
+  }
+  const canonicalNonce = decimalIntegerString(nonce, "nonce", { positive: true });
+  const binding = requireSorafsNativeFunction(
+    "sorafsDeriveOrderbookOrderId",
+    "orderbook order id derivation",
+  );
+  const orderId = requireSignedBuilderBuffer(
+    binding.sorafsDeriveOrderbookOrderId(owner, canonicalNonce),
+    "orderbook order id derivation",
+  );
+  if (orderId.length !== 32) {
+    throw new Error("Native binding returned a non-32-byte orderbook order id");
+  }
+  return orderId;
+}
+
 function requireSignedBuilderBuffer(value, context) {
   if (Buffer.isBuffer(value)) {
     return value;
@@ -404,13 +430,29 @@ export function buildSignedOrderbookOrderRequest(fields, privateKey) {
     { positive: true },
   );
   const remainingValue = optionalField(fields, "remainingGib", "remaining_gib");
+  const ownerAccount = bytesField(fields, "ownerAccount", "ownerAccount", "owner_account");
+  const nonce = decimalIntegerString(
+    requiredField(fields, "nonce", "nonce"),
+    "nonce",
+    { positive: true },
+  );
+  const orderId = deriveOrderbookOrderId(ownerAccount, nonce);
+  const suppliedOrderId = optionalField(fields, "orderId", "order_id");
+  if (suppliedOrderId !== undefined) {
+    const supplied = toBuffer(suppliedOrderId);
+    if (supplied.length !== 32 || !supplied.equals(orderId)) {
+      throw new RangeError(
+        `orderId must equal the canonical owner-and-nonce derivation ${orderId.toString("hex")}`,
+      );
+    }
+  }
   const binding = requireSorafsNativeFunction(
     "sorafsBuildSignedOrderbookOrderRequest",
     "orderbook order request builder",
   );
   return requireSignedBuilderBuffer(
     binding.sorafsBuildSignedOrderbookOrderRequest(
-      fixedBytesField(fields, "orderId", "orderId", "order_id"),
+      orderId,
       String(requiredField(fields, "side", "side")),
       String(requiredField(fields, "tier", "tier")),
       decimalIntegerString(
@@ -427,17 +469,13 @@ export function buildSignedOrderbookOrderRequest(fields, privateKey) {
       remainingValue === undefined
         ? undefined
         : decimalIntegerString(remainingValue, "remainingGib", { positive: true }),
-      bytesField(fields, "ownerAccount", "ownerAccount", "owner_account"),
+      ownerAccount,
       decimalIntegerString(
         requiredField(fields, "expiryUnix", "expiryUnix", "expiry_unix"),
         "expiryUnix",
         { positive: true },
       ),
-      decimalIntegerString(
-        requiredField(fields, "nonce", "nonce"),
-        "nonce",
-        { positive: true },
-      ),
+      nonce,
       normalizeOrderbookFeeBps(
         requiredField(fields, "makerFeeBps", "makerFeeBps", "maker_fee_bps"),
         "makerFeeBps",
@@ -804,6 +842,168 @@ function normalizeBase64PayloadMaybeUrl(value, label) {
   }
 }
 
+function requireCanonicalGatewayHex32(value, label) {
+  if (
+    typeof value !== "string" ||
+    value.length !== 64 ||
+    !/^[0-9a-f]{64}$/.test(value) ||
+    /^0{64}$/.test(value)
+  ) {
+    throw new TypeError(`${label} must be non-zero canonical lowercase 32-byte hex`);
+  }
+  return value;
+}
+
+function requireCanonicalGatewayToken(value, label) {
+  if (
+    typeof value !== "string" ||
+    value.trim() !== value ||
+    value.length === 0 ||
+    Buffer.byteLength(value, "utf8") > 4 * 1024
+  ) {
+    throw new TypeError(`${label} must be exact canonical standard base64`);
+  }
+  let canonical;
+  try {
+    canonical = normalizeBase64Payload(value, label);
+  } catch (error) {
+    throw new TypeError(`${label} must be exact canonical standard base64`, {
+      cause: error,
+    });
+  }
+  if (canonical !== value) {
+    throw new TypeError(`${label} must be exact canonical standard base64`);
+  }
+  if (Buffer.from(value, "base64").length > 2 * 1024) {
+    throw new TypeError(`${label} must be exact canonical standard base64`);
+  }
+  return value;
+}
+
+function parseCanonicalIpv4(host) {
+  if (!/^[0-9.]+$/.test(host)) {
+    return null;
+  }
+  const parts = host.split(".");
+  if (
+    parts.length !== 4 ||
+    parts.some(
+      (part) =>
+        part.length === 0 ||
+        (part.length > 1 && part.startsWith("0")) ||
+        !/^\d+$/.test(part) ||
+        Number(part) > 255,
+    )
+  ) {
+    return [];
+  }
+  return parts.map(Number);
+}
+
+function parseCanonicalIpv6(host) {
+  const literal = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+  if (!literal.includes(":") || literal.includes("%") || literal.includes(".")) {
+    return null;
+  }
+  const halves = literal.split("::");
+  if (halves.length > 2) {
+    return [];
+  }
+  const parseHalf = (half) => {
+    if (half === "") return [];
+    const parts = half.split(":");
+    if (parts.some((part) => !/^[0-9a-fA-F]{1,4}$/.test(part))) return null;
+    return parts.map((part) => Number.parseInt(part, 16));
+  };
+  const left = parseHalf(halves[0]);
+  const right = parseHalf(halves.length === 2 ? halves[1] : "");
+  if (left === null || right === null) return [];
+  if (halves.length === 1) return left.length === 8 ? left : [];
+  const missing = 8 - left.length - right.length;
+  if (missing < 1) return [];
+  return [...left, ...Array(missing).fill(0), ...right];
+}
+
+function isPublicGatewayLiteral(host) {
+  const ipv4 = parseCanonicalIpv4(host);
+  if (ipv4 !== null) {
+    if (ipv4.length !== 4) return false;
+    const [first, second, third, fourth] = ipv4;
+    return !(
+      first === 0 ||
+      first === 10 ||
+      first === 127 ||
+      first >= 224 ||
+      (first === 100 && second >= 64 && second <= 127) ||
+      (first === 169 && second === 254) ||
+      (first === 172 && second >= 16 && second <= 31) ||
+      (first === 192 && second === 0 && third === 0) ||
+      (first === 192 && second === 0 && third === 2) ||
+      (first === 192 && second === 88 && third === 99) ||
+      (first === 192 && second === 168) ||
+      (first === 198 && (second === 18 || second === 19)) ||
+      (first === 198 && second === 51 && third === 100) ||
+      (first === 203 && second === 0 && third === 113) ||
+      (first === 255 && second === 255 && third === 255 && fourth === 255)
+    );
+  }
+  const ipv6 = parseCanonicalIpv6(host);
+  if (ipv6 === null) return true;
+  if (ipv6.length !== 8) return false;
+  const [first, second] = ipv6;
+  const globalUnicast = (first & 0xe000) === 0x2000;
+  const documentation =
+    (first === 0x2001 && second === 0x0db8) ||
+    (first === 0x3fff && (second & 0xf000) === 0);
+  const specialPurpose = first === 0x2001 && second <= 0x01ff;
+  return globalUnicast && !documentation && !specialPurpose && first !== 0x2002;
+}
+
+function requireCanonicalGatewayUrl(value, label, expectedPath) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > 2_048 ||
+    value.trim() !== value ||
+    /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    throw new TypeError(`${label} must be an exact canonical HTTPS URL`);
+  }
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch (error) {
+    throw new TypeError(`${label} must be an exact canonical HTTPS URL`, { cause: error });
+  }
+  const expected =
+    expectedPath === "/"
+      ? value === parsed.origin || value === `${parsed.origin}/`
+      : value === `${parsed.origin}${expectedPath}`;
+  const hostname = parsed.hostname.toLowerCase();
+  const privateDnsName =
+    hostname === "localhost" ||
+    hostname.endsWith(".localhost") ||
+    hostname.endsWith(".local") ||
+    hostname.endsWith(".internal") ||
+    hostname.endsWith(".lan") ||
+    hostname.endsWith(".") ||
+    hostname.length > 253;
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username !== "" ||
+    parsed.password !== "" ||
+    parsed.port !== "" ||
+    parsed.search !== "" ||
+    parsed.hash !== "" ||
+    !expected ||
+    privateDnsName ||
+    !isPublicGatewayLiteral(parsed.hostname)
+  ) {
+    throw new TypeError(`${label} must be an exact public HTTPS origin${expectedPath}`);
+  }
+  return value;
+}
+
 function assertPositiveIntegerLike(value, label) {
   if (typeof value === "bigint") {
     if (value <= 0n) {
@@ -944,32 +1144,44 @@ function toSafeNumber(value) {
   return value;
 }
 
-function normaliseGatewayProvider(spec) {
+export function normaliseGatewayProvider(spec) {
   if (spec == null || typeof spec !== "object") {
     throw new TypeError("provider specification must be an object");
   }
-  const name = assertNonEmptyString(spec.name, "provider.name");
-  const providerIdHex = assertNonEmptyString(spec.providerIdHex, "provider.providerIdHex");
-  const normalizedProviderId =
-    providerIdHex.startsWith("0x") || providerIdHex.startsWith("0X")
-      ? providerIdHex.slice(2)
-      : providerIdHex;
-  if (normalizedProviderId.length !== 64 || !/^[0-9a-fA-F]+$/.test(normalizedProviderId)) {
-    throw new TypeError("provider.providerIdHex must be a 32-byte hex string");
+  const name = spec.name;
+  if (
+    typeof name !== "string" ||
+    Buffer.byteLength(name, "utf8") > 128 ||
+    !/^[0-9A-Za-z._:-]+$/.test(name)
+  ) {
+    throw new TypeError("provider.name must be canonical ASCII and at most 128 bytes");
   }
-  const baseUrl = assertNonEmptyString(spec.baseUrl, "provider.baseUrl");
-  const streamTokenB64 = normalizeBase64PayloadMaybeUrl(
+  const providerIdHex = requireCanonicalGatewayHex32(
+    spec.providerIdHex,
+    "provider.providerIdHex",
+  );
+  const gatewayPublicKeyHex = requireCanonicalGatewayHex32(
+    spec.gatewayPublicKeyHex,
+    "provider.gatewayPublicKeyHex",
+  );
+  const baseUrl = requireCanonicalGatewayUrl(spec.baseUrl, "provider.baseUrl", "/");
+  const streamTokenB64 = requireCanonicalGatewayToken(
     spec.streamTokenB64,
     "provider.streamTokenB64",
   );
   const native = {
     name,
-    provider_id_hex: normalizedProviderId.toLowerCase(),
+    provider_id_hex: providerIdHex,
+    gateway_public_key_hex: gatewayPublicKeyHex,
     base_url: baseUrl,
     stream_token_b64: streamTokenB64,
   };
-  if (typeof spec.privacyEventsUrl === "string" && spec.privacyEventsUrl.trim() !== "") {
-    native.privacy_events_url = spec.privacyEventsUrl.trim();
+  if (spec.privacyEventsUrl !== undefined && spec.privacyEventsUrl !== null) {
+    native.privacy_events_url = requireCanonicalGatewayUrl(
+      spec.privacyEventsUrl,
+      "provider.privacyEventsUrl",
+      "/privacy/events",
+    );
   }
   return native;
 }
@@ -1530,6 +1742,9 @@ export function sorafsGatewayFetch(
   }
   if (!Array.isArray(providers) || providers.length === 0) {
     throw new TypeError("providers must be a non-empty array");
+  }
+  if (providers.length > 256) {
+    throw new TypeError("providers must contain at most 256 entries");
   }
   const nativeProviders = providers.map(normaliseGatewayProvider);
   const uniqueProviderCount = new Set(

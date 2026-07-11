@@ -123,10 +123,11 @@ evidence.
 
 ## SCCP V1 release follow-ups
 
-The current first-release scope is exactly SORA Taira chain
-`809574f5-fee7-5e69-bfcf-52451e42d50f` (canonical I105 discriminant `369`,
+The current first-release scope is exactly the public SORA Taira Sumeragi-v2 chain
+`fc56984b-2be7-431d-840e-21514d1883f0` (canonical I105 discriminant `369`,
 `0x0171`) paired with Ethereum mainnet, BNB Smart Chain mainnet, and TRON
-mainnet. Testnet variants exist for exact integration testing; Nexus, Solana,
+mainnet. The archived pre-v2 Taira chain is not a settlement target. Testnet
+variants exist for exact integration testing; Nexus, Solana,
 TON, generic backends, arbitrary assets, and compatibility manifests are not
 SCCP V1 launch work.
 
@@ -140,19 +141,26 @@ caller-route-selected HTTP DTOs, and transparent SCCP proof paths are retired.
 Bridge admission accepts only the two closed SCCP proof variants, whose payloads
 own their typed route-configuration binding; generic ICS and transparent-ZK
 payloads cannot impersonate SCCP. Native BLS-dependent finality fails closed in
-builds without BLS support. Torii submission is a two-state detached-signing
+every build because SCCP has no BLS feature switch or no-verification fallback.
+Torii submission is a two-state detached-signing
 flow: preparation omits both signature and transaction payload, while direct
 submission supplies both plus a positive creation time.
 
-Remaining work is final integrated validation and external release evidence:
-finish the clean cross-workspace test matrix (the focused Swift, Kotlin/JVM,
-and Java Android detached-submit suites are complete); obtain two independent
-audits and reproducible semantic-circuit/prover artifacts for each production
-profile; deploy and authenticate exact source and destination material; apply
-the governed routes; complete bidirectional value-moving canaries; and publish
-a signed bundle accepted by the Rust release validator. Signal-binding
-fixtures, proof-controlled rosters, unavailable lanes, and synthetic receipts
-cannot satisfy those gates.
+The code-side semantic release gate is complete: production evidence must carry
+the closed seven-role content-addressed artifact set per profile, two
+independently signed canonical reports over the same exact eleven-signal honest
+proof claim, and an authenticated Rust receipt that re-derives the governed
+claim and verifies the BN254 pairing. Every SDK submission path also binds the
+exact endpoint schema with zero Norito header padding.
+
+Remaining work is final integrated validation and externally produced release
+evidence: finish the clean cross-workspace test matrix; obtain the independent
+audits and reproducible production artifacts required by the implemented gate;
+deploy and authenticate exact source and destination material; apply the
+governed routes; complete bidirectional value-moving canaries; and publish a
+signed bundle accepted by the Rust release validator. Signal-binding fixtures,
+proof-controlled rosters, unavailable lanes, synthetic receipts, and
+self-authored substitute audits cannot satisfy those gates.
 
 ### Superseded SCCP work log
 
@@ -7429,12 +7437,20 @@ redistributable schemas, and official trust/revocation bundles.
 
 ## Cross-dataspace AMX follow-ups
 
-- Add a multi-peer integration corridor that proves native AMX receipts emitted
-  by the universal coordinator survive block relay, Sumeragi status export, and
-  downstream audit consumption.
-- Extend SDK/OpenAPI convenience models for lane settlement commitments so
-  native AMX receipt legs are first-class in client responses instead of only
-  available through generic commitment decoding.
+- Completed 2026-07-10: the four-peer native AMX routing and restart corridors
+  now require every peer to converge on the exact receipt identity, phases,
+  participant legs, validator sets, signer bitmaps, and BLS signatures in the
+  committed block, typed Sumeragi status, and verified lane relay. The
+  downstream relay audit recomputes settlement hashes and rejects adversarial
+  source, route, height, leg, digest, phase, bitmap, and signature mutations.
+- Completed 2026-07-10: Python and Swift now expose strict first-class Nexus fee
+  and native AMX phase/body/QC/leg/receipt models for lane commitments and relay
+  envelopes. Their parsers fail closed on malformed or internally inconsistent
+  evidence, while Torii uses one canonical JSON shape for status and relays and
+  OpenAPI declares exact required fields, versions, enums, array constraints,
+  hash literals, bitmaps, and 96-byte BLS signatures. The Rust client already
+  preserves these fields through its typed Norito status model; Kotlin, Java,
+  and Mochi currently expose no Sumeragi settlement DTO surface to mirror.
 - If future coordinator execution supports partial prepare failure inside a
   batch, extend `NativeAmxReceipt` with explicit abort evidence. Finalized
   receipts currently represent only successfully committed native AMX batches.

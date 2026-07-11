@@ -26,7 +26,9 @@ class SorafsReferenceValidatorsTest {
         assertEquals(1, SorafsOrderbookSide.BID.bridgeCode)
         assertEquals(3, SorafsOrderbookTier.ARCHIVE.bridgeCode)
         assertEquals(4, SorafsOrderbookCancelReason.REPLACED.bridgeCode)
-        assertEquals(12, SorafsReferenceValidators.REQUIRED_BRIDGE_ABI_VERSION)
+        assertEquals(16, SorafsReferenceValidators.REQUIRED_BRIDGE_ABI_VERSION)
+        assertTrue(!SorafsReferenceValidators.isBridgeAbiSupported(15))
+        assertTrue(SorafsReferenceValidators.isBridgeAbiSupported(16))
     }
 
     @Test
@@ -76,6 +78,19 @@ class SorafsReferenceValidatorsTest {
             )
         }
         assertTrue(error.message.orEmpty().contains("privateKey"))
+    }
+
+    @Test
+    fun rejectsInvalidOrderIdDerivationInputsBeforeNativeDispatch() {
+        val emptyOwner = assertThrows(IllegalArgumentException::class.java) {
+            SorafsReferenceValidators.deriveOrderbookOrderId(ByteArray(0), 7)
+        }
+        assertTrue(emptyOwner.message.orEmpty().contains("ownerAccount"))
+
+        val zeroNonce = assertThrows(IllegalArgumentException::class.java) {
+            SorafsReferenceValidators.deriveOrderbookOrderId(byteArrayOf(1), 0)
+        }
+        assertTrue(zeroNonce.message.orEmpty().contains("nonce"))
     }
 
     @Test
@@ -145,6 +160,61 @@ class SorafsReferenceValidatorsTest {
         assertTrue(!signed.contentEquals(payload))
     }
 
+    @Test
+    fun derivesCanonicalOrderIdAndRejectsExplicitMismatchWhenNativeBridgeIsAvailable() {
+        assumeTrue(SorafsReferenceValidators.isNativeAvailable(), "connect_norito_bridge not available")
+        val owner = "buyer@sora".toByteArray(Charsets.UTF_8)
+        val orderId = SorafsReferenceValidators.deriveOrderbookOrderId(owner, 7)
+        assertEquals(
+            "9d91ad7700ca0c4762e031f9231aa38dd4502c6048c6ffa31d365e3c4e080b69",
+            orderId.toHex(),
+        )
+        assertTrue(!orderId.contentEquals(SorafsReferenceValidators.deriveOrderbookOrderId(owner, 8)))
+        assertTrue(
+            !orderId.contentEquals(
+                SorafsReferenceValidators.deriveOrderbookOrderId(
+                    "provider@sora".toByteArray(Charsets.UTF_8),
+                    7,
+                ),
+            ),
+        )
+
+        val signed = SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+            side = SorafsOrderbookSide.BID,
+            tier = SorafsOrderbookTier.HOT,
+            pricePerGibMicroXor = "1250000",
+            quantityGib = 64,
+            ownerAccount = owner,
+            expiryUnix = 1_800_000_000,
+            nonce = 7,
+            makerFeeBps = 10,
+            takerFeeBps = 15,
+            privateKey = ByteArray(32) { 0xB7.toByte() },
+        )
+        val outcome = SorafsReferenceValidators.validateOrderbookPayloadJson(
+            SorafsOrderbookPayloadKind.ORDER_REQUEST,
+            signed,
+            generatedAtUnix = 123,
+        )
+        assertTrue(outcome.contains("\"status\": \"Ok\""), outcome)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+                orderId = ByteArray(32) { 0x11.toByte() },
+                side = SorafsOrderbookSide.BID,
+                tier = SorafsOrderbookTier.HOT,
+                pricePerGibMicroXor = "1250000",
+                quantityGib = 64,
+                ownerAccount = owner,
+                expiryUnix = 1_800_000_000,
+                nonce = 7,
+                makerFeeBps = 10,
+                takerFeeBps = 15,
+                privateKey = ByteArray(32) { 0xB7.toByte() },
+            )
+        }
+    }
+
     private fun fixture(vararg parts: String): ByteArray {
         val cwd = Paths.get(System.getProperty("user.dir")).toAbsolutePath()
         val relative = parts.fold(Paths.get("fixtures")) { path, part -> path.resolve(part) }
@@ -156,6 +226,17 @@ class SorafsReferenceValidatorsTest {
         val path = candidates.firstOrNull { Files.exists(it) }
             ?: throw IllegalStateException("missing fixture ${relative.joinToString("/")}")
         return Files.readAllBytes(path.normalizeAbsolute())
+    }
+
+    private fun ByteArray.toHex(): String {
+        val alphabet = "0123456789abcdef"
+        val output = StringBuilder(size * 2)
+        for (byte in this) {
+            val value = byte.toInt() and 0xff
+            output.append(alphabet[value ushr 4])
+            output.append(alphabet[value and 0x0f])
+        }
+        return output.toString()
     }
 
     private fun Path.normalizeAbsolute(): Path = toAbsolutePath().normalize()

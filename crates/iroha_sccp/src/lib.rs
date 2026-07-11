@@ -176,7 +176,7 @@ pub const SCCP_DOMAIN_BSC: u32 = 2;
 /// SCCP protocol domain assigned to TRON networks.
 pub const SCCP_DOMAIN_TRON: u32 = 5;
 /// Public TAIRA chain id bound into TAIRA-origin SCCP finality proofs.
-pub const SCCP_TAIRA_FINALITY_CHAIN_ID_V1: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
+pub const SCCP_TAIRA_FINALITY_CHAIN_ID_V1: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 /// Canonical I105 chain discriminant required for every SCCP Taira account literal.
 pub const SCCP_TAIRA_I105_DISCRIMINANT_V1: u16 =
     iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_TAIRA;
@@ -4766,11 +4766,11 @@ mod tests {
             SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER, SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
             SccpBn254G1PointV1, SccpBn254G2PointV1, SccpDestinationDeploymentV1,
             SccpEvmDestinationDeploymentV1, SccpEvmSourceEmitterV1, SccpGovernedRouteV1,
-            SccpGroth16Bn254IcV1, SccpGroth16Bn254VerifyingKeyV1, SccpLaneIdV1, SccpNetworkV1,
-            SccpOutboundMessageContextV1, SccpRouteActivationV1, SccpSoraSettlementV1,
-            SccpSourceEmitterV1, SccpSourceIdentityV1, SccpTronDestinationDeploymentV1,
-            sccp_exact_tron_xor_route_config_hash_v1, sccp_lane_id_hash_v1,
-            sccp_v1_taira_xor_asset_definition_id,
+            SccpGroth16Bn254IcV1, SccpGroth16Bn254VerifyingKeyV1, SccpInboundFinalityCutoffV1,
+            SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1, SccpRouteActivationV1,
+            SccpSoraSettlementV1, SccpSourceEmitterV1, SccpSourceIdentityV1,
+            SccpTronDestinationDeploymentV1, sccp_exact_tron_xor_route_config_hash_v1,
+            sccp_lane_id_hash_v1, sccp_v1_taira_xor_asset_definition_id,
         },
         proof::ProofBox,
     };
@@ -5448,7 +5448,7 @@ mod tests {
         let hostile_route = governed_route(
             SccpNetworkV1::EthereumSepolia,
             fixture.route.revision,
-            SccpRouteActivationV1::Bidirectional,
+            SccpRouteActivationV1::Staged,
         );
         reset_sccp_destination_proof_work_counters_v1();
 
@@ -5766,7 +5766,7 @@ mod tests {
         .expect("TRON contract route config");
         assert_eq!(
             route_config,
-            hex32("3546ddb81c89ee998e9eaf7a517b6a59346f8dd28a4727de87dac33da4f04c5f")
+            hex32("604815ec629f4d8438f44fccc63ff37ac3a96cd71e23495b86779fd0fe68295f")
         );
 
         let request = &fixture().request;
@@ -5820,6 +5820,10 @@ mod tests {
             ($body:expr) => {{
                 let mut candidate = base.clone();
                 $body(&mut candidate);
+                assert_ne!(
+                    &candidate, base,
+                    "negative mutation must change the fixture"
+                );
                 assert_request_rejected(candidate);
             }};
         }
@@ -5830,7 +5834,7 @@ mod tests {
         );
         reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
             .source_network =
-            SccpNetworkV1::SoraTaira);
+            SccpNetworkV1::EthereumSepolia);
         reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
             .target_network =
             SccpNetworkV1::EthereumSepolia);
@@ -6047,6 +6051,13 @@ mod tests {
         ] {
             let mut historical = fixture.route.clone();
             historical.activation = activation;
+            historical.inbound_finality_cutoff =
+                activation
+                    .is_terminal()
+                    .then_some(SccpInboundFinalityCutoffV1 {
+                        trust_anchor_hash: [0x91; 32],
+                        max_anchor_interval_height: 100,
+                    });
             assert_eq!(
                 build_sccp_groth16_bn254_proof_request_from_governed_route_v1(
                     &fixture.bundle,

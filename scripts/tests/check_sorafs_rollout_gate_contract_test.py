@@ -18217,8 +18217,8 @@ def test_por_live_deployment_and_archive_work_stays_open_in_docs() -> None:
     normalized_validator = re.sub(r"\s+", " ", validator)
 
     required_scheduler_open = (
-        "Remaining SF-9a rollout work is live deployment evidence for external drand, VRF, and auditor feeds, plus any production governance archive handoff required by the operator; each deployment's SQL/Parquet archive backend decision is now part of the checked reporting/archive evidence, and operator-required governance archive handoff evidence must carry a fingerprinted digest.",
-        "The local SF-9 runtime integration is implemented. Remaining rollout work is live deployment evidence for external drand/VRF/auditor feeds and any production governance archive handoff required by the deployment operator.",
+        "The former deterministic randomness adapter fabricated bytes labelled as a drand signature and paired them with an empty VRF source. It has been removed from production wiring. `torii.sorafs_por.enabled = true` now fails startup closed until a configured external drand verifier and provider-VRF feed are implemented; `randomness_seed_hex` is never accepted as authenticated drand.",
+        "The local SF-9 state/report integration is implemented. Challenge generation remains release-blocked until verified external drand/VRF feeds are implemented and configured; live deployment evidence and any production governance archive handoff remain required.",
         "Operators should keep SF-9 promotion fail-closed until the payload-free deployment evidence passes the checked-in gate:",
         "The checker recognizes `sorafs.por.*` SF-9 rollout schemas for randomness, scheduler runtime, validator replay, reporting/archive handoff, observability, and governance approval.",
         "Archive a live drand/VRF/auditor run showing deterministic challenge generation and verdict replay that passes the SF-9 rollout evidence gate",

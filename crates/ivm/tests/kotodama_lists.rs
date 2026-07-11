@@ -4,6 +4,10 @@ use ivm::{IVM, KotodamaCompiler, ProgramMetadata};
 use ivm_abi::{list::ListLayoutV1, sum::SumLayoutV1};
 
 fn run(source: &str) -> IVM {
+    run_with_gas(source).0
+}
+
+fn run_with_gas(source: &str) -> (IVM, u64) {
     let program = KotodamaCompiler::new()
         .compile_source(source)
         .expect("compile bounded List program");
@@ -23,7 +27,36 @@ fn run(source: &str) -> IVM {
     vm.set_program_counter(entrypoint_pc)
         .expect("select main entrypoint");
     vm.run().expect("execute List program");
-    vm
+    let gas_used = u64::MAX.saturating_sub(vm.remaining_gas());
+    (vm, gas_used)
+}
+
+fn run_main_body_with_gas(result_type: &str, body: &str) -> (IVM, u64) {
+    run_with_gas(&format!(
+        r#"
+        seiyaku ListGasContract {{
+            view fn main() -> {result_type} {{
+                {body}
+            }}
+        }}
+        "#
+    ))
+}
+
+fn returned_list_words(vm: &IVM, capacity: u64) -> Vec<u64> {
+    let layout = ListLayoutV1::try_new(capacity, 1).expect("List<i64, N> layout");
+    let base = vm.register(10);
+    (0..layout.allocation_bytes().expect("bounded allocation") / 8)
+        .map(|word| vm.load_u64(base + word * 8).expect("returned List word"))
+        .collect()
+}
+
+fn positive_gas_delta(measured: u64, control: u64, operation: &str) -> u64 {
+    assert!(
+        measured > control,
+        "{operation} must consume gas beyond its matched control: measured={measured}, control={control}"
+    );
+    measured - control
 }
 
 #[test]
@@ -62,6 +95,295 @@ fn comprehension_and_take_execute_as_bounded_copies() {
         }
         "#);
     assert_eq!(vm.register(10), 6);
+}
+
+#[test]
+fn list_gas_grows_with_the_active_element_count_at_fixed_capacity() {
+    let mut samples = Vec::new();
+    for active_len in [1_u64, 4, 8] {
+        let elements = (1..=active_len)
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let source = format!(
+            r#"
+            seiyaku ListGas {{
+                view fn main() -> i64 {{
+                    let source: List<i64, 8> = [{elements}];
+                    let copied: List<i64, 8> = [value for value in source if value > 0];
+                    if copied.contains(99) {{ return -1; }}
+                    copied.len()
+                }}
+            }}
+            "#
+        );
+        let (vm, gas_used) = run_with_gas(&source);
+        assert_eq!(vm.register(10), active_len);
+        samples.push((active_len, gas_used));
+    }
+
+    for pair in samples.windows(2) {
+        assert!(
+            pair[0].1 < pair[1].1,
+            "List gas must grow with active elements at one fixed capacity: {samples:?}"
+        );
+    }
+}
+
+#[test]
+fn get_gas_is_constant_for_present_indices_and_cheaper_for_missing_indices() {
+    let mut samples = Vec::new();
+    for (index, expected) in [(0, 10), (1, 20), (3, 40), (8, 99)] {
+        let (vm, gas) = run_main_body_with_gas(
+            "i64",
+            &format!(
+                r#"
+            let values: List<i64, 8> = [10, 20, 30, 40];
+            return values.get({index}).unwrap_or(99);
+            "#
+            ),
+        );
+        assert_eq!(vm.register(10), expected);
+        samples.push((index, gas));
+    }
+
+    assert_eq!(
+        samples[0].1, samples[1].1,
+        "get must not scan preceding elements"
+    );
+    assert_eq!(
+        samples[1].1, samples[2].1,
+        "get must have constant work for every present index"
+    );
+    assert!(
+        samples[3].1 < samples[0].1,
+        "a missing get must skip payload materialization: {samples:?}"
+    );
+}
+
+#[test]
+fn try_set_gas_and_transactionality_cover_success_and_failure() {
+    let (control, control_gas) = run_main_body_with_gas(
+        "List<i64, 4>",
+        r#"
+        var values: List<i64, 4> = [10, 20];
+        return values;
+        "#,
+    );
+    let control_words = returned_list_words(&control, 4);
+
+    let (success, success_gas) = run_main_body_with_gas(
+        "List<i64, 4>",
+        r#"
+        var values: List<i64, 4> = [10, 20];
+        values.try_set(index: 1, value: 99);
+        return values;
+        "#,
+    );
+    assert_eq!(returned_list_words(&success, 4), [2, 4, 10, 99, 0, 0]);
+
+    let (failure, failure_gas) = run_main_body_with_gas(
+        "List<i64, 4>",
+        r#"
+        var values: List<i64, 4> = [10, 20];
+        values.try_set(index: 8, value: 99);
+        return values;
+        "#,
+    );
+    assert_eq!(
+        returned_list_words(&failure, 4),
+        control_words,
+        "failed try_set must leave the complete allocation unchanged"
+    );
+
+    let success_delta = positive_gas_delta(success_gas, control_gas, "successful try_set");
+    let failure_delta = positive_gas_delta(failure_gas, control_gas, "failed try_set");
+    assert!(
+        failure_delta < success_delta,
+        "failed try_set must skip element writes: success={success_delta}, failure={failure_delta}"
+    );
+}
+
+#[test]
+fn try_push_gas_and_transactionality_cover_space_and_full_capacity() {
+    let (space_control, space_control_gas) = run_main_body_with_gas(
+        "List<i64, 3>",
+        r#"
+        var values: List<i64, 3> = [10, 20];
+        return values;
+        "#,
+    );
+    let (success, success_gas) = run_main_body_with_gas(
+        "List<i64, 3>",
+        r#"
+        var values: List<i64, 3> = [10, 20];
+        values.try_push(30);
+        return values;
+        "#,
+    );
+    assert_eq!(returned_list_words(&success, 3), [3, 3, 10, 20, 30]);
+
+    let (full_control, full_control_gas) = run_main_body_with_gas(
+        "List<i64, 3>",
+        r#"
+        var values: List<i64, 3> = [10, 20, 30];
+        return values;
+        "#,
+    );
+    let full_control_words = returned_list_words(&full_control, 3);
+    let (failure, failure_gas) = run_main_body_with_gas(
+        "List<i64, 3>",
+        r#"
+        var values: List<i64, 3> = [10, 20, 30];
+        values.try_push(40);
+        return values;
+        "#,
+    );
+    assert_eq!(
+        returned_list_words(&failure, 3),
+        full_control_words,
+        "full-capacity try_push must leave the complete allocation unchanged"
+    );
+    assert_eq!(returned_list_words(&space_control, 3), [2, 3, 10, 20, 0]);
+
+    let success_delta = positive_gas_delta(success_gas, space_control_gas, "successful try_push");
+    let failure_delta = positive_gas_delta(failure_gas, full_control_gas, "full-capacity try_push");
+    assert!(
+        failure_delta < success_delta,
+        "full try_push must skip element and length writes: success={success_delta}, failure={failure_delta}"
+    );
+}
+
+#[test]
+fn pop_gas_and_transactionality_cover_nonempty_and_empty_lists() {
+    let (nonempty_control, nonempty_control_gas) = run_main_body_with_gas(
+        "List<i64, 3>",
+        r#"
+        var values: List<i64, 3> = [10, 20];
+        return values;
+        "#,
+    );
+    assert_eq!(returned_list_words(&nonempty_control, 3), [2, 3, 10, 20, 0]);
+    let (nonempty, nonempty_gas) = run_main_body_with_gas(
+        "List<i64, 3>",
+        r#"
+        var values: List<i64, 3> = [10, 20];
+        values.pop();
+        return values;
+        "#,
+    );
+    assert_eq!(
+        returned_list_words(&nonempty, 3),
+        [1, 3, 10, 0, 0],
+        "pop must clear the vacated slot"
+    );
+
+    let (empty_control, empty_control_gas) = run_main_body_with_gas(
+        "List<i64, 3>",
+        r#"
+        var values: List<i64, 3> = [];
+        return values;
+        "#,
+    );
+    let empty_control_words = returned_list_words(&empty_control, 3);
+    let (empty, empty_gas) = run_main_body_with_gas(
+        "List<i64, 3>",
+        r#"
+        var values: List<i64, 3> = [];
+        values.pop();
+        return values;
+        "#,
+    );
+    assert_eq!(
+        returned_list_words(&empty, 3),
+        empty_control_words,
+        "empty pop must leave the complete allocation unchanged"
+    );
+
+    let nonempty_delta = positive_gas_delta(nonempty_gas, nonempty_control_gas, "nonempty pop");
+    let empty_delta = positive_gas_delta(empty_gas, empty_control_gas, "empty pop");
+    assert!(
+        empty_delta < nonempty_delta,
+        "empty pop must skip payload reads and clearing writes: nonempty={nonempty_delta}, empty={empty_delta}"
+    );
+}
+
+#[test]
+fn contains_gas_increases_by_one_exact_scan_step_per_mismatch() {
+    let mut samples = Vec::new();
+    for (needle, expected) in [(10, 1), (20, 1), (30, 1), (40, 1), (99, 0)] {
+        let (vm, gas) = run_main_body_with_gas(
+            "i64",
+            &format!(
+                r#"
+            let values: List<i64, 4> = [10, 20, 30, 40];
+            if values.contains({needle}) {{ return 1; }}
+            return 0;
+            "#
+            ),
+        );
+        assert_eq!(vm.register(10), expected);
+        samples.push((needle, gas));
+    }
+
+    let first_scan_step = samples[1].1 - samples[0].1;
+    assert!(first_scan_step > 0, "each mismatch must consume gas");
+    assert_eq!(samples[2].1 - samples[1].1, first_scan_step);
+    assert_eq!(samples[3].1 - samples[2].1, first_scan_step);
+    assert!(
+        samples[4].1 > samples[3].1,
+        "an absent value must examine all active elements: {samples:?}"
+    );
+}
+
+#[test]
+fn comprehension_gas_delta_is_exactly_linear_in_active_source_elements() {
+    let mut deltas = Vec::new();
+    for active_len in [0_u64, 1, 2, 4, 8] {
+        let elements = (1..=active_len)
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let (control, control_gas) = run_main_body_with_gas(
+            "i64",
+            &format!(
+                r#"
+            let source: List<i64, 8> = [{elements}];
+            return source.len();
+            "#
+            ),
+        );
+        assert_eq!(control.register(10), active_len);
+        let (copied, copied_gas) = run_main_body_with_gas(
+            "i64",
+            &format!(
+                r#"
+            let source: List<i64, 8> = [{elements}];
+            let copied: List<i64, 8> = [value for value in source];
+            return copied.len();
+            "#
+            ),
+        );
+        assert_eq!(copied.register(10), active_len);
+        deltas.push((
+            active_len,
+            positive_gas_delta(copied_gas, control_gas, "List comprehension"),
+        ));
+    }
+
+    let fixed_delta = deltas[0].1;
+    let per_element = deltas[1].1 - fixed_delta;
+    assert!(
+        per_element > 0,
+        "each active source element must consume gas"
+    );
+    for &(active_len, delta) in &deltas[1..] {
+        assert_eq!(
+            delta - fixed_delta,
+            active_len * per_element,
+            "comprehension work must be exactly linear after fixed allocation/loop overhead: {deltas:?}"
+        );
+    }
 }
 
 #[test]

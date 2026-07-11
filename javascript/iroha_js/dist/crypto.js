@@ -2,7 +2,6 @@ import { Buffer } from "node:buffer";
 import { blake3 } from "@noble/hashes/blake3";
 import {
   entropyToMnemonic,
-  generateMnemonic,
   mnemonicToEntropy,
   validateMnemonic,
 } from "@scure/bip39";
@@ -11,9 +10,10 @@ import {
   createPrivateKey,
   createPublicKey,
   createHash,
+  randomBytes,
   sign as signRaw,
-  verify as verifyRaw,
 } from "node:crypto";
+import { verifyEd25519Strict } from "./ed25519Strict.js";
 import { AccountAddress } from "./address.js";
 import { blake2b256 } from "./blake2b.js";
 import { getNativeBinding } from "./native.js";
@@ -347,12 +347,7 @@ export function verifyEd25519(message, signature, publicKey) {
   const messageBuffer = toBuffer(message, "message");
   const signatureBuffer = toBuffer(signature, "signature");
   const publicKeyBuffer = normalizePublicKey(publicKey);
-  const publicKeyObject = createPublicKey({
-    key: Buffer.concat([ED25519_SPKI_PREFIX, publicKeyBuffer]),
-    format: "der",
-    type: "spki",
-  });
-  return verifyRaw(null, messageBuffer, publicKeyObject, signatureBuffer);
+  return verifyEd25519Strict(messageBuffer, signatureBuffer, publicKeyBuffer);
 }
 
 function recoveryPhraseWords(phrase) {
@@ -389,7 +384,9 @@ export function generateRecoveryPhrase(wordCount = 24) {
   if (!strength) {
     throw new Error("recovery phrase word count must be 12 or 24");
   }
-  return normalizeRecoveryPhrase(generateMnemonic(englishWordlist, strength));
+  return normalizeRecoveryPhrase(
+    entropyToMnemonic(randomBytes(strength / 8), englishWordlist),
+  );
 }
 
 export function entropyToRecoveryPhrase(entropy) {

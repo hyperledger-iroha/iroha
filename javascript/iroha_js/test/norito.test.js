@@ -506,12 +506,12 @@ baseTest("contract manifest codec roundtrips every V1 descriptor field", () => {
         name: "transfer",
         kind: { kind: "Kotoage", value: null },
         params: [
-          { name: "amount", type_name: "Amount" },
+          { name: "amount", type_name: "quantity" },
           { name: "tags", type_name: "List<Name, 64>" },
         ],
         argument_schema: {
           fields: [
-            { name: "amount", ty: leaf("Amount") },
+            { name: "amount", ty: leaf("Quantity") },
             {
               name: "tags",
               ty: {
@@ -548,7 +548,7 @@ baseTest("contract manifest codec roundtrips every V1 descriptor field", () => {
         ],
       },
     ],
-    states: [{ name: "Balances", type_name: "StateMap<AccountId, Amount>" }],
+    states: [{ name: "Balances", type_name: "StateMap<AccountId, quantity>" }],
     error_codes: [{ namespace: "LedgerError", name: "Denied", code: 7 }],
     kotoba: [
       {
@@ -705,7 +705,7 @@ baseTest("contract manifest codec validates every flat query schema and ordinary
   const leaf = (kind) => ({ kind: "Leaf", value: { kind, value: null } });
   const layouts = [
     ["AccountView", ["id", "metadata"], [leaf("AccountId"), leaf("Json")]],
-    ["AssetView", ["id", "amount"], [leaf("AssetId"), leaf("Amount")]],
+    ["AssetView", ["id", "amount"], [leaf("AssetId"), leaf("Quantity")]],
     [
       "AssetDefinitionView",
       ["id", "name", "description", "owned_by", "total_quantity", "metadata"],
@@ -715,7 +715,7 @@ baseTest("contract manifest codec validates every flat query schema and ordinary
         { kind: "Option", value: null },
         leaf("String"),
         leaf("AccountId"),
-        leaf("Amount"),
+        leaf("Quantity"),
         leaf("Json"),
       ],
     ],
@@ -826,7 +826,7 @@ baseTest("contract manifest codec rejects malformed and forged flat schema tapes
 
   const reservedViews = [
     ["AccountView", ["id", "metadata"], [leaf("AccountId"), leaf("Json")]],
-    ["AssetView", ["id", "amount"], [leaf("AssetId"), leaf("Amount")]],
+    ["AssetView", ["id", "amount"], [leaf("AssetId"), leaf("Quantity")]],
     [
       "AssetDefinitionView",
       ["id", "name", "description", "owned_by", "total_quantity", "metadata"],
@@ -836,7 +836,7 @@ baseTest("contract manifest codec rejects malformed and forged flat schema tapes
         { kind: "Option", value: null },
         leaf("String"),
         leaf("AccountId"),
-        leaf("Amount"),
+        leaf("Quantity"),
         leaf("Json"),
       ],
     ],

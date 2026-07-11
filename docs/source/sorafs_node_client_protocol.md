@@ -9,8 +9,8 @@ controls, and decide when to refresh or evict providers.
 ### Provider Advertisements
 
 Provider advertisements use the `ProviderAdvertV1` layout defined in
-`crates/sorafs_manifest::provider_advert`. Each advert carries a signed body,
-a bounded TTL, and routing metadata that guides client selection. Providers
+`crates/sorafs_manifest::provider_advert`. Each advert carries a signed
+envelope, a bounded TTL, and routing metadata that guides client selection. Providers
 aliases via `profile_aliases`, enabling discovery while clients transition.
 Unknown capability TLVs should be ignored when the advert sets
 `allow_unknown_capabilities`, following the GREASE guidance below.
@@ -30,6 +30,7 @@ ProviderAdvertV1 {
 The advertisement **must** validate the following constraints:
 
 - `expires_at > issued_at`
+- `issued_at ≤ now` (future-issued adverts are rejected)
 - `expires_at - issued_at ≤ 86 400 seconds (24 h)`
 - `capabilities`, `endpoints`, and `rendezvous_topics` are non-empty
 - `path_policy.min_guard_weight > 0`
@@ -67,7 +68,7 @@ ProviderAdvertBodyV1 {
 | `path_policy` | Guard rails that constrain path construction (minimum guard weight, maximum providers from the same ASN or staking pool). |
 | `stream_budget` | Optional concurrency and throughput envelope (`StreamBudgetV1`). Clients clamp in-flight requests to `max_in_flight` and treat `max(max_bytes_per_sec, burst)` as a hard per-chunk ceiling. Only valid when the advert also includes `CapabilityType::ChunkRangeFetch`. |
 | `transport_hints` | Ordered list of supported ranged-fetch transports (`TransportHintV1`). Priorities are low numbers first and align with CLI `--transport-hint` entries. Hints must be non-empty when present and require the `chunk_range_fetch` capability. SoraNet transport hints (`soranet_relay`) additionally require a SoraNet capability flag (`soranet_pq`). |
-| `signature_strict` | When `true`, verifiers MUST reject the advert if the signature fails. External tooling may set this to `false` to allow offline validation flows (the CLI logs a warning instead of aborting). |
+| `signature_strict` | Must be `true` for Torii discovery ingestion. Signature verification is mandatory and remote data cannot relax it. |
 | `allow_unknown_capabilities` | Signals that callers MAY retain the advert even if it contains capability codes they do not yet recognise. Clients drop the unknown TLVs while honouring the advertised capability policy for the known entries. |
 
 QoS hints expose deterministic expectations for schedulers:
@@ -83,9 +84,13 @@ QoS hints expose deterministic expectations for schedulers:
   available to clients. Schedulers clamp active fetches per provider to this
   value.
 
-The signature covers the serialized `ProviderAdvertBodyV1` and currently
-supports `Ed25519` (single-signer) with reserved space for future Norito-backed
-multi-signatures.
+The signature covers `sorafs.provider-advert.v1\0` followed by the canonical
+Norito encoding of the advert envelope: version, issuance and expiry timestamps,
+body, signature algorithm and public key, `signature_strict`, and
+`allow_unknown_capabilities`. Signature bytes themselves are excluded. This
+prevents copied signatures from changing TTL or policy. Ed25519 is the only
+accepted first-release algorithm; the multi-signature enum value remains
+reserved.
 
 For operator tooling, the repository ships `sorafs_provider_advert_stub`.
 It validates the inputs, emits the Norito advertisement blob, and produces a
@@ -100,12 +105,13 @@ cargo run -p sorafs_car --bin sorafs_provider_advert_stub -- \
   --stake-amount=5000000 \
   --availability=hot \
   --max-latency-ms=1500 \
+  --max-streams=4 \
   --capability=torii \
   --capability=quic \
   --range-capability=max_span=1048576,min_granularity=4096,sparse=true,alignment=false,merkle=true \
   --stream-budget=max_in_flight=4,max_bytes_per_sec=5000000,burst=2000000 \
-  --transport-hint=torii_http_range:0 \
-  --transport-hint=quic_stream:1 \
+  --transport-hint=torii:0 \
+  --transport-hint=quic:1 \
   --endpoint=torii:storage.example.com \
   --topic=sorafs.sf1.primary:global \
   --signing-key-file=provider.key \
@@ -119,6 +125,12 @@ cargo run -p sorafs_car --bin sorafs_provider_advert_stub -- \
 # available, but prefer the canonical handle form (`namespace.name@semver`) so
 # scripts remain stable if IDs change.
 ```
+
+Provider, stake-pool, signing-key, public-key, signature, capability-payload,
+and endpoint-metadata hex must be lowercase, even-length, prefix-free, and
+whitespace-free. Fixed-width identifiers such as `--provider-id` and
+`--stake-pool-id` must be exactly 32 bytes (64 hex characters); the helper does
+not left-pad short values before signing.
 
 `--range-capability` emits the `CapabilityType::ChunkRangeFetch` TLV with a
 structured payload (`ProviderCapabilityRangeV1`). Providers declare the largest
@@ -475,17 +487,23 @@ before reaching step four, ensuring operators can reproduce the test locally.
 
 ### Stream Token Issuance
 
-Range-enabled gateways mint deterministic stream tokens through
-`POST /v1/sorafs/storage/token`. Clients must supply deterministic headers and
+Range-enabled gateways mint signed stream tokens through
+`POST /v1/sorafs/storage/token`. Clients must supply canonical headers and
 the canonical request payload:
 
-- Header `X-SoraFS-Client`: ASCII identifier for the authenticated caller.
-  Requests missing or providing an empty client id are rejected with HTTP `400`.
-- Header `X-SoraFS-Nonce`: an opaque ASCII string echoed verbatim in the
-  response. Nodes reject requests missing this header with HTTP `400`.
+- Header `X-SoraFS-Client`: a 1–128 byte visible-ASCII quota key for the caller.
+  This header does not authenticate the caller by itself. Missing, whitespace,
+  control-character, and oversized values are rejected with HTTP `400`.
+- Header `X-SoraFS-Nonce`: a 1–128 byte visible-ASCII value echoed verbatim in
+  the response. Missing, whitespace, control-character, and oversized values
+  are rejected with HTTP `400`.
 - Body (`StreamTokenRequestDto`): `manifest_id_hex`, `provider_id_hex` (32-byte
   BLAKE3 digest), and optional overrides (`ttl_secs`, `max_streams`,
-  `rate_limit_bytes`, `requests_per_minute`) that clamp the issued token.
+  `rate_limit_bytes`, `requests_per_minute`). Hex is canonical lowercase with
+  no surrounding whitespace. The provider must be non-zero and exactly match
+  the gateway's declared provider identity. Every override must be positive and
+  no greater than its configured default; request values cannot raise a
+  gateway's ceiling.
 
 When stream tokens are enabled the handler responds with:
 
@@ -497,9 +515,9 @@ When stream tokens are enabled the handler responds with:
     signed the token. Clients cache this key to verify `signature_hex`.
   - `X-SoraFS-Token-Id` — the canonical identifier for the issued token body.
   - `X-SoraFS-Client-Quota-Remaining` — remaining issuance requests in the
-    current 60 s window. The header is set to `unlimited` when no budget is
-    enforced. When the quota is exhausted the gateway returns `429` together
-    with `Retry-After` indicating when the window resets and
+    current 60 s window. Zero/unlimited issuance policies are rejected. When
+    the quota is exhausted the gateway returns `429` together with
+    `Retry-After` indicating when the window resets and
     `X-SoraFS-Client-Quota-Remaining: 0`.
   - `Cache-Control: no-store` — responses are never cacheable.
 - Body:
@@ -508,9 +526,9 @@ When stream tokens are enabled the handler responds with:
 {
   "token": {
     "body": {
-      "token_id": "01J8M3YEZ0X9M6F6C4KQ6W3CBB",
-      "manifest_cid": "<base64-manifest-cid>",
-      "provider_id": "<base64-provider-id>",
+      "token_id": "0123456789abcdef0123456789abcdef",
+      "manifest_cid_hex": "<lowercase-hex-manifest-cid>",
+      "provider_id_hex": "<64-lowercase-hex-provider-id>",
       "profile_handle": "sorafs.sf1@1.0.0",
       "max_streams": 4,
       "ttl_epoch": 1731638400,
@@ -526,14 +544,22 @@ When stream tokens are enabled the handler responds with:
 
 `body` mirrors `StreamTokenBodyV1` encoded via Norito so downstream services can
 verify the signature deterministically. `signature_hex` is the detached
-Ed25519 signature over `body.to_canonical_bytes()`. Nodes return HTTP `404` with
+Ed25519 signature over the domain separator
+`sorafs.stream-token.signature.v1\0` followed by
+`body.to_canonical_bytes()`. The transport form is canonical padded base64 and
+is bounded to 4096 header bytes. Token IDs are exactly 16 random bytes rendered
+as 32 lowercase hexadecimal characters. A token has positive concurrency,
+request, and byte budgets, a maximum one-hour lifetime, and no more than 60
+seconds of positive issuance-clock skew. It is rejected at its exact expiry
+second. Nodes return HTTP `404` with
 `{"error": "stream token issuance is not enabled on this node"}` when the
 signing key is not configured, allowing operators to detect misconfigured
 gateways quickly.
-Binary fields such as `manifest_cid` and `provider_id` are emitted as base64
-strings by Norito JSON.
-Providing `requests_per_minute = 0` in the request overrides disables the quota
-for that token and keeps `X-SoraFS-Client-Quota-Remaining` set to `unlimited`.
+
+Issuance-client and per-token quota state are bounded and prune only expired or
+idle windows. A full state table never evicts an active budget (which would
+reset its quota); the gateway instead returns HTTP `503` with `Retry-After: 1`.
+Clock rollback and poisoned accounting state also fail closed with `503`.
 
 ### Chunk Range Fetch RPC
 
@@ -580,9 +606,9 @@ integrations can assert deterministic scheduling.【crates/sorafs_car/src/multi_
 For audits, run `sorafs_provider_advert_stub --verify --advert=<path> [--now=unix_ts]` to
 validate signatures, enforce TTL/path/QoS rules, and print a JSON summary of an
 existing advert (optionally with `--json-out` to persist the summary). The JSON
-payload includes `signature_verified=true` when the ed25519 signature matches the
-body, and explicitly reports `signature_strict` so tooling can distinguish governed
-adverts (`true`) from diagnostic fixtures (`false`). Operators can export the derived
+payload includes `signature_verified=true` when the Ed25519 signature matches the
+complete canonical envelope, and explicitly reports `signature_strict`. Torii only
+ingests adverts where this field is `true`. Operators can export the derived
 key/signature via `--public-key-out`/`--signature-out`, and the CLI accepts raw
 signatures when preceded by `--council-signature-public-key`.
 
@@ -683,16 +709,37 @@ strengthen constraints.
 
 ### Admission & Sybil Controls
 
-Only governed identities may publish provider adverts. Operators sign the body
+Only governed identities may publish provider adverts. Operators sign the envelope
 with an Ed25519 key whose public key is registered in the governance registry.
 Stake pointers reference the staking pool record in the ledger; Torii validates
 the pointer before accepting or broadcasting an advert.
 
 When an advert is signed by the CLI using a managed key, `signature_strict` is
-set to `true` so any verifier must enforce the signature. If external tooling
-injects a signature (for example, to test discovery without governance keys),
-`signature_strict` can be set to `false`; verifiers SHOULD still log failures
-but may proceed for diagnostics.
+set to `true`. Torii always verifies the signature first and rejects adverts that
+request relaxed verification. For each provider, a replacement must also have a
+strictly greater `issued_at`; exact byte-identical duplicates are idempotent, while
+older replays and conflicting adverts with the same timestamp are rejected without
+removing the current cache record. Before mutating the live cache, Torii atomically
+persists the provider's issuance timestamp and advert fingerprint in the canonical
+Norito checkpoint configured by `replay_checkpoint_path`. The checkpoint survives
+restart and expiry/admission pruning, preventing a shorter-lived update from being
+followed by replay of an older advert that is still within its own TTL. Exact copies
+of the durable high-water advert may repopulate an empty post-restart cache; a
+different advert at the same timestamp remains a downgrade and is rejected.
+
+`replay_checkpoint_max_entries` bounds the checkpoint and must be at least the
+number of identities in the admission registry; the default and hard first-release
+maximum are both 65,536. Checkpoint entries are strictly sorted and unique, and
+the file is read with bounded,
+no-follow semantics and updated using a private atomic temporary file plus rename.
+Torii retains an exclusive operating-system lock on the adjacent `.lock` file for
+the cache lifetime; a second process pointed at the same checkpoint fails closed
+instead of allowing last-writer-wins high-water regression.
+An oversized, corrupt, non-canonical, permissively accessible, symlink-backed, or
+admission-inconsistent checkpoint fails closed by disabling the discovery cache.
+Operators must treat `reason="replay_checkpoint"` as a local integrity incident;
+deleting the checkpoint to restore service reopens replay protection and is not an
+acceptable recovery procedure.
 
 If governance revokes a provider, its public key is removed from the registry
 and future adverts fail signature validation.

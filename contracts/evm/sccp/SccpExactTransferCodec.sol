@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-pragma solidity 0.8.24;
+pragma solidity 0.7.4;
 
 /**
  * @title SccpExactTransferCodec
@@ -81,7 +81,7 @@ library SccpExactTransferCodec {
     }
 
     function tairaNetwork() internal pure returns (bytes memory) {
-        return hex"010100000000809574f5fee75e69bfcf52451e42d50f";
+        return hex"010100000000fc56984b2be7431d840e21514d1883f0";
     }
 
     function lane(bytes memory source, bytes memory target) internal pure returns (bytes memory) {
@@ -822,8 +822,9 @@ library SccpExactTransferCodec {
     }
 
     function _add64(uint64 left, uint64 right) private pure returns (uint64 result) {
-        // The explicit mask documents BLAKE2b's intended modulo-2^64 behavior
-        // under Solidity 0.8.24 without weakening checked arithmetic elsewhere.
+        // The explicit mask fixes BLAKE2b's intended modulo-2^64 behavior
+        // independently of compiler arithmetic defaults. Value-moving paths
+        // retain their separate overflow and range checks.
         assembly {
             result := and(add(left, right), 0xffffffffffffffff)
         }

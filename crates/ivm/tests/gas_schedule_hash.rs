@@ -6,7 +6,7 @@ use hex_literal::hex;
 fn schedule_hash_matches_expected_digest() {
     let digest = ivm::gas::schedule_hash();
     // Blake2b-32 over `(opcode || le_u64(cost))` table, LSB set per `iroha_crypto::Hash`.
-    let expected = hex!("2160d7da698d444c3d41bab913edb3ba13079ca4e858fa75185dc20c4af153d9");
+    let expected = hex!("896aa03c9ffd6e2c63ec38f2698105035249f6cdf6803678c361322f78778569");
     assert_eq!(digest.as_ref(), &expected);
 }
 

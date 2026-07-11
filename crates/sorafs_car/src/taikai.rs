@@ -279,7 +279,10 @@ pub fn rehydrate_from_car(request: &RehydrateRequest<'_>) -> Result<BundleSummar
     let parsed = ParsedCar::parse(&car_bytes)
         .map_err(|err| eyre!("failed to parse CAR `{}`: {err}", request.car_in.display()))?;
 
-    let ingest_summary = ingest_single_file(parsed.payload()).map_err(|err| {
+    // Rehydration explicitly needs an owned payload for its ingest artefacts;
+    // ordinary CAR verification keeps payload bytes as borrowed CAR slices.
+    let payload = parsed.payload_bytes();
+    let ingest_summary = ingest_single_file(&payload).map_err(|err| {
         eyre!(
             "failed to rebuild chunk plan from CAR payload `{}`: {err}",
             request.car_in.display()

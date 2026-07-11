@@ -36,6 +36,9 @@ public final class ContractManifestJsonParser {
           "hajimari",
           "if",
           "in",
+          "int",
+          "decimal",
+          "quantity",
           "kaizen",
           "kotoage",
           "let",
@@ -51,7 +54,7 @@ public final class ContractManifestJsonParser {
           "view");
   private static final Set<String> RESERVED_DECLARATION_NAMES =
       set(
-          "i64", "u128", "bool", "string", "bytes", "Amount", "Json", "AccountId",
+          "int", "decimal", "quantity", "bool", "string", "bytes", "Json", "AccountId",
           "AssetDefinitionId", "AssetId", "DomainId", "Name", "NftId", "DataSpaceId",
           "Option", "Result", "List", "StateMap", "Secret", "AccountView", "AssetView",
           "AssetDefinitionView", "DomainView", "NftView", "QueryPage", "AxtDescriptor",
@@ -59,7 +62,7 @@ public final class ContractManifestJsonParser {
           "state_map_get", "__kotodama_list_len", "__kotodama_list_get",
           "__kotodama_list_try_set", "__kotodama_list_try_push", "__kotodama_list_pop",
           "__kotodama_list_contains", "__kotodama_list_take", "__kotodama_list_enumerate",
-          "__kotodama_amount_div_round");
+          "__kotodama_decimal_div_round", "__kotodama_quantity_div_round");
   private static final Map<String, ContractManifest.ValueKindV1> VALUE_KINDS = valueKinds();
 
   private ContractManifestJsonParser() {}
@@ -765,7 +768,7 @@ public final class ContractManifestJsonParser {
           struct,
           new String[] {"id", "amount"},
           new ContractManifest.ValueKindV1[] {
-            ContractManifest.ValueKindV1.ASSET_ID, ContractManifest.ValueKindV1.AMOUNT
+            ContractManifest.ValueKindV1.ASSET_ID, ContractManifest.ValueKindV1.QUANTITY
           });
     }
     if ("DomainView".equals(struct.name())) {
@@ -800,7 +803,7 @@ public final class ContractManifestJsonParser {
         || !nodeKindAt(nodes, start + 3, ContractManifest.ValueTypeNodeKindV1.OPTION)
         || !leafAt(nodes, start + 4, ContractManifest.ValueKindV1.STRING)
         || !leafAt(nodes, start + 5, ContractManifest.ValueKindV1.ACCOUNT_ID)
-        || !leafAt(nodes, start + 6, ContractManifest.ValueKindV1.AMOUNT)
+        || !leafAt(nodes, start + 6, ContractManifest.ValueKindV1.QUANTITY)
         || !leafAt(nodes, start + 7, ContractManifest.ValueKindV1.JSON)
         || !Integer.valueOf(start + 8).equals(subtreeEnd(nodes, start))) {
       return null;
@@ -892,15 +895,15 @@ public final class ContractManifestJsonParser {
   private static String canonicalLeafName(final ContractManifest.ValueKindV1 kind) {
     switch (kind) {
       case INT:
-        return "i64";
-      case U128:
-        return "u128";
+        return "int";
+      case DECIMAL:
+        return "decimal";
+      case QUANTITY:
+        return "quantity";
       case BOOL:
         return "bool";
       case STRING:
         return "string";
-      case AMOUNT:
-        return "Amount";
       case JSON:
         return "Json";
       case NAME:
@@ -1345,10 +1348,10 @@ public final class ContractManifestJsonParser {
   private static Map<String, ContractManifest.ValueKindV1> valueKinds() {
     final Map<String, ContractManifest.ValueKindV1> kinds = new HashMap<>();
     kinds.put("Int", ContractManifest.ValueKindV1.INT);
-    kinds.put("U128", ContractManifest.ValueKindV1.U128);
+    kinds.put("Decimal", ContractManifest.ValueKindV1.DECIMAL);
+    kinds.put("Quantity", ContractManifest.ValueKindV1.QUANTITY);
     kinds.put("Bool", ContractManifest.ValueKindV1.BOOL);
     kinds.put("String", ContractManifest.ValueKindV1.STRING);
-    kinds.put("Amount", ContractManifest.ValueKindV1.AMOUNT);
     kinds.put("Json", ContractManifest.ValueKindV1.JSON);
     kinds.put("Name", ContractManifest.ValueKindV1.NAME);
     kinds.put("AccountId", ContractManifest.ValueKindV1.ACCOUNT_ID);

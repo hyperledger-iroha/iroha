@@ -290,6 +290,7 @@ pub mod isi {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
         contract_address: &iroha_data_model::smart_contract::ContractAddress,
+        contract_subject: &AccountId,
         code_bytes: &[u8],
         manifest: &ContractManifest,
     ) -> Result<(), Error> {
@@ -371,7 +372,7 @@ pub mod isi {
                 let trigger_authority = descriptor
                     .authority
                     .clone()
-                    .unwrap_or_else(|| authority.clone());
+                    .unwrap_or_else(|| contract_subject.clone());
                 let action = iroha_data_model::trigger::action::Action::new(
                     Executable::Ivm(IvmBytecode::from_compiled(callback_contract.code_bytes)),
                     descriptor.repeats,
@@ -638,10 +639,25 @@ pub mod isi {
 
     fn ensure_contract_binding_governance(
         authority: &AccountId,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         ensure_contract_lifecycle_authority(authority, state_transaction)?;
-        if !protected_contract_namespaces(state_transaction).is_empty()
+        let protected = protected_contract_namespaces(state_transaction);
+        let address_dataspace = contract_address.dataspace_id().ok();
+        let protected_address = protected.contains("*")
+            || protected.contains(contract_address.as_str())
+            || address_dataspace.is_some_and(|dataspace_id| {
+                protected.contains(&format!("dataspace:{}", dataspace_id.as_u64()))
+                    || protected.iter().any(|namespace| {
+                        state_transaction
+                            .nexus
+                            .dataspace_catalog
+                            .by_alias(namespace)
+                            .is_some_and(|entry| entry.id == dataspace_id)
+                    })
+            });
+        if protected_address
             && !has_permission(&state_transaction.world, authority, "CanEnactGovernance")
         {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -5026,6 +5042,57 @@ pub mod isi {
         }
     }
 
+    fn ensure_contract_subject_binding(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    ) -> Result<AccountId, Error> {
+        let contract_subject = match state_transaction
+            .world
+            .contract_subject_bindings
+            .get(contract_address)
+        {
+            Some(binding) => {
+                binding.validate_for(contract_address).map_err(|message| {
+                    InstructionExecutionError::InvariantViolation(message.into())
+                })?;
+                binding.subject.clone()
+            }
+            None => {
+                let binding = crate::smartcontracts::code::ContractSubjectBinding::current_v2(
+                    contract_address,
+                );
+                let subject = binding.subject.clone();
+                state_transaction
+                    .world
+                    .contract_subject_bindings
+                    .insert(contract_address.clone(), binding);
+                subject
+            }
+        };
+        match state_transaction
+            .world
+            .contract_subject_addresses
+            .get(&contract_subject)
+        {
+            Some(existing) if existing != contract_address => {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "contract subject `{contract_subject}` is already bound to `{existing}`"
+                    )
+                    .into(),
+                ));
+            }
+            Some(_) => {}
+            None => {
+                state_transaction
+                    .world
+                    .contract_subject_addresses
+                    .insert(contract_subject.clone(), contract_address.clone());
+            }
+        }
+        Ok(contract_subject)
+    }
+
     fn bind_contract_instance(
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -5033,6 +5100,8 @@ pub mod isi {
         key: iroha_crypto::Hash,
     ) -> Result<bool, Error> {
         let contract_address = payload.contract_address.clone();
+        let contract_subject =
+            ensure_contract_subject_binding(state_transaction, &contract_address)?;
         let manifest = state_transaction
             .world
             .contract_manifests
@@ -5084,6 +5153,7 @@ pub mod isi {
             authority,
             state_transaction,
             &contract_address,
+            &contract_subject,
             &code_bytes,
             &manifest,
         )?;
@@ -5395,7 +5465,11 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_contract_binding_governance(authority, state_transaction)?;
+            ensure_contract_binding_governance(
+                authority,
+                self.contract_address(),
+                state_transaction,
+            )?;
             let key = *self.code_hash();
             let contract_address = self.contract_address().clone();
             let Some(manifest) = state_transaction
@@ -5413,6 +5487,8 @@ pub mod isi {
                 &key,
                 &manifest,
             )?;
+            let contract_subject =
+                ensure_contract_subject_binding(state_transaction, &contract_address)?;
             let existing = state_transaction
                 .world
                 .contract_instances
@@ -5526,6 +5602,7 @@ pub mod isi {
                     authority,
                     state_transaction,
                     self.contract_address(),
+                    &contract_subject,
                     &code_bytes,
                     &manifest,
                 )?;
@@ -5558,7 +5635,11 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_contract_binding_governance(authority, state_transaction)?;
+            ensure_contract_binding_governance(
+                authority,
+                self.contract_address(),
+                state_transaction,
+            )?;
             let key = self.contract_address().clone();
             let Some(prev_hash) = state_transaction
                 .world
@@ -10189,7 +10270,9 @@ pub mod isi {
                 ))
             })?;
         let sender = sender_address.to_account_id().map_err(|error| {
-            invalid_bridge_proof(format!("SCCP outbound sender controller is invalid: {error}"))
+            invalid_bridge_proof(format!(
+                "SCCP outbound sender controller is invalid: {error}"
+            ))
         })?;
         if canonical_sender != sender_literal || &sender != authority {
             return Err(invalid_bridge_proof(
@@ -10237,6 +10320,11 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            if !state_transaction.sccp_recording_proof_verified {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "SCCP message recording requires verified IVM proof".into(),
+                ));
+            }
             ensure_sccp_outbound_lane_is_active(state_transaction)?;
             let validated = match crate::bridge::validate_recorded_sccp_message_payload_bytes(
                 self.context,
@@ -14096,15 +14184,17 @@ pub mod isi {
                 &key,
                 &manifest,
             )?;
-            if state_transaction
-                .world
-                .contract_manifests
-                .get(&key)
-                .is_some_and(|existing| existing == &manifest)
-            {
-                return Ok(());
+            if let Some(existing) = state_transaction.world.contract_manifests.get(&key) {
+                if existing == &manifest {
+                    return Ok(());
+                }
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "different contract manifest already stored for this code_hash".into(),
+                ));
             }
-            // Insert/overwrite manifest for code_hash
+            // A code hash has one immutable manifest. In particular, a later submitter cannot
+            // re-sign the same bytecode with a broader entrypoint/trigger surface and change the
+            // behavior of an already reviewed active instance.
             state_transaction
                 .world
                 .contract_manifests
@@ -16719,6 +16809,29 @@ pub mod isi {
             _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            if let Parameter::Custom(custom) = self.inner() {
+                match iroha_data_model::nexus::LaneLifecycleParameterV1::from_custom_parameter(
+                    custom,
+                ) {
+                    Ok(Some(payload)) => state_transaction
+                        .stage_consensus_lane_lifecycle(&payload)
+                        .map_err(|err| {
+                            InstructionExecutionError::InvalidParameter(
+                                InvalidParameterError::SmartContract(format!(
+                                    "invalid Nexus lane lifecycle transition: {err}"
+                                )),
+                            )
+                        })?,
+                    Ok(None) => {}
+                    Err(err) => {
+                        return Err(InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(format!(
+                                "invalid Nexus lane lifecycle parameter payload: {err}"
+                            )),
+                        ));
+                    }
+                }
+            }
             // Handle scheduling parameters specially since they are optional in WSV
             // and are not listed by `Parameters::parameters()` iterator.
             match self.inner().clone() {
@@ -17973,7 +18086,7 @@ pub mod isi {
         }
 
         #[test]
-        fn record_sccp_message_is_core_native_and_does_not_require_ivm_proof() {
+        fn record_sccp_message_rejects_without_verified_ivm_proof() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new_for_testing(World::default(), kura, query_handle);
@@ -17989,6 +18102,7 @@ pub mod isi {
             let mut stx = block.transaction();
             configure_active_test_lanes(&mut stx, &[LaneId::SINGLE]);
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+            stx.sccp_recording_proof_verified = false;
 
             let payload = sora_outbound_sccp_payload(49);
             let key = crate::bridge::test_sccp_outbound_message_key(&payload);
@@ -17996,10 +18110,14 @@ pub mod isi {
                 canonical_test_sccp_payload_bytes(&payload),
             );
 
-            instruction
+            let error = instruction
                 .execute(&ALICE_ID, &mut stx)
-                .expect("Core-native SCCP settlement must accept a direct instruction");
-            assert!(stx.world.sccp_outbound_messages.get(&key).is_some());
+                .expect_err("plain SCCP recording must require a verified IVM proof");
+            assert!(
+                format!("{error:?}").contains("requires verified IVM proof"),
+                "unexpected proof-authority error: {error:?}"
+            );
+            assert!(stx.world.sccp_outbound_messages.get(&key).is_none());
         }
 
         #[test]
@@ -18051,6 +18169,7 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut stx = block.transaction();
+            stx.sccp_recording_proof_verified = true;
             let payload = sora_outbound_sccp_payload(47);
             let key = crate::bridge::test_sccp_outbound_message_key(&payload);
             let instruction = crate::bridge::test_record_sccp_message(
@@ -18082,6 +18201,7 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut stx = block.transaction();
+            stx.sccp_recording_proof_verified = true;
             configure_active_test_lanes(&mut stx, &[LaneId::SINGLE]);
             stx.current_lane_id = Some(LaneId::SINGLE);
             let payload = sora_outbound_sccp_payload(53);
@@ -18115,6 +18235,7 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut stx = block.transaction();
+            stx.sccp_recording_proof_verified = true;
             configure_active_test_lanes(&mut stx, &[LaneId::SINGLE]);
             stx.current_lane_id = Some(LaneId::SINGLE);
             let wrong_dataspace = DataSpaceId::new(7);
@@ -18151,6 +18272,7 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut stx = block.transaction();
+            stx.sccp_recording_proof_verified = true;
 
             let recreated_lane = LaneId::new(4);
             let retired_dataspace = DataSpaceId::new(20);
@@ -18225,6 +18347,7 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut stx = block.transaction();
+            stx.sccp_recording_proof_verified = true;
             configure_active_test_lanes(&mut stx, &[LaneId::SINGLE]);
             stx.current_lane_id = Some(LaneId::SINGLE);
             stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -18855,8 +18978,7 @@ pub mod isi {
                 .expect_err("unsupported controller must not create an unfinalizable lock");
 
                 assert!(
-                    format!("{error:?}")
-                        .contains("not supported by the V1 destination contracts"),
+                    format!("{error:?}").contains("not supported by the V1 destination contracts"),
                     "unexpected {label} admission error: {error:?}"
                 );
                 assert_eq!(sccp_asset_balance(&stx, &sender_asset), sender_before);
@@ -19546,6 +19668,76 @@ seiyaku GovernanceLifecycle {
         }
 
         #[test]
+        fn contract_manifest_is_immutable_for_registered_code_hash() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            bootstrap_alice_account(&mut stx);
+
+            let signer_one = checked_keypair_with_algorithm(Algorithm::Ed25519);
+            let signer_two = checked_keypair_with_algorithm(Algorithm::Ed25519);
+            let members = vec![
+                MultisigMember::new(signer_one.public_key().clone(), 1)
+                    .expect("first manifest signer"),
+                MultisigMember::new(signer_two.public_key().clone(), 1)
+                    .expect("second manifest signer"),
+            ];
+            let authority = AccountId::new_multisig(
+                MultisigPolicy::new(1, members).expect("manifest registrar multisig policy"),
+            );
+            Register::account(Account::new(authority.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register manifest authority");
+
+            let (artifact, unsigned_manifest) = minimal_contract_artifact();
+            let code_hash = unsigned_manifest.code_hash.expect("manifest code hash");
+            stx.world.contract_code.insert(code_hash, artifact);
+            let first_manifest = unsigned_manifest
+                .clone()
+                .try_signed(&signer_one)
+                .expect("first signed manifest");
+            smart_contract_code::RegisterSmartContractCode {
+                manifest: first_manifest.clone(),
+            }
+            .execute(&authority, &mut stx)
+            .expect("first manifest registration");
+
+            smart_contract_code::RegisterSmartContractCode {
+                manifest: first_manifest.clone(),
+            }
+            .execute(&authority, &mut stx)
+            .expect("identical manifest registration is idempotent");
+
+            let differently_signed_manifest = unsigned_manifest
+                .try_signed(&signer_two)
+                .expect("second signed manifest");
+            let err = smart_contract_code::RegisterSmartContractCode {
+                manifest: differently_signed_manifest,
+            }
+            .execute(&authority, &mut stx)
+            .expect_err("same code hash cannot acquire a different manifest");
+            assert!(
+                format!("{err:?}")
+                    .contains("different contract manifest already stored for this code_hash"),
+                "unexpected manifest replacement error: {err:?}",
+            );
+            assert_eq!(
+                stx.world.contract_manifests.get(&code_hash),
+                Some(&first_manifest),
+            );
+        }
+
+        #[test]
         fn ensure_manifest_signature_rejects_malformed_ed25519_signature_r() {
             let (_artifact, manifest) = minimal_contract_artifact();
             let key_pair = checked_keypair_with_algorithm(Algorithm::Ed25519);
@@ -19590,6 +19782,7 @@ seiyaku GovernanceLifecycle {
             let settlement_commitment = iroha_data_model::block::consensus::LaneBlockCommitment {
                 block_height: block_header.height().get(),
                 lane_id: LaneId::new(4),
+                lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
                 dataspace_id: DataSpaceId::new(12),
                 tx_count: 1,
                 total_local_micro: 1,
@@ -21054,6 +21247,7 @@ seiyaku GovernanceLifecycle {
         }
 
         fn enable_sccp_recording_for_test(stx: &mut StateTransaction<'_, '_>, lane_id: LaneId) {
+            stx.sccp_recording_proof_verified = true;
             stx.nexus.enabled = true;
             stx.current_lane_id = Some(lane_id);
             stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -33872,6 +34066,17 @@ seiyaku GovernanceLifecycle {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("seed unprivileged attacker");
 
+            let protected = iroha_data_model::parameter::custom::CustomParameter::new(
+                iroha_data_model::parameter::custom::CustomParameterId(
+                    "gov_protected_namespaces".parse().expect("parameter id"),
+                ),
+                Json::new(vec!["dataspace:1".to_owned()]),
+            );
+            stx.world
+                .parameters
+                .get_mut()
+                .set_parameter(Parameter::Custom(protected));
+
             let (program, manifest) = minimal_contract_artifact();
             let code_hash = manifest.code_hash.expect("manifest code hash");
             let register_bytes = scode::RegisterSmartContractBytes {
@@ -34029,7 +34234,7 @@ seiyaku GovernanceLifecycle {
                 iroha_data_model::parameter::custom::CustomParameterId(
                     "gov_protected_namespaces".parse().expect("parameter id"),
                 ),
-                Json::new(vec!["protected".to_owned()]),
+                Json::new(vec!["universal".to_owned()]),
             );
             stx.world
                 .parameters

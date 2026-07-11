@@ -4,7 +4,7 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/nexus/nexus-bootstrap-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 312f239689ed84aff1c914819df5a1c8e5473b64d15482e62462fc9b901510bf
+source_hash: 1859a31eac02d839cfb032c9a2bea520272c8310554f1fbc4e3691fc35cd7318
 source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -39,7 +39,7 @@ description: خطة تشغيلية لتشغيل عنقود المدققين ال
 ## بيئات الشبكة
 - تشغيل بيئتين لـ Nexus مع بادئات شبكة مختلفة:
 - **Sora Nexus (mainnet)** - بادئة شبكة انتاج `nexus` تستضيف الحوكمة القانونية وخدمات SoraFS/SoraNet المتراكبة (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - بادئة شبكة staging `testus` تعكس تكوين mainnet لاختبارات التكامل والتحقق قبل الاصدار (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - بادئة شبكة staging `testus` تعكس تكوين mainnet لاختبارات التكامل والتحقق قبل الاصدار (chain UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - الحفاظ على ملفات genesis ومفاتيح حوكمة وبصمات بنية تحتية منفصلة لكل بيئة. تعمل Testus كساحة اثبات لكل عمليات نشر SoraFS/SoraNet قبل الترقية الى Nexus.
 - يجب ان تنشر خطوط CI/CD الى Testus اولا وتنفذ smoke tests تلقائية وتطلب ترقية يدوية الى Nexus بعد نجاح الفحوصات.
 - حزم التكوين المرجعية موجودة تحت `configs/soranexus/nexus/` (mainnet) و `configs/soranexus/testus/` (testnet)، وكل منها يحتوي `config.toml` و`genesis.json` وادلة قبول Torii نموذجية.

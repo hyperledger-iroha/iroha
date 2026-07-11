@@ -4,7 +4,7 @@ seiyaku SmokeTransfer {
             source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB", ),
             destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76", ),
             asset_definition: AssetDefinitionId::parse("61CtjvNd9T3THAR65GsMVHr82Bjc"),
-            amount: Amount::from_i64(1),
+            amount: 1,
             dataspace: DataSpaceId::parse("0"),
         );
     }

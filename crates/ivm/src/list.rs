@@ -359,6 +359,103 @@ mod tests {
     }
 
     #[test]
+    fn list_operations_match_a_vec_model_for_every_capacity_and_active_length() {
+        fn snapshot(vm: &IVM, base: u64, layout: ListLayoutV1) -> Vec<u64> {
+            (0..layout.allocation_bytes().expect("allocation bytes") / 8)
+                .map(|word| vm.load_u64(base + word * 8).expect("reserved word"))
+                .collect()
+        }
+
+        for element_words in [1_u64, 2, 4] {
+            let mut vm = IVM::new(0);
+            for capacity in 1..=64 {
+                let layout = ListLayoutV1::try_new(capacity, element_words).expect("layout");
+                for active_len in 0..=capacity {
+                    let mut model = (0..active_len)
+                        .map(|index| {
+                            (0..element_words)
+                                .map(|word| index * 100 + word + 1)
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>();
+                    let base = allocate_words(&mut vm, layout, &model).expect("allocate list");
+
+                    assert_eq!(read_words(&vm, base, layout), Ok(model.clone()));
+                    assert_eq!(len(&vm, base, layout), Ok(active_len));
+                    for index in 0..active_len {
+                        assert_eq!(
+                            get_words(&vm, base, layout, index),
+                            Ok(Some(
+                                model[usize::try_from(index).expect("bounded index")].clone()
+                            ))
+                        );
+                    }
+                    assert_eq!(get_words(&vm, base, layout, active_len), Ok(None));
+
+                    let width = usize::try_from(element_words).expect("bounded element width");
+                    let replacement = vec![9_000 + active_len; width];
+                    let before_failed_set = snapshot(&vm, base, layout);
+                    assert_eq!(
+                        try_set_words(
+                            &mut vm,
+                            base,
+                            layout,
+                            active_len,
+                            &replacement,
+                        ),
+                        Ok(false)
+                    );
+                    assert_eq!(
+                        snapshot(&vm, base, layout),
+                        before_failed_set,
+                        "failed set mutated capacity {capacity}, length {active_len}, width {element_words}"
+                    );
+
+                    if active_len == 0 {
+                        let before_empty_pop = snapshot(&vm, base, layout);
+                        assert_eq!(pop_words(&mut vm, base, layout), Ok(None));
+                        assert_eq!(
+                            snapshot(&vm, base, layout),
+                            before_empty_pop,
+                            "empty pop mutated capacity {capacity}, width {element_words}"
+                        );
+                    }
+
+                    if active_len == capacity {
+                        let before_failed_push = snapshot(&vm, base, layout);
+                        assert_eq!(
+                            try_push_words(&mut vm, base, layout, &replacement),
+                            Ok(false)
+                        );
+                        assert_eq!(
+                            snapshot(&vm, base, layout),
+                            before_failed_push,
+                            "failed push mutated capacity {capacity}, width {element_words}"
+                        );
+                    } else {
+                        assert_eq!(
+                            try_push_words(&mut vm, base, layout, &replacement),
+                            Ok(true)
+                        );
+                        model.push(replacement.clone());
+                        assert_eq!(read_words(&vm, base, layout), Ok(model.clone()));
+                    }
+
+                    if let Some(first) = model.first() {
+                        assert_eq!(contains_words(&vm, base, layout, first), Ok(true));
+                    }
+                    let absent = vec![u64::MAX; width];
+                    assert_eq!(contains_words(&vm, base, layout, &absent), Ok(false));
+
+                    let expected = model.pop();
+                    assert_eq!(pop_words(&mut vm, base, layout), Ok(expected));
+                    assert_eq!(read_words(&vm, base, layout), Ok(model));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn malformed_element_width_fails_before_mutation() {
         let mut vm = IVM::new(0);
         let layout = ListLayoutV1::try_new(2, 2).expect("layout");

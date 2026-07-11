@@ -100,7 +100,7 @@ const BN254_BASE_FIELD_MODULUS_BE: [u8; 32] = [
 ];
 
 const SORA_TAIRA_CHAIN_ID_BYTES: [u8; 16] = [
-    0x80, 0x95, 0x74, 0xf5, 0xfe, 0xe7, 0x5e, 0x69, 0xbf, 0xcf, 0x52, 0x45, 0x1e, 0x42, 0xd5, 0x0f,
+    0xfc, 0x56, 0x98, 0x4b, 0x2b, 0xe7, 0x43, 0x1d, 0x84, 0x0e, 0x21, 0x51, 0x4d, 0x18, 0x83, 0xf0,
 ];
 
 /// Validation failure for a closed SCCP route or registry.
@@ -2426,11 +2426,11 @@ mod tests {
             sccp_lane_id_hash_v1(outbound_lane).expect("valid outbound lane");
         assert_eq!(
             source_lane_hash,
-            hex32("e6e5968272b47bc41c3a2d2d9a3cc620b2c535d58dbbfe4e2f4f31139bacd485")
+            hex32("d49004c91652644a316330b34b7cdda89264fc577096661a5d41dea31d59b95a")
         );
         assert_eq!(
             destination_lane_hash,
-            hex32("7c098e461e99f423aa6ce236f53efe573fb7f43318c41afc81dda3b07d223aa0")
+            hex32("7e68f921bbe63831f95498b695850630818a2a09c0215f4722199a38ec5f55f2")
         );
         assert_eq!(
             sccp_exact_tron_xor_route_config_hash_v1(
@@ -2441,7 +2441,7 @@ mod tests {
                 7,
             )
             .expect("valid exact TRON route"),
-            hex32("3546ddb81c89ee998e9eaf7a517b6a59346f8dd28a4727de87dac33da4f04c5f")
+            hex32("604815ec629f4d8438f44fccc63ff37ac3a96cd71e23495b86779fd0fe68295f")
         );
     }
 
@@ -2975,7 +2975,7 @@ mod tests {
         );
         assert_eq!(
             sccp_sora_taira_chain_id_hash_v1(),
-            hex32("3f139c4b2a31457994d17be5ce922d87fc702939116359f0e47314ab36a7f588")
+            hex32("cf1cfc0f57b0bfa4c21882a9870317a1f4812f86533897095e3944be34c5bba7")
         );
         assert_eq!(
             profile_hash,
@@ -2983,7 +2983,7 @@ mod tests {
         );
         assert_eq!(
             anchor_hash,
-            hex32("60c7628fe7a8e8c6a73a21ef30c270b6944bb33a4feb03e0b302aabe210cf0c6")
+            hex32("7dda271d98d9e4333093da84236157e39ce67f6f68680fedbdc17fbe8b7b6a4a")
         );
         assert_ne!(profile_hash, [0; 32]);
         assert_ne!(anchor_hash, [0; 32]);

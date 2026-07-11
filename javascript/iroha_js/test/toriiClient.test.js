@@ -5596,12 +5596,14 @@ test("fetchDaPayloadViaGateway fetches manifest bundle and invokes gateway", asy
     {
       name: "alpha",
       providerIdHex: "bb".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
       baseUrl: "https://gateway.test/",
       streamTokenB64: "dG9rZW4=",
     },
     {
       name: "beta",
       providerIdHex: "cc".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
       baseUrl: "https://gateway-two.test/",
       streamTokenB64: "dG9rZW4y",
     },
@@ -5623,6 +5625,7 @@ test("fetchDaPayloadViaGateway fetches manifest bundle and invokes gateway", asy
   assert.equal(handleArg, chunkerHandle);
   assert.ok(planJsonArg.includes('"chunk_index":0'));
   assert.equal(providerArg.length, 2);
+  assert.equal(providerArg[0].gatewayPublicKeyHex, "dd".repeat(32));
 });
 
 test("fetchDaPayloadViaGateway validates signal option", async () => {
@@ -5649,14 +5652,16 @@ test("fetchDaPayloadViaGateway validates signal option", async () => {
     {
       name: "alpha",
       providerIdHex: "11".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
       baseUrl: "https://gateway.test",
-      streamTokenB64: bufferToBase64Url(Buffer.from("token")),
+      streamTokenB64: Buffer.from("token").toString("base64"),
     },
     {
       name: "beta",
       providerIdHex: "22".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
       baseUrl: "https://gateway-two.test",
-      streamTokenB64: bufferToBase64Url(Buffer.from("token-2")),
+      streamTokenB64: Buffer.from("token-2").toString("base64"),
     },
   ];
   const client = new ToriiClient(BASE_URL, {
@@ -5716,12 +5721,14 @@ test("fetchDaPayloadViaGateway rejects invalid stream tokens", async () => {
           {
             name: "alpha",
             providerIdHex: "11".repeat(32),
+            gatewayPublicKeyHex: "dd".repeat(32),
             baseUrl: "https://gateway.one",
             streamTokenB64: "not-base64!!",
           },
           {
             name: "beta",
             providerIdHex: "22".repeat(32),
+            gatewayPublicKeyHex: "dd".repeat(32),
             baseUrl: "https://gateway.two",
             streamTokenB64: "dG9rZW4y",
           },
@@ -5748,9 +5755,10 @@ test("fetchDaPayloadViaGateway uses custom hooks", async (t) => {
   const providers = [
     {
       name: "alpha",
-      providerIdHex: `0x${"ee".repeat(32)}`,
+      providerIdHex: "ee".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
       baseUrl: "https://gateway.test",
-      streamTokenB64: bufferToBase64Url(Buffer.from("token")),
+      streamTokenB64: Buffer.from("token").toString("base64"),
     },
   ];
   const gatewayMock = t.mock.fn(() => ({
@@ -5859,12 +5867,14 @@ test("fetchDaPayloadViaGateway reuses provided manifest bundle", async (t) => {
       {
         name: "beta",
         providerIdHex: "22".repeat(32),
+        gatewayPublicKeyHex: "dd".repeat(32),
         baseUrl: "https://gateway.example/",
         streamTokenB64: "c3R1Yg==",
       },
       {
         name: "gamma",
         providerIdHex: "33".repeat(32),
+        gatewayPublicKeyHex: "dd".repeat(32),
         baseUrl: "https://gateway-two.example/",
         streamTokenB64: "c3R1Yi0y",
       },
@@ -5896,12 +5906,14 @@ test("fetchDaPayloadViaGateway accepts providers alias", async (t) => {
     {
       name: "gamma",
       providerIdHex: "98".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
       baseUrl: "https://gateway.test",
       streamTokenB64: Buffer.from("token").toString("base64"),
     },
     {
       name: "delta",
       providerIdHex: "97".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
       baseUrl: "https://gateway-two.test",
       streamTokenB64: Buffer.from("token-2").toString("base64"),
     },
@@ -6027,12 +6039,14 @@ test("fetchDaPayloadViaGateway attaches proof summary when requested", async (t)
       {
         name: "alpha",
         providerIdHex: "bb".repeat(32),
+        gatewayPublicKeyHex: "dd".repeat(32),
         baseUrl: "https://gateway.test/",
         streamTokenB64: "dG9rZW4=",
       },
       {
         name: "beta",
         providerIdHex: "bc".repeat(32),
+        gatewayPublicKeyHex: "dd".repeat(32),
         baseUrl: "https://gateway-two.test/",
         streamTokenB64: "dG9rZW4y",
       },
@@ -6074,6 +6088,7 @@ test("fetchDaPayloadViaGateway rejects invalid manifest_b64 for proof summary", 
           {
             name: "alpha",
             providerIdHex: "bb".repeat(32),
+            gatewayPublicKeyHex: "dd".repeat(32),
             baseUrl: "https://gateway.test/",
             streamTokenB64: "dG9rZW4=",
           },
@@ -6375,12 +6390,14 @@ test("proveDaAvailabilityToDir persists CLI artefacts", async () => {
         {
           name: "alpha",
           providerIdHex: "bb".repeat(32),
+          gatewayPublicKeyHex: "dd".repeat(32),
           baseUrl: "https://gateway.test/",
           streamTokenB64: Buffer.from("token").toString("base64"),
         },
         {
           name: "beta",
           providerIdHex: "bc".repeat(32),
+          gatewayPublicKeyHex: "dd".repeat(32),
           baseUrl: "https://gateway-two.test/",
           streamTokenB64: Buffer.from("token-2").toString("base64"),
         },
@@ -10658,8 +10675,8 @@ test("getSumeragiStatusTyped normalizes governance seals", async () => {
     return createResponse({
       status: 200,
       jsonData: {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v1",
-        staged_mode_tag: "iroha2-consensus::npos-sumeragi@v1",
+        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
+        staged_mode_tag: "iroha2-consensus::npos-sumeragi@v2",
         staged_mode_activation_height: "10",
         mode_activation_lag_blocks: 2,
         consensus_caps: {
@@ -10754,8 +10771,8 @@ test("getSumeragiStatusTyped normalizes governance seals", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const payload = await client.getSumeragiStatusTyped();
-  assert.equal(payload.mode_tag, "iroha2-consensus::permissioned-sumeragi@v1");
-  assert.equal(payload.staged_mode_tag, "iroha2-consensus::npos-sumeragi@v1");
+  assert.equal(payload.mode_tag, "iroha2-consensus::permissioned-sumeragi@v2");
+  assert.equal(payload.staged_mode_tag, "iroha2-consensus::npos-sumeragi@v2");
   assert.equal(payload.staged_mode_activation_height, 10);
   assert.equal(payload.mode_activation_lag_blocks, 2);
   assert.ok(payload.consensus_caps);
@@ -10849,7 +10866,7 @@ test("getSumeragiStatusTyped parses settlement and relay envelopes", async () =>
     createResponse({
       status: 200,
       jsonData: {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v1",
+        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
         lane_settlement_commitments: [
           {
             block_height: "21",
@@ -10934,7 +10951,7 @@ test("getSumeragiStatusTyped rejects invalid relay settlement hash", async () =>
     createResponse({
       status: 200,
       jsonData: {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v1",
+        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
         lane_relay_envelopes: [
           {
             lane_id: 1,
@@ -10968,7 +10985,7 @@ test("getSumeragiStatusTyped rejects invalid relay fastpq_proof digest", async (
     createResponse({
       status: 200,
       jsonData: {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v1",
+        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
         lane_relay_envelopes: [
           {
             lane_id: 1,
@@ -11149,7 +11166,7 @@ test("getSumeragiCommitQc fetches commit QC record", async () => {
           height: "12",
           view: "3",
           epoch: "4",
-          mode_tag: "iroha2-consensus::permissioned-sumeragi@v1",
+          mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
           validator_set_hash: "dd".repeat(32),
           validator_set_hash_version: 1,
           validator_set: ["alice@test", "bob@test"],
@@ -19621,7 +19638,7 @@ test("registerContractCode preserves branded romanized and Japanese lifecycle se
           name: "transfer",
           kind: "Kotoage",
           permission: "TransferAsset",
-          params: [{ name: "amount", typeName: "Option<i64>" }],
+          params: [{ name: "amount", typeName: "Option<int>" }],
           argumentSchema: {
             fields: [
               {
@@ -19662,7 +19679,7 @@ test("registerContractCode preserves branded romanized and Japanese lifecycle se
 
 const QUERY_VIEW_LAYOUTS = new Map([
   ["AccountView", { fields: ["id", "metadata"], children: ["AccountId", "Json"] }],
-  ["AssetView", { fields: ["id", "amount"], children: ["AssetId", "Amount"] }],
+  ["AssetView", { fields: ["id", "amount"], children: ["AssetId", "Quantity"] }],
   [
     "AssetDefinitionView",
     {
@@ -19672,7 +19689,7 @@ const QUERY_VIEW_LAYOUTS = new Map([
         "String",
         ["Option", "String"],
         "AccountId",
-        "Amount",
+        "Quantity",
         "Json",
       ],
     },
@@ -19832,7 +19849,7 @@ test("registerContractCode accepts the flat List tape at depth 256", async () =>
     value: { capacity: 1 },
   }));
   listNodes.push({ kind: "Leaf", value: { kind: "Int", value: null } });
-  let returnType = "i64";
+  let returnType = "int";
   for (let depth = 0; depth < 255; depth += 1) {
     returnType = `List<${returnType}, 1>`;
   }
@@ -19867,7 +19884,7 @@ test("registerContractCode rejects malformed and over-depth flat List tapes befo
       return createResponse({ status: 202 });
     },
   });
-  const submit = (nodes, returnType = "List<i64, 1>") =>
+  const submit = (nodes, returnType = "List<int, 1>") =>
     client.registerContractCode({
       authority: FIXTURE_ALICE_ID,
       privateKey: "ed25519:deadbeef",
@@ -19921,7 +19938,7 @@ test("registerContractCode rejects forged branded manifest declarations before f
     "",
     "seiyaku",
     "match",
-    "i64",
+    "int",
     "state_map_get",
     "__kotodama_link_forged",
     "９ledger",
@@ -19997,7 +20014,7 @@ test("registerContractCode rejects forged branded manifest declarations before f
           name: "mutate",
           kind: "Kotoage",
           permission: "Mutate",
-          params: [{ name: "value", typeName: "i64" }],
+          params: [{ name: "value", typeName: "int" }],
         },
       ],
     }),
@@ -20010,7 +20027,7 @@ test("registerContractCode rejects forged branded manifest declarations before f
           name: "mutate",
           kind: "Kotoage",
           permission: "Mutate",
-          params: [{ name: "match", typeName: "i64" }],
+          params: [{ name: "match", typeName: "int" }],
         },
       ],
     }),
@@ -20022,7 +20039,7 @@ test("registerContractCode rejects forged branded manifest declarations before f
         {
           name: "read",
           kind: "View",
-          returnType: "List<i64, 0>",
+          returnType: "List<int, 0>",
           returnSchema: {
             nodes: [
               {
@@ -20043,7 +20060,7 @@ test("registerContractCode rejects forged branded manifest declarations before f
         {
           name: "read",
           kind: "View",
-          returnType: "i64",
+          returnType: "int",
           returnSchema: {
             nodes: [
               { kind: "Leaf", value: { kind: "Int", value: null } },
@@ -21279,6 +21296,151 @@ test("getMultisigSpec accepts domain-scoped aliases and rejects unsupported alia
         multisigAccountAlias: "cbdc@banka.universal.extra",
       }),
     /must use name@dataspace or name@domain.dataspace form/,
+  );
+});
+
+test("IVM proved contract helpers simulate, derive, prove, and poll authoritative payloads", async () => {
+  const jobId = "ab".repeat(16);
+  const proved = {
+    bytecode: "Y29kZQ==",
+    overlay: [],
+    events_commitment: "01".repeat(32),
+    gas_policy_commitment: "02".repeat(32),
+  };
+  const attachment = {
+    backend: "halo2/ipa",
+    proof: { backend: "halo2/ipa", bytes: [1, 2, 3] },
+    vk_ref: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+  };
+  const calls = [];
+  let statusReads = 0;
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    if (url.endsWith("/v1/contracts/call/simulate")) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          ok: true,
+          dataspace: "universal",
+          contract_address: "tairac1routerfixture",
+          code_hash_hex: "11".repeat(32),
+          abi_hash_hex: "22".repeat(32),
+          entrypoint: "route_swap",
+          normalized_payload: { amount: 7 },
+          gas_limit: 5000,
+          gas_used: 800,
+          queued_instructions: [],
+          result: null,
+          error: null,
+          vm_diagnostic: null,
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith("/v1/zk/ivm/derive")) {
+      return createResponse({
+        status: 200,
+        jsonData: { proved },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith("/v1/zk/ivm/prove") && init.method === "POST") {
+      return createResponse({
+        status: 202,
+        jsonData: { job_id: jobId },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith(`/v1/zk/ivm/prove/${jobId}`)) {
+      statusReads += 1;
+      return createResponse({
+        status: 200,
+        jsonData:
+          statusReads === 1
+            ? {
+                job_id: jobId,
+                status: "running",
+                error: null,
+                proved: null,
+                attachment: null,
+              }
+            : {
+                job_id: jobId,
+                status: "done",
+                error: null,
+                proved,
+                attachment,
+              },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected request ${init.method} ${url}`);
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const simulation = await client.simulateContractCall({
+    authority: SAMPLE_ACCOUNT_ID,
+    contractAlias: "dlmm_router::dlmm.universal",
+    entrypoint: "route_swap",
+    payload: { amount: 7 },
+    gasLimit: 5000,
+  });
+  assert.equal(simulation.ok, true);
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    authority: SAMPLE_ACCOUNT_ID,
+    contract_alias: "dlmm_router::dlmm.universal",
+    entrypoint: "route_swap",
+    payload: { amount: 7 },
+    gas_limit: 5000,
+  });
+
+  const proofRequest = {
+    vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+    authority: SAMPLE_ACCOUNT_ID,
+    metadata: {
+      contract_address: simulation.contract_address,
+      contract_entrypoint: simulation.entrypoint,
+      contract_payload: simulation.normalized_payload,
+      gas_limit: simulation.gas_limit,
+    },
+    bytecode: proved.bytecode,
+  };
+  const derived = await client.deriveIvmProved(proofRequest);
+  assert.deepEqual(derived, { proved });
+  const completed = await client.proveIvmAndWait(
+    { ...proofRequest, proved: derived.proved },
+    { intervalMs: 0, timeoutMs: 1000 },
+  );
+  assert.equal(statusReads, 2);
+  assert.equal(completed.status, "done");
+  assert.deepEqual(completed.proved, proved);
+  assert.deepEqual(completed.attachment, attachment);
+
+  const deriveBody = JSON.parse(calls[1].init.body);
+  const proveBody = JSON.parse(calls[2].init.body);
+  assert.deepEqual(deriveBody.metadata, proofRequest.metadata);
+  assert.deepEqual(proveBody.metadata, proofRequest.metadata);
+  assert.deepEqual(proveBody.proved, proved);
+});
+
+test("waitForIvmProveJob fails closed when a done job omits proof material", async () => {
+  const jobId = "cd".repeat(16);
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          job_id: jobId,
+          status: "done",
+          error: null,
+          proved: null,
+          attachment: null,
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () => client.waitForIvmProveJob(jobId, { intervalMs: 0 }),
+    /completed without proved payload and attachment/,
   );
 });
 

@@ -35,7 +35,8 @@ use crate::{
     host::{
         IVMHost, checked_state_keys_limit, common_syscall_gas_quote,
         conservative_syscall_gas_quote, is_sm_syscall, preflight_reserved_syscall_gas,
-        quote_tlv_payload_len_at, reserve_available_syscall_gas,
+        quote_tlv_payload_len_at, require_host_syscall_metering_spec,
+        reserve_available_syscall_gas, reserve_available_syscall_gas_at_least,
     },
     ivm::IVM,
     parallel::StateUpdate,
@@ -2390,11 +2391,8 @@ impl WsvHost {
     }
 
     fn state_value_payload_len(stored: &[u8]) -> Result<usize, VMError> {
-        match pointer_abi::validate_tlv_bytes(stored) {
-            Ok(tlv) if tlv.type_id == PointerType::NoritoBytes => Ok(tlv.payload.len()),
-            Ok(_) => Err(VMError::NoritoInvalid),
-            Err(_) => Ok(stored.len()),
-        }
+        crate::host::validate_state_value_payload_len(stored.len())?;
+        Ok(stored.len())
     }
 
     fn state_value_len(&self, key: &str) -> Result<Option<usize>, VMError> {
@@ -2564,21 +2562,14 @@ impl WsvHost {
     }
 
     fn load_state_value(vm: &mut IVM, stored: &[u8]) -> Result<(), VMError> {
-        let mut env = stored.to_vec();
-        if let Ok(inner) = pointer_abi::validate_tlv_bytes(&env) {
-            if inner.type_id != PointerType::NoritoBytes {
-                return Err(VMError::NoritoInvalid);
-            }
-        } else {
-            let mut out = Vec::with_capacity(7 + env.len() + iroha_crypto::Hash::LENGTH);
-            out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
-            out.push(1);
-            out.extend_from_slice(&(env.len() as u32).to_be_bytes());
-            out.extend_from_slice(&env);
-            let h: [u8; iroha_crypto::Hash::LENGTH] = iroha_crypto::Hash::new(&env).into();
-            out.extend_from_slice(&h);
-            env = out;
-        }
+        crate::host::validate_state_value_payload_len(stored.len())?;
+        let mut env = Vec::with_capacity(7 + stored.len() + iroha_crypto::Hash::LENGTH);
+        env.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
+        env.push(1);
+        env.extend_from_slice(&(stored.len() as u32).to_be_bytes());
+        env.extend_from_slice(stored);
+        let h: [u8; iroha_crypto::Hash::LENGTH] = iroha_crypto::Hash::new(stored).into();
+        env.extend_from_slice(&h);
         let p = vm.alloc_host_tlv(&env)?;
         vm.set_register(10, p);
         Ok(())
@@ -2750,7 +2741,7 @@ impl WsvHost {
     /// Decode one canonical V1 `Amount` argument from a register.
     fn decode_amount_reg(&self, vm: &IVM, reg: usize) -> Result<Numeric, VMError> {
         let tlv = vm.validate_tlv(vm.register(reg))?;
-        if tlv.type_id != PointerType::Amount {
+        if tlv.type_id != PointerType::Quantity {
             return Err(VMError::NoritoInvalid);
         }
         let amount = decode_from_bytes::<Numeric>(tlv.payload).map_err(|_| VMError::DecodeError)?;
@@ -3318,15 +3309,15 @@ fn parse_permission_name(s: &str) -> Result<PermissionToken, VMError> {
     Ok(PermissionToken::Custom(s.to_string()))
 }
 
-const PUBLIC_INPUT_GAS_BASE: u64 = 16;
-const PUBLIC_INPUT_GAS_PER_BYTE: u64 = 1;
-const DEBUG_GAS: u64 = 16;
-const INPUT_PUBLISH_GAS_BASE: u64 = 16;
-const INPUT_PUBLISH_GAS_PER_BYTE: u64 = 1;
-const MUTATION_GAS: u64 = 16;
-const MUTATION_GAS_PER_BYTE: u64 = 1;
-const AXT_GAS_BASE: u64 = 16;
-const AXT_GAS_PER_BYTE: u64 = 1;
+const PUBLIC_INPUT_GAS_BASE: u64 = gas::HOST_BYTE_GAS_BASE;
+const PUBLIC_INPUT_GAS_PER_BYTE: u64 = gas::SYSCALL_GAS_PER_BYTE;
+const DEBUG_GAS: u64 = gas::HOST_DEBUG_GAS_BASE;
+const INPUT_PUBLISH_GAS_BASE: u64 = gas::HOST_BYTE_GAS_BASE;
+const INPUT_PUBLISH_GAS_PER_BYTE: u64 = gas::SYSCALL_GAS_PER_BYTE;
+const MUTATION_GAS: u64 = gas::HOST_BYTE_GAS_BASE;
+const MUTATION_GAS_PER_BYTE: u64 = gas::SYSCALL_GAS_PER_BYTE;
+const AXT_GAS_BASE: u64 = gas::HOST_BYTE_GAS_BASE;
+const AXT_GAS_PER_BYTE: u64 = gas::SYSCALL_GAS_PER_BYTE;
 
 /// Parse a JSON payload and return either the raw string value or selected field contents.
 fn parse_json_value_any(bytes: &[u8]) -> Result<njson::Value, VMError> {
@@ -3523,8 +3514,9 @@ fn parse_permission_name_any(bytes: &[u8]) -> Result<PermissionToken, VMError> {
 
 impl IVMHost for WsvHost {
     fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
-        if !crate::syscalls::is_syscall_allowed(vm.syscall_policy(), number) {
-            return Err(VMError::UnknownSyscall(number));
+        let metering = require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
+        if metering.metering == crate::syscall_metering::SyscallMetering::Staged {
+            return Ok(0);
         }
         if is_sm_syscall(number) && !self.sm_enabled {
             return Ok(0);
@@ -3544,23 +3536,25 @@ impl IVMHost for WsvHost {
             return crate::core_host::CoreHost::new().prepare_syscall(number, vm);
         }
 
-        let state_quote = match number {
-            crate::syscalls::SYSCALL_STATE_GET
-            | crate::syscalls::SYSCALL_STATE_LEN
-            | crate::syscalls::SYSCALL_STATE_KEYS
-            | crate::syscalls::SYSCALL_STATE_COUNT => Some(reserve_available_syscall_gas(vm)?),
-            crate::syscalls::SYSCALL_STATE_SET => {
-                quote_tlv_payload_len_at(vm, vm.register(10), PointerType::Name)?;
-                let value_len =
-                    quote_tlv_payload_len_at(vm, vm.register(11), PointerType::NoritoBytes)?;
-                Some(Self::state_query_gas(value_len))
-            }
-            crate::syscalls::SYSCALL_STATE_DEL | crate::syscalls::SYSCALL_STATE_HAS => Some(16),
-            crate::syscalls::SYSCALL_CORE_QUERY_GET | crate::syscalls::SYSCALL_CORE_QUERY_PAGE => {
-                Some(Self::state_query_gas(0))
-            }
-            _ => None,
-        };
+        let state_quote =
+            match number {
+                crate::syscalls::SYSCALL_STATE_GET
+                | crate::syscalls::SYSCALL_STATE_LEN
+                | crate::syscalls::SYSCALL_STATE_KEYS
+                | crate::syscalls::SYSCALL_STATE_COUNT => Some(
+                    reserve_available_syscall_gas_at_least(vm, metering.minimum_gas)?,
+                ),
+                crate::syscalls::SYSCALL_STATE_SET => {
+                    quote_tlv_payload_len_at(vm, vm.register(10), PointerType::Name)?;
+                    let value_len =
+                        quote_tlv_payload_len_at(vm, vm.register(11), PointerType::NoritoBytes)?;
+                    Some(Self::state_query_gas(value_len))
+                }
+                crate::syscalls::SYSCALL_STATE_DEL | crate::syscalls::SYSCALL_STATE_HAS => Some(16),
+                crate::syscalls::SYSCALL_CORE_QUERY_GET
+                | crate::syscalls::SYSCALL_CORE_QUERY_PAGE => Some(Self::state_query_gas(0)),
+                _ => None,
+            };
         if let Some(quote) = state_quote {
             return Ok(quote);
         }
@@ -3583,11 +3577,9 @@ impl IVMHost for WsvHost {
     }
 
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
-        if !crate::syscalls::is_syscall_allowed(vm.syscall_policy(), number) {
-            return Err(VMError::UnknownSyscall(number));
-        }
-        if crate::syscalls::is_amount_syscall(number) {
-            return crate::amount::execute(number, vm);
+        require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
+        if crate::syscalls::is_numeric_v1_syscall(number) {
+            return crate::numeric_v1::execute(number, vm);
         }
         let canonical = crate::syscalls::canonical_helper_syscall(number);
         if crate::syscalls::is_json_getter_syscall(canonical) {
@@ -3673,15 +3665,8 @@ impl IVMHost for WsvHost {
                 let path_name = self.decode_name_payload(p_path.payload)?;
                 let path = path_name.as_ref();
                 self.log_write_key(path);
-                let mut stored =
-                    Vec::with_capacity(7 + p_val.payload.len() + iroha_crypto::Hash::LENGTH);
-                stored.extend_from_slice(&(p_val.type_id as u16).to_be_bytes());
-                stored.push(p_val.version);
-                stored.extend_from_slice(&(p_val.payload.len() as u32).to_be_bytes());
-                stored.extend_from_slice(p_val.payload);
-                let h: [u8; iroha_crypto::Hash::LENGTH] =
-                    iroha_crypto::Hash::new(p_val.payload).into();
-                stored.extend_from_slice(&h);
+                crate::host::validate_state_value_payload_len(p_val.payload.len())?;
+                let stored = p_val.payload.to_vec();
                 if self.tx_active {
                     if crate::dev_env::decode_trace_enabled() {
                         eprintln!(
@@ -4321,7 +4306,7 @@ impl IVMHost for WsvHost {
                         let amount = parse_json_amount_field(field)?;
                         let body = norito::to_bytes(&amount).map_err(|_| VMError::NoritoInvalid)?;
                         let mut out = Vec::with_capacity(7 + body.len() + 32);
-                        out.extend_from_slice(&(PointerType::Amount as u16).to_be_bytes());
+                        out.extend_from_slice(&(PointerType::Quantity as u16).to_be_bytes());
                         out.push(1);
                         out.extend_from_slice(&(body.len() as u32).to_be_bytes());
                         out.extend_from_slice(&body);
@@ -8813,7 +8798,7 @@ mod tests_null_decode {
         .expect("Amount option");
         assert!(some);
         let tlv = vm.memory.validate_tlv(words[0]).expect("Amount TLV");
-        assert_eq!(tlv.type_id, PointerType::Amount);
+        assert_eq!(tlv.type_id, PointerType::Quantity);
         let amount: Numeric = decode_from_bytes(tlv.payload).expect("decode Amount");
         amount.validate_amount().expect("canonical Amount");
         assert_eq!(amount, Numeric::new(125_u32, 2));
@@ -8850,7 +8835,7 @@ mod tests_null_decode {
         let canonical = Numeric::new(125_u32, 2);
         let canonical_payload = norito::to_bytes(&canonical).expect("encode canonical Amount");
         let canonical_ptr = vm
-            .alloc_input_tlv(&make_tlv(PointerType::Amount, &canonical_payload))
+            .alloc_input_tlv(&make_tlv(PointerType::Quantity, &canonical_payload))
             .expect("allocate canonical Amount");
         vm.set_register(12, canonical_ptr);
         assert_eq!(host.decode_amount_reg(&vm, 12), Ok(canonical));
@@ -8864,7 +8849,7 @@ mod tests_null_decode {
         let noncanonical = Numeric::new(1_250_u32, 3);
         let noncanonical_ptr = vm
             .alloc_input_tlv(&make_tlv(
-                PointerType::Amount,
+                PointerType::Quantity,
                 &norito::to_bytes(&noncanonical).expect("encode noncanonical Amount"),
             ))
             .expect("allocate noncanonical Amount");

@@ -742,6 +742,69 @@ impl Actor {
             Err(outcome) => return outcome,
         };
         let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        if pending.height <= local_height {
+            let pending_height = pending.height;
+            let pending_view = pending.view;
+            let committed_hash = self.state.latest_block_hash_fast();
+            let matches_committed = committed_hash.is_some_and(|committed| committed == hash);
+            debug!(
+                height = pending.height,
+                view = pending.view,
+                local_height,
+                block = %hash,
+                committed_hash = ?committed_hash,
+                matches_committed,
+                "dropping stale pending block before validation"
+            );
+            if matches_committed {
+                self.clean_rbc_sessions_for_committed_block_if_settled(hash, pending_height);
+            } else {
+                let mut report = requeue_block_transactions(
+                    self.queue.as_ref(),
+                    self.state.as_ref(),
+                    pending.block.external_entrypoints_cloned(),
+                );
+                let failures = report.failures();
+                if failures > 0 {
+                    warn!(
+                        height = pending.height,
+                        view = pending.view,
+                        failures,
+                        block = %hash,
+                        "failed to requeue some transactions after dropping stale pending block"
+                    );
+                }
+                if report.requires_retry() {
+                    let retry_payload = report.take_retryable_entrypoints();
+                    pending.mark_requeue_pending(
+                        Instant::now(),
+                        super::PENDING_REQUEUE_BASE_BACKOFF,
+                        retry_payload,
+                    );
+                    self.pending.pending_blocks.insert(hash, pending);
+                }
+                self.clean_rbc_sessions_for_block(hash, pending_height);
+            }
+            self.clear_validation_ownership_for_block(hash);
+            self.qc_cache
+                .retain(|(_, cached_hash, _, _, _, _, _), _| cached_hash != &hash);
+            self.qc_signer_tally
+                .retain(|(_, cached_hash, _, _, _, _, _), _| cached_hash != &hash);
+            self.block_signer_cache.remove_block(&hash);
+            self.subsystems
+                .propose
+                .proposal_cache
+                .pop_proposal(pending_height, pending_view);
+            self.subsystems
+                .propose
+                .proposal_cache
+                .pop_hint(pending_height, pending_view);
+            self.subsystems
+                .propose
+                .proposal_cache
+                .prune_height_leq(local_height);
+            return ValidationGateOutcome::Deferred;
+        }
         if pending.height == local_height.saturating_add(1) {
             let expected_parent = self.state.view().latest_block_hash();
             let actual_parent = pending.block.header().prev_block_hash();
@@ -991,6 +1054,9 @@ impl Actor {
                 ValidationGateOutcome::Valid
             }
             Err(err) => {
+                if let BlockValidationError::MissingCertifiedMergeSidecar { entry_hash } = &err {
+                    return self.defer_missing_certified_merge_sidecar(hash, pending, *entry_hash);
+                }
                 if let BlockValidationError::PrevBlockHeightMismatch { expected, actual } = &err {
                     if let Some(parent_hash) = pending.block.header().prev_block_hash() {
                         self.request_missing_parent(
@@ -1036,6 +1102,124 @@ impl Actor {
                     return ValidationGateOutcome::Valid;
                 }
                 self.finalize_validation_failure(hash, pending, &err)
+            }
+        }
+    }
+
+    fn defer_missing_certified_merge_sidecar(
+        &mut self,
+        hash: HashOf<BlockHeader>,
+        mut pending: PendingBlock,
+        entry_hash: HashOf<MergeLedgerEntry>,
+    ) -> ValidationGateOutcome {
+        let reference = pending
+            .block
+            .execution_context()
+            .and_then(|bundle| bundle.merge_entry.as_ref())
+            .filter(|reference| reference.entry_hash == entry_hash)
+            .cloned();
+        let Some(reference) = reference else {
+            let error = BlockValidationError::ExecutionContextInvalid(
+                "missing-sidecar validation outcome has no matching compact reference".to_owned(),
+            );
+            return self.finalize_validation_failure(hash, pending, &error);
+        };
+        let committed_height = self.committed_height_snapshot();
+        let requester = self.common_config.peer.id().clone();
+        match self.subsystems.merge.sidecars.defer_block(
+            hash,
+            pending.height,
+            pending.view,
+            reference,
+            &requester,
+            committed_height,
+            Instant::now(),
+        ) {
+            Ok(Some(post)) => self.post_certified_merge_sidecar(post),
+            Ok(None) => {}
+            Err(error) => {
+                warn!(
+                    block = %hash,
+                    height = pending.height,
+                    view = pending.view,
+                    %entry_hash,
+                    ?error,
+                    "certified merge-sidecar fetch is deferred by a bounded transport guard"
+                );
+            }
+        }
+        pending.validation_status = ValidationStatus::Pending;
+        pending.parent_state_root = None;
+        pending.post_state_root = None;
+        pending.validated_commit_artifact = None;
+        pending.touch_progress(Instant::now());
+        self.pending.pending_blocks.insert(hash, pending);
+        debug!(
+            block = %hash,
+            %entry_hash,
+            "deferred block validation pending authenticated certified merge sidecar"
+        );
+        ValidationGateOutcome::Deferred
+    }
+
+    pub(super) fn resume_certified_merge_sidecar_blocks(
+        &mut self,
+        deferred: Vec<(HashOf<BlockHeader>, u64, u64)>,
+    ) {
+        let mut slots = Vec::new();
+        for (hash, height, view) in deferred {
+            let Some(pending) = self.pending.pending_blocks.get_mut(&hash) else {
+                continue;
+            };
+            if pending.height != height || pending.view != view {
+                continue;
+            }
+            pending.validation_status = ValidationStatus::Pending;
+            pending.parent_state_root = None;
+            pending.post_state_root = None;
+            pending.validated_commit_artifact = None;
+            pending.touch_progress(Instant::now());
+            if let Some(slot) = self
+                .vnext_rounds
+                .get(&(height, view))
+                .and_then(|round| round.slot(hash))
+                .map(|slot| slot.slot)
+            {
+                slots.push(slot);
+            }
+        }
+        for slot in slots {
+            let _ = self.mark_vnext_validation_deferred(slot);
+        }
+        self.request_commit_pipeline();
+    }
+
+    pub(super) fn reject_invalid_certified_merge_sidecar_blocks(
+        &mut self,
+        deferred: Vec<(HashOf<BlockHeader>, u64, u64)>,
+        reason: String,
+    ) {
+        for (hash, height, view) in deferred {
+            let Some(pending) = self.pending.pending_blocks.remove(&hash) else {
+                continue;
+            };
+            if pending.height != height || pending.view != view {
+                self.pending.pending_blocks.insert(hash, pending);
+                continue;
+            }
+            let error = BlockValidationError::ExecutionContextInvalid(format!(
+                "certified merge sidecar is invalid: {reason}"
+            ));
+            if let ValidationGateOutcome::Invalid {
+                hash,
+                height,
+                view,
+                reason,
+                reason_label,
+                evidence,
+            } = self.finalize_validation_failure(hash, pending, &error)
+            {
+                self.handle_validation_reject(hash, height, view, evidence, reason, reason_label);
             }
         }
     }
@@ -1283,6 +1467,19 @@ impl Actor {
                             "dropping late validation result after frontier owner supersede"
                         );
                         self.pending.pending_blocks.insert(hash, pending);
+                        progress = true;
+                        continue;
+                    }
+
+                    if let Err(BlockValidationError::MissingCertifiedMergeSidecar { entry_hash }) =
+                        &outcome
+                    {
+                        if let Some((slot, _)) = vnext_result.take() {
+                            let _ = self.mark_vnext_validation_deferred(slot);
+                        }
+                        let _ =
+                            self.defer_missing_certified_merge_sidecar(hash, pending, *entry_hash);
+                        self.request_commit_pipeline();
                         progress = true;
                         continue;
                     }
@@ -1558,14 +1755,18 @@ impl Actor {
             return;
         }
 
+        let retained_retry_owner = pending.requeue_pending;
         let should_requeue =
             pending.validation_status != ValidationStatus::Invalid && !pending.aborted;
+        let mut retry_payload = Vec::new();
         if should_requeue {
-            let (_requeued, failures, _duplicates, _) = requeue_block_transactions(
+            let mut report = requeue_block_transactions(
                 self.queue.as_ref(),
                 self.state.as_ref(),
                 pending.block.external_entrypoints_cloned(),
             );
+            let failures = report.failures();
+            retry_payload = report.take_retryable_entrypoints();
             if failures > 0 {
                 warn!(
                     height = slot.height,
@@ -1577,8 +1778,22 @@ impl Actor {
             }
         }
         pending.validation_status = ValidationStatus::Invalid;
-        pending.mark_aborted();
-        let _ = pending;
+        if !retry_payload.is_empty() {
+            pending.mark_requeue_pending(
+                Instant::now(),
+                super::PENDING_REQUEUE_BASE_BACKOFF,
+                retry_payload,
+            );
+            self.pending.pending_blocks.insert(slot.block_hash, pending);
+        } else if retained_retry_owner {
+            debug_assert!(
+                !pending.requeue_retry_payload.is_empty(),
+                "retained requeue owner must carry exact retry payload"
+            );
+            self.pending.pending_blocks.insert(slot.block_hash, pending);
+        } else {
+            pending.mark_aborted();
+        }
 
         self.subsystems.validation.inflight.remove(&slot.block_hash);
         self.subsystems
@@ -1722,12 +1937,21 @@ impl Actor {
                 )
             })
             .map(Box::new);
-        let (_requeued, failures, _duplicates, _) = requeue_block_transactions(
+        let mut report = requeue_block_transactions(
             self.queue.as_ref(),
             self.state.as_ref(),
             pending.block.external_entrypoints_cloned(),
         );
-        let _ = pending;
+        let failures = report.failures();
+        if report.requires_retry() {
+            let retry_payload = report.take_retryable_entrypoints();
+            pending.mark_requeue_pending(
+                Instant::now(),
+                super::PENDING_REQUEUE_BASE_BACKOFF,
+                retry_payload,
+            );
+            self.pending.pending_blocks.insert(hash, pending);
+        }
         if failures > 0 {
             warn!(
                 height,

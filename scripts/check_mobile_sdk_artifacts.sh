@@ -10,7 +10,12 @@ Checks that the Iroha mobile SDK packaging surface is ready for wallet
 integration:
   - SwiftPM package manifest and NoritoBridge binary target exist.
   - NoritoBridge.xcframework contains iOS device, iOS simulator, and macOS slices.
-  - NoritoBridge.artifacts.json records per-slice SHA-256 hashes.
+  - NoritoBridge.artifacts.json records per-slice SHA-256 hashes and the
+    privacy-production feature state, which must match the XCFramework marker.
+  - Every manifest hash matches the actual slice, all headers are identical,
+    and the manifest ABI/source fingerprint matches the checked-out bridge.
+  - Apple archives contain their declared architectures and the complete
+    Kagemusha recursive-spend symbol surface.
   - Kotlin/Android SDK modules are included and publishable.
 
 By default Android build outputs are not required. Pass --require-built-android
@@ -184,6 +189,60 @@ plist_contains() {
   return 1
 }
 
+hash_file() {
+  local path="$1"
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$path" | awk '{print $1}'
+  else
+    sha256sum "$path" | awk '{print $1}'
+  fi
+}
+
+manifest_json_value() {
+  local manifest="$1"
+  local key="$2"
+  python3 - "$manifest" "$key" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    value = json.load(handle)
+for component in sys.argv[2].split("."):
+    value = value[component]
+if isinstance(value, bool):
+    print("true" if value else "false")
+else:
+    print(value)
+PY
+}
+
+bridge_source_fingerprint() {
+  python3 - "$ROOT_DIR" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+source_roots = [root / "crates/connect_norito_bridge", root / "IrohaSwift/Sources/IrohaSwift"]
+paths = [
+    path.relative_to(root).as_posix()
+    for source_root in source_roots
+    for path in source_root.rglob("*")
+    if path.is_file() and not path.is_symlink()
+]
+digest = hashlib.sha256()
+for relative in sorted(paths):
+    path = root / relative
+    if not path.is_file():
+        continue
+    digest.update(relative.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(path.read_bytes())
+    digest.update(b"\0")
+print(digest.hexdigest())
+PY
+}
+
 require_plist_slice() {
   local plist="$1"
   local slice="$2"
@@ -208,6 +267,7 @@ check_xcframework() {
   local xcframework="$ROOT_DIR/dist/NoritoBridge.xcframework"
   local info="$xcframework/Info.plist"
   local manifest="$ROOT_DIR/dist/NoritoBridge.artifacts.json"
+  local privacy_marker="$xcframework/.privacy-production-enabled"
   local slices=(ios-arm64 ios-arm64_x86_64-simulator macos-arm64)
   local slice
 
@@ -232,10 +292,162 @@ check_xcframework() {
 
   require_file "$manifest" "NoritoBridge artifact manifest"
   if [[ -f "$manifest" ]]; then
+    local privacy_keys=()
+    local privacy_declarations=()
+    local privacy_key
+    local privacy_declaration
+    local privacy_value
+    while IFS= read -r privacy_key; do
+      privacy_keys+=("$privacy_key")
+    done < <(
+      grep -Eo '"privacy_production_enabled"[[:space:]]*:' "$manifest" || true
+    )
+    while IFS= read -r privacy_declaration; do
+      privacy_declarations+=("$privacy_declaration")
+    done < <(
+      grep -Eo '"privacy_production_enabled"[[:space:]]*:[[:space:]]*(true|false)' \
+        "$manifest" || true
+    )
+    if [[ ${#privacy_keys[@]} -ne 1 || ${#privacy_declarations[@]} -ne 1 ]]; then
+      fail "NoritoBridge artifact manifest must contain exactly one boolean privacy_production_enabled field"
+    else
+      privacy_value="${privacy_declarations[0]##*:}"
+      privacy_value="${privacy_value//[[:space:]]/}"
+      if [[ "$privacy_value" == "true" ]]; then
+        require_file "$privacy_marker" "privacy-production-enabled XCFramework marker"
+      elif [[ -e "$privacy_marker" ]]; then
+        fail "default privacy artifact must not carry the privacy-production-enabled XCFramework marker"
+      fi
+    fi
     require_regex "$manifest" '"version"[[:space:]]*:[[:space:]]*"[^"]+"' "NoritoBridge artifact version"
     for slice in "${slices[@]}"; do
       require_regex "$manifest" "\"$slice\"[[:space:]]*:[[:space:]]*\"[[:xdigit:]]{64}\"" "NoritoBridge artifact manifest hash for $slice"
+      if [[ -f "$xcframework/$slice/libNoritoBridge.a" ]]; then
+        local expected_hash actual_hash
+        expected_hash="$(manifest_json_value "$manifest" "hashes.$slice" 2>/dev/null || true)"
+        actual_hash="$(hash_file "$xcframework/$slice/libNoritoBridge.a")"
+        if [[ "$expected_hash" != "$actual_hash" ]]; then
+          fail "NoritoBridge artifact hash mismatch for $slice"
+        fi
+      fi
     done
+
+    require_regex "$manifest" '"native_bridge_abi_version"[[:space:]]*:[[:space:]]*[0-9]+' "NoritoBridge ABI version"
+    require_regex "$manifest" '"source_commit"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{40}"' "NoritoBridge source commit"
+    require_regex "$manifest" '"source_tree_dirty"[[:space:]]*:[[:space:]]*(true|false)' "NoritoBridge source dirty state"
+    require_regex "$manifest" '"source_fingerprint_sha256"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{64}"' "NoritoBridge source fingerprint"
+    require_regex "$manifest" '"bridge_header_sha256"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{64}"' "NoritoBridge header hash"
+    local required_symbols=(
+      connect_norito_bridge_abi_version
+      connect_norito_kagemusha_recursive_spend_init
+      connect_norito_kagemusha_recursive_spend_append
+      connect_norito_kagemusha_recursive_spend_verify
+      connect_norito_kagemusha_recursive_spend_redeem
+      connect_norito_kagemusha_recursive_spend_topup
+      connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result
+      connect_norito_kagemusha_recursive_spend_lineage_witness_append_result
+      connect_norito_kagemusha_recursive_spend_init_v2
+      connect_norito_kagemusha_recursive_spend_topup_v2
+      connect_norito_kagemusha_recursive_spend_append_v2
+      connect_norito_kagemusha_recursive_spend_verify_v2
+      connect_norito_kagemusha_recursive_spend_redeem_v2
+    )
+    if ! python3 - "$manifest" "${required_symbols[@]}" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+expected = sys.argv[2:]
+actual = payload.get("required_symbols")
+raise SystemExit(0 if actual == expected else 1)
+PY
+    then
+      fail "NoritoBridge artifact required symbol inventory is missing or non-canonical"
+    fi
+
+    local canonical_header="$xcframework/ios-arm64/Headers/connect_norito_bridge.h"
+    if [[ -f "$canonical_header" ]]; then
+      local manifest_header_hash actual_header_hash
+      manifest_header_hash="$(manifest_json_value "$manifest" bridge_header_sha256 2>/dev/null || true)"
+      actual_header_hash="$(hash_file "$canonical_header")"
+      if [[ "$manifest_header_hash" != "$actual_header_hash" ]]; then
+        fail "NoritoBridge artifact header hash mismatch"
+      fi
+      for slice in "${slices[@]}"; do
+        local slice_header="$xcframework/$slice/Headers/connect_norito_bridge.h"
+        if [[ -f "$slice_header" && "$(hash_file "$slice_header")" != "$actual_header_hash" ]]; then
+          fail "NoritoBridge bridge header differs in $slice"
+        fi
+      done
+    fi
+
+    local bridge_source="$ROOT_DIR/crates/connect_norito_bridge/src/lib.rs"
+    if [[ -f "$bridge_source" && -d "$ROOT_DIR/.git" ]]; then
+      local source_abi manifest_abi source_commit manifest_commit source_dirty manifest_dirty source_fingerprint manifest_fingerprint
+      source_abi="$(sed -nE 's/.*CONNECT_NORITO_BRIDGE_ABI_VERSION:[[:space:]]*u32[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' "$bridge_source" | head -n1)"
+      manifest_abi="$(manifest_json_value "$manifest" native_bridge_abi_version 2>/dev/null || true)"
+      if [[ -z "$source_abi" || "$manifest_abi" != "$source_abi" ]]; then
+        fail "NoritoBridge artifact ABI does not match bridge source"
+      fi
+      source_commit="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+      manifest_commit="$(manifest_json_value "$manifest" source_commit 2>/dev/null || true)"
+      if [[ "$manifest_commit" != "$source_commit" ]]; then
+        fail "NoritoBridge artifact source commit does not match checkout"
+      fi
+      source_dirty=false
+      if [[ -n "$(git -C "$ROOT_DIR" status --porcelain -- crates/connect_norito_bridge IrohaSwift/Sources/IrohaSwift)" ]]; then
+        source_dirty=true
+      fi
+      manifest_dirty="$(manifest_json_value "$manifest" source_tree_dirty 2>/dev/null || true)"
+      if [[ "$manifest_dirty" != "$source_dirty" ]]; then
+        fail "NoritoBridge artifact source dirty state does not match checkout"
+      fi
+      source_fingerprint="$(bridge_source_fingerprint)"
+      manifest_fingerprint="$(manifest_json_value "$manifest" source_fingerprint_sha256 2>/dev/null || true)"
+      if [[ "$manifest_fingerprint" != "$source_fingerprint" ]]; then
+        fail "NoritoBridge artifact source fingerprint does not match checkout"
+      fi
+    fi
+
+    if [[ "${MOBILE_SDK_SKIP_BINARY_INSPECTION:-0}" != "1" ]]; then
+      local index symbol actual_arches
+      for index in "${!slices[@]}"; do
+        slice="${slices[$index]}"
+        local binary="$xcframework/$slice/libNoritoBridge.a"
+        [[ -f "$binary" ]] || continue
+        if ! command -v lipo >/dev/null 2>&1; then
+          fail "lipo is required for strict Apple artifact validation"
+          break
+        fi
+        actual_arches="$(lipo -archs "$binary" 2>/dev/null || true)"
+        case "$slice" in
+          ios-arm64|macos-arm64)
+            if [[ "$actual_arches" != "arm64" ]]; then
+              fail "NoritoBridge $slice architectures must be arm64 (found ${actual_arches:-unreadable})"
+            fi
+            ;;
+          ios-arm64_x86_64-simulator)
+            if [[ " $actual_arches " != *" arm64 "* \
+              || " $actual_arches " != *" x86_64 "* \
+              || "$(wc -w <<<"$actual_arches" | tr -d '[:space:]')" != "2" ]]; then
+              fail "NoritoBridge $slice architectures must be arm64 and x86_64 (found ${actual_arches:-unreadable})"
+            fi
+            ;;
+        esac
+        if ! command -v nm >/dev/null 2>&1; then
+          fail "nm is required for strict Apple artifact validation"
+          break
+        fi
+        local symbols
+        symbols="$(nm -gj "$binary" 2>/dev/null || true)"
+        for symbol in "${required_symbols[@]}"; do
+          if ! grep -Eq "^_?${symbol}$" <<<"$symbols"; then
+            fail "NoritoBridge $slice is missing required symbol $symbol"
+          fi
+        done
+      done
+    fi
   fi
 }
 

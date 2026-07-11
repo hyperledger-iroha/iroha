@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-pragma solidity 0.8.24;
+pragma solidity 0.7.4;
 
 /**
  * @title TairaXOR
  * @dev TRC20-compatible bridged XOR token for the TAIRA -> TRON SCCP route.
  *
  * Minting and bridge burns are delegated to one constructor-immutable route.
- * There is no owner, initialization window, bridge setter, or upgrade hook.
+ * Deployment tooling binds the token to a precomputed route address before
+ * deploying the route at that exact address. There is no owner, initialization
+ * window, bridge setter, or upgrade hook.
  */
 contract TairaXOR {
     string public constant name = "TAIRA XOR";
@@ -28,7 +30,6 @@ contract TairaXOR {
 
     constructor(address routeBridge) {
         require(routeBridge != address(0), "Bridge address is required");
-        require(msg.sender == routeBridge, "Bridge must create token");
         bridge = routeBridge;
     }
 

@@ -852,7 +852,7 @@ const fn is_word(kind: SyntaxKind) -> bool {
         kind,
         SyntaxKind::Ident
             | SyntaxKind::Number
-            | SyntaxKind::Amount
+            | SyntaxKind::Decimal
             | SyntaxKind::String
             | SyntaxKind::Bytes
             | SyntaxKind::KwFn
@@ -931,7 +931,7 @@ const fn syntax_kind_starts_expression(kind: SyntaxKind) -> bool {
         kind,
         SyntaxKind::Ident
             | SyntaxKind::Number
-            | SyntaxKind::Amount
+            | SyntaxKind::Decimal
             | SyntaxKind::String
             | SyntaxKind::Bytes
             | SyntaxKind::KwTrue

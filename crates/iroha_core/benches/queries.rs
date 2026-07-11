@@ -1,13 +1,12 @@
 //! Benchmarks for core query execution (e.g., FindAccounts) over varying state sizes.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-#![allow(clippy::all)]
 #![allow(
     clippy::doc_markdown,
     clippy::uninlined_format_args,
     clippy::field_reassign_with_default,
     clippy::items_after_statements
 )]
-use std::sync::LazyLock;
+use std::{num::NonZeroU64, sync::LazyLock};
 
 use criterion::{BatchSize, BenchmarkId, Criterion};
 use iroha_core::{
@@ -25,10 +24,13 @@ use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     prelude::*,
     query::{
+        ErasedIterQuery, QueryBox, QueryRequest, QueryResponse, QueryWithParams,
         account::prelude::{FindAccounts, FindAccountsWithAsset},
         asset::prelude::{FindAssets, FindAssetsDefinitions},
         domain::prelude::FindDomains,
         dsl::CompoundPredicate,
+        nft::prelude::FindNfts,
+        parameters::{FetchSize, Pagination, QueryParams, Sorting},
         trigger::prelude::{FindActiveTriggerIds, FindTriggers},
     },
 };
@@ -173,93 +175,239 @@ fn bench_find_accounts_paginate(c: &mut Criterion) {
     });
 }
 
-fn build_state_for_typed_account_page(n: usize) -> (State, AccountId) {
+#[derive(Clone, Copy)]
+struct TypedCoreQueryFamily {
+    benchmark_name: &'static str,
+    tag: CoreQueryEntityTagV1,
+    words_per_item: u64,
+}
+
+const TYPED_CORE_QUERY_FAMILIES: [TypedCoreQueryFamily; 5] = [
+    TypedCoreQueryFamily {
+        benchmark_name: "typed_core_query_accounts_page_64",
+        tag: CoreQueryEntityTagV1::Account,
+        words_per_item: 2,
+    },
+    TypedCoreQueryFamily {
+        benchmark_name: "typed_core_query_assets_page_64",
+        tag: CoreQueryEntityTagV1::Asset,
+        words_per_item: 2,
+    },
+    TypedCoreQueryFamily {
+        benchmark_name: "typed_core_query_asset_definitions_page_64",
+        tag: CoreQueryEntityTagV1::AssetDefinition,
+        words_per_item: 6,
+    },
+    TypedCoreQueryFamily {
+        benchmark_name: "typed_core_query_domains_page_64",
+        tag: CoreQueryEntityTagV1::Domain,
+        words_per_item: 3,
+    },
+    TypedCoreQueryFamily {
+        benchmark_name: "typed_core_query_nfts_page_64",
+        tag: CoreQueryEntityTagV1::Nft,
+        words_per_item: 3,
+    },
+];
+
+fn raw_core_query_response(
+    state: &State,
+    query_handle: &iroha_core::query::store::LiveQueryStoreHandle,
+    authority: &AccountId,
+    tag: CoreQueryEntityTagV1,
+) -> QueryResponse {
+    let page_size = NonZeroU64::new(QUERY_PAGE_CAPACITY_V1 as u64)
+        .expect("typed query page capacity is non-zero");
+    let params = QueryParams::new(
+        Pagination::new(Some(page_size), 0),
+        Sorting::default(),
+        FetchSize::new(Some(page_size)),
+    );
+
+    macro_rules! request_for {
+        ($item:ty, $query:expr) => {{
+            let query = $query;
+            let erased = ErasedIterQuery::<$item>::new(
+                CompoundPredicate::PASS,
+                iroha_data_model::query::dsl::SelectorTuple::default(),
+                norito::codec::Encode::encode(&query),
+            );
+            let boxed: QueryBox<_> = Box::new(erased);
+            QueryRequest::Start(QueryWithParams::new(&boxed, params.clone()))
+        }};
+    }
+
+    let request = match tag {
+        CoreQueryEntityTagV1::Account => request_for!(Account, FindAccounts),
+        CoreQueryEntityTagV1::Asset => request_for!(Asset, FindAssets),
+        CoreQueryEntityTagV1::AssetDefinition => {
+            request_for!(AssetDefinition, FindAssetsDefinitions)
+        }
+        CoreQueryEntityTagV1::Domain => request_for!(Domain, FindDomains),
+        CoreQueryEntityTagV1::Nft => request_for!(Nft, FindNfts),
+    };
+    let response = run_on_snapshot(
+        state,
+        query_handle,
+        authority,
+        request,
+        QueryLimits::default(),
+    )
+    .unwrap_or_else(|error| panic!("execute raw {tag:?} QueryResponse baseline: {error:?}"));
+    let QueryResponse::Iterable(output) = &response else {
+        panic!("raw {tag:?} baseline must return an iterable QueryResponse")
+    };
+    assert_eq!(
+        output.batch.len(),
+        QUERY_PAGE_CAPACITY_V1,
+        "raw {tag:?} baseline must contain one full page"
+    );
+    assert!(
+        !output.has_more && output.continue_cursor.is_none(),
+        "exactly one raw {tag:?} page must exhaust the fixture"
+    );
+    response
+}
+
+fn build_state_for_typed_core_query_pages() -> (State, AccountId, [u64; 5]) {
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let _guard = RUNTIME.enter();
     let query_handle = LiveQueryStore::start_test();
 
-    let domain_id = bench_domain_id();
     let authority = bench_account("typed-query-authority");
-    let domain = Domain::new(domain_id).build(&authority);
-    let mut accounts = Vec::with_capacity(n.saturating_add(1));
+    let mut domains = Vec::with_capacity(QUERY_PAGE_CAPACITY_V1);
+    let mut accounts = Vec::with_capacity(QUERY_PAGE_CAPACITY_V1);
+    let mut asset_definitions = Vec::with_capacity(QUERY_PAGE_CAPACITY_V1);
+    let mut assets = Vec::with_capacity(QUERY_PAGE_CAPACITY_V1);
+    let mut nfts = Vec::with_capacity(QUERY_PAGE_CAPACITY_V1);
     accounts.push(Account::new(authority.clone()).build(&authority));
-    for i in 0..n {
-        let id = bench_account(&format!("typed-query-user{i}"));
-        accounts.push(Account::new(id.clone()).build(&id));
+    for i in 0..QUERY_PAGE_CAPACITY_V1 {
+        let domain_id = DomainId::try_new(format!("typed{i}"), "universal")
+            .expect("typed query benchmark domain id");
+        domains.push(Domain::new(domain_id.clone()).build(&authority));
+
+        let account_id = bench_account(&format!("typed-query-user{i}"));
+        if i + 1 < QUERY_PAGE_CAPACITY_V1 {
+            accounts.push(Account::new(account_id.clone()).build(&authority));
+        }
+
+        let asset_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "coin".parse().expect("asset name"));
+        asset_definitions
+            .push(AssetDefinition::numeric(asset_definition_id.clone()).build(&authority));
+        assets.push(Asset::new(
+            AssetId::of(asset_definition_id, authority.clone()),
+            iroha_primitives::numeric::Numeric::new(
+                u64::try_from(i).expect("fixture index fits u64") + 1,
+                0,
+            ),
+        ));
+
+        let nft_id: NftId = format!("ticket{i}$typed{i}.universal")
+            .parse()
+            .expect("typed query benchmark NFT id");
+        nfts.push(Nft::new(nft_id, Metadata::default()).build(&authority));
     }
 
     let state = State::new(
-        World::with([domain], accounts, []),
+        World::with_assets(domains, accounts, asset_definitions, assets, nfts),
         kura,
-        query_handle,
+        query_handle.clone(),
         #[cfg(feature = "telemetry")]
         <_>::default(),
     );
-    (state, authority)
+    let raw_query_response_bytes = TYPED_CORE_QUERY_FAMILIES.map(|family| {
+        u64::try_from(
+            norito::to_bytes(&raw_core_query_response(
+                &state,
+                &query_handle,
+                &authority,
+                family.tag,
+            ))
+            .unwrap_or_else(|error| {
+                panic!(
+                    "encode raw {:?} QueryResponse baseline: {error}",
+                    family.tag
+                )
+            })
+            .len(),
+        )
+        .expect("raw QueryResponse length fits u64")
+    });
+    (state, authority, raw_query_response_bytes)
 }
 
-fn bench_typed_core_query_account_page(c: &mut Criterion) {
-    const ACCOUNT_VIEW_WORDS_V1: u64 = 2;
-
-    let (state, authority) = build_state_for_typed_account_page(1_000);
+fn bench_typed_core_query_pages(c: &mut Criterion) {
+    let (state, authority, raw_query_response_bytes) = build_state_for_typed_core_query_pages();
     let view = state.view();
-    let raw_accounts = ValidQuery::execute(FindAccounts, CompoundPredicate::PASS, &view)
-        .expect("execute raw account payload baseline")
-        .take(QUERY_PAGE_CAPACITY_V1)
-        .collect::<Vec<_>>();
-    assert_eq!(raw_accounts.len(), QUERY_PAGE_CAPACITY_V1);
-    let raw_payload_bytes = u64::try_from(
-        norito::to_bytes(&raw_accounts)
-            .expect("encode raw account payload baseline")
-            .len(),
-    )
-    .expect("raw account payload length fits u64");
     let mut host = CoreHostImpl::new(authority);
     host.set_query_state(&view);
     host.enable_core_query_page_metrics();
-    let page_layout =
-        ivm::list::ListLayoutV1::try_new(QUERY_PAGE_CAPACITY_V1 as u64, ACCOUNT_VIEW_WORDS_V1)
-            .expect("typed account-page List layout");
 
-    c.bench_function("typed_core_query_accounts_page_64", |b| {
-        b.iter_batched(
-            || {
-                let mut vm = IVM::new(u64::MAX);
-                vm.set_register(10, CoreQueryEntityTagV1::Account.as_u64());
-                vm.set_register(11, 0);
-                vm.set_register(12, QUERY_PAGE_CAPACITY_V1 as u64);
-                vm
-            },
-            |mut vm| {
-                host.reset_core_query_page_metrics();
-                let gas = host
-                    .syscall(ivm::syscalls::SYSCALL_CORE_QUERY_PAGE, &mut vm)
-                    .expect("execute typed account-page query");
-                let items = ivm::list::read_words(&vm, vm.register(10), page_layout)
-                    .expect("materialized typed account page");
-                assert_eq!(items.len(), QUERY_PAGE_CAPACITY_V1);
-                let metrics = host
-                    .core_query_page_metrics()
-                    .expect("typed page-query counters enabled");
-                assert_eq!(metrics.host_queries, 1, "one host query per typed page");
-                assert_eq!(
-                    metrics.projection_decodes, 1,
-                    "one projection decode per typed page"
-                );
-                assert!(
-                    metrics.leaf_tlv_bytes > 0,
-                    "typed leaves must be encoded exactly once before materialization"
-                );
-                assert!(
-                    metrics.projection_payload_bytes < raw_payload_bytes,
-                    "typed projection payload ({} bytes) must be smaller than raw account payload ({raw_payload_bytes} bytes)",
-                    metrics.projection_payload_bytes,
-                );
-                std::hint::black_box((gas, items, vm.register(11), metrics));
-            },
-            BatchSize::SmallInput,
-        )
-    });
+    for (family, raw_query_response_bytes) in TYPED_CORE_QUERY_FAMILIES
+        .into_iter()
+        .zip(raw_query_response_bytes)
+    {
+        let page_layout =
+            ivm::list::ListLayoutV1::try_new(QUERY_PAGE_CAPACITY_V1 as u64, family.words_per_item)
+                .expect("typed query-page List layout");
+        c.bench_function(family.benchmark_name, |b| {
+            b.iter_batched(
+                || {
+                    let mut vm = IVM::new(u64::MAX);
+                    vm.set_register(10, family.tag.as_u64());
+                    vm.set_register(11, 0);
+                    vm.set_register(12, QUERY_PAGE_CAPACITY_V1 as u64);
+                    vm
+                },
+                |mut vm| {
+                    host.reset_core_query_page_metrics();
+                    let gas = host
+                        .syscall(ivm::syscalls::SYSCALL_CORE_QUERY_PAGE, &mut vm)
+                        .unwrap_or_else(|error| {
+                            panic!("execute typed {:?} page query: {error:?}", family.tag)
+                        });
+                    let items = ivm::list::read_words(&vm, vm.register(10), page_layout)
+                        .unwrap_or_else(|error| {
+                            panic!("materialize typed {:?} page: {error:?}", family.tag)
+                        });
+                    assert_eq!(
+                        items.len(),
+                        QUERY_PAGE_CAPACITY_V1,
+                        "one full typed {:?} page",
+                        family.tag
+                    );
+                    let metrics = host
+                        .core_query_page_metrics()
+                        .expect("typed page-query counters enabled");
+                    assert_eq!(
+                        metrics.host_queries, 1,
+                        "one host query per typed {:?} page",
+                        family.tag
+                    );
+                    assert_eq!(
+                        metrics.projection_decodes, 1,
+                        "one projection decode per typed {:?} page",
+                        family.tag
+                    );
+                    assert!(
+                        metrics.leaf_tlv_bytes > 0,
+                        "typed {:?} leaves must be encoded exactly once before materialization",
+                        family.tag
+                    );
+                    assert!(
+                        metrics.projection_payload_bytes < raw_query_response_bytes,
+                        "typed {:?} projection payload ({} bytes) must be smaller than the raw QueryResponse envelope ({} bytes)",
+                        family.tag,
+                        metrics.projection_payload_bytes,
+                        raw_query_response_bytes,
+                    );
+                    std::hint::black_box((gas, items, vm.register(11), metrics));
+                },
+                BatchSize::SmallInput,
+            )
+        });
+    }
 }
 
 fn bench_snapshot_vs_live_find_domains_first_batch(c: &mut Criterion) {
@@ -1066,7 +1214,7 @@ fn main() {
     bench_find_active_trigger_ids_iter(&mut c);
     bench_find_accounts_sort_id(&mut c);
     bench_find_accounts_paginate(&mut c);
-    bench_typed_core_query_account_page(&mut c);
+    bench_typed_core_query_pages(&mut c);
     bench_snapshot_vs_live_find_domains_first_batch(&mut c);
     bench_snapshot_vs_live_find_assets_first_batch(&mut c);
     bench_snapshot_sorted_asset_defs_first_batch(&mut c);

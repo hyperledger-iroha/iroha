@@ -1,8 +1,8 @@
 //! This module contains [`State`] snapshot actor service.
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     io::Write,
-    num::NonZeroUsize,
+    num::{NonZeroU32, NonZeroUsize},
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
@@ -28,12 +28,13 @@ use iroha_data_model::{
             RevokeSpaceDirectoryManifest,
         },
     },
-    nexus::{DataSpaceId, LaneId, UniversalAccountId},
+    name::Name,
+    nexus::{DataSpaceId, LaneCatalog, LaneId, UniversalAccountId},
     transaction::Executable,
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
-use mv::storage::StorageReadOnly;
+use mv::storage::{Storage, StorageReadOnly};
 use norito::codec::{DecodeAll, Encode as NoritoEncode};
 use norito::json::{self, JsonSerialize, JsonSerialize as JsonSerializeTrait};
 use sha2::{Digest, Sha256};
@@ -45,10 +46,10 @@ use crate::{
     nexus::space_directory::SpaceDirectoryManifestRecord,
     query::store::LiveQueryStoreHandle,
     state::{
-        SnapshotNoritoBlob, SnapshotPublicLaneRewardClaim, SnapshotSpaceDirectoryManifestSet,
-        State, deserialize::KuraSeed, public_lane_reward_record_matches_key,
-        public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
-        storage_transactions::TransactionsBlockError,
+        SnapshotNexusRuntime, SnapshotNoritoBlob, SnapshotPublicLaneRewardClaim,
+        SnapshotSpaceDirectoryManifestSet, State, deserialize::KuraSeed,
+        public_lane_reward_record_matches_key, public_lane_stake_share_matches_key,
+        public_lane_validator_record_matches_key, storage_transactions::TransactionsBlockError,
     },
 };
 
@@ -61,6 +62,11 @@ fn serialize_state_snapshot(
     let block_hashes: Vec<HashOf<BlockHeader>> = view.block_hashes.iter().copied().collect();
     let commit_topology = view.commit_topology.to_vec();
     let prev_commit_topology = view.prev_commit_topology.to_vec();
+    let nexus_runtime = SnapshotNexusRuntime::from_nexus(
+        &view.nexus,
+        &view.lane_incarnations,
+        &view.lane_incarnation_activation_heights,
+    );
     let public_lane_validators: Vec<_> = view
         .world
         .public_lane_validators
@@ -128,6 +134,11 @@ fn serialize_state_snapshot(
     json::write_json_string("world", out);
     out.push(':');
     state.world.json_serialize(out);
+    out.push(',');
+
+    json::write_json_string("nexus_runtime", out);
+    out.push(':');
+    json::JsonSerialize::json_serialize(&nexus_runtime, out);
     out.push(',');
 
     json::write_json_string("block_hashes", out);
@@ -1201,10 +1212,16 @@ fn reconcile_snapshot_hash_height_with_kura(
         return Ok(());
     }
 
-    Err(TryReadError::MismatchedHeight {
+    let extended = kura
+        .extend_hash_only_suffix_from_verified_snapshot(snapshot_hashes)
+        .map_err(TryReadError::Kura)?;
+    iroha_logger::warn!(
         snapshot_height,
-        kura_height: block_count,
-    })
+        previous_kura_height = block_count,
+        extended,
+        "verified local snapshot is ahead of Kura block bodies; extended Kura hash-only suffix"
+    );
+    Ok(())
 }
 
 fn reconcile_snapshot_hashes_with_kura(
@@ -1374,10 +1391,7 @@ fn try_read_snapshot_bundle(
     if snapshot_height > 0 && !has_offline_note_replay_keys && !hard_fork_snapshot_bootstrap {
         return Err(TryReadError::MissingOfflineNoteReplayKeys { snapshot_height });
     }
-    if snapshot_height > block_count
-        && hard_fork_snapshot_bootstrap
-        && !has_space_directory_manifest_section
-    {
+    if snapshot_height > block_count && !has_space_directory_manifest_section {
         return Err(TryReadError::MissingSpaceDirectoryManifestSection { snapshot_height });
     }
     let hash_override_after_height = hard_fork_snapshot_bootstrap_hash_override_after_height(
@@ -1611,13 +1625,17 @@ fn try_write_snapshot(
         .truncate(true)
         .open(&path_to_tmp_file)
         .map_err(|err| TryWriteError::IO(err, path_to_tmp_file.clone()))?;
-    json::to_writer(&mut file, state).map_err(TryWriteError::Serialization)?;
+    let mut snapshot_json = String::new();
+    serialize_state_snapshot(state, &mut snapshot_json, true);
+    file.write_all(snapshot_json.as_bytes())
+        .map_err(|err| TryWriteError::IO(err, path_to_tmp_file.clone()))?;
     file.flush()
         .map_err(|err| TryWriteError::IO(err, path_to_tmp_file.clone()))?;
     file.sync_data()
         .map_err(|err| TryWriteError::IO(err, path_to_tmp_file.clone()))?;
     let snapshot_bytes = std::fs::read(&path_to_tmp_file)
         .map_err(|err| TryWriteError::IO(err, path_to_tmp_file.clone()))?;
+    let geometry_checkpoint = geometry_checkpoint_from_snapshot_bytes(&snapshot_bytes)?;
     let digest_bytes = Sha256::digest(&snapshot_bytes);
     let digest_vec = digest_bytes.to_vec();
     let digest_hex = hex::encode(&digest_vec);
@@ -1674,7 +1692,136 @@ fn try_write_snapshot(
     promote_tmp_snapshot_file(&path_to_tmp_sig, &path_to_signature_file)?;
     promote_tmp_snapshot_file(&path_to_tmp_merkle, &path_to_merkle_file)?;
     sync_dir(store_dir.as_ref())?;
+    match state
+        .kura()
+        .checkpoint_lane_geometry_after_durable_snapshot(
+            &geometry_checkpoint.lane_config,
+            &geometry_checkpoint.incarnations,
+            &geometry_checkpoint.activation_heights,
+            geometry_checkpoint.height,
+            geometry_checkpoint.block_hash,
+            geometry_checkpoint.state_hash,
+            &geometry_checkpoint.smart_contract_state,
+        ) {
+        Ok(summary) if summary.compacted_transitions > 0 || summary.removed_archive_roots > 0 => {
+            info!(
+                compacted_transitions = summary.compacted_transitions,
+                removed_archive_roots = summary.removed_archive_roots,
+                reclaimed_bytes = summary.reclaimed_bytes,
+                snapshot_height = geometry_checkpoint.height,
+                "checkpointed snapshot-authoritative lane geometry and reclaimed obsolete archives"
+            );
+        }
+        Ok(_) => {}
+        Err(error) => warn!(
+            %error,
+            snapshot_height = geometry_checkpoint.height,
+            "snapshot is durable, but lane geometry archive GC failed closed"
+        ),
+    }
     Ok(())
+}
+
+struct DurableSnapshotGeometryCheckpoint {
+    lane_config: iroha_config::parameters::actual::LaneConfig,
+    incarnations: BTreeMap<LaneId, Hash>,
+    activation_heights: BTreeMap<LaneId, u64>,
+    height: u64,
+    block_hash: Option<HashOf<BlockHeader>>,
+    state_hash: Hash,
+    smart_contract_state: BTreeMap<Name, Vec<u8>>,
+}
+
+fn geometry_checkpoint_from_snapshot_bytes(
+    bytes: &[u8],
+) -> Result<DurableSnapshotGeometryCheckpoint, TryWriteError> {
+    let value: json::Value = json::from_slice(bytes).map_err(TryWriteError::Serialization)?;
+    let root = value.as_object().ok_or_else(|| {
+        TryWriteError::Serialization(json::Error::Message(
+            "snapshot root is not a JSON object".to_owned(),
+        ))
+    })?;
+    let runtime_value = root
+        .get("nexus_runtime")
+        .cloned()
+        .ok_or_else(|| TryWriteError::Serialization(json::Error::missing_field("nexus_runtime")))?;
+    let runtime: SnapshotNexusRuntime =
+        json::from_value(runtime_value).map_err(TryWriteError::Serialization)?;
+    if runtime.version != SnapshotNexusRuntime::VERSION {
+        return Err(TryWriteError::Serialization(json::Error::Message(format!(
+            "snapshot Nexus runtime version {} cannot prove lane geometry",
+            runtime.version
+        ))));
+    }
+    let block_hashes_value = root
+        .get("block_hashes")
+        .cloned()
+        .ok_or_else(|| TryWriteError::Serialization(json::Error::missing_field("block_hashes")))?;
+    let block_hashes: Vec<HashOf<BlockHeader>> =
+        json::from_value(block_hashes_value).map_err(TryWriteError::Serialization)?;
+    let height = u64::try_from(block_hashes.len()).map_err(|_| {
+        TryWriteError::Serialization(json::Error::Message(
+            "snapshot block height exceeds u64".to_owned(),
+        ))
+    })?;
+
+    let lane_count = NonZeroU32::new(runtime.lane_count).ok_or_else(|| {
+        TryWriteError::Serialization(json::Error::Message(
+            "snapshot Nexus lane count is zero".to_owned(),
+        ))
+    })?;
+    let lane_catalog = LaneCatalog::new(lane_count, runtime.lanes).map_err(|error| {
+        TryWriteError::Serialization(json::Error::Message(format!(
+            "snapshot Nexus lane catalog is invalid: {error}"
+        )))
+    })?;
+    let lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+    let mut incarnations = BTreeMap::new();
+    let mut activation_heights = BTreeMap::new();
+    for entry in runtime.lane_incarnations {
+        if incarnations
+            .insert(entry.lane_id, entry.incarnation)
+            .is_some()
+            || activation_heights
+                .insert(entry.lane_id, entry.activation_height)
+                .is_some()
+        {
+            return Err(TryWriteError::Serialization(json::Error::Message(
+                "snapshot Nexus runtime contains duplicate lane incarnations".to_owned(),
+            )));
+        }
+    }
+
+    let smart_contract_state_value = root
+        .get("world")
+        .and_then(json::Value::as_object)
+        .and_then(|world| world.get("smart_contract_state"))
+        .cloned()
+        .ok_or_else(|| {
+            TryWriteError::Serialization(json::Error::missing_field("world.smart_contract_state"))
+        })?;
+    let smart_contract_storage: Storage<Name, Vec<u8>> =
+        json::from_value(smart_contract_state_value).map_err(TryWriteError::Serialization)?;
+    let smart_contract_state = smart_contract_storage
+        .view()
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+
+    let mut canonical_value = value;
+    normalize_mv_cell_fields_in_state_value(&mut canonical_value);
+    normalize_set_like_parameter_fields_in_state_value(&mut canonical_value);
+    redact_consensus_sidecars_from_state_value(&mut canonical_value);
+    let canonical_json = json::to_json(&canonical_value).map_err(TryWriteError::Serialization)?;
+    Ok(DurableSnapshotGeometryCheckpoint {
+        lane_config,
+        incarnations,
+        activation_heights,
+        height,
+        block_hash: block_hashes.last().copied(),
+        state_hash: Hash::new(canonical_json.as_bytes()),
+        smart_contract_state,
+    })
 }
 
 fn ensure_state_is_backed_by_kura(state: &State) -> Result<(), TryWriteError> {
@@ -3628,7 +3775,7 @@ mod tests {
     }
 
     #[test]
-    async fn hard_fork_snapshot_hash_reconcile_extends_state_ahead_of_kura() {
+    async fn snapshot_hash_reconcile_extends_verified_local_snapshot_ahead_of_kura() {
         let tmp_root = tempdir().unwrap();
         let kura_store_dir = tmp_root.path().join("kura");
         let lane_config = LaneConfig::default();
@@ -3641,18 +3788,8 @@ mod tests {
         let extra_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; 32]));
 
         let hashes = vec![canonical_hash, extra_hash];
-        let err = reconcile_snapshot_hash_height_with_kura(&hashes, 1, &kura, false, None)
-            .expect_err("non-hard-fork snapshot ahead of Kura must be rejected");
-        assert!(matches!(
-            err,
-            TryReadError::MismatchedHeight {
-                snapshot_height: 2,
-                kura_height: 1,
-            }
-        ));
-
-        reconcile_snapshot_hash_height_with_kura(&hashes, 1, &kura, true, None)
-            .expect("hard-fork snapshot ahead of Kura should extend hash-only prefix");
+        reconcile_snapshot_hash_height_with_kura(&hashes, 1, &kura, false, None)
+            .expect("verified local snapshot ahead of Kura should extend hash-only suffix");
 
         assert_eq!(kura.blocks_count(), 2);
         assert_eq!(
@@ -3664,6 +3801,99 @@ mod tests {
             "snapshot-extended tail should not invent a block body"
         );
         assert_eq!(kura.durable_blocks_count(), 2);
+
+        drop(kura);
+        let (reopened, BlockCount(reopened_count)) =
+            Kura::new(&kura_config, &lane_config).expect("reopen kura");
+        assert_eq!(
+            reopened_count, 2,
+            "cold restart must retain the verified snapshot hash-only suffix"
+        );
+        assert_eq!(reopened.durable_blocks_count(), 2);
+        assert!(
+            reopened.get_block(nonzero!(1_usize)).is_some(),
+            "verified local snapshot recovery must preserve retained block bodies"
+        );
+        assert!(
+            reopened.get_block(nonzero!(2_usize)).is_none(),
+            "snapshot-extended suffix should remain hash-only after restart"
+        );
+    }
+
+    #[test]
+    async fn snapshot_read_extends_verified_local_snapshot_after_kura_tail_loss() {
+        let tmp_root = tempdir().unwrap();
+        let snapshot_store_dir = tmp_root.path().join("snapshot");
+        let kura_store_dir = tmp_root.path().join("kura");
+        let lane_config = LaneConfig::default();
+        let kura_config = kura_config_for_snapshot_test(&kura_store_dir, nonzero!(1_usize));
+        let (kura, _) = Kura::new(&kura_config, &lane_config).expect("kura init");
+        let mut state = state_factory_with_kura(Arc::clone(&kura));
+        let key_pair = checked_random_snapshot_keypair();
+
+        let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
+        store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block1));
+        let block2 = signed_block_after_transaction(
+            accepted_log_transaction("second"),
+            Some(block1.as_ref()),
+        );
+        store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block2));
+        let expected_snapshot = canonical_state_snapshot_bytes_for_tests(&state);
+        let expected_chain_id = state.chain_id.clone();
+
+        try_write_snapshot(&state, &snapshot_store_dir, &key_pair, TEST_CHUNK_SIZE)
+            .expect("snapshot write");
+        kura.prune_to_height(1).expect("simulate Kura tail loss");
+
+        let snapshot_state = try_read_snapshot(
+            &snapshot_store_dir,
+            &kura,
+            LiveQueryStore::start_test,
+            BlockCount(1),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &state.chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::new(<_>::default(), true),
+        )
+        .expect("verified local snapshot ahead of Kura should load");
+
+        assert_eq!(
+            canonical_state_snapshot_bytes_for_tests(&snapshot_state),
+            expected_snapshot
+        );
+        assert_eq!(kura.blocks_count(), 2);
+        assert!(
+            kura.get_block(nonzero!(1_usize)).is_some(),
+            "retained Kura block body should remain readable"
+        );
+        assert!(
+            kura.get_block(nonzero!(2_usize)).is_none(),
+            "snapshot-recovered suffix should be hash-only"
+        );
+
+        drop(snapshot_state);
+        drop(state);
+        drop(kura);
+        let (reopened, BlockCount(reopened_count)) =
+            Kura::new(&kura_config, &lane_config).expect("cold reopen Kura");
+        assert_eq!(reopened_count, 2);
+        let restarted_snapshot_state = try_read_snapshot(
+            &snapshot_store_dir,
+            &reopened,
+            LiveQueryStore::start_test,
+            BlockCount(reopened_count),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &expected_chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::new(<_>::default(), true),
+        )
+        .expect("verified snapshot and hash-only suffix should survive a cold restart");
+        assert_eq!(
+            canonical_state_snapshot_bytes_for_tests(&restarted_snapshot_state),
+            expected_snapshot
+        );
     }
 
     #[test]

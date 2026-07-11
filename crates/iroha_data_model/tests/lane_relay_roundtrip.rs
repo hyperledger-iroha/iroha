@@ -76,6 +76,7 @@ fn sample_settlement() -> LaneBlockCommitment {
     LaneBlockCommitment {
         block_height: 5,
         lane_id: LaneId::new(1),
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id: DataSpaceId::new(2),
         tx_count: 1,
         total_local_micro: receipt.local_amount_micro,

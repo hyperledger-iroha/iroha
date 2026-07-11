@@ -25,7 +25,10 @@ public final class SccpNativeMessageSubmitRequest {
         SccpSubmitEncoding.normalizeOptionalTransactionPayload(
             transactionPayloadB64, creationTimeMs, this.authority);
     SccpSubmitEncoding.validateCanonicalNoritoBase64(
-        nativeProofB64, "nativeProofB64", SccpSubmitEncoding.MAX_NATIVE_PROOF_BYTES);
+        nativeProofB64,
+        "nativeProofB64",
+        SccpSubmitEncoding.MAX_NATIVE_PROOF_BYTES,
+        SccpSubmitEncoding.NATIVE_INBOUND_PROOF_SCHEMA_NAME);
     this.nativeProofB64 = nativeProofB64;
     this.creationTimeMs = SccpSubmitEncoding.normalizeOptionalCreationTimeMs(creationTimeMs);
     SccpSubmitEncoding.validateDetachedSigningState(

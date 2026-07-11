@@ -2373,7 +2373,7 @@ mod tests {
                 contract,
                 statement.route_config_hash,
                 SccpLaneIdV1 {
-                    source: SccpNetworkV1::TronMainnet,
+                    source: SccpNetworkV1::EthereumMainnet,
                     target: SccpNetworkV1::SoraTaira,
                 },
                 &SccpPayloadV1::Transfer(test_transfer()),

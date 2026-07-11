@@ -146,8 +146,8 @@ pub fn json_value_schema_is_supported(schema: &StateValueSchemaV1) -> bool {
             StateValueNodeV1::Leaf(kind) => matches!(
                 kind,
                 StateValueKindV1::Int
-                    | StateValueKindV1::U128
-                    | StateValueKindV1::Amount
+                    | StateValueKindV1::Decimal
+                    | StateValueKindV1::Quantity
                     | StateValueKindV1::Bool
                     | StateValueKindV1::String
                     | StateValueKindV1::Json
@@ -193,7 +193,7 @@ mod tests {
                     keys: vec!["amount".into(), "labels".into()],
                 },
                 JsonConstructionNodeV1::Value {
-                    schema: leaf(StateValueKindV1::Amount),
+                    schema: leaf(StateValueKindV1::Quantity),
                 },
                 JsonConstructionNodeV1::Array { arity: 2 },
                 JsonConstructionNodeV1::Value {
@@ -264,7 +264,7 @@ mod tests {
             nodes: vec![
                 JsonConstructionNodeV1::Array { arity: 2 },
                 JsonConstructionNodeV1::Value {
-                    schema: leaf(StateValueKindV1::Amount),
+                    schema: leaf(StateValueKindV1::Quantity),
                 },
                 JsonConstructionNodeV1::Value {
                     schema: StateValueSchemaV1 {

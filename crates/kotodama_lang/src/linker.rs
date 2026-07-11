@@ -2244,9 +2244,8 @@ fn collect_expr_calls<'source>(expr: &'source Expr, calls: &mut Vec<&'source str
             }
         }
         Expr::Bool(_)
-        | Expr::Number(_)
-        | Expr::Decimal(_)
-        | Expr::AmountLiteral(_)
+        | Expr::IntLiteral(_)
+        | Expr::DecimalLiteral(_)
         | Expr::OptionNone
         | Expr::String(_)
         | Expr::Bytes(_)
@@ -2291,8 +2290,8 @@ fn qualify_type(ty: &mut Type, local_structs: &HashSet<String>, prefix: &str) {
             *name = format!("{prefix}_{name}");
         }
         Type::Int
-        | Type::FixedU128
-        | Type::Amount
+        | Type::Decimal
+        | Type::Quantity
         | Type::Bool
         | Type::String
         | Type::Bytes
@@ -2420,6 +2419,7 @@ fn qualify_expr(expr: &mut TypedExpr, local_structs: &HashSet<String>, prefix: &
         }
         ExprKind::Unary { expr, .. }
         | ExprKind::NumericCast { expr }
+        | ExprKind::NumericTryCast { expr }
         | ExprKind::OptionSome { value: expr }
         | ExprKind::ResultOk { value: expr }
         | ExprKind::ResultErr { error: expr }
@@ -2507,9 +2507,8 @@ fn qualify_expr(expr: &mut TypedExpr, local_structs: &HashSet<String>, prefix: &
             qualify_expr(target, local_structs, prefix);
             qualify_expr(index, local_structs, prefix);
         }
-        ExprKind::Number(_)
-        | ExprKind::Decimal(_)
-        | ExprKind::AmountLiteral { .. }
+        ExprKind::IntLiteral(_)
+        | ExprKind::DecimalLiteral { .. }
         | ExprKind::OptionNone
         | ExprKind::Bool(_)
         | ExprKind::String(_)
@@ -2636,6 +2635,7 @@ fn rename_expr_calls(
         }
         ExprKind::Unary { expr, .. }
         | ExprKind::NumericCast { expr }
+        | ExprKind::NumericTryCast { expr }
         | ExprKind::OptionSome { value: expr }
         | ExprKind::ResultOk { value: expr }
         | ExprKind::ResultErr { error: expr }
@@ -2713,9 +2713,8 @@ fn rename_expr_calls(
             rename_expr_calls(target, local_names, external_names);
             rename_expr_calls(index, local_names, external_names);
         }
-        ExprKind::Number(_)
-        | ExprKind::Decimal(_)
-        | ExprKind::AmountLiteral { .. }
+        ExprKind::IntLiteral(_)
+        | ExprKind::DecimalLiteral { .. }
         | ExprKind::OptionNone
         | ExprKind::Bool(_)
         | ExprKind::String(_)
@@ -3277,10 +3276,16 @@ mod tests {
     }
 
     #[test]
-    fn linked_typed_hir_retains_order_stable_distinct_source_ids() {
+    fn linked_typed_hir_retains_path_and_order_stable_distinct_source_ids() {
         let request = transitive_source_request("module Base { fn value() -> i64 { return 1; } }");
         let mut reordered = request.clone();
         reordered.packages.reverse();
+        reordered.root.source_name = r".\app.ko".to_owned();
+        for package in &mut reordered.packages {
+            for module in &mut package.modules {
+                module.source_name = format!(r".\nested\..\{}", module.source_name);
+            }
+        }
 
         let left = ModuleBuildGraph::default()
             .link(request, LinkerOptions::default())

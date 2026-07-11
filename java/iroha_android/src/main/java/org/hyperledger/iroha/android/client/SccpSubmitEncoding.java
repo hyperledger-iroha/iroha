@@ -8,6 +8,7 @@ import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.sccp.SccpV1;
 import org.hyperledger.iroha.norito.NoritoHeader;
+import org.hyperledger.iroha.norito.SchemaHash;
 
 /** Shared strict encoding checks for SCCP bridge submit DTOs. */
 final class SccpSubmitEncoding {
@@ -15,12 +16,19 @@ final class SccpSubmitEncoding {
   static final int MAX_NATIVE_PROOF_BYTES = 16 * 1024 * 1024;
   static final int MAX_DETACHED_SIGNATURE_BYTES = 16 * 1024;
   static final int MAX_TRANSACTION_PAYLOAD_BYTES = 16 * 1024 * 1024;
+  static final String DESTINATION_ARTIFACT_SCHEMA_NAME =
+      "iroha_sccp::SccpGroth16Bn254ProofArtifactV1";
+  static final String NATIVE_INBOUND_PROOF_SCHEMA_NAME =
+      "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1";
   private static final NoritoJavaCodecAdapter TRANSACTION_CODEC = new NoritoJavaCodecAdapter();
 
   private SccpSubmitEncoding() {}
 
   static byte[] validateCanonicalNoritoBase64(
-      final String value, final String field, final int maximum) {
+      final String value,
+      final String field,
+      final int maximum,
+      final String expectedSchemaName) {
     if (value == null || value.isEmpty() || !value.equals(value.trim())) {
       throw new IllegalArgumentException(field + " must be canonical padded base64");
     }
@@ -41,7 +49,7 @@ final class SccpSubmitEncoding {
     }
     final NoritoHeader.DecodeResult result;
     try {
-      result = NoritoHeader.decode(decoded, null);
+      result = NoritoHeader.decode(decoded, SchemaHash.hash16(expectedSchemaName));
     } catch (final IllegalArgumentException ex) {
       throw new IllegalArgumentException(field + " must contain a canonical Norito envelope", ex);
     }
@@ -51,12 +59,9 @@ final class SccpSubmitEncoding {
     }
     final int headerPadding =
         decoded.length - NoritoHeader.HEADER_LENGTH - header.payloadLength();
-    if (headerPadding != 0 && headerPadding != 8) {
+    if (headerPadding != 0) {
       throw new IllegalArgumentException(
-          field + " must use canonical Norito header alignment padding");
-    }
-    if (allZero(header.schemaHash())) {
-      throw new IllegalArgumentException(field + " must advertise a nonzero Norito schema");
+          field + " must use the exact zero-padded SCCP Norito alignment");
     }
     if (!Arrays.equals(
         header.encode(), Arrays.copyOfRange(decoded, 0, NoritoHeader.HEADER_LENGTH))) {

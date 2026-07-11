@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.client;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import java.lang.reflect.Field;
@@ -61,7 +62,7 @@ public final class AndroidOkHttpClientRefactorTests {
     assertTrue(unwrapField(offline, "executor") instanceof OkHttpTransportExecutor);
 
     final SorafsGatewayClient sorafs =
-        SorafsGatewayClient.builder().setBaseUri(URI.create("http://localhost:8080")).build();
+        SorafsGatewayClient.builder().setBaseUri(URI.create("https://gateway.example/")).build();
     assertTrue(unwrapField(sorafs, "executor") instanceof OkHttpTransportExecutor);
 
     final ToriiEventStreamClient streamClient =
@@ -73,7 +74,7 @@ public final class AndroidOkHttpClientRefactorTests {
   }
 
   @Test
-  public void sorafsGatewayFlowUsesPlatformDefaults() throws Exception {
+  public void sorafsGatewayRejectsInsecureLoopbackBeforePlatformDispatch() throws Exception {
     try (MockWebServer server = new MockWebServer()) {
       server.enqueue(new MockResponse().setResponseCode(200).setBody("{\"ok\":true}"));
       server.start();
@@ -86,20 +87,16 @@ public final class AndroidOkHttpClientRefactorTests {
                   GatewayProvider.builder()
                       .setName("provider-1")
                       .setProviderIdHex("01".repeat(32))
+                      .setGatewayPublicKeyHex("02".repeat(32))
                       .setBaseUrl("https://provider.example")
                       .setStreamTokenBase64(
                           Base64.getEncoder().encodeToString("token".getBytes(StandardCharsets.UTF_8)))
                       .build())
               .build();
-      final SorafsGatewayClient client =
-          SorafsGatewayClient.builder().setBaseUri(base).build();
-
-      final ClientResponse response = client.fetch(request).get(2, TimeUnit.SECONDS);
-      assertEquals(200, response.statusCode());
-      final okhttp3.mockwebserver.RecordedRequest recorded =
-          Objects.requireNonNull(server.takeRequest(1, TimeUnit.SECONDS));
-      assertEquals("/v1/sorafs/gateway/fetch", recorded.getPath());
-      assertEquals("application/json", recorded.getHeader("Content-Type"));
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> SorafsGatewayClient.builder().setBaseUri(base).build());
+      assertEquals(0, server.getRequestCount());
     }
   }
 

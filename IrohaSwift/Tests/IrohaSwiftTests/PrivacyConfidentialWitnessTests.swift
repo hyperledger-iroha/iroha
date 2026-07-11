@@ -31,6 +31,173 @@ final class PrivacyConfidentialWitnessTests: XCTestCase {
         XCTAssertEqual(try byteVec(fields[5]), Data())
     }
 
+    func testEncodesUnshieldWitnessAndProofRequestWireShape() throws {
+        let witness = try Self.unshieldWitness()
+        let witnessArchive = try PrivacyConfidentialWitnessCodecs.encodeUnshieldWitness(witness)
+        let witnessFrame = try XCTUnwrap(noritoDecodeFrame(witnessArchive))
+
+        XCTAssertEqual(witnessFrame.paddingLength, 8)
+        XCTAssertEqual(witnessFrame.header.flags, NoritoHeader.compactLen)
+        XCTAssertEqual(
+            witnessFrame.header.schema,
+            noritoSchemaHash(forTypeName: PrivacyConfidentialWitnessCodecs.privacyConfidentialWitnessV1WireName)
+        )
+
+        let witnessFields = try compactFields(witnessFrame.payload)
+        XCTAssertEqual(witnessFields.count, 9)
+        XCTAssertEqual(try compactString(witnessFields[0]), "chain")
+        XCTAssertEqual(try compactString(witnessFields[1]), "asset")
+        XCTAssertEqual(try byteVec(witnessFields[2]), Self.fixed32(0x11))
+
+        let treeCommitments = try compactSequence(witnessFields[3])
+        XCTAssertEqual(treeCommitments.count, 1)
+        XCTAssertEqual(try byteVec(treeCommitments[0]), Self.fixed32(0x66))
+
+        let inputs = try compactSequence(witnessFields[4])
+        XCTAssertEqual(inputs.count, 1)
+        let inputFields = try compactFields(inputs[0])
+        XCTAssertEqual(inputFields.count, 4)
+        XCTAssertEqual(inputFields[0], Self.u128LittleEndian(9))
+        XCTAssertEqual(try byteVec(inputFields[1]), Self.fixed32(0x22))
+        XCTAssertEqual(try byteVec(inputFields[2]), Self.fixed32(0x01))
+        XCTAssertEqual(try uint64(inputFields[3]), 0)
+
+        XCTAssertEqual(try compactSequence(witnessFields[5]), [])
+        let unshieldChange = try compactSequence(witnessFields[6])
+        XCTAssertEqual(unshieldChange.count, 1)
+        let changeFields = try compactFields(unshieldChange[0])
+        XCTAssertEqual(changeFields.count, 2)
+        XCTAssertEqual(changeFields[0], Self.u128LittleEndian(4))
+        XCTAssertEqual(try byteVec(changeFields[1]), Self.fixed32(0x55))
+        XCTAssertEqual(witnessFields[7], Self.u128LittleEndian(5))
+        XCTAssertEqual(try byteVec(witnessFields[8]), Self.fixed32(0x77))
+
+        let expectedSchema = Data(
+            (
+                "{\"schema\":\"confidential_unshield_v3\",\"public_inputs\":[\"input_commitment_0\"," +
+                    "\"input_commitment_1\",\"nullifier_0\",\"nullifier_1\",\"change_commitment_0\"," +
+                    "\"root\",\"public_amount\",\"asset_tag\",\"chain_tag\"]}"
+            ).utf8
+        )
+        XCTAssertEqual(
+            PrivacyConfidentialWitnessCodecs.confidentialUnshieldPublicInputsSchema(),
+            expectedSchema
+        )
+
+        let request = try PrivacyConfidentialWitnessCodecs.buildConfidentialUnshieldProofRequestV1(
+            witness: witness
+        )
+        let requestFrame = try XCTUnwrap(noritoDecodeFrame(request))
+        XCTAssertEqual(requestFrame.header.schema, Array(repeating: UInt8(0x52), count: 16))
+        XCTAssertEqual(requestFrame.header.flags, NoritoHeader.compactLen)
+
+        let requestFields = try compactFields(requestFrame.payload)
+        XCTAssertEqual(requestFields.count, 6)
+        XCTAssertEqual(
+            try compactString(requestFields[0]),
+            PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3AlgorithmId
+        )
+        XCTAssertEqual(
+            try compactString(requestFields[1]),
+            PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3Entrypoint
+        )
+        XCTAssertEqual(
+            try compactString(requestFields[2]),
+            PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef
+        )
+        XCTAssertEqual(try byteVec(requestFields[3]), expectedSchema)
+        XCTAssertEqual(try byteVec(requestFields[4]), witnessArchive)
+        XCTAssertEqual(try byteVec(requestFields[5]), Data())
+    }
+
+    func testUnshieldWitnessAcceptsZeroOrOneChangeAndCanonicalPublicAmount() throws {
+        let zeroChange = try Self.unshieldWitness(
+            unshieldChange: [],
+            publicAmount: "0"
+        )
+        XCTAssertNoThrow(try PrivacyConfidentialWitnessCodecs.encodeUnshieldWitness(zeroChange))
+
+        let oneChange = try Self.unshieldWitness(publicAmount: "5")
+        XCTAssertNoThrow(try PrivacyConfidentialWitnessCodecs.encodeUnshieldWitness(oneChange))
+
+        let maximumPublicAmount = try Self.unshieldWitness(
+            unshieldChange: [],
+            publicAmount: "340282366920938463463374607431768211455"
+        )
+        XCTAssertNoThrow(
+            try PrivacyConfidentialWitnessCodecs.buildConfidentialUnshieldProofRequestV1(
+                witness: maximumPublicAmount
+            )
+        )
+    }
+
+    func testUnshieldProofRequestRejectsTransferOutputsAndCrossWiredVerifierRef() throws {
+        let transferWitness = try Self.transferWitness()
+        XCTAssertInvalidField("transferOutputs") {
+            _ = try PrivacyConfidentialWitnessCodecs.encodeUnshieldWitness(transferWitness)
+        }
+        XCTAssertInvalidField("transferOutputs") {
+            _ = try PrivacyConfidentialWitnessCodecs.buildConfidentialUnshieldProofRequestV1(
+                witness: transferWitness
+            )
+        }
+
+        let unshieldWitness = try Self.unshieldWitness()
+        XCTAssertInvalidField("vkRef") {
+            _ = try PrivacyConfidentialWitnessCodecs.buildConfidentialUnshieldProofRequestV1(
+                witness: unshieldWitness,
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialTransferV2VerifierRef
+            )
+        }
+    }
+
+    func testBuildsCanonicalUnshieldVerifyRequestAndRejectsInvalidProofInputs() throws {
+        let proof = Data([0x01, 0x02, 0x03, 0x04])
+        let request = try PrivacyConfidentialWitnessCodecs
+            .buildConfidentialUnshieldVerifyRequestV1(proof: proof)
+        let frame = try XCTUnwrap(noritoDecodeFrame(request))
+        XCTAssertEqual(frame.header.schema, Array(repeating: UInt8(0x52), count: 16))
+        XCTAssertEqual(frame.header.flags, NoritoHeader.compactLen)
+        XCTAssertEqual(frame.paddingLength, 0)
+
+        let fields = try compactFields(frame.payload)
+        XCTAssertEqual(fields.count, 6)
+        XCTAssertEqual(
+            try compactString(fields[0]),
+            PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3AlgorithmId
+        )
+        XCTAssertEqual(
+            try compactString(fields[1]),
+            PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3Entrypoint
+        )
+        XCTAssertEqual(
+            try compactString(fields[2]),
+            PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef
+        )
+        XCTAssertEqual(
+            try byteVec(fields[3]),
+            PrivacyConfidentialWitnessCodecs.confidentialUnshieldPublicInputsSchema()
+        )
+        XCTAssertEqual(try byteVec(fields[4]), Data())
+        XCTAssertEqual(try byteVec(fields[5]), proof)
+
+        XCTAssertInvalidField("proof") {
+            _ = try PrivacyConfidentialWitnessCodecs
+                .buildConfidentialUnshieldVerifyRequestV1(proof: Data())
+        }
+        XCTAssertInvalidField("proof") {
+            _ = try PrivacyConfidentialWitnessCodecs.buildConfidentialUnshieldVerifyRequestV1(
+                proof: Data(repeating: 0x7f, count: 32 * 1024 * 1024 + 1)
+            )
+        }
+        XCTAssertInvalidField("vkRef") {
+            _ = try PrivacyConfidentialWitnessCodecs.buildConfidentialUnshieldVerifyRequestV1(
+                proof: proof,
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialTransferV2VerifierRef
+            )
+        }
+    }
+
     func testTransferWitnessValidationRejectsUnshieldAndPublicAmount() throws {
         let input = try PrivacyConfidentialNoteWitnessV1(
             amount: "7",
@@ -226,6 +393,35 @@ final class PrivacyConfidentialWitnessTests: XCTestCase {
         )
     }
 
+    private static func unshieldWitness(
+        transferOutputs: [PrivacyConfidentialTransferOutputWitnessV1] = [],
+        unshieldChange: [PrivacyConfidentialUnshieldChangeWitnessV1]? = nil,
+        publicAmount: String = "5"
+    ) throws -> PrivacyConfidentialWitnessV1 {
+        let checkedChange: [PrivacyConfidentialUnshieldChangeWitnessV1]
+        if let unshieldChange {
+            checkedChange = unshieldChange
+        } else {
+            checkedChange = [
+                try PrivacyConfidentialUnshieldChangeWitnessV1(
+                    amount: "4",
+                    rho: fixed32(0x55)
+                )
+            ]
+        }
+        return try PrivacyConfidentialWitnessV1(
+            chainId: "chain",
+            assetDefinitionId: "asset",
+            spendKey: fixed32(0x11),
+            treeCommitments: [fixed32(0x66)],
+            inputs: [try noteWitness(leafIndex: 0, rhoSeed: 0x22, amount: "9")],
+            transferOutputs: transferOutputs,
+            unshieldChange: checkedChange,
+            publicAmount: publicAmount,
+            rootHint: fixed32(0x77)
+        )
+    }
+
     private static func noteWitness(
         leafIndex: UInt64,
         rhoSeed: UInt8,
@@ -252,6 +448,10 @@ final class PrivacyConfidentialWitnessTests: XCTestCase {
 
     private static func fixed32(_ seed: UInt8) -> Data {
         Data(repeating: seed, count: 32)
+    }
+
+    private static func u128LittleEndian(_ value: UInt8) -> Data {
+        Data([value] + Array(repeating: UInt8(0), count: 15))
     }
 
     private func XCTAssertInvalidField(
@@ -292,6 +492,25 @@ final class PrivacyConfidentialWitnessTests: XCTestCase {
         let bytes = try reader.readBytes(Int(count))
         XCTAssertEqual(reader.remaining, 0)
         return bytes
+    }
+
+    private func compactSequence(_ payload: Data) throws -> [Data] {
+        var reader = TestCompactReader(payload)
+        let count = try reader.readUInt64LE()
+        var values: [Data] = []
+        values.reserveCapacity(Int(count))
+        for _ in 0..<count {
+            values.append(try reader.readField())
+        }
+        XCTAssertEqual(reader.remaining, 0)
+        return values
+    }
+
+    private func uint64(_ payload: Data) throws -> UInt64 {
+        var reader = TestCompactReader(payload)
+        let value = try reader.readUInt64LE()
+        XCTAssertEqual(reader.remaining, 0)
+        return value
     }
 }
 

@@ -27,7 +27,6 @@
 //! [`docs/opcodes.md`](../docs/opcodes.md).
 
 mod aes;
-mod amount;
 pub mod analysis;
 mod argument_record;
 pub mod axt;
@@ -63,6 +62,13 @@ pub mod list;
 mod memory;
 pub mod merkle_utils;
 mod metadata;
+/// Stable Kotodama V1 numeric ABI tags and register conventions.
+pub mod numeric {
+    pub use ivm_abi::numeric::*;
+}
+pub mod numeric_gas;
+pub mod numeric_tlv;
+pub mod numeric_v1;
 pub mod mock_wsv;
 mod pedersen;
 pub mod pointer_abi;
@@ -79,6 +85,7 @@ pub mod simple_instruction;
 mod state_overlay;
 mod state_value;
 pub mod sum;
+pub mod syscall_metering;
 pub mod syscalls;
 mod vector;
 pub mod zk;
@@ -125,8 +132,8 @@ pub use crate::metadata::{
     CONTRACT_FEATURE_KNOWN_BITS, EmbeddedContractDebugInfoV1, EmbeddedContractInterfaceV1,
     EmbeddedEntrypointDescriptor, EmbeddedFunctionBudgetReportV1, EmbeddedSourceLocation,
     EmbeddedSourceMapEntryV1, EmbeddedStateDescriptor, EmbeddedStateFieldDescriptor,
-    EmbeddedStateType, MAGIC as METADATA_MAGIC, ProgramMetadata, VECTOR_LENGTH_MAX,
-    contract_code_hash,
+    EmbeddedStateType, LiteralKindV1, MAGIC as METADATA_MAGIC, ProgramMetadata, VECTOR_LENGTH_MAX,
+    contract_code_hash, decode_literal_descriptor, encode_literal_descriptor,
 };
 pub use crate::prepared::PreparedContract;
 pub use crate::{

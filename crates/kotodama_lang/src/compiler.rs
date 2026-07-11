@@ -11,7 +11,14 @@
 //! module emit the canonical wide encoding introduced for the first release; no
 //! alternate instruction layouts are generated.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+/// Opaque phase boundaries used by the compiler regression benchmark.
+#[doc(hidden)]
+pub mod benchmark;
+
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -51,12 +58,14 @@ use super::{
     semantic::{self, TypedItem, TypedProgram},
 };
 use crate::{
+    builtins::{Builtin, BuiltinAccess},
     encoding, instruction,
     metadata::{
         self, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, EmbeddedContractInterfaceV1,
         EmbeddedEntrypointDescriptor, EmbeddedFunctionBudgetReportV1, EmbeddedSourceLocation,
         EmbeddedSourceMapEntryV1, EmbeddedStateDescriptor, EmbeddedStateFieldDescriptor,
-        EmbeddedStateType, LITERAL_SECTION_MAGIC, ProgramMetadata,
+        EmbeddedStateType, LITERAL_SECTION_MAGIC, LiteralKindV1, ProgramMetadata,
+        encode_literal_descriptor,
     },
     pointer_abi::PointerType,
     syscalls,
@@ -65,6 +74,7 @@ use crate::{
 const WIDE_IMM_MIN: i32 = -128;
 const WIDE_IMM_MAX: i32 = 127;
 const LITERAL_SHIFT_REG: u8 = 26;
+const STACK_FRAME_ALIGNMENT: usize = 16;
 /// Default hash-covered execution ceiling emitted for a Kotodama V1 artifact.
 pub const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
 const KOTODAMA_ABI_VERSION: u8 = 1;
@@ -161,9 +171,29 @@ struct CompilationArtifacts {
     compile_report: CompileReport,
 }
 
+struct LoweredCompilation {
+    typed: TypedProgram,
+    ir_program: ir::Program,
+    executable_roots: BTreeSet<String>,
+    source_name: Option<String>,
+}
+
+struct SsaCompilation {
+    typed: TypedProgram,
+    ssa_program: crate::ssa::Program,
+    executable_roots: BTreeSet<String>,
+    source_name: Option<String>,
+}
+
 struct PreparedCompilation {
     typed: TypedProgram,
     ssa_program: crate::ssa::Program,
+    source_name: Option<String>,
+}
+
+struct CodegenCompilation {
+    typed: TypedProgram,
+    ir_program: ir::Program,
     source_name: Option<String>,
 }
 
@@ -473,6 +503,32 @@ fn emit_addi(code: &mut Vec<u8>, rd: u8, rs1: u8, mut value: i64) {
     }
 }
 
+fn emit_bounded_add(
+    code: &mut Vec<u8>,
+    fixups: &LiteralFixups,
+    rd: u8,
+    rs1: u8,
+    value: i64,
+    literal_scratch: u8,
+) -> Result<(), String> {
+    if ((WIDE_IMM_MIN as i64)..=(WIDE_IMM_MAX as i64)).contains(&value) {
+        push_word(
+            code,
+            encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, rd, rs1, value as i8),
+        );
+        return Ok(());
+    }
+    if literal_scratch == rd || literal_scratch == rs1 {
+        return Err("bounded add literal scratch must differ from both operands".to_owned());
+    }
+    emit_i64_literal_load(code, fixups, literal_scratch, value);
+    push_word(
+        code,
+        encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, rd, rs1, literal_scratch),
+    );
+    Ok(())
+}
+
 fn signed_compare_plan(op: BinaryOp, left: u8, right: u8) -> Option<(u8, u8, bool)> {
     match op {
         BinaryOp::Lt => Some((left, right, false)),
@@ -495,6 +551,7 @@ fn signed_branch_plan(op: BinaryOp, left: u8, right: u8) -> Option<(u8, u8, u8)>
 
 fn emit_load64(
     code: &mut Vec<u8>,
+    fixups: &LiteralFixups,
     rd: u8,
     base: u8,
     offset: i64,
@@ -511,16 +568,14 @@ fn emit_load64(
     } else {
         rd
     };
-    if addr_reg != base {
-        push_word(code, encode_addi(addr_reg, base, 0)?);
-    }
-    emit_addi_inplace(code, addr_reg, offset);
+    emit_bounded_add(code, fixups, addr_reg, base, offset, LITERAL_SHIFT_REG)?;
     push_word(code, encode_load64_rv(rd, addr_reg, 0)?);
     Ok(())
 }
 
 fn emit_store64(
     code: &mut Vec<u8>,
+    fixups: &LiteralFixups,
     base: u8,
     rs: u8,
     offset: i64,
@@ -533,14 +588,19 @@ fn emit_store64(
     if scratch == base {
         return Err("emit_store64 scratch must differ from base".to_string());
     }
-    push_word(code, encode_addi(scratch, base, 0)?);
-    emit_addi_inplace(code, scratch, offset);
+    emit_bounded_add(code, fixups, scratch, base, offset, LITERAL_SHIFT_REG)?;
     push_word(code, encode_store64_rv(scratch, rs, 0)?);
     Ok(())
 }
 
 fn stack_slot_offset_bytes(frame_prefix: usize, offset: usize) -> i64 {
     frame_prefix.saturating_add(offset) as i64
+}
+
+fn checked_align_stack_frame_size(size: usize) -> Result<usize, String> {
+    let padding = (STACK_FRAME_ALIGNMENT - size % STACK_FRAME_ALIGNMENT) % STACK_FRAME_ALIGNMENT;
+    size.checked_add(padding)
+        .ok_or_else(|| "Kotodama stack frame alignment overflow".to_owned())
 }
 
 fn encode_nop() -> u32 {
@@ -1056,23 +1116,42 @@ fn relax_control_transfers_with_trampolines(
     Ok((relaxed, offset_map))
 }
 
-fn patch_literal_load(code: &mut [u8], start: usize, rd: u8, index: u16) {
+fn patch_indexed_literal_load(
+    code: &mut [u8],
+    start: usize,
+    rd: u8,
+    index: u16,
+    kind: LiteralKindV1,
+) {
+    let opcode = match kind {
+        LiteralKindV1::PointerTlv => instruction::wide::memory::LDLIT,
+        LiteralKindV1::I64 => instruction::wide::memory::LDI64,
+    };
     write_word(
         code,
         start,
-        encoding::wide::encode_literal(instruction::wide::memory::LDLIT, rd, index),
+        encoding::wide::encode_literal(opcode, rd, index),
     );
 }
 
-fn emit_literal_load(code: &mut Vec<u8>, fixups: &mut Vec<LiteralFixup>, rd: u8, key: DataKey) {
+#[cfg(test)]
+fn patch_literal_load(code: &mut [u8], start: usize, rd: u8, index: u16) {
+    patch_indexed_literal_load(code, start, rd, index, LiteralKindV1::PointerTlv);
+}
+
+fn emit_literal_load(code: &mut Vec<u8>, fixups: &LiteralFixups, rd: u8, key: DataKey) {
     let off = reserve_word(code);
-    fixups.push((off, rd, key));
+    fixups.borrow_mut().push((off, rd, key));
+}
+
+fn emit_i64_literal_load(code: &mut Vec<u8>, fixups: &LiteralFixups, rd: u8, value: i64) {
+    emit_literal_load(code, fixups, rd, DataKey(DataKind::I64, value.to_string()));
 }
 
 fn validate_literal_count(count: usize) -> Result<(), String> {
     if count > usize::from(u16::MAX) + 1 {
         return Err(format!(
-            "too many unique typed literals: {count}; indexed literal loads support at most {}",
+            "too many unique literals: {count}; indexed literal loads support at most {}",
             usize::from(u16::MAX) + 1
         ));
     }
@@ -1081,6 +1160,7 @@ fn validate_literal_count(count: usize) -> Result<(), String> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum DataKind {
+    I64,
     Account,
     AssetDef,
     NftId,
@@ -1096,13 +1176,42 @@ enum DataKind {
     ProofBlob,
     SoracloudRequest,
     SoracloudResponse,
-    Amount,
+    Int,
+    Decimal,
+    Quantity,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct DataKey(DataKind, String);
 
 type LiteralFixup = (usize, u8, DataKey);
+type LiteralFixups = RefCell<Vec<LiteralFixup>>;
+
+impl DataKind {
+    const fn literal_kind(self) -> LiteralKindV1 {
+        match self {
+            Self::I64 => LiteralKindV1::I64,
+            Self::Account
+            | Self::AssetDef
+            | Self::NftId
+            | Self::AssetId
+            | Self::Name
+            | Self::Json
+            | Self::Domain
+            | Self::Blob
+            | Self::NoritoBytes
+            | Self::DataSpaceId
+            | Self::AxtDescriptor
+            | Self::AssetHandle
+            | Self::ProofBlob
+            | Self::SoracloudRequest
+            | Self::SoracloudResponse
+            | Self::Int
+            | Self::Decimal
+            | Self::Quantity => LiteralKindV1::PointerTlv,
+        }
+    }
+}
 
 fn pointer_type_for_kind(kind: ir::DataRefKind) -> Option<PointerType> {
     use ir::DataRefKind::*;
@@ -1122,7 +1231,9 @@ fn pointer_type_for_kind(kind: ir::DataRefKind) -> Option<PointerType> {
         ProofBlob => Some(PointerType::ProofBlob),
         SoracloudRequest => Some(PointerType::SoracloudRequest),
         SoracloudResponse => Some(PointerType::SoracloudResponse),
-        Amount => Some(PointerType::Amount),
+        Int => Some(PointerType::Int),
+        Decimal => Some(PointerType::Decimal),
+        Quantity => Some(PointerType::Quantity),
     }
 }
 
@@ -1144,7 +1255,9 @@ fn data_key_for_pointer(kind: ir::DataRefKind, value: &str) -> DataKey {
         ProofBlob => DataKey(DataKind::ProofBlob, value.to_owned()),
         SoracloudRequest => DataKey(DataKind::SoracloudRequest, value.to_owned()),
         SoracloudResponse => DataKey(DataKind::SoracloudResponse, value.to_owned()),
-        Amount => DataKey(DataKind::Amount, value.to_owned()),
+        Int => DataKey(DataKind::Int, value.to_owned()),
+        Decimal => DataKey(DataKind::Decimal, value.to_owned()),
+        Quantity => DataKey(DataKind::Quantity, value.to_owned()),
     }
 }
 
@@ -1232,13 +1345,36 @@ fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>>
         }
         DRK::Blob => (PointerType::Blob, decode_hex_or_raw_bytes(raw).ok()?),
         DRK::NoritoBytes => (PointerType::NoritoBytes, decode_hex_or_raw_bytes(raw).ok()?),
-        DRK::Amount => {
-            let amount = raw
+        DRK::Int => {
+            let value = raw.parse::<iroha_primitives::bigint::BigInt>().ok()?;
+            let frame = iroha_primitives::numeric_abi::IntValueV1::new(value)
+                .encode_frame()
+                .ok()?;
+            (PointerType::Int, frame)
+        }
+        DRK::Decimal => {
+            let value = raw
                 .parse::<iroha_primitives::numeric::Numeric>()
                 .ok()?
-                .canonicalize_amount()
+                .canonicalize_decimal()
                 .ok()?;
-            (PointerType::Amount, to_bytes(&amount).ok()?)
+            let frame = iroha_primitives::numeric_abi::DecimalValueV1::try_from_numeric(value)
+                .ok()?
+                .encode_frame()
+                .ok()?;
+            (PointerType::Decimal, frame)
+        }
+        DRK::Quantity => {
+            let decimal = raw
+                .parse::<iroha_primitives::numeric::Numeric>()
+                .ok()?
+                .canonicalize_decimal()
+                .ok()?;
+            let quantity = iroha_primitives::numeric::Quantity::try_from_numeric(decimal).ok()?;
+            let frame = iroha_primitives::numeric_abi::QuantityValueV1::new(quantity)
+                .encode_frame()
+                .ok()?;
+            (PointerType::Quantity, frame)
         }
         DRK::DataSpaceId => {
             if let Some(raw_id) = parse_u64_literal(raw) {
@@ -1308,6 +1444,7 @@ fn parse_u64_literal(raw: &str) -> Option<u64> {
 // `crates/kotodama_lang/src/samples/zk_vote_and_unshield.ko`.
 
 /// Compiler entry point for translating KOTODAMA programs into IVM bytecode.
+#[derive(Clone)]
 pub struct Compiler {
     lang: Language,
     opts: CompilerOptions,
@@ -1361,16 +1498,19 @@ mod tests {
     };
 
     use super::{
-        AUTHORITY_ACCOUNT_KEY, COLLECTION_ITERATION_CAP, Compiler, CompilerMode, CompilerOptions,
-        DEFAULT_MAX_CYCLES, DeferredTransfer, GLOBAL_WILDCARD_KEY, HINT_SKIP_DYNAMIC_STATE_PATH,
-        HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE, HINT_SKIP_OPAQUE_ISI, NFT_COARSE_KEY,
-        STATE_WILDCARD_KEY, TRAMPOLINE_ISLAND_BYTES, TransferKind, WIDE_IMM_MAX,
-        decoded_control_target, emit_addi, emit_load64, emit_store64, encode_addi, encode_jal,
-        encode_nop, patch_literal_load, pointer_type_for_kind, push_word,
+        AUTHORITY_ACCOUNT_KEY, AccessHintDiagnostics, AccessSets, COLLECTION_ITERATION_CAP,
+        Compiler, CompilerMode, CompilerOptions, DEFAULT_MAX_CYCLES, DataKind, DeferredTransfer,
+        GLOBAL_WILDCARD_KEY, HINT_SKIP_DYNAMIC_STATE_PATH, HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE,
+        HINT_SKIP_OPAQUE_ISI, IrAccessClass, LiteralFixups, NFT_COARSE_KEY, STATE_WILDCARD_KEY,
+        TRAMPOLINE_ISLAND_BYTES, TransferKind, WIDE_IMM_MAX, checked_align_stack_frame_size,
+        classify_ir_access, decoded_control_target, emit_addi, emit_load64, emit_store64,
+        encode_addi, encode_jal, encode_nop, patch_indexed_literal_load, patch_literal_load,
+        pointer_type_for_kind, push_word, record_isi_access,
         relax_control_transfers_with_trampolines, reserve_word, stack_slot_offset_bytes,
     };
     use crate::{
         ast::BinaryOp,
+        builtins::BuiltinAccess,
         ir,
         parser::parse_test_fragment as parse,
         semantic::{self, analyze},
@@ -1416,6 +1556,195 @@ mod tests {
         assert!(
             keys.iter().all(|key| key != GLOBAL_WILDCARD_KEY),
             "access hints unexpectedly require the global wildcard in {keys:?}"
+        );
+    }
+
+    fn assert_conservative_ledger_read(read_keys: &[String], write_keys: &[String]) {
+        assert!(
+            read_keys.iter().any(|key| key == GLOBAL_WILDCARD_KEY),
+            "unresolved ledger reads must carry the global read wildcard: {read_keys:?}"
+        );
+        assert!(
+            write_keys.iter().all(|key| key != GLOBAL_WILDCARD_KEY),
+            "read-only host operations must not claim a global write: {write_keys:?}"
+        );
+    }
+
+    fn unresolved_world_access(instr: &ir::Instr) -> (AccessSets, IndexSet<String>) {
+        let IrAccessClass::Ledger(access) = classify_ir_access(instr) else {
+            panic!("expected ledger access for {instr:?}");
+        };
+        let string_map = HashMap::new();
+        let int_const_map = HashMap::new();
+        let authority_account_temps = HashSet::new();
+        let dataref_kind_map = HashMap::new();
+        let instruction_literal_access_map = HashMap::new();
+        let mut access_set = AccessSets::default();
+        let mut diagnostics = AccessHintDiagnostics::default();
+        let mut skips = IndexSet::new();
+        record_isi_access(
+            instr,
+            access,
+            0,
+            &string_map,
+            &int_const_map,
+            &authority_account_temps,
+            &dataref_kind_map,
+            &instruction_literal_access_map,
+            &mut access_set,
+            &mut diagnostics,
+            &mut skips,
+        );
+        (access_set, skips)
+    }
+
+    #[test]
+    fn ir_access_classification_is_registry_backed_and_fail_closed() {
+        let temp = ir::Temp(0);
+        assert_eq!(
+            classify_ir_access(&ir::Instr::ResolveAccountAlias {
+                dest: temp,
+                alias: temp,
+            }),
+            IrAccessClass::Ledger(BuiltinAccess::LedgerRead)
+        );
+        for number in [
+            syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
+            syscalls::SYSCALL_ZK_VERIFY_UNSHIELD,
+            syscalls::SYSCALL_ZK_VERIFY_BATCH,
+            syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT,
+            syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY,
+        ] {
+            assert_eq!(
+                classify_ir_access(&ir::Instr::ZkVerify {
+                    number,
+                    payload: temp,
+                }),
+                IrAccessClass::Ledger(BuiltinAccess::LedgerRead)
+            );
+        }
+        assert_eq!(
+            classify_ir_access(&ir::Instr::ZkVerify {
+                number: u32::MAX,
+                payload: temp,
+            }),
+            IrAccessClass::Ledger(BuiltinAccess::Dynamic)
+        );
+        assert_eq!(
+            classify_ir_access(&ir::Instr::CreateNftsForAllUsers),
+            IrAccessClass::Ledger(BuiltinAccess::LedgerWrite)
+        );
+        assert_eq!(
+            classify_ir_access(&ir::Instr::StateGet {
+                dest: temp,
+                path: temp,
+            }),
+            IrAccessClass::State(BuiltinAccess::StateRead)
+        );
+        assert_eq!(
+            classify_ir_access(&ir::Instr::StateSet {
+                path: temp,
+                value: temp,
+            }),
+            IrAccessClass::State(BuiltinAccess::StateWrite)
+        );
+        assert_eq!(
+            classify_ir_access(&ir::Instr::CommitOutput),
+            IrAccessClass::None
+        );
+        assert_eq!(
+            classify_ir_access(&ir::Instr::SetExecutionDepth { value: temp }),
+            IrAccessClass::None
+        );
+    }
+
+    #[test]
+    fn unresolved_world_ir_uses_read_or_write_appropriate_wildcards() {
+        let temp = ir::Temp(0);
+        for instruction in [
+            ir::Instr::ResolveAccountAlias {
+                dest: temp,
+                alias: temp,
+            },
+            ir::Instr::ZkVerify {
+                number: syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
+                payload: temp,
+            },
+        ] {
+            let (access, skips) = unresolved_world_access(&instruction);
+            assert_eq!(
+                access.reads,
+                IndexSet::from([GLOBAL_WILDCARD_KEY.to_owned()])
+            );
+            assert!(access.writes.is_empty());
+            assert_eq!(skips, IndexSet::from([HINT_SKIP_OPAQUE_ISI.to_owned()]));
+        }
+
+        let (access, skips) = unresolved_world_access(&ir::Instr::CreateNftsForAllUsers);
+        assert_eq!(
+            access.reads,
+            IndexSet::from([GLOBAL_WILDCARD_KEY.to_owned()])
+        );
+        assert_eq!(
+            access.writes,
+            IndexSet::from([GLOBAL_WILDCARD_KEY.to_owned()])
+        );
+        assert_eq!(skips, IndexSet::from([HINT_SKIP_OPAQUE_ISI.to_owned()]));
+    }
+
+    #[test]
+    fn dynamic_state_fallback_preserves_registry_read_write_class() {
+        let temp = ir::Temp(0);
+        let program = ir::Program {
+            functions: vec![
+                call_graph_function(
+                    "read",
+                    vec![ir::Instr::StateGet {
+                        dest: temp,
+                        path: temp,
+                    }],
+                ),
+                call_graph_function(
+                    "write",
+                    vec![ir::Instr::StateSet {
+                        path: temp,
+                        value: temp,
+                    }],
+                ),
+            ],
+        };
+        let mut access_sets = vec![AccessSets::default(); 2];
+        let mut diagnostics = AccessHintDiagnostics::default();
+        let mut skips = vec![IndexSet::new(); 2];
+
+        super::derive_state_access_hints(
+            &program,
+            &HashMap::new(),
+            &mut access_sets,
+            &mut diagnostics,
+            &mut skips,
+        );
+
+        assert_eq!(
+            access_sets[0].reads,
+            IndexSet::from([STATE_WILDCARD_KEY.to_owned()])
+        );
+        assert!(access_sets[0].writes.is_empty());
+        assert_eq!(
+            access_sets[1].reads,
+            IndexSet::from([STATE_WILDCARD_KEY.to_owned()])
+        );
+        assert_eq!(
+            access_sets[1].writes,
+            IndexSet::from([STATE_WILDCARD_KEY.to_owned()])
+        );
+        assert_eq!(diagnostics.state_wildcards, 2);
+        assert_eq!(
+            skips,
+            vec![
+                IndexSet::from([HINT_SKIP_DYNAMIC_STATE_PATH.to_owned()]),
+                IndexSet::from([HINT_SKIP_DYNAMIC_STATE_PATH.to_owned()]),
+            ]
         );
     }
 
@@ -1473,7 +1802,7 @@ mod tests {
             (ProofBlob, PointerType::ProofBlob),
             (SoracloudRequest, PointerType::SoracloudRequest),
             (SoracloudResponse, PointerType::SoracloudResponse),
-            (Amount, PointerType::Amount),
+            (Amount, PointerType::Quantity),
         ];
         for (kind, expected) in cases {
             let ty = pointer_type_for_kind(kind);
@@ -1682,26 +2011,73 @@ seiyaku StableLoop {
     }
 
     #[test]
-    fn emit_load64_uses_addi_for_copy() {
+    fn emit_load64_uses_bounded_indexed_offset() {
         let mut code = Vec::new();
+        let fixups = LiteralFixups::default();
         let offset = WIDE_IMM_MAX as i64 + 1;
-        emit_load64(&mut code, 5, 6, offset, None).expect("emit load64");
-        let word = u32::from_le_bytes(code[..4].try_into().unwrap());
+        emit_load64(&mut code, &fixups, 5, 6, offset, None).expect("emit load64");
+        let recorded = fixups.into_inner();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].0, 0);
+        assert_eq!(recorded[0].1, super::LITERAL_SHIFT_REG);
+        assert_eq!((recorded[0].2).0, DataKind::I64);
+        patch_indexed_literal_load(
+            &mut code,
+            recorded[0].0,
+            recorded[0].1,
+            0,
+            ivm_abi::metadata::LiteralKindV1::I64,
+        );
+        let words = code
+            .chunks_exact(4)
+            .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(words.len(), 3);
         assert_eq!(
-            word,
-            encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 5, 6, 0)
+            instruction::wide::opcode(words[0]),
+            instruction::wide::memory::LDI64
+        );
+        assert_eq!(
+            instruction::wide::opcode(words[1]),
+            instruction::wide::arithmetic::ADD
+        );
+        assert_eq!(
+            instruction::wide::opcode(words[2]),
+            instruction::wide::memory::LOAD64
         );
     }
 
     #[test]
-    fn emit_store64_uses_addi_for_copy() {
+    fn emit_store64_uses_bounded_indexed_offset() {
         let mut code = Vec::new();
+        let fixups = LiteralFixups::default();
         let offset = WIDE_IMM_MAX as i64 + 1;
-        emit_store64(&mut code, 6, 5, offset, 7).expect("emit store64");
-        let word = u32::from_le_bytes(code[..4].try_into().unwrap());
+        emit_store64(&mut code, &fixups, 6, 5, offset, 7).expect("emit store64");
+        let recorded = fixups.into_inner();
+        assert_eq!(recorded.len(), 1);
+        patch_indexed_literal_load(
+            &mut code,
+            recorded[0].0,
+            recorded[0].1,
+            0,
+            ivm_abi::metadata::LiteralKindV1::I64,
+        );
+        let words = code
+            .chunks_exact(4)
+            .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(words.len(), 3);
         assert_eq!(
-            word,
-            encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 7, 6, 0)
+            instruction::wide::opcode(words[0]),
+            instruction::wide::memory::LDI64
+        );
+        assert_eq!(
+            instruction::wide::opcode(words[1]),
+            instruction::wide::arithmetic::ADD
+        );
+        assert_eq!(
+            instruction::wide::opcode(words[2]),
+            instruction::wide::memory::STORE64
         );
     }
 
@@ -1711,6 +2087,18 @@ seiyaku StableLoop {
         let bytes = stack_slot_offset_bytes(8, offset);
         assert_eq!(bytes, 8i64 + offset as i64);
         assert!(bytes > i16::MAX as i64);
+    }
+
+    #[test]
+    fn stack_frame_alignment_is_checked_and_includes_odd_eight_byte_prefixes() {
+        for (unpadded, expected) in [(0, 0), (8, 16), (16, 16), (24, 32), (4097, 4112)] {
+            assert_eq!(
+                checked_align_stack_frame_size(unpadded),
+                Ok(expected),
+                "unexpected alignment for {unpadded} bytes"
+            );
+        }
+        assert!(checked_align_stack_frame_size(usize::MAX).is_err());
     }
 
     #[test]
@@ -2314,14 +2702,16 @@ seiyaku HelperAccess {
     #[test]
     fn emit_load64_requires_scratch_when_rd_equals_base() {
         let mut code = Vec::new();
-        let err = emit_load64(&mut code, 5, 5, 0, None).unwrap_err();
+        let fixups = LiteralFixups::default();
+        let err = emit_load64(&mut code, &fixups, 5, 5, 0, None).unwrap_err();
         assert!(err.contains("emit_load64 requires scratch"));
     }
 
     #[test]
     fn emit_store64_requires_distinct_scratch() {
         let mut code = Vec::new();
-        let err = emit_store64(&mut code, 5, 6, 256, 5).unwrap_err();
+        let fixups = LiteralFixups::default();
+        let err = emit_store64(&mut code, &fixups, 5, 6, 256, 5).unwrap_err();
         assert!(err.contains("emit_store64 scratch"));
     }
 
@@ -7247,7 +7637,7 @@ seiyaku Test {
         assert_no_global_access_key(&hints.read_keys);
         assert_no_global_access_key(&hints.write_keys);
         assert!(hints.read_keys.iter().any(|key| key == STATE_WILDCARD_KEY));
-        assert!(hints.write_keys.iter().any(|key| key == STATE_WILDCARD_KEY));
+        assert!(hints.write_keys.is_empty());
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let read = entrypoints
             .iter()
@@ -7256,7 +7646,7 @@ seiyaku Test {
         assert_no_global_access_key(&read.read_keys);
         assert_no_global_access_key(&read.write_keys);
         assert!(read.read_keys.iter().any(|key| key == STATE_WILDCARD_KEY));
-        assert!(read.write_keys.iter().any(|key| key == STATE_WILDCARD_KEY));
+        assert!(read.write_keys.is_empty());
         assert_eq!(read.access_hints_complete, Some(false));
         assert!(!read.access_hints_skipped.is_empty());
     }
@@ -7737,7 +8127,7 @@ kotoage fn main() authorize("AssetAdmin") {{
     }
 
     #[test]
-    fn manifest_access_set_hints_omit_global_wildcard_for_alias_shorthand_account_id() {
+    fn manifest_access_set_hints_conservatively_serialize_alias_shorthand_account_id() {
         let from_literal = sample_account_literal();
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let src = format!(
@@ -9277,7 +9667,7 @@ seiyaku Test {
         assert_no_global_access_key(&read.read_keys);
         assert_no_global_access_key(&read.write_keys);
         assert!(read.read_keys.iter().any(|key| key == STATE_WILDCARD_KEY));
-        assert!(read.write_keys.iter().any(|key| key == STATE_WILDCARD_KEY));
+        assert!(read.write_keys.is_empty());
         assert_eq!(read.access_hints_complete, Some(false));
         assert_eq!(
             read.access_hints_skipped,
@@ -10999,11 +11389,11 @@ impl Compiler {
             .map_err(|diagnostics| diagnostics.render_human())
     }
 
-    fn prepare_typed_program(
+    fn lower_typed_program(
         &self,
         typed: TypedProgram,
         source_name: Option<&str>,
-    ) -> Result<PreparedCompilation, DiagnosticBundle> {
+    ) -> Result<LoweredCompilation, DiagnosticBundle> {
         if self.opts.max_cycles == 0 {
             return Err(native_diagnostic_bundle(
                 "K4001",
@@ -11070,22 +11460,58 @@ impl Compiler {
         )
         .map_err(|failures| lowering_diagnostic_bundle("K3003", failures, source_name))?;
         let executable_roots = executable_ir_roots(&typed, self.opts.mode == CompilerMode::Test);
-        let mut ssa_program = crate::ssa::Program::from_ir(ir_program).map_err(|message| {
+        Ok(LoweredCompilation {
+            typed,
+            ir_program,
+            executable_roots,
+            source_name: source_name.map(ToOwned::to_owned),
+        })
+    }
+
+    fn construct_ssa_program(
+        &self,
+        lowered: LoweredCompilation,
+    ) -> Result<SsaCompilation, DiagnosticBundle> {
+        let LoweredCompilation {
+            typed,
+            ir_program,
+            executable_roots,
+            source_name,
+        } = lowered;
+        let ssa_program = crate::ssa::Program::from_ir(ir_program).map_err(|message| {
             native_diagnostic_bundle(
                 "K3005",
                 DiagnosticPhase::Lowering,
-                source_name,
+                source_name.as_deref(),
                 None,
                 message,
             )
         })?;
+        Ok(SsaCompilation {
+            typed,
+            ssa_program,
+            executable_roots,
+            source_name,
+        })
+    }
+
+    fn optimize_ssa_program(
+        &self,
+        ssa: SsaCompilation,
+    ) -> Result<PreparedCompilation, DiagnosticBundle> {
+        let SsaCompilation {
+            typed,
+            mut ssa_program,
+            executable_roots,
+            source_name,
+        } = ssa;
         ssa_program
             .optimize_and_retain(&executable_roots)
             .map_err(|message| {
                 native_diagnostic_bundle(
                     "K3004",
                     DiagnosticPhase::Lowering,
-                    source_name,
+                    source_name.as_deref(),
                     None,
                     message,
                 )
@@ -11093,20 +11519,44 @@ impl Compiler {
         Ok(PreparedCompilation {
             typed,
             ssa_program,
-            source_name: source_name.map(ToOwned::to_owned),
+            source_name,
         })
     }
 
-    fn compile_prepared(
+    fn destroy_ssa_program(
         &self,
         prepared: PreparedCompilation,
-    ) -> Result<CompilationArtifacts, String> {
+    ) -> Result<CodegenCompilation, DiagnosticBundle> {
         let PreparedCompilation {
             typed,
             ssa_program,
             source_name,
         } = prepared;
-        let ir_prog = ssa_program.into_ir()?;
+        let ir_program = ssa_program.into_ir().map_err(|message| {
+            native_diagnostic_bundle(
+                "K3006",
+                DiagnosticPhase::Lowering,
+                source_name.as_deref(),
+                None,
+                message,
+            )
+        })?;
+        Ok(CodegenCompilation {
+            typed,
+            ir_program,
+            source_name,
+        })
+    }
+
+    fn compile_codegen(
+        &self,
+        prepared: CodegenCompilation,
+    ) -> Result<CompilationArtifacts, String> {
+        let CodegenCompilation {
+            typed,
+            ir_program: ir_prog,
+            source_name,
+        } = prepared;
         if ir_prog.functions.is_empty() {
             return Err(i18n::translate(self.lang, Message::NoFunctions));
         }
@@ -11129,14 +11579,10 @@ impl Compiler {
         let mut access_sets: Vec<AccessSets> = vec![AccessSets::default(); func_count];
         let mut hint_skips: Vec<IndexSet<String>> = vec![IndexSet::new(); func_count];
         let mut hint_diagnostics = AccessHintDiagnostics::default();
-        let mut uses_isi = false;
         use super::ir::DataRefKind as DRK;
         for (func_idx, func) in ir_prog.functions.iter().enumerate() {
             for bb in &func.blocks {
                 for instr in &bb.instrs {
-                    if instr_queues_isi(instr) {
-                        uses_isi = true;
-                    }
                     if let ir::Instr::Binary { dest, .. } = instr {
                         // Temps are mutable in loop lowerings (e.g., `i = i + 1`), so
                         // stale const facts must be dropped before codegen-time folding.
@@ -11215,30 +11661,62 @@ impl Compiler {
                     {
                         int_const_map.insert((func_idx, *dest), neg);
                     }
-                    if let ir::Instr::NumericFromInt { dest, value, kind } = instr
-                        && let Some(raw) = int_const_map.get(&(func_idx, *value)).copied()
+                    if let ir::Instr::IntFromScalar { dest, .. } = instr {
+                        dataref_kind_map.insert((func_idx, *dest), DRK::Int);
+                    }
+                    if let ir::Instr::NumericConvert {
+                        dest, destination, ..
+                    } = instr
                     {
-                        let numeric = iroha_primitives::numeric::Numeric::new(raw, 0);
-                        let payload = norito::to_bytes(&numeric).expect("encode numeric");
-                        norito_literal_map
-                            .insert((func_idx, *dest), format!("0x{}", hex::encode(payload)));
-                        let dataref_kind = match kind {
-                            ir::WideNumericKind::U128 => DRK::NoritoBytes,
-                            ir::WideNumericKind::Amount => DRK::Amount,
-                        };
-                        dataref_kind_map.insert((func_idx, *dest), dataref_kind);
+                        dataref_kind_map.insert(
+                            (func_idx, *dest),
+                            match destination {
+                                ir::WideNumericKind::Int => DRK::Int,
+                                ir::WideNumericKind::Decimal => DRK::Decimal,
+                                ir::WideNumericKind::Quantity => DRK::Quantity,
+                            },
+                        );
                     }
-                    if let ir::Instr::AmountFromU128 { dest, .. } = instr {
-                        dataref_kind_map.insert((func_idx, *dest), DRK::Amount);
+                    if let ir::Instr::NumericTryConvert {
+                        dest, destination, ..
+                    } = instr
+                    {
+                        dataref_kind_map.insert(
+                            (func_idx, *dest),
+                            match destination {
+                                ir::WideNumericKind::Int => DRK::Int,
+                                ir::WideNumericKind::Decimal => DRK::Decimal,
+                                ir::WideNumericKind::Quantity => DRK::Quantity,
+                            },
+                        );
                     }
-                    if let ir::Instr::NumericBinary { dest, kind, .. } = instr {
+                    if let ir::Instr::NumericBinary {
+                        dest, result_kind, ..
+                    } = instr
+                    {
+                        dataref_kind_map.insert(
+                            (func_idx, *dest),
+                            match result_kind {
+                                ir::WideNumericKind::Int => DRK::Int,
+                                ir::WideNumericKind::Decimal => DRK::Decimal,
+                                ir::WideNumericKind::Quantity => DRK::Quantity,
+                            },
+                        );
+                    }
+                    if let ir::Instr::NumericNeg { dest, kind, .. } = instr {
                         dataref_kind_map.insert(
                             (func_idx, *dest),
                             match kind {
-                                ir::WideNumericKind::U128 => DRK::NoritoBytes,
-                                ir::WideNumericKind::Amount => DRK::Amount,
+                                ir::WideNumericKind::Int => DRK::Int,
+                                ir::WideNumericKind::Decimal => DRK::Decimal,
+                                ir::WideNumericKind::Quantity => DRK::Quantity,
                             },
                         );
+                    }
+                    if let ir::Instr::WrappingBinary { dest, .. }
+                    | ir::Instr::WrappingNeg { dest, .. } = instr
+                    {
+                        dataref_kind_map.insert((func_idx, *dest), DRK::Int);
                     }
                     if let ir::Instr::EncodeInt { dest, value } = instr
                         && let Some(raw) = int_const_map.get(&(func_idx, *value)).copied()
@@ -11656,7 +12134,9 @@ impl Compiler {
                             ir::DataRefKind::ProofBlob => "proof_blob",
                             ir::DataRefKind::SoracloudRequest => "soracloud_request",
                             ir::DataRefKind::SoracloudResponse => "soracloud_response",
-                            ir::DataRefKind::Amount => "amount",
+                            ir::DataRefKind::Int => "int",
+                            ir::DataRefKind::Decimal => "decimal",
+                            ir::DataRefKind::Quantity => "quantity",
                         };
                         let msg =
                             format!("{name} expects a string literal; pass a literal or bytes");
@@ -11666,19 +12146,17 @@ impl Compiler {
             }
         }
 
-        if uses_isi {
-            derive_isi_access_hints(
-                &ir_prog,
-                &string_map,
-                &int_const_map,
-                &authority_account_temps,
-                &dataref_kind_map,
-                &instruction_literal_access_map,
-                &mut access_sets,
-                &mut hint_diagnostics,
-                &mut hint_skips,
-            );
-        }
+        derive_isi_access_hints(
+            &ir_prog,
+            &string_map,
+            &int_const_map,
+            &authority_account_temps,
+            &dataref_kind_map,
+            &instruction_literal_access_map,
+            &mut access_sets,
+            &mut hint_diagnostics,
+            &mut hint_skips,
+        );
         propagate_transitive_access_hints(&ir_prog, &mut access_sets, &mut hint_skips);
         let has_any_hints = access_sets
             .iter()
@@ -11699,8 +12177,10 @@ impl Compiler {
         // Norito blobs for AccountId/AssetDefinitionId placed in data section
         let mut data_bytes: Vec<u8> = Vec::new();
         let mut data_offsets: HashMap<DataKey, u64> = HashMap::new();
-        // Literal table fixups: each becomes one indexed typed-literal load.
-        let mut fixups: Vec<LiteralFixup> = Vec::new();
+        // Literal table fixups: each becomes one indexed pointer or scalar load.
+        // Code-generation callbacks share this explicit compilation-local
+        // recorder; there is no thread-local or process-global registry.
+        let fixups = LiteralFixups::default();
 
         // Compile every function retained by whole-program reachability and stitch
         // them together. Track global code, per-function start offsets, and fixups
@@ -11766,10 +12246,17 @@ impl Compiler {
             saved_regs.retain(|register| !regalloc::ARG_REGS.contains(&usize::from(*register)));
             saved_regs.sort_unstable();
             saved_regs.dedup();
-            let saved_size = saved_regs.len() * 8;
+            let saved_size = saved_regs
+                .len()
+                .checked_mul(8)
+                .ok_or_else(|| "callee-saved stack frame is too large".to_string())?;
             let spill_base = return_address_size;
-            let save_base = spill_base + alloc.frame_size;
-            let state_value_table_base = save_base + saved_size;
+            let save_base = spill_base
+                .checked_add(alloc.frame_size)
+                .ok_or_else(|| "spill stack frame is too large".to_string())?;
+            let state_value_table_base = save_base
+                .checked_add(saved_size)
+                .ok_or_else(|| "callee-saved stack frame is too large".to_string())?;
             let state_value_table_words = func
                 .blocks
                 .iter()
@@ -11783,9 +12270,10 @@ impl Compiler {
             let state_value_table_bytes = state_value_table_words
                 .checked_mul(ivm_abi::state_value::DECODED_STATE_VALUE_WORD_BYTES as usize)
                 .ok_or_else(|| "durable aggregate state scratch frame is too large".to_string())?;
-            let local_frame = state_value_table_base
+            let unaligned_local_frame = state_value_table_base
                 .checked_add(state_value_table_bytes)
                 .ok_or_else(|| "durable aggregate state frame is too large".to_string())?;
+            let local_frame = checked_align_stack_frame_size(unaligned_local_frame)?;
             let debug_seed_index = function_debug_seeds.len();
             function_debug_seeds.push(FunctionDebugSeed {
                 name: func.name.clone(),
@@ -11827,6 +12315,7 @@ impl Compiler {
                     })?;
                     emit_load64(
                         code,
+                        &fixups,
                         reload.register as u8,
                         sp,
                         stack_slot_offset_bytes(spill_base, *offset),
@@ -11841,7 +12330,7 @@ impl Compiler {
                     Ok(register as u8)
                 } else if let Some(off) = alloc.stack.get(t) {
                     let total = stack_slot_offset_bytes(spill_base, *off);
-                    emit_load64(code, scratch, sp, total, Some(scratch))?;
+                    emit_load64(code, &fixups, scratch, sp, total, Some(scratch))?;
                     Ok(scratch)
                 } else {
                     Ok(0)
@@ -11863,7 +12352,7 @@ impl Compiler {
                               code: &mut Vec<u8>|
              -> Result<(), String> {
                 if spilled {
-                    emit_store64(code, sp, from, offset, scratch2)?;
+                    emit_store64(code, &fixups, sp, from, offset, scratch2)?;
                 }
                 Ok(())
             };
@@ -11883,15 +12372,22 @@ impl Compiler {
                 // nested-call return address actually require one.
                 if bb.label == func.entry && local_frame > 0 {
                     let sp = regalloc::SP_REG as u8;
-                    emit_addi_inplace(&mut code, sp, -(local_frame as i64));
+                    emit_bounded_add(
+                        &mut code,
+                        &fixups,
+                        sp,
+                        sp,
+                        -(local_frame as i64),
+                        LITERAL_SHIFT_REG,
+                    )?;
                     let scratch_base = if sp != scratch1 { scratch1 } else { scratch2 };
                     if saves_return_address {
                         let ra = 1u8;
-                        emit_store64(&mut code, sp, ra, 0, scratch_base)?;
+                        emit_store64(&mut code, &fixups, sp, ra, 0, scratch_base)?;
                     }
                     for (idx, reg) in saved_regs.iter().copied().enumerate() {
                         let offset = (save_base + idx * 8) as i64;
-                        emit_store64(&mut code, sp, reg, offset, scratch_base)?;
+                        emit_store64(&mut code, &fixups, sp, reg, offset, scratch_base)?;
                     }
                 }
                 let fused_relational = match (&bb.terminator, bb.instrs.last()) {
@@ -11928,7 +12424,7 @@ impl Compiler {
                             // Materialize string literals as Blob pointers via the literal table.
                             let (rd, spilled, imm) = dst_reg(dest);
                             let key = DataKey(DataKind::Blob, value.clone());
-                            emit_literal_load(&mut code, &mut fixups, rd, key);
+                            emit_literal_load(&mut code, &fixups, rd, key);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::Const { dest, value } => {
@@ -11937,39 +12433,7 @@ impl Compiler {
                             if ((WIDE_IMM_MIN as i64)..=(WIDE_IMM_MAX as i64)).contains(&imm_val) {
                                 emit_addi(&mut code, rd, 0, imm_val);
                             } else {
-                                const BASE_SHIFT: i16 = 11;
-                                const BASE: i64 = 1 << BASE_SHIFT;
-                                let mut digits: Vec<i16> = Vec::new();
-                                let mut n = imm_val;
-                                while n != 0 {
-                                    let rem = n % BASE;
-                                    digits.push(rem as i16);
-                                    n = (n - rem) / BASE;
-                                }
-                                if digits.is_empty() {
-                                    digits.push(0);
-                                }
-                                digits.reverse();
-                                // Preload shift amount into the reserved literal scratch register.
-                                emit_addi(&mut code, LITERAL_SHIFT_REG, 0, BASE_SHIFT as i64);
-                                let mut iter = digits.into_iter();
-                                if let Some(first) = iter.next() {
-                                    emit_addi(&mut code, rd, 0, first as i64);
-                                    for digit in iter {
-                                        let shift = encoding::wide::encode_rr(
-                                            instruction::wide::arithmetic::SLL,
-                                            rd,
-                                            rd,
-                                            LITERAL_SHIFT_REG,
-                                        );
-                                        push_word(&mut code, shift);
-                                        if digit != 0 {
-                                            emit_addi(&mut code, rd, rd, digit as i64);
-                                        }
-                                    }
-                                } else {
-                                    emit_addi(&mut code, rd, 0, 0);
-                                }
+                                emit_i64_literal_load(&mut code, &fixups, rd, imm_val);
                             }
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
@@ -12020,7 +12484,7 @@ impl Compiler {
                                 {
                                     let (rd, spilled, imm) = dst_reg(dest);
                                     let key = data_key_for_pointer(kind, &lit);
-                                    emit_literal_load(&mut code, &mut fixups, rd, key);
+                                    emit_literal_load(&mut code, &fixups, rd, key);
                                     spill_back(dest, rd, spilled, imm, &mut code)?;
                                     continue;
                                 } else if let Some(kind) =
@@ -12030,7 +12494,7 @@ impl Compiler {
                                 {
                                     let (rd, spilled, imm) = dst_reg(dest);
                                     let key = data_key_for_pointer(kind, &lit);
-                                    emit_literal_load(&mut code, &mut fixups, rd, key);
+                                    emit_literal_load(&mut code, &fixups, rd, key);
                                     spill_back(dest, rd, spilled, imm, &mut code)?;
                                     continue;
                                 } else if left_zero || right_zero {
@@ -12047,23 +12511,19 @@ impl Compiler {
                             let rs2 = src_reg(right, scratch2, &mut code)?;
                             match op {
                                 BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul => {
-                                    let operation = match op {
-                                        BinaryOp::Add => {
-                                            crate::checked_arithmetic::CheckedBinaryOp::Add
-                                        }
-                                        BinaryOp::Sub => {
-                                            crate::checked_arithmetic::CheckedBinaryOp::Sub
-                                        }
-                                        BinaryOp::Mul => {
-                                            crate::checked_arithmetic::CheckedBinaryOp::Mul
-                                        }
+                                    // Source numeric arithmetic never reaches scalar IR: it uses
+                                    // the Int/Decimal/Quantity syscalls. Scalar arithmetic here is
+                                    // compiler-owned bounded control-flow and layout bookkeeping.
+                                    let opcode = match op {
+                                        BinaryOp::Add => instruction::wide::arithmetic::ADD,
+                                        BinaryOp::Sub => instruction::wide::arithmetic::SUB,
+                                        BinaryOp::Mul => instruction::wide::arithmetic::MUL,
                                         _ => unreachable!(),
                                     };
-                                    for word in crate::checked_arithmetic::encode_checked_binary(
-                                        operation, rd, rs1, rs2,
-                                    ) {
-                                        push_word(&mut code, word);
-                                    }
+                                    push_word(
+                                        &mut code,
+                                        encoding::wide::encode_rr(opcode, rd, rs1, rs2),
+                                    );
                                 }
                                 BinaryOp::And => {
                                     let word = encoding::wide::encode_rr(
@@ -12152,16 +12612,40 @@ impl Compiler {
                             left,
                             right,
                         } => {
-                            let (rd, spilled, imm) = dst_reg(dest);
-                            let rs1 = src_reg(left, scratch1, &mut code)?;
-                            let rs2 = src_reg(right, scratch2, &mut code)?;
-                            let opcode = match op {
-                                BinaryOp::Add => instruction::wide::arithmetic::ADD,
-                                BinaryOp::Sub => instruction::wide::arithmetic::SUB,
-                                BinaryOp::Mul => instruction::wide::arithmetic::MUL,
+                            let load_int = |temp: &ir::Temp,
+                                            target: u8,
+                                            scratch: u8,
+                                            code: &mut Vec<u8>|
+                             -> Result<(), String> {
+                                if let Some(literal) = string_map.get(&(func_idx, *temp)).cloned() {
+                                    emit_literal_load(
+                                        code,
+                                        &fixups,
+                                        target,
+                                        DataKey(DataKind::Int, literal),
+                                    );
+                                } else {
+                                    let source = src_reg(temp, scratch, code)?;
+                                    push_word(code, encode_addi(target, source, 0)?);
+                                }
+                                Ok(())
+                            };
+                            load_int(left, 10, scratch1, &mut code)?;
+                            code.extend_from_slice(&publish_tlv);
+                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
+                            load_int(right, 10, scratch1, &mut code)?;
+                            code.extend_from_slice(&publish_tlv);
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                            let syscall = match op {
+                                BinaryOp::Add => syscalls::SYSCALL_INT_WRAP_ADD,
+                                BinaryOp::Sub => syscalls::SYSCALL_INT_WRAP_SUB,
+                                BinaryOp::Mul => syscalls::SYSCALL_INT_WRAP_MUL,
                                 _ => unreachable!("wrapping binary IR accepts only +, -, and *"),
                             };
-                            push_word(&mut code, encoding::wide::encode_rr(opcode, rd, rs1, rs2));
+                            push_syscall(&mut code, syscall);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::Unary { dest, op, operand } => {
@@ -12169,11 +12653,15 @@ impl Compiler {
                             let rs = src_reg(operand, scratch1, &mut code)?;
                             match op {
                                 UnaryOp::Neg => {
-                                    for word in
-                                        crate::checked_arithmetic::encode_checked_neg(rd, rs)
-                                    {
-                                        push_word(&mut code, word);
-                                    }
+                                    push_word(
+                                        &mut code,
+                                        encoding::wide::encode_rr(
+                                            instruction::wide::arithmetic::NEG,
+                                            rd,
+                                            rs,
+                                            0,
+                                        ),
+                                    );
                                 }
                                 UnaryOp::Not => {
                                     // boolean not (0/1) via XORI with 1
@@ -12191,17 +12679,21 @@ impl Compiler {
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::WrappingNeg { dest, operand } => {
+                            if let Some(literal) = string_map.get(&(func_idx, *operand)).cloned() {
+                                emit_literal_load(
+                                    &mut code,
+                                    &fixups,
+                                    10,
+                                    DataKey(DataKind::Int, literal),
+                                );
+                            } else {
+                                let source = src_reg(operand, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, source, 0)?);
+                            }
+                            code.extend_from_slice(&publish_tlv);
+                            push_syscall(&mut code, syscalls::SYSCALL_INT_WRAP_NEG);
                             let (rd, spilled, imm) = dst_reg(dest);
-                            let rs = src_reg(operand, scratch1, &mut code)?;
-                            push_word(
-                                &mut code,
-                                encoding::wide::encode_rr(
-                                    instruction::wide::arithmetic::NEG,
-                                    rd,
-                                    rs,
-                                    0,
-                                ),
-                            );
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::Abs { dest, src } => {
@@ -12304,7 +12796,7 @@ impl Compiler {
                                 && let Some(lit) = string_map.get(&(func_idx, *src)).cloned()
                             {
                                 let key = data_key_for_pointer(kind, &lit);
-                                emit_literal_load(&mut code, &mut fixups, rd, key);
+                                emit_literal_load(&mut code, &fixups, rd, key);
                             } else {
                                 let rs = src_reg(src, scratch1, &mut code)?;
                                 if rd != rs {
@@ -12394,7 +12886,7 @@ impl Compiler {
                                 .get(&(func_idx, *account))
                                 .map(|s| DataKey(DataKind::Account, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 10, k_acc);
+                                emit_literal_load(&mut code, &fixups, 10, k_acc);
                             } else {
                                 let r_acc = src_reg(account, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r_acc, 0)?);
@@ -12404,7 +12896,7 @@ impl Compiler {
                                 .get(&(func_idx, *asset))
                                 .map(|s| DataKey(DataKind::AssetDef, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 11, k_asset);
+                                emit_literal_load(&mut code, &fixups, 11, k_asset);
                             } else {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r_asset, 0)?);
@@ -12448,7 +12940,7 @@ impl Compiler {
                                 .get(&(func_idx, *account))
                                 .map(|s| DataKey(DataKind::Account, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 10, k_acc);
+                                emit_literal_load(&mut code, &fixups, 10, k_acc);
                             } else {
                                 let r_acc = src_reg(account, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r_acc, 0)?);
@@ -12458,7 +12950,7 @@ impl Compiler {
                                 .get(&(func_idx, *asset))
                                 .map(|s| DataKey(DataKind::AssetDef, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 11, k_asset);
+                                emit_literal_load(&mut code, &fixups, 11, k_asset);
                             } else {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r_asset, 0)?);
@@ -12492,7 +12984,7 @@ impl Compiler {
                             // Pointer-ABI: load DomainId TLV pointer into x10; or move from runtime pointer.
                             if let Some(dom_str) = string_map.get(&(func_idx, *domain)) {
                                 let key_dom = DataKey(DataKind::Domain, dom_str.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key_dom);
+                                emit_literal_load(&mut code, &fixups, 10, key_dom);
                             } else {
                                 let r_dom = src_reg(domain, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r_dom, 0)?);
@@ -12512,7 +13004,7 @@ impl Compiler {
                         Instr::UnregisterDomain { domain } => {
                             if let Some(dom_str) = string_map.get(&(func_idx, *domain)) {
                                 let key_dom = DataKey(DataKind::Domain, dom_str.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key_dom);
+                                emit_literal_load(&mut code, &fixups, 10, key_dom);
                             } else {
                                 let r_dom = src_reg(domain, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r_dom, 0)?);
@@ -12531,7 +13023,7 @@ impl Compiler {
                         Instr::UnregisterAccount { account } => {
                             if let Some(acc_str) = string_map.get(&(func_idx, *account)) {
                                 let key_acc = DataKey(DataKind::Account, acc_str.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key_acc);
+                                emit_literal_load(&mut code, &fixups, 10, key_acc);
                             } else {
                                 let r = src_reg(account, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -12550,7 +13042,7 @@ impl Compiler {
                         Instr::RegisterAccount { account } => {
                             if let Some(acc_str) = string_map.get(&(func_idx, *account)) {
                                 let key_acc = DataKey(DataKind::Account, acc_str.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key_acc);
+                                emit_literal_load(&mut code, &fixups, 10, key_acc);
                             } else {
                                 let r = src_reg(account, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -12570,14 +13062,14 @@ impl Compiler {
                         | Instr::RemoveSignatory { account, signatory } => {
                             if let Some(acc_str) = string_map.get(&(func_idx, *account)) {
                                 let key_acc = DataKey(DataKind::Account, acc_str.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key_acc);
+                                emit_literal_load(&mut code, &fixups, 10, key_acc);
                             } else {
                                 let r = src_reg(account, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
                             }
                             if let Some(json) = string_map.get(&(func_idx, *signatory)) {
                                 let key_json = DataKey(DataKind::Json, json.clone());
-                                emit_literal_load(&mut code, &mut fixups, 11, key_json);
+                                emit_literal_load(&mut code, &fixups, 11, key_json);
                             } else {
                                 let r = src_reg(signatory, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r, 0)?);
@@ -12601,7 +13093,7 @@ impl Compiler {
                         Instr::SetAccountQuorum { account, quorum } => {
                             if let Some(acc_str) = string_map.get(&(func_idx, *account)) {
                                 let key_acc = DataKey(DataKind::Account, acc_str.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key_acc);
+                                emit_literal_load(&mut code, &fixups, 10, key_acc);
                             } else {
                                 let r = src_reg(account, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -12622,7 +13114,7 @@ impl Compiler {
                         Instr::UnregisterAsset { asset } => {
                             if let Some(ad_str) = string_map.get(&(func_idx, *asset)) {
                                 let key = DataKey(DataKind::AssetDef, ad_str.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(asset, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -12642,7 +13134,7 @@ impl Compiler {
                             // Load domain into x10 and publish; keep a copy in x12
                             if let Some(dom_str) = string_map.get(&(func_idx, *domain)) {
                                 let key_dom = DataKey(DataKind::Domain, dom_str.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key_dom);
+                                emit_literal_load(&mut code, &fixups, 10, key_dom);
                             } else {
                                 let r_dom = src_reg(domain, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r_dom, 0)?);
@@ -12657,7 +13149,7 @@ impl Compiler {
                             // Load 'to' AccountId into x11
                             if let Some(to_str) = string_map.get(&(func_idx, *to)) {
                                 let key_to = DataKey(DataKind::Account, to_str.clone());
-                                emit_literal_load(&mut code, &mut fixups, 11, key_to);
+                                emit_literal_load(&mut code, &fixups, 11, key_to);
                             } else {
                                 let r_to = src_reg(to, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r_to, 0)?);
@@ -12680,7 +13172,7 @@ impl Compiler {
                             // r10 = &Json
                             if let Some(j) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, j.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(json, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -12699,7 +13191,7 @@ impl Compiler {
                         Instr::UnregisterPeer { json } => {
                             if let Some(j) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, j.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(json, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -12718,7 +13210,7 @@ impl Compiler {
                         Instr::CreateTrigger { json } => {
                             if let Some(j) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, j.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(json, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -12737,7 +13229,7 @@ impl Compiler {
                         Instr::RemoveTrigger { name } => {
                             if let Some(nm) = string_map.get(&(func_idx, *name)) {
                                 let key = DataKey(DataKind::Name, nm.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(name, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -12756,7 +13248,7 @@ impl Compiler {
                         Instr::SetTriggerEnabled { name, enabled } => {
                             if let Some(nm) = string_map.get(&(func_idx, *name)) {
                                 let key = DataKey(DataKind::Name, nm.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(name, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -12780,14 +13272,14 @@ impl Compiler {
                             // r10 = &Name, r11 = &Json
                             if let Some(nm) = string_map.get(&(func_idx, *name)) {
                                 let key = DataKey(DataKind::Name, nm.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(name, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
                             }
                             if let Some(js) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, js.clone());
-                                emit_literal_load(&mut code, &mut fixups, 11, key);
+                                emit_literal_load(&mut code, &fixups, 11, key);
                             } else {
                                 let r = src_reg(json, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r, 0)?);
@@ -12811,7 +13303,7 @@ impl Compiler {
                         Instr::DeleteRole { name } => {
                             if let Some(nm) = string_map.get(&(func_idx, *name)) {
                                 let key = DataKey(DataKind::Name, nm.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(name, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -12832,14 +13324,14 @@ impl Compiler {
                             // r10=&AccountId, r11=&Name
                             if let Some(a) = string_map.get(&(func_idx, *account)) {
                                 let key = DataKey(DataKind::Account, a.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(account, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
                             }
                             if let Some(nm) = string_map.get(&(func_idx, *name)) {
                                 let key = DataKey(DataKind::Name, nm.clone());
-                                emit_literal_load(&mut code, &mut fixups, 11, key);
+                                emit_literal_load(&mut code, &fixups, 11, key);
                             } else {
                                 let r = src_reg(name, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r, 0)?);
@@ -12869,7 +13361,7 @@ impl Compiler {
                             // r10 = &AccountId; r11 = &Name or &Json
                             if let Some(a) = string_map.get(&(func_idx, *account)) {
                                 let key = DataKey(DataKind::Account, a.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(account, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -12882,7 +13374,7 @@ impl Compiler {
                                 } else {
                                     DataKey(DataKind::Name, nm.clone())
                                 };
-                                emit_literal_load(&mut code, &mut fixups, 11, dk);
+                                emit_literal_load(&mut code, &fixups, 11, dk);
                             } else {
                                 let r = src_reg(token, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r, 0)?);
@@ -12912,7 +13404,7 @@ impl Compiler {
                             // Load/move payload pointer into x10
                             if let Some(pstr) = string_map.get(&(func_idx, *payload)) {
                                 let key = DataKey(DataKind::NoritoBytes, pstr.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(payload, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -13032,7 +13524,7 @@ impl Compiler {
                         Instr::VerifyProof { dest, payload } => {
                             if let Some(pstr) = string_map.get(&(func_idx, *payload)) {
                                 let key = DataKey(DataKind::NoritoBytes, pstr.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(payload, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -13050,7 +13542,7 @@ impl Compiler {
                         Instr::VendorExecuteInstruction { payload, kind } => {
                             if let Some(pstr) = string_map.get(&(func_idx, *payload)) {
                                 let key = DataKey(DataKind::NoritoBytes, pstr.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(payload, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -13090,7 +13582,7 @@ impl Compiler {
                         Instr::VendorExecuteQuery { dest, payload } => {
                             if let Some(pstr) = string_map.get(&(func_idx, *payload)) {
                                 let key = DataKey(DataKind::NoritoBytes, pstr.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(payload, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -13113,7 +13605,7 @@ impl Compiler {
                         Instr::QueryExecuteNorito { dest, payload } => {
                             if let Some(pstr) = string_map.get(&(func_idx, *payload)) {
                                 let key = DataKey(DataKind::NoritoBytes, pstr.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(payload, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -13196,7 +13688,7 @@ impl Compiler {
                             if let Some(account_str) = string_map.get(&(func_idx, *account)) {
                                 emit_literal_load(
                                     &mut code,
-                                    &mut fixups,
+                                    &fixups,
                                     10,
                                     DataKey(DataKind::Account, account_str.clone()),
                                 );
@@ -13207,7 +13699,7 @@ impl Compiler {
                             if let Some(asset_str) = string_map.get(&(func_idx, *asset)) {
                                 emit_literal_load(
                                     &mut code,
-                                    &mut fixups,
+                                    &fixups,
                                     11,
                                     DataKey(DataKind::AssetDef, asset_str.clone()),
                                 );
@@ -13237,7 +13729,7 @@ impl Compiler {
                             {
                                 emit_literal_load(
                                     &mut code,
-                                    &mut fixups,
+                                    &fixups,
                                     10,
                                     DataKey(DataKind::Name, raw_key.clone()),
                                 );
@@ -13274,7 +13766,7 @@ impl Compiler {
                         Instr::SmartContractLifecycle { payload, syscall } => {
                             if let Some(pstr) = string_map.get(&(func_idx, *payload)) {
                                 let key = DataKey(DataKind::NoritoBytes, pstr.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(payload, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -13289,7 +13781,7 @@ impl Compiler {
                         Instr::TransferBatchApply { payload } => {
                             if let Some(pstr) = string_map.get(&(func_idx, *payload)) {
                                 let key = DataKey(DataKind::NoritoBytes, pstr.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(payload, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -13306,7 +13798,7 @@ impl Compiler {
                         | Instr::VrfEpochSeed { dest, payload } => {
                             if let Some(pstr) = string_map.get(&(func_idx, *payload)) {
                                 let key = DataKey(DataKind::NoritoBytes, pstr.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(payload, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -13435,7 +13927,7 @@ impl Compiler {
                             let hex_payload = hex::encode(bytes);
                             let key = DataKey(DataKind::NoritoBytes, hex_payload);
                             let (rd, spilled, imm) = dst_reg(dest);
-                            emit_literal_load(&mut code, &mut fixups, rd, key);
+                            emit_literal_load(&mut code, &fixups, rd, key);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::BuildUnshieldInline {
@@ -13545,7 +14037,7 @@ impl Compiler {
                             let hex_payload = hex::encode(bytes);
                             let key = DataKey(DataKind::NoritoBytes, hex_payload);
                             let (rd, spilled, imm) = dst_reg(dest);
-                            emit_literal_load(&mut code, &mut fixups, rd, key);
+                            emit_literal_load(&mut code, &fixups, rd, key);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::RegisterAsset {
@@ -13560,7 +14052,7 @@ impl Compiler {
                             );
                             if let Some(asset_str) = string_map.get(&(func_idx, *asset)) {
                                 let key_asset = DataKey(DataKind::AssetDef, asset_str.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key_asset);
+                                emit_literal_load(&mut code, &fixups, 10, key_asset);
                             } else {
                                 let r_asset = src_reg(asset, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r_asset, 0)?);
@@ -13590,7 +14082,7 @@ impl Compiler {
                             let r_mint = src_reg(mintable, scratch1, &mut code)?;
                             if let Some(asset_str) = string_map.get(&(func_idx, *asset)) {
                                 let key_asset = DataKey(DataKind::AssetDef, asset_str.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key_asset);
+                                emit_literal_load(&mut code, &fixups, 10, key_asset);
                             } else {
                                 let r_asset = src_reg(asset, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r_asset, 0)?);
@@ -13607,7 +14099,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(10, r_acc, 0)?);
                             if let Some(asset_str) = string_map.get(&(func_idx, *asset)) {
                                 let key_asset = DataKey(DataKind::AssetDef, asset_str.clone());
-                                emit_literal_load(&mut code, &mut fixups, 11, key_asset);
+                                emit_literal_load(&mut code, &fixups, 11, key_asset);
                             } else {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r_asset, 0)?);
@@ -13649,7 +14141,7 @@ impl Compiler {
                                 .get(&(func_idx, *from))
                                 .map(|s| DataKey(DataKind::Account, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 10, from_str);
+                                emit_literal_load(&mut code, &fixups, 10, from_str);
                             } else {
                                 let r_from = src_reg(from, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r_from, 0)?);
@@ -13658,7 +14150,7 @@ impl Compiler {
                                 .get(&(func_idx, *to))
                                 .map(|s| DataKey(DataKind::Account, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 11, to_str);
+                                emit_literal_load(&mut code, &fixups, 11, to_str);
                             } else {
                                 let r_to = src_reg(to, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r_to, 0)?);
@@ -13667,7 +14159,7 @@ impl Compiler {
                                 .get(&(func_idx, *asset))
                                 .map(|s| DataKey(DataKind::AssetDef, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 12, asset_str);
+                                emit_literal_load(&mut code, &fixups, 12, asset_str);
                             } else {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(12, r_asset, 0)?);
@@ -13677,7 +14169,7 @@ impl Compiler {
                                 .get(&(func_idx, *dataspace))
                                 .map(|s| DataKey(DataKind::DataSpaceId, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 14, dataspace_str);
+                                emit_literal_load(&mut code, &fixups, 14, dataspace_str);
                             } else {
                                 let r_dataspace = src_reg(dataspace, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(14, r_dataspace, 0)?);
@@ -13726,7 +14218,7 @@ impl Compiler {
                                 .get(&(func_idx, *from))
                                 .map(|s| DataKey(DataKind::Account, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 10, from_str);
+                                emit_literal_load(&mut code, &fixups, 10, from_str);
                             } else {
                                 let r_from = src_reg(from, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r_from, 0)?);
@@ -13735,7 +14227,7 @@ impl Compiler {
                                 .get(&(func_idx, *to))
                                 .map(|s| DataKey(DataKind::Account, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 11, to_str);
+                                emit_literal_load(&mut code, &fixups, 11, to_str);
                             } else {
                                 let r_to = src_reg(to, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r_to, 0)?);
@@ -13744,7 +14236,7 @@ impl Compiler {
                                 .get(&(func_idx, *asset))
                                 .map(|s| DataKey(DataKind::AssetDef, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 12, asset_str);
+                                emit_literal_load(&mut code, &fixups, 12, asset_str);
                             } else {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(12, r_asset, 0)?);
@@ -13783,7 +14275,7 @@ impl Compiler {
                                 .get(&(func_idx, *escrow))
                                 .map(|s| DataKey(DataKind::Name, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 10, escrow_str);
+                                emit_literal_load(&mut code, &fixups, 10, escrow_str);
                             } else {
                                 let r_escrow = src_reg(escrow, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r_escrow, 0)?);
@@ -13792,7 +14284,7 @@ impl Compiler {
                                 .get(&(func_idx, *asset))
                                 .map(|s| DataKey(DataKind::AssetDef, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 11, asset_str);
+                                emit_literal_load(&mut code, &fixups, 11, asset_str);
                             } else {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r_asset, 0)?);
@@ -13833,7 +14325,7 @@ impl Compiler {
                                 .get(&(func_idx, *escrow))
                                 .map(|s| DataKey(DataKind::Name, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 10, escrow_str);
+                                emit_literal_load(&mut code, &fixups, 10, escrow_str);
                             } else {
                                 let r_escrow = src_reg(escrow, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r_escrow, 0)?);
@@ -13862,7 +14354,7 @@ impl Compiler {
                                 .get(&(func_idx, *escrow))
                                 .map(|s| DataKey(DataKind::Name, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 10, escrow_str);
+                                emit_literal_load(&mut code, &fixups, 10, escrow_str);
                             } else {
                                 let r_escrow = src_reg(escrow, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r_escrow, 0)?);
@@ -13902,7 +14394,7 @@ impl Compiler {
                                 .get(&(func_idx, *escrow))
                                 .map(|s| DataKey(DataKind::Name, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 10, escrow_str);
+                                emit_literal_load(&mut code, &fixups, 10, escrow_str);
                             } else {
                                 let r_escrow = src_reg(escrow, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r_escrow, 0)?);
@@ -13940,7 +14432,7 @@ impl Compiler {
                         | Instr::AnonymousEscrowResolveDispute { request } => {
                             if let Some(pstr) = string_map.get(&(func_idx, *request)) {
                                 let key = DataKey(DataKind::NoritoBytes, pstr.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r_request = src_reg(request, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r_request, 0)?);
@@ -13973,7 +14465,7 @@ impl Compiler {
                                 .get(&(func_idx, *escrow))
                                 .map(|s| DataKey(DataKind::Name, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 10, escrow_str);
+                                emit_literal_load(&mut code, &fixups, 10, escrow_str);
                             } else {
                                 let r_escrow = src_reg(escrow, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r_escrow, 0)?);
@@ -14002,7 +14494,7 @@ impl Compiler {
                                 .get(&(func_idx, *escrow))
                                 .map(|s| DataKey(DataKind::Name, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 10, escrow_str);
+                                emit_literal_load(&mut code, &fixups, 10, escrow_str);
                             } else {
                                 let r_escrow = src_reg(escrow, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r_escrow, 0)?);
@@ -14098,7 +14590,7 @@ impl Compiler {
                                 .get(&(func_idx, *account))
                                 .map(|s| DataKey(DataKind::Account, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 10, k_acc);
+                                emit_literal_load(&mut code, &fixups, 10, k_acc);
                             } else {
                                 let r_acc = src_reg(account, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r_acc, 0)?);
@@ -14108,7 +14600,7 @@ impl Compiler {
                                 .get(&(func_idx, *key))
                                 .map(|s| DataKey(DataKind::Name, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 11, k_name);
+                                emit_literal_load(&mut code, &fixups, 11, k_name);
                             } else {
                                 let r_key = src_reg(key, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r_key, 0)?);
@@ -14118,7 +14610,7 @@ impl Compiler {
                                 .get(&(func_idx, *value))
                                 .map(|s| DataKey(DataKind::Json, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 12, k_json);
+                                emit_literal_load(&mut code, &fixups, 12, k_json);
                             } else {
                                 let r_val = src_reg(value, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(12, r_val, 0)?);
@@ -14154,7 +14646,7 @@ impl Compiler {
                                 .get(&(func_idx, *nft))
                                 .map(|s| DataKey(DataKind::NftId, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 10, k_nft);
+                                emit_literal_load(&mut code, &fixups, 10, k_nft);
                             } else {
                                 let r = src_reg(nft, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -14163,7 +14655,7 @@ impl Compiler {
                                 .get(&(func_idx, *owner))
                                 .map(|s| DataKey(DataKind::Account, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 11, k_owner);
+                                emit_literal_load(&mut code, &fixups, 11, k_owner);
                             } else {
                                 let r = src_reg(owner, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r, 0)?);
@@ -14197,19 +14689,19 @@ impl Compiler {
                                 .get(&(func_idx, *json))
                                 .map(|s| DataKey(DataKind::Json, s.clone()));
                             if let Some(kn) = k_nft {
-                                emit_literal_load(&mut code, &mut fixups, 10, kn);
+                                emit_literal_load(&mut code, &fixups, 10, kn);
                             } else {
                                 let r = src_reg(nft, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
                             }
                             if let Some(kk) = k_key {
-                                emit_literal_load(&mut code, &mut fixups, 11, kk);
+                                emit_literal_load(&mut code, &fixups, 11, kk);
                             } else {
                                 let r = src_reg(key, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r, 0)?);
                             }
                             if let Some(kj) = k_json {
-                                emit_literal_load(&mut code, &mut fixups, 12, kj);
+                                emit_literal_load(&mut code, &fixups, 12, kj);
                             } else {
                                 let r = src_reg(json, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(12, r, 0)?);
@@ -14241,7 +14733,7 @@ impl Compiler {
                                 .get(&(func_idx, *nft))
                                 .map(|s| DataKey(DataKind::NftId, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 10, kn);
+                                emit_literal_load(&mut code, &fixups, 10, kn);
                             } else {
                                 let r = src_reg(nft, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -14264,7 +14756,7 @@ impl Compiler {
                                 .get(&(func_idx, *from))
                                 .map(|s| DataKey(DataKind::Account, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 10, k_from);
+                                emit_literal_load(&mut code, &fixups, 10, k_from);
                             } else {
                                 let r = src_reg(from, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -14273,7 +14765,7 @@ impl Compiler {
                                 .get(&(func_idx, *nft))
                                 .map(|s| DataKey(DataKind::NftId, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 11, k_nft);
+                                emit_literal_load(&mut code, &fixups, 11, k_nft);
                             } else {
                                 let r = src_reg(nft, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r, 0)?);
@@ -14282,7 +14774,7 @@ impl Compiler {
                                 .get(&(func_idx, *to))
                                 .map(|s| DataKey(DataKind::Account, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 12, k_to);
+                                emit_literal_load(&mut code, &fixups, 12, k_to);
                             } else {
                                 let r = src_reg(to, scratchd, &mut code)?;
                                 push_word(&mut code, encode_addi(12, r, 0)?);
@@ -14372,7 +14864,7 @@ impl Compiler {
                                 .get(&(func_idx, *alias))
                                 .map(|s| DataKey(DataKind::Blob, s.clone()))
                             {
-                                emit_literal_load(&mut code, &mut fixups, 10, alias_str);
+                                emit_literal_load(&mut code, &fixups, 10, alias_str);
                             } else {
                                 let r = src_reg(alias, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -14394,7 +14886,7 @@ impl Compiler {
                         Instr::GetTriggerEvent { dest } => {
                             emit_literal_load(
                                 &mut code,
-                                &mut fixups,
+                                &fixups,
                                 10,
                                 DataKey(DataKind::Name, TRIGGER_EVENT_PUBLIC_INPUT_KEY.to_string()),
                             );
@@ -14422,7 +14914,7 @@ impl Compiler {
                             if let Some(actor_raw) = string_map.get(&(func_idx, *actor)) {
                                 emit_literal_load(
                                     &mut code,
-                                    &mut fixups,
+                                    &fixups,
                                     10,
                                     DataKey(DataKind::Blob, actor_raw.clone()),
                                 );
@@ -14433,7 +14925,7 @@ impl Compiler {
                             if let Some(entrypoint_raw) = string_map.get(&(func_idx, *entrypoint)) {
                                 emit_literal_load(
                                     &mut code,
-                                    &mut fixups,
+                                    &fixups,
                                     11,
                                     DataKey(DataKind::Blob, entrypoint_raw.clone()),
                                 );
@@ -14445,7 +14937,7 @@ impl Compiler {
                                 if let Some(kind) = dataref_kind_map.get(&(func_idx, *payload)) {
                                     emit_literal_load(
                                         &mut code,
-                                        &mut fixups,
+                                        &fixups,
                                         12,
                                         data_key_for_pointer(*kind, payload_raw),
                                     );
@@ -14489,7 +14981,7 @@ impl Compiler {
                             if let Some(actor_raw) = string_map.get(&(func_idx, *actor)) {
                                 emit_literal_load(
                                     &mut code,
-                                    &mut fixups,
+                                    &fixups,
                                     10,
                                     DataKey(DataKind::Blob, actor_raw.clone()),
                                 );
@@ -14500,7 +14992,7 @@ impl Compiler {
                             if let Some(entrypoint_raw) = string_map.get(&(func_idx, *entrypoint)) {
                                 emit_literal_load(
                                     &mut code,
-                                    &mut fixups,
+                                    &fixups,
                                     11,
                                     DataKey(DataKind::Blob, entrypoint_raw.clone()),
                                 );
@@ -14512,7 +15004,7 @@ impl Compiler {
                                 if let Some(kind) = dataref_kind_map.get(&(func_idx, *payload)) {
                                     emit_literal_load(
                                         &mut code,
-                                        &mut fixups,
+                                        &fixups,
                                         12,
                                         data_key_for_pointer(*kind, payload_raw),
                                     );
@@ -14549,7 +15041,7 @@ impl Compiler {
                             if let Some(actor_raw) = string_map.get(&(func_idx, *actor)) {
                                 emit_literal_load(
                                     &mut code,
-                                    &mut fixups,
+                                    &fixups,
                                     10,
                                     DataKey(DataKind::Blob, actor_raw.clone()),
                                 );
@@ -14560,7 +15052,7 @@ impl Compiler {
                             if let Some(entrypoint_raw) = string_map.get(&(func_idx, *entrypoint)) {
                                 emit_literal_load(
                                     &mut code,
-                                    &mut fixups,
+                                    &fixups,
                                     11,
                                     DataKey(DataKind::Blob, entrypoint_raw.clone()),
                                 );
@@ -14572,7 +15064,7 @@ impl Compiler {
                                 if let Some(kind) = dataref_kind_map.get(&(func_idx, *payload)) {
                                     emit_literal_load(
                                         &mut code,
-                                        &mut fixups,
+                                        &fixups,
                                         12,
                                         data_key_for_pointer(*kind, payload_raw),
                                     );
@@ -14590,7 +15082,7 @@ impl Compiler {
                             if let Some(actor_raw) = string_map.get(&(func_idx, *actor)) {
                                 emit_literal_load(
                                     &mut code,
-                                    &mut fixups,
+                                    &fixups,
                                     10,
                                     DataKey(DataKind::Blob, actor_raw.clone()),
                                 );
@@ -14607,7 +15099,7 @@ impl Compiler {
                             if let Some(actor_raw) = string_map.get(&(func_idx, *actor)) {
                                 emit_literal_load(
                                     &mut code,
-                                    &mut fixups,
+                                    &fixups,
                                     10,
                                     DataKey(DataKind::Blob, actor_raw.clone()),
                                 );
@@ -14628,7 +15120,7 @@ impl Compiler {
                             if let Some(actor_raw) = string_map.get(&(func_idx, *actor)) {
                                 emit_literal_load(
                                     &mut code,
-                                    &mut fixups,
+                                    &fixups,
                                     10,
                                     DataKey(DataKind::Blob, actor_raw.clone()),
                                 );
@@ -14640,7 +15132,7 @@ impl Compiler {
                                 if let Some(kind) = dataref_kind_map.get(&(func_idx, *message)) {
                                     emit_literal_load(
                                         &mut code,
-                                        &mut fixups,
+                                        &fixups,
                                         11,
                                         data_key_for_pointer(*kind, message_raw),
                                     );
@@ -14672,7 +15164,7 @@ impl Compiler {
                                     && let Some(value) = string_map.get(&(func_idx, *a)).cloned()
                                 {
                                     let key = data_key_for_pointer(kind, &value);
-                                    emit_literal_load(&mut code, &mut fixups, rd, key);
+                                    emit_literal_load(&mut code, &fixups, rd, key);
                                 } else {
                                     let rs = src_reg(a, scratch1, &mut code)?;
                                     push_word(&mut code, encode_addi(rd, rs, 0)?);
@@ -14717,7 +15209,7 @@ impl Compiler {
                                     && let Some(value) = string_map.get(&(func_idx, *a)).cloned()
                                 {
                                     let key = data_key_for_pointer(kind, &value);
-                                    emit_literal_load(&mut code, &mut fixups, rd, key);
+                                    emit_literal_load(&mut code, &fixups, rd, key);
                                 } else {
                                     let rs = src_reg(a, scratch1, &mut code)?;
                                     push_word(&mut code, encode_addi(rd, rs, 0)?);
@@ -14757,7 +15249,7 @@ impl Compiler {
                         Instr::Sm3Hash { dest, message } => {
                             if let Some(bytes) = string_map.get(&(func_idx, *message)) {
                                 let key = DataKey(DataKind::Blob, bytes.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let rs = src_reg(message, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, rs, 0)?);
@@ -14779,7 +15271,7 @@ impl Compiler {
                         Instr::Sha256Hash { dest, message } => {
                             if let Some(bytes) = string_map.get(&(func_idx, *message)) {
                                 let key = DataKey(DataKind::Blob, bytes.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let rs = src_reg(message, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, rs, 0)?);
@@ -14801,7 +15293,7 @@ impl Compiler {
                         Instr::Sha3Hash { dest, message } => {
                             if let Some(bytes) = string_map.get(&(func_idx, *message)) {
                                 let key = DataKey(DataKind::Blob, bytes.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let rs = src_reg(message, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, rs, 0)?);
@@ -14823,7 +15315,7 @@ impl Compiler {
                         Instr::Blake2b256Hash { dest, message } => {
                             if let Some(bytes) = string_map.get(&(func_idx, *message)) {
                                 let key = DataKey(DataKind::Blob, bytes.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let rs = src_reg(message, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, rs, 0)?);
@@ -14845,7 +15337,7 @@ impl Compiler {
                         Instr::Keccak256Hash { dest, message } => {
                             if let Some(bytes) = string_map.get(&(func_idx, *message)) {
                                 let key = DataKey(DataKind::Blob, bytes.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let rs = src_reg(message, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, rs, 0)?);
@@ -14867,7 +15359,7 @@ impl Compiler {
                         Instr::IrohaHash { dest, message } => {
                             if let Some(bytes) = string_map.get(&(func_idx, *message)) {
                                 let key = DataKey(DataKind::Blob, bytes.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let rs = src_reg(message, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, rs, 0)?);
@@ -14899,7 +15391,7 @@ impl Compiler {
                             );
                             let load_blob_into_x10 =
                                 |code: &mut Vec<u8>,
-                                 fixups: &mut Vec<LiteralFixup>,
+                                 fixups: &LiteralFixups,
                                  temp: &ir::Temp|
                                  -> Result<(), String> {
                                     if let Some(bytes) = string_map.get(&(func_idx, *temp)) {
@@ -14912,17 +15404,17 @@ impl Compiler {
                                     code.extend_from_slice(&publish.to_le_bytes());
                                     Ok(())
                                 };
-                            load_blob_into_x10(&mut code, &mut fixups, signature)?;
+                            load_blob_into_x10(&mut code, &fixups, signature)?;
                             push_word(&mut code, encode_addi(11, 10, 0)?);
-                            load_blob_into_x10(&mut code, &mut fixups, public_key)?;
+                            load_blob_into_x10(&mut code, &fixups, public_key)?;
                             push_word(&mut code, encode_addi(12, 10, 0)?);
                             if let Some(dist) = distid {
-                                load_blob_into_x10(&mut code, &mut fixups, dist)?;
+                                load_blob_into_x10(&mut code, &fixups, dist)?;
                                 push_word(&mut code, encode_addi(13, 10, 0)?);
                             } else {
                                 push_word(&mut code, encode_addi(13, 0, 0)?);
                             }
-                            load_blob_into_x10(&mut code, &mut fixups, message)?;
+                            load_blob_into_x10(&mut code, &fixups, message)?;
                             let call = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_SM2_VERIFY as u8,
@@ -14945,7 +15437,7 @@ impl Compiler {
                             );
                             let load_blob_into_x10 =
                                 |code: &mut Vec<u8>,
-                                 fixups: &mut Vec<LiteralFixup>,
+                                 fixups: &LiteralFixups,
                                  temp: &ir::Temp|
                                  -> Result<(), String> {
                                     if let Some(bytes) = string_map.get(&(func_idx, *temp)) {
@@ -14958,13 +15450,13 @@ impl Compiler {
                                     code.extend_from_slice(&publish.to_le_bytes());
                                     Ok(())
                                 };
-                            load_blob_into_x10(&mut code, &mut fixups, signature)?;
+                            load_blob_into_x10(&mut code, &fixups, signature)?;
                             push_word(&mut code, encode_addi(11, 10, 0)?);
-                            load_blob_into_x10(&mut code, &mut fixups, public_key)?;
+                            load_blob_into_x10(&mut code, &fixups, public_key)?;
                             push_word(&mut code, encode_addi(12, 10, 0)?);
                             let rs = src_reg(scheme, scratch1, &mut code)?;
                             push_word(&mut code, encode_addi(13, rs, 0)?);
-                            load_blob_into_x10(&mut code, &mut fixups, message)?;
+                            load_blob_into_x10(&mut code, &fixups, message)?;
                             let call = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_VERIFY_SIGNATURE as u8,
@@ -14990,7 +15482,7 @@ impl Compiler {
                                 |temp: &ir::Temp, target: Option<u8>| -> Result<(), String> {
                                     if let Some(bytes) = string_map.get(&(func_idx, *temp)) {
                                         let key = DataKey(DataKind::Blob, bytes.clone());
-                                        emit_literal_load(&mut code, &mut fixups, 10, key);
+                                        emit_literal_load(&mut code, &fixups, 10, key);
                                     } else {
                                         let rs = src_reg(temp, scratch1, &mut code)?;
                                         push_word(&mut code, encode_addi(10, rs, 0)?);
@@ -15030,7 +15522,7 @@ impl Compiler {
                                 |temp: &ir::Temp, target: Option<u8>| -> Result<(), String> {
                                     if let Some(bytes) = string_map.get(&(func_idx, *temp)) {
                                         let key = DataKey(DataKind::Blob, bytes.clone());
-                                        emit_literal_load(&mut code, &mut fixups, 10, key);
+                                        emit_literal_load(&mut code, &fixups, 10, key);
                                     } else {
                                         let rs = src_reg(temp, scratch1, &mut code)?;
                                         push_word(&mut code, encode_addi(10, rs, 0)?);
@@ -15071,7 +15563,7 @@ impl Compiler {
                                 |temp: &ir::Temp, target: Option<u8>| -> Result<(), String> {
                                     if let Some(bytes) = string_map.get(&(func_idx, *temp)) {
                                         let key = DataKey(DataKind::Blob, bytes.clone());
-                                        emit_literal_load(&mut code, &mut fixups, 10, key);
+                                        emit_literal_load(&mut code, &fixups, 10, key);
                                     } else {
                                         let rs = src_reg(temp, scratch1, &mut code)?;
                                         push_word(&mut code, encode_addi(10, rs, 0)?);
@@ -15118,7 +15610,7 @@ impl Compiler {
                                 |temp: &ir::Temp, target: Option<u8>| -> Result<(), String> {
                                     if let Some(bytes) = string_map.get(&(func_idx, *temp)) {
                                         let key = DataKey(DataKind::Blob, bytes.clone());
-                                        emit_literal_load(&mut code, &mut fixups, 10, key);
+                                        emit_literal_load(&mut code, &fixups, 10, key);
                                     } else {
                                         let rs = src_reg(temp, scratch1, &mut code)?;
                                         push_word(&mut code, encode_addi(10, rs, 0)?);
@@ -15210,7 +15702,7 @@ impl Compiler {
                             {
                                 emit_literal_load(
                                     &mut code,
-                                    &mut fixups,
+                                    &fixups,
                                     10,
                                     data_key_for_pointer(*kind, raw),
                                 );
@@ -15242,8 +15734,8 @@ impl Compiler {
                             code.extend_from_slice(&andi.to_le_bytes());
                             // Zero-initialize the single key/value pair to keep Map::new deterministic.
                             emit_addi(&mut code, scratch1, 0, 0);
-                            emit_store64(&mut code, 10, scratch1, 0, scratch2)?;
-                            emit_store64(&mut code, 10, scratch1, 8, scratch2)?;
+                            emit_store64(&mut code, &fixups, 10, scratch1, 0, scratch2)?;
+                            emit_store64(&mut code, &fixups, 10, scratch1, 8, scratch2)?;
                             // dest = x10
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
@@ -15257,7 +15749,7 @@ impl Compiler {
                                 && let Some(lit) = string_map.get(&(func_idx, *value)).cloned()
                             {
                                 let key = data_key_for_pointer(kind, &lit);
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 if string_map.contains_key(&(func_idx, *value))
                                     && pointer_kind.is_none()
@@ -15289,7 +15781,7 @@ impl Compiler {
                             })? as u16;
                             if let Some(bytes) = string_map.get(&(func_idx, *blob)).cloned() {
                                 let key = DataKey(DataKind::NoritoBytes, bytes);
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let rs = src_reg(blob, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, rs, 0)?);
@@ -15303,17 +15795,17 @@ impl Compiler {
                         }
                         Instr::PointerEq { dest, left, right } => {
                             // Mirror both pointers into INPUT so TLV_EQ validates INPUT-resident TLVs.
-                            let mut load_ptr = |temp: &ir::Temp,
-                                                target: u8,
-                                                scratch: u8,
-                                                code: &mut Vec<u8>|
+                            let load_ptr = |temp: &ir::Temp,
+                                            target: u8,
+                                            scratch: u8,
+                                            code: &mut Vec<u8>|
                              -> Result<(), String> {
                                 if let Some(kind) =
                                     dataref_kind_map.get(&(func_idx, *temp)).copied()
                                     && let Some(lit) = string_map.get(&(func_idx, *temp)).cloned()
                                 {
                                     let key = data_key_for_pointer(kind, &lit);
-                                    emit_literal_load(code, &mut fixups, target, key);
+                                    emit_literal_load(code, &fixups, target, key);
                                 } else {
                                     let rs = src_reg(temp, scratch, code)?;
                                     push_word(code, encode_addi(target, rs, 0)?);
@@ -15356,7 +15848,7 @@ impl Compiler {
                             }
 
                             if let Some(rflag) = flag_reg {
-                                emit_load64(&mut code, rflag, rmap, 0, None)?;
+                                emit_load64(&mut code, &fixups, rflag, rmap, 0, None)?;
                                 let eq = encoding::wide::encode_rr(
                                     instruction::wide::arithmetic::SEQ,
                                     rflag,
@@ -15374,7 +15866,7 @@ impl Compiler {
                                 } else {
                                     None
                                 };
-                                emit_load64(&mut code, rd, rmap, 8, value_scratch)?;
+                                emit_load64(&mut code, &fixups, rd, rmap, 8, value_scratch)?;
                                 push_word(
                                     &mut code,
                                     encoding::wide::encode_rr(
@@ -15386,7 +15878,7 @@ impl Compiler {
                                 );
                             } else {
                                 // Fall back to using rd for the flag and reuse rkey (spilled) for value.
-                                emit_load64(&mut code, rd, rmap, 0, None)?;
+                                emit_load64(&mut code, &fixups, rd, rmap, 0, None)?;
                                 let eq = encoding::wide::encode_rr(
                                     instruction::wide::arithmetic::SEQ,
                                     rd,
@@ -15394,7 +15886,7 @@ impl Compiler {
                                     rkey,
                                 );
                                 push_word(&mut code, eq);
-                                emit_load64(&mut code, rkey, rmap, 8, None)?;
+                                emit_load64(&mut code, &fixups, rkey, rmap, 8, None)?;
                                 push_word(
                                     &mut code,
                                     encoding::wide::encode_rr(
@@ -15415,7 +15907,7 @@ impl Compiler {
                             } else {
                                 None
                             };
-                            emit_load64(&mut code, rd, rbase, *imm as i64, scratch)?;
+                            emit_load64(&mut code, &fixups, rd, rbase, *imm as i64, scratch)?;
                             spill_back(dest, rd, spilled, imm_spill, &mut code)?;
                         }
                         Instr::Load64 { dest, address } => {
@@ -15426,7 +15918,7 @@ impl Compiler {
                             } else {
                                 None
                             };
-                            emit_load64(&mut code, rd, raddress, 0, scratch)?;
+                            emit_load64(&mut code, &fixups, rd, raddress, 0, scratch)?;
                             spill_back(dest, rd, spilled, imm_spill, &mut code)?;
                         }
                         Instr::Store64Imm { base, imm, value } => {
@@ -15448,7 +15940,7 @@ impl Compiler {
                                 // native-JSON word table.
                                 emit_literal_load(
                                     &mut code,
-                                    &mut fixups,
+                                    &fixups,
                                     value_scratch,
                                     data_key_for_pointer(kind, &literal),
                                 );
@@ -15464,6 +15956,7 @@ impl Compiler {
                                 })?;
                             emit_store64(
                                 &mut code,
+                                &fixups,
                                 rbase,
                                 rvalue,
                                 i64::from(*imm),
@@ -15484,7 +15977,7 @@ impl Compiler {
                             {
                                 emit_literal_load(
                                     &mut code,
-                                    &mut fixups,
+                                    &fixups,
                                     value_scratch,
                                     data_key_for_pointer(kind, &literal),
                                 );
@@ -15498,7 +15991,7 @@ impl Compiler {
                                 .ok_or_else(|| {
                                     "no scratch register available for 64-bit list store".to_owned()
                                 })?;
-                            emit_store64(&mut code, raddress, rvalue, 0, address_scratch)?;
+                            emit_store64(&mut code, &fixups, raddress, rvalue, 0, address_scratch)?;
                         }
                         Instr::MapSet { map, key, value } => {
                             // Minimal map layout: [0..8) key, [8..16) value
@@ -15507,9 +16000,9 @@ impl Compiler {
                             let rval = src_reg(value, scratchd, &mut code)?;
                             // Encode 64-bit store of key at offset 0
                             let scratch_base = if rmap != scratch1 { scratch1 } else { scratch2 };
-                            emit_store64(&mut code, rmap, rkey, 0, scratch_base)?;
+                            emit_store64(&mut code, &fixups, rmap, rkey, 0, scratch_base)?;
                             // Encode 64-bit store of value at offset 8
-                            emit_store64(&mut code, rmap, rval, 8, scratch_base)?;
+                            emit_store64(&mut code, &fixups, rmap, rval, 8, scratch_base)?;
                         }
                         Instr::MapLoadPair {
                             dest_key,
@@ -15528,7 +16021,7 @@ impl Compiler {
                             } else {
                                 None
                             };
-                            emit_load64(&mut code, rd_k, rmap, base_off, key_scratch)?;
+                            emit_load64(&mut code, &fixups, rd_k, rmap, base_off, key_scratch)?;
                             spill_back(dest_key, rd_k, spilled_k, imm_k, &mut code)?;
 
                             let val_scratch = if rd_v == rmap {
@@ -15536,14 +16029,14 @@ impl Compiler {
                             } else {
                                 None
                             };
-                            emit_load64(&mut code, rd_v, rmap, base_off + 8, val_scratch)?;
+                            emit_load64(&mut code, &fixups, rd_v, rmap, base_off + 8, val_scratch)?;
                             spill_back(dest_val, rd_v, spilled_v, imm_v, &mut code)?;
                         }
                         Instr::StateGet { dest, path } => {
                             // Load path (Name) into x10; publish into INPUT; SCALL STATE_GET; move x10 to dest
                             if let Some(s) = string_map.get(&(func_idx, *path)) {
                                 let key = DataKey(DataKind::Name, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(path, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -15566,7 +16059,7 @@ impl Compiler {
                             // r10=&Name path; r11=&NoritoBytes value; publish both to INPUT then SCALL
                             if let Some(s) = string_map.get(&(func_idx, *path)) {
                                 let key = DataKey(DataKind::Name, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(path, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -15574,7 +16067,7 @@ impl Compiler {
                             // Load value into r11
                             if let Some(s) = string_map.get(&(func_idx, *value)) {
                                 let key = DataKey(DataKind::NoritoBytes, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 11, key);
+                                emit_literal_load(&mut code, &fixups, 11, key);
                             } else {
                                 let r = src_reg(value, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r, 0)?);
@@ -15600,7 +16093,7 @@ impl Compiler {
                             // r10=&Name path; publish; SCALL
                             if let Some(s) = string_map.get(&(func_idx, *path)) {
                                 let key = DataKey(DataKind::Name, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(path, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -15624,7 +16117,7 @@ impl Compiler {
                         } => {
                             if let Some(s) = string_map.get(&(func_idx, *prefix)) {
                                 let key = DataKey(DataKind::Name, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(prefix, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -15654,7 +16147,7 @@ impl Compiler {
                             if let Some(name) = string_map.get(&(func_idx, *base)) {
                                 emit_literal_load(
                                     &mut code,
-                                    &mut fixups,
+                                    &fixups,
                                     11,
                                     DataKey(DataKind::Name, name.clone()),
                                 );
@@ -15686,7 +16179,7 @@ impl Compiler {
                                 {
                                     emit_literal_load(
                                         &mut code,
-                                        &mut fixups,
+                                        &fixups,
                                         scratch2,
                                         data_key_for_pointer(kind, &literal),
                                     );
@@ -15702,14 +16195,21 @@ impl Compiler {
                                     .ok_or_else(|| {
                                         "durable aggregate state table offset overflow".to_string()
                                     })?;
-                                emit_store64(&mut code, sp, source, offset as i64, scratch1)?;
+                                emit_store64(
+                                    &mut code,
+                                    &fixups,
+                                    sp,
+                                    source,
+                                    offset as i64,
+                                    scratch1,
+                                )?;
                             }
                             if let Some(kind) = dataref_kind_map.get(&(func_idx, *schema)).copied()
                                 && let Some(literal) = string_map.get(&(func_idx, *schema)).cloned()
                             {
                                 emit_literal_load(
                                     &mut code,
-                                    &mut fixups,
+                                    &fixups,
                                     10,
                                     data_key_for_pointer(kind, &literal),
                                 );
@@ -15717,7 +16217,14 @@ impl Compiler {
                                 let schema_reg = src_reg(schema, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, schema_reg, 0)?);
                             }
-                            emit_addi(&mut code, 11, sp, state_value_table_base as i64);
+                            emit_bounded_add(
+                                &mut code,
+                                &fixups,
+                                11,
+                                sp,
+                                state_value_table_base as i64,
+                                LITERAL_SHIFT_REG,
+                            )?;
                             emit_addi(&mut code, 12, 0, words.len() as i64);
                             push_syscall(&mut code, syscalls::SYSCALL_STATE_VALUE_ENCODE);
                             let (rd, spilled, imm) = dst_reg(dest);
@@ -15727,7 +16234,7 @@ impl Compiler {
                         Instr::StateHas { dest, path } => {
                             if let Some(s) = string_map.get(&(func_idx, *path)) {
                                 let key = DataKey(DataKind::Name, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(path, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -15745,7 +16252,7 @@ impl Compiler {
                         Instr::StateLen { dest, path } => {
                             if let Some(s) = string_map.get(&(func_idx, *path)) {
                                 let key = DataKey(DataKind::Name, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(path, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -15763,7 +16270,7 @@ impl Compiler {
                         Instr::StateCount { dest, prefix } => {
                             if let Some(s) = string_map.get(&(func_idx, *prefix)) {
                                 let key = DataKey(DataKind::Name, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(prefix, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -15782,7 +16289,7 @@ impl Compiler {
                             // r10=&NoritoBytes or &Blob; publish; SCALL; move to dest
                             if let Some(s) = string_map.get(&(func_idx, *blob)) {
                                 let key = DataKey(DataKind::NoritoBytes, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(blob, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -15805,7 +16312,7 @@ impl Compiler {
                             // r10=&Name base; publish; r11=key; SCALL BUILD_PATH_MAP_KEY; move to dest
                             if let Some(s) = string_map.get(&(func_idx, *base)) {
                                 let key_b = DataKey(DataKind::Name, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key_b);
+                                emit_literal_load(&mut code, &fixups, 10, key_b);
                             } else {
                                 let r = src_reg(base, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -15842,26 +16349,18 @@ impl Compiler {
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
-                        Instr::NumericFromInt { dest, value, kind } => {
+                        Instr::IntFromScalar { dest, value } => {
                             let rv = src_reg(value, scratch1, &mut code)?;
                             push_word(&mut code, encode_addi(10, rv, 0)?);
-                            let syscall = match kind {
-                                ir::WideNumericKind::U128 => syscalls::SYSCALL_NUMERIC_FROM_INT,
-                                ir::WideNumericKind::Amount => syscalls::SYSCALL_AMOUNT_FROM_I64,
-                            };
-                            push_syscall(&mut code, syscall);
+                            push_syscall(&mut code, syscalls::SYSCALL_INT_FROM_I64);
                             let (rd, spilled, imm) = dst_reg(dest);
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
-                        Instr::NumericToInt { dest, value, kind } => {
+                        Instr::IntToScalar { dest, value } => {
                             if let Some(s) = string_map.get(&(func_idx, *value)) {
-                                let data_kind = match kind {
-                                    ir::WideNumericKind::U128 => DataKind::NoritoBytes,
-                                    ir::WideNumericKind::Amount => DataKind::Amount,
-                                };
-                                let key = DataKey(data_kind, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                let key = DataKey(DataKind::Int, s.clone());
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(value, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -15871,35 +16370,122 @@ impl Compiler {
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes());
-                            let syscall = match kind {
-                                ir::WideNumericKind::U128 => syscalls::SYSCALL_NUMERIC_TO_INT,
-                                ir::WideNumericKind::Amount => syscalls::SYSCALL_AMOUNT_TO_I64,
-                            };
-                            push_syscall(&mut code, syscall);
+                            push_syscall(&mut code, syscalls::SYSCALL_INT_TRY_TO_I64);
+                            // Scalar-only host protocols cannot carry a recoverable numeric
+                            // status. Fail closed before consuming the scalar result.
+                            push_word(&mut code, encode_branch_rv(0x0, 11, 0, 8)?);
+                            push_syscall(&mut code, syscalls::SYSCALL_ABORT);
                             let (rd, spilled, imm) = dst_reg(dest);
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
-                        Instr::AmountFromU128 { dest, value } => {
+                        Instr::NumericConvert {
+                            dest,
+                            value,
+                            source,
+                            destination,
+                        } => {
                             if let Some(s) = string_map.get(&(func_idx, *value)) {
-                                let key = DataKey(DataKind::NoritoBytes, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                let data_kind = match source {
+                                    ir::WideNumericKind::Int => DataKind::Int,
+                                    ir::WideNumericKind::Decimal => DataKind::Decimal,
+                                    ir::WideNumericKind::Quantity => DataKind::Quantity,
+                                };
+                                let key = DataKey(data_kind, s.clone());
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(value, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
                             }
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall(&mut code, syscalls::SYSCALL_AMOUNT_FROM_U128);
+                            let (syscall, recoverable) = match (source, destination) {
+                                (ir::WideNumericKind::Int, ir::WideNumericKind::Decimal) => {
+                                    (syscalls::SYSCALL_DECIMAL_FROM_INT, false)
+                                }
+                                (ir::WideNumericKind::Int, ir::WideNumericKind::Quantity) => {
+                                    (syscalls::SYSCALL_QUANTITY_TRY_FROM_INT, true)
+                                }
+                                (ir::WideNumericKind::Decimal, ir::WideNumericKind::Int) => {
+                                    (syscalls::SYSCALL_DECIMAL_TRY_TO_INT_EXACT, true)
+                                }
+                                (ir::WideNumericKind::Decimal, ir::WideNumericKind::Quantity) => {
+                                    (syscalls::SYSCALL_QUANTITY_TRY_FROM_DECIMAL, true)
+                                }
+                                (ir::WideNumericKind::Quantity, ir::WideNumericKind::Decimal) => {
+                                    (syscalls::SYSCALL_QUANTITY_TO_DECIMAL, false)
+                                }
+                                _ => {
+                                    return Err("unsupported Kotodama numeric conversion".to_owned());
+                                }
+                            };
+                            push_syscall(&mut code, syscall);
+                            if recoverable {
+                                push_word(&mut code, encode_branch_rv(0x0, 11, 0, 8)?);
+                                push_syscall(&mut code, syscalls::SYSCALL_ABORT);
+                            }
                             let (rd, spilled, imm) = dst_reg(dest);
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
-                        Instr::NumericNeg { dest, value } => {
+                        Instr::NumericTryConvert {
+                            dest,
+                            value,
+                            source,
+                            destination,
+                        } => {
+                            if let Some(s) = string_map.get(&(func_idx, *value)) {
+                                let data_kind = match source {
+                                    ir::WideNumericKind::Int => DataKind::Int,
+                                    ir::WideNumericKind::Decimal => DataKind::Decimal,
+                                    ir::WideNumericKind::Quantity => DataKind::Quantity,
+                                };
+                                emit_literal_load(
+                                    &mut code,
+                                    &fixups,
+                                    10,
+                                    DataKey(data_kind, s.clone()),
+                                );
+                            } else {
+                                let r = src_reg(value, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            code.extend_from_slice(&publish_tlv);
+                            let syscall = match (source, destination) {
+                                (ir::WideNumericKind::Int, ir::WideNumericKind::Quantity) => {
+                                    syscalls::SYSCALL_QUANTITY_TRY_FROM_INT
+                                }
+                                (ir::WideNumericKind::Decimal, ir::WideNumericKind::Quantity) => {
+                                    syscalls::SYSCALL_QUANTITY_TRY_FROM_DECIMAL
+                                }
+                                _ => {
+                                    return Err(
+                                        "unsupported recoverable Kotodama numeric conversion"
+                                            .to_owned(),
+                                    );
+                                }
+                            };
+                            push_syscall(&mut code, syscall);
+                            let (result_reg, result_spilled, result_imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(result_reg, 10, 0)?);
+                            spill_back(dest, result_reg, result_spilled, result_imm, &mut code)?;
+                        }
+                        Instr::NumericStatus { dest } => {
+                            let (status_reg, status_spilled, status_imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(status_reg, 11, 0)?);
+                            spill_back(
+                                dest,
+                                status_reg,
+                                status_spilled,
+                                status_imm,
+                                &mut code,
+                            )?;
+                        }
+                        Instr::NumericNeg { dest, value, kind } => {
                             if let Some(kind) = dataref_kind_map.get(&(func_idx, *value)).copied()
                                 && let Some(lit) = string_map.get(&(func_idx, *value)).cloned()
                             {
                                 let key = data_key_for_pointer(kind, &lit);
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 if string_map.contains_key(&(func_idx, *value))
                                     && !dataref_kind_map.contains_key(&(func_idx, *value))
@@ -15915,11 +16501,17 @@ impl Compiler {
                                 push_word(&mut code, encode_addi(10, r, 0)?);
                             }
                             code.extend_from_slice(&publish_tlv);
-                            let word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_NUMERIC_NEG as u8,
-                            );
-                            code.extend_from_slice(&word.to_le_bytes());
+                            for register in 11..=14 {
+                                push_word(&mut code, encode_addi(register, 0, 0)?);
+                            }
+                            let syscall = match kind {
+                                ir::WideNumericKind::Int => syscalls::SYSCALL_INT_NEG,
+                                ir::WideNumericKind::Decimal => syscalls::SYSCALL_DECIMAL_NEG,
+                                ir::WideNumericKind::Quantity => {
+                                    return Err("quantity negation reached code generation".to_owned());
+                                }
+                            };
+                            push_syscall(&mut code, syscall);
                             let (rd, spilled, imm) = dst_reg(dest);
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
@@ -15929,19 +16521,21 @@ impl Compiler {
                             op,
                             left,
                             right,
-                            kind,
+                            left_kind,
+                            right_kind,
+                            result_kind,
                         } => {
-                            let mut load_ptr = |temp: &ir::Temp,
-                                                target: u8,
-                                                scratch: u8,
-                                                code: &mut Vec<u8>|
+                            let load_ptr = |temp: &ir::Temp,
+                                            target: u8,
+                                            scratch: u8,
+                                            code: &mut Vec<u8>|
                              -> Result<(), String> {
                                 if let Some(kind) =
                                     dataref_kind_map.get(&(func_idx, *temp)).copied()
                                     && let Some(lit) = string_map.get(&(func_idx, *temp)).cloned()
                                 {
                                     let key = data_key_for_pointer(kind, &lit);
-                                    emit_literal_load(code, &mut fixups, target, key);
+                                    emit_literal_load(code, &fixups, target, key);
                                 } else {
                                     if string_map.contains_key(&(func_idx, *temp))
                                         && !dataref_kind_map.contains_key(&(func_idx, *temp))
@@ -15968,47 +16562,29 @@ impl Compiler {
                             push_word(&mut code, encode_addi(11, 10, 0)?);
                             // Restore lhs into r10
                             push_word(&mut code, encode_addi(10, scratch2, 0)?);
-                            let num = match (kind, op) {
-                                (ir::WideNumericKind::U128, BinaryOp::Add) => {
-                                    syscalls::SYSCALL_NUMERIC_ADD
-                                }
-                                (ir::WideNumericKind::U128, BinaryOp::Sub) => {
-                                    syscalls::SYSCALL_NUMERIC_SUB
-                                }
-                                (ir::WideNumericKind::U128, BinaryOp::Mul) => {
-                                    syscalls::SYSCALL_NUMERIC_MUL
-                                }
-                                (ir::WideNumericKind::U128, BinaryOp::Div) => {
-                                    syscalls::SYSCALL_NUMERIC_DIV
-                                }
-                                (ir::WideNumericKind::U128, BinaryOp::Mod) => {
-                                    syscalls::SYSCALL_NUMERIC_REM
-                                }
-                                (ir::WideNumericKind::Amount, BinaryOp::Add) => {
-                                    syscalls::SYSCALL_AMOUNT_ADD
-                                }
-                                (ir::WideNumericKind::Amount, BinaryOp::Sub) => {
-                                    syscalls::SYSCALL_AMOUNT_SUB
-                                }
-                                (ir::WideNumericKind::Amount, BinaryOp::Mul) => {
-                                    syscalls::SYSCALL_AMOUNT_MUL
-                                }
-                                (ir::WideNumericKind::Amount, BinaryOp::Div) => {
-                                    syscalls::SYSCALL_AMOUNT_DIV_EXACT
-                                }
-                                (ir::WideNumericKind::Amount, BinaryOp::Mod) => {
-                                    return Err(i18n::translate(
-                                        self.lang,
-                                        Message::SemanticError(
-                                            "Amount does not support remainder; use exact division or amount.div_round",
-                                        ),
-                                    ));
-                                }
+                            for register in 12..=14 {
+                                push_word(&mut code, encode_addi(register, 0, 0)?);
+                            }
+                            let num = match (left_kind, op, right_kind, result_kind) {
+                                (ir::WideNumericKind::Int, BinaryOp::Add, ir::WideNumericKind::Int, ir::WideNumericKind::Int) => syscalls::SYSCALL_INT_ADD,
+                                (ir::WideNumericKind::Int, BinaryOp::Sub, ir::WideNumericKind::Int, ir::WideNumericKind::Int) => syscalls::SYSCALL_INT_SUB,
+                                (ir::WideNumericKind::Int, BinaryOp::Mul, ir::WideNumericKind::Int, ir::WideNumericKind::Int) => syscalls::SYSCALL_INT_MUL,
+                                (ir::WideNumericKind::Int, BinaryOp::Div, ir::WideNumericKind::Int, ir::WideNumericKind::Int) => syscalls::SYSCALL_INT_DIV,
+                                (ir::WideNumericKind::Int, BinaryOp::Mod, ir::WideNumericKind::Int, ir::WideNumericKind::Int) => syscalls::SYSCALL_INT_REM,
+                                (ir::WideNumericKind::Decimal, BinaryOp::Add, ir::WideNumericKind::Decimal, ir::WideNumericKind::Decimal) => syscalls::SYSCALL_DECIMAL_ADD,
+                                (ir::WideNumericKind::Decimal, BinaryOp::Sub, ir::WideNumericKind::Decimal, ir::WideNumericKind::Decimal) => syscalls::SYSCALL_DECIMAL_SUB,
+                                (ir::WideNumericKind::Decimal, BinaryOp::Mul, ir::WideNumericKind::Decimal, ir::WideNumericKind::Decimal) => syscalls::SYSCALL_DECIMAL_MUL,
+                                (ir::WideNumericKind::Decimal, BinaryOp::Div, ir::WideNumericKind::Decimal, ir::WideNumericKind::Decimal) => syscalls::SYSCALL_DECIMAL_DIV_EXACT,
+                                (ir::WideNumericKind::Quantity, BinaryOp::Add, ir::WideNumericKind::Quantity, ir::WideNumericKind::Quantity) => syscalls::SYSCALL_QUANTITY_ADD,
+                                (ir::WideNumericKind::Quantity, BinaryOp::Sub, ir::WideNumericKind::Quantity, ir::WideNumericKind::Quantity) => syscalls::SYSCALL_QUANTITY_SUB,
+                                (ir::WideNumericKind::Quantity, BinaryOp::Mul, ir::WideNumericKind::Decimal, ir::WideNumericKind::Quantity) => syscalls::SYSCALL_QUANTITY_MUL_DECIMAL,
+                                (ir::WideNumericKind::Quantity, BinaryOp::Div, ir::WideNumericKind::Decimal, ir::WideNumericKind::Quantity) => syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_EXACT,
+                                (ir::WideNumericKind::Quantity, BinaryOp::Div, ir::WideNumericKind::Quantity, ir::WideNumericKind::Decimal) => syscalls::SYSCALL_QUANTITY_RATIO_EXACT,
                                 _ => {
                                     return Err(i18n::translate(
                                         self.lang,
                                         Message::SemanticError(
-                                            "numeric binary expects arithmetic operator",
+                                            "numeric binary operands do not match the V1 operator matrix",
                                         ),
                                     ));
                                 }
@@ -16025,17 +16601,17 @@ impl Compiler {
                             right,
                             kind,
                         } => {
-                            let mut load_ptr = |temp: &ir::Temp,
-                                                target: u8,
-                                                scratch: u8,
-                                                code: &mut Vec<u8>|
+                            let load_ptr = |temp: &ir::Temp,
+                                            target: u8,
+                                            scratch: u8,
+                                            code: &mut Vec<u8>|
                              -> Result<(), String> {
                                 if let Some(kind) =
                                     dataref_kind_map.get(&(func_idx, *temp)).copied()
                                     && let Some(lit) = string_map.get(&(func_idx, *temp)).cloned()
                                 {
                                     let key = data_key_for_pointer(kind, &lit);
-                                    emit_literal_load(code, &mut fixups, target, key);
+                                    emit_literal_load(code, &fixups, target, key);
                                 } else {
                                     if string_map.contains_key(&(func_idx, *temp))
                                         && !dataref_kind_map.contains_key(&(func_idx, *temp))
@@ -16060,41 +16636,59 @@ impl Compiler {
                             push_word(&mut code, encode_addi(11, 10, 0)?);
                             push_word(&mut code, encode_addi(10, scratch2, 0)?);
                             let num = match (kind, op) {
-                                (ir::WideNumericKind::U128, BinaryOp::Eq) => {
-                                    syscalls::SYSCALL_NUMERIC_EQ
+                                (ir::WideNumericKind::Int, BinaryOp::Eq) => {
+                                    syscalls::SYSCALL_INT_EQ
                                 }
-                                (ir::WideNumericKind::U128, BinaryOp::Ne) => {
-                                    syscalls::SYSCALL_NUMERIC_NE
+                                (ir::WideNumericKind::Int, BinaryOp::Ne) => {
+                                    syscalls::SYSCALL_INT_NE
                                 }
-                                (ir::WideNumericKind::U128, BinaryOp::Lt) => {
-                                    syscalls::SYSCALL_NUMERIC_LT
+                                (ir::WideNumericKind::Int, BinaryOp::Lt) => {
+                                    syscalls::SYSCALL_INT_LT
                                 }
-                                (ir::WideNumericKind::U128, BinaryOp::Le) => {
-                                    syscalls::SYSCALL_NUMERIC_LE
+                                (ir::WideNumericKind::Int, BinaryOp::Le) => {
+                                    syscalls::SYSCALL_INT_LE
                                 }
-                                (ir::WideNumericKind::U128, BinaryOp::Gt) => {
-                                    syscalls::SYSCALL_NUMERIC_GT
+                                (ir::WideNumericKind::Int, BinaryOp::Gt) => {
+                                    syscalls::SYSCALL_INT_GT
                                 }
-                                (ir::WideNumericKind::U128, BinaryOp::Ge) => {
-                                    syscalls::SYSCALL_NUMERIC_GE
+                                (ir::WideNumericKind::Int, BinaryOp::Ge) => {
+                                    syscalls::SYSCALL_INT_GE
                                 }
-                                (ir::WideNumericKind::Amount, BinaryOp::Eq) => {
-                                    syscalls::SYSCALL_AMOUNT_EQ
+                                (ir::WideNumericKind::Decimal, BinaryOp::Eq) => {
+                                    syscalls::SYSCALL_DECIMAL_EQ
                                 }
-                                (ir::WideNumericKind::Amount, BinaryOp::Ne) => {
-                                    syscalls::SYSCALL_AMOUNT_NE
+                                (ir::WideNumericKind::Decimal, BinaryOp::Ne) => {
+                                    syscalls::SYSCALL_DECIMAL_NE
                                 }
-                                (ir::WideNumericKind::Amount, BinaryOp::Lt) => {
-                                    syscalls::SYSCALL_AMOUNT_LT
+                                (ir::WideNumericKind::Decimal, BinaryOp::Lt) => {
+                                    syscalls::SYSCALL_DECIMAL_LT
                                 }
-                                (ir::WideNumericKind::Amount, BinaryOp::Le) => {
-                                    syscalls::SYSCALL_AMOUNT_LE
+                                (ir::WideNumericKind::Decimal, BinaryOp::Le) => {
+                                    syscalls::SYSCALL_DECIMAL_LE
                                 }
-                                (ir::WideNumericKind::Amount, BinaryOp::Gt) => {
-                                    syscalls::SYSCALL_AMOUNT_GT
+                                (ir::WideNumericKind::Decimal, BinaryOp::Gt) => {
+                                    syscalls::SYSCALL_DECIMAL_GT
                                 }
-                                (ir::WideNumericKind::Amount, BinaryOp::Ge) => {
-                                    syscalls::SYSCALL_AMOUNT_GE
+                                (ir::WideNumericKind::Decimal, BinaryOp::Ge) => {
+                                    syscalls::SYSCALL_DECIMAL_GE
+                                }
+                                (ir::WideNumericKind::Quantity, BinaryOp::Eq) => {
+                                    syscalls::SYSCALL_QUANTITY_EQ
+                                }
+                                (ir::WideNumericKind::Quantity, BinaryOp::Ne) => {
+                                    syscalls::SYSCALL_QUANTITY_NE
+                                }
+                                (ir::WideNumericKind::Quantity, BinaryOp::Lt) => {
+                                    syscalls::SYSCALL_QUANTITY_LT
+                                }
+                                (ir::WideNumericKind::Quantity, BinaryOp::Le) => {
+                                    syscalls::SYSCALL_QUANTITY_LE
+                                }
+                                (ir::WideNumericKind::Quantity, BinaryOp::Gt) => {
+                                    syscalls::SYSCALL_QUANTITY_GT
+                                }
+                                (ir::WideNumericKind::Quantity, BinaryOp::Ge) => {
+                                    syscalls::SYSCALL_QUANTITY_GE
                                 }
                                 _ => {
                                     return Err(i18n::translate(
@@ -16128,7 +16722,7 @@ impl Compiler {
                                     && let Some(lit) = string_map.get(&(func_idx, *arg)).cloned()
                                 {
                                     let key = data_key_for_pointer(kind, &lit);
-                                    emit_literal_load(&mut code, &mut fixups, target, key);
+                                    emit_literal_load(&mut code, &fixups, target, key);
                                 } else {
                                     let scratch = if target == scratch1 {
                                         scratch2
@@ -16152,7 +16746,7 @@ impl Compiler {
                             // r10=&Name base; publish; r11=&NoritoBytes blob; publish; SCALL BUILD_PATH_KEY_NORITO
                             if let Some(s) = string_map.get(&(func_idx, *base)) {
                                 let kb = DataKey(DataKind::Name, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, kb);
+                                emit_literal_load(&mut code, &fixups, 10, kb);
                             } else {
                                 let r = src_reg(base, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16164,7 +16758,7 @@ impl Compiler {
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             if let Some(s) = string_map.get(&(func_idx, *key_blob)) {
                                 let kb = DataKey(DataKind::NoritoBytes, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 11, kb);
+                                emit_literal_load(&mut code, &fixups, 11, kb);
                             } else {
                                 let r = src_reg(key_blob, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r, 0)?);
@@ -16189,7 +16783,7 @@ impl Compiler {
                             // r10=&Json; publish; SCALL JSON_ENCODE; move r10
                             if let Some(s) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(json, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16212,7 +16806,7 @@ impl Compiler {
                             // r10=&NoritoBytes or &Blob; publish; SCALL JSON_DECODE; move
                             if let Some(s) = string_map.get(&(func_idx, *blob)) {
                                 let key = DataKey(DataKind::NoritoBytes, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(blob, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16249,7 +16843,7 @@ impl Compiler {
                         } => {
                             if let Some(s) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(json, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16262,7 +16856,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(scratch2, 10, 0)?);
                             if let Some(s) = string_map.get(&(func_idx, *key)) {
                                 let kb = DataKey(DataKind::Name, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, kb);
+                                emit_literal_load(&mut code, &fixups, 10, kb);
                             } else {
                                 let r = src_reg(key, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16287,17 +16881,17 @@ impl Compiler {
                             key,
                             value,
                         } => {
-                            let mut load_ptr = |temp: &ir::Temp,
-                                                target: u8,
-                                                scratch: u8,
-                                                code: &mut Vec<u8>|
+                            let load_ptr = |temp: &ir::Temp,
+                                            target: u8,
+                                            scratch: u8,
+                                            code: &mut Vec<u8>|
                              -> Result<(), String> {
                                 if let Some(kind) =
                                     dataref_kind_map.get(&(func_idx, *temp)).copied()
                                     && let Some(lit) = string_map.get(&(func_idx, *temp)).cloned()
                                 {
                                     let key = data_key_for_pointer(kind, &lit);
-                                    emit_literal_load(code, &mut fixups, target, key);
+                                    emit_literal_load(code, &fixups, target, key);
                                 } else {
                                     if string_map.contains_key(&(func_idx, *temp))
                                         && !dataref_kind_map.contains_key(&(func_idx, *temp))
@@ -16357,7 +16951,7 @@ impl Compiler {
                             // JSON_GET_I64 returns one active-only Option<i64> handle in r10.
                             if let Some(s) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(json, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16371,7 +16965,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(scratch2, 10, 0)?);
                             if let Some(s) = string_map.get(&(func_idx, *key)) {
                                 let kb = DataKey(DataKind::Name, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, kb);
+                                emit_literal_load(&mut code, &fixups, 10, kb);
                             } else {
                                 let r = src_reg(key, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16392,7 +16986,7 @@ impl Compiler {
                             // JSON_GET_AMOUNT returns one active-only Option<Amount> handle in r10.
                             if let Some(s) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(json, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16405,7 +16999,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(scratch2, 10, 0)?);
                             if let Some(s) = string_map.get(&(func_idx, *key)) {
                                 let kb = DataKey(DataKind::Name, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, kb);
+                                emit_literal_load(&mut code, &fixups, 10, kb);
                             } else {
                                 let r = src_reg(key, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16426,7 +17020,7 @@ impl Compiler {
                             // JSON_GET_JSON returns one active-only Option<Json> handle in r10.
                             if let Some(s) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(json, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16440,7 +17034,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(scratch2, 10, 0)?);
                             if let Some(s) = string_map.get(&(func_idx, *key)) {
                                 let kb = DataKey(DataKind::Name, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, kb);
+                                emit_literal_load(&mut code, &fixups, 10, kb);
                             } else {
                                 let r = src_reg(key, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16461,7 +17055,7 @@ impl Compiler {
                             // JSON_GET_NAME returns one active-only Option<Name> handle in r10.
                             if let Some(s) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(json, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16475,7 +17069,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(scratch2, 10, 0)?);
                             if let Some(s) = string_map.get(&(func_idx, *key)) {
                                 let kb = DataKey(DataKind::Name, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, kb);
+                                emit_literal_load(&mut code, &fixups, 10, kb);
                             } else {
                                 let r = src_reg(key, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16496,7 +17090,7 @@ impl Compiler {
                             // JSON_GET_ACCOUNT_ID returns one active-only Option<AccountId> handle in r10.
                             if let Some(s) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(json, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16510,7 +17104,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(scratch2, 10, 0)?);
                             if let Some(s) = string_map.get(&(func_idx, *key)) {
                                 let kb = DataKey(DataKind::Name, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, kb);
+                                emit_literal_load(&mut code, &fixups, 10, kb);
                             } else {
                                 let r = src_reg(key, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16531,7 +17125,7 @@ impl Compiler {
                             // JSON_GET_ASSET_DEFINITION_ID returns one active-only Option handle in r10.
                             if let Some(s) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(json, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16544,7 +17138,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(scratch2, 10, 0)?);
                             if let Some(s) = string_map.get(&(func_idx, *key)) {
                                 let kb = DataKey(DataKind::Name, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, kb);
+                                emit_literal_load(&mut code, &fixups, 10, kb);
                             } else {
                                 let r = src_reg(key, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16565,7 +17159,7 @@ impl Compiler {
                             // JSON_GET_NFT_ID returns one active-only Option<NftId> handle in r10.
                             if let Some(s) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(json, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16579,7 +17173,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(scratch2, 10, 0)?);
                             if let Some(s) = string_map.get(&(func_idx, *key)) {
                                 let kb = DataKey(DataKind::Name, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, kb);
+                                emit_literal_load(&mut code, &fixups, 10, kb);
                             } else {
                                 let r = src_reg(key, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16600,7 +17194,7 @@ impl Compiler {
                             // JSON_GET_BLOB_HEX returns one active-only Option<bytes> handle in r10.
                             if let Some(s) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(json, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16614,7 +17208,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(scratch2, 10, 0)?);
                             if let Some(s) = string_map.get(&(func_idx, *key)) {
                                 let kb = DataKey(DataKind::Name, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, kb);
+                                emit_literal_load(&mut code, &fixups, 10, kb);
                             } else {
                                 let r = src_reg(key, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16636,7 +17230,7 @@ impl Compiler {
                             // r10=&NoritoBytes; publish; SCALL NAME_DECODE; move
                             if let Some(s) = string_map.get(&(func_idx, *blob)) {
                                 let key = DataKey(DataKind::NoritoBytes, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(blob, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16659,7 +17253,7 @@ impl Compiler {
                             // r10=&Name; publish; r11=&Json; publish; SCALL
                             if let Some(s) = string_map.get(&(func_idx, *schema)) {
                                 let key = DataKey(DataKind::Name, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(schema, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16672,7 +17266,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(scratch1, 10, 0)?);
                             if let Some(s) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(json, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16693,7 +17287,7 @@ impl Compiler {
                             // r10=&Name; publish; r11=&NoritoBytes or &Blob; publish; SCALL
                             if let Some(s) = string_map.get(&(func_idx, *schema)) {
                                 let key = DataKey(DataKind::Name, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(schema, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16706,7 +17300,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(scratch1, 10, 0)?);
                             if let Some(s) = string_map.get(&(func_idx, *blob)) {
                                 let key = DataKey(DataKind::NoritoBytes, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(blob, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16726,7 +17320,7 @@ impl Compiler {
                         Instr::SchemaInfo { dest, schema } => {
                             if let Some(s) = string_map.get(&(func_idx, *schema)) {
                                 let key = DataKey(DataKind::Name, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(schema, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16758,7 +17352,7 @@ impl Compiler {
                             );
                             if let Some(s) = string_map.get(&(func_idx, *input)) {
                                 let key = DataKey(DataKind::Blob, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(input, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16766,7 +17360,7 @@ impl Compiler {
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             if let Some(s) = string_map.get(&(func_idx, *public_key)) {
                                 let key = DataKey(DataKind::Blob, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 11, key);
+                                emit_literal_load(&mut code, &fixups, 11, key);
                             } else {
                                 let r = src_reg(public_key, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r, 0)?);
@@ -16774,7 +17368,7 @@ impl Compiler {
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             if let Some(s) = string_map.get(&(func_idx, *proof)) {
                                 let key = DataKey(DataKind::Blob, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 12, key);
+                                emit_literal_load(&mut code, &fixups, 12, key);
                             } else {
                                 let r = src_reg(proof, scratchd, &mut code)?;
                                 push_word(&mut code, encode_addi(12, r, 0)?);
@@ -16794,7 +17388,7 @@ impl Compiler {
                         Instr::VrfVerifyBatch { dest, batch } => {
                             if let Some(s) = string_map.get(&(func_idx, *batch)) {
                                 let key = DataKey(DataKind::Blob, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(batch, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16816,7 +17410,7 @@ impl Compiler {
                         Instr::AxtBegin { descriptor } => {
                             if let Some(s) = string_map.get(&(func_idx, *descriptor)) {
                                 let key = DataKey(DataKind::AxtDescriptor, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(descriptor, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16839,7 +17433,7 @@ impl Compiler {
                             );
                             if let Some(s) = string_map.get(&(func_idx, *dsid)) {
                                 let key = DataKey(DataKind::DataSpaceId, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(dsid, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16848,7 +17442,7 @@ impl Compiler {
                             if let Some(m) = manifest {
                                 if let Some(s) = string_map.get(&(func_idx, *m)) {
                                     let key = DataKey(DataKind::NoritoBytes, s.clone());
-                                    emit_literal_load(&mut code, &mut fixups, 11, key);
+                                    emit_literal_load(&mut code, &fixups, 11, key);
                                 } else {
                                     let r = src_reg(m, scratch2, &mut code)?;
                                     push_word(&mut code, encode_addi(11, r, 0)?);
@@ -16870,7 +17464,7 @@ impl Compiler {
                             );
                             if let Some(s) = string_map.get(&(func_idx, *dsid)) {
                                 let key = DataKey(DataKind::DataSpaceId, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(dsid, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16879,7 +17473,7 @@ impl Compiler {
                             if let Some(p) = proof {
                                 if let Some(s) = string_map.get(&(func_idx, *p)) {
                                     let key = DataKey(DataKind::ProofBlob, s.clone());
-                                    emit_literal_load(&mut code, &mut fixups, 11, key);
+                                    emit_literal_load(&mut code, &fixups, 11, key);
                                 } else {
                                     let r = src_reg(p, scratch2, &mut code)?;
                                     push_word(&mut code, encode_addi(11, r, 0)?);
@@ -16905,7 +17499,7 @@ impl Compiler {
                             );
                             if let Some(s) = string_map.get(&(func_idx, *handle)) {
                                 let key = DataKey(DataKind::AssetHandle, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                                emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(handle, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
@@ -16913,7 +17507,7 @@ impl Compiler {
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             if let Some(s) = string_map.get(&(func_idx, *intent)) {
                                 let key = DataKey(DataKind::NoritoBytes, s.clone());
-                                emit_literal_load(&mut code, &mut fixups, 11, key);
+                                emit_literal_load(&mut code, &fixups, 11, key);
                             } else {
                                 let r = src_reg(intent, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r, 0)?);
@@ -16922,7 +17516,7 @@ impl Compiler {
                             if let Some(p) = proof {
                                 if let Some(s) = string_map.get(&(func_idx, *p)) {
                                     let key = DataKey(DataKind::ProofBlob, s.clone());
-                                    emit_literal_load(&mut code, &mut fixups, 12, key);
+                                    emit_literal_load(&mut code, &fixups, 12, key);
                                 } else {
                                     let r = src_reg(p, scratchd, &mut code)?;
                                     push_word(&mut code, encode_addi(12, r, 0)?);
@@ -16950,16 +17544,16 @@ impl Compiler {
                 allocation_position.set(next_allocation_position);
                 emit_split_reloads(next_allocation_position, &mut code)?;
                 next_allocation_position = next_allocation_position.saturating_add(1);
-                let mut emit_return_value = |temp: &ir::Temp,
-                                             rd: u8,
-                                             scratch: u8,
-                                             code: &mut Vec<u8>|
+                let emit_return_value = |temp: &ir::Temp,
+                                         rd: u8,
+                                         scratch: u8,
+                                         code: &mut Vec<u8>|
                  -> Result<(), String> {
                     if let Some(kind) = dataref_kind_map.get(&(func_idx, *temp)).copied()
                         && let Some(lit) = string_map.get(&(func_idx, *temp)).cloned()
                     {
                         let key = data_key_for_pointer(kind, &lit);
-                        emit_literal_load(code, &mut fixups, rd, key);
+                        emit_literal_load(code, &fixups, rd, key);
                     } else {
                         let rs = src_reg(temp, scratch, code)?;
                         if rd != rs {
@@ -16982,14 +17576,28 @@ impl Compiler {
                             let scratch_base = if sp != scratch1 { scratch1 } else { scratch2 };
                             for (idx, reg) in saved_regs.iter().copied().enumerate() {
                                 let offset = (save_base + idx * 8) as i64;
-                                emit_load64(&mut code, reg, sp, offset, Some(scratch_base))?;
+                                emit_load64(
+                                    &mut code,
+                                    &fixups,
+                                    reg,
+                                    sp,
+                                    offset,
+                                    Some(scratch_base),
+                                )?;
                             }
                             if saves_return_address {
                                 let ld = encode_load64_rv(1, sp, 0)?;
                                 push_word(&mut code, ld);
                             }
                             if local_frame > 0 {
-                                emit_addi_inplace(&mut code, sp, local_frame as i64);
+                                emit_bounded_add(
+                                    &mut code,
+                                    &fixups,
+                                    sp,
+                                    sp,
+                                    local_frame as i64,
+                                    LITERAL_SHIFT_REG,
+                                )?;
                             }
                             // JALR x0, x1, 0
                             let jalr = encoding::wide::encode_rr(
@@ -17013,14 +17621,28 @@ impl Compiler {
                             let scratch_base = if sp != scratch1 { scratch1 } else { scratch2 };
                             for (idx, reg) in saved_regs.iter().copied().enumerate() {
                                 let offset = (save_base + idx * 8) as i64;
-                                emit_load64(&mut code, reg, sp, offset, Some(scratch_base))?;
+                                emit_load64(
+                                    &mut code,
+                                    &fixups,
+                                    reg,
+                                    sp,
+                                    offset,
+                                    Some(scratch_base),
+                                )?;
                             }
                             if saves_return_address {
                                 let ld = encode_load64_rv(1, sp, 0)?;
                                 push_word(&mut code, ld);
                             }
                             if local_frame > 0 {
-                                emit_addi_inplace(&mut code, sp, local_frame as i64);
+                                emit_bounded_add(
+                                    &mut code,
+                                    &fixups,
+                                    sp,
+                                    sp,
+                                    local_frame as i64,
+                                    LITERAL_SHIFT_REG,
+                                )?;
                             }
                             let jalr = encoding::wide::encode_rr(
                                 instruction::wide::control::JALR,
@@ -17051,14 +17673,28 @@ impl Compiler {
                             let scratch_base = if sp != scratch1 { scratch1 } else { scratch2 };
                             for (idx, reg) in saved_regs.iter().copied().enumerate() {
                                 let offset = (save_base + idx * 8) as i64;
-                                emit_load64(&mut code, reg, sp, offset, Some(scratch_base))?;
+                                emit_load64(
+                                    &mut code,
+                                    &fixups,
+                                    reg,
+                                    sp,
+                                    offset,
+                                    Some(scratch_base),
+                                )?;
                             }
                             if saves_return_address {
                                 let ld = encode_load64_rv(1, sp, 0)?;
                                 push_word(&mut code, ld);
                             }
                             if local_frame > 0 {
-                                emit_addi_inplace(&mut code, sp, local_frame as i64);
+                                emit_bounded_add(
+                                    &mut code,
+                                    &fixups,
+                                    sp,
+                                    sp,
+                                    local_frame as i64,
+                                    LITERAL_SHIFT_REG,
+                                )?;
                             }
                             let jalr = encoding::wide::encode_rr(
                                 instruction::wide::control::JALR,
@@ -17262,6 +17898,7 @@ impl Compiler {
             TRAMPOLINE_HOP_BYTES,
         )?;
         code = relaxed_code;
+        let mut fixups = fixups.into_inner();
         for (at, _, _) in &mut fixups {
             *at = code_offsets.instruction(*at);
         }
@@ -17332,7 +17969,9 @@ impl Compiler {
                 DRK::ProofBlob => DataKey(DataKind::ProofBlob, v.clone()),
                 DRK::SoracloudRequest => DataKey(DataKind::SoracloudRequest, v.clone()),
                 DRK::SoracloudResponse => DataKey(DataKind::SoracloudResponse, v.clone()),
-                DRK::Amount => DataKey(DataKind::Amount, v.clone()),
+                DRK::Int => DataKey(DataKind::Int, v.clone()),
+                DRK::Decimal => DataKey(DataKind::Decimal, v.clone()),
+                DRK::Quantity => DataKey(DataKind::Quantity, v.clone()),
             };
             key_order.insert(dk);
         }
@@ -17341,7 +17980,45 @@ impl Compiler {
             if let Some(off) = data_offsets.get(key) {
                 return Ok(*off);
             }
+            if let DataKey(DataKind::I64, raw) = key {
+                let value = raw.parse::<i64>().map_err(|error| {
+                    format!("invalid compiler-owned i64 literal `{raw}`: {error}")
+                })?;
+                let off = data_bytes.len() as u64;
+                data_bytes.extend_from_slice(&value.to_le_bytes());
+                data_offsets.insert(key.clone(), off);
+                return Ok(off);
+            }
+            let numeric_kind = match key.0 {
+                DataKind::Int => Some(DRK::Int),
+                DataKind::Decimal => Some(DRK::Decimal),
+                DataKind::Quantity => Some(DRK::Quantity),
+                _ => None,
+            };
+            if let Some(kind) = numeric_kind {
+                let bytes = encode_pointer_tlv_bytes(kind, &key.1).ok_or_else(|| {
+                    let error = format!(
+                        "invalid {} literal `{}`",
+                        match kind {
+                            DRK::Int => "int",
+                            DRK::Decimal => "decimal",
+                            DRK::Quantity => "quantity",
+                            _ => unreachable!("numeric kind selected above"),
+                        },
+                        key.1
+                    );
+                    i18n::translate(self.lang, Message::SemanticError(&error))
+                })?;
+                let off = data_bytes.len() as u64;
+                data_bytes.extend_from_slice(&bytes);
+                data_offsets.insert(key.clone(), off);
+                return Ok(off);
+            }
             let (type_id, mut payload) = match key {
+                DataKey(DataKind::I64, _) => unreachable!("i64 literals return above"),
+                DataKey(DataKind::Int | DataKind::Decimal | DataKind::Quantity, _) => {
+                    unreachable!("numeric literals return above")
+                }
                 DataKey(DataKind::Account, s) => {
                     let id = AccountId::parse_encoded(s)
                         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
@@ -17590,26 +18267,6 @@ impl Compiler {
                         })?,
                     )
                 }
-                DataKey(DataKind::Amount, s) => {
-                    let value = s
-                        .parse::<iroha_primitives::numeric::Numeric>()
-                        .map_err(|error| {
-                            let error = format!("invalid Amount literal `{s}`: {error}");
-                            i18n::translate(self.lang, Message::SemanticError(&error))
-                        })?
-                        .canonicalize_amount()
-                        .map_err(|error| {
-                            let error = format!("invalid Amount literal `{s}`: {error}");
-                            i18n::translate(self.lang, Message::SemanticError(&error))
-                        })?;
-                    (
-                        PointerType::Amount as u16,
-                        to_bytes(&value).map_err(|error| {
-                            let error = format!("invalid Amount literal `{s}`: {error}");
-                            i18n::translate(self.lang, Message::SemanticError(&error))
-                        })?,
-                    )
-                }
             };
             // TLV envelope: type_id (be), version=1, len (be u32), payload, hash (32 bytes blake2b-32)
             let mut v = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
@@ -17680,7 +18337,7 @@ impl Compiler {
                 .collect(),
             states: state_descriptors,
         };
-        // Compute the indexed literal table and patch LDLIT words. Contract artifacts are laid out as:
+        // Compute the indexed literal table and patch LDLIT/LDI64 words. Contract artifacts are laid out as:
         //   [ header | CNTR | LTLB? | code ]
         let meta_bytes = meta.encode();
         let contract_section = contract_interface.encode_section();
@@ -17693,8 +18350,16 @@ impl Compiler {
         let mut lit_bytes: Vec<u8> = Vec::with_capacity(lit_size as usize);
         for k in key_order.iter() {
             let data_off = get_or_insert_data(k)?;
-            let ptr = data_base_rel + data_off;
-            lit_bytes.extend_from_slice(&ptr.to_le_bytes());
+            let relative_offset = data_base_rel
+                .checked_add(data_off)
+                .ok_or_else(|| "literal table offset overflow".to_owned())?;
+            let descriptor = encode_literal_descriptor(k.0.literal_kind(), relative_offset)
+                .ok_or_else(|| {
+                    format!(
+                        "literal table offset {relative_offset} exceeds the ABI-v1 56-bit domain"
+                    )
+                })?;
+            lit_bytes.extend_from_slice(&descriptor.to_le_bytes());
         }
         // Sora Nexus contracts still have legitimate dynamic ledger operations
         // whose exact account/asset keys are only known from the call payload.
@@ -17705,11 +18370,12 @@ impl Compiler {
             let index = key_order
                 .get_index_of(key)
                 .expect("literal fixup key must have a stable table index");
-            patch_literal_load(
+            patch_indexed_literal_load(
                 &mut code,
                 *at,
                 *rd,
                 u16::try_from(index).expect("literal count validated against u16 index range"),
+                key.0.literal_kind(),
             );
         }
 
@@ -17814,8 +18480,11 @@ impl Compiler {
         ),
         DiagnosticBundle,
     > {
-        let prepared = self.prepare_typed_program(program, source_name)?;
-        let artifacts = self.compile_prepared(prepared).map_err(|message| {
+        let lowered = self.lower_typed_program(program, source_name)?;
+        let ssa = self.construct_ssa_program(lowered)?;
+        let optimized = self.optimize_ssa_program(ssa)?;
+        let codegen = self.destroy_ssa_program(optimized)?;
+        let artifacts = self.compile_codegen(codegen).map_err(|message| {
             native_diagnostic_bundle(
                 "K3099",
                 DiagnosticPhase::Lowering,
@@ -18196,9 +18865,9 @@ fn manifest_state_descriptors(states: &[EmbeddedStateDescriptor]) -> Vec<StateDe
 
 fn manifest_state_type_name(ty: &EmbeddedStateType) -> String {
     match ty {
-        EmbeddedStateType::I64 => "i64".to_string(),
-        EmbeddedStateType::U128 => "u128".to_string(),
-        EmbeddedStateType::Amount => "Amount".to_string(),
+        EmbeddedStateType::Int => "int".to_string(),
+        EmbeddedStateType::Decimal => "decimal".to_string(),
+        EmbeddedStateType::Quantity => "quantity".to_string(),
         EmbeddedStateType::Bool => "bool".to_string(),
         EmbeddedStateType::String => "string".to_string(),
         EmbeddedStateType::Bytes => "bytes".to_string(),
@@ -18253,9 +18922,9 @@ fn build_state_type_descriptor(ty: &semantic::Type) -> Result<EmbeddedStateType,
     use semantic::Type;
 
     Ok(match semantic::resolve_struct_type(ty) {
-        Type::Int => EmbeddedStateType::I64,
-        Type::FixedU128 => EmbeddedStateType::U128,
-        Type::Amount => EmbeddedStateType::Amount,
+        Type::Int => EmbeddedStateType::Int,
+        Type::Decimal => EmbeddedStateType::Decimal,
+        Type::Quantity => EmbeddedStateType::Quantity,
         Type::Bool => EmbeddedStateType::Bool,
         Type::String => EmbeddedStateType::String,
         Type::Bytes => EmbeddedStateType::Bytes,
@@ -18340,6 +19009,33 @@ fn executable_ir_roots(typed: &TypedProgram, include_tests: bool) -> BTreeSet<St
         .collect()
 }
 
+/// Scheduler-relevant access class for one lowered IR instruction.
+///
+/// Keeping this classification exhaustive over [`ir::Instr`] makes a newly
+/// introduced host operation a compile error here instead of silently omitting
+/// it from the contract's derived access metadata.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IrAccessClass {
+    /// VM-local work with no world or durable-state dependency.
+    None,
+    /// Contract-owned durable-state access, recorded by the state-hint pass.
+    State(BuiltinAccess),
+    /// Ledger/world access, recorded by the ISI-hint pass.
+    Ledger(BuiltinAccess),
+}
+
+fn access_class_for_builtin(builtin: Builtin) -> IrAccessClass {
+    match builtin.spec().access {
+        BuiltinAccess::None => IrAccessClass::None,
+        access @ (BuiltinAccess::StateRead | BuiltinAccess::StateWrite) => {
+            IrAccessClass::State(access)
+        }
+        access @ (BuiltinAccess::LedgerRead
+        | BuiltinAccess::LedgerWrite
+        | BuiltinAccess::Dynamic) => IrAccessClass::Ledger(access),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn derive_isi_access_hints(
     ir_prog: &ir::Program,
@@ -18355,11 +19051,12 @@ fn derive_isi_access_hints(
     for (func_idx, func) in ir_prog.functions.iter().enumerate() {
         for bb in &func.blocks {
             for instr in &bb.instrs {
-                if !instr_queues_isi(instr) {
+                let IrAccessClass::Ledger(access) = classify_ir_access(instr) else {
                     continue;
-                }
+                };
                 record_isi_access(
                     instr,
+                    access,
                     func_idx,
                     string_map,
                     int_const_map,
@@ -18492,10 +19189,14 @@ fn derive_state_access_hints(
     for (func_idx, func) in ir_prog.functions.iter().enumerate() {
         for bb in &func.blocks {
             for instr in &bb.instrs {
+                let IrAccessClass::State(coarse_access) = classify_ir_access(instr) else {
+                    continue;
+                };
                 match instr {
                     ir::Instr::StateGet { path, .. }
                     | ir::Instr::StateHas { path, .. }
                     | ir::Instr::StateLen { path, .. } => {
+                        debug_assert_eq!(coarse_access, BuiltinAccess::StateRead);
                         if let Some(key) =
                             render_state_hint(state_path_hints.get(&(func_idx, *path)))
                         {
@@ -18510,12 +19211,10 @@ fn derive_state_access_hints(
                             access_sets[func_idx]
                                 .reads
                                 .insert(STATE_WILDCARD_KEY.to_string());
-                            access_sets[func_idx]
-                                .writes
-                                .insert(STATE_WILDCARD_KEY.to_string());
                         }
                     }
                     ir::Instr::StateKeys { prefix, .. } | ir::Instr::StateCount { prefix, .. } => {
+                        debug_assert_eq!(coarse_access, BuiltinAccess::StateRead);
                         if let Some(key) =
                             render_state_hint(state_path_hints.get(&(func_idx, *prefix)))
                         {
@@ -18530,12 +19229,10 @@ fn derive_state_access_hints(
                             access_sets[func_idx]
                                 .reads
                                 .insert(STATE_WILDCARD_KEY.to_string());
-                            access_sets[func_idx]
-                                .writes
-                                .insert(STATE_WILDCARD_KEY.to_string());
                         }
                     }
                     ir::Instr::StateSet { path, .. } | ir::Instr::StateDel { path } => {
+                        debug_assert_eq!(coarse_access, BuiltinAccess::StateWrite);
                         if let Some(key) =
                             render_state_hint(state_path_hints.get(&(func_idx, *path)))
                         {
@@ -18555,7 +19252,21 @@ fn derive_state_access_hints(
                                 .insert(STATE_WILDCARD_KEY.to_string());
                         }
                     }
-                    _ => {}
+                    _ => {
+                        debug_assert!(
+                            false,
+                            "state-classified IR instruction is missing state-hint derivation"
+                        );
+                        hint_diagnostics.state_wildcards =
+                            hint_diagnostics.state_wildcards.saturating_add(1);
+                        record_hint_skip(&mut hint_skips[func_idx], HINT_SKIP_DYNAMIC_STATE_PATH);
+                        access_sets[func_idx]
+                            .reads
+                            .insert(STATE_WILDCARD_KEY.to_string());
+                        access_sets[func_idx]
+                            .writes
+                            .insert(STATE_WILDCARD_KEY.to_string());
+                    }
                 }
             }
         }
@@ -18565,6 +19276,7 @@ fn derive_state_access_hints(
 #[allow(clippy::too_many_arguments)]
 fn record_isi_access(
     instr: &ir::Instr,
+    coarse_access: BuiltinAccess,
     func_idx: usize,
     string_map: &HashMap<(usize, ir::Temp), String>,
     int_const_map: &HashMap<(usize, ir::Temp), i64>,
@@ -18585,8 +19297,23 @@ fn record_isi_access(
                 .literal_trigger_spec_decode_failures
                 .saturating_add(1);
         }
-        access_set.reads.insert(GLOBAL_WILDCARD_KEY.to_string());
-        access_set.writes.insert(GLOBAL_WILDCARD_KEY.to_string());
+        match coarse_access {
+            BuiltinAccess::LedgerRead => {
+                access_set.reads.insert(GLOBAL_WILDCARD_KEY.to_string());
+            }
+            BuiltinAccess::LedgerWrite | BuiltinAccess::Dynamic => {
+                access_set.reads.insert(GLOBAL_WILDCARD_KEY.to_string());
+                access_set.writes.insert(GLOBAL_WILDCARD_KEY.to_string());
+            }
+            BuiltinAccess::None | BuiltinAccess::StateRead | BuiltinAccess::StateWrite => {
+                debug_assert!(
+                    false,
+                    "non-ledger IR access class reached world-access fallback"
+                );
+                access_set.reads.insert(GLOBAL_WILDCARD_KEY.to_string());
+                access_set.writes.insert(GLOBAL_WILDCARD_KEY.to_string());
+            }
+        }
     };
     match instr {
         ir::Instr::TransferBatchBegin | ir::Instr::TransferBatchEnd => {}
@@ -18986,6 +19713,12 @@ fn record_isi_access(
                 }
                 _ => apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI),
             }
+        }
+        ir::Instr::ResolveAccountAlias { .. } | ir::Instr::ZkVerify { .. } => {
+            apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI)
+        }
+        ir::Instr::CreateNftsForAllUsers => {
+            apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI)
         }
         ir::Instr::GetPublicInput { .. }
         | ir::Instr::GetPrivateInput { .. }
@@ -20983,86 +21716,320 @@ fn record_anonymous_asset_escrow_close_access(set: &mut AccessSets, escrow_id: &
     add_dynamic_zk_asset_rw(set);
 }
 
-fn instr_queues_isi(instr: &ir::Instr) -> bool {
-    matches!(
-        instr,
-        ir::Instr::RegisterAsset { .. }
-            | ir::Instr::CreateNewAsset { .. }
-            | ir::Instr::TransferAsset { .. }
-            | ir::Instr::TransferBatchAsset { .. }
-            | ir::Instr::EscrowOpenOffer { .. }
-            | ir::Instr::EscrowAccept { .. }
-            | ir::Instr::EscrowMarkPaymentSent { .. }
-            | ir::Instr::EscrowRelease { .. }
-            | ir::Instr::EscrowCancel { .. }
-            | ir::Instr::EscrowOpenDispute { .. }
-            | ir::Instr::EscrowResolveDispute { .. }
-            | ir::Instr::AnonymousEscrowOpenOffer { .. }
-            | ir::Instr::AnonymousEscrowAccept { .. }
-            | ir::Instr::AnonymousEscrowMarkPaymentSent { .. }
-            | ir::Instr::AnonymousEscrowRelease { .. }
-            | ir::Instr::AnonymousEscrowCancel { .. }
-            | ir::Instr::AnonymousEscrowOpenDispute { .. }
-            | ir::Instr::AnonymousEscrowResolveDispute { .. }
-            | ir::Instr::TransferBatchBegin
-            | ir::Instr::TransferBatchEnd
-            | ir::Instr::TransferBatchApply { .. }
-            | ir::Instr::MintAsset { .. }
-            | ir::Instr::BurnAsset { .. }
-            | ir::Instr::SetAccountDetail { .. }
-            | ir::Instr::CreateNft { .. }
-            | ir::Instr::SetNftData { .. }
-            | ir::Instr::BurnNft { .. }
-            | ir::Instr::TransferNft { .. }
-            | ir::Instr::RegisterDomain { .. }
-            | ir::Instr::RegisterAccount { .. }
-            | ir::Instr::AddSignatory { .. }
-            | ir::Instr::RemoveSignatory { .. }
-            | ir::Instr::SetAccountQuorum { .. }
-            | ir::Instr::UnregisterDomain { .. }
-            | ir::Instr::UnregisterAsset { .. }
-            | ir::Instr::UnregisterAccount { .. }
-            | ir::Instr::RegisterPeer { .. }
-            | ir::Instr::UnregisterPeer { .. }
-            | ir::Instr::CreateTrigger { .. }
-            | ir::Instr::RemoveTrigger { .. }
-            | ir::Instr::SetTriggerEnabled { .. }
-            | ir::Instr::GrantPermission { .. }
-            | ir::Instr::RevokePermission { .. }
-            | ir::Instr::CreateRole { .. }
-            | ir::Instr::DeleteRole { .. }
-            | ir::Instr::GrantRole { .. }
-            | ir::Instr::RevokeRole { .. }
-            | ir::Instr::TransferDomain { .. }
-            | ir::Instr::VendorExecuteInstruction { .. }
-            | ir::Instr::VendorExecuteQuery { .. }
-            | ir::Instr::QueryExecuteNorito { .. }
-            | ir::Instr::QueryGet { .. }
-            | ir::Instr::CoreQueryGet { .. }
-            | ir::Instr::CoreQueryPage { .. }
-            | ir::Instr::GetAccountBalance { .. }
-            | ir::Instr::UseNullifier { .. }
-            | ir::Instr::SmartContractLifecycle { .. }
-            | ir::Instr::ZkRootsGet { .. }
-            | ir::Instr::ZkVoteGetTally { .. }
-            | ir::Instr::VrfEpochSeed { .. }
-            | ir::Instr::InvokeEntrypointAs { .. }
-            | ir::Instr::InvokeEntrypointAsMulti { .. }
-            | ir::Instr::ExpectRejectAs { .. }
-            | ir::Instr::ActorAccount { .. }
-            | ir::Instr::ActorPublicKey { .. }
-            | ir::Instr::ActorSign { .. }
-            | ir::Instr::SubscriptionBill
-            | ir::Instr::SubscriptionRecordUsage
-            | ir::Instr::BuildSubmitBallotInline { .. }
-            | ir::Instr::BuildUnshieldInline { .. }
-            | ir::Instr::AxtBegin { .. }
-            | ir::Instr::AxtTouch { .. }
-            | ir::Instr::VerifyDsProof { .. }
-            | ir::Instr::UseAssetHandle { .. }
-            | ir::Instr::AxtCommit
-            | ir::Instr::SoracloudHostCall { .. }
-    )
+fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
+    match instr {
+        ir::Instr::Const { .. }
+        | ir::Instr::Copy { .. }
+        | ir::Instr::StringConst { .. }
+        | ir::Instr::Binary { .. }
+        | ir::Instr::WrappingBinary { .. }
+        | ir::Instr::Unary { .. }
+        | ir::Instr::WrappingNeg { .. }
+        | ir::Instr::IntFromScalar { .. }
+        | ir::Instr::IntToScalar { .. }
+        | ir::Instr::NumericConvert { .. }
+        | ir::Instr::NumericTryConvert { .. }
+        | ir::Instr::NumericStatus { .. }
+        | ir::Instr::NumericNeg { .. }
+        | ir::Instr::NumericBinary { .. }
+        | ir::Instr::NumericCompare { .. }
+        // `DirectHelperSyscall` is reserved for compiler-owned codec, numeric,
+        // and argument-record helpers. World operations have dedicated IR
+        // variants below so their access cannot be hidden behind a raw number.
+        | ir::Instr::DirectHelperSyscall { .. }
+        | ir::Instr::Min { .. }
+        | ir::Instr::Max { .. }
+        | ir::Instr::Abs { .. }
+        | ir::Instr::DivCeil { .. }
+        | ir::Instr::Gcd { .. }
+        | ir::Instr::Mean { .. }
+        | ir::Instr::Isqrt { .. }
+        | ir::Instr::LoadVar { .. }
+        | ir::Instr::Poseidon2 { .. }
+        | ir::Instr::Poseidon6 { .. }
+        | ir::Instr::Pubkgen { .. }
+        | ir::Instr::Valcom { .. }
+        | ir::Instr::AssertEq { .. }
+        | ir::Instr::Assert { .. }
+        | ir::Instr::AbortIf { .. }
+        | ir::Instr::MapNew { .. }
+        | ir::Instr::PointerFromString { .. }
+        | ir::Instr::MapGet { .. }
+        | ir::Instr::MapLoadPair { .. }
+        | ir::Instr::MapSet { .. }
+        | ir::Instr::Load64Imm { .. }
+        | ir::Instr::Load64 { .. }
+        | ir::Instr::Store64Imm { .. }
+        | ir::Instr::Store64 { .. }
+        | ir::Instr::TuplePack { .. }
+        | ir::Instr::TupleGet { .. }
+        | ir::Instr::Call { .. }
+        | ir::Instr::CallMulti { .. }
+        | ir::Instr::DataRef { .. }
+        | ir::Instr::GetAuthority { .. }
+        | ir::Instr::SysvarAuthority { .. }
+        | ir::Instr::CurrentTimeMs { .. }
+        | ir::Instr::BlockHeight { .. }
+        | ir::Instr::BlockTimeMs { .. }
+        | ir::Instr::ChainId { .. }
+        | ir::Instr::ContractAddress { .. }
+        | ir::Instr::Entrypoint { .. }
+        | ir::Instr::GetTriggerEvent { .. }
+        | ir::Instr::GetPublicInput { .. }
+        | ir::Instr::StateMapKeyAt { .. }
+        | ir::Instr::StateValueEncode { .. }
+        | ir::Instr::DecodeInt { .. }
+        | ir::Instr::PathMapKey { .. }
+        | ir::Instr::PathMapKeyNorito { .. }
+        | ir::Instr::EncodeInt { .. }
+        | ir::Instr::PointerToNorito { .. }
+        | ir::Instr::PointerFromNorito { .. }
+        | ir::Instr::JsonEncode { .. }
+        | ir::Instr::JsonDecode { .. }
+        | ir::Instr::TlvLen { .. }
+        | ir::Instr::JsonObject { .. }
+        | ir::Instr::JsonSetInt { .. }
+        | ir::Instr::JsonSetAccountId { .. }
+        | ir::Instr::JsonGetInt { .. }
+        | ir::Instr::JsonGetNumeric { .. }
+        | ir::Instr::JsonGetJson { .. }
+        | ir::Instr::JsonGetName { .. }
+        | ir::Instr::JsonGetAccountId { .. }
+        | ir::Instr::JsonGetAssetDefinitionId { .. }
+        | ir::Instr::JsonGetNftId { .. }
+        | ir::Instr::JsonGetBlobHex { .. }
+        | ir::Instr::NameDecode { .. }
+        | ir::Instr::SchemaEncode { .. }
+        | ir::Instr::SchemaDecode { .. }
+        | ir::Instr::SchemaInfo { .. }
+        | ir::Instr::PointerEq { .. } => IrAccessClass::None,
+
+        ir::Instr::Sm3Hash { .. } => access_class_for_builtin(Builtin::Sm3Hash),
+        ir::Instr::Sha256Hash { .. } => access_class_for_builtin(Builtin::Sha256Hash),
+        ir::Instr::Sha3Hash { .. } => access_class_for_builtin(Builtin::Sha3Hash),
+        ir::Instr::Blake2b256Hash { .. } => {
+            access_class_for_builtin(Builtin::Blake2b256Hash)
+        }
+        ir::Instr::Keccak256Hash { .. } => access_class_for_builtin(Builtin::Keccak256Hash),
+        ir::Instr::IrohaHash { .. } => access_class_for_builtin(Builtin::IrohaHash),
+        ir::Instr::Sm2Verify { .. } => access_class_for_builtin(Builtin::Sm2Verify),
+        ir::Instr::VerifySignature { .. } => {
+            access_class_for_builtin(Builtin::VerifySignature)
+        }
+        ir::Instr::Sm4GcmSeal { .. } => access_class_for_builtin(Builtin::Sm4GcmSeal),
+        ir::Instr::Sm4GcmOpen { .. } => access_class_for_builtin(Builtin::Sm4GcmOpen),
+        ir::Instr::Sm4CcmSeal { .. } => access_class_for_builtin(Builtin::Sm4CcmSeal),
+        ir::Instr::Sm4CcmOpen { .. } => access_class_for_builtin(Builtin::Sm4CcmOpen),
+
+        ir::Instr::RegisterAsset { .. } => access_class_for_builtin(Builtin::RegisterAsset),
+        ir::Instr::CreateNewAsset { .. } => access_class_for_builtin(Builtin::CreateNewAsset),
+        ir::Instr::TransferAsset { .. } => access_class_for_builtin(Builtin::TransferAsset),
+        ir::Instr::TransferBatchAsset { .. } => access_class_for_builtin(Builtin::TransferBatch),
+        ir::Instr::EscrowOpenOffer { .. } => access_class_for_builtin(Builtin::EscrowOpenOffer),
+        ir::Instr::EscrowAccept { .. } => access_class_for_builtin(Builtin::EscrowAccept),
+        ir::Instr::EscrowMarkPaymentSent { .. } => {
+            access_class_for_builtin(Builtin::EscrowMarkPaymentSent)
+        }
+        ir::Instr::EscrowRelease { .. } => access_class_for_builtin(Builtin::EscrowRelease),
+        ir::Instr::EscrowCancel { .. } => access_class_for_builtin(Builtin::EscrowCancel),
+        ir::Instr::EscrowOpenDispute { .. } => {
+            access_class_for_builtin(Builtin::EscrowOpenDispute)
+        }
+        ir::Instr::EscrowResolveDispute { .. } => {
+            access_class_for_builtin(Builtin::EscrowResolveDispute)
+        }
+        ir::Instr::AnonymousEscrowOpenOffer { .. } => {
+            access_class_for_builtin(Builtin::AnonymousEscrowOpenOffer)
+        }
+        ir::Instr::AnonymousEscrowAccept { .. } => {
+            access_class_for_builtin(Builtin::AnonymousEscrowAccept)
+        }
+        ir::Instr::AnonymousEscrowMarkPaymentSent { .. } => {
+            access_class_for_builtin(Builtin::AnonymousEscrowMarkPaymentSent)
+        }
+        ir::Instr::AnonymousEscrowRelease { .. } => {
+            access_class_for_builtin(Builtin::AnonymousEscrowRelease)
+        }
+        ir::Instr::AnonymousEscrowCancel { .. } => {
+            access_class_for_builtin(Builtin::AnonymousEscrowCancel)
+        }
+        ir::Instr::AnonymousEscrowOpenDispute { .. } => {
+            access_class_for_builtin(Builtin::AnonymousEscrowOpenDispute)
+        }
+        ir::Instr::AnonymousEscrowResolveDispute { .. } => {
+            access_class_for_builtin(Builtin::AnonymousEscrowResolveDispute)
+        }
+        ir::Instr::TransferBatchBegin => {
+            access_class_for_builtin(Builtin::TransferV1BatchBegin)
+        }
+        ir::Instr::TransferBatchEnd => access_class_for_builtin(Builtin::TransferV1BatchEnd),
+        ir::Instr::TransferBatchApply { .. } => {
+            access_class_for_builtin(Builtin::TransferV1BatchApply)
+        }
+        ir::Instr::MintAsset { .. } => access_class_for_builtin(Builtin::MintAsset),
+        ir::Instr::BurnAsset { .. } => access_class_for_builtin(Builtin::BurnAsset),
+        ir::Instr::Info { .. } => access_class_for_builtin(Builtin::Info),
+        ir::Instr::DebugPrint { .. } => access_class_for_builtin(Builtin::DebugPrint),
+        ir::Instr::DebugLog { .. } => access_class_for_builtin(Builtin::DebugLog),
+        ir::Instr::CreateNftsForAllUsers => {
+            access_class_for_builtin(Builtin::CreateNftsForAllUsers)
+        }
+        ir::Instr::SetExecutionDepth { .. } => {
+            access_class_for_builtin(Builtin::SetExecutionDepth)
+        }
+        ir::Instr::SetVl { .. } => access_class_for_builtin(Builtin::SetVl),
+        ir::Instr::SetAccountDetail { .. } => {
+            access_class_for_builtin(Builtin::SetAccountDetail)
+        }
+        ir::Instr::CreateNft { .. } => access_class_for_builtin(Builtin::NftMintAsset),
+        ir::Instr::SetNftData { .. } => access_class_for_builtin(Builtin::NftSetMetadata),
+        ir::Instr::BurnNft { .. } => access_class_for_builtin(Builtin::NftBurnAsset),
+        ir::Instr::TransferNft { .. } => access_class_for_builtin(Builtin::NftTransferAsset),
+        ir::Instr::RegisterDomain { .. } => access_class_for_builtin(Builtin::RegisterDomain),
+        ir::Instr::RegisterAccount { .. } => access_class_for_builtin(Builtin::RegisterAccount),
+        ir::Instr::AddSignatory { .. } => access_class_for_builtin(Builtin::AddSignatory),
+        ir::Instr::RemoveSignatory { .. } => access_class_for_builtin(Builtin::RemoveSignatory),
+        ir::Instr::SetAccountQuorum { .. } => {
+            access_class_for_builtin(Builtin::SetAccountQuorum)
+        }
+        ir::Instr::UnregisterDomain { .. } => {
+            access_class_for_builtin(Builtin::UnregisterDomain)
+        }
+        ir::Instr::UnregisterAsset { .. } => access_class_for_builtin(Builtin::UnregisterAsset),
+        ir::Instr::UnregisterAccount { .. } => {
+            access_class_for_builtin(Builtin::UnregisterAccount)
+        }
+        ir::Instr::RegisterPeer { .. } => access_class_for_builtin(Builtin::RegisterPeer),
+        ir::Instr::UnregisterPeer { .. } => access_class_for_builtin(Builtin::UnregisterPeer),
+        ir::Instr::CreateTrigger { .. } => access_class_for_builtin(Builtin::CreateTrigger),
+        ir::Instr::RemoveTrigger { .. } => access_class_for_builtin(Builtin::RemoveTrigger),
+        ir::Instr::SetTriggerEnabled { .. } => {
+            access_class_for_builtin(Builtin::SetTriggerEnabled)
+        }
+        ir::Instr::GrantPermission { .. } => {
+            access_class_for_builtin(Builtin::GrantPermission)
+        }
+        ir::Instr::RevokePermission { .. } => {
+            access_class_for_builtin(Builtin::RevokePermission)
+        }
+        ir::Instr::CreateRole { .. } => access_class_for_builtin(Builtin::CreateRole),
+        ir::Instr::DeleteRole { .. } => access_class_for_builtin(Builtin::DeleteRole),
+        ir::Instr::GrantRole { .. } => access_class_for_builtin(Builtin::GrantRole),
+        ir::Instr::RevokeRole { .. } => access_class_for_builtin(Builtin::RevokeRole),
+        ir::Instr::TransferDomain { .. } => access_class_for_builtin(Builtin::TransferDomain),
+        ir::Instr::ResolveAccountAlias { .. } => {
+            access_class_for_builtin(Builtin::ResolveAccountAlias)
+        }
+        ir::Instr::InvokeEntrypointAs { .. }
+        | ir::Instr::InvokeEntrypointAsMulti { .. } => {
+            access_class_for_builtin(Builtin::TestInvokeEntrypointAs)
+        }
+        ir::Instr::ExpectRejectAs { .. } => {
+            access_class_for_builtin(Builtin::TestExpectRejectAs)
+        }
+        ir::Instr::ActorAccount { .. } => access_class_for_builtin(Builtin::TestActorAccount),
+        ir::Instr::ActorPublicKey { .. } => {
+            access_class_for_builtin(Builtin::TestActorPublicKey)
+        }
+        ir::Instr::ActorSign { .. } => access_class_for_builtin(Builtin::TestActorSign),
+        ir::Instr::ZkVerify { number, .. } => match *number {
+            ivm_abi::syscalls::SYSCALL_ZK_VERIFY_TRANSFER => {
+                access_class_for_builtin(Builtin::ZkVerifyTransfer)
+            }
+            ivm_abi::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD => {
+                access_class_for_builtin(Builtin::ZkVerifyUnshield)
+            }
+            ivm_abi::syscalls::SYSCALL_ZK_VERIFY_BATCH => {
+                access_class_for_builtin(Builtin::ZkVerifyBatch)
+            }
+            ivm_abi::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT => {
+                access_class_for_builtin(Builtin::ZkVoteVerifyBallot)
+            }
+            ivm_abi::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
+                access_class_for_builtin(Builtin::ZkVoteVerifyTally)
+            }
+            _ => IrAccessClass::Ledger(BuiltinAccess::Dynamic),
+        },
+        ir::Instr::ProveExecution { .. } => access_class_for_builtin(Builtin::ProveExecution),
+        ir::Instr::GrowHeap { .. } => access_class_for_builtin(Builtin::GrowHeap),
+        ir::Instr::GetMerklePath { .. } => access_class_for_builtin(Builtin::GetMerklePath),
+        ir::Instr::GetMerkleCompact { .. } => {
+            access_class_for_builtin(Builtin::GetMerkleCompact)
+        }
+        ir::Instr::GetRegisterMerkleCompact { .. } => {
+            access_class_for_builtin(Builtin::GetRegisterMerkleCompact)
+        }
+        ir::Instr::VerifyProof { .. } => access_class_for_builtin(Builtin::VerifyProof),
+        ir::Instr::VendorExecuteInstruction { kind, .. } => access_class_for_builtin(match kind {
+            ir::VendorInstructionKind::SubmitBallot => Builtin::ScExecuteSubmitBallot,
+            ir::VendorInstructionKind::Unshield => Builtin::ScExecuteUnshield,
+            ir::VendorInstructionKind::RecordSccpMessage => Builtin::RecordSccpMessage,
+        }),
+        ir::Instr::VendorExecuteQuery { .. } => access_class_for_builtin(Builtin::ExecuteQuery),
+        ir::Instr::QueryExecuteNorito { .. } => {
+            access_class_for_builtin(Builtin::QueryExecuteNorito)
+        }
+        ir::Instr::QueryGet { .. } => access_class_for_builtin(Builtin::QueryGetParameter),
+        ir::Instr::CoreQueryGet { .. } => access_class_for_builtin(Builtin::QueryGetAccount),
+        ir::Instr::CoreQueryPage { .. } => access_class_for_builtin(Builtin::QueryPageAccounts),
+        ir::Instr::GetAccountBalance { .. } => {
+            access_class_for_builtin(Builtin::GetAccountBalance)
+        }
+        ir::Instr::Alloc { .. } => access_class_for_builtin(Builtin::Alloc),
+        ir::Instr::GetPrivateInput { .. } => {
+            access_class_for_builtin(Builtin::GetPrivateInput)
+        }
+        ir::Instr::UseNullifier { .. } => access_class_for_builtin(Builtin::UseNullifier),
+        ir::Instr::CommitOutput => access_class_for_builtin(Builtin::CommitOutput),
+        ir::Instr::SmartContractLifecycle { syscall, .. } => match *syscall {
+            ivm_abi::syscalls::SYSCALL_DEACTIVATE_CONTRACT_INSTANCE => {
+                access_class_for_builtin(Builtin::DeactivateContractInstance)
+            }
+            ivm_abi::syscalls::SYSCALL_REMOVE_SMART_CONTRACT_BYTES => {
+                access_class_for_builtin(Builtin::RemoveSmartContractBytes)
+            }
+            ivm_abi::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_CODE => {
+                access_class_for_builtin(Builtin::RegisterSmartContractCode)
+            }
+            ivm_abi::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES => {
+                access_class_for_builtin(Builtin::RegisterSmartContractBytes)
+            }
+            ivm_abi::syscalls::SYSCALL_ACTIVATE_CONTRACT_INSTANCE => {
+                access_class_for_builtin(Builtin::ActivateContractInstance)
+            }
+            _ => IrAccessClass::Ledger(BuiltinAccess::Dynamic),
+        },
+        ir::Instr::ZkRootsGet { .. } => access_class_for_builtin(Builtin::ZkRootsGet),
+        ir::Instr::ZkVoteGetTally { .. } => access_class_for_builtin(Builtin::ZkVoteGetTally),
+        ir::Instr::VrfEpochSeed { .. } => access_class_for_builtin(Builtin::VrfEpochSeed),
+        ir::Instr::SubscriptionBill => access_class_for_builtin(Builtin::SubscriptionBill),
+        ir::Instr::SubscriptionRecordUsage => {
+            access_class_for_builtin(Builtin::SubscriptionRecordUsage)
+        }
+        ir::Instr::StateGet { .. } => access_class_for_builtin(Builtin::StateGet),
+        ir::Instr::StateSet { .. } => access_class_for_builtin(Builtin::StateSet),
+        ir::Instr::StateDel { .. } => access_class_for_builtin(Builtin::StateDel),
+        ir::Instr::StateKeys { .. } => access_class_for_builtin(Builtin::StateKeys),
+        ir::Instr::StateHas { .. } => access_class_for_builtin(Builtin::StateHas),
+        ir::Instr::StateLen { .. } => access_class_for_builtin(Builtin::StateLen),
+        ir::Instr::StateCount { .. } => access_class_for_builtin(Builtin::StateCount),
+        ir::Instr::BuildSubmitBallotInline { .. } => {
+            access_class_for_builtin(Builtin::BuildSubmitBallotInline)
+        }
+        ir::Instr::BuildUnshieldInline { .. } => {
+            access_class_for_builtin(Builtin::BuildUnshieldInline)
+        }
+        ir::Instr::VrfVerify { .. } => access_class_for_builtin(Builtin::VrfVerify),
+        ir::Instr::VrfVerifyBatch { .. } => access_class_for_builtin(Builtin::VrfVerifyBatch),
+        ir::Instr::AxtBegin { .. } => access_class_for_builtin(Builtin::AxtBegin),
+        ir::Instr::AxtTouch { .. } => access_class_for_builtin(Builtin::AxtTouch),
+        ir::Instr::VerifyDsProof { .. } => access_class_for_builtin(Builtin::VerifyDsProof),
+        ir::Instr::UseAssetHandle { .. } => access_class_for_builtin(Builtin::UseAssetHandle),
+        ir::Instr::AxtCommit => access_class_for_builtin(Builtin::AxtCommit),
+        ir::Instr::SoracloudHostCall { .. } => {
+            access_class_for_builtin(Builtin::SoracloudReadCommittedState)
+        }
+    }
 }
 
 fn detect_vector_usage(code: &[u8]) -> bool {
@@ -21445,9 +22412,8 @@ fn validate_codegen_supported(tp: &semantic::TypedProgram) -> Result<(), Vec<ir:
                 expr_ok(target)?;
                 expr_ok(index)
             }
-            EK::Number(_)
-            | EK::Decimal(_)
-            | EK::AmountLiteral { .. }
+            EK::IntLiteral(_)
+            | EK::DecimalLiteral { .. }
             | EK::Bool(_)
             | EK::String(_)
             | EK::Bytes(_)

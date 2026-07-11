@@ -4,32 +4,17 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { ed25519 } from "@noble/curves/ed25519";
 
 import * as packageExports from "../dist/index.js";
 
 const {
   AccountAddress,
   ToriiClient,
-  SCCP_DOMAIN_BSC,
-  SCCP_DOMAIN_ETH,
-  SCCP_DOMAIN_SORA,
-  SCCP_DOMAIN_TRON,
-  SCCP_CODEC_CANONICAL_TEXT,
-  SCCP_CODEC_EVM_ADDRESS20,
-  SCCP_CODEC_TRON_ADDRESS21,
-  SCCP_ETH_MAINNET_EVM_CHAIN_ID,
-  SCCP_ETH_MAINNET_NETWORK_ID,
-  SCCP_BSC_MAINNET_EVM_CHAIN_ID,
-  SCCP_BSC_MAINNET_NETWORK_ID,
-  SCCP_BSC_GROTH16_PROOF_SELF_TEST_SCHEMA_V1,
-  SCCP_BSC_TESTNET_EVM_CHAIN_ID,
-  SCCP_BSC_TESTNET_NETWORK_ID,
-  SCCP_STARK_FRI_PROOF_FAMILY_V1,
-  SCCP_SOURCE_STATE_MAX_PROOF_BYTES,
-  SCCP_SOURCE_STATE_MAX_PROOF_LABEL_BYTES,
-  SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES,
-  SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1,
-  SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1,
+  submitIvmProvedContractCall,
+  submitValidationFeeIvmProvedContractCall,
+  validationFeePolicyHash,
+  verifySignedValidationFeePolicy,
   KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
   KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
   KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
@@ -102,76 +87,6 @@ const {
   PRIVACY_FFI_STATUS_ERROR,
   PRIVACY_FFI_VERSION_V1,
   PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,
-  SCCP_MESSAGE_TRANSPARENT_PUBLIC_INPUTS_BYTES_V1_LEN,
-  bscCommitMessageHash,
-  bscCommitSealHash,
-  bscGroth16VerifierKeyHash,
-  bscValidatorSetHashFromPayload,
-  bscValidatorSetMetadataProofHash,
-  bscValidatorSetPayloadFromHeaderRlp,
-  bscValidatorSetPayloadFromParliaExtra,
-  bscValidatorSetPayloadHash,
-  bscValidatorSetStorageValueHash,
-  bscValidatorSetTransitionMessageHash,
-  canonicalSccpMessageProofBundleBytes,
-  canonicalSccpPayloadEnvelopeBytes,
-  buildApplySccpRouteGovernanceInstruction,
-  buildEvmSccpProofRequest,
-  buildEvmSccpSubmission,
-  EthereumMainnetBeaconRestConsensusProvider,
-  EthereumMainnetSccp,
-  SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
-  SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
-  SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
-  SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
-  SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
-  SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
-  SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
-  SCCP_ETH_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
-  SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
-  SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
-  SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
-  SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
-  SCCP_TAIRA_XOR_ASSET_KEY_V1,
-  SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1,
-  SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
-  ethereumMainnetSccpDestinationBinding,
-  parseEthereumMainnetNativeEvmProverBundleManifest,
-  parseEthereumMainnetNativeEvmProverParityFixture,
-  parseEthereumMainnetNativeEvmProverSelfTestFixture,
-  runEthereumMainnetNativeProverSelfTest,
-  validateEthereumMainnetNativeEvmProverBundle,
-  validateEthereumMainnetNativeEvmProverParityFixture,
-  validateEthereumMainnetNativeEvmProverSelfTestFixture,
-  verifyEthereumMainnetNativeEvmProverArtifacts,
-  verifyEthereumMainnetNativeEvmProverArtifactsFromBundle,
-  verifyBscMainnetNativeEvmProverArtifacts,
-  verifyBscTestnetNativeEvmProverArtifacts,
-  BscMainnetSccp,
-  BscMainnetGroth16Bn254ProofAdapter,
-  BscMainnetSccpProver,
-  BscTestnetSccp,
-  BscTestnetGroth16Bn254ProofAdapter,
-  BscTestnetSccpProver,
-  EvmGroth16Bn254ProofAdapter,
-  bscMainnetSccpDestinationBinding,
-  bscTestnetSccpDestinationBinding,
-  buildBscMainnetSccpDestinationProofRequest,
-  buildBscMainnetSccpDestinationSubmission,
-  buildBscTestnetSccpDestinationProofRequest,
-  buildBscTestnetSccpDestinationSubmission,
-  buildBscTestnetSccpLocalAdmissionSubmission,
-  evmSccpDestinationBinding,
-  wrapBscMainnetSccpDestinationProofResult,
-  wrapBscTestnetSccpDestinationProofResult,
-  wrapEvmSccpProofResult,
-  sccpMerkleRootFromCommitment,
-  sccpPayloadHash,
-  sccpTransferMessageId,
-  buildTronSccpProofRequest,
-  buildTronSccpSubmission,
-  tronSccpDestinationBinding,
-  wrapTronSccpProofResult,
   preferredKagemushaOfflineSpendMode,
   buildKagemushaInstructionArchiveInstruction,
   buildKagemushaInstructionTransaction,
@@ -272,56 +187,12 @@ const {
   buildPqMaspStarkRegisterPoolInstruction,
   buildPqMaspStarkTransferInstruction,
   noritoDecodePrivacyProofEnvelope,
-  canonicalBscCommitMessageBytes,
-  canonicalBscCommitSealBytes,
-  canonicalBscValidatorSetMetadataProofBytes,
-  canonicalBscValidatorSetPayloadBytes,
-  canonicalBscValidatorSetTransitionMessageBytes,
-  canonicalEvmReceiptRootMptValue,
-  canonicalSccpSourceAdapterEngineDeploymentBytes,
-  canonicalSccpSourceVerifierMaterialBytes,
-  normalizeSccpSourceVerifierMaterial,
-  canonicalEthSyncCommitteePayloadBytes,
-  SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD,
-  ethMainnetSyncCommitteePeriodForSlot,
-  ethSyncCommitteePayloadHash,
-  ethSyncCommitteeHashFromPayload,
-  canonicalTronSccpRouteCanaryEvidenceBytes,
-  canonicalTronRawBlockHeaderBytes,
-  canonicalTronReceiptRootMptValue,
-  canonicalTronSccpReceiptStateProofBytes,
-  canonicalTronSolidBlockMessageBytes,
-  canonicalTronSolidBlockHeaderProofBytes,
-  canonicalTronWitnessSealBytes,
-  canonicalTronWitnessScheduleTransitionMessageBytes,
-  canonicalTronWitnessScheduleTransitionSealBytes,
-  canonicalTronWitnessSchedulePayloadBytes,
-  ethBeaconBlockHeaderRoot,
-  ethBeaconBodyRootFromExecutionPayloadBranch,
-  ethExecutionPayloadHeaderRootFromRlp,
-  sccpGroth16Bn254PublicSignalWords,
-  sccpMessageTransparentPublicInputAbiWords,
-  sccpSubmitMessageProofCallData,
-  sccpDestinationBindingHash,
-  sccpDestinationBindingKey,
-  tronSccpRouteCanaryEvidenceHash,
-  sccpSourceAdapterEngineDeploymentHash,
-  sccpSourceAdapterDeploymentBindingFromDeployment,
-  sccpSourceAdapterVerifierVkHash,
-  sccpSourceVerifierMaterialHash,
-  tronBlockIdFromRawDataHash,
-  tronRawBlockHeaderHash,
-  tronSccpReceiptStateProofHash,
-  tronSolidBlockMessageHash,
-  tronSolidBlockHeaderProofHash,
-  tronWitnessSealHash,
-  tronWitnessScheduleHashFromPayload,
-  tronWitnessScheduleTransitionMessageHash,
-  tronWitnessScheduleTransitionSealHash,
-  tronWitnessSchedulePayloadHash,
   OfflineCashConfigurationSnapshotError,
   assertOfflineCashConfigurationSnapshotUsable,
 } = packageExports;
+
+const deterministicEd25519PublicKey = (seedByte) =>
+  Buffer.from(ed25519.getPublicKey(Buffer.alloc(32, seedByte)));
 
 const GENERIC_LINEAGE_FAMILY_ID = "kagemusha-recursive-spend-lineage-v1";
 const UNSUPPORTED_RECURSIVE_SPEND_PROOF_CIRCUIT_ID =
@@ -1587,72 +1458,6 @@ function recursiveSpendVerifierRecord() {
   });
 }
 
-const sha256Hex = (bytes) =>
-  `0x${createHash("sha256").update(Buffer.from(bytes)).digest("hex")}`;
-const fixtureHash = (label) => sha256Hex(Buffer.from(label, "utf8"));
-const canonicalJson = (value) => {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
-  }
-  return `{${Object.keys(value)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
-    .join(",")}}`;
-};
-const BSC_GROTH16_PUBLIC_SIGNAL_NAMES = Object.freeze([
-  "message_id",
-  "payload_hash",
-  "target_domain",
-  "commitment_root",
-  "finality_height",
-  "finality_block_hash",
-  "source_domain",
-  "statement_hash",
-  "destination_binding_hash",
-  "route_configuration_hash",
-  "sora_finality_anchor_hash",
-]);
-const sampleBscGroth16ProofSelfTestAdversarialChecks = () => ({
-  publicSignalMismatch: {
-    attempted: BSC_GROTH16_PUBLIC_SIGNAL_NAMES.length,
-    rejected: BSC_GROTH16_PUBLIC_SIGNAL_NAMES.length,
-    cases: BSC_GROTH16_PUBLIC_SIGNAL_NAMES.map((name, index) => ({
-      index,
-      name,
-      phase: "wtnsCalculate",
-      rejected: true,
-    })),
-  },
-  nonBooleanValueBit: {
-    attempted: 1,
-    rejected: 1,
-    case: {
-      signalName: "message_id",
-      inputName: "messageIdBits",
-      bitIndex: 0,
-      phase: "wtnsCalculate",
-      rejected: true,
-    },
-  },
-});
-const bscNativeProverReportProductionAttestationHash = (
-  kind,
-  materialManifestHash,
-) => {
-  const role =
-    kind === "cross-sdk-parity"
-      ? "cross-sdk-parity"
-      : "native-prover-self-test";
-  return sha256Hex(
-    Buffer.from(
-      `iroha-sccp-bsc-native-prover-report-production-attestation/v1:${role}:${materialManifestHash}`,
-      "utf8",
-    ),
-  );
-};
 const PRIVACY_PACKAGE_PRODUCTION_GATE_VERSION = "privacy-production-gate-v1";
 const PRIVACY_PACKAGE_PRODUCTION_REVIEW_SCOPE_VERSION =
   "privacy-production-review-scope-v1";
@@ -1928,336 +1733,12 @@ function declarationClass(name) {
     : DECLARATIONS_TEXT.slice(start, end);
 }
 
-function abiWord(value) {
-  let remaining = BigInt(value);
-  const out = new Uint8Array(32);
-  for (let index = out.length - 1; index >= 0; index -= 1) {
-    out[index] = Number(remaining & 0xffn);
-    remaining >>= 8n;
-  }
-  return out;
-}
-
-const BN254_G2_GENERATOR_WORDS = [
-  abiWord(0x1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6edn),
-  abiWord(0x198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2n),
-  abiWord(0x12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daan),
-  abiWord(0x090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975bn),
-];
-const BN254_BASE_FIELD_MODULUS =
-  21888242871839275222246405745257275088696311157297823662689037894645226208583n;
-const BSC_TEST_G1 = Object.freeze(["1", "2"]);
-const BSC_TEST_G1_NEGATED = Object.freeze([
-  "1",
-  (BN254_BASE_FIELD_MODULUS - 2n).toString(),
-]);
-const BSC_TEST_G2 = Object.freeze([
-  "10857046999023057135944570762232829481370756359578518086990519993285655852781",
-  "11559732032986387107991004021392285783925812861821192530917403151452391805634",
-  "8495653923123431417604973247489272438418190587263600148770280649306958101930",
-  "4082367875863433681332203403145435568316851327593401208105741076214120093531",
-]);
-const BSC_TEST_G2_NEGATED = Object.freeze([
-  BSC_TEST_G2[0],
-  BSC_TEST_G2[1],
-  (BN254_BASE_FIELD_MODULUS - BigInt(BSC_TEST_G2[2])).toString(),
-  (BN254_BASE_FIELD_MODULUS - BigInt(BSC_TEST_G2[3])).toString(),
-]);
-
-function bscVerifierKeyMaterial(chain) {
-  const material = {
-    schema: "iroha-sccp-bsc-groth16-verifier-key/v1",
-    routeId: SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
-    assetKey: SCCP_TAIRA_XOR_ASSET_KEY_V1,
-    bscNetwork: chain === "bsc-mainnet" ? "mainnet" : "testnet",
-    chain,
-    proofBackend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
-    proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
-    sourceDomain: SCCP_DOMAIN_SORA,
-    targetDomain: SCCP_DOMAIN_BSC,
-    publicInputCount: 11,
-    alpha1: [...BSC_TEST_G1],
-    beta2: [...BSC_TEST_G2],
-    gamma2: [...BSC_TEST_G2_NEGATED],
-    delta2: [...BSC_TEST_G2],
-    ic: Array.from({ length: 12 }, (_, index) =>
-      index === 11 ? BSC_TEST_G1_NEGATED : BSC_TEST_G1,
-    ).flat(),
-  };
-  const verifierKeyHash = bscGroth16VerifierKeyHash(material);
-  return {
-    ...material,
-    expectedVerifierKeyHash: verifierKeyHash,
-    verifierKeyHash,
-  };
-}
-
-function bscVerifierKeyMaterialBytes(chain) {
-  return Buffer.from(`${JSON.stringify(bscVerifierKeyMaterial(chain))}\n`);
-}
-
-function sampleGroth16ProofBytes(publicInputs = undefined) {
-  const out = new Uint8Array(384);
-  [
-    abiWord(1),
-    publicInputs
-      ? Uint8Array.from(Buffer.from(publicInputs.message_id.slice(2), "hex"))
-      : Uint8Array.from({ length: 32 }, () => 0x11),
-    abiWord(SCCP_DOMAIN_SORA),
-    publicInputs
-      ? Uint8Array.from(
-          Buffer.from(publicInputs.commitment_root.slice(2), "hex"),
-        )
-      : Uint8Array.from({ length: 32 }, () => 0x33),
-    abiWord(1),
-    abiWord(2),
-    ...BN254_G2_GENERATOR_WORDS,
-    abiWord(1),
-    abiWord(2),
-  ].forEach((word, index) => out.set(word, index * 32));
-  return out;
-}
-
-function sampleBscGroth16ProofSelfTestBytes({
-  nativeProverBundle,
-  materialManifestHash,
-  chain,
-  chainIdHex,
-  networkIdHex,
-}) {
-  const publicSignalWords = Array.from({ length: 11 }, (_, index) =>
-    String(index + 1),
-  );
-  const proof = {
-    pi_a: [...BSC_TEST_G1, "1"],
-    pi_b: [
-      [BSC_TEST_G2[1], BSC_TEST_G2[0]],
-      [BSC_TEST_G2[3], BSC_TEST_G2[2]],
-      ["1", "0"],
-    ],
-    pi_c: [...BSC_TEST_G1, "1"],
-    protocol: "groth16",
-    curve: "bn128",
-  };
-  return Buffer.from(
-    JSON.stringify({
-      schema: SCCP_BSC_GROTH16_PROOF_SELF_TEST_SCHEMA_V1,
-      routeId: SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
-      assetKey: SCCP_TAIRA_XOR_ASSET_KEY_V1,
-      bscNetwork: chain === "bsc-mainnet" ? "mainnet" : "testnet",
-      chain,
-      chainIdHex,
-      networkIdHex,
-      circuitProfile: "sccp-bsc-labeled-signal-binding-v1",
-      circuitKind: "public-signal-binding-material-only",
-      proofBackend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
-      proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
-      manifest: {
-        path: "groth16-material.manifest.json",
-        sha256: materialManifestHash,
-        productionReady: false,
-        productionBlockers: [
-          "diagnostic labeled-signal circuit is forbidden for production admission",
-        ],
-      },
-      artifacts: {
-        circuitSource: {
-          path: "circuit/sccp-bsc-labeled-signal-binding-v1.circom",
-          sha256: fixtureHash(`dist ${chain} groth16 circuit source`),
-        },
-        r1cs: {
-          path: nativeProverBundle.proof_artifact,
-          sha256: nativeProverBundle.proof_artifact_hash,
-        },
-        provingKey: {
-          path: nativeProverBundle.proving_key,
-          sha256: nativeProverBundle.proving_key_hash,
-        },
-        snarkjsVerificationKey: {
-          path: `artifacts/${chain}/snarkjs-verification-key.json`,
-          sha256: fixtureHash(
-            `dist ${chain} groth16 snarkjs verification key`,
-          ),
-        },
-        bscVerifierKey: {
-          path: nativeProverBundle.verifier_key,
-          sha256: nativeProverBundle.verifier_key_artifact_hash,
-        },
-        witnessWasm: {
-          path: `artifacts/${chain}/witness.wasm`,
-          sha256: fixtureHash(`dist ${chain} groth16 witness wasm`),
-        },
-      },
-      sample: {
-        id: `dist-${chain}-groth16-self-test`,
-        publicSignalNames: [...BSC_GROTH16_PUBLIC_SIGNAL_NAMES],
-        publicSignalWords,
-      },
-      snarkjs: {
-        binary: "snarkjs",
-        wtnsCalculate: true,
-        groth16Prove: true,
-        groth16Verify: true,
-      },
-      adversarialChecks: sampleBscGroth16ProofSelfTestAdversarialChecks(),
-      witnessHash: fixtureHash(`dist ${chain} groth16 witness`),
-      proofHash: sha256Hex(Buffer.from(canonicalJson(proof), "utf8")),
-      publicSignalsHash: sha256Hex(
-        Buffer.from(JSON.stringify(publicSignalWords), "utf8"),
-      ),
-      proof,
-      publicSignals: publicSignalWords,
-    }),
-    "utf8",
-  );
-}
-
-function sampleEvmFamilyProofBundleFixture(targetDomain, nonce = 1n) {
-  const transferPayload = {
-    version: 1,
-    source_domain: SCCP_DOMAIN_SORA,
-    dest_domain: targetDomain,
-    nonce,
-    asset_home_domain: SCCP_DOMAIN_SORA,
-    asset_id_codec: SCCP_CODEC_CANONICAL_TEXT,
-    asset_id: "xor#package-dist",
-    amount: 1000n,
-    sender_codec: SCCP_CODEC_CANONICAL_TEXT,
-    sender: "alice@sora",
-    recipient_codec:
-      targetDomain === SCCP_DOMAIN_TRON
-        ? SCCP_CODEC_TRON_ADDRESS21
-        : SCCP_CODEC_EVM_ADDRESS20,
-    recipient:
-      targetDomain === SCCP_DOMAIN_TRON
-        ? "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
-        : `0x${"11".repeat(20)}`,
-    route_id_codec: SCCP_CODEC_CANONICAL_TEXT,
-    route_id:
-      targetDomain === SCCP_DOMAIN_TRON
-        ? "sccp-package-dist-tron-v1"
-        : "sccp-package-dist-evm-v1",
-  };
-  const payloadEnvelope = { kind: "Transfer", value: transferPayload };
-  const payloadBytes = canonicalSccpPayloadEnvelopeBytes(payloadEnvelope);
-  const messageId = sccpTransferMessageId(transferPayload);
-  const payloadHash = sccpPayloadHash(payloadBytes);
-  const commitment = {
-    version: 1,
-    kind: "Transfer",
-    target_domain: targetDomain,
-    message_id: messageId,
-    payload_hash: payloadHash,
-  };
-  const commitmentRoot = sccpMerkleRootFromCommitment(commitment, {
-    steps: [],
-  });
-  return {
-    publicInputs: {
-      version: 1,
-      message_id: messageId,
-      payload_hash: payloadHash,
-      target_domain: targetDomain,
-      commitment_root: commitmentRoot,
-      finality_height: "19",
-      finality_block_hash: `0x${"44".repeat(32)}`,
-    },
-    bundleBytes: canonicalSccpMessageProofBundleBytes({
-      version: 1,
-      commitment_root: commitmentRoot,
-      commitment,
-      merkle_proof: { steps: [] },
-      payload: payloadEnvelope,
-      finality_proof: "0x010203",
-    }),
-  };
-}
-
-function sampleEvmDestinationBinding() {
-  return evmSccpDestinationBinding({
-    targetDomain: SCCP_DOMAIN_ETH,
-    networkId: `0x${"33".repeat(32)}`,
-    verifierAddress: `0x${"11".repeat(20)}`,
-    bridgeAddress: `0x${"22".repeat(20)}`,
-    verifierCodeHash: `0x${"bb".repeat(32)}`,
-    verifierKeyHash: `0x${"cc".repeat(32)}`,
-  });
-}
-
-function sampleTronDestinationBinding() {
-  return tronSccpDestinationBinding({
-    networkId: `0x${"33".repeat(32)}`,
-    verifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
-    verifierCodeHash: `0x${"bb".repeat(32)}`,
-    verifierKeyHash: `0x${"cc".repeat(32)}`,
-  });
-}
-
-function rlpLengthPrefix(length, shortOffset, longOffset) {
-  if (length < 56) return Uint8Array.from([shortOffset + length]);
-  const bytes = [];
-  let remaining = length;
-  while (remaining > 0) {
-    bytes.unshift(remaining & 0xff);
-    remaining = Math.floor(remaining / 256);
-  }
-  return Uint8Array.from([longOffset + bytes.length, ...bytes]);
-}
-
-function concatBytes(...parts) {
-  const out = new Uint8Array(
-    parts.reduce((size, part) => size + part.length, 0),
-  );
-  let offset = 0;
-  for (const part of parts) {
-    out.set(part, offset);
-    offset += part.length;
-  }
-  return out;
-}
-
-function rlpString(bytes) {
-  if (bytes.length === 1 && bytes[0] < 0x80) return bytes;
-  return concatBytes(rlpLengthPrefix(bytes.length, 0x80, 0xb7), bytes);
-}
-
-function rlpList(fields) {
-  const payload = concatBytes(...fields);
-  return concatBytes(rlpLengthPrefix(payload.length, 0xc0, 0xf7), payload);
-}
-
-function sampleEthExecutionHeaderRlp(
-  receiptsRoot = Uint8Array.from(Array(32).fill(0x15)),
-) {
-  return rlpList([
-    rlpString(Uint8Array.from(Array(32).fill(0x10))),
-    rlpString(Uint8Array.from(Array(32).fill(0x11))),
-    rlpString(Uint8Array.from(Array(20).fill(0x12))),
-    rlpString(Uint8Array.from(Array(32).fill(0x13))),
-    rlpString(Uint8Array.from(Array(32).fill(0x14))),
-    rlpString(receiptsRoot),
-    rlpString(Uint8Array.from(Array(256).fill(0x00))),
-    rlpString(new Uint8Array()),
-    rlpString(Uint8Array.from([0x2a])),
-    rlpString(Uint8Array.from([0x01, 0xc9, 0xc3, 0x80])),
-    rlpString(Uint8Array.from([0x52, 0x08])),
-    rlpString(Uint8Array.from([0x65, 0x53, 0xf1, 0x00])),
-    rlpString(Uint8Array.from(Buffer.from("iroha-sccp-test"))),
-    rlpString(Uint8Array.from(Array(32).fill(0x16))),
-    rlpString(Uint8Array.from(Array(8).fill(0x00))),
-    rlpString(Uint8Array.from([0x3b, 0x9a, 0xca, 0x00])),
-    rlpString(Uint8Array.from(Array(32).fill(0x17))),
-    rlpString(new Uint8Array()),
-    rlpString(new Uint8Array()),
-    rlpString(Uint8Array.from(Array(32).fill(0x18))),
-  ]);
-}
-
 test("package dist entrypoint imports and emits halfwidth i105 literals", () => {
-  const publicKey = Buffer.from(
-    "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
-    "hex",
-  );
+  assert.equal(typeof submitIvmProvedContractCall, "function");
+  assert.equal(typeof submitValidationFeeIvmProvedContractCall, "function");
+  assert.equal(typeof validationFeePolicyHash, "function");
+  assert.equal(typeof verifySignedValidationFeePolicy, "function");
+  const publicKey = deterministicEd25519PublicKey(0x20);
   const address = AccountAddress.fromAccount({ publicKey });
   const literal = address.toI105(0x02f1);
 
@@ -2502,9 +1983,19 @@ test("package SCCP entrypoint and declarations cover public source exports", () 
   );
 });
 
-test("package SCCP exports do not expose TON finality fixture builders", () => {
+test("package SCCP exports reject retired and diagnostic helper surfaces", () => {
   const declarationExports = declarationExportNames();
   const forbidden = [
+    "SCCP_DOMAIN_SOL",
+    "SCCP_DOMAIN_TON",
+    "SCCP_CODEC_SOLANA_PUBKEY32",
+    "SCCP_CODEC_TON_ACCOUNT36",
+    "SCCP_STARK_FRI_PROOF_FAMILY_V1",
+    "SCCP_BSC_GROTH16_PROOF_SELF_TEST_SCHEMA_V1",
+    "normalizeSccpProofManifests",
+    "normalizeSccpSourceAdapterEngineDeployment",
+    "buildEvmSccpProofRequest",
+    "buildTronSccpProofRequest",
     "sccpBuildTonMessageBundleSourceProofWithDeployment",
     "sccpTonFixtureValidatorSetHash",
   ];
@@ -8808,7 +8299,7 @@ test("package dist SIS-with-hints production helpers reject dev fixture bytes", 
 
 test("package dist Vega production helpers reject dev fixture bytes", () => {
   const accountId = AccountAddress.fromAccount({
-    publicKey: Buffer.alloc(32, 0x10),
+    publicKey: deterministicEd25519PublicKey(0x10),
   }).toI105(0x02f1);
   const base = {
     issuerJson: { did: "did:example:issuer:boi", key: "issuer-key-1" },
@@ -8903,7 +8394,7 @@ test("package dist silent-threshold production helpers reject dev fixture bytes"
 
 test("package dist ZK-X.509 production helpers reject dev fixture bytes", () => {
   const accountId = AccountAddress.fromAccount({
-    publicKey: Buffer.alloc(32, 0x10),
+    publicKey: deterministicEd25519PublicKey(0x10),
   }).toI105(0x02f1);
   const base = {
     caRootJson: { root: "boi-root-ca", version: 1 },
@@ -8951,7 +8442,7 @@ test("package dist ZK-X.509 production helpers reject dev fixture bytes", () => 
 
 test("package dist zkAt production helpers reject dev fixture bytes", () => {
   const accountId = AccountAddress.fromAccount({
-    publicKey: Buffer.alloc(32, 0x10),
+    publicKey: deterministicEd25519PublicKey(0x10),
   }).toI105(0x02f1);
   const base = {
     policyJson: { threshold: 2, roles: ["ops", "risk", "treasury"] },
@@ -9056,7 +8547,7 @@ test("package dist privacy proof envelopes reject production metadata claims", (
 
 test("package dist privacy dev proof fixtures reject production metadata claims", () => {
   const accountId = AccountAddress.fromAccount({
-    publicKey: Buffer.alloc(32, 0x10),
+    publicKey: deterministicEd25519PublicKey(0x10),
   }).toI105(0x02f1);
   const anonymousPgcReceiverSet = buildAnonymousPgcReceiverSet({
     threshold: 1,
@@ -10553,6 +10044,36 @@ test("package declarations expose recursive compact key-package signatures", () 
     /recursiveCompact(?:KeyArtifactsArchive|VerifierKeysArchive)\?:\s*BinaryLike/u,
     "recursive compact key packages must not be optional",
   );
+});
+
+test("package Nexus browser export has an enforced browser-only dependency graph", () => {
+  const source = readFileSync(
+    new URL("../src/nexusApp.js", import.meta.url),
+    "utf8",
+  );
+  const dist = readFileSync(
+    new URL("../dist/nexusApp.js", import.meta.url),
+    "utf8",
+  );
+  const bundleGate = readFileSync(
+    new URL("../scripts/bundle-size-check.mjs", import.meta.url),
+    "utf8",
+  );
+  const browserRegression = readFileSync(
+    new URL("./nexusApp.browser.test.js", import.meta.url),
+    "utf8",
+  );
+
+  assert.equal(dist, source, "Nexus browser source and dist must remain exact");
+  assert.match(source, /import \{ Buffer \} from "buffer";/u);
+  assert.match(source, /from "\.\/crypto\.browser\.js";/u);
+  assert.match(source, /browserTransactionCodec/u);
+  assert.match(source, /class BrowserToriiPipelineClient/u);
+  assert.doesNotMatch(source, /from "(?:node:|\.\/(?:crypto|native|toriiClient)\.js)/u);
+  assert.match(bundleGate, /label: "nexusApp\.js \(browser\)"/u);
+  assert.match(bundleGate, /limitKb: 205/u);
+  assert.match(browserRegression, /globalThis\.Buffer = undefined/u);
+  assert.match(browserRegression, /defaults build, finalize, and submit/u);
 });
 
 test("package declarations expose Torii iterable string select projections", () => {

@@ -26,6 +26,7 @@ import org.hyperledger.iroha.android.sccp.SccpNetworkV1;
 import org.hyperledger.iroha.android.sccp.SccpV1;
 import org.hyperledger.iroha.norito.CRC64;
 import org.hyperledger.iroha.norito.NoritoHeader;
+import org.hyperledger.iroha.norito.SchemaHash;
 
 /** Adversarial client tests for exact SCCP discovery, readback, and submission. */
 public final class SccpClientExactTests {
@@ -33,9 +34,9 @@ public final class SccpClientExactTests {
   private static final String AUTHORITY = canonicalAuthority(0x11);
   private static final String OTHER_AUTHORITY = canonicalAuthority(0x12);
   private static final String BSC_ROUTE_CONFIG_HASH =
-      "3054EC1DC859DC1D269169D09F942B7A03787E201278A6CD24EAC1D354BCF213";
+      "368647C0EA13EBF50ADDC9CFACA0923625F12EB3A5D1D11350AFD65A2C11E683";
   private static final String TRON_ROUTE_CONFIG_HASH =
-      "93FC70B3378A18C82A98ED5077B8B7F8086788B26FB55B2F44AACA41DB8C76DF";
+      "4C162A59B6A3003ADF2DBC767A6FF5E0A74B628712A51F73D4B2AA65362969F1";
 
   private SccpClientExactTests() {}
 
@@ -59,6 +60,7 @@ public final class SccpClientExactTests {
 
   private static void submitDtosExposeOnlyClosedArtifactFields() {
     final String artifact = canonicalArtifact();
+    final String nativeArtifact = canonicalNativeArtifact();
     final SccpDestinationProofSubmitRequest proof =
         new SccpDestinationProofSubmitRequest(AUTHORITY, artifact);
     assert proof.toJsonMap().keySet().equals(Set.of("authority", "destination_proof_b64"));
@@ -66,7 +68,7 @@ public final class SccpClientExactTests {
         proof.toJsonBytes(), "/v1/bridge/proofs/submit");
 
     final SccpNativeMessageSubmitRequest message =
-        new SccpNativeMessageSubmitRequest(AUTHORITY, artifact);
+        new SccpNativeMessageSubmitRequest(AUTHORITY, nativeArtifact);
     assert message.toJsonMap().keySet().equals(Set.of("authority", "native_proof_b64"));
     HttpClientTransport.preflightSccpBridgeSubmitJson(
         message.toJsonBytes(), "/v1/bridge/messages");
@@ -101,7 +103,7 @@ public final class SccpClientExactTests {
         signed.toJsonBytes(), "/v1/bridge/proofs/submit");
     final SccpNativeMessageSubmitRequest signedMessage =
         new SccpNativeMessageSubmitRequest(
-            AUTHORITY, artifact, signature, transaction, 7L);
+            AUTHORITY, nativeArtifact, signature, transaction, 7L);
     assert signedMessage.toJsonMap().keySet().equals(
         Set.of(
             "authority",
@@ -155,10 +157,11 @@ public final class SccpClientExactTests {
     final String tairaAuthority =
         address.toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     final String artifact = canonicalArtifact();
+    final String nativeArtifact = canonicalNativeArtifact();
     assert SccpV1.TAIRA_I105_DISCRIMINANT_V1 == 369;
     assert AccountAddress.detectI105Discriminant(tairaAuthority) == 369;
     new SccpDestinationProofSubmitRequest(tairaAuthority, artifact);
-    new SccpNativeMessageSubmitRequest(tairaAuthority, artifact);
+    new SccpNativeMessageSubmitRequest(tairaAuthority, nativeArtifact);
 
     final String checksumMutation =
         tairaAuthority.substring(0, tairaAuthority.length() - 1)
@@ -177,7 +180,7 @@ public final class SccpClientExactTests {
       expectFailure(
           () -> new SccpDestinationProofSubmitRequest(invalidAuthority, artifact));
       expectFailure(
-          () -> new SccpNativeMessageSubmitRequest(invalidAuthority, artifact));
+          () -> new SccpNativeMessageSubmitRequest(invalidAuthority, nativeArtifact));
       final Map<String, Object> body = map();
       body.put("authority", invalidAuthority);
       body.put("destination_proof_b64", artifact);
@@ -300,7 +303,8 @@ public final class SccpClientExactTests {
   }
 
   private static void artifactValidationRejectsAliasesCorruptionAndZeroSchema() {
-    final byte[] canonical = canonicalArtifactBytes(0);
+    final byte[] canonical =
+        canonicalArtifactBytes(SccpSubmitEncoding.DESTINATION_ARTIFACT_SCHEMA_NAME, 0);
     final String encoded = Base64.getEncoder().encodeToString(canonical);
     expectFailure(() -> new SccpDestinationProofSubmitRequest("alice", encoded));
     expectFailure(
@@ -390,8 +394,32 @@ public final class SccpClientExactTests {
                     .encodeToString(fill(SccpSubmitEncoding.MAX_DETACHED_SIGNATURE_BYTES + 1, 1)),
                 transaction,
                 7L));
+    final byte[] nativeProof =
+        canonicalArtifactBytes(SccpSubmitEncoding.NATIVE_INBOUND_PROOF_SCHEMA_NAME, 0);
     new SccpNativeMessageSubmitRequest(
-        AUTHORITY, Base64.getEncoder().encodeToString(canonicalArtifactBytes(8)));
+        AUTHORITY, Base64.getEncoder().encodeToString(nativeProof));
+    expectFailure(
+        () -> new SccpNativeMessageSubmitRequest(AUTHORITY, encoded));
+    expectFailure(
+        () ->
+            new SccpDestinationProofSubmitRequest(
+                AUTHORITY, Base64.getEncoder().encodeToString(nativeProof)));
+    expectFailure(
+        () ->
+            new SccpNativeMessageSubmitRequest(
+                AUTHORITY,
+                Base64.getEncoder()
+                    .encodeToString(
+                        canonicalArtifactBytes(
+                            SccpSubmitEncoding.NATIVE_INBOUND_PROOF_SCHEMA_NAME, 8))));
+    expectFailure(
+        () ->
+            new SccpDestinationProofSubmitRequest(
+                AUTHORITY,
+                Base64.getEncoder()
+                    .encodeToString(
+                        canonicalArtifactBytes(
+                            SccpSubmitEncoding.DESTINATION_ARTIFACT_SCHEMA_NAME, 8))));
   }
 
   private static void capabilitiesAreExactAndContainNoRetiredDiscoverySurface() {
@@ -881,6 +909,12 @@ public final class SccpClientExactTests {
     final Map<String, Object> anchorMismatch = proofRequest();
     anchorMismatch.put("sora_finality_anchor_hash", prefixed(0x7e));
     expectFailure(() -> SccpJsonParser.parseProofRequest(jsonBytes(anchorMismatch)));
+    final Map<String, Object> archivedIdentity = proofRequest();
+    object(archivedIdentity.get("sora_finality_anchor"))
+        .put(
+            "chain_id_hash",
+            upperHex(keccak(hexBytes("809574f5fee75e69bfcf52451e42d50f"))));
+    expectFailure(() -> SccpJsonParser.parseProofRequest(jsonBytes(archivedIdentity)));
     final Map<String, Object> oversizedAmount = messageBundle();
     object(object(oversizedAmount.get("payload")).get("Transfer"))
         .put("amount", BigInteger.ONE.shiftLeft(128).toString());
@@ -1565,12 +1599,20 @@ public final class SccpClientExactTests {
   }
 
   private static String canonicalArtifact() {
-    return Base64.getEncoder().encodeToString(canonicalArtifactBytes(0));
+    return Base64.getEncoder()
+        .encodeToString(
+            canonicalArtifactBytes(SccpSubmitEncoding.DESTINATION_ARTIFACT_SCHEMA_NAME, 0));
   }
 
-  private static byte[] canonicalArtifactBytes(final int padding) {
-    final byte[] schema = new byte[16];
-    for (int index = 0; index < schema.length; index++) schema[index] = (byte) (index + 1);
+  private static String canonicalNativeArtifact() {
+    return Base64.getEncoder()
+        .encodeToString(
+            canonicalArtifactBytes(SccpSubmitEncoding.NATIVE_INBOUND_PROOF_SCHEMA_NAME, 0));
+  }
+
+  private static byte[] canonicalArtifactBytes(
+      final String schemaName, final int padding) {
+    final byte[] schema = SchemaHash.hash16(schemaName);
     final byte[] payload = {1, 2, 3};
     final NoritoHeader header =
         new NoritoHeader(
@@ -1615,7 +1657,7 @@ public final class SccpClientExactTests {
   }
 
   private static String tairaChainIdHash() {
-    return upperHex(keccak(hexBytes("809574f5fee75e69bfcf52451e42d50f")));
+    return upperHex(keccak(hexBytes("fc56984b2be7431d840e21514d1883f0")));
   }
 
   private static String semanticProfileHash() {

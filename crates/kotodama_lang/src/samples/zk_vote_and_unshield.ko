@@ -12,7 +12,7 @@
 // into INPUT.
 seiyaku ZkVoteAndUnshield {
     // Verify a ballot proof, then enqueue a prebuilt SubmitBallot instruction via the vendor bridge.
-    fn verify_and_submit_ballot(proof_env: bytes, submit: bytes) {
+    fn verify_and_submit_ballot(bytes proof_env, bytes submit) {
         // 1) Verify the ballot using ZK_VOTE_VERIFY_BALLOT.
         //    `proof_env` must be a Norito-encoded OpenVerifyEnvelope in a NoritoBytes TLV.
         ledger::governance::verify_ballot(proof_env);
@@ -21,7 +21,7 @@ seiyaku ZkVoteAndUnshield {
     }
 
     // Verify an unshield proof, then enqueue a prebuilt Unshield instruction via the vendor bridge.
-    fn verify_and_unshield(proof_env: bytes, unshield: bytes) {
+    fn verify_and_unshield(bytes proof_env, bytes unshield) {
         // 1) Verify the unshield using ZK_VERIFY_UNSHIELD (0x61).
         crypto::zk::verify_unshield(proof_env);
         // 2) Enqueue the prebuilt Unshield instruction.

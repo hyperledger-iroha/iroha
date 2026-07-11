@@ -1,43 +1,371 @@
+import { Buffer } from "buffer";
 import { AccountAddress } from "./address.js";
 import {
   createConnectAppSession,
   createConnectSessionPreview,
   registerConnectSession,
 } from "./connect.browser.js";
-import { buildTransferAssetInstruction } from "./instructionBuilders.js";
-import { getNativeBinding } from "./native.js";
-import { ToriiClient } from "./toriiClient.js";
 import { blake2b256 } from "./blake2b.js";
-import { verifyEd25519 } from "./crypto.js";
-import { hashSignedTransaction } from "./transaction.js";
+import { verifyEd25519 } from "./crypto.browser.js";
+import {
+  browserTransactionCodec,
+  browserSignedTransactionHashHex,
+  finalizeBrowserSignedTransaction,
+} from "./transactionCodec.js";
 
 const ALGORITHM_ED25519 = "ed25519";
 const ALGORITHM_ED25519_TAG = 0;
+const MAX_PAYLOAD_BYTES = 1024 * 1024;
+const MAX_SIGNED_TRANSACTION_BYTES = MAX_PAYLOAD_BYTES + 4096;
+const MAX_TORII_RESPONSE_BYTES = 64 * 1024;
+const DEFAULT_TORII_REQUEST_TIMEOUT_MS = 15_000;
+const DEFAULT_STATUS_POLL_INTERVAL_MS = 1_000;
+const DEFAULT_STATUS_POLL_TIMEOUT_MS = 30_000;
+const DEFAULT_SUCCESS_STATUSES = Object.freeze(["Approved", "Committed", "Applied"]);
+const DEFAULT_FAILURE_STATUSES = Object.freeze(["Rejected", "Expired"]);
 
-function toBuffer(value, context) {
-  if (Buffer.isBuffer(value)) {
-    return Buffer.from(value);
+function assertByteLength(length, maxBytes, context) {
+  if (maxBytes !== undefined && length > maxBytes) {
+    throw new TypeError(`${context} exceeds ${maxBytes} bytes`);
   }
-  if (value instanceof Uint8Array) {
-    return Buffer.from(value);
-  }
-  if (ArrayBuffer.isView(value)) {
-    return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
-  }
-  if (value instanceof ArrayBuffer) {
-    return Buffer.from(value);
-  }
-  if (Array.isArray(value)) {
-    return Buffer.from(value);
+}
+
+function toBuffer(value, context, { maxBytes } = {}) {
+  try {
+    if (Buffer.isBuffer(value)) {
+      assertByteLength(value.length, maxBytes, context);
+      return Buffer.from(value);
+    }
+    if (value instanceof Uint8Array) {
+      assertByteLength(value.byteLength, maxBytes, context);
+      return Buffer.from(value);
+    }
+    if (ArrayBuffer.isView(value)) {
+      assertByteLength(value.byteLength, maxBytes, context);
+      return Buffer.from(
+        new Uint8Array(value.buffer, value.byteOffset, value.byteLength),
+      );
+    }
+    if (value instanceof ArrayBuffer) {
+      assertByteLength(value.byteLength, maxBytes, context);
+      return Buffer.from(new Uint8Array(value));
+    }
+    if (Array.isArray(value)) {
+      if (Object.getPrototypeOf(value) !== Array.prototype) {
+        throw new TypeError(`${context} byte arrays must use Array.prototype`);
+      }
+      const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+      const length = lengthDescriptor?.value;
+      if (!Number.isSafeInteger(length) || length < 0) {
+        throw new TypeError(`${context} byte array has an invalid length`);
+      }
+      assertByteLength(length, maxBytes, context);
+      const ownKeys = Reflect.ownKeys(value);
+      if (ownKeys.length !== length + 1) {
+        throw new TypeError(`${context} byte arrays must be dense without custom fields`);
+      }
+      const bytes = new Uint8Array(length);
+      for (let index = 0; index < length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (
+          !descriptor ||
+          !descriptor.enumerable ||
+          !Object.prototype.hasOwnProperty.call(descriptor, "value") ||
+          !Number.isInteger(descriptor.value) ||
+          descriptor.value < 0 ||
+          descriptor.value > 255
+        ) {
+          throw new TypeError(
+            `${context}[${index}] must be an integer byte from 0 through 255`,
+          );
+        }
+        bytes[index] = descriptor.value;
+      }
+      return Buffer.from(bytes);
+    }
+  } catch (error) {
+    if (error instanceof TypeError && error.message.startsWith(context)) {
+      throw error;
+    }
+    throw new TypeError(`${context} must reference readable bytes`, { cause: error });
   }
   if (typeof value === "string") {
     const trimmed = value.startsWith("0x") ? value.slice(2) : value;
+    if (maxBytes !== undefined && trimmed.length > maxBytes * 2) {
+      throw new TypeError(`${context} exceeds ${maxBytes} bytes`);
+    }
     if (/^[0-9a-fA-F]*$/.test(trimmed) && trimmed.length % 2 === 0) {
       return Buffer.from(trimmed, "hex");
     }
   }
   throw new TypeError(`${context} must be bytes or a hex string`);
 }
+
+function isBytesInput(value) {
+  return (
+    Buffer.isBuffer(value) ||
+    value instanceof Uint8Array ||
+    ArrayBuffer.isView(value) ||
+    value instanceof ArrayBuffer ||
+    Array.isArray(value) ||
+    typeof value === "string"
+  );
+}
+
+function exactHashHex(value, context, code) {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
+    throw new NexusAppError(
+      code,
+      `${context} must be exactly 64 lowercase hexadecimal characters`,
+    );
+  }
+  return value;
+}
+
+function normalizeHashValue(value, context, code, { hexOnly = false } = {}) {
+  if (typeof value === "string") {
+    return exactHashHex(value, context, code);
+  }
+  if (hexOnly) {
+    throw new NexusAppError(
+      code,
+      `${context} must be exactly 64 lowercase hexadecimal characters`,
+    );
+  }
+  let bytes;
+  try {
+    bytes = toBuffer(value, context, { maxBytes: 32 });
+  } catch (error) {
+    throw new NexusAppError(code, `${context} must be an exact 32-byte hash`, error);
+  }
+  if (bytes.length !== 32) {
+    throw new NexusAppError(code, `${context} must be an exact 32-byte hash`);
+  }
+  return bytes.toString("hex");
+}
+
+function ownDataDescriptor(value, key, context, code) {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  if (!descriptor) return null;
+  if (!Object.prototype.hasOwnProperty.call(descriptor, "value")) {
+    throw new NexusAppError(code, `${context}.${key} must be a data field`);
+  }
+  return descriptor;
+}
+
+function snapshotDataFields(value, allowed, context, code) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new NexusAppError(code, `${context} must be a plain object`);
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new NexusAppError(code, `${context} must be a plain object`);
+  }
+  const snapshot = Object.create(null);
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (
+      typeof key !== "string" ||
+      !descriptor ||
+      !descriptor.enumerable ||
+      !Object.prototype.hasOwnProperty.call(descriptor, "value")
+    ) {
+      throw new NexusAppError(code, `${context} must contain enumerable data fields only`);
+    }
+    if (!allowed.has(key)) {
+      throw new NexusAppError(code, `${context}.${key} is not supported`);
+    }
+    Object.defineProperty(snapshot, key, {
+      value: descriptor.value,
+      enumerable: true,
+      configurable: false,
+      writable: false,
+    });
+  }
+  return Object.freeze(snapshot);
+}
+
+function normalizeByteAliases(value, aliases, context, code, { maxBytes } = {}) {
+  let selected = null;
+  let selectedKey = null;
+  for (const key of aliases) {
+    const descriptor = ownDataDescriptor(value, key, context, code);
+    if (!descriptor || descriptor.value === undefined || descriptor.value === null) continue;
+    let normalized;
+    try {
+      normalized = toBuffer(descriptor.value, `${context}.${key}`, { maxBytes });
+    } catch (error) {
+      throw new NexusAppError(code, `${context}.${key} must be bytes`, error);
+    }
+    if (selected !== null && !selected.equals(normalized)) {
+      throw new NexusAppError(
+        code,
+        `${context}.${selectedKey} conflicts with ${context}.${key}`,
+      );
+    }
+    selected = normalized;
+    selectedKey = key;
+  }
+  return selected;
+}
+
+function normalizeHashAliases(value, aliases, context, invalidCode, conflictCode) {
+  let selected = null;
+  let selectedKey = null;
+  for (const { key, hexOnly = false } of aliases) {
+    const descriptor = ownDataDescriptor(value, key, context, invalidCode);
+    if (!descriptor || descriptor.value === undefined || descriptor.value === null) continue;
+    const normalized = normalizeHashValue(
+      descriptor.value,
+      `${context}.${key}`,
+      invalidCode,
+      { hexOnly },
+    );
+    if (selected !== null && selected !== normalized) {
+      throw new NexusAppError(
+        conflictCode,
+        `${context}.${selectedKey} conflicts with ${context}.${key}`,
+      );
+    }
+    selected = normalized;
+    selectedKey = key;
+  }
+  return selected;
+}
+
+const PAYLOAD_BYTE_ALIASES = Object.freeze(["payloadBytes", "payload_bytes", "bytes"]);
+const SIGNED_BYTE_ALIASES = Object.freeze([
+  "signedTransaction",
+  "signed_transaction",
+  "bytes",
+]);
+const PAYLOAD_HASH_ALIASES = Object.freeze([
+  Object.freeze({ key: "payloadHashHex", hexOnly: true }),
+  Object.freeze({ key: "payload_hash_hex", hexOnly: true }),
+  Object.freeze({ key: "hashHex", hexOnly: true }),
+  Object.freeze({ key: "hash_hex", hexOnly: true }),
+  Object.freeze({ key: "hash" }),
+]);
+const TRANSACTION_HASH_ALIASES = Object.freeze([
+  Object.freeze({ key: "hashHex", hexOnly: true }),
+  Object.freeze({ key: "hash_hex", hexOnly: true }),
+  Object.freeze({ key: "transactionHashHex", hexOnly: true }),
+  Object.freeze({ key: "transaction_hash_hex", hexOnly: true }),
+  Object.freeze({ key: "signedTransactionHashHex", hexOnly: true }),
+  Object.freeze({ key: "signed_transaction_hash_hex", hexOnly: true }),
+  Object.freeze({ key: "signedTransactionHash" }),
+  Object.freeze({ key: "signed_transaction_hash" }),
+  Object.freeze({ key: "hash" }),
+]);
+const SUBMISSION_HASH_ALIASES = Object.freeze([
+  ...TRANSACTION_HASH_ALIASES,
+  Object.freeze({ key: "txHash" }),
+  Object.freeze({ key: "tx_hash" }),
+]);
+const SIGNATURE_FIELDS = new Set([
+  "algorithm",
+  "alg",
+  "signature",
+  "bytes",
+  "payload",
+]);
+const SIGNABLE_FIELDS = new Set([
+  "payloadBytes",
+  "payloadHashHex",
+  "authority",
+  "signingPublicKey",
+  "signatureAlgorithm",
+]);
+const CONFIG_FIELDS = new Set([
+  "chainId",
+  "baseUrl",
+  "toriiBaseUrl",
+  "connectBaseUrl",
+  "node",
+  "authority",
+  "accountId",
+  "signingPublicKey",
+  "fetchImpl",
+  "webSocketImpl",
+  "allowInsecure",
+  "appMeta",
+  "appMetadata",
+  "permissions",
+  "connectTransport",
+  "connect",
+  "transactionCodec",
+  "toriiClient",
+]);
+const TRANSFER_DRAFT_FIELDS = new Set([
+  "chainId",
+  "authority",
+  "accountId",
+  "sourceAccountId",
+  "sourceAssetHoldingId",
+  "sourceAssetId",
+  "assetId",
+  "quantity",
+  "destinationAccountId",
+  "destination",
+  "to",
+  "metadata",
+  "creationTimeMs",
+  "ttlMs",
+  "nonce",
+  "signingPublicKey",
+]);
+const FINALIZE_OPTION_FIELDS = new Set([
+  "wait",
+  "intervalMs",
+  "timeoutMs",
+  "maxAttempts",
+  "scope",
+  "successStatuses",
+  "failureStatuses",
+  "onStatus",
+  "signal",
+  "signingPublicKey",
+  "toriiClient",
+]);
+const CONNECT_OPTION_FIELDS = new Set([
+  "sid",
+  "chainId",
+  "node",
+  "appKeyPair",
+  "nonce",
+  "protocol",
+]);
+const CONNECT_SESSION_FIELDS = new Set([
+  "sid",
+  "walletLaunchUri",
+  "wallet_launch_uri",
+  "wallet_uri",
+  "appLaunchUri",
+  "app_launch_uri",
+  "app_uri",
+  "tokenApp",
+  "token_app",
+  "tokenWallet",
+  "token_wallet",
+  "tokenManagement",
+  "token_management",
+  "tokenRelay",
+  "token_relay",
+  "approvedAccountId",
+  "approvedAccount",
+  "approved_account",
+  "signingPublicKey",
+  "signing_public_key",
+  "appSession",
+  "preview",
+]);
+const APPROVAL_FIELDS = new Set([
+  "accountId",
+  "account_id",
+  "signingPublicKey",
+  "signing_public_key",
+  "session",
+]);
 
 function requireNonEmptyString(value, context) {
   if (typeof value !== "string" || value.trim() === "") {
@@ -55,10 +383,6 @@ function irohaPrehash(payloadBytes) {
 function irohaPrehashHex(payloadBytes) {
   const digest = irohaPrehash(payloadBytes);
   return digest.toString("hex");
-}
-
-function resolveNativeBinding() {
-  return globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
 }
 
 function accountEd25519PublicKey(accountId) {
@@ -153,11 +477,13 @@ function normalizeAlgorithm(algorithm) {
 }
 
 function normalizeConnectSession(session) {
-  if (!session || typeof session !== "object") {
-    throw new TypeError("connect session must be an object");
-  }
+  session = snapshotDataFields(
+    session,
+    CONNECT_SESSION_FIELDS,
+    "connect session",
+    "invalid_connect_session",
+  );
   return {
-    ...session,
     sid: requireNonEmptyString(session.sid, "session.sid"),
     walletLaunchUri:
       session.walletLaunchUri ??
@@ -184,6 +510,8 @@ function normalizeConnectSession(session) {
       session.signingPublicKey ??
       session.signing_public_key ??
       null,
+    appSession: session.appSession ?? null,
+    preview: session.preview ?? null,
   };
 }
 
@@ -199,17 +527,50 @@ function isRawByteSignature(value) {
 
 function normalizeSignature(signature) {
   if (isRawByteSignature(signature) || !signature || typeof signature !== "object") {
-    return {
-      algorithm: ALGORITHM_ED25519,
-      signature: toBuffer(signature, "signature"),
-    };
+    let bytes;
+    try {
+      bytes = toBuffer(signature, "signature", { maxBytes: 64 });
+    } catch (error) {
+      throw new NexusAppError("invalid_signature", error.message, error);
+    }
+    if (bytes.length !== 64) {
+      throw new NexusAppError(
+        "invalid_signature",
+        `Ed25519 signature must be 64 bytes, got ${bytes.length}`,
+      );
+    }
+    return { algorithm: ALGORITHM_ED25519, signature: bytes };
   }
-  const algorithm = normalizeAlgorithm(signature.algorithm ?? signature.alg);
-  const bytes = toBuffer(
-    signature.signature ?? signature.bytes ?? signature.payload,
-    "signature.signature",
+  signature = snapshotDataFields(
+    signature,
+    SIGNATURE_FIELDS,
+    "signature",
+    "invalid_signature",
   );
-  if (algorithm === ALGORITHM_ED25519 && bytes.length !== 64) {
+  const algorithmDescriptor = Object.getOwnPropertyDescriptor(signature, "algorithm");
+  const algDescriptor = Object.getOwnPropertyDescriptor(signature, "alg");
+  const algorithm = normalizeAlgorithm(algorithmDescriptor?.value);
+  const aliasAlgorithm = normalizeAlgorithm(algDescriptor?.value);
+  if (algorithmDescriptor && algDescriptor && algorithm !== aliasAlgorithm) {
+    throw new NexusAppError(
+      "unsupported_signature_algorithm",
+      "signature.algorithm conflicts with signature.alg",
+    );
+  }
+  const bytes = normalizeByteAliases(
+    signature,
+    ["signature", "bytes", "payload"],
+    "signature",
+    "invalid_signature",
+    { maxBytes: 64 },
+  );
+  if (bytes === null) {
+    throw new NexusAppError(
+      "invalid_signature",
+      "signature must include signature, bytes, or payload",
+    );
+  }
+  if (bytes.length !== 64) {
     throw new NexusAppError(
       "invalid_signature",
       `Ed25519 signature must be 64 bytes, got ${bytes.length}`,
@@ -219,119 +580,147 @@ function normalizeSignature(signature) {
 }
 
 function defaultBuildTransferPayload(input) {
-  const native = resolveNativeBinding();
-  const metadata =
-    input.metadata === undefined || input.metadata === null
-      ? null
-      : typeof input.metadata === "string"
-        ? input.metadata
-        : JSON.stringify(input.metadata);
-  if (native && typeof native.buildTransferAssetPayload === "function") {
-    const result = native.buildTransferAssetPayload(
-      input.chainId,
-      input.authority,
-      input.sourceAssetHoldingId ?? input.sourceAssetId,
-      String(input.quantity),
-      input.destinationAccountId,
-      metadata,
-      input.creationTimeMs ?? null,
-      input.ttlMs ?? null,
-      input.nonce ?? null,
-    );
-    return toBuffer(
-      result?.payloadBytes ?? result?.payload_bytes ?? result,
-      "buildTransferAssetPayload result",
-    );
-  }
-  if (native && typeof native.buildTransactionPayload === "function") {
-    const instruction = buildTransferAssetInstruction({
-      sourceAssetHoldingId: input.sourceAssetHoldingId ?? input.sourceAssetId,
-      quantity: input.quantity,
-      destinationAccountId: input.destinationAccountId,
-    });
-    const result = native.buildTransactionPayload(
-      input.chainId,
-      input.authority,
-      [JSON.stringify(instruction)],
-      metadata,
-      input.creationTimeMs ?? null,
-      input.ttlMs ?? null,
-      input.nonce ?? null,
-    );
-    return toBuffer(
-      result?.payloadBytes ?? result?.payload_bytes ?? result,
-      "buildTransactionPayload result",
-    );
-  }
-  throw new NexusAppError(
-    "transaction_codec_unavailable",
-    "native transaction payload builder is unavailable; provide config.transactionCodec.buildTransferPayload",
-  );
+  return browserTransactionCodec.buildTransferPayload(input);
 }
 
 function defaultFinalizeSignedTransaction(signable, signature, publicKey) {
-  const native = resolveNativeBinding();
-  const finalize =
-    native?.finalizeSignedTransaction ??
-    native?.finalizeTransactionWithSignature ??
-    null;
-  if (typeof finalize !== "function") {
+  return finalizeBrowserSignedTransaction(signable, signature, publicKey);
+}
+
+function normalizePayloadBuildResult(result) {
+  if (isBytesInput(result)) {
+    return {
+      payloadBytes: toBuffer(result, "payloadBytes", { maxBytes: MAX_PAYLOAD_BYTES }),
+      assertedHashHex: null,
+    };
+  }
+  if (result === null || typeof result !== "object" || Array.isArray(result)) {
     throw new NexusAppError(
-      "transaction_codec_unavailable",
-      "native signed transaction finalizer is unavailable; provide config.transactionCodec.finalizeSignedTransaction",
+      "invalid_payload",
+      "transaction codec must return payload bytes or a payload result object",
     );
   }
-  return finalize({
-    payloadBytes: Buffer.from(signable.payloadBytes),
-    payload_hash_hex: signable.payloadHashHex,
-    payloadHashHex: signable.payloadHashHex,
-    signature: Buffer.from(signature.signature),
-    signatureBytes: Buffer.from(signature.signature),
-    publicKey: Buffer.from(publicKey),
-    signingPublicKey: Buffer.from(publicKey),
-    authority: signable.authority,
-  });
+  const payloadBytes = normalizeByteAliases(
+    result,
+    PAYLOAD_BYTE_ALIASES,
+    "transaction codec result",
+    "invalid_payload",
+    { maxBytes: MAX_PAYLOAD_BYTES },
+  );
+  if (payloadBytes === null) {
+    throw new NexusAppError(
+      "invalid_payload",
+      "transaction codec result must include payload bytes",
+    );
+  }
+  const assertedHashHex = normalizeHashAliases(
+    result,
+    PAYLOAD_HASH_ALIASES,
+    "transaction codec result",
+    "invalid_payload_hash",
+    "payload_hash_mismatch",
+  );
+  return { payloadBytes, assertedHashHex };
+}
+
+function canonicalSignedTransactionHashHex(signedTransaction) {
+  try {
+    return exactHashHex(
+      browserSignedTransactionHashHex(signedTransaction),
+      "canonical signed transaction hash",
+      "invalid_transaction_hash",
+    );
+  } catch (error) {
+    if (error instanceof NexusAppError) throw error;
+    throw new NexusAppError(
+      "invalid_signed_transaction",
+      "signed transaction must be canonical version-1 single-signature Transfer::Asset bytes",
+      error,
+    );
+  }
 }
 
 function normalizeFinalizedTransaction(result) {
-  const signedTransaction = toBuffer(
-    result?.signedTransaction ??
-      result?.signed_transaction ??
-      result?.bytes ??
-      result,
-    "signed transaction",
-  );
-  let hashHex =
-    result?.hashHex ??
-    result?.hash_hex ??
-    (result?.hash ? toBuffer(result.hash, "hash").toString("hex") : null);
-  if (!hashHex) {
-    hashHex = hashSignedTransaction(signedTransaction);
+  if (
+    result === null ||
+    typeof result !== "object" ||
+    Array.isArray(result) ||
+    isBytesInput(result)
+  ) {
+    throw new NexusAppError(
+      "invalid_transaction_hash",
+      "transaction finalizer must return signed bytes and an exact canonical hash",
+    );
   }
-  return { signedTransaction, hashHex: String(hashHex).toLowerCase() };
+  const signedTransaction = normalizeByteAliases(
+    result,
+    SIGNED_BYTE_ALIASES,
+    "transaction finalizer result",
+    "invalid_signed_transaction",
+    { maxBytes: MAX_SIGNED_TRANSACTION_BYTES },
+  );
+  if (signedTransaction === null) {
+    throw new NexusAppError(
+      "invalid_signed_transaction",
+      "transaction finalizer result must include signed transaction bytes",
+    );
+  }
+  const assertedHashHex = normalizeHashAliases(
+    result,
+    TRANSACTION_HASH_ALIASES,
+    "transaction finalizer result",
+    "invalid_transaction_hash",
+    "transaction_hash_mismatch",
+  );
+  if (assertedHashHex === null) {
+    throw new NexusAppError(
+      "invalid_transaction_hash",
+      "transaction finalizer result must include an exact canonical transaction hash",
+    );
+  }
+  const computedHashHex = canonicalSignedTransactionHashHex(signedTransaction);
+  if (assertedHashHex !== computedHashHex) {
+    throw new NexusAppError(
+      "transaction_hash_mismatch",
+      `transaction finalizer hash ${assertedHashHex} does not match canonical hash ${computedHashHex}`,
+    );
+  }
+  return { signedTransaction, hashHex: computedHashHex };
 }
 
 function submissionHashHex(submission) {
-  const candidate =
-    submission?.hashHex ??
-    submission?.hash_hex ??
-    submission?.hash ??
-    submission?.txHash ??
-    submission?.tx_hash ??
-    submission?.transactionHashHex ??
-    submission?.transaction_hash_hex ??
-    submission?.signedTransactionHash ??
-    submission?.signed_transaction_hash ??
-    submission?.payload?.txHash ??
-    submission?.payload?.tx_hash ??
-    submission?.payload?.hash ??
-    submission?.payload?.signedTransactionHash ??
-    submission?.payload?.signed_transaction_hash ??
-    null;
-  if (!candidate) {
-    return null;
+  if (submission === null || typeof submission !== "object") return null;
+  const direct = normalizeHashAliases(
+    submission,
+    SUBMISSION_HASH_ALIASES,
+    "Torii submission",
+    "invalid_transaction_hash",
+    "transaction_hash_mismatch",
+  );
+  const payloadDescriptor = ownDataDescriptor(
+    submission,
+    "payload",
+    "Torii submission",
+    "invalid_transaction_hash",
+  );
+  const payload = payloadDescriptor?.value;
+  const nested =
+    payload !== null && typeof payload === "object" && !Array.isArray(payload)
+      ? normalizeHashAliases(
+          payload,
+          SUBMISSION_HASH_ALIASES,
+          "Torii submission.payload",
+          "invalid_transaction_hash",
+          "transaction_hash_mismatch",
+        )
+      : null;
+  if (direct !== null && nested !== null && direct !== nested) {
+    throw new NexusAppError(
+      "transaction_hash_mismatch",
+      "Torii submission hash aliases conflict with submission.payload hash aliases",
+    );
   }
-  return toBuffer(candidate, "submission.hash").toString("hex");
+  return direct ?? nested;
 }
 
 function maybeInvoke(method, receiver, ...args) {
@@ -339,6 +728,412 @@ function maybeInvoke(method, receiver, ...args) {
     return method.apply(receiver, args);
   }
   return undefined;
+}
+
+function normalizeToriiBaseUrl(value) {
+  const literal = requireNonEmptyString(value, "config.toriiBaseUrl");
+  let url;
+  try {
+    url = new URL(literal);
+  } catch (error) {
+    throw new TypeError("config.toriiBaseUrl must be an absolute HTTP(S) URL", {
+      cause: error,
+    });
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new TypeError("config.toriiBaseUrl must use HTTP or HTTPS");
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new TypeError(
+      "config.toriiBaseUrl must not contain credentials, a query, or a fragment",
+    );
+  }
+  url.pathname = url.pathname
+    .replace(/\/+$/u, "")
+    .replace(/\/v1(?:\/explorer)?$/iu, "");
+  return url.toString().replace(/\/$/u, "");
+}
+
+function normalizeNonNegativeInteger(value, fallback, context) {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`${context} must be a non-negative safe integer`);
+  }
+  return value;
+}
+
+function normalizePositiveInteger(value, context) {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new TypeError(`${context} must be a positive safe integer`);
+  }
+  return value;
+}
+
+function normalizeStatusSet(value, fallback, context) {
+  const source = value === undefined || value === null ? fallback : value;
+  if (typeof source === "string" || source?.[Symbol.iterator] === undefined) {
+    throw new TypeError(`${context} must be an iterable of status strings`);
+  }
+  const result = new Set();
+  for (const status of source) {
+    if (
+      typeof status !== "string" ||
+      status.length === 0 ||
+      status.length > 64 ||
+      status.trim() !== status ||
+      !/^[\x20-\x7e]+$/u.test(status)
+    ) {
+      throw new TypeError(`${context} must contain exact printable status strings`);
+    }
+    result.add(status);
+    if (result.size > 32) {
+      throw new TypeError(`${context} must not contain more than 32 statuses`);
+    }
+  }
+  if (result.size === 0) {
+    throw new TypeError(`${context} must not be empty`);
+  }
+  return result;
+}
+
+function responseHeader(response, name) {
+  return typeof response?.headers?.get === "function"
+    ? response.headers.get(name)
+    : null;
+}
+
+async function cancelResponseBody(response) {
+  try {
+    await response?.body?.cancel?.();
+  } catch {
+    // Cancellation is best-effort; preserve the validation or transport result.
+  }
+}
+
+async function readBoundedResponseText(response, context) {
+  const declaredLength = responseHeader(response, "content-length");
+  if (declaredLength !== null && declaredLength !== undefined) {
+    if (!/^(?:0|[1-9]\d*)$/u.test(declaredLength)) {
+      await cancelResponseBody(response);
+      throw new Error(`${context} returned an invalid Content-Length`);
+    }
+    if (BigInt(declaredLength) > BigInt(MAX_TORII_RESPONSE_BYTES)) {
+      await cancelResponseBody(response);
+      throw new Error(`${context} exceeds ${MAX_TORII_RESPONSE_BYTES} response bytes`);
+    }
+  }
+  if (response?.body && typeof response.body.getReader === "function") {
+    const reader = response.body.getReader();
+    const chunks = [];
+    let total = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!(value instanceof Uint8Array)) {
+          throw new Error(`${context} returned an invalid response stream`);
+        }
+        total += value.byteLength;
+        if (total > MAX_TORII_RESPONSE_BYTES) {
+          throw new Error(`${context} exceeds ${MAX_TORII_RESPONSE_BYTES} response bytes`);
+        }
+        chunks.push(value);
+      }
+    } catch (error) {
+      try {
+        await reader.cancel(error);
+      } catch {
+        // Preserve the original bounded-read failure.
+      }
+      throw error;
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch (error) {
+      throw new Error(`${context} must return valid UTF-8`, { cause: error });
+    }
+  }
+  if (typeof response?.arrayBuffer === "function") {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > MAX_TORII_RESPONSE_BYTES) {
+      throw new Error(`${context} exceeds ${MAX_TORII_RESPONSE_BYTES} response bytes`);
+    }
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch (error) {
+      throw new Error(`${context} must return valid UTF-8`, { cause: error });
+    }
+  }
+  if (typeof response?.text === "function") {
+    const text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > MAX_TORII_RESPONSE_BYTES) {
+      throw new Error(`${context} exceeds ${MAX_TORII_RESPONSE_BYTES} response bytes`);
+    }
+    return text;
+  }
+  throw new Error(`${context} returned an unreadable response body`);
+}
+
+function parseJsonResponse(text, context) {
+  if (text === "") return null;
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`${context} must return JSON`, { cause: error });
+  }
+  if (payload !== null && (typeof payload !== "object" || Array.isArray(payload))) {
+    throw new Error(`${context} must return a JSON object or null`);
+  }
+  return payload;
+}
+
+function pipelineStatusKind(payload) {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+  const value = payload.status ?? payload.content?.status;
+  if (typeof value === "string") return value;
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    typeof value.kind === "string"
+  ) {
+    return value.kind;
+  }
+  return null;
+}
+
+function delayWithSignal(milliseconds, signal) {
+  if (milliseconds === 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason ?? new Error("operation aborted"));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener?.("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason ?? new Error("operation aborted"));
+    };
+    signal?.addEventListener?.("abort", onAbort, { once: true });
+  });
+}
+
+class BrowserToriiPipelineClient {
+  constructor(baseUrl, fetchImpl) {
+    this.baseUrl = normalizeToriiBaseUrl(baseUrl);
+    this.fetchImpl = fetchImpl ?? globalThis.fetch?.bind(globalThis);
+    if (typeof this.fetchImpl !== "function") {
+      throw new TypeError("browser Nexus Torii submission requires fetch");
+    }
+  }
+
+  async _open(path, init, externalSignal) {
+    const controller = new AbortController();
+    const onAbort = () => controller.abort(externalSignal?.reason);
+    if (externalSignal?.aborted) {
+      controller.abort(externalSignal.reason);
+    } else {
+      externalSignal?.addEventListener?.("abort", onAbort, { once: true });
+    }
+    const timeout = setTimeout(
+      () => controller.abort(new Error("Torii request timed out")),
+      DEFAULT_TORII_REQUEST_TIMEOUT_MS,
+    );
+    try {
+      const response = await this.fetchImpl(
+        new URL(`${this.baseUrl}${path}`).toString(),
+        {
+          credentials: "omit",
+          redirect: "error",
+          referrerPolicy: "no-referrer",
+          ...init,
+          signal: controller.signal,
+        },
+      );
+      if (!response || !Number.isInteger(response.status)) {
+        throw new Error("Torii fetch returned an invalid response");
+      }
+      return {
+        response,
+        close: () => {
+          clearTimeout(timeout);
+          externalSignal?.removeEventListener?.("abort", onAbort);
+          controller.abort(new Error("Torii response closed"));
+        },
+      };
+    } catch (error) {
+      clearTimeout(timeout);
+      externalSignal?.removeEventListener?.("abort", onAbort);
+      throw error;
+    }
+  }
+
+  async submitTransaction(payload) {
+    const signedTransaction = toBuffer(payload, "signed transaction", {
+      maxBytes: MAX_SIGNED_TRANSACTION_BYTES,
+    });
+    if (signedTransaction.length < 2) {
+      throw new TypeError("signed transaction must not be empty");
+    }
+    const request = await this._open(
+      "/v1/pipeline/transactions",
+      {
+        method: "POST",
+        cache: "no-store",
+        headers: {
+          Accept: "application/json, application/x-norito",
+          "Content-Type": "application/x-norito",
+        },
+        body: Buffer.from(signedTransaction),
+      },
+    );
+    try {
+      const { response } = request;
+      if (![200, 201, 202, 204].includes(response.status)) {
+        await cancelResponseBody(response);
+        throw new Error(`Torii transaction submission returned HTTP ${response.status}`);
+      }
+      if (response.status === 204) {
+        await cancelResponseBody(response);
+        return null;
+      }
+      const contentType = responseHeader(response, "content-type")?.toLowerCase() ?? "";
+      if (contentType.includes("application/x-norito")) {
+        await response.body?.cancel?.();
+        return null;
+      }
+      const text = await readBoundedResponseText(response, "Torii submission");
+      if (text === "") return null;
+      return parseJsonResponse(text, "Torii submission");
+    } finally {
+      request.close();
+    }
+  }
+
+  async getTransactionStatus(hashHex, options = {}) {
+    const hash = exactHashHex(
+      hashHex,
+      "transaction status hash",
+      "invalid_transaction_hash",
+    );
+    const scope = options.scope ?? "global";
+    if (scope !== "local" && scope !== "auto" && scope !== "global") {
+      throw new TypeError("transaction status scope must be local, auto, or global");
+    }
+    const query = new URLSearchParams({ hash, scope });
+    const request = await this._open(
+      `/v1/pipeline/transactions/status?${query.toString()}`,
+      {
+        method: "GET",
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+      },
+      options.signal,
+    );
+    try {
+      const { response } = request;
+      if (response.status === 404 || response.status === 204) {
+        await cancelResponseBody(response);
+        return null;
+      }
+      if (response.status !== 200 && response.status !== 202) {
+        await cancelResponseBody(response);
+        throw new Error(`Torii transaction status returned HTTP ${response.status}`);
+      }
+      const text = await readBoundedResponseText(response, "Torii transaction status");
+      return parseJsonResponse(text, "Torii transaction status");
+    } finally {
+      request.close();
+    }
+  }
+
+  async waitForTransactionStatus(hashHex, options = {}) {
+    if (options === null || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError("transaction status options must be an object");
+    }
+    const intervalMs = normalizeNonNegativeInteger(
+      options.intervalMs,
+      DEFAULT_STATUS_POLL_INTERVAL_MS,
+      "transaction status intervalMs",
+    );
+    const timeoutMs =
+      options.timeoutMs === null
+        ? null
+        : normalizeNonNegativeInteger(
+            options.timeoutMs,
+            DEFAULT_STATUS_POLL_TIMEOUT_MS,
+            "transaction status timeoutMs",
+          );
+    const maxAttempts =
+      options.maxAttempts === undefined || options.maxAttempts === null
+        ? null
+        : normalizePositiveInteger(
+            options.maxAttempts,
+            "transaction status maxAttempts",
+          );
+    if (
+      options.onStatus !== undefined &&
+      options.onStatus !== null &&
+      typeof options.onStatus !== "function"
+    ) {
+      throw new TypeError("transaction status onStatus must be a function");
+    }
+    const successStatuses = normalizeStatusSet(
+      options.successStatuses,
+      DEFAULT_SUCCESS_STATUSES,
+      "transaction status successStatuses",
+    );
+    const failureStatuses = normalizeStatusSet(
+      options.failureStatuses,
+      DEFAULT_FAILURE_STATUSES,
+      "transaction status failureStatuses",
+    );
+    for (const status of successStatuses) {
+      if (failureStatuses.has(status)) {
+        throw new TypeError(`transaction status '${status}' cannot be both success and failure`);
+      }
+    }
+    const startedAt = Date.now();
+    let attempts = 0;
+    let lastPayload = null;
+    while (true) {
+      if (options.signal?.aborted) {
+        throw options.signal.reason ?? new Error("operation aborted");
+      }
+      attempts += 1;
+      lastPayload = await this.getTransactionStatus(hashHex, {
+        scope: options.scope,
+        signal: options.signal,
+      });
+      const status = pipelineStatusKind(lastPayload);
+      if (options.onStatus) {
+        await options.onStatus(status, lastPayload, attempts);
+      }
+      if (status !== null && successStatuses.has(status)) return lastPayload;
+      if (status !== null && failureStatuses.has(status)) {
+        throw new Error(`transaction reached failure status ${status}`);
+      }
+      if (maxAttempts !== null && attempts >= maxAttempts) {
+        throw new Error(`transaction status did not settle after ${attempts} attempts`);
+      }
+      if (timeoutMs !== null && Date.now() - startedAt >= timeoutMs) {
+        throw new Error(`transaction status did not settle within ${timeoutMs}ms`);
+      }
+      await delayWithSignal(intervalMs, options.signal);
+    }
+  }
 }
 
 export class NexusAppError extends Error {
@@ -354,22 +1149,32 @@ export class NexusAppError extends Error {
 
 export class NexusAppClient {
   constructor(config = {}) {
-    if (!config || typeof config !== "object") {
-      throw new TypeError("NexusAppClient config must be an object");
-    }
-    this.config = { ...config };
+    config = snapshotDataFields(
+      config,
+      CONFIG_FIELDS,
+      "config",
+      "invalid_config",
+    );
+    this.config = config;
     this.connect = config.connectTransport ?? config.connect ?? null;
     this.transactionCodec = config.transactionCodec ?? null;
     this.toriiClient =
       config.toriiClient ??
       (config.toriiBaseUrl || config.baseUrl
-        ? new ToriiClient(config.toriiBaseUrl ?? config.baseUrl, {
-            fetchImpl: config.fetchImpl,
-          })
+        ? new BrowserToriiPipelineClient(
+            config.toriiBaseUrl ?? config.baseUrl,
+            config.fetchImpl,
+          )
         : null);
   }
 
   async startConnect(options = {}) {
+    options = snapshotDataFields(
+      options,
+      CONNECT_OPTION_FIELDS,
+      "connect options",
+      "invalid_connect_options",
+    );
     const injected = await maybeInvoke(
       this.connect?.startConnect,
       this.connect,
@@ -400,11 +1205,12 @@ export class NexusAppClient {
       preview.sidBase64Url,
       { node, fetchImpl: this.config.fetchImpl },
     );
+    const normalizedRegistered = normalizeConnectSession(registered);
     return normalizeConnectSession({
-      ...registered,
+      ...normalizedRegistered,
       preview,
-      walletLaunchUri: registered.wallet_uri ?? preview.walletUri,
-      appLaunchUri: registered.app_uri ?? preview.appUri,
+      walletLaunchUri: normalizedRegistered.walletLaunchUri ?? preview.walletUri,
+      appLaunchUri: normalizedRegistered.appLaunchUri ?? preview.appUri,
     });
   }
 
@@ -436,6 +1242,12 @@ export class NexusAppClient {
       normalized.appSession = appSession;
       approved = await appSession.waitForApproval();
     }
+    approved = snapshotDataFields(
+      approved,
+      APPROVAL_FIELDS,
+      "wallet approval",
+      "invalid_wallet_approval",
+    );
     const accountIdRaw = approved.accountId ?? approved.account_id;
     if (typeof accountIdRaw !== "string" || accountIdRaw.trim() === "") {
       throw new NexusAppError(
@@ -469,6 +1281,12 @@ export class NexusAppClient {
   }
 
   buildTransferDraft(input = {}) {
+    input = snapshotDataFields(
+      input,
+      TRANSFER_DRAFT_FIELDS,
+      "transfer input",
+      "invalid_transfer_input",
+    );
     const authority =
       input.authority ??
       input.accountId ??
@@ -498,15 +1316,34 @@ export class NexusAppClient {
       ttlMs: input.ttlMs ?? null,
       nonce: input.nonce ?? null,
     };
-    const payloadBytes = toBuffer(
+    const payloadResult =
       this.transactionCodec?.buildTransferPayload
         ? this.transactionCodec.buildTransferPayload(payloadInput)
-        : defaultBuildTransferPayload(payloadInput),
-      "payloadBytes",
-    );
-    const payloadHashHex =
-      this.transactionCodec?.payloadHashHex?.(payloadBytes) ??
-      irohaPrehashHex(payloadBytes);
+        : defaultBuildTransferPayload(payloadInput);
+    const { payloadBytes, assertedHashHex } = normalizePayloadBuildResult(payloadResult);
+    if (payloadBytes.length === 0) {
+      throw new NexusAppError("invalid_payload", "payloadBytes must not be empty");
+    }
+    const payloadHashHex = irohaPrehashHex(payloadBytes);
+    if (assertedHashHex !== null && assertedHashHex !== payloadHashHex) {
+      throw new NexusAppError(
+        "payload_hash_mismatch",
+        `transaction codec payload hash ${assertedHashHex} does not match canonical hash ${payloadHashHex}`,
+      );
+    }
+    if (typeof this.transactionCodec?.payloadHashHex === "function") {
+      const codecHashHex = exactHashHex(
+        this.transactionCodec.payloadHashHex(Buffer.from(payloadBytes)),
+        "transactionCodec.payloadHashHex result",
+        "invalid_payload_hash",
+      );
+      if (codecHashHex !== payloadHashHex) {
+        throw new NexusAppError(
+          "payload_hash_mismatch",
+          `transaction codec payloadHashHex ${codecHashHex} does not match canonical hash ${payloadHashHex}`,
+        );
+      }
+    }
     const signingPublicKey =
       input.signingPublicKey ??
       this.config.signingPublicKey ??
@@ -519,7 +1356,7 @@ export class NexusAppClient {
         authority,
         signingPublicKey: signingPublicKey
           ? validateEd25519PublicKey(
-              toBuffer(signingPublicKey, "signingPublicKey"),
+              toBuffer(signingPublicKey, "signingPublicKey", { maxBytes: 32 }),
               "signingPublicKey",
             )
           : null,
@@ -529,18 +1366,25 @@ export class NexusAppClient {
   }
 
   async requestSignature(session, signable) {
+    const normalizedSession = normalizeConnectSession(session);
+    signable = snapshotDataFields(
+      signable,
+      SIGNABLE_FIELDS,
+      "signable",
+      "invalid_payload",
+    );
     normalizeAlgorithm(signable.signatureAlgorithm);
     const injected = await maybeInvoke(
       this.connect?.requestSignature,
       this.connect,
-      session,
+      normalizedSession,
       signable,
       this.config,
     );
     if (injected !== undefined) {
       return normalizeSignature(injected);
     }
-    const appSession = session?.appSession;
+    const appSession = normalizedSession.appSession;
     if (!appSession || typeof appSession.signTransaction !== "function") {
       throw new NexusAppError(
         "connect_session_unapproved",
@@ -552,8 +1396,38 @@ export class NexusAppClient {
   }
 
   async finalizeAndSubmit(signable, signature, options = {}) {
+    options = snapshotDataFields(
+      options,
+      FINALIZE_OPTION_FIELDS,
+      "finalize options",
+      "invalid_finalize_options",
+    );
+    signable = snapshotDataFields(
+      signable,
+      SIGNABLE_FIELDS,
+      "signable",
+      "invalid_payload",
+    );
     normalizeAlgorithm(signable.signatureAlgorithm);
     const normalizedSignature = normalizeSignature(signature);
+    const payloadBytes = toBuffer(signable.payloadBytes, "signable.payloadBytes", {
+      maxBytes: MAX_PAYLOAD_BYTES,
+    });
+    if (payloadBytes.length === 0) {
+      throw new NexusAppError("invalid_payload", "signable.payloadBytes must not be empty");
+    }
+    const payloadHashHex = irohaPrehashHex(payloadBytes);
+    const assertedPayloadHashHex = exactHashHex(
+      signable.payloadHashHex,
+      "signable.payloadHashHex",
+      "invalid_payload_hash",
+    );
+    if (assertedPayloadHashHex !== payloadHashHex) {
+      throw new NexusAppError(
+        "payload_hash_mismatch",
+        `signable payload hash ${assertedPayloadHashHex} does not match canonical hash ${payloadHashHex}`,
+      );
+    }
     const signingPublicKey =
       signable.signingPublicKey ??
       options.signingPublicKey ??
@@ -565,27 +1439,57 @@ export class NexusAppClient {
       );
     }
     const publicKey = validateEd25519PublicKey(
-      toBuffer(signingPublicKey, "signingPublicKey"),
+      toBuffer(signingPublicKey, "signingPublicKey", { maxBytes: 32 }),
       "signingPublicKey",
     );
     validateEd25519SignatureForPayload(
       publicKey,
-      signable.payloadBytes,
+      payloadBytes,
       normalizedSignature.signature,
+    );
+    const canonicalSignable = Object.freeze({
+      payloadBytes,
+      payloadHashHex,
+      authority: signable.authority,
+      signingPublicKey: Buffer.from(publicKey),
+      signatureAlgorithm: ALGORITHM_ED25519,
+    });
+    const expectedFinalized = finalizeBrowserSignedTransaction(
+      {
+        payloadBytes,
+        payloadHashHex,
+        authority: null,
+        signingPublicKey: Buffer.from(publicKey),
+        signatureAlgorithm: ALGORITHM_ED25519,
+      },
+      normalizedSignature,
+      publicKey,
     );
     const finalized = normalizeFinalizedTransaction(
       this.transactionCodec?.finalizeSignedTransaction
         ? this.transactionCodec.finalizeSignedTransaction(
-            signable,
+            canonicalSignable,
             normalizedSignature,
             publicKey,
           )
         : defaultFinalizeSignedTransaction(
-            signable,
+            canonicalSignable,
             normalizedSignature,
             publicKey,
           ),
     );
+    if (!finalized.signedTransaction.equals(expectedFinalized.signedTransaction)) {
+      throw new NexusAppError(
+        "signed_transaction_mismatch",
+        "transaction finalizer bytes do not match the independently finalized canonical transfer",
+      );
+    }
+    if (finalized.hashHex !== expectedFinalized.hashHex) {
+      throw new NexusAppError(
+        "transaction_hash_mismatch",
+        "transaction finalizer hash does not match the independently finalized canonical transfer",
+      );
+    }
     const toriiClient = options.toriiClient ?? this.toriiClient;
     if (!toriiClient || typeof toriiClient.submitTransaction !== "function") {
       throw new NexusAppError(
@@ -621,6 +1525,7 @@ export class NexusAppClient {
           successStatuses: options.successStatuses,
           failureStatuses: options.failureStatuses,
           onStatus: options.onStatus,
+          signal: options.signal,
         });
       } catch (error) {
         throw new NexusAppError(
@@ -639,6 +1544,12 @@ export class NexusAppClient {
   }
 
   async transferWithWallet(session, input, options = {}) {
+    input = snapshotDataFields(
+      input,
+      TRANSFER_DRAFT_FIELDS,
+      "transfer input",
+      "invalid_transfer_input",
+    );
     const normalizedSession = session ? normalizeConnectSession(session) : {};
     const approvedAccount =
       normalizedSession.approvedAccountId ??

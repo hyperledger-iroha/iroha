@@ -22,6 +22,7 @@ use super::{
         cst::{MissingSyntax, SyntaxOutline, SyntaxOutlineBuilder, SyntaxOutlineCheckpoint},
     },
 };
+use iroha_primitives::bigint::BigInt;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ParseError {
@@ -45,12 +46,61 @@ pub struct ParseError {
 type ParseResult<T> = Result<T, ParseError>;
 type ForEachMapBinding = (NodeId, String, Option<String>, Expr);
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum IntegerSuffix {
-    #[default]
-    None,
-    I64,
-    U128,
+fn integer_digits(spelling: &str) -> (&str, u32) {
+    if let Some(digits) = spelling
+        .strip_prefix("0x")
+        .or_else(|| spelling.strip_prefix("0X"))
+    {
+        (digits, 16)
+    } else if let Some(digits) = spelling
+        .strip_prefix("0b")
+        .or_else(|| spelling.strip_prefix("0B"))
+    {
+        (digits, 2)
+    } else {
+        (spelling, 10)
+    }
+}
+
+fn parse_integer_value(spelling: &str, negative: bool) -> Result<BigInt, ()> {
+    let (digits, radix_value) = integer_digits(spelling);
+    let radix = BigInt::from(radix_value);
+    let mut value = BigInt::zero();
+    for character in digits.chars().filter(|character| *character != '_') {
+        let digit = character.to_digit(radix_value).ok_or(())?;
+        value = value.checked_mul(&radix).map_err(|_| ())?;
+        value = if negative {
+            value.checked_sub(&BigInt::from(digit)).map_err(|_| ())?
+        } else {
+            value.checked_add(&BigInt::from(digit)).map_err(|_| ())?
+        };
+    }
+    Ok(value)
+}
+
+fn parse_bounded_unsigned(spelling: &str, maximum: u64) -> Result<u64, ()> {
+    let (digits, radix) = integer_digits(spelling);
+    let compact = digits
+        .chars()
+        .filter(|character| *character != '_')
+        .collect::<String>();
+    let value = u64::from_str_radix(&compact, radix).map_err(|_| ())?;
+    (value <= maximum).then_some(value).ok_or(())
+}
+
+fn bigint_literal_expr(value: BigInt) -> Expr {
+    Expr::IntLiteral(value)
+}
+
+fn retired_numeric_type_replacement(name: &str) -> Option<Option<&'static str>> {
+    match name {
+        "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32"
+        | "u64" | "u128" | "usize" | "num" => Some(Some("int")),
+        "float" | "f32" | "f64" => Some(Some("decimal")),
+        "Amount" | "amount" | "money" => Some(Some("quantity")),
+        "number" => Some(None),
+        _ => None,
+    }
 }
 
 fn expected_syntax_kind(kind: &TokenKind) -> Option<SyntaxKind> {
@@ -83,7 +133,7 @@ fn expected_syntax_kind(kind: &TokenKind) -> Option<SyntaxKind> {
         TokenKind::False => SyntaxKind::KwFalse,
         TokenKind::Ident(_) => SyntaxKind::Ident,
         TokenKind::Number(_) => SyntaxKind::Number,
-        TokenKind::AmountLiteral(_) => SyntaxKind::Amount,
+        TokenKind::DecimalLiteral(_) => SyntaxKind::Decimal,
         TokenKind::String(_) => SyntaxKind::String,
         TokenKind::Bytes(_) => SyntaxKind::Bytes,
         TokenKind::Plus => SyntaxKind::Plus,
@@ -1049,10 +1099,17 @@ impl<'a> CstAstLowerer<'a> {
             }
             self.expect(TokenKind::Equal)?;
             let code_token = self.bump();
-            let code = match code_token.kind {
-                TokenKind::Number(value) if (1..=u128::from(u32::MAX)).contains(&value) => {
-                    value as u32
-                }
+            let code = match &code_token.kind {
+                TokenKind::Number(value) => parse_bounded_unsigned(value, u64::from(u32::MAX))
+                    .ok()
+                    .and_then(|value| u32::try_from(value).ok())
+                    .filter(|value| *value != 0)
+                    .ok_or_else(|| {
+                        self.error(
+                            code_token.clone(),
+                            "explicit error code in the range 1..=4294967295",
+                        )
+                    })?,
                 _ => {
                     return Err(self.error(
                         code_token,
@@ -1344,17 +1401,9 @@ impl<'a> CstAstLowerer<'a> {
     fn parse_u64_literal(&mut self, context: &str) -> ParseResult<u64> {
         let tok = self.bump();
         match tok.kind.clone() {
-            TokenKind::Number(n) => {
-                if self.consume_integer_suffix()? == IntegerSuffix::U128 {
-                    return Err(self.error(
-                        tok,
-                        &format!("{context} expects an i64-domain integer literal"),
-                    ));
-                }
-                u64::try_from(n).map_err(|_| {
-                    self.range_error(&tok, format!("{context} integer literal out of range"))
-                })
-            }
+            TokenKind::Number(n) => parse_bounded_unsigned(&n, u64::MAX).map_err(|_| {
+                self.range_error(&tok, format!("{context} integer literal out of range"))
+            }),
             TokenKind::Minus => Err(self.error(
                 tok,
                 &format!("{context} expects a non-negative integer literal"),
@@ -1614,7 +1663,7 @@ impl<'a> CstAstLowerer<'a> {
     }
 
     fn parse_struct_def(&mut self) -> ParseResult<Item> {
-        // struct Name { field: Type, ... }
+        // struct Name { Type field; ... }
         let node = self.begin_node(AstNodeKind::Struct, self.current_start());
         self.expect(TokenKind::Struct)?;
         let (name, name_token) = self.expect_ident_token()?;
@@ -1633,10 +1682,17 @@ impl<'a> CstAstLowerer<'a> {
                 self.bump();
                 continue;
             }
-            // Expect: ident ':' type ';'
-            let field_name = self.expect_ident()?;
-            self.expect(TokenKind::Colon)?;
             let ty = self.parse_type_expr()?;
+            let field_name = if self.peek(TokenKind::Colon) {
+                let token = self.bump();
+                return Err(self.coded_error(
+                    token,
+                    "E_RETIRED_DECLARATION_ORDER",
+                    "Kotodama V1 struct fields are type-first: write `int field;`, not `field: int;`",
+                ));
+            } else {
+                self.expect_ident()?
+            };
             fields.push((field_name, ty));
             if self.peek(TokenKind::Semicolon) || self.peek(TokenKind::Comma) {
                 self.bump();
@@ -1648,9 +1704,18 @@ impl<'a> CstAstLowerer<'a> {
     }
 
     fn parse_state_decl(&mut self) -> ParseResult<Item> {
-        // Canonical V1 form: `state name: Type;`.
+        // Canonical V1 form: `state Type name;`.
         let node = self.begin_node(AstNodeKind::State, self.current_start());
         self.expect(TokenKind::State)?;
+        let ty = self.parse_type_expr()?;
+        if self.peek(TokenKind::Colon) {
+            let token = self.bump();
+            return Err(self.coded_error(
+                token,
+                "E_RETIRED_DECLARATION_ORDER",
+                "Kotodama V1 state declarations are type-first: write `state int value;`, not `state value: int;`",
+            ));
+        }
         let (name, name_token) = self.expect_ident_token()?;
         self.record_declaration(
             node,
@@ -1659,8 +1724,6 @@ impl<'a> CstAstLowerer<'a> {
             DeclarationKind::State,
             None,
         );
-        self.expect(TokenKind::Colon)?;
-        let ty = self.parse_type_expr()?;
         self.expect(TokenKind::Semicolon)?;
         self.finish_node(node);
         Ok(Item::State(super::ast::StateDecl { name, ty }))
@@ -1669,6 +1732,15 @@ impl<'a> CstAstLowerer<'a> {
     fn parse_const_decl(&mut self) -> ParseResult<Item> {
         let node = self.begin_node(AstNodeKind::Const, self.current_start());
         self.expect(TokenKind::Const)?;
+        let ty = Some(self.parse_type_expr()?);
+        if self.peek(TokenKind::Colon) {
+            let token = self.bump();
+            return Err(self.coded_error(
+                token,
+                "E_RETIRED_DECLARATION_ORDER",
+                "Kotodama V1 constants are type-first: write `const int limit = 1;`, not `const limit: int = 1;`",
+            ));
+        }
         let (name, name_token) = self.expect_ident_token()?;
         self.record_declaration(
             node,
@@ -1677,8 +1749,6 @@ impl<'a> CstAstLowerer<'a> {
             DeclarationKind::Const,
             None,
         );
-        self.expect(TokenKind::Colon)?;
-        let ty = Some(self.parse_type_expr()?);
         self.expect(TokenKind::Equal)?;
         let value = self.parse_expr()?;
         self.expect(TokenKind::Semicolon)?;
@@ -1900,6 +1970,11 @@ impl<'a> CstAstLowerer<'a> {
             let owner = self.begin_node(AstNodeKind::Statement, statement_start);
             let mutable = self.peek(TokenKind::Var);
             self.bump();
+            let ty = if self.typed_local_starts_here() {
+                Some(self.parse_type_expr()?)
+            } else {
+                None
+            };
             // pattern
             let pat = if self.peek(TokenKind::LParen) {
                 self.bump();
@@ -1927,13 +2002,14 @@ impl<'a> CstAstLowerer<'a> {
                 self.record_binding(owner, 0, name.clone(), token.range, BindingFactKind::Local);
                 Pattern::Name(name)
             };
-            // optional type
-            let ty = if self.peek(TokenKind::Colon) {
-                self.bump();
-                Some(self.parse_type_expr()?)
-            } else {
-                None
-            };
+            if self.peek(TokenKind::Colon) {
+                let token = self.bump();
+                return Err(self.coded_error(
+                    token,
+                    "E_RETIRED_DECLARATION_ORDER",
+                    "Kotodama V1 typed locals are type-first: write `let int value = ...;`; omit the type entirely to use inference",
+                ));
+            }
             self.expect(TokenKind::Equal)?;
             let expr = self.parse_expr()?;
             self.expect(TokenKind::Semicolon)?;
@@ -2339,7 +2415,11 @@ impl<'a> CstAstLowerer<'a> {
     fn inc_statement(&mut self, name: String, range: TextRange) -> Statement {
         let left =
             self.source_expression(AstNodeKind::Expression, range, Expr::Ident(name.clone()));
-        let right = self.source_expression(AstNodeKind::Expression, range, Expr::Number(1));
+        let right = self.source_expression(
+            AstNodeKind::Expression,
+            range,
+            Expr::IntLiteral(BigInt::one()),
+        );
         let value = self.source_expression(
             AstNodeKind::Expression,
             range,
@@ -2385,7 +2465,7 @@ impl<'a> CstAstLowerer<'a> {
             self.expect(TokenKind::LParen)?;
             let end = self.parse_expr()?;
             self.expect(TokenKind::RParen)?;
-            if !matches!(end.kind(), Expr::Number(value) if *value >= 0) {
+            if !matches!(end.kind(), Expr::IntLiteral(value) if !value.is_negative()) {
                 return Err(self.coded_error(
                     self.tokens[self.pos.saturating_sub(1)].clone(),
                     "E_UNBOUNDED_LOOP",
@@ -2393,7 +2473,11 @@ impl<'a> CstAstLowerer<'a> {
                 ));
             }
             let range = TextRange::new(header_start, self.previous_end(header_start));
-            let zero = self.source_expression(AstNodeKind::Expression, range, Expr::Number(0));
+            let zero = self.source_expression(
+                AstNodeKind::Expression,
+                range,
+                Expr::IntLiteral(BigInt::zero()),
+            );
             let init = self.finish_owned_statement(
                 init_owner,
                 range,
@@ -2653,30 +2737,26 @@ impl<'a> CstAstLowerer<'a> {
     }
 
     fn parse_unary(&mut self) -> ParseResult<Expr> {
-        let mut prefixes = Vec::new();
+        let mut prefixes: Vec<(UnaryOp, Token)> = Vec::new();
         loop {
             if self.peek(TokenKind::Minus) {
                 let minus = self.bump();
                 if let Some(token) = self.tokens.get(self.pos).cloned()
-                    && let TokenKind::Number(n) = token.kind.clone()
-                    && n > i64::MAX as u128
+                    && let TokenKind::Number(spelling) = token.kind.clone()
                 {
                     self.bump();
-                    if self.consume_integer_suffix()? == IntegerSuffix::U128 {
-                        return Err(
-                            self.error(token, "u128 literals cannot be negated; u128 is unsigned")
-                        );
-                    }
-                    let value = self.number_to_i64_neg(&token, n)?;
-                    let mut expr =
-                        self.source_expression_from(minus.range.start, Expr::Number(value));
+                    let value = parse_integer_value(&spelling, true).map_err(|_| {
+                        self.coded_error(
+                            token.clone(),
+                            "E_INT_LITERAL_OVERFLOW",
+                            "integer literal is outside the signed Kotodama int domain",
+                        )
+                    })?;
+                    let mut expr = self.source_expression_from(
+                        minus.range.start,
+                        bigint_literal_expr(value),
+                    );
                     for (op, token) in prefixes.into_iter().rev() {
-                        if op == UnaryOp::Neg && matches!(expr.kind(), Expr::Decimal(_)) {
-                            return Err(self.error(
-                                token,
-                                "u128 literals cannot be negated; u128 is unsigned",
-                            ));
-                        }
                         expr = self.source_expression_from(
                             token.range.start,
                             Expr::Unary {
@@ -2699,22 +2779,6 @@ impl<'a> CstAstLowerer<'a> {
         let primary = self.parse_primary()?;
         let mut expr = self.parse_postfix(primary, postfix_start)?;
         for (op, token) in prefixes.into_iter().rev() {
-            if op == UnaryOp::Neg {
-                if matches!(expr.kind(), Expr::Decimal(_)) {
-                    return Err(
-                        self.error(token, "u128 literals cannot be negated; u128 is unsigned")
-                    );
-                }
-                if matches!(expr.kind(), Expr::AmountLiteral(_)) {
-                    let mut error = self.coded_error(
-                        token,
-                        "E_AMOUNT_NEGATIVE",
-                        "Amount literals are non-negative; remove the `-`",
-                    );
-                    error.fix = Some(String::new());
-                    return Err(error);
-                }
-            }
             expr = self.source_expression_from(
                 token.range.start,
                 Expr::Unary {
@@ -2739,7 +2803,7 @@ impl<'a> CstAstLowerer<'a> {
                         }
                         TokenKind::Number(n) => {
                             self.bump();
-                            let index = self.number_to_usize(&token, n, "tuple index")?;
+                            let index = self.number_to_usize(&token, &n, "tuple index")?;
                             (index.to_string(), None)
                         }
                         _ => {
@@ -2861,24 +2925,26 @@ impl<'a> CstAstLowerer<'a> {
         let expression = match &tok.kind {
             TokenKind::True => Expr::Bool(true),
             TokenKind::False => Expr::Bool(false),
-            TokenKind::Number(n) => match self.consume_integer_suffix()? {
-                IntegerSuffix::U128 => Expr::Decimal(n.to_string()),
-                IntegerSuffix::None | IntegerSuffix::I64 => {
-                    let value = self.number_to_i64(&tok, *n)?;
-                    Expr::Number(value)
-                }
-            },
-            TokenKind::AmountLiteral(spelling) => {
+            TokenKind::Number(spelling) => bigint_literal_expr(
+                parse_integer_value(spelling, false).map_err(|_| {
+                    self.coded_error(
+                        tok.clone(),
+                        "E_INT_LITERAL_OVERFLOW",
+                        "integer literal is outside the signed Kotodama int domain",
+                    )
+                })?,
+            ),
+            TokenKind::DecimalLiteral(spelling) => {
                 let range = tok.range;
                 let node = self.facts.source_map.allocate_owned(
-                    AstNodeKind::AmountLiteral,
+                    AstNodeKind::DecimalLiteral,
                     range,
                     self.current_function,
                 );
                 Expr::Source {
                     node,
                     source: SourceRange::new(self.facts.source_map.source(), range),
-                    expression: Box::new(Expr::AmountLiteral(spelling.clone())),
+                    expression: Box::new(Expr::DecimalLiteral(spelling.clone())),
                 }
             }
             TokenKind::String(s) => Expr::String(s.clone()),
@@ -3282,8 +3348,15 @@ impl<'a> CstAstLowerer<'a> {
         }
 
         let parameters: &[&str] = match name {
-            "Option::some" | "option::some" | "u128::from_i64" | "Amount::from_i64"
-            | "Amount::from_u128" | "try_push" | "contains" => &["value"],
+            "Option::some"
+            | "option::some"
+            | "decimal::from_int"
+            | "decimal::to_int_exact"
+            | "decimal::to_int_trunc"
+            | "quantity::try_from_decimal"
+            | "decimal::from_quantity"
+            | "try_push"
+            | "contains" => &["value"],
             "Result::ok" | "result::ok" => &["value"],
             "Result::err" | "result::err" => &["error"],
             "get" => &["index"],
@@ -3590,7 +3663,7 @@ impl<'a> CstAstLowerer<'a> {
                 }) = self.tokens.get(self.pos).cloned()
                 {
                     let token = self.bump();
-                    let value = u64::try_from(value).map_err(|_| {
+                    let value = parse_bounded_unsigned(&value, u64::MAX).map_err(|_| {
                         self.range_error(
                             &token,
                             "compile-time integer type argument is outside the u64 range"
@@ -3601,6 +3674,20 @@ impl<'a> CstAstLowerer<'a> {
                 }
 
                 let (base, base_token) = self.expect_ident_token()?;
+                if let Some(replacement) = retired_numeric_type_replacement(&base) {
+                    let replacement = replacement.map_or_else(
+                        || "use `int`, `decimal`, or `quantity` according to the value's domain"
+                            .to_owned(),
+                        |replacement| format!("use `{replacement}`"),
+                    );
+                    return Err(self.coded_error(
+                        base_token,
+                        "E_RETIRED_NUMERIC_TYPE",
+                        format!(
+                            "numeric type `{base}` is not part of Kotodama V1; {replacement}"
+                        ),
+                    ));
+                }
                 self.record_type_use(base.clone(), base_token.range);
                 if self.peek(TokenKind::Less) {
                     self.bump();
@@ -3722,7 +3809,7 @@ impl<'a> CstAstLowerer<'a> {
                     && let TokenKind::Number(n) = token.kind.clone()
                 {
                     self.bump();
-                    let index = self.number_to_usize(&token, n, "tuple index")?;
+                    let index = self.number_to_usize(&token, &n, "tuple index")?;
                     index.to_string()
                 } else {
                     let tok = self.bump();
@@ -3832,7 +3919,16 @@ impl<'a> CstAstLowerer<'a> {
     }
 
     fn parse_param(&mut self) -> ParseResult<Param> {
-        // Canonical V1 form: `name: Type`.
+        // Canonical V1 form: `Type name`.
+        let (is_state, ty) = self.parse_param_type_annotation()?;
+        if self.peek(TokenKind::Colon) {
+            let token = self.bump();
+            return Err(self.coded_error(
+                token,
+                "E_RETIRED_DECLARATION_ORDER",
+                "Kotodama V1 parameters are type-first: write `int value`, not `value: int`",
+            ));
+        }
         let (name, name_token) = self.expect_ident_token()?;
         let node = self.begin_node(AstNodeKind::Parameter, name_token.range.start);
         self.record_declaration(
@@ -3842,8 +3938,6 @@ impl<'a> CstAstLowerer<'a> {
             DeclarationKind::Parameter,
             self.current_function,
         );
-        self.expect(TokenKind::Colon)?;
-        let (is_state, ty) = self.parse_param_type_annotation()?;
         self.finish_node(node);
         Ok(Param {
             ty: Some(ty),
@@ -3900,93 +3994,10 @@ impl<'a> CstAstLowerer<'a> {
         self.expect(kind)
     }
 
-    fn consume_integer_suffix(&mut self) -> ParseResult<IntegerSuffix> {
-        if let Some(Token {
-            kind: TokenKind::Ident(suffix),
-            range,
-            ..
-        }) = self.tokens.get(self.pos)
-        {
-            let adjacent = self
-                .tokens
-                .get(self.pos.saturating_sub(1))
-                .is_some_and(|previous| previous.range.end == range.start);
-            if suffix == "amt" {
-                let tok = self.bump();
-                let (code, message) = if adjacent {
-                    (
-                        "E_AMOUNT_SUFFIX",
-                        "Amount literals require the exact scanner-recognized `amt` suffix",
-                    )
-                } else {
-                    (
-                        "E_AMOUNT_SUFFIX_SEPARATED",
-                        "the `amt` suffix must immediately follow the Amount digits",
-                    )
-                };
-                return Err(self.coded_error(tok, code, message));
-            }
-            if adjacent && suffix == "i64" {
-                self.bump();
-                return Ok(IntegerSuffix::I64);
-            } else if adjacent && suffix == "u128" {
-                self.bump();
-                return Ok(IntegerSuffix::U128);
-            } else if adjacent && (suffix.starts_with('i') || suffix.starts_with('u')) {
-                let tok = self.bump();
-                let line_text = self
-                    .source
-                    .lines()
-                    .nth(tok.line.saturating_sub(1))
-                    .unwrap_or("");
-                let caret = " ".repeat(tok.column.saturating_sub(1)) + "^";
-                return Err(ParseError {
-                    code: "K1001",
-                    message: format!("unknown integer literal suffix `{suffix}`"),
-                    line: tok.line,
-                    column: tok.column,
-                    snippet: format!("{line_text}\n{caret}"),
-                    range: tok.range,
-                    fix: None,
-                    expected: None,
-                    expected_owner: None,
-                });
-            }
-        }
-        Ok(IntegerSuffix::None)
-    }
-
-    fn number_to_i64(&self, token: &Token, value: u128) -> ParseResult<i64> {
-        if value <= i64::MAX as u128 {
-            Ok(value as i64)
-        } else {
-            Err(self.range_error(
-                token,
-                format!("integer literal out of range (max {})", i64::MAX),
-            ))
-        }
-    }
-
-    fn number_to_i64_neg(&self, token: &Token, value: u128) -> ParseResult<i64> {
-        let max_plus_one = i64::MAX as u128 + 1;
-        if value <= i64::MAX as u128 {
-            Ok(-(value as i64))
-        } else if value == max_plus_one {
-            Ok(i64::MIN)
-        } else {
-            Err(self.range_error(
-                token,
-                format!("integer literal out of range (min {})", i64::MIN),
-            ))
-        }
-    }
-
-    fn number_to_usize(&self, token: &Token, value: u128, context: &str) -> ParseResult<usize> {
-        if value <= i64::MAX as u128 && value <= usize::MAX as u128 {
-            Ok(value as usize)
-        } else {
-            Err(self.range_error(token, format!("{context} integer literal out of range")))
-        }
+    fn number_to_usize(&self, token: &Token, value: &str, context: &str) -> ParseResult<usize> {
+        parse_bounded_unsigned(value, usize::MAX as u64)
+            .and_then(|value| usize::try_from(value).map_err(|_| ()))
+            .map_err(|()| self.range_error(token, format!("{context} integer literal out of range")))
     }
 
     fn range_error(&self, token: &Token, message: String) -> ParseError {
@@ -4024,6 +4035,51 @@ impl<'a> CstAstLowerer<'a> {
         )
     }
 
+    fn typed_local_starts_here(&self) -> bool {
+        if matches!(
+            (self.tokens.get(self.pos), self.tokens.get(self.pos + 1)),
+            (
+                Some(Token {
+                    kind: TokenKind::Ident(_),
+                    ..
+                }),
+                Some(Token {
+                    kind: TokenKind::Ident(_),
+                    ..
+                } | Token {
+                    kind: TokenKind::Less,
+                    ..
+                })
+            )
+        ) {
+            return true;
+        }
+        if !self.peek(TokenKind::LParen) {
+            return false;
+        }
+        let mut depth = 0_usize;
+        for (offset, token) in self.tokens[self.pos..].iter().enumerate() {
+            match token.kind {
+                TokenKind::LParen => depth += 1,
+                TokenKind::RParen => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return matches!(
+                            self.tokens.get(self.pos + offset + 1),
+                            Some(Token {
+                                kind: TokenKind::Ident(_),
+                                ..
+                            })
+                        );
+                    }
+                }
+                TokenKind::EOF | TokenKind::Equal if depth == 1 => return false,
+                _ => {}
+            }
+        }
+        false
+    }
+
     fn question_starts_ternary(&self) -> bool {
         self.peek(TokenKind::Question)
             && self
@@ -4038,7 +4094,7 @@ impl<'a> CstAstLowerer<'a> {
             TokenKind::True
                 | TokenKind::False
                 | TokenKind::Number(_)
-                | TokenKind::AmountLiteral(_)
+                | TokenKind::DecimalLiteral(_)
                 | TokenKind::String(_)
                 | TokenKind::Bytes(_)
                 | TokenKind::Ident(_)
@@ -4587,7 +4643,7 @@ mod tests {
         };
         assert!(matches!(
             grouped_function.body.statements[0].kind(),
-            Statement::Return(Some(value)) if matches!(value.kind(), Expr::Number(1))
+            Statement::Return(Some(value)) if matches!(value.kind(), Expr::IntLiteral(1))
         ));
     }
 
@@ -5125,7 +5181,7 @@ mod tests {
         };
         assert!(matches!(
             value.kind(),
-            Expr::Decimal(value) if value == "340282366920938463463374607431768211455"
+            Expr::IntLiteral(value) if value == "340282366920938463463374607431768211455"
         ));
     }
 
@@ -5144,7 +5200,7 @@ mod tests {
         let Statement::Let { value, .. } = function.body.statements[0].kind() else {
             panic!("expected let statement");
         };
-        assert!(matches!(value.kind(), Expr::AmountLiteral(value) if value == "1.250_0amt"));
+        assert!(matches!(value.kind(), Expr::DecimalLiteral(value) if value == "1.250_0amt"));
     }
 
     #[test]
@@ -5549,7 +5605,7 @@ mod tests {
         match stmt.kind() {
             Statement::AssignExpr { op, value, .. } => {
                 assert_eq!(*op, AssignOp::Add);
-                assert!(matches!(value.kind(), Expr::Number(1)));
+                assert!(matches!(value.kind(), Expr::IntLiteral(1)));
             }
             other => panic!("expected compound assignment, got {other:?}"),
         }

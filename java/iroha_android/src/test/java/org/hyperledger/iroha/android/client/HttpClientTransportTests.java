@@ -772,7 +772,7 @@ public final class HttpClientTransportTests {
     final ClientConfig config =
         ClientConfig.builder()
             .setBaseUri(URI.create("https://torii.example:8080"))
-            .setSorafsGatewayUri(URI.create("https://gateway.example:8443/gateway"))
+            .setSorafsGatewayUri(URI.create("https://gateway.example/"))
             .setRequestTimeout(Duration.ofSeconds(12))
             .putDefaultHeader("X-Trace", "android-client")
             .build();
@@ -782,7 +782,9 @@ public final class HttpClientTransportTests {
         GatewayProvider.builder()
             .setName("primary")
             .setProviderIdHex("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
-            .setBaseUrl("https://storage.example/direct")
+            .setGatewayPublicKeyHex(
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+            .setBaseUrl("https://storage.example/")
             .setStreamTokenBase64("dG9rZW4=")
             .build();
 
@@ -806,8 +808,8 @@ public final class HttpClientTransportTests {
     final TransportRequest requestSent = executor.lastRequest;
     assert requestSent != null : "Executor should capture request";
     assert requestSent.uri().toString().equals(
-            "https://gateway.example:8443/gateway/v1/sorafs/gateway/fetch")
-        : "Gateway URI must combine base path with fetch endpoint";
+            "https://gateway.example/v1/sorafs/gateway/fetch")
+        : "Gateway URI must use the canonical origin and fixed fetch endpoint";
     assert requestSent.headers().getOrDefault("Content-Type", List.of()).contains("application/json")
         : "Gateway fetch must set JSON content type";
     assert requestSent.headers().getOrDefault("X-Trace", List.of()).contains("android-client")

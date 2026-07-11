@@ -369,7 +369,7 @@ fn json_get_amount_reads_decimal_strings() {
     vm.run().unwrap();
 
     let tlv = vm.memory.validate_tlv(unwrap_some_word(&vm)).unwrap();
-    assert_eq!(tlv.type_id, PointerType::Amount);
+    assert_eq!(tlv.type_id, PointerType::Quantity);
     let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode Amount");
     assert_eq!(value, "0.00001".parse::<Numeric>().expect("parse Amount"));
 }
@@ -389,7 +389,7 @@ fn json_get_amount_direct_accepts_input_heap_and_literal_pointers() {
     vm.load_program(&direct_prog).unwrap();
     vm.run().unwrap();
     let tlv = vm.memory.validate_tlv(unwrap_some_word(&vm)).unwrap();
-    assert_eq!(tlv.type_id, PointerType::Amount);
+    assert_eq!(tlv.type_id, PointerType::Quantity);
     let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode input Amount");
     assert_eq!(value, "0.00001".parse::<Numeric>().expect("parse Amount"));
 
@@ -402,7 +402,7 @@ fn json_get_amount_direct_accepts_input_heap_and_literal_pointers() {
     vm.load_program(&direct_prog).unwrap();
     vm.run().unwrap();
     let tlv = vm.memory.validate_tlv(unwrap_some_word(&vm)).unwrap();
-    assert_eq!(tlv.type_id, PointerType::Amount);
+    assert_eq!(tlv.type_id, PointerType::Quantity);
     let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode heap Amount");
     assert_eq!(value, "0.00001".parse::<Numeric>().expect("parse Amount"));
 
@@ -420,7 +420,7 @@ fn json_get_amount_direct_accepts_input_heap_and_literal_pointers() {
     vm.set_register(11, key_addr);
     vm.run().unwrap();
     let tlv = vm.memory.validate_tlv(unwrap_some_word(&vm)).unwrap();
-    assert_eq!(tlv.type_id, PointerType::Amount);
+    assert_eq!(tlv.type_id, PointerType::Quantity);
     let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode literal Amount");
     assert_eq!(value, "0.00001".parse::<Numeric>().expect("parse Amount"));
 }

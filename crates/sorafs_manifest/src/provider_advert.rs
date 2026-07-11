@@ -1,8 +1,9 @@
 //! Norito-encoded provider advertisements for the SoraFS node ↔ client protocol.
 //!
-//! The advertisement body is signed by governed providers and propagated
-//! through the discovery mesh. TTLs are capped at 24 hours with clients
-//! refreshing half-way through the validity window to avoid stale routes.
+//! The complete advertisement envelope is signed by governed providers and
+//! propagated through the discovery mesh. TTLs are capped at 24 hours with
+//! clients refreshing half-way through the validity window to avoid stale
+//! routes.
 
 use core::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -20,6 +21,9 @@ use crate::chunker_registry;
 /// Advertisement schema version.
 pub const PROVIDER_ADVERT_VERSION_V1: u8 = 1;
 
+/// Domain separator prepended to canonical provider-advert signature payloads.
+pub const PROVIDER_ADVERT_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.provider-advert.v1\0";
+
 /// Maximum advertisement time-to-live (seconds).
 pub const MAX_ADVERT_TTL_SECS: u64 = 24 * 60 * 60;
 
@@ -35,14 +39,35 @@ pub struct ProviderAdvertV1 {
     pub issued_at: u64,
     /// Unix timestamp (seconds) when the advert expires.
     pub expires_at: u64,
-    /// Signed body of the advertisement.
+    /// Body included in the signed advertisement envelope.
     pub body: ProviderAdvertBodyV1,
-    /// Provider signature covering the serialized body.
+    /// Provider signature covering the domain-separated canonical envelope.
     pub signature: AdvertSignature,
-    /// Whether consumers should enforce signature validation.
+    /// Signed verification policy; production Torii ingestion requires `true`.
     pub signature_strict: bool,
     /// Allow consumers to ignore unknown capability TLVs (GREASE-friendly).
     #[norito(default)]
+    pub allow_unknown_capabilities: bool,
+}
+
+/// Canonical provider-advert fields covered by an envelope signature.
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+pub struct ProviderAdvertSignaturePayloadV1 {
+    /// Provider-advert schema version.
+    pub version: u8,
+    /// Unix timestamp at which the advert was issued.
+    pub issued_at: u64,
+    /// Unix timestamp at which the advert expires.
+    pub expires_at: u64,
+    /// Advert body covered by the signature.
+    pub body: ProviderAdvertBodyV1,
+    /// Signature algorithm selected for the advert.
+    pub signature_algorithm: SignatureAlgorithm,
+    /// Public key whose corresponding private key signs the payload.
+    pub signature_public_key: Vec<u8>,
+    /// Whether consumers are required to verify the signature.
+    pub signature_strict: bool,
+    /// Whether consumers may ignore unknown capability identifiers.
     pub allow_unknown_capabilities: bool,
 }
 
@@ -69,6 +94,12 @@ impl ProviderAdvertV1 {
         }
         if self.expires_at <= self.issued_at {
             return Err(AdvertValidationError::InvalidTimestamps);
+        }
+        if self.issued_at > now {
+            return Err(AdvertValidationError::IssuedInFuture {
+                now,
+                issued_at: self.issued_at,
+            });
         }
         let ttl = self.ttl();
         if ttl == 0 || ttl > MAX_ADVERT_TTL_SECS {
@@ -99,7 +130,7 @@ impl ProviderAdvertV1 {
     }
 }
 
-/// Provider advertisement body signed by the provider.
+/// Provider advertisement body included in the provider-signed envelope.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ProviderAdvertBodyV1 {
     /// Governance-controlled provider identifier (32-byte digest).
@@ -567,7 +598,7 @@ pub struct PathDiversityPolicy {
     pub max_same_pool_per_path: u8,
 }
 
-/// Signature covering the serialized advertisement body.
+/// Signature covering the domain-separated canonical advertisement envelope.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 #[norito(decode_from_slice)]
 pub struct AdvertSignature {
@@ -989,6 +1020,8 @@ pub enum AdvertValidationError {
     UnsupportedVersion(u8),
     #[error("expires_at must be greater than issued_at")]
     InvalidTimestamps,
+    #[error("advert issued in the future (now={now}, issued_at={issued_at})")]
+    IssuedInFuture { now: u64, issued_at: u64 },
     #[error("advert TTL {ttl} exceeds maximum {max}")]
     TtlOutOfRange { ttl: u64, max: u64 },
     #[error("advert expired (now={now}, expires_at={expires_at})")]
@@ -1137,7 +1170,37 @@ impl ProviderAdvertV1 {
         Ok(())
     }
 
-    /// Verifies the provider signature over the canonical Norito advert body.
+    /// Returns the canonical envelope fields covered by the signature.
+    #[must_use]
+    pub fn signature_payload(&self) -> ProviderAdvertSignaturePayloadV1 {
+        ProviderAdvertSignaturePayloadV1 {
+            version: self.version,
+            issued_at: self.issued_at,
+            expires_at: self.expires_at,
+            body: self.body.clone(),
+            signature_algorithm: self.signature.algorithm,
+            signature_public_key: self.signature.public_key.clone(),
+            signature_strict: self.signature_strict,
+            allow_unknown_capabilities: self.allow_unknown_capabilities,
+        }
+    }
+
+    /// Returns the domain-separated canonical bytes covered by the signature.
+    ///
+    /// The signed envelope binds the schema version, timestamps, body,
+    /// signature algorithm and public key, strict-verification policy, and
+    /// unknown-capability policy. Signature bytes themselves are excluded.
+    pub fn signature_payload_bytes(&self) -> Result<Vec<u8>, AdvertSignatureError> {
+        let envelope_bytes = norito::to_bytes(&self.signature_payload())
+            .map_err(|err| AdvertSignatureError::EnvelopeEncoding(err.to_string()))?;
+        let mut payload =
+            Vec::with_capacity(PROVIDER_ADVERT_SIGNATURE_DOMAIN_V1.len() + envelope_bytes.len());
+        payload.extend_from_slice(PROVIDER_ADVERT_SIGNATURE_DOMAIN_V1);
+        payload.extend_from_slice(&envelope_bytes);
+        Ok(payload)
+    }
+
+    /// Verifies the provider signature over the canonical advert envelope.
     pub fn verify_signature(&self) -> Result<(), AdvertSignatureError> {
         match self.signature.algorithm {
             SignatureAlgorithm::Ed25519 => {}
@@ -1165,10 +1228,9 @@ impl ProviderAdvertV1 {
         let signature = crate::checked_ed25519_signature_from_bytes(&signature)
             .map_err(AdvertSignatureError::Verification)?;
 
-        let body_bytes = norito::to_bytes(&self.body)
-            .map_err(|err| AdvertSignatureError::BodyEncoding(err.to_string()))?;
+        let payload = self.signature_payload_bytes()?;
         verifying_key
-            .verify_strict(&body_bytes, &signature)
+            .verify_strict(&payload, &signature)
             .map_err(|err| AdvertSignatureError::Verification(err.to_string()))
     }
 }
@@ -1209,9 +1271,9 @@ pub enum AdvertSignatureError {
     /// Public key bytes could not be parsed.
     #[error("invalid ed25519 public key: {0}")]
     InvalidPublicKey(String),
-    /// Advert body could not be encoded into canonical signature bytes.
-    #[error("failed to encode provider advert body for signature verification: {0}")]
-    BodyEncoding(String),
+    /// Advert envelope could not be encoded into canonical signature bytes.
+    #[error("failed to encode provider advert envelope for signature verification: {0}")]
+    EnvelopeEncoding(String),
     /// Signature verification failed.
     #[error("provider advert signature verification failed: {0}")]
     Verification(String),
@@ -1310,13 +1372,15 @@ mod tests {
     fn signed_sample_advert(now: u64) -> ProviderAdvertV1 {
         let mut advert = sample_advert(now);
         let signing_key = SigningKey::from_bytes(&[0xA5; 32]);
-        let body_bytes = norito::to_bytes(&advert.body).expect("encode advert body");
-        let signature = signing_key.sign(&body_bytes);
         advert.signature = AdvertSignature {
             algorithm: SignatureAlgorithm::Ed25519,
             public_key: signing_key.verifying_key().to_bytes().to_vec(),
-            signature: signature.to_bytes().to_vec(),
+            signature: vec![0; SIGNATURE_LENGTH],
         };
+        let payload = advert
+            .signature_payload_bytes()
+            .expect("encode advert signature envelope");
+        advert.signature.signature = signing_key.sign(&payload).to_bytes().to_vec();
         advert
     }
 
@@ -1332,19 +1396,106 @@ mod tests {
     }
 
     #[test]
-    fn verify_signature_accepts_signed_advert_body() {
+    fn verify_signature_accepts_signed_advert_envelope() {
         let advert = signed_sample_advert(1_700_000_000);
         advert
             .verify_signature()
-            .expect("signature should verify over canonical body bytes");
+            .expect("signature should verify over canonical envelope bytes");
     }
 
     #[test]
-    fn verify_signature_rejects_tampered_advert_body() {
-        let mut advert = signed_sample_advert(1_700_000_000);
-        advert.body.qos.max_retrieval_latency_ms += 1;
-        let err = advert.verify_signature().unwrap_err();
-        assert!(matches!(err, AdvertSignatureError::Verification(_)));
+    fn verify_signature_rejects_every_tampered_envelope_field() {
+        let advert = signed_sample_advert(1_700_000_000);
+        let tampered = [
+            ("version", {
+                let mut value = advert.clone();
+                value.version += 1;
+                value
+            }),
+            ("issued_at", {
+                let mut value = advert.clone();
+                value.issued_at += 1;
+                value
+            }),
+            ("expires_at", {
+                let mut value = advert.clone();
+                value.expires_at += 1;
+                value
+            }),
+            ("body", {
+                let mut value = advert.clone();
+                value.body.qos.max_retrieval_latency_ms += 1;
+                value
+            }),
+            ("signature algorithm", {
+                let mut value = advert.clone();
+                value.signature.algorithm = SignatureAlgorithm::MultiSig;
+                value
+            }),
+            ("signature public key", {
+                let mut value = advert.clone();
+                value.signature.public_key[0] ^= 1;
+                value
+            }),
+            ("signature bytes", {
+                let mut value = advert.clone();
+                value.signature.signature[0] ^= 1;
+                value
+            }),
+            ("signature policy", {
+                let mut value = advert.clone();
+                value.signature_strict = false;
+                value
+            }),
+            ("unknown-capability policy", {
+                let mut value = advert.clone();
+                value.allow_unknown_capabilities = true;
+                value
+            }),
+        ];
+
+        for (field, value) in tampered {
+            assert!(
+                value.verify_signature().is_err(),
+                "tampering with {field} must invalidate the signature"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_signature_rejects_legacy_body_only_signature() {
+        let mut advert = sample_advert(1_700_000_000);
+        let signing_key = SigningKey::from_bytes(&[0xA5; 32]);
+        let body_bytes = norito::to_bytes(&advert.body).expect("encode advert body");
+        advert.signature = AdvertSignature {
+            algorithm: SignatureAlgorithm::Ed25519,
+            public_key: signing_key.verifying_key().to_bytes().to_vec(),
+            signature: signing_key.sign(&body_bytes).to_bytes().to_vec(),
+        };
+
+        assert!(matches!(
+            advert.verify_signature(),
+            Err(AdvertSignatureError::Verification(_))
+        ));
+    }
+
+    #[test]
+    fn verify_signature_rejects_undomained_envelope_signature() {
+        let mut advert = sample_advert(1_700_000_000);
+        let signing_key = SigningKey::from_bytes(&[0xA5; 32]);
+        advert.signature = AdvertSignature {
+            algorithm: SignatureAlgorithm::Ed25519,
+            public_key: signing_key.verifying_key().to_bytes().to_vec(),
+            signature: vec![0; SIGNATURE_LENGTH],
+        };
+        let envelope_bytes = norito::to_bytes(&advert.signature_payload())
+            .expect("encode undomained advert envelope");
+        advert.signature.signature = signing_key.sign(&envelope_bytes).to_bytes().to_vec();
+
+        assert!(matches!(
+            advert.verify_signature(),
+            Err(AdvertSignatureError::Verification(_))
+        ));
     }
 
     #[test]
@@ -1413,6 +1564,19 @@ mod tests {
             err,
             AdvertValidationError::TtlOutOfRange { ttl, max } if ttl == MAX_ADVERT_TTL_SECS + 1 && max == MAX_ADVERT_TTL_SECS
         ));
+    }
+
+    #[test]
+    fn future_issued_advert_is_rejected() {
+        let now = 1_700_000_000;
+        let advert = sample_advert(now + 1);
+        assert_eq!(
+            advert.validate(now),
+            Err(AdvertValidationError::IssuedInFuture {
+                now,
+                issued_at: now + 1,
+            })
+        );
     }
 
     #[test]

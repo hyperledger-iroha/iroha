@@ -4220,7 +4220,7 @@ mod tests {
         use halo2_proofs::halo2curves::{ff::Field as _, pasta::Fp};
         use iroha_data_model::ChainId;
 
-        let chain_id: ChainId = "809574f5-fee7-5e69-bfcf-52451e42d50f"
+        let chain_id: ChainId = "fc56984b-2be7-431d-840e-21514d1883f0"
             .parse()
             .expect("valid chain id");
         let asset_definition_id = "xor#universal";

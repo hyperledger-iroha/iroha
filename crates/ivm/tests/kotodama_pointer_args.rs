@@ -62,12 +62,10 @@ fn pointer_map_default_roundtrip() {
     let base = Name::from_str("Owners").expect("valid state name");
     let stored = resolve_state_value(host, &base, 7).expect("state entry present");
 
-    // State boundaries carry a schema-bound record inside NoritoBytes. The
-    // active pointer atom contains the original validated AccountId envelope.
-    let outer = validate_tlv_bytes(&stored).expect("outer TLV");
-    assert_eq!(outer.type_id, PointerType::NoritoBytes);
+    // Durable storage contains the raw schema-bound record payload. The active
+    // pointer atom contains the original validated AccountId envelope.
     let inner_envelope =
-        common::decode_pointer_state_value(outer.payload, StateValueKindV1::AccountId);
+        common::decode_pointer_state_value(&stored, StateValueKindV1::AccountId);
     let inner = validate_tlv_bytes(&inner_envelope).expect("inner TLV");
     assert_eq!(inner.type_id, PointerType::AccountId);
 
@@ -123,10 +121,8 @@ fn pointer_asset_state_storage_wraps_inner_pointer() {
     let base = Name::from_str("Assets").expect("valid state name");
     let stored = resolve_state_value(host, &base, 7).expect("state entry present");
 
-    let outer = validate_tlv_bytes(&stored).expect("outer TLV");
-    assert_eq!(outer.type_id, PointerType::NoritoBytes);
     let inner_envelope =
-        common::decode_pointer_state_value(outer.payload, StateValueKindV1::AssetDefinitionId);
+        common::decode_pointer_state_value(&stored, StateValueKindV1::AssetDefinitionId);
     let inner = validate_tlv_bytes(&inner_envelope).expect("inner TLV");
     assert_eq!(inner.type_id, PointerType::AssetDefinitionId);
 

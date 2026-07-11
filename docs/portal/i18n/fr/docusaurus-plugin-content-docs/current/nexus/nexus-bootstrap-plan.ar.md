@@ -31,7 +31,7 @@ Il s'agit de la référence `docs/source/soranexus_bootstrap_plan.md`. ابق ا
 - La méthode bootstrap (`configs/nexus/bootstrap/*.toml`) est utilisée pour les applications.## بيئات الشبكة
 - تشغيل بيئتين لـ Nexus مع بادئات شبكة مختلفة:
 - **Sora Nexus (mainnet)** - Utiliser le module `nexus` pour le réseau principal et SoraFS/SoraNet Description (ID de chaîne `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - Mise en scène `testus` pour le réseau principal et la chaîne UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - Mise en scène `testus` pour le réseau principal et la chaîne UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - الحفاظ على ملفات genesis ومفاتيح حوكمة وبصمات بنية تحتية منفصلة لكل بيئة. Utilisez Testus pour les connexions SoraFS/SoraNet avec Nexus.
 - يجب ان تنشر خطوط CI/CD الى Testus اولا وتنفذ smoke tests تلقائية وتطلب ترقية يدوية الى Nexus بعد نجاح الفحوصات.
 - Vous pouvez utiliser `configs/soranexus/nexus/` (mainnet) et `configs/soranexus/testus/` (testnet) et `config.toml`. و`genesis.json` et Torii نموذجية.

@@ -2,22 +2,21 @@
   "schema": "iroha.sccp.contract-compiler-lock.v1",
   "compilers": {
     "evm": {
-      "identity": "solc-evm-0.8.24+commit.e11b9ed9",
-      "reported_version": "0.8.24+commit.e11b9ed9.Emscripten.clang",
-      "sha256": "11b054b55273ec55f6ab3f445eb0eb2c83a23fed43d10079d34ac3eabe6ed8b1",
-      "url": "https://binaries.soliditylang.org/wasm/soljson-v0.8.24+commit.e11b9ed9.js"
+      "identity": "solc-evm-0.7.4+commit.3f05b770",
+      "reported_version": "0.7.4+commit.3f05b770.Emscripten.clang",
+      "sha256": "2b55ed5fec4d9625b6c7b3ab1abd2b7fb7dd2a9c68543bf0323db2c7e2d55af2",
+      "url": "https://binaries.soliditylang.org/wasm/soljson-v0.7.4+commit.3f05b770.js"
     },
     "tron": {
-      "identity": "tron-solc-tvm-0.8.24+commit.7d902c66",
-      "reported_version": "0.8.24+commit.7d902c66.Emscripten.clang",
-      "sha256": "527b5363b50eee33b9d45a1619ccd3511e6304637867135396969ac93bc67116",
-      "url": "https://raw.githubusercontent.com/tronprotocol/solc-bin/main/wasm/soljson-v0.8.24+commit.7d902c66.js"
+      "identity": "tron-solc-tvm-0.7.4+commit.3f05b770",
+      "reported_version": "0.7.4+commit.3f05b770.Emscripten.clang",
+      "sha256": "2b55ed5fec4d9625b6c7b3ab1abd2b7fb7dd2a9c68543bf0323db2c7e2d55af2",
+      "url": "https://raw.githubusercontent.com/ethereum/solc-bin/gh-pages/bin/soljson-v0.7.4+commit.3f05b770.js"
     }
   },
   "settings": {
     "evmVersion": "istanbul",
     "metadata": {
-      "appendCBOR": true,
       "bytecodeHash": "ipfs",
       "useLiteralContent": true
     },

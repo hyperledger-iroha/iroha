@@ -70,7 +70,7 @@ cargo test -p sorafs_car --features cli fetch_command_respects_direct_transports
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
-  --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
+  --provider name=gw-regulated,provider-id=001122...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64
 ```- Скрипт соответствует флагам CLI в виде архивов конфигурации ключ=значение (см. `docs/examples/sorafs_direct_mode_smoke.conf`). Отправьте дайджест манифеста и рекламные объявления с ценностями производства перед выпуском.
 - `--policy` из-за дефекта `docs/examples/sorafs_direct_mode_policy.json`, но может быть получен аналогичный JSON-запрос, созданный для `sorafs_orchestrator::bindings::config_to_json`. CLI принимает политику через `--orchestrator-config=PATH`, имеет возможность воспроизводить воспроизводимые файлы без ручной настройки флажков.
 - Когда `sorafs_cli` не находится в `PATH`, помощник компилирует из ящика `sorafs_orchestrator` (выпуск каждого файла) для того, чтобы люди могли проверить сантехнику в прямом режиме, который вы отправляете.

@@ -160,6 +160,20 @@ derivation inside the native bridge remains unchanged; top-up derivation
 consumes the init request archive, not the init result bundle alone, because
 the request carries the checked hop proof, verifier records, and Pallas opening
 metadata needed for validation.
+
+For confidential-unshield redemption, use
+`KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment` with the
+native unshield-v3 build result, the exact `halo2/ipa` verifier-record
+reference, and the current block height when the record has an activation or
+withdrawal boundary. The builder requires the production
+`halo2-ipa-pasta:confidential_unshield_v3` proof reference, computes the schema
+and envelope bindings with canonical Iroha `Hash` prehashes, and invokes the
+existing `PrivacyNativeBridge.verifyProof` path before it emits an attachment.
+The verify result must report the same operation and byte-identical proof with
+`verified = true`; native-unavailable, malformed, substituted-key, and invalid
+proof results fail closed. Windowless active records may omit the height,
+activation is inclusive, and withdrawal is exclusive.
+
 Use
 `canRedeemWitnessless(circuitId, hopCount)` or
 `requiresLineageWitnessForRedeem(circuitId, hopCount)` before online redeem
@@ -239,6 +253,23 @@ path plus `lineageVerifierRecords` / raw `lineage_verifier_records` for
 additional Reserved-lineage verifier records. Use the plural field for
 multi-profile record-backed lineage witnesses, or place every Reserved-lineage
 verifier record there for vector-only callers.
+`KagemushaRecursiveSpendRequestCodecs` also exposes
+`encodeConfidentialTransferV2VerifierRecordArchive(verifierKeyBytes)` and
+`encodeConfidentialUnshieldV3VerifierRecordArchive(verifierKeyBytes)`. They
+produce canonical, active `offline_kagemusha` Halo2/IPA/Pallas verifier records
+with the governed circuit version, marked Iroha public-input schema hash,
+domain-separated verifier-key commitment, `halo2_default` gas schedule, 192 KiB
+proof cap, and inline key bytes. `buildRedeemProofAttachment(...)` returns the
+Norito archive, while `buildRedeemProofAttachmentValue(...)` returns the typed
+`ProofAttachment` accepted by `UnshieldInstruction.Builder.setProof`. Both
+overloads accept an optional `blockHeight`, enforce verifier lifecycle bounds,
+and call the native unshield verifier; mismatched or unsuccessful verification
+results fail closed before an attachment is returned.
+These archives follow Rust's canonical field policy: protocol-special direct
+`[u8; 32]` fields are packed, generic fixed arrays inside `Vec`/`Option` keep
+per-element framing, and `AssetDefinitionId` retains its delegated framed
+`[u8; 16]` representation. An absent trailing default `lane_privacy` field is
+omitted from `ProofAttachment` rather than encoded as an explicit `None`.
 `normalizeAppendOutputCircuitId` and `isSupportedAppendOutputCircuitId` expose
 that explicit-selector rule for wallet-side preflight.
 `RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1` and

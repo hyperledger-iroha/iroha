@@ -404,7 +404,7 @@ impl InstallArgs {
 
 #[derive(clap::Args, Debug, Default)]
 struct GatewayFetchArgs {
-    /// Gateway provider descriptor: name=<alias>,provider-id=<64-hex>,base-url=<url>,stream-token=<base64>[,privacy-url=<url>][,package=<alias-or-ref>][,manifest=<64-hex>]
+    /// Gateway provider descriptor: name=<alias>,provider-id=<64-hex>,gateway-key=<64-hex>,base-url=<https-url>,stream-token=<base64>[,privacy-url=<https-url>][,package=<alias-or-ref>][,manifest=<64-hex>]
     #[arg(long = "gateway-provider", value_name = "SPEC")]
     gateway_provider: Vec<GatewayProviderSpec>,
     /// Client label sent to `SoraFS` gateway providers for audit and rate limiting.
@@ -422,9 +422,6 @@ struct GatewayFetchArgs {
     /// Persist the gateway fetch scoreboard JSON artifact
     #[arg(long, value_name = "PATH")]
     gateway_scoreboard_out: Option<PathBuf>,
-    /// Permit `<http://localhost>`, `<http://127.0.0.1>`, or `<http://[::1]>` gateway URLs for local testing.
-    #[arg(long = "gateway-allow-insecure-localhost")]
-    gateway_allow_insecure_localhost: bool,
 }
 
 impl GatewayFetchArgs {
@@ -439,7 +436,6 @@ impl GatewayFetchArgs {
             || self.gateway_max_peers.is_some()
             || self.gateway_telemetry_region.is_some()
             || self.gateway_scoreboard_out.is_some()
-            || self.gateway_allow_insecure_localhost
     }
 }
 
@@ -447,6 +443,7 @@ impl GatewayFetchArgs {
 struct GatewayProviderSpec {
     name: String,
     provider_id_hex: String,
+    gateway_public_key_hex: String,
     base_url: String,
     stream_token_b64: String,
     privacy_events_url: Option<String>,
@@ -2856,49 +2853,24 @@ fn validate_source_fetch_inputs(
 
 fn validate_gateway_provider_urls(gateway: &GatewayFetchArgs) -> Result<()> {
     for provider in &gateway.gateway_provider {
-        validate_gateway_provider_url(
-            &provider.base_url,
-            "--gateway-provider base-url",
-            gateway.gateway_allow_insecure_localhost,
-        )?;
+        validate_gateway_provider_url(&provider.base_url, "--gateway-provider base-url")?;
         if let Some(privacy_events_url) = &provider.privacy_events_url {
-            validate_gateway_provider_url(
-                privacy_events_url,
-                "--gateway-provider privacy-url",
-                gateway.gateway_allow_insecure_localhost,
-            )?;
+            validate_gateway_provider_url(privacy_events_url, "--gateway-provider privacy-url")?;
         }
     }
     Ok(())
 }
 
-fn validate_gateway_provider_url(
-    raw: &str,
-    label: &str,
-    allow_insecure_localhost: bool,
-) -> Result<()> {
+fn validate_gateway_provider_url(raw: &str, label: &str) -> Result<()> {
     let url =
         url::Url::parse(raw.trim()).map_err(|err| eyre!("{label} must be a valid URL: {err}"))?;
     if url.host().is_none() {
         bail!("{label} must include a host");
     }
-    match url.scheme() {
-        "https" => Ok(()),
-        "http" if allow_insecure_localhost && is_loopback_gateway_url(&url) => Ok(()),
-        "http" => bail!(
-            "{label} must use https; http is only allowed for localhost with --gateway-allow-insecure-localhost"
-        ),
-        scheme => bail!("{label} must use https, found `{scheme}`"),
+    if url.scheme() != "https" {
+        bail!("{label} must use https, found `{}`", url.scheme());
     }
-}
-
-fn is_loopback_gateway_url(url: &url::Url) -> bool {
-    match url.host() {
-        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
-        Some(url::Host::Ipv4(addr)) => addr.is_loopback(),
-        Some(url::Host::Ipv6(addr)) => addr.is_loopback(),
-        None => false,
-    }
+    Ok(())
 }
 
 fn count_missing_lockfile_sources(lockfile: &MusubiLockfile, cache_dir: &Path) -> usize {
@@ -2941,6 +2913,7 @@ fn parse_nonzero_usize(value: &str) -> std::result::Result<usize, String> {
 fn parse_gateway_provider_spec(value: &str) -> std::result::Result<GatewayProviderSpec, String> {
     let mut name: Option<String> = None;
     let mut provider_id: Option<String> = None;
+    let mut gateway_public_key: Option<String> = None;
     let mut base_url: Option<String> = None;
     let mut stream_token: Option<String> = None;
     let mut privacy_events_url: Option<String> = None;
@@ -2965,6 +2938,10 @@ fn parse_gateway_provider_spec(value: &str) -> std::result::Result<GatewayProvid
             }
             "provider-id" | "provider_id" => {
                 provider_id = Some(validate_hex_32_cli(val, "--gateway-provider provider-id")?);
+            }
+            "gateway-key" | "gateway_key" | "gateway-public-key" | "gateway_public_key" => {
+                gateway_public_key =
+                    Some(validate_hex_32_cli(val, "--gateway-provider gateway-key")?);
             }
             "base-url" | "base_url" => {
                 if val.is_empty() {
@@ -2995,7 +2972,7 @@ fn parse_gateway_provider_spec(value: &str) -> std::result::Result<GatewayProvid
             }
             other => {
                 return Err(format!(
-                    "unknown --gateway-provider key `{other}`. expected name, provider-id, base-url, stream-token, privacy-url, package, manifest"
+                    "unknown --gateway-provider key `{other}`. expected name, provider-id, gateway-key, base-url, stream-token, privacy-url, package, manifest"
                 ));
             }
         }
@@ -3005,6 +2982,8 @@ fn parse_gateway_provider_spec(value: &str) -> std::result::Result<GatewayProvid
         name: name.ok_or_else(|| "--gateway-provider requires name=<alias>".to_owned())?,
         provider_id_hex: provider_id
             .ok_or_else(|| "--gateway-provider requires provider-id=<hex>".to_owned())?,
+        gateway_public_key_hex: gateway_public_key
+            .ok_or_else(|| "--gateway-provider requires gateway-key=<hex>".to_owned())?,
         base_url: base_url
             .ok_or_else(|| "--gateway-provider requires base-url=<https://...>".to_owned())?,
         stream_token_b64: stream_token
@@ -3045,6 +3024,7 @@ impl GatewayProviderSpec {
         SorafsGatewayProviderInput {
             name: self.name.clone(),
             provider_id_hex: self.provider_id_hex.clone(),
+            gateway_public_key_hex: self.gateway_public_key_hex.clone(),
             base_url: self.base_url.clone(),
             stream_token_b64: self.stream_token_b64.clone(),
             privacy_events_url: self.privacy_events_url.clone(),
@@ -3381,18 +3361,8 @@ fn join_contract_aliases(aliases: &[ContractAlias]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        collections::HashMap,
-        io::{Read, Write},
-        net::{TcpListener, TcpStream},
-        thread,
-        time::Duration,
-    };
 
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
     use iroha_data_model::{Decode, Encode};
-    use sorafs_car::{gateway::GatewayFetchContext, multi_fetch::FetchOptions};
-    use sorafs_manifest::{StreamTokenBodyV1, StreamTokenV1};
 
     #[test]
     fn manifest_parses_namespace_dependencies_exports_and_dapp_link() {
@@ -3652,20 +3622,22 @@ mod tests {
     #[test]
     fn gateway_provider_spec_parses_scoped_provider() {
         let provider_id = "11".repeat(32);
+        let gateway_key = "33".repeat(32);
         let manifest = "22".repeat(32);
         let spec: GatewayProviderSpec = format!(
-            "name=gw,provider-id={provider_id},base-url=https://gw.example,stream-token=token,privacy-url=https://privacy.example,package=math,manifest={manifest}"
+            "name=gw,provider-id={provider_id},gateway-key={gateway_key},base-url=https://gw.example,stream-token=token,privacy-url=https://privacy.example/privacy/events,package=math,manifest={manifest}"
         )
         .parse()
         .expect("parse provider");
 
         assert_eq!(spec.name, "gw");
         assert_eq!(spec.provider_id_hex, provider_id);
+        assert_eq!(spec.gateway_public_key_hex, gateway_key);
         assert_eq!(spec.base_url, "https://gw.example");
         assert_eq!(spec.stream_token_b64, "token");
         assert_eq!(
             spec.privacy_events_url.as_deref(),
-            Some("https://privacy.example")
+            Some("https://privacy.example/privacy/events")
         );
         assert_eq!(spec.package.as_deref(), Some("math"));
         assert_eq!(spec.manifest_id_hex.as_deref(), Some(manifest.as_str()));
@@ -3682,6 +3654,7 @@ mod tests {
             gateway_provider: vec![GatewayProviderSpec {
                 name: "gw".into(),
                 provider_id_hex: "11".repeat(32),
+                gateway_public_key_hex: "22".repeat(32),
                 base_url: "http://gw.example".into(),
                 stream_token_b64: "token".into(),
                 privacy_events_url: None,
@@ -3702,9 +3675,10 @@ mod tests {
             gateway_provider: vec![GatewayProviderSpec {
                 name: "gw".into(),
                 provider_id_hex: "11".repeat(32),
+                gateway_public_key_hex: "22".repeat(32),
                 base_url: "https://gw.example".into(),
                 stream_token_b64: "token".into(),
-                privacy_events_url: Some("https://privacy.example/events".into()),
+                privacy_events_url: Some("https://privacy.example/privacy/events".into()),
                 package: None,
                 manifest_id_hex: None,
             }],
@@ -3715,11 +3689,12 @@ mod tests {
     }
 
     #[test]
-    fn gateway_provider_accepts_local_http_only_with_explicit_flag() {
+    fn gateway_provider_rejects_local_http_without_a_bypass() {
         let gateway = GatewayFetchArgs {
             gateway_provider: vec![GatewayProviderSpec {
                 name: "gw".into(),
                 provider_id_hex: "11".repeat(32),
+                gateway_public_key_hex: "22".repeat(32),
                 base_url: "http://127.0.0.1:8080".into(),
                 stream_token_b64: "token".into(),
                 privacy_events_url: Some("http://[::1]:8081/privacy/events".into()),
@@ -3729,15 +3704,8 @@ mod tests {
             ..GatewayFetchArgs::default()
         };
 
-        let err =
-            validate_source_fetch_inputs(&[], &gateway).expect_err("localhost http needs flag");
-        assert!(err.to_string().contains("gateway-allow-insecure-localhost"));
-
-        let gateway = GatewayFetchArgs {
-            gateway_allow_insecure_localhost: true,
-            ..gateway
-        };
-        validate_source_fetch_inputs(&[], &gateway).expect("localhost http accepted with flag");
+        let err = validate_source_fetch_inputs(&[], &gateway).expect_err("localhost http denied");
+        assert!(err.to_string().contains("must use https"));
     }
 
     #[test]
@@ -3852,6 +3820,7 @@ mod tests {
             gateway_provider: vec![GatewayProviderSpec {
                 name: "gw".into(),
                 provider_id_hex: "11".repeat(32),
+                gateway_public_key_hex: "22".repeat(32),
                 base_url: "https://gw.example".into(),
                 stream_token_b64: "token".into(),
                 privacy_events_url: None,
@@ -3863,7 +3832,6 @@ mod tests {
             gateway_max_peers: Some(1),
             gateway_telemetry_region: Some("test-region".into()),
             gateway_scoreboard_out: Some(scoreboard_path.clone()),
-            gateway_allow_insecure_localhost: false,
         };
         let runner = StaticGatewayRunner {
             manifest_id_hex,
@@ -3892,202 +3860,12 @@ mod tests {
     }
 
     #[test]
-    fn cache_fetch_reconstructs_source_from_live_gateway() {
-        struct RealGatewayRunner;
-
-        impl GatewayFetchRunner for RealGatewayRunner {
-            fn fetch(&self, request: GatewayFetchRequest) -> Result<Vec<u8>> {
-                let context =
-                    GatewayFetchContext::new(request.gateway_config, request.providers)
-                        .map_err(|err| eyre!("failed to build gateway fetch context: {err}"))?;
-                let mut options = FetchOptions::default();
-                options.per_chunk_retry_limit = request.options.retry_budget;
-                options.global_parallel_limit = request.options.max_peers;
-                let runtime = tokio::runtime::Runtime::new()
-                    .wrap_err("failed to initialise Tokio runtime")?;
-                let outcome = runtime
-                    .block_on(context.execute_plan(&request.plan, options))
-                    .map_err(|err| eyre!("gateway fetch failed: {err}"))?;
-                Ok(outcome.assemble_payload())
-            }
-        }
-
-        let source = tempfile::tempdir().expect("source tempdir");
-        fs::write(
-            source.path().join("Musubi.toml"),
-            "[package]\nnamespace = \"std.universal\"\nname = \"math\"\nversion = \"1.2.3\"\n",
-        )
-        .expect("manifest");
-        fs::create_dir(source.path().join("src")).expect("src dir");
-        fs::write(
-            source.path().join("src/lib.ko"),
-            "module Math { fn add() {} }\n",
-        )
-        .expect("source");
-
-        let manifest = read_manifest(&source.path().join("Musubi.toml")).expect("manifest");
-        let archive_stats = hash_source_tree(source.path()).expect("archive hash");
-        let sorafs =
-            build_sorafs_source_manifest(&manifest, source.path(), None, None, None, archive_stats)
-                .expect("sorafs manifest");
-        let manifest_id_hex = hex::encode(sorafs.digest.as_bytes());
-        let chunks = sorafs
-            .source_plan
-            .chunks
-            .iter()
-            .map(|chunk| {
-                let chunk_start = usize::try_from(chunk.offset).expect("chunk offset");
-                let chunk_end = chunk_start + usize::try_from(chunk.length).expect("chunk length");
-                (
-                    format!(
-                        "/v1/sorafs/storage/chunk/{}/{}",
-                        manifest_id_hex,
-                        hex::encode(chunk.digest_blake3_256)
-                    ),
-                    sorafs.payload[chunk_start..chunk_end].to_vec(),
-                )
-            })
-            .collect::<HashMap<_, _>>();
-        let base_url = spawn_chunk_gateway(chunks);
-        let provider_id_hex = "11".repeat(32);
-        let chunker_handle = chunker_registry::default_descriptor().aliases[0].to_owned();
-        let token = stream_token_b64(&manifest_id_hex, &provider_id_hex, &chunker_handle, 4);
-        let package = LockedPackage {
-            alias: "math".parse().unwrap(),
-            package: "std.universal/math@1.2.3".parse().unwrap(),
-            version_req: "^1.0.0".parse().unwrap(),
-            archive: Some(MusubiArchiveRef::new(
-                sorafs.digest,
-                archive_stats.archive_hash_blake3_256,
-                archive_stats.source_bytes,
-                archive_stats.source_file_count,
-            )),
-            source_plan: Some(sorafs.source_plan),
-            cache_path: None,
-            exports: vec!["add".parse().unwrap()],
-            dependencies: Vec::new(),
-            direct: true,
-            resolved: true,
-        };
-        let gateway = GatewayFetchArgs {
-            gateway_provider: vec![GatewayProviderSpec {
-                name: "gw".into(),
-                provider_id_hex,
-                base_url,
-                stream_token_b64: token,
-                privacy_events_url: None,
-                package: Some("math".into()),
-                manifest_id_hex: None,
-            }],
-            gateway_retry_budget: Some(1),
-            gateway_max_peers: Some(1),
-            gateway_allow_insecure_localhost: true,
-            ..GatewayFetchArgs::default()
-        };
-        validate_source_fetch_inputs(&[], &gateway).expect("localhost gateway accepted");
-
-        let cache = tempfile::tempdir().expect("cache tempdir");
-        fetch_locked_package_source_from(
-            &package,
-            cache.path(),
-            SourceFetchMode::Gateway {
-                runner: &RealGatewayRunner,
-                args: &gateway,
-                allow_unscoped_providers: false,
-            },
-            false,
-        )
-        .expect("live gateway fetch source");
-
-        let fetched =
-            fs::read_to_string(cache_source_path(cache.path(), &package).join("src/lib.ko"))
-                .expect("read fetched");
-        assert_eq!(fetched, "module Math { fn add() {} }\n");
-        verify_cached_package(cache.path(), &package).expect("verify cache");
-    }
-
-    fn spawn_chunk_gateway(chunks: HashMap<String, Vec<u8>>) -> String {
-        let request_count = chunks.len();
-        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind gateway");
-        let addr = listener.local_addr().expect("gateway addr");
-        thread::spawn(move || {
-            for _ in 0..request_count {
-                if let Ok((mut stream, _)) = listener.accept() {
-                    serve_chunk_gateway(&mut stream, &chunks);
-                }
-            }
-        });
-        format!("http://{addr}")
-    }
-
-    fn serve_chunk_gateway(stream: &mut TcpStream, chunks: &HashMap<String, Vec<u8>>) {
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-        let mut request = Vec::new();
-        let mut buffer = [0_u8; 1024];
-        loop {
-            let bytes_read = stream.read(&mut buffer).expect("read request");
-            if bytes_read == 0 {
-                break;
-            }
-            request.extend_from_slice(&buffer[..bytes_read]);
-            if request.windows(4).any(|window| window == b"\r\n\r\n") {
-                break;
-            }
-        }
-        let request = String::from_utf8_lossy(&request);
-        let path = request
-            .lines()
-            .next()
-            .and_then(|line| line.split_whitespace().nth(1))
-            .unwrap_or_default();
-        if let Some(body) = chunks.get(path) {
-            write_http_response(stream, 200, "OK", body);
-        } else {
-            write_http_response(stream, 404, "Not Found", b"missing chunk");
-        }
-    }
-
-    fn write_http_response(stream: &mut TcpStream, status: u16, reason: &str, body: &[u8]) {
-        let header = format!(
-            "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            body.len()
-        );
-        stream.write_all(header.as_bytes()).expect("write header");
-        stream.write_all(body).expect("write body");
-    }
-
-    fn stream_token_b64(
-        manifest_cid_hex: &str,
-        provider_id_hex: &str,
-        profile_handle: &str,
-        max_streams: u16,
-    ) -> String {
-        let mut provider_id = [0_u8; 32];
-        provider_id.copy_from_slice(&hex::decode(provider_id_hex).expect("provider id hex"));
-        let token = StreamTokenV1 {
-            body: StreamTokenBodyV1 {
-                token_id: "01J9TK3GR0XM6YQF7WQXA9Z2SF".to_owned(),
-                manifest_cid: hex::decode(manifest_cid_hex).expect("manifest cid hex"),
-                provider_id,
-                profile_handle: profile_handle.to_owned(),
-                max_streams,
-                ttl_epoch: 9_999_999_999,
-                rate_limit_bytes: 8 * 1024 * 1024,
-                issued_at: 1_735_000_000,
-                requests_per_minute: 120,
-                token_pk_version: 1,
-            },
-            signature: vec![0; 64],
-        };
-        STANDARD.encode(norito::to_bytes(&token).expect("encode stream token"))
-    }
-
-    #[test]
     fn provider_payload_and_gateway_provider_cannot_be_mixed() {
         let gateway = GatewayFetchArgs {
             gateway_provider: vec![GatewayProviderSpec {
                 name: "gw".into(),
                 provider_id_hex: "11".repeat(32),
+                gateway_public_key_hex: "22".repeat(32),
                 base_url: "https://gw.example".into(),
                 stream_token_b64: "token".into(),
                 privacy_events_url: None,
@@ -4135,6 +3913,7 @@ mod tests {
             gateway_provider: vec![GatewayProviderSpec {
                 name: "gw".into(),
                 provider_id_hex: "11".repeat(32),
+                gateway_public_key_hex: "22".repeat(32),
                 base_url: "https://gw.example".into(),
                 stream_token_b64: "token".into(),
                 privacy_events_url: None,

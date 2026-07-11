@@ -4203,8 +4203,8 @@ def test_status_snapshot_parses_mode_and_consensus_caps() -> None:
     session.queue(
         StubResponse(
             payload={
-                "mode_tag": "iroha2-consensus::permissioned-sumeragi@v1",
-                "staged_mode_tag": "iroha2-consensus::npos-sumeragi@v1",
+                "mode_tag": "iroha2-consensus::permissioned-sumeragi@v2",
+                "staged_mode_tag": "iroha2-consensus::npos-sumeragi@v2",
                 "staged_mode_activation_height": 10,
                 "mode_activation_lag_blocks": 2,
                 "consensus_caps": {
@@ -4237,8 +4237,8 @@ def test_status_snapshot_parses_mode_and_consensus_caps() -> None:
 
     snapshot = client.get_status_snapshot()
 
-    assert snapshot.status.mode_tag == "iroha2-consensus::permissioned-sumeragi@v1"
-    assert snapshot.status.staged_mode_tag == "iroha2-consensus::npos-sumeragi@v1"
+    assert snapshot.status.mode_tag == "iroha2-consensus::permissioned-sumeragi@v2"
+    assert snapshot.status.staged_mode_tag == "iroha2-consensus::npos-sumeragi@v2"
     assert snapshot.status.staged_mode_activation_height == 10
     assert snapshot.status.mode_activation_lag_blocks == 2
     assert snapshot.status.consensus_caps is not None

@@ -1,6 +1,6 @@
 {
   "name": "solc",
-  "version": "0.8.24-iroha-authenticated",
+  "version": "0.7.4-iroha-authenticated",
   "private": true,
   "main": "index.js"
 }

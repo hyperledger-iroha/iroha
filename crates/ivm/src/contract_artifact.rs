@@ -13,7 +13,9 @@ use iroha_data_model::smart_contract::manifest::{
 
 use crate::{
     ProgramMetadata, SyscallPolicy,
-    ivm::{decode_literal_pointers, prepare_instruction_stream},
+    ivm::{
+        decode_literal_table, prepare_instruction_stream, validate_indexed_literal_instructions,
+    },
     ivm_cache::{DecodedOp, IvmCache},
     metadata::{
         CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, CONTRACT_FEATURE_KNOWN_BITS,
@@ -72,7 +74,22 @@ pub fn verify_contract_artifact(
             "instruction decode failed for executable stream: {err}"
         ))
     })?;
-    verify_decoded_contract_artifact(artifact, &parsed, envelope, decoded.as_ref())
+    let verified = verify_decoded_contract_artifact(artifact, &parsed, envelope, decoded.as_ref())?;
+    let literal_table = decode_literal_table(
+        artifact,
+        parsed.header_len,
+        parsed.literal_section,
+        SyscallPolicy::AbiV1,
+    )
+    .map_err(|err| {
+        ContractArtifactError::invalid(format!("literal index validation failed: {err}"))
+    })?;
+    validate_indexed_literal_instructions(decoded.as_ref(), literal_table.entries()).map_err(
+        |err| {
+            ContractArtifactError::invalid(format!("literal instruction validation failed: {err}"))
+        },
+    )?;
+    Ok(verified)
 }
 
 /// Prepare a validated self-describing contract for repeated VM loading.
@@ -105,7 +122,7 @@ impl PreparedContract {
             envelope,
             decoded.as_ref(),
         )?;
-        let literal_pointers = decode_literal_pointers(
+        let literal_table = decode_literal_table(
             artifact.as_ref(),
             parsed.header_len,
             parsed.literal_section,
@@ -122,7 +139,7 @@ impl PreparedContract {
             &verified.metadata,
             decoded.as_ref(),
             instruction_entry_pc,
-            literal_pointers.len(),
+            literal_table.entries(),
         )
         .map_err(|err| {
             ContractArtifactError::invalid(format!("instruction preparation failed: {err}"))
@@ -139,7 +156,7 @@ impl PreparedContract {
             code_offset: verified.code_offset,
             code_hash: verified.code_hash,
             contract_interface: Arc::new(verified.contract_interface),
-            literal_pointers,
+            literal_table,
             decoded,
             prepared_program,
             control_flow,
@@ -284,9 +301,9 @@ fn manifest_state_type_name(ty: &crate::metadata::EmbeddedStateType) -> String {
     use crate::metadata::EmbeddedStateType;
 
     match ty {
-        EmbeddedStateType::I64 => "i64".to_string(),
-        EmbeddedStateType::U128 => "u128".to_string(),
-        EmbeddedStateType::Amount => "Amount".to_string(),
+        EmbeddedStateType::Int => "int".to_string(),
+        EmbeddedStateType::Decimal => "decimal".to_string(),
+        EmbeddedStateType::Quantity => "quantity".to_string(),
         EmbeddedStateType::Bool => "bool".to_string(),
         EmbeddedStateType::String => "string".to_string(),
         EmbeddedStateType::Bytes => "bytes".to_string(),
@@ -637,14 +654,14 @@ fn validate_contract_interface(
     Ok(())
 }
 
-fn is_canonical_contract_name(name: &str) -> bool {
+fn is_canonical_ascii_identifier(name: &str) -> bool {
     let mut chars = name.chars();
     matches!(chars.next(), Some(first) if first == '_' || first.is_ascii_alphabetic())
         && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
 }
 
 fn is_canonical_source_identifier(name: &str) -> bool {
-    is_canonical_contract_name(name) && !kotodama_lang::lexer::V1_KEYWORDS.contains(&name)
+    is_canonical_ascii_identifier(name) && !kotodama_lang::lexer::V1_KEYWORDS.contains(&name)
 }
 
 fn is_canonical_source_declaration_name(name: &str, is_function: bool) -> bool {
@@ -1267,6 +1284,57 @@ mod tests {
         Arc::from(artifact.into_boxed_slice())
     }
 
+    fn indexed_literal_contract_fixture(
+        kind: crate::metadata::LiteralKindV1,
+        data: &[u8],
+        opcode: u8,
+    ) -> Vec<u8> {
+        let metadata = ProgramMetadata::default();
+        let interface = EmbeddedContractInterfaceV1 {
+            seiyaku_name: "LiteralAdmission".to_owned(),
+            compiler_fingerprint: "ivm-unit-tests".to_owned(),
+            features_bitmap: 0,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: vec![crate::metadata::EmbeddedEntrypointDescriptor {
+                name: "inspect".to_owned(),
+                kind: EntryPointKind::View,
+                params: Vec::new(),
+                argument_schema: None,
+                return_type: None,
+                return_schema: None,
+                permission: None,
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                access_hints_complete: Some(true),
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+                entry_pc: 0,
+            }],
+            error_codes: Vec::new(),
+            states: Vec::new(),
+        };
+        let interface = interface.encode_section();
+        let unpadded = interface.len() + 16 + 8 + data.len();
+        let post_pad = (4 - (unpadded % 4)) % 4;
+        let descriptor =
+            crate::metadata::encode_literal_descriptor(kind, 24).expect("small literal descriptor");
+
+        let mut artifact = metadata.encode();
+        artifact.extend_from_slice(&interface);
+        artifact.extend_from_slice(&crate::metadata::LITERAL_SECTION_MAGIC);
+        artifact.extend_from_slice(&1_u32.to_le_bytes());
+        artifact.extend_from_slice(&(post_pad as u32).to_le_bytes());
+        artifact.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        artifact.extend_from_slice(&descriptor.to_le_bytes());
+        artifact.extend_from_slice(data);
+        artifact.extend(std::iter::repeat_n(0, post_pad));
+        artifact
+            .extend_from_slice(&crate::encoding::wide::encode_literal(opcode, 5, 0).to_le_bytes());
+        artifact.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+        artifact
+    }
+
     #[test]
     fn repeated_preparation_reuses_instruction_storage_and_indexes_entrypoints() {
         let artifact = prepared_fixture(0);
@@ -1291,6 +1359,43 @@ mod tests {
                 .map(|entrypoint| entrypoint.kind),
             Some(EntryPointKind::View)
         );
+    }
+
+    #[test]
+    fn admission_rejects_indexed_literal_type_confusion_and_scalar_length_mismatch() {
+        let scalar = 7_i64.to_le_bytes();
+        let valid = indexed_literal_contract_fixture(
+            crate::metadata::LiteralKindV1::I64,
+            &scalar,
+            crate::instruction::wide::memory::LDI64,
+        );
+        verify_contract_artifact(&valid).expect("canonical LDI64 artifact verifies");
+        let prepared = prepare_contract(Arc::from(valid.into_boxed_slice()))
+            .expect("canonical LDI64 artifact prepares");
+        let mut vm = crate::IVM::new(1);
+        vm.load_prepared(&prepared)
+            .expect("prepared LDI64 artifact loads");
+        vm.run().expect("prepared LDI64 artifact executes");
+        assert_eq!(vm.register(5), 7);
+
+        let wrong_opcode = indexed_literal_contract_fixture(
+            crate::metadata::LiteralKindV1::I64,
+            &scalar,
+            crate::instruction::wide::memory::LDLIT,
+        );
+        let wrong_length = indexed_literal_contract_fixture(
+            crate::metadata::LiteralKindV1::I64,
+            &scalar[..7],
+            crate::instruction::wide::memory::LDI64,
+        );
+        for artifact in [wrong_opcode, wrong_length] {
+            let error = verify_contract_artifact(&artifact)
+                .expect_err("malicious indexed literal artifact must fail admission");
+            assert!(error.to_string().contains("literal"), "{error}");
+            let error = prepare_contract(Arc::from(artifact.into_boxed_slice()))
+                .expect_err("malicious indexed literal artifact must not prepare");
+            assert!(error.to_string().contains("literal"), "{error}");
+        }
     }
 
     #[test]

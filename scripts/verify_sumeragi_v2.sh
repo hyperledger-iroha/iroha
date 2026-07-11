@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+EXPECTED_VERUS_VERSION="0.2026.05.31.5dd6d83"
+EXPECTED_VERUS_TOOLCHAIN_VERSION="1.95.0"
+EXPECTED_VSTD_VERSION="0.0.0-2026-05-31-0205"
+REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+command -v verus >/dev/null 2>&1 || {
+  echo "verus ${EXPECTED_VERUS_VERSION} is required in PATH" >&2
+  exit 1
+}
+command -v cargo-verus >/dev/null 2>&1 || {
+  echo "cargo-verus ${EXPECTED_VERUS_VERSION} is required in PATH" >&2
+  exit 1
+}
+
+actual_version="$(verus --version | awk '/Version:/ {print $2; exit}')"
+if [[ "$actual_version" != "$EXPECTED_VERUS_VERSION" ]]; then
+  echo "expected Verus ${EXPECTED_VERUS_VERSION}, found ${actual_version:-unknown}" >&2
+  exit 1
+fi
+
+actual_toolchain="$(verus --version | awk '/Toolchain:/ {print $2; exit}')"
+if [[ "${actual_toolchain%%-*}" != "$EXPECTED_VERUS_TOOLCHAIN_VERSION" ]]; then
+  echo "expected Verus Rust toolchain ${EXPECTED_VERUS_TOOLCHAIN_VERSION}, found ${actual_toolchain:-unknown}" >&2
+  exit 1
+fi
+
+platform="$(verus --version | awk '/Platform:/ {print $2; exit}')"
+case "$platform" in
+  macos_aarch64)
+    expected_verus_sha256="f11f8a863103a3c8fcaf27e6189edfdba31081516591365b5e29b0a66f570451"
+    expected_cargo_verus_sha256="f918c6229c8d714640c9c9ec3d60b9c1d2e0aafc09bba8ff037332b04f85d078"
+    ;;
+  *)
+    expected_verus_sha256="${SUMERAGI_VERUS_SHA256:-}"
+    expected_cargo_verus_sha256="${SUMERAGI_CARGO_VERUS_SHA256:-}"
+    if [[ -z "$expected_verus_sha256" || -z "$expected_cargo_verus_sha256" ]]; then
+      echo "no pinned Verus checksums for platform ${platform:-unknown}; set SUMERAGI_VERUS_SHA256 and SUMERAGI_CARGO_VERUS_SHA256" >&2
+      exit 1
+    fi
+    ;;
+esac
+
+actual_verus_sha256="$(sha256_file "$(command -v verus)")"
+actual_cargo_verus_sha256="$(sha256_file "$(command -v cargo-verus)")"
+if [[ "$actual_verus_sha256" != "$expected_verus_sha256" ]]; then
+  echo "Verus binary checksum mismatch for ${platform}" >&2
+  exit 1
+fi
+if [[ "$actual_cargo_verus_sha256" != "$expected_cargo_verus_sha256" ]]; then
+  echo "cargo-verus binary checksum mismatch for ${platform}" >&2
+  exit 1
+fi
+
+if ! rg -q "vstd = \{ version = \"=${EXPECTED_VSTD_VERSION}\", optional = true \}" \
+  "$REPO_ROOT/crates/iroha_sumeragi_core/Cargo.toml"; then
+  echo "iroha_sumeragi_core must pin vstd ${EXPECTED_VSTD_VERSION}" >&2
+  exit 1
+fi
+
+if rg -n '\b(assume|admit)\s*\(|external_body|external_[[:alnum:]_]*specification|assume_specification' \
+  "$REPO_ROOT/crates/iroha_sumeragi_core/src"; then
+  echo "unreviewed Verus trust escape hatch found in iroha_sumeragi_core" >&2
+  exit 1
+fi
+
+# Keep the explicit Verus-to-TLA action-name table from silently drifting.
+# This is a spelling/existence guard, not a claim that two independently
+# parsed action bodies are already proved equivalent.
+tla_core="$REPO_ROOT/docs/formal/sumeragi_v2/SumeragiV2Core.tla"
+verus_model="$REPO_ROOT/crates/iroha_sumeragi_core/src/verus_proofs.rs"
+for action in \
+  BeginLocalProposal BeginPrepare BeginObservePrepare BeginLockCommit \
+  BeginTimeout BeginInstallTC BeginDecision PersistProposal PersistPrepare \
+  PersistObservePrepare PersistLockCommit PersistTimeout PersistInstallTC \
+  PersistDecision DeliverProposal DeliverVote DeliverQC DeliverTimeout \
+  DeliverTC FetchBody StoreBody ValidateBody CompleteProposalSignature \
+  CompleteVoteSignature CompleteTimeoutSignature FormPrepareQC FormCommitQC \
+  FormTC ApplyDecision; do
+  if ! rg -q "^${action}\\(" "$tla_core"; then
+    echo "mapped TLA+ action ${action} is missing from SumeragiV2Core.tla" >&2
+    exit 1
+  fi
+  if ! rg -q "^[[:space:]]*${action}," "$verus_model"; then
+    echo "mapped TLA+ action ${action} is missing from verus_proofs.rs" >&2
+    exit 1
+  fi
+done
+
+cd "$REPO_ROOT"
+
+# A clean target is intentional.  Pinned vstd uses reviewed trusted
+# specifications, so root-only forwarding is required: `--no-cheating` applies
+# to this crate while dependencies are still verified under their upstream
+# trust policy.  The source scan remains a defense against unsupported syntax
+# that a future Verus parser might otherwise stop classifying as cheating.
+if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
+  CARGO_TARGET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sumeragi-v2-verus.XXXXXX")"
+  trap 'rm -rf -- "$CARGO_TARGET_DIR"' EXIT
+  export CARGO_TARGET_DIR
+fi
+
+cargo verus verify -p iroha_sumeragi_core --features verus \
+  --fwd-verus-args-to roots -- \
+  --rlimit 60 \
+  --expand-errors \
+  --no-cheating

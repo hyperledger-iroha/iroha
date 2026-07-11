@@ -37,7 +37,7 @@ use iroha_data_model::{
 use iroha_primitives::{
     bigint::BigInt,
     json::Json,
-    numeric::{AmountRoundingMode, Numeric, NumericError},
+    numeric::{Numeric, NumericError, RoundingMode},
 };
 use norito::json::{self, native::Number as JsonNumber};
 
@@ -55,12 +55,12 @@ pub const COLLECTION_ITERATION_LIMIT: i64 = 64;
 const QUERY_PAGE_TYPE_NAME: &str = "QueryPage";
 /// Canonical source-level type spellings offered by language tooling.
 pub const V1_SOURCE_TYPE_NAMES: &[&str] = &[
-    "i64",
-    "u128",
+    "int",
+    "decimal",
+    "quantity",
     "bool",
     "string",
     "bytes",
-    "Amount",
     "Json",
     "AccountId",
     "AssetDefinitionId",
@@ -83,11 +83,15 @@ pub const V1_SOURCE_TYPE_NAMES: &[&str] = &[
 ];
 /// Canonical active-only sum constructor and pattern paths.
 pub const V1_SUM_PATHS: &[&str] = &["Option::some", "Option::none", "Result::ok", "Result::err"];
-/// Canonical explicit Amount rounding modes.
+/// Canonical explicit exact-decimal rounding modes.
 pub const V1_ROUNDING_PATHS: &[&str] = &[
+    "Rounding::toward_zero",
+    "Rounding::away_from_zero",
     "Rounding::floor",
     "Rounding::ceil",
     "Rounding::nearest_even",
+    "Rounding::nearest_away",
+    "Rounding::nearest_toward_zero",
 ];
 /// Canonical bounded-list member API.
 pub const V1_LIST_MEMBER_NAMES: &[&str] = &[
@@ -109,7 +113,9 @@ pub(crate) const LIST_POP_INTRINSIC: &str = "__kotodama_list_pop";
 pub(crate) const LIST_CONTAINS_INTRINSIC: &str = "__kotodama_list_contains";
 pub(crate) const LIST_TAKE_INTRINSIC: &str = "__kotodama_list_take";
 pub(crate) const LIST_ENUMERATE_INTRINSIC: &str = "__kotodama_list_enumerate";
-pub(crate) const AMOUNT_DIV_ROUND_INTRINSIC: &str = "__kotodama_amount_div_round";
+pub(crate) const DECIMAL_DIV_ROUND_INTRINSIC: &str = "__kotodama_decimal_div_round";
+pub(crate) const QUANTITY_DIV_ROUND_INTRINSIC: &str = "__kotodama_quantity_div_round";
+pub(crate) const QUANTITY_RATIO_ROUND_INTRINSIC: &str = "__kotodama_quantity_ratio_round";
 
 fn is_list_intrinsic(name: &str) -> bool {
     matches!(
@@ -142,7 +148,12 @@ pub fn is_reserved_source_declaration(name: &str, is_function: bool) -> bool {
     name.starts_with(LINKED_SYMBOL_PREFIX)
         || name == STATE_MAP_GET_INTRINSIC
         || is_list_intrinsic(name)
-        || name == AMOUNT_DIV_ROUND_INTRINSIC
+        || matches!(
+            name,
+            DECIMAL_DIV_ROUND_INTRINSIC
+                | QUANTITY_DIV_ROUND_INTRINSIC
+                | QUANTITY_RATIO_ROUND_INTRINSIC
+        )
         || is_canonical_type_spelling(name)
         || (is_function
             && (Builtin::from_name(name).is_some() || Builtin::from_source_name(name).is_some()))
@@ -301,9 +312,8 @@ fn collect_source_expr_summary(expr: &Expr, summary: &mut FunctionSummary) {
             }
         }
         Expr::Bool(_)
-        | Expr::Number(_)
-        | Expr::Decimal(_)
-        | Expr::AmountLiteral(_)
+        | Expr::IntLiteral(_)
+        | Expr::DecimalLiteral(_)
         | Expr::OptionNone
         | Expr::String(_)
         | Expr::Bytes(_)
@@ -413,9 +423,12 @@ pub struct FunctionSignature {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
+    /// Signed adaptive-width integer in `-2^4095..=2^4095-1`.
     Int,
-    FixedU128,
-    Amount,
+    /// Exact bounded base-10 decimal.
+    Decimal,
+    /// Nominal non-negative ledger quantity backed by the decimal representation.
+    Quantity,
     Bool,
     String,
     /// First-class raw byte sequence.
@@ -482,6 +495,12 @@ pub enum ExprKind {
     /// V1 never inserts this node to make otherwise-incompatible operands or
     /// assignments type check.
     NumericCast {
+        expr: Box<TypedExpr>,
+    },
+    /// Recoverable conversion into the nominal `quantity` domain.
+    ///
+    /// The error payload is the stable numeric-fault tag returned by ABI V1.
+    NumericTryCast {
         expr: Box<TypedExpr>,
     },
     /// Ternary conditional expression: `cond ? then : else`.
@@ -568,10 +587,10 @@ pub enum ExprKind {
         target: Box<TypedExpr>,
         index: Box<TypedExpr>,
     },
-    Number(i64),
-    Decimal(String),
-    /// Canonical Amount payload paired with its exact source spelling.
-    AmountLiteral {
+    /// A source `int` literal in the complete signed 4,096-bit domain.
+    IntLiteral(BigInt),
+    /// Canonical exact decimal payload paired with its source spelling.
+    DecimalLiteral {
         value: Numeric,
         spelling: String,
     },
@@ -1748,8 +1767,8 @@ fn collect_struct_dependencies(
             }
             Type::Tuple(items) => pending.extend(items.iter().rev()),
             Type::Int
-            | Type::FixedU128
-            | Type::Amount
+            | Type::Decimal
+            | Type::Quantity
             | Type::Bool
             | Type::String
             | Type::Bytes
@@ -2429,9 +2448,8 @@ fn validate_production_projection_expr(
             }
             Ok(())
         }
-        ExprKind::Number(_)
-        | ExprKind::Decimal(_)
-        | ExprKind::AmountLiteral { .. }
+        ExprKind::IntLiteral(_)
+        | ExprKind::DecimalLiteral { .. }
         | ExprKind::OptionNone
         | ExprKind::Bool(_)
         | ExprKind::String(_)
@@ -2611,6 +2629,9 @@ fn analyze_with_context(
             resolve_struct_type_with_context(context, &convert_type_expr(context, declared)?);
         validate_list_schemas(&expected)?;
         ensure_assignable_and_coerce(&expected, &mut value)?;
+        if is_numeric_type(&value.ty) {
+            value = fold_constant_numeric(&value)?;
+        }
         resolved_consts.insert(decl.name, value);
     }
     context.consts.replace(resolved_consts);
@@ -2861,11 +2882,11 @@ fn core_query_view_name(ty: &Type) -> Option<&str> {
     (core_query_view_type(builtin).as_ref() == Some(ty)).then_some(name.as_str())
 }
 
-fn type_name(ty: &Type) -> String {
+pub(crate) fn type_name(ty: &Type) -> String {
     match ty {
-        Type::Int => "i64".into(),
-        Type::FixedU128 => "u128".into(),
-        Type::Amount => "Amount".into(),
+        Type::Int => "int".into(),
+        Type::Decimal => "decimal".into(),
+        Type::Quantity => "quantity".into(),
         Type::Bool => "bool".into(),
         Type::String => "string".into(),
         Type::Bytes => "bytes".into(),
@@ -3786,19 +3807,19 @@ fn json_from_expr(expr: &Expr) -> Result<Json, SemanticError> {
             return json_from_expr(expression);
         }
         Expr::String(s) => json::Value::String(s.clone()),
-        Expr::Number(n) => json::Value::Number(JsonNumber::I64(*n)),
-        Expr::Decimal(raw) => {
-            let value = raw.parse::<f64>().map_err(|err| SemanticError {
+        Expr::IntLiteral(value) => {
+            let number = value
+                .try_to_i64()
+                .map(JsonNumber::I64)
+                .or_else(|| value.try_to_u64().map(JsonNumber::U64))
+                .ok_or_else(|| SemanticError {
                 code: "E_TRIGGER_METADATA_VALUE",
-                message: format!("invalid decimal metadata literal `{raw}`: {err}"),
-            })?;
-            let number = JsonNumber::from_f64(value).ok_or_else(|| SemanticError {
-                code: "E_TRIGGER_METADATA_VALUE",
-                message: format!("invalid decimal metadata literal `{raw}`: not finite"),
+                message: "trigger metadata JSON cannot represent this int exactly; use an explicit string or typed state value"
+                    .into(),
             })?;
             json::Value::Number(number)
         }
-        Expr::AmountLiteral(_) => {
+        Expr::DecimalLiteral(_) => {
             return Err(SemanticError {
                 code: "E_TRIGGER_METADATA_VALUE",
                 message: "Amount trigger metadata requires explicit native JSON construction"
@@ -3842,15 +3863,15 @@ fn json_from_expr(expr: &Expr) -> Result<Json, SemanticError> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NumericKind {
     Int,
-    FixedU128,
-    Amount,
+    Decimal,
+    Quantity,
 }
 
 fn numeric_kind(ty: &Type) -> Option<NumericKind> {
     match resolve_struct_type(ty) {
         Type::Int => Some(NumericKind::Int),
-        Type::FixedU128 => Some(NumericKind::FixedU128),
-        Type::Amount => Some(NumericKind::Amount),
+        Type::Decimal => Some(NumericKind::Decimal),
+        Type::Quantity => Some(NumericKind::Quantity),
         _ => None,
     }
 }
@@ -3858,92 +3879,104 @@ fn numeric_kind(ty: &Type) -> Option<NumericKind> {
 fn numeric_kind_to_type(kind: NumericKind) -> Type {
     match kind {
         NumericKind::Int => Type::Int,
-        NumericKind::FixedU128 => Type::FixedU128,
-        NumericKind::Amount => Type::Amount,
+        NumericKind::Decimal => Type::Decimal,
+        NumericKind::Quantity => Type::Quantity,
     }
 }
 
-fn parse_amount_literal(spelling: &str) -> Result<Numeric, SemanticError> {
-    let body = spelling.strip_suffix("amt").ok_or_else(|| SemanticError {
-        code: "E_AMOUNT_SUFFIX",
-        message: "Amount literals must end with lowercase `amt`".into(),
+fn parse_decimal_literal(spelling: &str) -> Result<Numeric, SemanticError> {
+    let (coefficient, exponent) = spelling
+        .split_once(['e', 'E'])
+        .map_or((spelling, "0"), |(coefficient, exponent)| {
+            (coefficient, exponent)
+        });
+    let exponent = exponent.replace('_', "");
+    let exponent = exponent.parse::<i64>().map_err(|_| SemanticError {
+        code: if exponent.starts_with('-') {
+            "E_DECIMAL_SCALE_OVERFLOW"
+        } else {
+            "E_DECIMAL_MANTISSA_OVERFLOW"
+        },
+        message: "decimal exponent is outside the representable V1 domain".into(),
     })?;
-    let mut parts = body.split('.');
-    let whole = parts.next().unwrap_or_default();
-    let fractional = parts.next();
-    if parts.next().is_some() {
-        return Err(SemanticError {
-            code: "E_AMOUNT_MALFORMED",
-            message: "Amount literals contain at most one decimal point".into(),
+    let (whole, fractional) = coefficient
+        .split_once('.')
+        .map_or((coefficient, ""), |(whole, fractional)| {
+            (whole, fractional)
         });
+    let whole = whole.replace('_', "");
+    let fractional = fractional.replace('_', "");
+    let mut mantissa_spelling = format!("{whole}{fractional}");
+    if mantissa_spelling.bytes().all(|byte| byte == b'0') {
+        return Ok(Numeric::zero());
     }
-
-    let valid_component = |component: &str| {
-        !component.is_empty()
-            && !component.starts_with('_')
-            && !component.ends_with('_')
-            && !component.contains("__")
-            && component
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || byte == b'_')
-    };
-    if !valid_component(whole) || fractional.is_some_and(|part| !valid_component(part)) {
-        return Err(SemanticError {
-            code: "E_AMOUNT_MALFORMED",
-            message:
-                "underscores must separate decimal digits and both sides of `.` require digits"
-                    .into(),
-        });
+    let mut scale = i64::try_from(fractional.len())
+        .map_err(|_| SemanticError {
+            code: "E_DECIMAL_SCALE_OVERFLOW",
+            message: "decimal literal scale exceeds the V1 maximum of 28".into(),
+        })?
+        .checked_sub(exponent)
+        .ok_or_else(|| SemanticError {
+            code: if exponent.is_negative() {
+                "E_DECIMAL_SCALE_OVERFLOW"
+            } else {
+                "E_DECIMAL_MANTISSA_OVERFLOW"
+            },
+            message: "decimal exponent is outside the representable V1 domain".into(),
+        })?;
+    if scale < 0 {
+        let zeros = usize::try_from(scale.unsigned_abs()).map_err(|_| SemanticError {
+            code: "E_DECIMAL_MANTISSA_OVERFLOW",
+            message: "decimal literal exceeds the signed 4,096-bit mantissa domain".into(),
+        })?;
+        if mantissa_spelling.len().saturating_add(zeros) > 1_234 {
+            return Err(SemanticError {
+                code: "E_DECIMAL_MANTISSA_OVERFLOW",
+                message: "decimal literal exceeds the signed 4,096-bit mantissa domain".into(),
+            });
+        }
+        mantissa_spelling.extend(core::iter::repeat_n('0', zeros));
+        scale = 0;
     }
-
-    let raw_fractional = fractional
-        .map(|part| {
-            part.bytes()
-                .filter(u8::is_ascii_digit)
-                .map(char::from)
-                .collect::<String>()
-        })
-        .unwrap_or_default();
-    let scale = raw_fractional.trim_end_matches('0').len();
+    while scale > 0 && mantissa_spelling.ends_with('0') {
+        mantissa_spelling.pop();
+        scale -= 1;
+    }
+    let scale = u32::try_from(scale).map_err(|_| SemanticError {
+        code: "E_DECIMAL_SCALE_OVERFLOW",
+        message: "decimal literal scale exceeds the V1 maximum of 28".into(),
+    })?;
     if scale > 28 {
         return Err(SemanticError {
-            code: "E_AMOUNT_SCALE_OVERFLOW",
-            message: format!("Amount literal has canonical scale {scale}; the V1 maximum is 28"),
+            code: "E_DECIMAL_SCALE_OVERFLOW",
+            message: format!("decimal literal has canonical scale {scale}; the V1 maximum is 28"),
         });
     }
-
-    let mut mantissa_spelling = body
-        .bytes()
-        .filter(|byte| byte.is_ascii_digit())
-        .map(char::from)
-        .collect::<String>();
-    let canonicalized_digits = raw_fractional.len().saturating_sub(scale);
-    mantissa_spelling.truncate(mantissa_spelling.len().saturating_sub(canonicalized_digits));
     let mantissa = mantissa_spelling
         .parse::<BigInt>()
         .map_err(|_| SemanticError {
-            code: "E_AMOUNT_MANTISSA_OVERFLOW",
-            message: "Amount literal exceeds the 512-bit mantissa limit".into(),
+            code: "E_DECIMAL_MANTISSA_OVERFLOW",
+            message: "decimal literal exceeds the signed 4,096-bit mantissa domain".into(),
         })?;
-    Numeric::try_new(mantissa, scale as u32)
+    Numeric::try_new(mantissa, scale)
         .map_err(|error| match error {
             NumericError::MantissaTooLarge => SemanticError {
-                code: "E_AMOUNT_MANTISSA_OVERFLOW",
-                message: "Amount literal exceeds the 512-bit mantissa limit".into(),
+                code: "E_DECIMAL_MANTISSA_OVERFLOW",
+                message: "decimal literal exceeds the signed 4,096-bit mantissa domain".into(),
             },
             NumericError::ScaleTooLarge => SemanticError {
-                code: "E_AMOUNT_SCALE_OVERFLOW",
-                message: "Amount literal scale exceeds the V1 maximum of 28".into(),
+                code: "E_DECIMAL_SCALE_OVERFLOW",
+                message: "decimal literal scale exceeds the V1 maximum of 28".into(),
             },
             NumericError::Malformed => SemanticError {
-                code: "E_AMOUNT_MALFORMED",
-                message: "invalid Amount literal".into(),
+                code: "E_DECIMAL_MALFORMED",
+                message: "invalid decimal literal".into(),
             },
         })?
-        .canonicalize_amount()
+        .canonicalize_decimal()
         .map_err(|error| SemanticError {
-            code: "E_AMOUNT_MALFORMED",
-            message: format!("invalid Amount literal: {error}"),
+            code: "E_DECIMAL_MALFORMED",
+            message: format!("invalid decimal literal: {error}"),
         })
 }
 
@@ -4148,7 +4181,10 @@ pub(crate) fn is_numeric_type(ty: &Type) -> bool {
 }
 
 pub(crate) fn is_wide_numeric_type(ty: &Type) -> bool {
-    matches!(resolve_struct_type(ty), Type::FixedU128 | Type::Amount)
+    matches!(
+        resolve_struct_type(ty),
+        Type::Int | Type::Decimal | Type::Quantity
+    )
 }
 
 fn is_int_like(ty: &Type) -> bool {
@@ -4158,15 +4194,38 @@ fn is_int_like(ty: &Type) -> bool {
 fn numeric_result_type(lhs: &Type, rhs: &Type) -> Option<Type> {
     let lhs_resolved = resolve_struct_type(lhs);
     let rhs_resolved = resolve_struct_type(rhs);
-    if lhs_resolved != rhs_resolved {
-        return None;
+    if lhs_resolved == rhs_resolved {
+        return numeric_kind(&lhs_resolved).map(numeric_kind_to_type);
     }
-    numeric_kind(&lhs_resolved).map(numeric_kind_to_type)
+    matches!(
+        (&lhs_resolved, &rhs_resolved),
+        (Type::Int, Type::Decimal) | (Type::Decimal, Type::Int)
+    )
+    .then_some(Type::Decimal)
+}
+
+fn arithmetic_result_type(op: BinaryOp, lhs: &Type, rhs: &Type) -> Option<Type> {
+    let lhs = resolve_struct_type(lhs);
+    let rhs = resolve_struct_type(rhs);
+    match (op, &lhs, &rhs) {
+        (_, Type::Int, Type::Int) => Some(Type::Int),
+        (BinaryOp::Mod, Type::Decimal, Type::Decimal)
+        | (BinaryOp::Mod, Type::Int, Type::Decimal)
+        | (BinaryOp::Mod, Type::Decimal, Type::Int) => None,
+        (_, Type::Decimal, Type::Decimal)
+        | (_, Type::Int, Type::Decimal)
+        | (_, Type::Decimal, Type::Int) => Some(Type::Decimal),
+        (BinaryOp::Add | BinaryOp::Sub, Type::Quantity, Type::Quantity) => Some(Type::Quantity),
+        (BinaryOp::Mul, Type::Quantity, Type::Decimal)
+        | (BinaryOp::Div, Type::Quantity, Type::Decimal) => Some(Type::Quantity),
+        (BinaryOp::Div, Type::Quantity, Type::Quantity) => Some(Type::Decimal),
+        _ => None,
+    }
 }
 
 fn literal_i64(expr: &TypedExpr) -> Option<i64> {
     match expr.kind() {
-        ExprKind::Number(n) => Some(*n),
+        ExprKind::IntLiteral(n) => n.try_to_i64(),
         ExprKind::NumericCast { expr } => literal_i64(expr),
         ExprKind::Unary {
             op: UnaryOp::Neg,
@@ -4196,10 +4255,12 @@ fn explicit_numeric_conversion(
     name: &str,
     args: Vec<TypedExpr>,
 ) -> Option<Result<TypedExpr, SemanticError>> {
-    let (source, destination) = match name {
-        "u128::from_i64" => (Type::Int, Type::FixedU128),
-        "Amount::from_i64" => (Type::Int, Type::Amount),
-        "Amount::from_u128" => (Type::FixedU128, Type::Amount),
+    let (source, destination, recoverable) = match name {
+        "decimal::from_int" => (Type::Int, Type::Decimal, false),
+        "decimal::to_int_exact" => (Type::Decimal, Type::Int, false),
+        "quantity::try_from_int" => (Type::Int, Type::Quantity, true),
+        "quantity::try_from_decimal" => (Type::Decimal, Type::Quantity, true),
+        "decimal::from_quantity" => (Type::Quantity, Type::Decimal, false),
         _ => return None,
     };
     Some((|| {
@@ -4209,19 +4270,38 @@ fn explicit_numeric_conversion(
                 message: format!("{name} expects exactly one {} argument", type_name(&source)),
             });
         }
-        if matches!(source, Type::Int) && literal_i64(&args[0]).is_some_and(|value| value < 0) {
-            return Err(SemanticError {
-                code: "E_NEGATIVE_CONVERSION",
-                message: format!("{name} cannot convert a negative i64"),
+        let argument = Box::new(args.into_iter().next().expect("one argument checked"));
+        if recoverable {
+            return Ok(TypedExpr {
+                expr: ExprKind::NumericTryCast { expr: argument },
+                ty: Type::Result(Box::new(destination), Box::new(Type::Int)),
             });
         }
         Ok(TypedExpr {
-            expr: ExprKind::NumericCast {
-                expr: Box::new(args.into_iter().next().expect("one argument checked")),
-            },
+            expr: ExprKind::NumericCast { expr: argument },
             ty: destination,
         })
     })())
+}
+
+fn numeric_literal_is_negative(expr: &TypedExpr) -> bool {
+    match expr.kind() {
+        ExprKind::IntLiteral(value) => value.is_negative(),
+        ExprKind::DecimalLiteral { value, .. } => value.mantissa().is_negative(),
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            expr,
+        } => !numeric_literal_is_zero(expr),
+        _ => false,
+    }
+}
+
+fn numeric_literal_is_zero(expr: &TypedExpr) -> bool {
+    match expr.kind() {
+        ExprKind::IntLiteral(value) => value.is_zero(),
+        ExprKind::DecimalLiteral { value, .. } => value.is_zero(),
+        _ => false,
+    }
 }
 
 fn is_supported_durable_value_type(ty: &Type) -> bool {
@@ -4240,6 +4320,25 @@ fn is_supported_durable_value_type(ty: &Type) -> bool {
         Type::List(element, _) => is_supported_durable_value_type(&element),
         _ => false,
     }
+}
+
+fn coerce_numeric_operand(expr: &mut TypedExpr, expected: &Type) -> Result<(), SemanticError> {
+    let actual = resolve_struct_type(&expr.ty);
+    let expected = resolve_struct_type(expected);
+    if actual == expected {
+        return Ok(());
+    }
+    if actual == Type::Int && expected == Type::Decimal {
+        let inner = expr.clone();
+        *expr = TypedExpr {
+            expr: ExprKind::NumericCast {
+                expr: Box::new(inner),
+            },
+            ty: Type::Decimal,
+        };
+        return Ok(());
+    }
+    require_same_numeric_type(expr, &expected)
 }
 
 fn list_element_contains_resource_handle(ty: &Type) -> bool {
@@ -4345,8 +4444,8 @@ fn list_element_is_comparable(ty: &Type) -> bool {
         | Type::AssetHandle
         | Type::NamedStruct(_) => false,
         Type::Int
-        | Type::FixedU128
-        | Type::Amount
+        | Type::Decimal
+        | Type::Quantity
         | Type::Bool
         | Type::String
         | Type::Bytes
@@ -4368,8 +4467,8 @@ fn list_element_is_comparable(ty: &Type) -> bool {
 fn is_supported_public_argument_type(ty: &Type) -> bool {
     match resolve_struct_type(ty) {
         Type::Int
-        | Type::FixedU128
-        | Type::Amount
+        | Type::Decimal
+        | Type::Quantity
         | Type::Bool
         | Type::String
         | Type::Json
@@ -4432,7 +4531,7 @@ fn ensure_in_memory_map_word_types(
             return Err(SemanticError {
                 code: "K2003",
                 message: format!(
-                    "ephemeral map key type `{}` is not supported; use i64, bool, string, bytes, Json, or typed Iroha IDs",
+                    "ephemeral map key type `{}` is not supported; use int, decimal, quantity, bool, string, bytes, Json, or typed Iroha IDs",
                     type_name(&k)
                 ),
             });
@@ -4441,7 +4540,7 @@ fn ensure_in_memory_map_word_types(
             return Err(SemanticError {
                 code: "K2003",
                 message: format!(
-                    "ephemeral map value type `{}` is not supported; use i64, bool, string, bytes, Json, or typed Iroha IDs",
+                    "ephemeral map value type `{}` is not supported; use int, decimal, quantity, bool, string, bytes, Json, or typed Iroha IDs",
                     type_name(&v)
                 ),
             });
@@ -4511,7 +4610,7 @@ fn validate_state_type_inner(ty: &Type, allow_map: bool) -> Result<(), SemanticE
                 Err(SemanticError {
                     code: "K2003",
                     message: format!(
-                        "state type `{}` is not supported for durable storage; use i64, u128, Amount, bool, Json, bytes, typed Iroha IDs, or aggregate V1 types",
+                        "state type `{}` is not supported for durable storage; use int, decimal, quantity, bool, Json, bytes, typed Iroha IDs, or aggregate V1 types",
                         type_name(&other)
                     ),
                 })
@@ -4571,7 +4670,7 @@ pub fn is_pointer_type(ty: &Type) -> bool {
 }
 
 const TRANSFER_BATCH_SIGNATURE: &str =
-    "(AccountId, AccountId, AssetDefinitionId, Amount) tuple entries";
+    "(AccountId, AccountId, AssetDefinitionId, quantity) tuple entries";
 
 fn is_transfer_batch_entry_tuple(ty: &Type) -> bool {
     match ty {
@@ -4579,7 +4678,7 @@ fn is_transfer_batch_entry_tuple(ty: &Type) -> bool {
             matches!(resolve_struct_type(&fields[0]), Type::AccountId)
                 && matches!(resolve_struct_type(&fields[1]), Type::AccountId)
                 && matches!(resolve_struct_type(&fields[2]), Type::AssetDefinitionId)
-                && matches!(resolve_struct_type(&fields[3]), Type::Amount)
+                && matches!(resolve_struct_type(&fields[3]), Type::Quantity)
         }
         _ => false,
     }
@@ -5310,7 +5409,7 @@ fn validate_v1_bounded_for_shape(
                 .into(),
         });
     };
-    if !matches!(value.kind(), Expr::Number(0)) {
+    if !matches!(value.kind(), Expr::IntLiteral(value) if value.is_zero()) {
         return Err(SemanticError {
             code: "E_UNBOUNDED_LOOP",
             message: "range loops must start from zero".into(),
@@ -5334,7 +5433,7 @@ fn validate_v1_bounded_for_shape(
         });
     };
     if !matches!(left.kind(), Expr::Ident(name) if name == variable)
-        || !matches!(right.kind(), Expr::Number(value) if *value >= 0)
+        || !matches!(right.kind(), Expr::IntLiteral(value) if !value.is_negative())
     {
         return Err(SemanticError {
             code: "E_UNBOUNDED_LOOP",
@@ -5370,7 +5469,7 @@ fn validate_v1_bounded_for_shape(
     };
     if name != variable
         || !matches!(step_left.kind(), Expr::Ident(name) if name == variable)
-        || !matches!(step_right.kind(), Expr::Number(1))
+        || !matches!(step_right.kind(), Expr::IntLiteral(value) if value == &BigInt::one())
     {
         return Err(SemanticError {
             code: "E_UNBOUNDED_LOOP",
@@ -6118,9 +6217,17 @@ fn analyze_statement_inner(
                         Expr::Source { .. } | Expr::Resolved { .. } => {
                             unreachable!("kind() strips provenance wrappers")
                         }
-                        Expr::Number(n) if *n >= 0 => {
-                            enforce_static_iteration_limit("StateMap.take(N)", *n as u128)?;
-                            Some(usize::try_from(*n).expect("V1 iteration bound is at most 64"))
+                        Expr::IntLiteral(n) if !n.is_negative() => {
+                            let value = n.try_to_u64().ok_or_else(|| SemanticError {
+                                code: "E_UNBOUNDED_ITERATION",
+                                message: "`.take(n)` requires an int literal no greater than 64"
+                                    .into(),
+                            })?;
+                            enforce_static_iteration_limit(
+                                "StateMap.take(N)",
+                                u128::from(value),
+                            )?;
+                            Some(usize::try_from(value).expect("V1 iteration bound is at most 64"))
                         }
                         _ => None,
                     };
@@ -6182,7 +6289,9 @@ fn analyze_statement_inner(
                         Expr::Source { .. } | Expr::Resolved { .. } => {
                             unreachable!("kind() strips provenance wrappers")
                         }
-                        Expr::Number(n) if *n >= 0 => Some(*n as usize),
+                        Expr::IntLiteral(n) if !n.is_negative() => {
+                            n.try_to_u64().and_then(|value| usize::try_from(value).ok())
+                        }
                         _ => None,
                     };
                     // Interpret second numeric as end; compute n = end - start
@@ -6190,7 +6299,9 @@ fn analyze_statement_inner(
                         Expr::Source { .. } | Expr::Resolved { .. } => {
                             unreachable!("kind() strips provenance wrappers")
                         }
-                        Expr::Number(n) if *n >= 0 => Some(*n as usize),
+                        Expr::IntLiteral(n) if !n.is_negative() => {
+                            n.try_to_u64().and_then(|value| usize::try_from(value).ok())
+                        }
                         _ => None,
                     };
                     if let (Some(start), Some(end)) = (start, end) {
@@ -6264,7 +6375,7 @@ fn core_query_view_type(builtin: Builtin) -> Option<Type> {
         ),
         Builtin::QueryGetAsset | Builtin::QueryPageAssets => (
             "AssetView",
-            vec![("id", Type::AssetId), ("amount", Type::Amount)],
+            vec![("id", Type::AssetId), ("amount", Type::Quantity)],
         ),
         Builtin::QueryGetAssetDefinition | Builtin::QueryPageAssetDefinitions => (
             "AssetDefinitionView",
@@ -6273,7 +6384,7 @@ fn core_query_view_type(builtin: Builtin) -> Option<Type> {
                 ("name", Type::String),
                 ("description", Type::Option(Box::new(Type::String))),
                 ("owned_by", Type::AccountId),
-                ("total_quantity", Type::Amount),
+                ("total_quantity", Type::Quantity),
                 ("metadata", Type::Json),
             ],
         ),
@@ -6367,7 +6478,7 @@ fn core_query_page_type(builtin: Builtin) -> Type {
 fn direct_json_getter_type(builtin: Builtin) -> Option<Type> {
     let payload = match builtin {
         Builtin::JsonGetIntDirect => Type::Int,
-        Builtin::JsonGetNumericDirect => Type::Amount,
+        Builtin::JsonGetNumericDirect => Type::Quantity,
         Builtin::JsonGetJsonDirect => Type::Json,
         Builtin::JsonGetNameDirect => Type::Name,
         Builtin::JsonGetAccountIdDirect => Type::AccountId,
@@ -6586,7 +6697,7 @@ fn analyze_surface_builtin_call(
                 match resolve_struct_type(&resolved_value_ty) {
                     Type::Int => {
                         call_args.push(TypedExpr {
-                            expr: ExprKind::Number(0),
+                            expr: ExprKind::IntLiteral(BigInt::zero()),
                             ty: Type::Int,
                         });
                     }
@@ -6662,7 +6773,7 @@ fn analyze_surface_builtin_call(
                 match resolve_struct_type(&resolved_value_ty) {
                     Type::Int => {
                         call_args.push(TypedExpr {
-                            expr: ExprKind::Number(0),
+                            expr: ExprKind::IntLiteral(BigInt::zero()),
                             ty: Type::Int,
                         });
                     }
@@ -7355,7 +7466,7 @@ fn analyze_surface_builtin_call(
                     name: builtin.name().to_string(),
                     args: arg_typed,
                 },
-                ty: Type::Amount,
+                ty: Type::Quantity,
             })
         }
         Builtin::GetPublicInput => {
@@ -7499,7 +7610,7 @@ fn analyze_surface_builtin_call(
             if arg_typed.len() != 3
                 || !(arg_typed[0].ty == Type::AccountId
                     && arg_typed[1].ty == Type::AssetDefinitionId
-                    && arg_typed[2].ty == Type::Amount)
+                    && arg_typed[2].ty == Type::Quantity)
             {
                 return Err(SemanticError {
                     code: "K2003",
@@ -7522,7 +7633,7 @@ fn analyze_surface_builtin_call(
                 || !(arg_typed[0].ty == Type::AccountId
                     && arg_typed[1].ty == Type::AccountId
                     && arg_typed[2].ty == Type::AssetDefinitionId
-                    && arg_typed[3].ty == Type::Amount
+                    && arg_typed[3].ty == Type::Quantity
                     && arg_typed[4].ty == Type::DataSpaceId)
             {
                 return Err(SemanticError {
@@ -7856,7 +7967,7 @@ fn analyze_surface_builtin_call(
             if !(arg_typed.len() == 3 || arg_typed.len() == 4)
                 || !(arg_typed[0].ty == Type::Name
                     && arg_typed[1].ty == Type::AssetDefinitionId
-                    && arg_typed[2].ty == Type::Amount)
+                    && arg_typed[2].ty == Type::Quantity)
                 || (arg_typed.len() == 4 && !is_blob_like(&arg_typed[3].ty))
             {
                 return Err(SemanticError {
@@ -7914,8 +8025,8 @@ fn analyze_surface_builtin_call(
         Builtin::EscrowResolveDispute => {
             if !(arg_typed.len() == 3 || arg_typed.len() == 4)
                 || !(arg_typed[0].ty == Type::Name
-                    && arg_typed[1].ty == Type::Amount
-                    && arg_typed[2].ty == Type::Amount)
+                    && arg_typed[1].ty == Type::Quantity
+                    && arg_typed[2].ty == Type::Quantity)
                 || (arg_typed.len() == 4 && !is_blob_like(&arg_typed[3].ty))
             {
                 return Err(SemanticError {
@@ -8374,7 +8485,7 @@ fn analyze_surface_builtin_call(
         }
         Builtin::SetAccountQuorum => {
             if arg_typed.len() != 2
-                || !(arg_typed[0].ty == Type::AccountId && arg_typed[1].ty == Type::Amount)
+                || !(arg_typed[0].ty == Type::AccountId && arg_typed[1].ty == Type::Quantity)
             {
                 return Err(SemanticError {
                     code: "K2003",
@@ -8820,7 +8931,7 @@ fn analyze_surface_builtin_call(
         }
         Builtin::NumericToIntDirect => {
             if arg_typed.len() != 1
-                || !matches!(resolve_struct_type(&arg_typed[0].ty), Type::FixedU128)
+                || !matches!(resolve_struct_type(&arg_typed[0].ty), Type::Int)
             {
                 return Err(SemanticError {
                     code: "K2003",
@@ -8883,7 +8994,7 @@ fn analyze_surface_builtin_call(
                     message: format!("{} expects wide numeric operands", builtin.name()),
                 });
             }
-            if matches!(resolve_struct_type(&result_ty), Type::Amount)
+            if matches!(resolve_struct_type(&result_ty), Type::Quantity)
                 && matches!(builtin, Builtin::NumericRem | Builtin::NumericRemDirect)
             {
                 return Err(SemanticError {
@@ -8892,7 +9003,7 @@ fn analyze_surface_builtin_call(
                         .into(),
                 });
             }
-            if matches!(resolve_struct_type(&result_ty), Type::Amount)
+            if matches!(resolve_struct_type(&result_ty), Type::Quantity)
                 && matches!(
                     builtin,
                     Builtin::NumericAddDirect
@@ -8941,7 +9052,7 @@ fn analyze_surface_builtin_call(
                     ),
                 });
             }
-            if matches!(resolve_struct_type(&arg_typed[0].ty), Type::Amount)
+            if matches!(resolve_struct_type(&arg_typed[0].ty), Type::Quantity)
                 && matches!(
                     builtin,
                     Builtin::NumericEqDirect
@@ -9131,7 +9242,7 @@ fn analyze_surface_builtin_call(
             }
             let payload = match builtin {
                 Builtin::GetInt => Type::Int,
-                Builtin::GetNumeric => Type::Amount,
+                Builtin::GetNumeric => Type::Quantity,
                 Builtin::GetJson => Type::Json,
                 Builtin::GetName => Type::Name,
                 Builtin::GetAccountId => Type::AccountId,
@@ -9761,8 +9872,8 @@ fn analyze_list_comprehension(
 fn is_native_json_value_type(ty: &Type) -> bool {
     match resolve_struct_type(ty) {
         Type::Int
-        | Type::FixedU128
-        | Type::Amount
+        | Type::Decimal
+        | Type::Quantity
         | Type::Bool
         | Type::String
         | Type::Bytes
@@ -9983,7 +10094,7 @@ fn analyze_list_method_call(
         }
         LIST_TAKE_INTRINSIC => {
             let Some(limit) = typed.get(1).and_then(|argument| match argument.kind() {
-                ExprKind::Number(limit) => Some(limit),
+                ExprKind::IntLiteral(limit) => Some(limit),
                 _ => None,
             }) else {
                 return Some(Err(SemanticError {
@@ -9991,7 +10102,11 @@ fn analyze_list_method_call(
                     message: "List.take limit must be a compile-time integer constant".into(),
                 }));
             };
-            let limit = match u8::try_from(*limit).ok().filter(|limit| *limit <= capacity) {
+            let limit = match limit
+                .try_to_u64()
+                .and_then(|limit| u8::try_from(limit).ok())
+                .filter(|limit| *limit <= capacity)
+            {
                 Some(limit) => limit,
                 None => {
                     return Some(Err(SemanticError {
@@ -10062,7 +10177,7 @@ fn analyze_amount_method_call(
         Ok(receiver) => receiver,
         Err(error) => return Some(Err(error)),
     };
-    if resolve_struct_type(&receiver.ty) != Type::Amount {
+    if resolve_struct_type(&receiver.ty) != Type::Quantity {
         return Some(Err(SemanticError {
             code: "E_AMOUNT_DIV_ROUND_RECEIVER",
             message: format!(
@@ -10113,12 +10228,12 @@ fn analyze_amount_method_call(
                     context,
                     &plan.ordered[index],
                     vars,
-                    Some(&Type::Amount),
+                    Some(&Type::Quantity),
                 ) {
                     Ok(divisor) => divisor,
                     Err(error) => return Some(Err(error)),
                 };
-                if let Err(error) = ensure_assignable_and_coerce(&Type::Amount, &mut divisor) {
+                if let Err(error) = ensure_assignable_and_coerce(&Type::Quantity, &mut divisor) {
                     return Some(Err(error));
                 }
                 divisor
@@ -10137,7 +10252,7 @@ fn analyze_amount_method_call(
                 };
                 rounding_mode = Some(mode);
                 TypedExpr {
-                    expr: ExprKind::Number(mode_tag),
+                    expr: ExprKind::IntLiteral(BigInt::from(mode_tag)),
                     ty: Type::Int,
                 }
             }
@@ -10169,8 +10284,8 @@ fn analyze_amount_method_call(
             message: "Amount.div_round scale must be i64".into(),
         }));
     }
-    if let ExprKind::Number(scale) = scale.kind()
-        && !(0..=28).contains(scale)
+    if let ExprKind::IntLiteral(scale) = scale.kind()
+        && !scale.try_to_u64().is_some_and(|scale| scale <= 28)
     {
         return Some(Err(SemanticError {
             code: "E_AMOUNT_DIV_ROUND_SCALE",
@@ -10178,7 +10293,7 @@ fn analyze_amount_method_call(
         }));
     }
     let rounding_mode = rounding_mode.expect("validated rounding mode slot");
-    if matches!(divisor.kind(), ExprKind::AmountLiteral { value, .. } if value.is_zero()) {
+    if matches!(divisor.kind(), ExprKind::DecimalLiteral { value, .. } if value.is_zero()) {
         return Some(Err(SemanticError {
             code: "E_AMOUNT_CONSTANT_ARITHMETIC",
             message: "Amount division by literal zero is invalid".into(),
@@ -10186,14 +10301,19 @@ fn analyze_amount_method_call(
     }
 
     if let (
-        ExprKind::AmountLiteral {
+        ExprKind::DecimalLiteral {
             value: dividend, ..
         },
-        ExprKind::AmountLiteral { value: divisor, .. },
-        ExprKind::Number(scale),
+        ExprKind::DecimalLiteral { value: divisor, .. },
+        ExprKind::IntLiteral(scale),
     ) = (receiver.kind(), divisor.kind(), scale.kind())
     {
-        let scale = u32::try_from(*scale).expect("literal scale was checked in 0..=28");
+        let scale = u32::try_from(
+            scale
+                .try_to_u64()
+                .expect("literal scale was checked in 0..=28"),
+        )
+        .expect("literal scale was checked in 0..=28");
         let value = match dividend.checked_amount_div_round(divisor, scale, rounding_mode) {
             Ok(value) => value,
             Err(error) => {
@@ -10204,11 +10324,11 @@ fn analyze_amount_method_call(
             }
         };
         return Some(Ok(TypedExpr {
-            expr: ExprKind::AmountLiteral {
+            expr: ExprKind::DecimalLiteral {
                 spelling: format!("{value}amt"),
                 value,
             },
-            ty: Type::Amount,
+            ty: Type::Quantity,
         }));
     }
 
@@ -10218,7 +10338,7 @@ fn analyze_amount_method_call(
                 name: AMOUNT_DIV_ROUND_INTRINSIC.to_owned(),
                 args: vec![receiver, divisor, scale, mode],
             },
-            ty: Type::Amount,
+            ty: Type::Quantity,
         },
         &plan,
     )))
@@ -10627,28 +10747,18 @@ fn analyze_expr_expected_inner(
                 ty: Type::Json,
             })
         }
-        Expr::Number(n) => Ok(TypedExpr {
-            expr: ExprKind::Number(*n),
+        Expr::IntLiteral(n) => Ok(TypedExpr {
+            expr: ExprKind::IntLiteral(n.clone()),
             ty: Type::Int,
         }),
-        Expr::Decimal(raw) => {
-            raw.parse::<u128>().map_err(|_| SemanticError {
-                code: "E_UINT_OVERFLOW",
-                message: format!("u128 literal `{raw}` is outside 0..={}", u128::MAX),
-            })?;
+        Expr::DecimalLiteral(spelling) => {
+            let value = parse_decimal_literal(spelling)?;
             Ok(TypedExpr {
-                expr: ExprKind::Decimal(raw.clone()),
-                ty: Type::FixedU128,
-            })
-        }
-        Expr::AmountLiteral(spelling) => {
-            let value = parse_amount_literal(spelling)?;
-            Ok(TypedExpr {
-                expr: ExprKind::AmountLiteral {
+                expr: ExprKind::DecimalLiteral {
                     value,
                     spelling: spelling.clone(),
                 },
-                ty: Type::Amount,
+                ty: Type::Decimal,
             })
         }
         Expr::Bool(b) => Ok(TypedExpr {
@@ -10711,7 +10821,7 @@ fn analyze_expr_expected_inner(
                             });
                         }
                         Ok(TypedExpr {
-                            expr: ExprKind::Number(i64::from(code)),
+                            expr: ExprKind::IntLiteral(BigInt::from(code)),
                             ty: Type::Int,
                         })
                     }
@@ -10734,7 +10844,7 @@ fn analyze_expr_expected_inner(
             }
             if let Some(code) = context.error_codes.borrow().get(name).copied() {
                 return Ok(TypedExpr {
-                    expr: ExprKind::Number(i64::from(code)),
+                    expr: ExprKind::IntLiteral(BigInt::from(code)),
                     ty: Type::Int,
                 });
             }
@@ -10754,21 +10864,28 @@ fn analyze_expr_expected_inner(
                             message: "unary '-' expects numeric".into(),
                         });
                     };
-                    if kind != NumericKind::Int {
+                    if !matches!(kind, NumericKind::Int | NumericKind::Decimal) {
                         return Err(SemanticError {
-                            code: "E_UNSIGNED_NEGATION",
-                            message:
-                                "unary '-' is only supported for i64; numeric aliases are unsigned"
-                                    .into(),
+                            code: "E_QUANTITY_NEGATION",
+                            message: "unary `-` is supported for int and decimal; quantity is non-negative"
+                                .into(),
                         });
                     }
-                    Ok(TypedExpr {
+                    let typed = TypedExpr {
                         expr: ExprKind::Unary {
                             op: *op,
-                            expr: Box::new(inner_t.clone()),
+                            expr: Box::new(inner_t),
                         },
                         ty: numeric_kind_to_type(kind),
-                    })
+                    };
+                    match crate::checked_arithmetic::evaluate(&typed) {
+                        Ok(Some(value)) => Ok(value.into_typed_expr()),
+                        Ok(None) => Ok(typed),
+                        Err(error) => Err(SemanticError {
+                            code: error.code(),
+                            message: error.to_string(),
+                        }),
+                    }
                 }
                 UnaryOp::Not => {
                     if inner_t.ty != Type::Bool {
@@ -10962,29 +11079,26 @@ fn analyze_expr_expected_inner(
             }
         }
         Expr::Binary { op, left, right } => {
-            let left_t = analyze_expr(context, left, vars)?;
-            let right_t = analyze_expr(context, right, vars)?;
+            let mut left_t = analyze_expr(context, left, vars)?;
+            let mut right_t = analyze_expr(context, right, vars)?;
             crate::secret::reject_secret_ordinary_operation(&[&left_t, &right_t])?;
             use BinaryOp::*;
             match op {
                 Add | Sub | Mul | Div | Mod => {
-                    let Some(result_ty) = numeric_result_type(&left_t.ty, &right_t.ty) else {
+                    let Some(result_ty) = arithmetic_result_type(*op, &left_t.ty, &right_t.ty)
+                    else {
                         return Err(SemanticError {
                             code: "K2003",
                             message: format!(
-                                "{op:?} requires identical numeric operand types; implicit conversions are not part of Kotodama V1"
+                                "operator {op:?} is not defined for {} and {}",
+                                type_name(&left_t.ty),
+                                type_name(&right_t.ty),
                             ),
                         });
                     };
-                    require_same_numeric_type(&left_t, &result_ty)?;
-                    require_same_numeric_type(&right_t, &result_ty)?;
-                    if *op == Mod && matches!(resolve_struct_type(&result_ty), Type::Amount) {
-                        return Err(SemanticError {
-                            code: "E_AMOUNT_REMAINDER",
-                            message:
-                                "Amount does not support `%`; use exact `/` or amount.div_round"
-                                    .into(),
-                        });
+                    if matches!(result_ty, Type::Decimal) {
+                        coerce_numeric_operand(&mut left_t, &Type::Decimal)?;
+                        coerce_numeric_operand(&mut right_t, &Type::Decimal)?;
                     }
                     let typed = TypedExpr {
                         expr: ExprKind::Binary {
@@ -10994,27 +11108,14 @@ fn analyze_expr_expected_inner(
                         },
                         ty: result_ty,
                     };
-                    if matches!(resolve_struct_type(&typed.ty), Type::Amount) {
-                        match crate::checked_arithmetic::evaluate_checked_amount(&typed) {
-                            Ok(Some(value)) => {
-                                return Ok(TypedExpr {
-                                    expr: ExprKind::AmountLiteral {
-                                        spelling: format!("{value}amt"),
-                                        value,
-                                    },
-                                    ty: Type::Amount,
-                                });
-                            }
-                            Err(error) => {
-                                return Err(SemanticError {
-                                    code: "E_AMOUNT_CONSTANT_ARITHMETIC",
-                                    message: error.message(),
-                                });
-                            }
-                            Ok(None) => {}
-                        }
+                    match crate::checked_arithmetic::evaluate(&typed) {
+                        Ok(Some(value)) => Ok(value.into_typed_expr()),
+                        Ok(None) => Ok(typed),
+                        Err(error) => Err(SemanticError {
+                            code: error.code(),
+                            message: error.to_string(),
+                        }),
                     }
-                    Ok(typed)
                 }
                 And | Or => {
                     if left_t.ty != Type::Bool || right_t.ty != Type::Bool {
@@ -11054,8 +11155,8 @@ fn analyze_expr_expected_inner(
                         });
                     }
                     if let Some(result_ty) = numeric_result {
-                        require_same_numeric_type(&left_t, &result_ty)?;
-                        require_same_numeric_type(&right_t, &result_ty)?;
+                        coerce_numeric_operand(&mut left_t, &result_ty)?;
+                        coerce_numeric_operand(&mut right_t, &result_ty)?;
                     }
                     Ok(TypedExpr {
                         expr: ExprKind::Binary {
@@ -11075,8 +11176,8 @@ fn analyze_expr_expected_inner(
                             ),
                         });
                     };
-                    require_same_numeric_type(&left_t, &result_ty)?;
-                    require_same_numeric_type(&right_t, &result_ty)?;
+                    coerce_numeric_operand(&mut left_t, &result_ty)?;
+                    coerce_numeric_operand(&mut right_t, &result_ty)?;
                     Ok(TypedExpr {
                         expr: ExprKind::Binary {
                             op: *op,
@@ -11274,8 +11375,13 @@ fn analyze_expr_expected_inner(
                 )?;
             } else if argument_names.is_some() {
                 let intrinsic_names: &[&str] = match name.as_str() {
-                    "option::some" | "result::ok" | "u128::from_i64" | "Amount::from_i64"
-                    | "Amount::from_u128" => &["value"],
+                    "option::some"
+                    | "result::ok"
+                    | "decimal::from_int"
+                    | "decimal::to_int_exact"
+                    | "decimal::to_int_trunc"
+                    | "quantity::try_from_decimal"
+                    | "decimal::from_quantity" => &["value"],
                     "result::err" => &["error"],
                     "unwrap_or" | "unwrap_err_or" => &["default"],
                     _ => &[],
@@ -11655,28 +11761,18 @@ fn analyze_const_expr_inner(
         Expr::Source { .. } | Expr::Resolved { .. } => {
             unreachable!("kind() strips AST and resolved-HIR provenance wrappers")
         }
-        Expr::Number(n) => Ok(TypedExpr {
-            expr: ExprKind::Number(*n),
+        Expr::IntLiteral(n) => Ok(TypedExpr {
+            expr: ExprKind::IntLiteral(n.clone()),
             ty: Type::Int,
         }),
-        Expr::Decimal(raw) => {
-            raw.parse::<u128>().map_err(|_| SemanticError {
-                code: "E_UINT_OVERFLOW",
-                message: format!("u128 literal `{raw}` is outside 0..={}", u128::MAX),
-            })?;
+        Expr::DecimalLiteral(spelling) => {
+            let value = parse_decimal_literal(spelling)?;
             Ok(TypedExpr {
-                expr: ExprKind::Decimal(raw.clone()),
-                ty: Type::FixedU128,
-            })
-        }
-        Expr::AmountLiteral(spelling) => {
-            let value = parse_amount_literal(spelling)?;
-            Ok(TypedExpr {
-                expr: ExprKind::AmountLiteral {
+                expr: ExprKind::DecimalLiteral {
                     value,
                     spelling: spelling.clone(),
                 },
-                ty: Type::Amount,
+                ty: Type::Decimal,
             })
         }
         Expr::Bool(value) => Ok(TypedExpr {
@@ -11712,27 +11808,70 @@ fn analyze_const_expr_inner(
             expr: inner,
         } => {
             let inner = analyze_const_expr(context, inner, consts)?;
-            match inner.into_kind() {
-                ExprKind::Number(value) => value
-                    .checked_neg()
-                    .map(|value| TypedExpr {
-                        expr: ExprKind::Number(value),
-                        ty: Type::Int,
-                    })
-                    .ok_or_else(|| SemanticError {
-                        code: "E_INT_OVERFLOW",
-                        message: format!("negating {value} is outside the i64 range"),
-                    }),
-                _ => Err(SemanticError {
+            if !matches!(resolve_struct_type(&inner.ty), Type::Int | Type::Decimal) {
+                return Err(SemanticError {
                     code: "K2003",
-                    message: "const unary '-' expects an integer literal or integer const".into(),
-                }),
+                    message: "const unary `-` expects int or decimal".into(),
+                });
             }
+            let ty = inner.ty.clone();
+            fold_constant_numeric(&TypedExpr {
+                expr: ExprKind::Unary {
+                    op: UnaryOp::Neg,
+                    expr: Box::new(inner),
+                },
+                ty,
+            })
+        }
+        Expr::Binary { op, left, right }
+            if matches!(
+                op,
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
+            ) =>
+        {
+            let mut left = analyze_const_expr(context, left, consts)?;
+            let mut right = analyze_const_expr(context, right, consts)?;
+            let result = arithmetic_result_type(*op, &left.ty, &right.ty).ok_or_else(|| {
+                SemanticError {
+                    code: "K2003",
+                    message: format!(
+                        "operator {op:?} is not defined for {} and {}",
+                        type_name(&left.ty),
+                        type_name(&right.ty)
+                    ),
+                }
+            })?;
+            if result == Type::Decimal {
+                coerce_numeric_operand(&mut left, &Type::Decimal)?;
+                coerce_numeric_operand(&mut right, &Type::Decimal)?;
+            }
+            fold_constant_numeric(&TypedExpr {
+                expr: ExprKind::Binary {
+                    op: *op,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                },
+                ty: result,
+            })
         }
         _ => Err(SemanticError {
             code: "E_CONST_INITIALIZER",
             message: "const initializers must be literal values or previously declared constants"
                 .into(),
+        }),
+    }
+}
+
+fn fold_constant_numeric(expression: &TypedExpr) -> Result<TypedExpr, SemanticError> {
+    match crate::checked_arithmetic::evaluate(expression) {
+        Ok(Some(value)) => Ok(value.into_typed_expr()),
+        Ok(None) => Err(SemanticError {
+            code: "E_CONST_INITIALIZER",
+            message: "numeric constant depends on a runtime value".into(),
+        }),
+        Err(error) => Err(SemanticError {
+            code: error.code(),
+            message: error.to_string(),
         }),
     }
 }
@@ -11822,9 +11961,9 @@ fn convert_type_expr_inner(
         TypeExpr::Path(s) => {
             context.validate_named_type_target(type_node.as_ref(), s)?;
             match s.as_str() {
-                "i64" => Type::Int,
-                "u128" => Type::FixedU128,
-                "Amount" => Type::Amount,
+                "int" => Type::Int,
+                "decimal" => Type::Decimal,
+                "quantity" => Type::Quantity,
                 "bool" => Type::Bool,
                 "string" => Type::String,
                 "bytes" => Type::Bytes,
@@ -11891,7 +12030,7 @@ fn convert_type_expr_inner(
                     return Err(SemanticError {
                         code: "E_SECRET_PAYLOAD_TYPE",
                         message: format!(
-                            "Secret<{}> is unsupported; the V1 private-input ABI supplies Secret<i64>",
+                            "Secret<{}> is unsupported; the V1 private-input ABI supplies Secret<int>",
                             type_name(&inner)
                         ),
                     });
@@ -12069,6 +12208,38 @@ fn ensure_assignable_and_coerce(
     expr: &mut TypedExpr,
 ) -> Result<(), SemanticError> {
     if let Err(error) = ensure_assignable(expected, &expr.ty) {
+        if resolve_struct_type(expected) == Type::Decimal
+            && resolve_struct_type(&expr.ty) == Type::Int
+            && int_literal_expression(expr)
+        {
+            let inner = expr.clone();
+            *expr = TypedExpr {
+                expr: ExprKind::NumericCast {
+                    expr: Box::new(inner),
+                },
+                ty: Type::Decimal,
+            };
+            return Ok(());
+        }
+        if resolve_struct_type(expected) == Type::Quantity
+            && matches!(resolve_struct_type(&expr.ty), Type::Int | Type::Decimal)
+            && exact_numeric_literal_expression(expr)
+        {
+            if numeric_literal_is_negative(expr) {
+                return Err(SemanticError {
+                    code: "E_NEGATIVE_QUANTITY",
+                    message: "a contextual quantity literal cannot be negative".into(),
+                });
+            }
+            let inner = expr.clone();
+            *expr = TypedExpr {
+                expr: ExprKind::NumericCast {
+                    expr: Box::new(inner),
+                },
+                ty: Type::Quantity,
+            };
+            return Ok(());
+        }
         if let ExprKind::Call { name, .. } | ExprKind::NamedCall { name, .. } = expr.kind()
             && let Some(builtin) = Builtin::from_name(name)
             && core_query_view_type(builtin).is_some()
@@ -12096,6 +12267,28 @@ fn ensure_assignable_and_coerce(
         return Err(error);
     }
     Ok(())
+}
+
+fn int_literal_expression(expr: &TypedExpr) -> bool {
+    match expr.kind() {
+        ExprKind::IntLiteral(_) => true,
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            expr,
+        } => int_literal_expression(expr),
+        _ => false,
+    }
+}
+
+fn exact_numeric_literal_expression(expr: &TypedExpr) -> bool {
+    match expr.kind() {
+        ExprKind::IntLiteral(_) | ExprKind::DecimalLiteral { .. } => true,
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            expr,
+        } => exact_numeric_literal_expression(expr),
+        _ => false,
+    }
 }
 
 fn assign_op_to_binary(op: AssignOp) -> Option<BinaryOp> {
@@ -12474,9 +12667,8 @@ fn expr_mutates_map(expr: &TypedExpr, map_name: &str) -> bool {
         ExprKind::Index { target, index } => {
             expr_mutates_map(target, map_name) || expr_mutates_map(index, map_name)
         }
-        ExprKind::Number(_)
-        | ExprKind::Decimal(_)
-        | ExprKind::AmountLiteral { .. }
+        ExprKind::IntLiteral(_)
+        | ExprKind::DecimalLiteral { .. }
         | ExprKind::OptionNone
         | ExprKind::Bool(_)
         | ExprKind::String(_)
@@ -12790,9 +12982,8 @@ fn collect_state_accesses_expr(
             }
         }
         ExprKind::Bool(_)
-        | ExprKind::Number(_)
-        | ExprKind::Decimal(_)
-        | ExprKind::AmountLiteral { .. }
+        | ExprKind::IntLiteral(_)
+        | ExprKind::DecimalLiteral { .. }
         | ExprKind::OptionNone
         | ExprKind::String(_)
         | ExprKind::Bytes(_) => {}
@@ -12995,9 +13186,8 @@ fn collect_calls_in_expr(
             collect_calls_in_expr(context, index, calls);
         }
         ExprKind::Bool(_)
-        | ExprKind::Number(_)
-        | ExprKind::Decimal(_)
-        | ExprKind::AmountLiteral { .. }
+        | ExprKind::IntLiteral(_)
+        | ExprKind::DecimalLiteral { .. }
         | ExprKind::OptionNone
         | ExprKind::String(_)
         | ExprKind::Bytes(_)
@@ -13431,9 +13621,8 @@ fn evaluate_definite_init_expr(
             initialized = evaluate_definite_init_expr(target, initialized, summaries);
             evaluate_definite_init_expr(index, initialized, summaries)
         }
-        ExprKind::Number(_)
-        | ExprKind::Decimal(_)
-        | ExprKind::AmountLiteral { .. }
+        ExprKind::IntLiteral(_)
+        | ExprKind::DecimalLiteral { .. }
         | ExprKind::OptionNone
         | ExprKind::Bool(_)
         | ExprKind::String(_)
@@ -14020,9 +14209,8 @@ fn expr_contains_host_side_effects(expr: &TypedExpr) -> bool {
         ExprKind::Index { target, index } => {
             expr_contains_host_side_effects(target) || expr_contains_host_side_effects(index)
         }
-        ExprKind::Number(_)
-        | ExprKind::Decimal(_)
-        | ExprKind::AmountLiteral { .. }
+        ExprKind::IntLiteral(_)
+        | ExprKind::DecimalLiteral { .. }
         | ExprKind::OptionNone
         | ExprKind::Bool(_)
         | ExprKind::String(_)
@@ -14109,9 +14297,8 @@ fn expr_contains_instruction_emission(expr: &TypedExpr) -> bool {
         ExprKind::Index { target, index } => {
             expr_contains_instruction_emission(target) || expr_contains_instruction_emission(index)
         }
-        ExprKind::Number(_)
-        | ExprKind::Decimal(_)
-        | ExprKind::AmountLiteral { .. }
+        ExprKind::IntLiteral(_)
+        | ExprKind::DecimalLiteral { .. }
         | ExprKind::OptionNone
         | ExprKind::Bool(_)
         | ExprKind::String(_)
@@ -14205,9 +14392,8 @@ fn expr_mutates_durable_state(context: &SemanticContext, expr: &TypedExpr) -> bo
             expr_mutates_durable_state(context, target)
                 || expr_mutates_durable_state(context, index)
         }
-        ExprKind::Number(_)
-        | ExprKind::Decimal(_)
-        | ExprKind::AmountLiteral { .. }
+        ExprKind::IntLiteral(_)
+        | ExprKind::DecimalLiteral { .. }
         | ExprKind::OptionNone
         | ExprKind::Bool(_)
         | ExprKind::String(_)
@@ -14404,6 +14590,25 @@ mod tests {
     }
 
     #[test]
+    fn native_json_requires_explicit_result_and_struct_conversion() {
+        let result = analyze_error(
+            "fn invalid(value: Result<i64, i64>) -> Json { json { value: value } }",
+        );
+        assert_eq!(result.code, "E_JSON_VALUE_TYPE");
+        assert!(result.message.contains("Result"), "{}", result.message);
+
+        let structure = analyze_error(
+            "struct Payload { value: i64 } fn invalid(value: Payload) -> Json { json { value: value } }",
+        );
+        assert_eq!(structure.code, "E_JSON_VALUE_TYPE");
+        assert!(
+            structure.message.contains("arbitrary struct"),
+            "{}",
+            structure.message
+        );
+    }
+
+    #[test]
     fn native_json_rejects_recursive_schema_limits_during_semantic_checking() {
         let children = std::iter::repeat_n("json [1, 2, 3, 4]", 64)
             .collect::<Vec<_>>()
@@ -14453,6 +14658,14 @@ mod tests {
 
         let error =
             analyze_error("fn resources(value: List<Option<StateMap<i64, i64>>, 2>) { return; }");
+        assert_eq!(error.code, "E_LIST_RESOURCE_ELEMENT");
+
+        let secret_source =
+            "fn resources(value: List<Option<Secret<i64>>, 2>) { let ignored = value; }";
+        let secret_program = parse(secret_source).expect("secret List source should parse");
+        let error = SemanticContext::with_zk_enabled(true)
+            .analyze(&secret_program)
+            .expect_err("nested Secret handles must not become List elements");
         assert_eq!(error.code, "E_LIST_RESOURCE_ELEMENT");
     }
 
@@ -14588,8 +14801,8 @@ mod tests {
             ("1_000.000_001amt", "1000000001", 6),
         ] {
             let expr = returned_expr(&format!("fn amount() -> Amount {{ return {spelling}; }}"));
-            assert_eq!(expr.ty, Type::Amount, "`{spelling}`");
-            let ExprKind::AmountLiteral {
+            assert_eq!(expr.ty, Type::Quantity, "`{spelling}`");
+            let ExprKind::DecimalLiteral {
                 value,
                 spelling: retained,
             } = expr.expr
@@ -14607,7 +14820,7 @@ mod tests {
     fn amount_literal_accepts_scale_twenty_eight_and_rejects_twenty_nine() {
         let scale_28 = format!("0.{}1amt", "0".repeat(27));
         let expr = returned_expr(&format!("fn amount() -> Amount {{ return {scale_28}; }}"));
-        let ExprKind::AmountLiteral { value, .. } = expr.expr else {
+        let ExprKind::DecimalLiteral { value, .. } = expr.expr else {
             panic!("expected Amount literal");
         };
         assert_eq!(value.scale(), 28);
@@ -14620,7 +14833,7 @@ mod tests {
         let expr = returned_expr(&format!(
             "fn amount() -> Amount {{ return {trailing_zeros}; }}"
         ));
-        let ExprKind::AmountLiteral { value, spelling } = expr.expr else {
+        let ExprKind::DecimalLiteral { value, spelling } = expr.expr else {
             panic!("expected canonicalized Amount literal");
         };
         assert_eq!(spelling, trailing_zeros, "source spelling remains stable");
@@ -14663,8 +14876,8 @@ mod tests {
         assert!(error.message.contains("type"), "{}", error.message);
 
         let expr = returned_expr("fn integer() -> u128 { return 10u128; }");
-        assert_eq!(expr.ty, Type::FixedU128);
-        assert!(matches!(expr.expr, ExprKind::Decimal(ref raw) if raw == "10"));
+        assert_eq!(expr.ty, Type::Int);
+        assert!(matches!(expr.expr, ExprKind::IntLiteral(ref raw) if raw == "10"));
     }
 
     #[test]
@@ -14677,7 +14890,7 @@ mod tests {
         ] {
             let expression =
                 returned_expr(&format!("fn amount() -> Amount {{ return {source}; }}"));
-            let ExprKind::AmountLiteral { value, .. } = expression.expr else {
+            let ExprKind::DecimalLiteral { value, .. } = expression.expr else {
                 panic!("constant Amount expression `{source}` must fold");
             };
             assert_eq!(value.to_string(), expected, "{source}");
@@ -14721,12 +14934,12 @@ mod tests {
         };
         assert_eq!(name, AMOUNT_DIV_ROUND_INTRINSIC);
         assert_eq!(args.len(), 4);
-        assert_eq!(args[0].ty, Type::Amount);
-        assert_eq!(args[1].ty, Type::Amount);
+        assert_eq!(args[0].ty, Type::Quantity);
+        assert_eq!(args[1].ty, Type::Quantity);
         assert_eq!(args[2].ty, Type::Int);
         assert!(matches!(
             args[3].expr,
-            ExprKind::Number(value)
+            ExprKind::IntLiteral(value)
                 if value == ivm_abi::syscalls::AMOUNT_ROUND_NEAREST_EVEN as i64
         ));
         assert_eq!(evaluation_order, [0, 3, 1, 2]);
@@ -14787,7 +15000,7 @@ mod tests {
             ),
         ] {
             let expression = returned_expr(source);
-            let ExprKind::AmountLiteral { value, .. } = expression.expr else {
+            let ExprKind::DecimalLiteral { value, .. } = expression.expr else {
                 panic!("constant rounded division must fold");
             };
             assert_eq!(value.to_string(), expected);
@@ -14811,9 +15024,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["amount", "destination", "source"]
         );
-        assert!(matches!(fields[0].1.expr, ExprKind::AmountLiteral { .. }));
+        assert!(matches!(fields[0].1.expr, ExprKind::DecimalLiteral { .. }));
         assert!(matches!(fields[1].1.expr, ExprKind::String(ref value) if value == "sink"));
-        assert!(matches!(fields[2].1.expr, ExprKind::Number(7)));
+        assert!(matches!(fields[2].1.expr, ExprKind::IntLiteral(7)));
     }
 
     #[test]
@@ -14863,7 +15076,7 @@ mod tests {
         else {
             panic!("expected typed call");
         };
-        assert!(matches!(args[0].expr, ExprKind::Number(1)));
+        assert!(matches!(args[0].expr, ExprKind::IntLiteral(1)));
         assert!(matches!(args[1].expr, ExprKind::String(ref value) if value == "two"));
         assert_eq!(evaluation_order, &[1, 0]);
     }
@@ -15661,7 +15874,7 @@ mod tests {
                 mutable: true,
                 pat: Pattern::Name("i".to_owned()),
                 ty: None,
-                value: Expr::Number(0),
+                value: Expr::IntLiteral(0),
             })),
             cond: Some(Expr::Binary {
                 op: BinaryOp::Lt,
@@ -15673,7 +15886,7 @@ mod tests {
                 value: Expr::Binary {
                     op: BinaryOp::Add,
                     left: Box::new(Expr::Ident("i".to_owned())),
-                    right: Box::new(Expr::Number(1)),
+                    right: Box::new(Expr::IntLiteral(1)),
                 },
             })),
             body: Block {
@@ -16853,7 +17066,7 @@ mod tests {
         .expect("parse explicit conversions");
         let typed = analyze(&program).expect("analyze explicit conversions");
         let TypedItem::Function(f) = &typed.items[0];
-        assert_eq!(f.ret_ty, Some(Type::Amount));
+        assert_eq!(f.ret_ty, Some(Type::Quantity));
     }
 
     #[test]
@@ -16909,7 +17122,7 @@ mod tests {
         .expect("parse u128::MAX");
         let typed = analyze(&program).expect("analyze u128::MAX");
         let TypedItem::Function(function) = &typed.items[0];
-        assert_eq!(function.ret_ty, Some(Type::FixedU128));
+        assert_eq!(function.ret_ty, Some(Type::Int));
     }
 
     #[test]

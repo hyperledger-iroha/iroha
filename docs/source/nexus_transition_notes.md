@@ -122,9 +122,13 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   omitted from the newest entry, and commit validation rejects equal or lower
   lane heights, preventing higher-epoch merge replays from reusing old
   settlement material.
-- Apply plans through the Nexus config/lifecycle helpers (`State::apply_lane_lifecycle`,
-  `Queue::apply_lane_lifecycle`) to add/retire lanes without restart; routing,
-  TEU snapshots, and manifest registries reload automatically after a successful plan.
+- User-facing tools fetch `GET /v1/nexus/lifecycle`, validate its exact catalog
+  commitment, and submit a signed `SetParameter(nexus_lane_lifecycle_v1)`
+  transaction from an authority holding `CanSetParameters`. The
+  `State::apply_lane_lifecycle` and `Queue::apply_lane_lifecycle` helpers are
+  internal consensus replay/publication hooks, not node-local administration
+  APIs. Routing, TEU snapshots, and manifest registries reload after the
+  transaction is committed and applied on every peer.
   Lifecycle updates also prune lane-relay emergency overrides for reset lanes
   and for lanes absent from the updated catalog; pre-staged overrides for newly
   created lane ids are treated as stale prior-incarnation state and must be
@@ -138,7 +142,11 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   config swaps also reserve the configured
   `autoscale.min_lanes..autoscale.max_lanes` elastic id range for the
   autoscaler, so operator-managed base/governance/zk lanes cannot silently
-  consume future scale-out ids. The routing `default_lane` must stay below
+  consume future scale-out ids. These legacy-named fields are half-open lane-id
+  bounds, not active-lane counts: `min_lanes` is inclusive and `max_lanes` is
+  exclusive. Sparse holes remain eligible for deterministic creation, and the
+  range may begin above the initial catalog namespace because lifecycle
+  additions expand that namespace. The routing `default_lane` must stay below
   `autoscale.min_lanes`, so the default route has a stable base anchor and
   cannot point at or above the autoscale-owned elastic range. Full config swaps
   may preserve active autoscale-managed lanes unchanged, but swaps that add,
@@ -192,6 +200,15 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   blank, blank canonical sponsors are treated as absent, and each sponsored
   contract allowlist entry must name a contract target plus at least one
   non-empty entrypoint.
+- State snapshots now carry a versioned `nexus_runtime` record with the exact
+  effective lane catalog and autoscale transition cursor. Startup overlays
+  current static policy onto those restored stateful values, validates the
+  combined Nexus configuration, and rebinds Kura to every restored lane before
+  block replay. Unknown versions, invalid/duplicate catalogs, missing lane 0,
+  malformed or future autoscale ownership, and future cooldown cursors are
+  rejected. This closes the tip-snapshot gap where no Kura suffix exists to
+  replay a scale-out or scale-in; legacy snapshots without the record continue
+  to use the configured catalog.
 - Autoscale scale-out creates elastic lanes in the configured default
   dataspace. Those lanes are admitted into default traffic only when their
   visibility is public, their metadata marks them as managed, their alias
@@ -237,13 +254,15 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   tiered retire conflicts preserve the committed emergency overrides, AXT replay
   entries, verified relay state, public-lane validator activity, and
   public-lane economic rows that would otherwise be reset. State-level lane
-  geometry reconciliation dry-runs
-  both Kura block/merge storage and tiered-state snapshot geometry before
-  either backend is mutated, then prepares tiered-state storage before Kura
-  block/merge provisioning, so a Kura path conflict, tiered path conflict,
-  occupied relabel target, retired archive-root conflict, or bad tiered cold
-  root fails lane creation/relabel/retirement before the other storage backend
-  creates new lane artifacts. Deterministic autoscale scale-out and scale-in
+  geometry reconciliation dry-runs both Kura block/merge storage and
+  tiered-state snapshot geometry before either backend is mutated. Kura fsyncs
+  a versioned Norito intent with the complete old/new lane paths, incarnations,
+  and activation heights before filesystem mutation, then tiered reconciliation
+  runs behind that barrier. Startup reconciles the journal to the
+  snapshot-authoritative catalog: pre-publication work rolls back and
+  post-publication work rolls forward. Unsafe paths, archive collisions,
+  symlinks, partial storage pairs, and stale incarnation markers fail closed.
+  Deterministic autoscale scale-out and scale-in
   use that same ordering at commit time, and staged DA indexes remain behind
   the failure boundary when a new or retiring elastic lane hits a Kura or tiered
   conflict.

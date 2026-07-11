@@ -24,12 +24,14 @@ use iroha_data_model::{
         error::{InstructionExecutionError, MathError},
         offline::{
             AuditOfflineNote, IssueOfflineNote, KagemushaTransfer, RedeemKagemushaRecursive,
-            RedeemOfflineNote, RegisterOfflineDeviceAttestation, SetOfflineDeviceAttestationPolicy,
-            TopUpKagemushaRecursive,
+            RedeemKagemushaRecursiveV2, RedeemOfflineNote, RegisterOfflineDeviceAttestation,
+            SetOfflineDeviceAttestationPolicy, TopUpKagemushaRecursive, TopUpKagemushaRecursiveV2,
         },
     },
     name::Name,
     offline::{
+        KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE, KagemushaRecursiveSpendBranchPathV2,
+        KagemushaRecursiveSpendTopUpAnchorV2, KagemushaRequestAuthorizationV2,
         OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA, OFFLINE_REJECTION_REASON_PREFIX,
         OfflineAndroidAppAttestationPolicy, OfflineDeviceAttestationPolicy,
         OfflineDeviceAttestationRegistration, OfflineDeviceAttestationTrustedRoot,
@@ -378,6 +380,16 @@ pub mod isi {
     const OFFLINE_NOTE_ATTESTATION_CHALLENGE_DOMAIN: &str = "offline-note-attestation-challenge";
     const OFFLINE_NOTE_ATTESTATION_REPORT_DOMAIN: &str = "offline-note-attestation-report";
     const OFFLINE_NOTE_ATTESTATION_EVIDENCE_DOMAIN: &str = "offline-note-attestation-evidence";
+    const KAGEMUSHA_V2_DEVICE_LINEAGE_DOMAIN: &str = "kagemusha-v2-device-lineage";
+    const KAGEMUSHA_V2_OPERATION_DOMAIN: &str = "kagemusha-v2-operation";
+    const KAGEMUSHA_V2_NONCE_DOMAIN: &str = "kagemusha-v2-authorization-nonce";
+    const KAGEMUSHA_V2_PAYLOAD_DOMAIN: &str = "kagemusha-v2-payload";
+    const KAGEMUSHA_V2_REQUEST_DOMAIN: &str = "kagemusha-v2-request";
+    const KAGEMUSHA_V2_REDEEMED_COMMITMENT_DOMAIN: &str = "kagemusha-v2-redeemed-commitment";
+    const KAGEMUSHA_V2_BRANCH_EXACT_DOMAIN: &str = "kagemusha-v2-redeemed-branch";
+    const KAGEMUSHA_V2_BRANCH_DESCENDANT_DOMAIN: &str = "kagemusha-v2-redeemed-descendant";
+    const KAGEMUSHA_V2_AUTHORIZED_CHANGE_CHILD_DOMAIN: &str =
+        "kagemusha-v2-authorized-change-child";
     const OFFLINE_ATTESTATION_EVIDENCE_PREFIX: &[u8] = b"offline-device-attestation-evidence-v1";
     const OFFLINE_NOTE_ATTESTATION_RECENT_BLOCK_WINDOW: u64 = 128;
     const OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST: &str = "ios-appattest";
@@ -396,6 +408,23 @@ pub mod isi {
     const OFFLINE_ATTESTATION_ANDROID_KEY_OID: &str = "1.3.6.1.4.1.11129.2.1.17";
     const OFFLINE_ATTESTATION_IOS_ENV_PRODUCTION: &str = "production";
     const OFFLINE_ATTESTATION_IOS_ENV_DEVELOPMENT: &str = "development";
+
+    fn ensure_kagemusha_v2_chain_backend_available(
+        error_label: &str,
+        operation: &str,
+    ) -> Result<(), Error> {
+        if KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE {
+            return Ok(());
+        }
+
+        // TODO: Remove this fail-closed gate only when the branch-independent
+        // V2 proof backend and the corresponding chain executor ship together.
+        Err(labeled_invariant(
+            error_label,
+            format!("Kagemusha V2 recursive {operation} proof backend is unavailable"),
+        )
+        .into())
+    }
     const OFFLINE_ATTESTATION_IOS_AAGUID_PRODUCTION: &[u8; 16] = b"appattest\0\0\0\0\0\0\0";
     const OFFLINE_ATTESTATION_IOS_AAGUID_DEVELOPMENT: &[u8; 16] = b"appattestdevelop";
     const OFFLINE_ATTESTATION_ANDROID_SECURITY_LEVEL_TRUSTED_ENVIRONMENT: i64 = 1;
@@ -1848,10 +1877,10 @@ pub mod isi {
                     "recursive Kagemusha redeem verifier key is not registered",
                 )
             })?;
-        if record.status != ConfidentialStatus::Active {
+        if !record.is_active_at(state_transaction.block_height()) {
             return Err(labeled_invariant(
                 "verifier_key_inactive",
-                "recursive Kagemusha redeem verifier key is not active",
+                "recursive Kagemusha redeem verifier key is not active at the current block height",
             )
             .into());
         }
@@ -2126,6 +2155,87 @@ pub mod isi {
             return Err(labeled_invariant(
                 "final_commitment_mismatch",
                 "recursive Kagemusha final redeem proof is not bound to the final spendable note and change output",
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn ensure_kagemusha_v2_redeem_public_inputs(
+        request: &iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV2,
+        state_transaction: &StateTransaction<'_, '_>,
+        vk_record: &VerifyingKeyRecord,
+    ) -> Result<(), Error> {
+        if !crate::zk::confidential_v2::is_confidential_unshield_v3_circuit_id(
+            &vk_record.circuit_id,
+        ) {
+            return Err(labeled_invariant(
+                "verifier_key_invalid",
+                "Kagemusha V2 redemption requires an unshield-v3 proof attachment",
+            )
+            .into());
+        }
+        let statement = &request.bundle.statement;
+        let zero = [0u8; 32];
+        let expected_change = request
+            .redemption
+            .change_output
+            .as_ref()
+            .map_or(zero, |change| change.note_commitment);
+        let (
+            input_commitments,
+            proof_nullifiers,
+            proof_output,
+            proof_root,
+            public_amount,
+            asset_tag,
+            chain_tag,
+        ) = crate::zk::confidential_v2::parse_unshield_public_inputs_v3(
+            &request.redeem_proof.proof.bytes,
+        )
+        .map_err(|err| labeled_invariant("invalid_proof", err.to_string()))?;
+        let expected_public_amount =
+            crate::zk::confidential_v2::encode_confidential_amount_v2(request.amount.atomic_units);
+        let expected_asset_tag = crate::zk::confidential_v2::derive_confidential_asset_tag_v2(
+            &statement.asset.to_string(),
+        );
+        let expected_chain_tag = crate::zk::confidential_v2::derive_confidential_chain_tag_v2(
+            state_transaction.chain_id().as_str(),
+        );
+        if input_commitments != [statement.current_note.note_commitment, zero]
+            || proof_nullifiers != [statement.current_note.spend_nullifier, zero]
+            || proof_output != expected_change
+            || proof_root != statement.final_root
+            || public_amount != expected_public_amount
+            || asset_tag != expected_asset_tag
+            || chain_tag != expected_chain_tag
+        {
+            return Err(labeled_invariant(
+                "final_commitment_mismatch",
+                "Kagemusha V2 unshield-v3 proof is not bound to the exact note, nullifier, root, scaled amount, asset, chain, and full redemption output",
+            )
+            .into());
+        }
+        let parsed_binding = iroha_data_model::offline::KagemushaUnshieldPublicInputsBindingV2 {
+            input_commitment_0: input_commitments[0],
+            input_commitment_1: input_commitments[1],
+            nullifier_0: proof_nullifiers[0],
+            nullifier_1: proof_nullifiers[1],
+            change_output_commitment: proof_output,
+            root: proof_root,
+            public_amount,
+            asset_tag,
+            chain_tag,
+        };
+        if parsed_binding != request.redemption.unshield_public_inputs
+            || parsed_binding
+                .digest()
+                .map_err(|err| labeled_invariant("invalid_proof", err.to_string()))?
+                != request.redemption.unshield_public_inputs_digest
+        {
+            return Err(labeled_invariant(
+                "proof_binding",
+                "Kagemusha V2 redemption intent does not match the canonical unshield-v3 public inputs",
             )
             .into());
         }
@@ -2552,6 +2662,398 @@ pub mod isi {
 
     fn offline_note_attestation_evidence_key(evidence_hash: &Hash) -> Hash {
         offline_note_replay_key(OFFLINE_NOTE_ATTESTATION_EVIDENCE_DOMAIN, evidence_hash)
+    }
+
+    fn kagemusha_v2_marker(domain: &str, components: &[&[u8]]) -> Hash {
+        let mut preimage = Vec::with_capacity(
+            domain.len()
+                + components
+                    .iter()
+                    .map(|component| 8usize.saturating_add(component.len()))
+                    .sum::<usize>(),
+        );
+        preimage.extend_from_slice(domain.as_bytes());
+        for component in components {
+            preimage.extend_from_slice(
+                &u64::try_from(component.len())
+                    .unwrap_or(u64::MAX)
+                    .to_be_bytes(),
+            );
+            preimage.extend_from_slice(component);
+        }
+        Hash::new(&preimage)
+    }
+
+    fn kagemusha_v2_device_lineage_key(
+        account: &AccountId,
+        device_id: &str,
+        evidence_sha256: &[u8; 32],
+        asset: Option<&AssetDefinitionId>,
+    ) -> Hash {
+        let account = account.to_string();
+        let asset = asset.map(ToString::to_string).unwrap_or_default();
+        kagemusha_v2_marker(
+            KAGEMUSHA_V2_DEVICE_LINEAGE_DOMAIN,
+            &[
+                account.as_bytes(),
+                device_id.as_bytes(),
+                evidence_sha256,
+                asset.as_bytes(),
+            ],
+        )
+    }
+
+    fn kagemusha_v2_authorization_markers(
+        authorization: &KagemushaRequestAuthorizationV2,
+    ) -> [Hash; 4] {
+        let authority = authorization.authority.to_string();
+        let operation = kagemusha_v2_marker(
+            KAGEMUSHA_V2_OPERATION_DOMAIN,
+            &[authority.as_bytes(), &authorization.operation_id],
+        );
+        let nonce = kagemusha_v2_marker(
+            KAGEMUSHA_V2_NONCE_DOMAIN,
+            &[authority.as_bytes(), &authorization.nonce],
+        );
+        let payload = kagemusha_v2_marker(
+            KAGEMUSHA_V2_PAYLOAD_DOMAIN,
+            &[authority.as_bytes(), &authorization.payload_digest],
+        );
+        let request = kagemusha_v2_marker(
+            KAGEMUSHA_V2_REQUEST_DOMAIN,
+            &[
+                authority.as_bytes(),
+                &authorization.operation_id,
+                &authorization.nonce,
+                &authorization.payload_digest,
+            ],
+        );
+        [operation, nonce, payload, request]
+    }
+
+    enum KagemushaV2ReplayStatus {
+        Fresh([Hash; 4]),
+        Committed,
+    }
+
+    fn kagemusha_v2_replay_status(
+        authorization: &KagemushaRequestAuthorizationV2,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<KagemushaV2ReplayStatus, Error> {
+        let markers = kagemusha_v2_authorization_markers(authorization);
+        let [operation, nonce, payload, request] = &markers;
+        if state_transaction
+            .world
+            .offline_note_replay_keys
+            .get(request)
+            .is_some()
+        {
+            return Ok(KagemushaV2ReplayStatus::Committed);
+        }
+        if [operation, nonce, payload].iter().any(|marker| {
+            state_transaction
+                .world
+                .offline_note_replay_keys
+                .get(marker)
+                .is_some()
+        }) {
+            return Err(labeled_invariant(
+                "authorization_replay",
+                "Kagemusha V2 operation id, nonce, or payload digest conflicts with a committed request",
+            )
+            .into());
+        }
+        Ok(KagemushaV2ReplayStatus::Fresh(markers))
+    }
+
+    fn commit_kagemusha_v2_replay_markers(
+        markers: [Hash; 4],
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) {
+        for marker in markers {
+            state_transaction
+                .world
+                .offline_note_replay_keys
+                .insert(marker, ());
+        }
+    }
+
+    fn ensure_registered_kagemusha_v2_device(
+        authorization: &KagemushaRequestAuthorizationV2,
+        asset: &AssetDefinitionId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let evidence = authorization
+            .app_attest_evidence
+            .as_deref()
+            .ok_or_else(|| {
+                labeled_invariant(
+                    "device_attestation_required",
+                    "Kagemusha V2 authorization requires registered App Attest evidence",
+                )
+            })?;
+        let evidence_sha256: [u8; 32] = Sha256::digest(evidence).into();
+        if authorization.app_attest_evidence_sha256 != Some(evidence_sha256) {
+            return Err(labeled_invariant(
+                "invalid_attestation",
+                "Kagemusha V2 authorization evidence digest does not match its evidence bytes",
+            )
+            .into());
+        }
+        let scoped = kagemusha_v2_device_lineage_key(
+            &authorization.authority,
+            &authorization.device_id,
+            &evidence_sha256,
+            Some(asset),
+        );
+        let global = kagemusha_v2_device_lineage_key(
+            &authorization.authority,
+            &authorization.device_id,
+            &evidence_sha256,
+            None,
+        );
+        if state_transaction
+            .world
+            .offline_note_replay_keys
+            .get(&scoped)
+            .is_none()
+            && state_transaction
+                .world
+                .offline_note_replay_keys
+                .get(&global)
+                .is_none()
+        {
+            return Err(labeled_invariant(
+                "device_not_registered",
+                "Kagemusha V2 authorization device/evidence lineage is not registered",
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn kagemusha_v2_branch_prefix(
+        path: KagemushaRecursiveSpendBranchPathV2,
+        depth: u8,
+    ) -> KagemushaRecursiveSpendBranchPathV2 {
+        debug_assert!(depth <= path.depth);
+        let mut prefix = path;
+        prefix.depth = depth;
+        let full_bytes = usize::from(depth / 8);
+        let partial_bits = depth % 8;
+        if partial_bits == 0 {
+            prefix.path_bits[full_bytes..].fill(0);
+        } else {
+            prefix.path_bits[full_bytes] &= u8::MAX << (8 - partial_bits);
+            prefix.path_bits[full_bytes + 1..].fill(0);
+        }
+        prefix
+    }
+
+    fn kagemusha_v2_branch_marker(domain: &str, path: KagemushaRecursiveSpendBranchPathV2) -> Hash {
+        kagemusha_v2_marker(
+            domain,
+            &[&path.lineage_root, &[path.depth], &path.path_bits],
+        )
+    }
+
+    fn ensure_kagemusha_v2_branch_available(
+        path: KagemushaRecursiveSpendBranchPathV2,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        path.validate()
+            .map_err(|err| labeled_invariant("branch_conflict", err.to_string()))?;
+        for depth in 0..=path.depth {
+            let prefix = kagemusha_v2_branch_prefix(path, depth);
+            let exact = kagemusha_v2_branch_marker(KAGEMUSHA_V2_BRANCH_EXACT_DOMAIN, prefix);
+            if state_transaction
+                .world
+                .offline_note_replay_keys
+                .get(&exact)
+                .is_some()
+            {
+                if depth < path.depth {
+                    let child = kagemusha_v2_branch_prefix(path, depth + 1);
+                    let authorized_child = kagemusha_v2_branch_marker(
+                        KAGEMUSHA_V2_AUTHORIZED_CHANGE_CHILD_DOMAIN,
+                        child,
+                    );
+                    if state_transaction
+                        .world
+                        .offline_note_replay_keys
+                        .get(&authorized_child)
+                        .is_some()
+                    {
+                        continue;
+                    }
+                }
+                return Err(labeled_invariant(
+                    "branch_conflict",
+                    "Kagemusha V2 branch equals or descends from an already redeemed branch",
+                )
+                .into());
+            }
+        }
+        let has_descendant =
+            kagemusha_v2_branch_marker(KAGEMUSHA_V2_BRANCH_DESCENDANT_DOMAIN, path);
+        if state_transaction
+            .world
+            .offline_note_replay_keys
+            .get(&has_descendant)
+            .is_some()
+        {
+            return Err(labeled_invariant(
+                "branch_conflict",
+                "Kagemusha V2 branch is an ancestor of an already redeemed branch",
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn commit_kagemusha_v2_branch(
+        path: KagemushaRecursiveSpendBranchPathV2,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) {
+        let exact = kagemusha_v2_branch_marker(KAGEMUSHA_V2_BRANCH_EXACT_DOMAIN, path);
+        state_transaction
+            .world
+            .offline_note_replay_keys
+            .insert(exact, ());
+        for depth in 0..path.depth {
+            let prefix = kagemusha_v2_branch_prefix(path, depth);
+            let descendant =
+                kagemusha_v2_branch_marker(KAGEMUSHA_V2_BRANCH_DESCENDANT_DOMAIN, prefix);
+            state_transaction
+                .world
+                .offline_note_replay_keys
+                .insert(descendant, ());
+        }
+    }
+
+    fn authorize_kagemusha_v2_change_child(
+        parent: KagemushaRecursiveSpendBranchPathV2,
+        child: KagemushaRecursiveSpendBranchPathV2,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let expected = parent
+            .child(iroha_data_model::offline::KagemushaRecursiveSpendBranchV2::Change)
+            .map_err(|err| labeled_invariant("branch_conflict", err.to_string()))?;
+        if child != expected {
+            return Err(labeled_invariant(
+                "branch_conflict",
+                "Kagemusha V2 partial redemption change is not the dedicated deterministic child",
+            )
+            .into());
+        }
+        let marker = kagemusha_v2_branch_marker(KAGEMUSHA_V2_AUTHORIZED_CHANGE_CHILD_DOMAIN, child);
+        if state_transaction
+            .world
+            .offline_note_replay_keys
+            .get(&marker)
+            .is_some()
+        {
+            return Err(labeled_invariant(
+                "branch_conflict",
+                "Kagemusha V2 partial redemption change child is already registered",
+            )
+            .into());
+        }
+        state_transaction
+            .world
+            .offline_note_replay_keys
+            .insert(marker, ());
+        Ok(())
+    }
+
+    fn kagemusha_v2_topup_anchor_state_key(operation_id: [u8; 32]) -> Result<Name, Error> {
+        format!("kagemusha_v2_topup_anchor_{}", hex::encode(operation_id))
+            .parse()
+            .map_err(|err| {
+                labeled_invariant(
+                    "invalid_recursive_topup",
+                    format!("failed to derive Kagemusha V2 anchor state key: {err}"),
+                )
+                .into()
+            })
+    }
+
+    fn load_kagemusha_v2_topup_anchor(
+        operation_id: [u8; 32],
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<KagemushaRecursiveSpendTopUpAnchorV2, Error> {
+        let key = kagemusha_v2_topup_anchor_state_key(operation_id)?;
+        let archive = state_transaction
+            .world
+            .smart_contract_state
+            .get(&key)
+            .ok_or_else(|| {
+                labeled_invariant(
+                    "topup_anchor_missing",
+                    "Kagemusha V2 bundle has no finalized top-up anchor",
+                )
+            })?;
+        let anchor: KagemushaRecursiveSpendTopUpAnchorV2 = norito::decode_from_bytes(archive)
+            .map_err(|err| {
+                labeled_invariant(
+                    "topup_anchor_invalid",
+                    format!("failed to decode persisted Kagemusha V2 top-up anchor: {err}"),
+                )
+            })?;
+        anchor
+            .validate_public_binding()
+            .map_err(|err| labeled_invariant("topup_anchor_invalid", err.to_string()))?;
+        if anchor.topup_operation_id != operation_id
+            || norito::to_bytes(&anchor)
+                .map_err(|err| {
+                    labeled_invariant(
+                        "topup_anchor_invalid",
+                        format!("failed to re-encode persisted Kagemusha V2 top-up anchor: {err}"),
+                    )
+                })?
+                .as_slice()
+                != archive.as_slice()
+        {
+            return Err(labeled_invariant(
+                "topup_anchor_invalid",
+                "persisted Kagemusha V2 top-up anchor is non-canonical or keyed incorrectly",
+            )
+            .into());
+        }
+        Ok(anchor)
+    }
+
+    fn persist_kagemusha_v2_topup_anchor(
+        anchor: &KagemushaRecursiveSpendTopUpAnchorV2,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        anchor
+            .validate_public_binding()
+            .map_err(|err| labeled_invariant("topup_anchor_invalid", err.to_string()))?;
+        let key = kagemusha_v2_topup_anchor_state_key(anchor.topup_operation_id)?;
+        if state_transaction
+            .world
+            .smart_contract_state
+            .get(&key)
+            .is_some()
+        {
+            return Err(labeled_invariant(
+                "authorization_replay",
+                "Kagemusha V2 top-up operation already has a finalized anchor",
+            )
+            .into());
+        }
+        let archive = norito::to_bytes(anchor).map_err(|err| {
+            labeled_invariant(
+                "topup_anchor_invalid",
+                format!("failed to encode Kagemusha V2 top-up anchor: {err}"),
+            )
+        })?;
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(key, archive);
+        Ok(())
     }
 
     fn is_zero_hash(hash: &Hash) -> bool {
@@ -4296,6 +4798,16 @@ pub mod isi {
             let report_key =
                 offline_note_attestation_report_key(&registration.attestation_report_hash);
             let evidence_key = offline_note_attestation_evidence_key(&registration.evidence_hash);
+            let kagemusha_v2_device_lineage_key =
+                (registration.platform == OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST).then(|| {
+                    let evidence_sha256: [u8; 32] = Sha256::digest(&registration.evidence).into();
+                    kagemusha_v2_device_lineage_key(
+                        &registration.account_id,
+                        &registration.device_id,
+                        &evidence_sha256,
+                        registration.asset_definition_id.as_ref(),
+                    )
+                });
             for key in [
                 &attested_certificate_key,
                 &challenge_key,
@@ -4332,6 +4844,12 @@ pub mod isi {
                 .world
                 .offline_note_replay_keys
                 .insert(evidence_key, ());
+            if let Some(device_lineage_key) = kagemusha_v2_device_lineage_key {
+                state_transaction
+                    .world
+                    .offline_note_replay_keys
+                    .insert(device_lineage_key, ());
+            }
             Ok(())
         }
     }
@@ -5177,6 +5695,214 @@ pub mod isi {
         ))
     }
 
+    fn ensure_kagemusha_v2_anchor_matches_topup_request(
+        anchor: &KagemushaRecursiveSpendTopUpAnchorV2,
+        request: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV2,
+    ) -> Result<(), Error> {
+        let step = request
+            .init_request
+            .init_request
+            .record_bundle
+            .bundle
+            .steps
+            .first()
+            .ok_or_else(|| {
+                labeled_invariant(
+                    "invalid_recursive_topup",
+                    "Kagemusha V2 top-up requires exactly one confidential transfer step",
+                )
+            })?;
+        if anchor.chain_id != request.init_request.current_note.chain_id
+            || anchor.payer != request.authorization.authority
+            || anchor.asset != request.asset
+            || anchor.asset_scale != request.init_request.amount.scale
+            || anchor.amount != request.init_request.amount
+            || anchor.initial_root != step.root_before
+            || anchor.finalized_root != step.root_after
+            || anchor.topup_anchor_nullifiers != step.input_nullifiers
+            || anchor.current_note != request.init_request.current_note
+            || anchor.topup_operation_id != request.init_request.operation_id
+            || anchor.transfer_verifier_id != step.attachment.vk_ref
+            || Some(anchor.transfer_verifier_commitment) != step.attachment.vk_commitment
+            || anchor.artifact_generation != request.init_request.lineage_artifact.generation
+        {
+            return Err(labeled_invariant(
+                "topup_anchor_mismatch",
+                "persisted Kagemusha V2 top-up anchor does not match the signed request",
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn finalized_kagemusha_v2_topup_anchor(
+        request: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV2,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<KagemushaRecursiveSpendTopUpAnchorV2, Error> {
+        let step = request
+            .init_request
+            .init_request
+            .record_bundle
+            .bundle
+            .steps
+            .first()
+            .ok_or_else(|| {
+                labeled_invariant(
+                    "invalid_recursive_topup",
+                    "Kagemusha V2 top-up requires exactly one confidential transfer step",
+                )
+            })?;
+        let transfer_verifier_commitment = step.attachment.vk_commitment.ok_or_else(|| {
+            labeled_invariant(
+                "verifier_key_invalid",
+                "Kagemusha V2 top-up transfer proof has no verifier commitment",
+            )
+        })?;
+        let finalized_tx_hash = *state_transaction
+            .current_tx_hash
+            .as_ref()
+            .ok_or_else(|| {
+                labeled_invariant(
+                    "topup_anchor_invalid",
+                    "current signed transaction hash is unavailable for Kagemusha V2 top-up",
+                )
+            })?
+            .as_ref();
+        let anchor = KagemushaRecursiveSpendTopUpAnchorV2 {
+            version: 2,
+            chain_id: request.init_request.current_note.chain_id.clone(),
+            payer: request.authorization.authority.clone(),
+            asset: request.asset.clone(),
+            asset_scale: request.init_request.amount.scale,
+            amount: request.init_request.amount,
+            initial_root: step.root_before,
+            finalized_root: step.root_after,
+            topup_anchor_nullifiers: step.input_nullifiers.clone(),
+            current_note: request.init_request.current_note.clone(),
+            topup_operation_id: request.init_request.operation_id,
+            transfer_verifier_id: step.attachment.vk_ref.clone(),
+            transfer_verifier_commitment,
+            artifact_generation: request.init_request.lineage_artifact.generation.clone(),
+            finalized_height: state_transaction.block_height(),
+            finalized_tx_hash,
+            anchor_digest: [0; 32],
+        }
+        .finalize_digest()
+        .map_err(|err| labeled_invariant("topup_anchor_invalid", err.to_string()))?;
+        ensure_kagemusha_v2_anchor_matches_topup_request(&anchor, request)?;
+        Ok(anchor)
+    }
+
+    fn ensure_kagemusha_v2_bundle_matches_topup_anchor(
+        bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
+        anchor: &KagemushaRecursiveSpendTopUpAnchorV2,
+    ) -> Result<(), Error> {
+        let statement = &bundle.statement;
+        if statement.chain_id != anchor.chain_id
+            || statement.asset != *anchor.asset.definition()
+            || statement.asset_scale != anchor.asset_scale
+            || statement.initial_root != anchor.initial_root
+            || statement.topup_anchor_nullifiers != anchor.topup_anchor_nullifiers
+            || statement.topup_operation_id != anchor.topup_operation_id
+            || statement.artifact_generation != anchor.artifact_generation
+        {
+            return Err(labeled_invariant(
+                "topup_anchor_mismatch",
+                "Kagemusha V2 recursive statement does not match its finalized top-up anchor",
+            )
+            .into());
+        }
+        if statement.peer_hop_count == 0
+            && (statement.final_root != anchor.finalized_root
+                || statement.current_note != anchor.current_note)
+        {
+            return Err(labeled_invariant(
+                "topup_anchor_mismatch",
+                "Kagemusha V2 initial recursive statement changed the finalized top-up note or root",
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn resolve_kagemusha_v2_recursive_verifier(
+        bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
+        supplied: Option<&VerifyingKeyRecord>,
+        requested_height: u64,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<VerifyingKeyRecord, Error> {
+        let id = &bundle.recursive_proof.verifier_key_id;
+        let record = state_transaction
+            .world
+            .verifying_keys
+            .get(id)
+            .cloned()
+            .ok_or_else(|| {
+                labeled_invariant(
+                    "verifier_key_invalid",
+                    "Kagemusha V2 recursive verifier key is not registered",
+                )
+            })?;
+        if supplied.is_some_and(|supplied| supplied != &record) {
+            return Err(labeled_invariant(
+                "verifier_key_invalid",
+                "Kagemusha V2 supplied recursive verifier record differs from chain state",
+            )
+            .into());
+        }
+        let current_height = state_transaction.block_height();
+        if requested_height == 0
+            || requested_height > current_height
+            || !record.is_active_at(requested_height)
+            || !record.is_active_at(current_height)
+            || record.status != ConfidentialStatus::Active
+            || record.circuit_id != id.name
+            || record.namespace != crate::zk::KAGEMUSHA_VERIFIER_NAMESPACE
+            || record.backend != BackendTag::Halo2IpaPasta
+            || id.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA
+            || record.commitment == [0; 32]
+            || record.max_proof_bytes == 0
+            || bundle.recursive_proof.proof.bytes.len() > record.max_proof_bytes as usize
+        {
+            return Err(labeled_invariant(
+                "verifier_key_invalid",
+                "Kagemusha V2 recursive verifier record is inactive or inconsistent with the proof",
+            )
+            .into());
+        }
+        let circuit_key = (record.circuit_id.clone(), record.version);
+        if state_transaction
+            .world
+            .verifying_keys_by_circuit
+            .get(&circuit_key)
+            != Some(id)
+        {
+            return Err(labeled_invariant(
+                "verifier_key_inactive",
+                "Kagemusha V2 recursive verifier circuit/version is not active",
+            )
+            .into());
+        }
+        let key = record.key.as_ref().ok_or_else(|| {
+            labeled_invariant(
+                "verifier_key_invalid",
+                "Kagemusha V2 recursive verifier key is not available inline",
+            )
+        })?;
+        if key.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA
+            || key.bytes.is_empty()
+            || u32::try_from(key.bytes.len()).ok() != Some(record.vk_len)
+            || crate::zk::hash_vk(key) != record.commitment
+        {
+            return Err(labeled_invariant(
+                "verifier_key_invalid",
+                "Kagemusha V2 inline recursive verifier key does not match its record",
+            )
+            .into());
+        }
+        Ok(record)
+    }
+
     impl Execute for KagemushaTransfer {
         fn execute(
             self,
@@ -5236,6 +5962,157 @@ pub mod isi {
             validate_kagemusha_transfer_instruction(&transfer, state_transaction)?;
             reserve_offline_note_escrow(state_transaction, &self.asset, &self.amount)?;
             execute_kagemusha_transfer_instruction(transfer, authority, state_transaction)
+        }
+    }
+
+    impl Execute for TopUpKagemushaRecursiveV2 {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            if !state_transaction.settlement.offline.kagemusha_enabled {
+                return Err(labeled_invariant(
+                    "kagemusha_disabled",
+                    "Kagemusha V2 recursive top-up is disabled by configuration",
+                )
+                .into());
+            }
+            ensure_kagemusha_v2_chain_backend_available("invalid_recursive_topup", "top-up")?;
+            let request = self.request;
+            request
+                .validate_public_binding()
+                .map_err(|err| labeled_invariant("invalid_recursive_topup", err.to_string()))?;
+            let replay_markers =
+                match kagemusha_v2_replay_status(&request.authorization, state_transaction)? {
+                    KagemushaV2ReplayStatus::Committed => {
+                        let anchor = load_kagemusha_v2_topup_anchor(
+                            request.authorization.operation_id,
+                            state_transaction,
+                        )?;
+                        ensure_kagemusha_v2_anchor_matches_topup_request(&anchor, &request)?;
+                        return Ok(());
+                    }
+                    KagemushaV2ReplayStatus::Fresh(markers) => markers,
+                };
+            request
+                .validate_authorization_at(state_transaction.block_unix_timestamp_ms())
+                .map_err(|err| labeled_invariant("invalid_authorization", err.to_string()))?;
+            if request.asset.account() != &request.authorization.authority {
+                return Err(labeled_invariant(
+                    "unauthorized_controller",
+                    "Kagemusha V2 top-up authority must equal the charged asset account",
+                )
+                .into());
+            }
+            ensure_can_submit_kagemusha_topup(&request.asset, authority, state_transaction)?;
+            ensure_registered_kagemusha_v2_device(
+                &request.authorization,
+                request.asset.definition(),
+                state_transaction,
+            )?;
+            if request.init_request.current_note.chain_id != *state_transaction.chain_id() {
+                return Err(labeled_invariant(
+                    "wrong_chain",
+                    "Kagemusha V2 top-up chain id does not match this chain",
+                )
+                .into());
+            }
+            let spec = state_transaction.numeric_spec_for(request.asset.definition())?;
+            let live_scale = spec.scale().ok_or_else(|| {
+                labeled_invariant(
+                    "amount_scale_invalid",
+                    "Kagemusha V2 requires an asset definition with a fixed numeric scale",
+                )
+            })?;
+            if request.init_request.amount.scale != live_scale {
+                return Err(labeled_invariant(
+                    "amount_scale_mismatch",
+                    "Kagemusha V2 top-up amount scale does not equal the live asset scale",
+                )
+                .into());
+            }
+            let amount = request.init_request.amount.public_numeric();
+            if amount.scale() != live_scale {
+                return Err(labeled_invariant(
+                    "amount_scale_mismatch",
+                    "Kagemusha V2 top-up Numeric encoding changed the authoritative scale",
+                )
+                .into());
+            }
+            assert_numeric_spec_with(&amount, spec)?;
+            let transfer =
+                kagemusha_transfer_from_init_request(&request.init_request.init_request)?;
+            validate_kagemusha_transfer_instruction(&transfer, state_transaction)?;
+            reserve_offline_note_escrow(state_transaction, &request.asset, &amount)?;
+            execute_kagemusha_transfer_instruction(transfer, authority, state_transaction)?;
+
+            let finalized_root = state_transaction
+                .world
+                .zk_assets
+                .get(request.asset.definition())
+                .and_then(|state| state.root_history.last().copied())
+                .ok_or_else(|| {
+                    labeled_invariant(
+                        "topup_anchor_invalid",
+                        "Kagemusha V2 transfer did not finalize a confidential root",
+                    )
+                })?;
+            let expected_finalized_root = request
+                .init_request
+                .init_request
+                .record_bundle
+                .bundle
+                .steps
+                .first()
+                .map(|step| step.root_after)
+                .ok_or_else(|| {
+                    labeled_invariant(
+                        "invalid_recursive_topup",
+                        "Kagemusha V2 top-up is missing its checked transfer step",
+                    )
+                })?;
+            if finalized_root != expected_finalized_root {
+                return Err(labeled_invariant(
+                    "topup_anchor_mismatch",
+                    "Kagemusha V2 checked transfer root does not equal the finalized ledger root",
+                )
+                .into());
+            }
+            let anchor = finalized_kagemusha_v2_topup_anchor(&request, state_transaction)?;
+            persist_kagemusha_v2_topup_anchor(&anchor, state_transaction)?;
+            commit_kagemusha_v2_replay_markers(replay_markers, state_transaction);
+            Ok(())
+        }
+    }
+
+    // TODO: Replace this fail-closed stub when the V2 redeem proof backend is enabled.
+    impl Execute for RedeemKagemushaRecursiveV2 {
+        fn execute(
+            self,
+            _authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            if !state_transaction.settlement.offline.kagemusha_enabled {
+                return Err(labeled_invariant(
+                    "kagemusha_disabled",
+                    "Kagemusha V2 recursive redemption is disabled by configuration",
+                )
+                .into());
+            }
+
+            // V2 redemption is part of the public instruction contract, but the
+            // branch-independent proof backend is deliberately unavailable. Keep
+            // dispatch fail-closed before authorization markers, nullifiers,
+            // commitments, balances, or any other ledger state can be mutated.
+            self.request
+                .ensure_proof_backend_available()
+                .map_err(|err| labeled_invariant("proof_backend_unavailable", err.to_string()))?;
+            Err(labeled_invariant(
+                "invalid_recursive_redeem",
+                "Kagemusha V2 proof backend unexpectedly reported availability without a chain executor",
+            )
+            .into())
         }
     }
 
@@ -5475,10 +6352,13 @@ pub mod isi {
             domain::{Domain, DomainId},
             offline::{
                 KagemushaFoldStep, KagemushaRecursiveAggregationProof,
-                KagemushaRecursiveSpendBundleV1, KagemushaRecursiveSpendLineageWitnessV1,
-                KagemushaVerifiedFoldBundle, KagemushaVerifiedFoldRecordBundle,
-                KagemushaVerifiedFoldStep, KagemushaVerifiedFoldVerifierRecord,
-                OfflineNoteAuditBundle,
+                KagemushaRecursiveSpendArtifactReferenceV2, KagemushaRecursiveSpendArtifactRoleV2,
+                KagemushaRecursiveSpendBundleV1, KagemushaRecursiveSpendInitRequestV2,
+                KagemushaRecursiveSpendLineageWitnessV1, KagemushaRecursiveSpendTopUpRequestV2,
+                KagemushaRequestAuthorizationV2, KagemushaScaledAmountV2,
+                KagemushaSpendableNoteDescriptorV2, KagemushaVerifiedFoldBundle,
+                KagemushaVerifiedFoldRecordBundle, KagemushaVerifiedFoldStep,
+                KagemushaVerifiedFoldVerifierRecord, OfflineNoteAuditBundle,
             },
             permission::Permission,
             proof::ProofAttachment,
@@ -5549,6 +6429,13 @@ pub mod isi {
                 KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
                 "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
             );
+        }
+
+        #[test]
+        fn kagemusha_v2_redeem_implements_execute() {
+            fn assert_execute<T: Execute>() {}
+
+            assert_execute::<RedeemKagemushaRecursiveV2>();
         }
 
         #[test]
@@ -8789,6 +9676,155 @@ pub mod isi {
                 block_height: None,
             };
             TopUpKagemushaRecursive::new(asset, amount, init_request)
+        }
+
+        fn unavailable_v2_topup_instruction(asset: AssetId, payer: &AccountId) -> InstructionBox {
+            let v1 = recursive_topup_instruction_for_authorization_test(
+                asset.clone(),
+                Numeric::new(1, 0),
+            );
+            let chain_id = v1.init_request.record_bundle.bundle.chain_id.clone();
+            let amount = KagemushaScaledAmountV2 {
+                atomic_units: 1,
+                scale: 0,
+            };
+            let operation_id = fixed_bytes(b"unavailable-kagemusha-v2-topup-operation");
+            let current_note = KagemushaSpendableNoteDescriptorV2 {
+                chain_id,
+                asset: asset.definition().clone(),
+                note_commitment: v1.init_request.current_note.note_commitment,
+                spend_nullifier: v1.init_request.current_note.spend_nullifier,
+                amount,
+            };
+            let init_request = KagemushaRecursiveSpendInitRequestV2 {
+                init_request: v1.init_request,
+                amount,
+                current_note,
+                lineage_artifact: KagemushaRecursiveSpendArtifactReferenceV2 {
+                    role: KagemushaRecursiveSpendArtifactRoleV2::LineageInitProver,
+                    generation: "unavailable-backend-test".to_owned(),
+                    circuit_id: "unavailable-backend-test".to_owned(),
+                    artifact_type: "unavailable-backend-test".to_owned(),
+                    size_bytes: 1,
+                    sha256: fixed_bytes(b"unavailable-kagemusha-v2-artifact"),
+                },
+                operation_id,
+            };
+            let authorization = KagemushaRequestAuthorizationV2 {
+                authority: payer.clone(),
+                device_id: "unavailable-backend-test".to_owned(),
+                operation_id,
+                issued_at_ms: 0,
+                expires_at_ms: u64::MAX,
+                nonce: fixed_bytes(b"unavailable-kagemusha-v2-nonce"),
+                payload_digest: fixed_bytes(b"unavailable-kagemusha-v2-payload"),
+                app_attest_evidence_sha256: None,
+                app_attest_evidence: None,
+                signature: sample_signature(0xE2),
+            };
+            TopUpKagemushaRecursiveV2::new(KagemushaRecursiveSpendTopUpRequestV2 {
+                asset,
+                init_request,
+                authorization,
+            })
+            .into()
+        }
+
+        #[test]
+        fn unavailable_kagemusha_v2_topup_dispatch_is_state_inert() {
+            let (mut state, asset_id, payer, _definition_id) =
+                distinct_escrow_test_state(Numeric::new(100, 0), 0x79);
+            state.settlement.offline.kagemusha_enabled = true;
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let assets_before = transaction
+                .world
+                .assets()
+                .iter()
+                .map(|(id, value)| (id.clone(), value.clone()))
+                .collect::<Vec<_>>();
+            let zk_before = transaction
+                .world
+                .zk_assets
+                .iter()
+                .map(|(id, value)| {
+                    (
+                        id.clone(),
+                        norito::to_bytes(value).expect("encode pre-dispatch ZK asset state"),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let replay_before = transaction
+                .world
+                .offline_note_replay_keys
+                .iter()
+                .map(|(key, ())| *key)
+                .collect::<Vec<_>>();
+            let contract_state_before = transaction
+                .world
+                .smart_contract_state
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<Vec<_>>();
+            let events_before = transaction.world.internal_event_buf.len();
+
+            let err = unavailable_v2_topup_instruction(asset_id, &payer)
+                .execute(&payer, &mut transaction)
+                .expect_err("disabled Kagemusha V2 backend must reject native dispatch");
+
+            assert_offline_rejection(
+                err,
+                "invalid_recursive_topup",
+                "proof backend is unavailable",
+            );
+            assert_eq!(
+                transaction
+                    .world
+                    .assets()
+                    .iter()
+                    .map(|(id, value)| (id.clone(), value.clone()))
+                    .collect::<Vec<_>>(),
+                assets_before,
+                "unavailable V2 top-up must not debit payer or credit escrow",
+            );
+            assert_eq!(
+                transaction
+                    .world
+                    .zk_assets
+                    .iter()
+                    .map(|(id, value)| {
+                        (
+                            id.clone(),
+                            norito::to_bytes(value).expect("encode post-dispatch ZK asset state"),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                zk_before,
+                "unavailable V2 top-up must not change ZK roots or note material",
+            );
+            assert_eq!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .iter()
+                    .map(|(key, ())| *key)
+                    .collect::<Vec<_>>(),
+                replay_before,
+                "unavailable V2 top-up must not consume replay markers",
+            );
+            assert_eq!(
+                transaction
+                    .world
+                    .smart_contract_state
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<Vec<_>>(),
+                contract_state_before,
+                "unavailable V2 top-up must not persist an anchor",
+            );
+            assert_eq!(transaction.world.internal_event_buf.len(), events_before);
         }
 
         #[test]
@@ -14218,6 +15254,99 @@ pub mod isi {
                     "verifier_key_invalid",
                     "pending-production backend tag",
                 );
+            }
+        }
+
+        #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+        #[test]
+        fn kagemusha_recursive_redeem_resolver_enforces_unshield_verifier_lifecycle_at_block_height()
+         {
+            // This is the final redeem path's production verifier-resolution boundary. Driving
+            // `RedeemKagemushaRecursive::execute` to it requires generating the heavyweight real
+            // recursive and unshield Halo2 proofs used by the ignored end-to-end fixtures.
+            let domain_id = DomainId::try_new("offline", "universal").expect("domain id");
+            let definition_id = AssetDefinitionId::new(
+                domain_id,
+                "kgmr_lifecycle".parse().expect("asset definition name"),
+            );
+            let vk_id = VerifyingKeyId::new(
+                crate::zk::ZK_BACKEND_HALO2_IPA,
+                "recursive-kagemusha-unshield-v3-lifecycle",
+            );
+            let mut record = crate::zk::confidential_v2::confidential_unshield_v3_vk_record(
+                crate::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
+                1,
+            )
+            .expect("canonical confidential unshield v3 verifier record");
+            record.activation_height = Some(10);
+            record.withdraw_height = Some(20);
+            let commitment = record.commitment;
+            let envelope = OpenVerifyEnvelope::new(
+                BackendTag::Halo2IpaPasta,
+                record.circuit_id.clone(),
+                commitment,
+                crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1
+                    .to_vec(),
+                vec![0xC0],
+            );
+            let mut proof = ProofAttachment::new_ref(
+                crate::zk::ZK_BACKEND_HALO2_IPA.into(),
+                ProofBox::new(
+                    crate::zk::ZK_BACKEND_HALO2_IPA.into(),
+                    norito::to_bytes(&envelope).expect("encode lifecycle proof envelope"),
+                ),
+                vk_id.clone(),
+            );
+            proof.vk_commitment = Some(commitment);
+
+            let mut world = World::default();
+            world
+                .verifying_keys_by_circuit
+                .insert((record.circuit_id.clone(), record.version), vk_id.clone());
+            world.verifying_keys.insert(vk_id.clone(), record);
+            world.zk_assets.insert(definition_id.clone(), {
+                let mut zk_state = ZkAssetState::default();
+                zk_state.vk_unshield = Some(ZkAssetVerifierBinding {
+                    id: vk_id,
+                    commitment,
+                });
+                zk_state
+            });
+            let kura = Kura::blank_kura_for_testing();
+            let state = State::new(world, Arc::clone(&kura), LiveQueryStore::start_test());
+
+            for (height, should_be_active, boundary) in [
+                (9, false, "before activation"),
+                (10, true, "at activation"),
+                (19, true, "before withdrawal"),
+                (20, false, "at withdrawal"),
+            ] {
+                let header = BlockHeader::new(
+                    std::num::NonZeroU64::new(height).expect("non-zero lifecycle height"),
+                    None,
+                    None,
+                    None,
+                    0,
+                    0,
+                );
+                let mut block = state.block(header);
+                let transaction = block.transaction();
+                let result =
+                    resolve_kagemusha_unshield_verifier(&definition_id, &proof, &transaction);
+                match (should_be_active, result) {
+                    (true, Ok(_)) => {}
+                    (true, Err(err)) => {
+                        panic!("unshield verifier must be active {boundary}: {err}")
+                    }
+                    (false, Err(err)) => assert_offline_rejection(
+                        err,
+                        "verifier_key_inactive",
+                        "current block height",
+                    ),
+                    (false, Ok(_)) => {
+                        panic!("unshield verifier must be inactive {boundary}")
+                    }
+                }
             }
         }
 

@@ -12,8 +12,8 @@ pub(crate) fn state_value_kind_for_type(
 
     Some(match semantic::resolve_struct_type(ty) {
         Type::Int => Kind::Int,
-        Type::FixedU128 => Kind::U128,
-        Type::Amount => Kind::Amount,
+        Type::Decimal => Kind::Decimal,
+        Type::Quantity => Kind::Quantity,
         Type::Bool => Kind::Bool,
         Type::String => Kind::String,
         Type::Json => Kind::Json,

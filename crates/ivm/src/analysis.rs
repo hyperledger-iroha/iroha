@@ -344,7 +344,7 @@ impl ProgramAnalysisBuilder {
                 self.read(rs_lo);
                 self.read(rs_hi);
             }
-            wide::memory::LDLIT => {
+            wide::memory::LDLIT | wide::memory::LDI64 => {
                 let rd = u8::try_from(wide::rd(op.inst)).expect("register index fits in u8");
                 self.write(rd);
             }
@@ -564,6 +564,7 @@ mod tests {
     fn analysis_tracks_indexed_literal_and_implicit_far_link() {
         let words = [
             wide_enc::encode_literal(wide::memory::LDLIT, 42, 0x1234),
+            wide_enc::encode_literal(wide::memory::LDI64, 43, 0x5678),
             wide_enc::encode_offset24(wide::control::JALS, 1),
             wide_enc::encode_halt(),
         ];
@@ -571,6 +572,7 @@ mod tests {
         let report = analyze_program(&program).expect("analysis succeeds");
 
         assert_eq!(report.registers.writes[42], 1);
+        assert_eq!(report.registers.writes[43], 1);
         assert_eq!(report.registers.writes[1], 1);
         assert_eq!(report.registers.reads.iter().sum::<u64>(), 0);
     }

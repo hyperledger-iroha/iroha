@@ -134,6 +134,12 @@ fn gas_branches_always_one() {
 }
 
 #[test]
+fn indexed_scalar_load_has_one_gas_base_cost() {
+    let load = ivm::encoding::wide::encode_literal(wide::memory::LDI64, 7, u16::MAX);
+    assert_eq!(cost_of(load), 1);
+}
+
+#[test]
 fn gas_getgas_and_jumps_and_vector_sha() {
     // Property: sum(cost_of) over a linear sequence equals runtime gas
     // Build a linear sequence with ALU + LOAD/STORE + GETGAS and compare sums
@@ -224,10 +230,10 @@ fn v1_amount_add_quote_golden() {
     let lhs = norito::to_bytes(&Numeric::new(125_u32, 2)).expect("encode lhs Amount");
     let rhs = norito::to_bytes(&Numeric::new(75_u32, 2)).expect("encode rhs Amount");
     let lhs = vm
-        .alloc_input_tlv(&make_tlv(PointerType::Amount as u16, &lhs))
+        .alloc_input_tlv(&make_tlv(PointerType::Quantity as u16, &lhs))
         .expect("allocate lhs Amount");
     let rhs = vm
-        .alloc_input_tlv(&make_tlv(PointerType::Amount as u16, &rhs))
+        .alloc_input_tlv(&make_tlv(PointerType::Quantity as u16, &rhs))
         .expect("allocate rhs Amount");
     vm.set_register(10, lhs);
     vm.set_register(11, rhs);

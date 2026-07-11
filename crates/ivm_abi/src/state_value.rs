@@ -40,12 +40,12 @@ pub const DECODED_STATE_VALUE_WORD_BYTES: i16 = 8;
 /// Canonical representation of one scalar leaf in a durable aggregate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum StateValueKindV1 {
-    /// Signed 64-bit integer.
+    /// Canonical Kotodama signed 4096-bit integer pointer.
     Int,
-    /// Unsigned 128-bit numeric value.
-    U128,
-    /// Amount numeric value.
-    Amount,
+    /// Canonical exact bounded decimal pointer.
+    Decimal,
+    /// Canonical nominal non-negative quantity pointer.
+    Quantity,
     /// Boolean scalar restricted to zero or one in the VM word table.
     Bool,
     /// UTF-8 source string carried in a Blob pointer.
@@ -84,7 +84,7 @@ impl StateValueKindV1 {
     /// Return whether the value occupies a pointer word rather than an inline scalar.
     #[must_use]
     pub const fn is_pointer(self) -> bool {
-        !matches!(self, Self::Int | Self::Bool)
+        !matches!(self, Self::Bool)
     }
 
     /// Return whether this leaf is a non-copyable resource handle.
@@ -435,8 +435,7 @@ fn walk_state_value_atoms(
             *atom_index = atom_index.saturating_add(1);
             let valid = matches!(
                 (kind, atom),
-                (StateValueKindV1::Int, StateValueAtomV1::Int(_))
-                    | (StateValueKindV1::Bool, StateValueAtomV1::Bool(_))
+                (StateValueKindV1::Bool, StateValueAtomV1::Bool(_))
             ) || (kind.is_pointer() && matches!(atom, StateValueAtomV1::Pointer(_)));
             if valid && let Some(kinds) = kinds {
                 kinds.push(StateValueWordKindV1::Leaf(*kind));
@@ -462,8 +461,6 @@ pub enum StateValueWordKindV1 {
 pub enum StateValueAtomV1 {
     /// Option/Result tag.
     Tag(bool),
-    /// Signed integer bits.
-    Int(i64),
     /// Boolean value.
     Bool(bool),
     /// Complete validated pointer-ABI TLV envelope.
@@ -509,7 +506,10 @@ mod tests {
 
         let record = StateValueRecordV1 {
             schema_hash: [7; 32],
-            atoms: vec![StateValueAtomV1::Int(9), StateValueAtomV1::Bool(true)],
+            atoms: vec![
+                StateValueAtomV1::Pointer(vec![1]),
+                StateValueAtomV1::Bool(true),
+            ],
         };
         let encoded = norito::to_bytes(&record).expect("encode record");
         assert_eq!(
@@ -560,8 +560,14 @@ mod tests {
             option.word_kinds_for_atoms(&[StateValueAtomV1::Tag(false)]),
             Some(vec![StateValueWordKindV1::Sum])
         );
-        assert!(option.validate_atoms(&[StateValueAtomV1::Tag(true), StateValueAtomV1::Int(9),]));
-        assert!(!option.validate_atoms(&[StateValueAtomV1::Tag(false), StateValueAtomV1::Int(9),]));
+        assert!(option.validate_atoms(&[
+            StateValueAtomV1::Tag(true),
+            StateValueAtomV1::Pointer(vec![1]),
+        ]));
+        assert!(!option.validate_atoms(&[
+            StateValueAtomV1::Tag(false),
+            StateValueAtomV1::Pointer(vec![1]),
+        ]));
 
         let result = StateValueSchemaV1 {
             nodes: vec![
@@ -585,13 +591,13 @@ mod tests {
     }
 
     #[test]
-    fn nested_amount_lists_roundtrip_and_reject_invalid_shapes() {
-        let amount = StateValueSchemaV1 {
-            nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Amount)],
+    fn nested_quantity_lists_roundtrip_and_reject_invalid_shapes() {
+        let quantity = StateValueSchemaV1 {
+            nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Quantity)],
         };
         let inner = StateValueSchemaV1 {
             nodes: vec![StateValueNodeV1::List {
-                element: Box::new(amount),
+                element: Box::new(quantity),
                 capacity: 2,
             }],
         };

@@ -88,7 +88,7 @@ Logs:
   - `signature` (Ed25519 hex)
 - **Normalization rules.** Fields are sorted alphabetically before signing to ensure canonical serialization. Numeric values are represented as integers; time values use Unix epoch seconds.
 - **Scoreboard alignment.** Orchestrator scoreboard ingests the above fields directly, mapping `max_streams`, `ttl_epoch`, and `rate_limit_bytes` into availability and penalty factors. Additional scoreboard signals (e.g., token health) derive from issuance telemetry using `token_id`.
-- **Validation helpers.** Shared Rust crate `sorafs_token_schema` will expose `Token::sign` / `Token::verify` and schema validation to minimize duplication across gateway and orchestrator binaries.
+- **Validation helpers.** Shared Rust crate `sorafs_manifest::{StreamTokenBodyV1, StreamTokenV1}` will expose `Token::sign` / `Token::verify` and schema validation to minimize duplication across gateway and orchestrator binaries.
 
 ## Secure Token Issuance API
 

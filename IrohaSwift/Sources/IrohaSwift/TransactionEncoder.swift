@@ -366,12 +366,14 @@ private struct NativeClaimIdentifierPayloadEnvelope: Encodable, Sendable {
 
 private struct NativeClaimIdentifierAttestationEnvelope: Encodable, Sendable {
     let kind: String
+    let algorithm: String?
     let signature: String?
     let proofBackend: String?
     let proofB64: String?
 
     private enum CodingKeys: String, CodingKey {
         case kind
+        case algorithm
         case signature
         case proofBackend = "proof_backend"
         case proofB64 = "proof_b64"
@@ -430,6 +432,7 @@ private func encodeNativeClaimIdentifierReceiptJSON(
     )
     let attestation = NativeClaimIdentifierAttestationEnvelope(
         kind: receipt.attestation.kind,
+        algorithm: receipt.attestation.algorithm,
         signature: receipt.attestation.signature,
         proofBackend: receipt.attestation.proofBackend,
         proofB64: receipt.attestation.proofB64
@@ -555,7 +558,7 @@ private enum SetPrimaryAccountAliasSwiftNoritoEncoder {
     }
 
     private static func encodeTransactionEntrypoint(_ signedTransaction: Data) -> Data {
-        var entrypoint = OfflineNoritoWriter()
+        var entrypoint = OfflineCompactNoritoWriter()
         entrypoint.writeUInt32LE(0)
         entrypoint.writeField(signedTransaction)
         return entrypoint.data

@@ -64,7 +64,10 @@ pub mod uri {
     pub const AXT_PROOF_CACHE_STATUS: &str = "/v1/debug/axt/cache";
     /// The URI for local config changing inspecting
     pub const CONFIGURATION: &str = "/v1/configuration";
-    /// URI for applying Nexus lane lifecycle plans (add/retire lanes at runtime).
+    /// URI for reading the Nexus lifecycle catalog commitment.
+    ///
+    /// `POST` on this URI is retained only as an explicit deprecated rejection;
+    /// lifecycle changes are signed `SetParameter` transactions.
     pub const NEXUS_LANE_LIFECYCLE: &str = "/v1/nexus/lifecycle";
     /// URI to report status for administration
     pub const STATUS: &str = "/status";

@@ -6,15 +6,15 @@ seiyaku IrohaSwap {
     }
 
     // Pool metadata
-    state PoolAssetA: StateMap<Name, AssetDefinitionId>;
-    state PoolAssetB: StateMap<Name, AssetDefinitionId>;
-    state PoolAccount: StateMap<Name, AccountId>;
-    state PoolLpAsset: StateMap<Name, AssetDefinitionId>;
+    state StateMap<Name, AssetDefinitionId> PoolAssetA;
+    state StateMap<Name, AssetDefinitionId> PoolAssetB;
+    state StateMap<Name, AccountId> PoolAccount;
+    state StateMap<Name, AssetDefinitionId> PoolLpAsset;
     // Pool accounting (reserves and LP supply)
-    state ReserveA: StateMap<Name, Amount>;
-    state ReserveB: StateMap<Name, Amount>;
-    state LpSupply: StateMap<Name, Amount>;
-    fn min_value(a: Amount, b: Amount) -> Amount {
+    state StateMap<Name, quantity> ReserveA;
+    state StateMap<Name, quantity> ReserveB;
+    state StateMap<Name, quantity> LpSupply;
+    fn min_value(quantity a, quantity b) -> quantity {
         if (a < b) {
             return a;
         } else {
@@ -22,7 +22,7 @@ seiyaku IrohaSwap {
         }
     }
 
-    fn ensure_pool(pool: Name) {
+    fn ensure_pool(Name pool) {
         require(PoolAssetA.contains(pool), PoolError::UnknownPool);
         require(PoolAssetB.contains(pool), PoolError::UnknownPool);
         require(PoolAccount.contains(pool), PoolError::UnknownPool);
@@ -31,13 +31,13 @@ seiyaku IrohaSwap {
 
     // Create a new pool with caller-chosen LP asset and pool account.
     kotoage fn init_pool(
-        pool: Name,
-        asset_a: AssetDefinitionId,
-        asset_b: AssetDefinitionId,
-        pool_account: AccountId,
-        lp_asset: AssetDefinitionId,
+        Name pool,
+        AssetDefinitionId asset_a,
+        AssetDefinitionId asset_b,
+        AccountId pool_account,
+        AssetDefinitionId lp_asset,
     ) authorize("Admin") {
-        let zero = Amount::from_i64(0);
+        let zero = 0;
         require(asset_a != asset_b, PoolError::IdenticalAssets);
         // Refuse duplicate pool creation.
         require(!PoolAssetA.contains(pool), PoolError::PoolAlreadyExists);
@@ -53,12 +53,12 @@ seiyaku IrohaSwap {
 
     // Provide liquidity; mints LP proportional to contribution.
     kotoage fn deposit_liquidity(
-        provider: AccountId,
-        pool: Name,
-        amount_a: Amount,
-        amount_b: Amount,
+        AccountId provider,
+        Name pool,
+        quantity amount_a,
+        quantity amount_b,
     ) authorize("Admin") {
-        let zero = Amount::from_i64(0);
+        let zero = 0;
         require(amount_a > zero, PoolError::InvalidAssetAAmount);
         require(amount_b > zero, PoolError::InvalidAssetBAmount);
         ensure_pool(pool);
@@ -101,10 +101,10 @@ seiyaku IrohaSwap {
     }
 
     // Withdraw liquidity; burns LP and returns proportional reserves.
-    kotoage fn withdraw_liquidity(provider: AccountId, pool: Name, lp_amount: Amount) authorize(
+    kotoage fn withdraw_liquidity(AccountId provider, Name pool, quantity lp_amount) authorize(
         "Admin"
     ) {
-        let zero = Amount::from_i64(0);
+        let zero = 0;
         require(lp_amount > zero, PoolError::InvalidLiquidityAmount);
         ensure_pool(pool);
         let asset_a = PoolAssetA.get(pool).unwrap_or(
@@ -145,13 +145,13 @@ seiyaku IrohaSwap {
 
     // Swap with 0.3% fee (997/1000).
     kotoage fn swap(
-        trader: AccountId,
-        pool: Name,
-        input_asset: AssetDefinitionId,
-        amount_in: Amount,
-        min_output: Amount,
-    ) -> Amount authorize("Admin") {
-        let zero = Amount::from_i64(0);
+        AccountId trader,
+        Name pool,
+        AssetDefinitionId input_asset,
+        quantity amount_in,
+        quantity min_output,
+    ) -> quantity authorize("Admin") {
+        let zero = 0;
         require(amount_in > zero, PoolError::InvalidSwapAmount);
         ensure_pool(pool);
         let asset_a = PoolAssetA.get(pool).unwrap_or(
@@ -168,8 +168,8 @@ seiyaku IrohaSwap {
         require(is_a_in || is_b_in, PoolError::AssetNotInPool);
         let reserve_in = (is_a_in) ? reserve_a : reserve_b;
         let reserve_out = (is_a_in) ? reserve_b : reserve_a;
-        let fee_numerator = Amount::from_i64(997);
-        let fee_denominator = Amount::from_i64(1000);
+        let fee_numerator = 997;
+        let fee_denominator = 1000;
         let effective = (amount_in * fee_numerator) / fee_denominator;
         let out = (reserve_out * effective) / (reserve_in + effective);
         require(out >= min_output, PoolError::SlippageExceeded);

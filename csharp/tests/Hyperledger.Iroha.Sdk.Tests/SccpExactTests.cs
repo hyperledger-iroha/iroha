@@ -348,6 +348,18 @@ public sealed class SccpExactTests
                 pair.PrivateKeySeed)),
             Convert.ToBase64String(nativePayload),
             creationTimeMs: 7));
+        var archivedChainPayload = CanonicalTransactionPayload(
+            7,
+            destinationProof: true,
+            chainId: "809574f5-fee7-5e69-bfcf-52451e42d50f");
+        Assert.Throws<ArgumentException>(() => new SccpBridgeProofSubmitRequest(
+            authority,
+            artifact,
+            Convert.ToBase64String(Ed25519Signer.Sign(
+                IrohaHash.Hash(archivedChainPayload),
+                pair.PrivateKeySeed)),
+            Convert.ToBase64String(archivedChainPayload),
+            creationTimeMs: 7));
         var legacyPayload = CanonicalTransactionPayload(
             7,
             legacyOuterBinding: true,
@@ -849,8 +861,8 @@ public sealed class SccpExactTests
         var parsed = SccpGroth16ProofRequestV1.Parse(Json(valid));
         Assert.Equal(SccpDestinationProofBackendV1.EvmGroth16Bn254, parsed.Backend);
         Assert.Equal(SccpNetworkV1.BscMainnet, parsed.TargetNetwork);
-        Assert.Equal("0x501448f8fdc0f41ae7bcdc6c53f7ef79e4e8b522acbe57f61860cd014759125a", parsed.StatementHash);
-        Assert.Equal("0x991981227380d4e6320c6f43222b52409b5e3efeceb3702435263ee26c503d42", parsed.RequestHash);
+        Assert.Equal("0x3668dc065b23e51605e5c58bcde5264a1a89297418dae3096f55db6dde95719e", parsed.StatementHash);
+        Assert.Equal("0xabccf908b615899f25dcbb0f12e4c35dcbe88013e6ac59c7487b1b534bfb89c4", parsed.RequestHash);
         var mutations = new Action<Dictionary<string, object?>>[]
         {
             value => value["allow_unready"] = true,
@@ -883,6 +895,12 @@ public sealed class SccpExactTests
         Assert.Throws<ArgumentException>(() => SccpGroth16ProofRequestV1.Parse(Encoding.UTF8.GetBytes(
             text.Replace("\"target_domain\":2", "\"target_domain\":2,\"target_domain\":5", StringComparison.Ordinal))));
         Assert.Throws<ArgumentException>(() => SccpGroth16ProofRequestV1.Parse(Encoding.UTF8.GetBytes(text + "null")));
+
+        var archivedIdentity = ProofRequestObject();
+        ((Dictionary<string, object?>)archivedIdentity["sora_finality_anchor"]!)["chain_id_hash"] =
+            Convert.ToHexString(SccpV1.Keccak256(
+                Convert.FromHexString("809574F5FEE75E69BFCF52451E42D50F")));
+        Assert.Throws<ArgumentException>(() => SccpGroth16ProofRequestV1.Parse(Json(archivedIdentity)));
     }
 
     [Fact]
@@ -2139,7 +2157,7 @@ public sealed class SccpExactTests
 
     private static Dictionary<string, object?> FinalityAnchor()
     {
-        var chainHash = SccpV1.Keccak256(Convert.FromHexString("809574F5FEE75E69BFCF52451E42D50F"));
+        var chainHash = SccpV1.Keccak256(Convert.FromHexString("FC56984B2BE7431D840E21514D1883F0"));
         return new Dictionary<string, object?>
         {
             ["version"] = 1,
@@ -2288,7 +2306,8 @@ public sealed class SccpExactTests
         bool legacyOuterBinding = false,
         byte routeHashByte = 0x22,
         bool destinationProof = false,
-        uint? payloadKindOverride = null)
+        uint? payloadKindOverride = null,
+        string chainId = "fc56984b-2be7-431d-840e-21514d1883f0")
     {
         const string submitBridgeProof = "iroha_data_model::isi::bridge::SubmitBridgeProof";
         var pair = Ed25519KeyPair.FromSeed(Enumerable.Repeat((byte)0x57, 32).ToArray());
@@ -2331,7 +2350,7 @@ public sealed class SccpExactTests
         var nonce = new byte[] { 0 };
         var metadata = UInt64(0);
         return Concat(
-            CompactField(CompactField(CompactString("809574f5-fee7-5e69-bfcf-52451e42d50f"))),
+            CompactField(CompactField(CompactString(chainId))),
             CompactField(authority),
             CompactField(creation.ToArray()),
             CompactField(executable),

@@ -44,6 +44,56 @@ Clients MUST attach the Norito-signed manifest envelope (`manifest_signatures.js
 using `X-SoraFS-Manifest-Envelope` when requesting a full CAR to allow gateways to
 perform policy checks (GAR, PDP/PoR status).
 
+The standalone `sorafs_gateway` process additionally requires
+`--approved-manifest-envelope <path>`. The file must contain exactly one canonical
+base64 envelope, without whitespace. Startup validates that envelope against the
+loaded manifest, provider, chunker, profile, and GAR fields; every request must
+then supply the exact approved bytes. This explicit operator approval is a trust
+anchor for the standalone GAR envelope only. It is not council verification and
+must not be represented as a `ProviderAdmissionEnvelopeV1` approval.
+
+### 2.2. Stream Tokens
+
+Range clients obtain a token with `POST /token`, a canonical JSON body containing
+exactly `manifest_envelope` and the sorted `capabilities` array, and a canonical
+lowercase `X-SoraFS-Client` identifier. The initial profile permits only
+`sorafs.chunk-range.block`.
+
+The returned `X-SoraFS-Stream-Token` is canonical base64 over a canonical Norito
+JSON envelope containing `payload`, `public_key_hex`, and `signature_hex`. The
+Ed25519 signature covers the domain `b"sorafs-gateway-stream-token-v1\0"`, the
+big-endian payload length, and the exact canonical payload bytes. The payload
+binds a random 256-bit token identifier and nonce, manifest, provider, chunker,
+client, capabilities, issuance/expiry times, concurrency limit, and byte/quota
+limits. Clients must reject a non-canonical envelope, weak or all-zero key or
+signature, unexpected gateway key, invalid signature, or any binding mismatch.
+The response JSON exposes the same real signature and public key; zero-filled
+placeholder signatures are forbidden.
+
+Token TTLs, concurrency, per-request bytes, per-client issuance, live-token
+records, and client-quota records all have non-zero hard limits. Configuration
+that disables any limit is rejected at startup. The reference standalone
+gateway also caps the token request at 24 KiB, decoded manifest envelopes at
+12 KiB, resident payloads at 64 MiB, full CARs at 96 MiB, and range CARs at
+16 MiB. Capacity exhaustion fails closed rather than growing a registry or
+response buffer without bound.
+
+Do not confuse that standalone profile token with Torii's
+`sorafs_manifest::StreamTokenV1`, which is used by `sorafs-fetch`,
+`sorafs_cli fetch`, Musubi, and the gateway SDK clients. A Torii token is
+canonical Norito binary encoded with standard base64 and its Ed25519 signature
+covers exactly `b"sorafs.stream-token.signature.v1\0"` followed by the canonical
+Norito body bytes, with no length prefix. Every provider descriptor must include
+`gateway-key=<64-hex>` from an authenticated deployment inventory. Clients
+reject body-only legacy signatures, a key supplied only alongside the token,
+and all key/token binding or lifetime failures before sending a request.
+
+Torii client base URLs are HTTPS-only port-443 origins at `/`. Credentials,
+queries, fragments, redirects, non-root paths, and non-public addresses are
+forbidden; hostname resolution must return only globally routable addresses,
+which are pinned into the HTTP client. The optional privacy endpoint uses the
+same policy and the exact `/privacy/events` path.
+
 ## 3. Response Requirements
 
 ### 3.1. Common Headers

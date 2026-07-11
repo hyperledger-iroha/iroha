@@ -2035,6 +2035,20 @@ impl TieredStateBackend {
                 )?;
             }
         }
+        {
+            let view = world.contract_subject_bindings.view();
+            for (key, value) in view.iter() {
+                let key_handle = TieredKeyHandle::ContractSubjectBinding((*key).clone());
+                let key_payload = norito::codec::Encode::encode(key);
+                self.collect_entry_with_encoded_key(
+                    TieredSegment::ContractSubjectBindings,
+                    &key_handle,
+                    key_payload,
+                    value,
+                    &mut ctx,
+                )?;
+            }
+        }
         collect_map!(
             TieredSegment::SmartContractState,
             SmartContractState,
@@ -2687,6 +2701,7 @@ mod measured_bytes_impls {
 
     use crate::{
         governance::state::ParliamentTerm,
+        smartcontracts::code::ContractSubjectBinding,
         state::{
             DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker, ElectionState,
             FrontierCheckpoint, GovernanceLockRecord, GovernanceLocksForReferendum,
@@ -2874,6 +2889,12 @@ mod measured_bytes_impls {
     impl MeasuredBytes for ContractAddress {
         fn measured_bytes(&self) -> usize {
             size_of::<ContractAddress>().saturating_add(self.as_ref().len())
+        }
+    }
+
+    impl MeasuredBytes for ContractSubjectBinding {
+        fn measured_bytes(&self) -> usize {
+            size_of::<ContractSubjectBinding>().saturating_add(self.subject.measured_bytes_extra())
         }
     }
 
@@ -4152,6 +4173,7 @@ enum TieredSegment {
     ContractManifests,
     ContractCode,
     ContractInstances,
+    ContractSubjectBindings,
     SmartContractState,
     ZkAssets,
     Elections,
@@ -4198,6 +4220,7 @@ impl TieredSegment {
             TieredSegment::ContractManifests => "contract_manifests",
             TieredSegment::ContractCode => "contract_code",
             TieredSegment::ContractInstances => "contract_instances",
+            TieredSegment::ContractSubjectBindings => "contract_subject_bindings",
             TieredSegment::SmartContractState => "smart_contract_state",
             TieredSegment::ZkAssets => "zk_assets",
             TieredSegment::Elections => "elections",
@@ -4257,6 +4280,7 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "contract_manifests" => TieredSegment::ContractManifests,
             "contract_code" => TieredSegment::ContractCode,
             "contract_instances" => TieredSegment::ContractInstances,
+            "contract_subject_bindings" => TieredSegment::ContractSubjectBindings,
             "smart_contract_state" => TieredSegment::SmartContractState,
             "zk_assets" => TieredSegment::ZkAssets,
             "elections" => TieredSegment::Elections,
@@ -4459,6 +4483,7 @@ pub(crate) enum TieredKeyHandle {
     ContractManifest(iroha_crypto::Hash),
     ContractCode(iroha_crypto::Hash),
     ContractInstance(iroha_data_model::smart_contract::ContractAddress),
+    ContractSubjectBinding(iroha_data_model::smart_contract::ContractAddress),
     SmartContractState(Name),
     ZkAsset(iroha_data_model::asset::AssetDefinitionId),
     Election(String),
@@ -4509,6 +4534,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::ContractManifest(_) => TieredSegment::ContractManifests,
             TieredKeyHandle::ContractCode(_) => TieredSegment::ContractCode,
             TieredKeyHandle::ContractInstance(_) => TieredSegment::ContractInstances,
+            TieredKeyHandle::ContractSubjectBinding(_) => TieredSegment::ContractSubjectBindings,
             TieredKeyHandle::SmartContractState(_) => TieredSegment::SmartContractState,
             TieredKeyHandle::ZkAsset(_) => TieredSegment::ZkAssets,
             TieredKeyHandle::Election(_) => TieredSegment::Elections,
@@ -4529,6 +4555,7 @@ impl TieredKeyHandle {
     fn encode_key(&self) -> Result<Vec<u8>> {
         match self {
             TieredKeyHandle::ContractInstance(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::ContractSubjectBinding(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Domain(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Account(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AccountRekey(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4643,6 +4670,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::ContractManifest(hash) => fetch!(world.contract_manifests, hash),
             TieredKeyHandle::ContractCode(hash) => fetch!(world.contract_code, hash),
             TieredKeyHandle::ContractInstance(key) => fetch!(world.contract_instances, key),
+            TieredKeyHandle::ContractSubjectBinding(key) => {
+                fetch!(world.contract_subject_bindings, key)
+            }
             TieredKeyHandle::SmartContractState(key) => fetch!(world.smart_contract_state, key),
             TieredKeyHandle::ZkAsset(id) => fetch!(world.zk_assets, id),
             TieredKeyHandle::Election(id) => fetch!(world.elections, id),
@@ -4720,6 +4750,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::ContractManifest(hash) => fetch!(world.contract_manifests, hash),
             TieredKeyHandle::ContractCode(hash) => fetch!(world.contract_code, hash),
             TieredKeyHandle::ContractInstance(key) => fetch!(world.contract_instances, key),
+            TieredKeyHandle::ContractSubjectBinding(key) => {
+                fetch!(world.contract_subject_bindings, key)
+            }
             TieredKeyHandle::SmartContractState(key) => fetch!(world.smart_contract_state, key),
             TieredKeyHandle::ZkAsset(id) => fetch!(world.zk_assets, id),
             TieredKeyHandle::Election(id) => fetch!(world.elections, id),
@@ -4819,6 +4852,9 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::ContractManifest(hash) => write!(f, "contract_manifest:{hash}"),
             TieredKeyHandle::ContractCode(hash) => write!(f, "contract_code:{hash}"),
             TieredKeyHandle::ContractInstance(key) => write!(f, "contract_instance:{key:?}"),
+            TieredKeyHandle::ContractSubjectBinding(key) => {
+                write!(f, "contract_subject_binding:{key:?}")
+            }
             TieredKeyHandle::SmartContractState(key) => write!(f, "smart_contract_state:{key}"),
             TieredKeyHandle::ZkAsset(id) => write!(f, "zk_asset:{id}"),
             TieredKeyHandle::Election(id) => write!(f, "election:{id}"),

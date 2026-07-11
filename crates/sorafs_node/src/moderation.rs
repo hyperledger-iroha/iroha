@@ -849,6 +849,20 @@ pub struct ModerationScreeningSnapshot {
 /// Error raised by the local screening/quarantine runtime.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ModerationScreeningError {
+    /// A configured authoritative-state ceiling was reached.
+    #[error("moderation screening resource `{resource}` exhausted (limit {limit})")]
+    ResourceExhausted {
+        /// Bounded resource label.
+        resource: &'static str,
+        /// Configured entry ceiling.
+        limit: usize,
+    },
+    /// The durable screening/quarantine checkpoint could not be committed.
+    #[error("moderation screening checkpoint failed: {message}")]
+    Checkpoint {
+        /// Persistence failure detail.
+        message: String,
+    },
     /// Screening input is invalid.
     #[error("invalid moderation screening input: {message}")]
     InvalidInput {
@@ -889,6 +903,14 @@ pub enum ModerationScreeningError {
 /// Error raised by the local encrypted quarantine object store.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ModerationQuarantineObjectError {
+    /// A configured authoritative-state ceiling was reached.
+    #[error("moderation quarantine object resource `{resource}` exhausted (limit {limit})")]
+    ResourceExhausted {
+        /// Bounded resource label.
+        resource: &'static str,
+        /// Configured entry ceiling.
+        limit: usize,
+    },
     /// The local SoraFS storage backend is disabled.
     #[error("SoraFS moderation quarantine object store is disabled")]
     StorageDisabled,
@@ -962,6 +984,14 @@ pub enum ModerationQuarantineObjectError {
 /// Error raised by the payload-free local evidence viewer audit runtime.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ModerationEvidenceViewerError {
+    /// A configured authoritative-state ceiling was reached.
+    #[error("moderation evidence viewer resource `{resource}` exhausted (limit {limit})")]
+    ResourceExhausted {
+        /// Bounded resource label.
+        resource: &'static str,
+        /// Configured entry ceiling.
+        limit: usize,
+    },
     /// Session or access event input is invalid.
     #[error("invalid moderation evidence viewer input: {message}")]
     InvalidInput {
@@ -1038,6 +1068,20 @@ pub enum ModerationEvidenceViewerError {
 /// Error raised while admitting moderation model registry material.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ModerationModelRegistryError {
+    /// A configured authoritative-state ceiling was reached.
+    #[error("moderation model registry resource `{resource}` exhausted (limit {limit})")]
+    ResourceExhausted {
+        /// Bounded resource label.
+        resource: &'static str,
+        /// Configured entry ceiling.
+        limit: usize,
+    },
+    /// The durable model-registry checkpoint could not be committed.
+    #[error("moderation model registry checkpoint failed: {message}")]
+    Checkpoint {
+        /// Persistence failure detail.
+        message: String,
+    },
     /// A reproducibility manifest failed canonical validation.
     #[error("moderation reproducibility manifest validation failed: {message}")]
     InvalidReproManifest {
@@ -1074,13 +1118,28 @@ pub enum ModerationModelRegistryError {
 }
 
 /// Local in-memory registry for moderation model release artifacts.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct ModerationModelRegistry {
     repro_manifests: BTreeMap<[u8; 16], ModerationReproRegistryRecord>,
     corpora: BTreeMap<[u8; 32], ModerationCorpusRegistryRecord>,
+    entry_limit: usize,
+}
+
+impl Default for ModerationModelRegistry {
+    fn default() -> Self {
+        Self::with_entry_limit(65_536)
+    }
 }
 
 impl ModerationModelRegistry {
+    pub(crate) fn with_entry_limit(entry_limit: usize) -> Self {
+        Self {
+            repro_manifests: BTreeMap::new(),
+            corpora: BTreeMap::new(),
+            entry_limit: entry_limit.max(1),
+        }
+    }
+
     pub(crate) fn admit_repro_manifest(
         &mut self,
         manifest: ModerationReproManifestV1,
@@ -1107,6 +1166,12 @@ impl ModerationModelRegistry {
             }
             Some(existing) => Ok(existing.clone()),
             None => {
+                if self.repro_manifests.len() >= self.entry_limit {
+                    return Err(ModerationModelRegistryError::ResourceExhausted {
+                        resource: "reproducibility_manifests",
+                        limit: self.entry_limit,
+                    });
+                }
                 self.repro_manifests
                     .insert(record.manifest_id, record.clone());
                 Ok(record)
@@ -1143,6 +1208,14 @@ impl ModerationModelRegistry {
             family_count,
             variant_count,
         };
+        if !self.corpora.contains_key(&record.corpus_digest)
+            && self.corpora.len() >= self.entry_limit
+        {
+            return Err(ModerationModelRegistryError::ResourceExhausted {
+                resource: "adversarial_corpora",
+                limit: self.entry_limit,
+            });
+        }
         Ok(self
             .corpora
             .entry(record.corpus_digest)
@@ -1161,6 +1234,20 @@ impl ModerationModelRegistry {
         &mut self,
         snapshot: ModerationModelRegistrySnapshot,
     ) -> Result<(), ModerationModelRegistryError> {
+        for (resource, count) in [
+            (
+                "reproducibility_manifests",
+                snapshot.reproducibility_manifests.len(),
+            ),
+            ("adversarial_corpora", snapshot.adversarial_corpora.len()),
+        ] {
+            if count > self.entry_limit {
+                return Err(ModerationModelRegistryError::ResourceExhausted {
+                    resource,
+                    limit: self.entry_limit,
+                });
+            }
+        }
         let mut repro_manifests = BTreeMap::new();
         for record in snapshot.reproducibility_manifests {
             if record.runtime_version.trim().is_empty() {
@@ -1226,12 +1313,52 @@ impl ModerationModelRegistry {
 }
 
 /// Local in-memory index for encrypted moderation quarantine payload objects.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct ModerationQuarantineObjectRuntime {
     objects: BTreeMap<[u8; 16], ModerationQuarantineObjectRecord>,
+    entry_limit: usize,
+}
+
+impl Default for ModerationQuarantineObjectRuntime {
+    fn default() -> Self {
+        Self::with_entry_limit(65_536)
+    }
 }
 
 impl ModerationQuarantineObjectRuntime {
+    pub(crate) fn with_entry_limit(entry_limit: usize) -> Self {
+        Self {
+            objects: BTreeMap::new(),
+            entry_limit: entry_limit.max(1),
+        }
+    }
+
+    pub(crate) fn ensure_insert_capacity(
+        &self,
+        quarantine_id: &[u8; 16],
+    ) -> Result<(), ModerationQuarantineObjectError> {
+        if !self.objects.contains_key(quarantine_id) && self.objects.len() >= self.entry_limit {
+            return Err(ModerationQuarantineObjectError::ResourceExhausted {
+                resource: "quarantine_objects",
+                limit: self.entry_limit,
+            });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn ensure_snapshot_capacity(
+        &self,
+        snapshot: &ModerationQuarantineObjectSnapshot,
+    ) -> Result<(), ModerationQuarantineObjectError> {
+        if snapshot.objects.len() > self.entry_limit {
+            return Err(ModerationQuarantineObjectError::ResourceExhausted {
+                resource: "quarantine_objects",
+                limit: self.entry_limit,
+            });
+        }
+        Ok(())
+    }
+
     pub(crate) fn get(&self, quarantine_id: &[u8; 16]) -> Option<ModerationQuarantineObjectRecord> {
         self.objects.get(quarantine_id).cloned()
     }
@@ -1250,6 +1377,7 @@ impl ModerationQuarantineObjectRuntime {
             }
             Some(existing) => Ok(existing.clone()),
             None => {
+                self.ensure_insert_capacity(&record.quarantine_id)?;
                 self.objects.insert(record.quarantine_id, record.clone());
                 Ok(record)
             }
@@ -1266,6 +1394,7 @@ impl ModerationQuarantineObjectRuntime {
         &mut self,
         snapshot: ModerationQuarantineObjectSnapshot,
     ) -> Result<(), ModerationQuarantineObjectError> {
+        self.ensure_snapshot_capacity(&snapshot)?;
         let mut objects = BTreeMap::new();
         for record in snapshot.objects {
             validate_quarantine_object_record(&record)
@@ -1282,13 +1411,28 @@ impl ModerationQuarantineObjectRuntime {
 }
 
 /// Local in-memory payload-free evidence viewer session and access-log runtime.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct ModerationEvidenceViewerRuntime {
     sessions: BTreeMap<[u8; 16], ModerationEvidenceViewerSessionRecord>,
     access_events: Vec<ModerationEvidenceViewerAccessEventRecord>,
+    entry_limit: usize,
+}
+
+impl Default for ModerationEvidenceViewerRuntime {
+    fn default() -> Self {
+        Self::with_entry_limit(65_536)
+    }
 }
 
 impl ModerationEvidenceViewerRuntime {
+    pub(crate) fn with_entry_limit(entry_limit: usize) -> Self {
+        Self {
+            sessions: BTreeMap::new(),
+            access_events: Vec::new(),
+            entry_limit: entry_limit.max(1),
+        }
+    }
+
     pub(crate) fn create_session(
         &mut self,
         input: ModerationEvidenceViewerSessionInput,
@@ -1303,6 +1447,12 @@ impl ModerationEvidenceViewerRuntime {
             }
             Some(existing) => Ok(existing.clone()),
             None => {
+                if self.sessions.len() >= self.entry_limit {
+                    return Err(ModerationEvidenceViewerError::ResourceExhausted {
+                        resource: "evidence_viewer_sessions",
+                        limit: self.entry_limit,
+                    });
+                }
                 self.sessions.insert(record.session_id, record.clone());
                 Ok(record)
             }
@@ -1320,10 +1470,19 @@ impl ModerationEvidenceViewerRuntime {
             .ok_or_else(|| ModerationEvidenceViewerError::UnknownSession {
                 session_id_hex: hex::encode(input.session_id),
             })?;
+        if self.access_events.len() >= self.entry_limit {
+            return Err(ModerationEvidenceViewerError::ResourceExhausted {
+                resource: "evidence_viewer_access_events",
+                limit: self.entry_limit,
+            });
+        }
         let sequence = self
             .access_events
             .last()
-            .map_or(1, |event| event.sequence.saturating_add(1));
+            .map_or(Some(1), |event| event.sequence.checked_add(1))
+            .ok_or_else(|| ModerationEvidenceViewerError::InvalidInput {
+                message: "evidence viewer access event sequence exhausted".to_owned(),
+            })?;
         let record = evidence_viewer_access_event_record_from_input(sequence, input, &session)?;
         self.access_events.push(record.clone());
         Ok(record)
@@ -1340,6 +1499,20 @@ impl ModerationEvidenceViewerRuntime {
         &mut self,
         snapshot: ModerationEvidenceViewerSnapshot,
     ) -> Result<(), ModerationEvidenceViewerError> {
+        for (resource, count) in [
+            ("evidence_viewer_sessions", snapshot.sessions.len()),
+            (
+                "evidence_viewer_access_events",
+                snapshot.access_events.len(),
+            ),
+        ] {
+            if count > self.entry_limit {
+                return Err(ModerationEvidenceViewerError::ResourceExhausted {
+                    resource,
+                    limit: self.entry_limit,
+                });
+            }
+        }
         let mut sessions = BTreeMap::new();
         for record in snapshot.sessions {
             validate_evidence_viewer_session_record(&record)
@@ -1353,6 +1526,7 @@ impl ModerationEvidenceViewerRuntime {
 
         let mut expected_sequence = 1_u64;
         let mut events = Vec::with_capacity(snapshot.access_events.len());
+        let mut event_ids = BTreeSet::new();
         for record in snapshot.access_events {
             if record.sequence != expected_sequence {
                 return Err(ModerationEvidenceViewerError::InvalidSnapshot {
@@ -1373,8 +1547,17 @@ impl ModerationEvidenceViewerRuntime {
             })?;
             validate_evidence_viewer_access_event_record(&record, session)
                 .map_err(|message| ModerationEvidenceViewerError::InvalidSnapshot { message })?;
+            if !event_ids.insert(record.event_id) {
+                return Err(ModerationEvidenceViewerError::InvalidSnapshot {
+                    message: "duplicate evidence viewer access event id".to_owned(),
+                });
+            }
             events.push(record);
-            expected_sequence = expected_sequence.saturating_add(1);
+            expected_sequence = expected_sequence.checked_add(1).ok_or_else(|| {
+                ModerationEvidenceViewerError::InvalidSnapshot {
+                    message: "evidence viewer access event sequence exhausted".to_owned(),
+                }
+            })?;
         }
 
         self.sessions = sessions;
@@ -1552,13 +1735,28 @@ pub(crate) fn moderation_evidence_viewer_audit_report_from_snapshot(
 }
 
 /// Local in-memory runtime for SFM-4a screening and quarantine evidence.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct ModerationScreeningRuntime {
     screening_records: BTreeMap<[u8; 16], ModerationScreeningRecord>,
     quarantine_records: BTreeMap<[u8; 16], ModerationQuarantineRecord>,
+    entry_limit: usize,
+}
+
+impl Default for ModerationScreeningRuntime {
+    fn default() -> Self {
+        Self::with_entry_limit(65_536)
+    }
 }
 
 impl ModerationScreeningRuntime {
+    pub(crate) fn with_entry_limit(entry_limit: usize) -> Self {
+        Self {
+            screening_records: BTreeMap::new(),
+            quarantine_records: BTreeMap::new(),
+            entry_limit: entry_limit.max(1),
+        }
+    }
+
     pub(crate) fn record_screening(
         &mut self,
         input: ModerationScreeningInput,
@@ -1586,14 +1784,39 @@ impl ModerationScreeningRuntime {
                 });
             }
             None => {
-                self.screening_records
-                    .insert(record.record_id, record.clone());
+                if self.screening_records.len() >= self.entry_limit {
+                    return Err(ModerationScreeningError::ResourceExhausted {
+                        resource: "screening_records",
+                        limit: self.entry_limit,
+                    });
+                }
             }
         }
 
+        if let Some(quarantine) = quarantine.as_ref() {
+            match self.quarantine_records.get(&quarantine.quarantine_id) {
+                Some(existing) if existing != quarantine => {
+                    return Err(ModerationScreeningError::ConflictingRecord {
+                        record_id_hex: hex::encode(record.record_id),
+                    });
+                }
+                Some(_) => {}
+                None if self.quarantine_records.len() >= self.entry_limit => {
+                    return Err(ModerationScreeningError::ResourceExhausted {
+                        resource: "quarantine_records",
+                        limit: self.entry_limit,
+                    });
+                }
+                None => {}
+            }
+        }
+
+        self.screening_records
+            .insert(record.record_id, record.clone());
         if let Some(quarantine) = quarantine.clone() {
             self.quarantine_records
-                .insert(quarantine.quarantine_id, quarantine);
+                .entry(quarantine.quarantine_id)
+                .or_insert(quarantine);
         }
 
         Ok(ModerationScreeningOutcome { record, quarantine })
@@ -1730,6 +1953,17 @@ impl ModerationScreeningRuntime {
         &mut self,
         snapshot: ModerationScreeningSnapshot,
     ) -> Result<(), ModerationScreeningError> {
+        for (resource, count) in [
+            ("screening_records", snapshot.screening_records.len()),
+            ("quarantine_records", snapshot.quarantine_records.len()),
+        ] {
+            if count > self.entry_limit {
+                return Err(ModerationScreeningError::ResourceExhausted {
+                    resource,
+                    limit: self.entry_limit,
+                });
+            }
+        }
         let mut screening_records = BTreeMap::new();
         for record in snapshot.screening_records {
             validate_screening_record(&record)?;
@@ -3500,6 +3734,14 @@ fn governance_vote_choice(choice: SoraFsModerationVoteChoice) -> SoraFsModeratio
 /// Error raised by the local moderation ballot runtime.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ModerationBallotRuntimeError {
+    /// A configured authoritative-state ceiling was reached.
+    #[error("moderation ballot resource `{resource}` exhausted (limit {limit})")]
+    ResourceExhausted {
+        /// Bounded resource label.
+        resource: &'static str,
+        /// Configured entry ceiling.
+        limit: usize,
+    },
     /// Canonical moderation ballot payload validation failed.
     #[error(transparent)]
     Validation(#[from] SoraFsModerationBallotError),
@@ -3761,18 +4003,110 @@ pub enum ModerationBallotRuntimeError {
         /// Validation failure.
         message: String,
     },
+    /// The monotonic moderation event sequence was exhausted.
+    #[error("moderation ballot event sequence exhausted")]
+    EventSequenceOverflow,
+    /// The durable ballot/event checkpoint could not be committed.
+    #[error("moderation ballot checkpoint failed: {0}")]
+    Checkpoint(String),
     /// The local moderation runtime lock was poisoned.
     #[error("moderation ballot state lock poisoned")]
     StateLockPoisoned,
 }
 
 /// Local in-memory moderation ballot lifecycle runtime.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct ModerationBallotRuntime {
     ballots: BTreeMap<ModerationBallotKey, ModerationBallotState>,
+    juror_count: usize,
+    commit_count: usize,
+    reveal_count: usize,
+    challenge_count: usize,
+    entry_limit: usize,
+}
+
+impl Default for ModerationBallotRuntime {
+    fn default() -> Self {
+        Self::with_entry_limit(65_536)
+    }
 }
 
 impl ModerationBallotRuntime {
+    pub(crate) fn with_entry_limit(entry_limit: usize) -> Self {
+        Self {
+            ballots: BTreeMap::new(),
+            juror_count: 0,
+            commit_count: 0,
+            reveal_count: 0,
+            challenge_count: 0,
+            entry_limit: entry_limit.max(1),
+        }
+    }
+
+    fn ensure_new_entries(
+        &self,
+        resource: &'static str,
+        current: usize,
+        additional: usize,
+    ) -> Result<(), ModerationBallotRuntimeError> {
+        if current
+            .checked_add(additional)
+            .is_none_or(|next| next > self.entry_limit)
+        {
+            return Err(ModerationBallotRuntimeError::ResourceExhausted {
+                resource,
+                limit: self.entry_limit,
+            });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn ensure_snapshot_capacity(
+        &self,
+        snapshot: &ModerationBallotSnapshot,
+    ) -> Result<(), ModerationBallotRuntimeError> {
+        if snapshot.ballots.len() > self.entry_limit {
+            return Err(ModerationBallotRuntimeError::ResourceExhausted {
+                resource: "ballots",
+                limit: self.entry_limit,
+            });
+        }
+        let mut jurors = 0usize;
+        let mut commits = 0usize;
+        let mut reveals = 0usize;
+        let mut challenges = 0usize;
+        for ballot in &snapshot.ballots {
+            for (resource, total, additional) in [
+                (
+                    "ballot_jurors",
+                    &mut jurors,
+                    ballot.announcement.juror_ids.len(),
+                ),
+                ("ballot_commits", &mut commits, ballot.commits.len()),
+                ("ballot_reveals", &mut reveals, ballot.reveals.len()),
+                (
+                    "ballot_challenges",
+                    &mut challenges,
+                    ballot.challenges.len(),
+                ),
+            ] {
+                *total = total.checked_add(additional).ok_or(
+                    ModerationBallotRuntimeError::ResourceExhausted {
+                        resource,
+                        limit: self.entry_limit,
+                    },
+                )?;
+                if *total > self.entry_limit {
+                    return Err(ModerationBallotRuntimeError::ResourceExhausted {
+                        resource,
+                        limit: self.entry_limit,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn announce_ballot(
         &mut self,
         announcement: ModerationBallotAnnouncement,
@@ -3785,6 +4119,16 @@ impl ModerationBallotRuntime {
                 round_id: key.round_id,
             });
         }
+        self.ensure_new_entries("ballots", self.ballots.len(), 1)?;
+        self.ensure_new_entries(
+            "ballot_jurors",
+            self.juror_count,
+            announcement.juror_ids.len(),
+        )?;
+        let juror_count = self
+            .juror_count
+            .checked_add(announcement.juror_ids.len())
+            .expect("capacity preflight checked juror count");
         self.ballots.insert(
             key.clone(),
             ModerationBallotState {
@@ -3795,6 +4139,7 @@ impl ModerationBallotRuntime {
                 tally: None,
             },
         );
+        self.juror_count = juror_count;
         Ok(self
             .ballots
             .get(&key)
@@ -3829,9 +4174,16 @@ impl ModerationBallotRuntime {
                 juror_id: commit.juror_id,
             });
         }
+        if self.commit_count >= self.entry_limit {
+            return Err(ModerationBallotRuntimeError::ResourceExhausted {
+                resource: "ballot_commits",
+                limit: self.entry_limit,
+            });
+        }
         state
             .commits
             .insert(commit.juror_id.clone(), commit.clone());
+        self.commit_count += 1;
         Ok(ModerationBallotCommitOutcome {
             accepted_commit: commit,
             committed_count: state.commits.len(),
@@ -3876,9 +4228,16 @@ impl ModerationBallotRuntime {
             });
         }
         commit.verify_reveal(&reveal)?;
+        if self.reveal_count >= self.entry_limit {
+            return Err(ModerationBallotRuntimeError::ResourceExhausted {
+                resource: "ballot_reveals",
+                limit: self.entry_limit,
+            });
+        }
         state
             .reveals
             .insert(reveal.juror_id.clone(), reveal.clone());
+        self.reveal_count += 1;
         Ok(ModerationBallotRevealOutcome {
             accepted_reveal: reveal,
             committed_count: state.commits.len(),
@@ -3915,6 +4274,12 @@ impl ModerationBallotRuntime {
                 challenge_id: input.challenge_id,
             });
         }
+        if self.challenge_count >= self.entry_limit {
+            return Err(ModerationBallotRuntimeError::ResourceExhausted {
+                resource: "ballot_challenges",
+                limit: self.entry_limit,
+            });
+        }
         let record = ModerationBallotChallengeRecord {
             challenge_id: input.challenge_id,
             case_id: input.case_id,
@@ -3933,6 +4298,7 @@ impl ModerationBallotRuntime {
         state
             .challenges
             .insert(record.challenge_id.clone(), record.clone());
+        self.challenge_count += 1;
         Ok(record)
     }
 
@@ -4113,7 +4479,12 @@ impl ModerationBallotRuntime {
         &mut self,
         snapshot: ModerationBallotSnapshot,
     ) -> Result<(), ModerationBallotRuntimeError> {
+        self.ensure_snapshot_capacity(&snapshot)?;
         let mut ballots = BTreeMap::new();
+        let mut juror_count = 0usize;
+        let mut commit_count = 0usize;
+        let mut reveal_count = 0usize;
+        let mut challenge_count = 0usize;
         for record in snapshot.ballots {
             validate_ballot_record(&record)?;
             let key = ModerationBallotKey::from_announcement(&record.announcement);
@@ -4125,9 +4496,40 @@ impl ModerationBallotRuntime {
             }
 
             let state = ballot_state_from_record(record)?;
+            for (resource, total, additional) in [
+                (
+                    "ballot_jurors",
+                    &mut juror_count,
+                    state.announcement.juror_ids.len(),
+                ),
+                ("ballot_commits", &mut commit_count, state.commits.len()),
+                ("ballot_reveals", &mut reveal_count, state.reveals.len()),
+                (
+                    "ballot_challenges",
+                    &mut challenge_count,
+                    state.challenges.len(),
+                ),
+            ] {
+                *total = total.checked_add(additional).ok_or(
+                    ModerationBallotRuntimeError::ResourceExhausted {
+                        resource,
+                        limit: self.entry_limit,
+                    },
+                )?;
+                if *total > self.entry_limit {
+                    return Err(ModerationBallotRuntimeError::ResourceExhausted {
+                        resource,
+                        limit: self.entry_limit,
+                    });
+                }
+            }
             ballots.insert(key, state);
         }
         self.ballots = ballots;
+        self.juror_count = juror_count;
+        self.commit_count = commit_count;
+        self.reveal_count = reveal_count;
+        self.challenge_count = challenge_count;
         Ok(())
     }
 }
@@ -4640,7 +5042,110 @@ fn validate_restored_tally(
 
 #[cfg(test)]
 mod tests {
+    use iroha_data_model::sorafs::moderation::SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1;
+
     use super::*;
+
+    fn screening_input(
+        subject: &str,
+        verdict: ModerationScreeningVerdict,
+    ) -> ModerationScreeningInput {
+        ModerationScreeningInput {
+            subject: subject.to_owned(),
+            subject_digest: *blake3::hash(subject.as_bytes()).as_bytes(),
+            manifest_id: [0x12; 16],
+            runner_hash: [0x34; 32],
+            combined_score_bps: if verdict.requires_quarantine_record() {
+                7_000
+            } else {
+                1_000
+            },
+            verdict,
+            screened_at_unix: 1_800_000_050,
+            evidence_digest: Some([0xE1; 32]),
+            policy_digest: Some([0xC1; 32]),
+            notes: None,
+        }
+    }
+
+    fn quarantine_object_record(seed: u8) -> ModerationQuarantineObjectRecord {
+        seal_moderation_quarantine_object(
+            ModerationQuarantineObjectInput {
+                quarantine_id: [seed; 16],
+                payload: vec![seed; 32],
+                captured_at_unix: 1_800_000_100 + u64::from(seed),
+                content_type: None,
+                notes: None,
+            },
+            [0x7B; 32],
+        )
+        .expect("seal quarantine object")
+        .0
+    }
+
+    fn evidence_session_input(
+        quarantine_id: [u8; 16],
+        nonce: u8,
+    ) -> ModerationEvidenceViewerSessionInput {
+        ModerationEvidenceViewerSessionInput {
+            quarantine_id,
+            requested_by: "operator@moderation".to_owned(),
+            viewer_account: "juror@moderation".to_owned(),
+            viewer_role: "juror".to_owned(),
+            purpose: "appeal evidence review".to_owned(),
+            attestation_digest: [0xA7; 32],
+            watermark_metadata_digest: [0xB7; 32],
+            session_nonce_digest: [nonce; 32],
+            issued_at_unix_ms: 1_800_000_100_000,
+            expires_at_unix_ms: 1_800_000_200_000,
+            legal_hold_id: None,
+            notes: None,
+            raw_evidence_included: false,
+            signed_url_included: false,
+            session_token_included: false,
+            watermark_secret_included: false,
+        }
+    }
+
+    fn evidence_access_input(session_id: [u8; 16]) -> ModerationEvidenceViewerAccessInput {
+        ModerationEvidenceViewerAccessInput {
+            session_id,
+            kind: ModerationEvidenceViewerAccessKind::Viewed,
+            actor_account: "juror@moderation".to_owned(),
+            event_at_unix_ms: 1_800_000_100_001,
+            request_digest: [0xD7; 32],
+            event_metadata_digest: None,
+            notes: None,
+            raw_evidence_included: false,
+            signed_url_included: false,
+            session_token_included: false,
+            response_body_included: false,
+        }
+    }
+
+    fn ballot_announcement(case_id: &str) -> ModerationBallotAnnouncement {
+        let jurors = vec!["juror-a".to_owned()];
+        ModerationBallotAnnouncement {
+            context: SoraFsModerationBallotContextV1 {
+                version: SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
+                case_id: case_id.to_owned(),
+                evidence_bundle_digest: [0xAB; 32],
+                appeal_finance_config_version: "appeal-finance-v1".to_owned(),
+                panel_roster_hash: local_moderation_panel_roster_hash(&jurors, 1),
+                policy_reference: "policy://sorafs/moderation/v1".to_owned(),
+                evidence_uri: None,
+            },
+            appeal_deposit_escrow_id_hex: None,
+            appeal_deposit: None,
+            round_id: "round-1".to_owned(),
+            juror_ids: jurors,
+            quorum: 1,
+            announced_at_unix_ms: 1_800_000_000_000,
+            commit_deadline_unix_ms: 1_800_000_010_000,
+            challenge_deadline_unix_ms: 1_800_000_020_000,
+            reveal_deadline_unix_ms: 1_800_000_030_000,
+        }
+    }
 
     #[test]
     fn moderation_quarantine_object_seal_open_preserves_object_id() {
@@ -4676,5 +5181,157 @@ mod tests {
         let opened =
             open_moderation_quarantine_object(envelope, &record, local_key).expect("open object");
         assert_eq!(opened, payload);
+    }
+
+    #[test]
+    fn authoritative_moderation_collections_refuse_over_limit_without_replacement() {
+        let repro = ModerationReproRegistryRecord {
+            manifest_id: [1; 16],
+            manifest_digest: [2; 32],
+            runner_hash: [3; 32],
+            runtime_version: "runner-1".to_owned(),
+            issued_at_unix: 1,
+            model_count: 1,
+            signer_count: 1,
+        };
+        let mut registry = ModerationModelRegistry::with_entry_limit(1);
+        registry
+            .restore_snapshot(ModerationModelRegistrySnapshot {
+                reproducibility_manifests: vec![repro.clone()],
+                adversarial_corpora: Vec::new(),
+            })
+            .expect("restore registry at boundary");
+        let registry_before = registry.snapshot();
+        let mut second_repro = repro.clone();
+        second_repro.manifest_id = [4; 16];
+        assert!(matches!(
+            registry
+                .restore_snapshot(ModerationModelRegistrySnapshot {
+                    reproducibility_manifests: vec![repro, second_repro],
+                    adversarial_corpora: Vec::new(),
+                })
+                .expect_err("over-limit registry snapshot must fail"),
+            ModerationModelRegistryError::ResourceExhausted { .. }
+        ));
+        assert_eq!(registry.snapshot(), registry_before);
+
+        let first_object = quarantine_object_record(1);
+        let second_object = quarantine_object_record(2);
+        let mut objects = ModerationQuarantineObjectRuntime::with_entry_limit(1);
+        objects
+            .insert(first_object.clone())
+            .expect("insert object at boundary");
+        assert_eq!(
+            objects
+                .insert(first_object.clone())
+                .expect("replay object at capacity"),
+            first_object
+        );
+        assert!(matches!(
+            objects
+                .insert(second_object.clone())
+                .expect_err("new object above capacity must fail"),
+            ModerationQuarantineObjectError::ResourceExhausted { .. }
+        ));
+        let objects_before = objects.snapshot();
+        assert!(matches!(
+            objects
+                .restore_snapshot(ModerationQuarantineObjectSnapshot {
+                    objects: vec![first_object.clone(), second_object],
+                })
+                .expect_err("over-limit object snapshot must fail"),
+            ModerationQuarantineObjectError::ResourceExhausted { .. }
+        ));
+        assert_eq!(objects.snapshot(), objects_before);
+
+        let mut viewer = ModerationEvidenceViewerRuntime::with_entry_limit(1);
+        let first_input = evidence_session_input(first_object.quarantine_id, 1);
+        let session = viewer
+            .create_session(first_input.clone(), &first_object)
+            .expect("create session at boundary");
+        assert_eq!(
+            viewer
+                .create_session(first_input, &first_object)
+                .expect("replay session at capacity"),
+            session
+        );
+        assert!(matches!(
+            viewer
+                .create_session(
+                    evidence_session_input(first_object.quarantine_id, 2),
+                    &first_object
+                )
+                .expect_err("new session above capacity must fail"),
+            ModerationEvidenceViewerError::ResourceExhausted { .. }
+        ));
+        viewer
+            .record_access(evidence_access_input(session.session_id))
+            .expect("record access at boundary");
+        assert!(matches!(
+            viewer
+                .record_access(evidence_access_input(session.session_id))
+                .expect_err("new access above capacity must fail"),
+            ModerationEvidenceViewerError::ResourceExhausted { .. }
+        ));
+        let viewer_before = viewer.snapshot();
+        let mut extra_session = viewer_before.sessions[0].clone();
+        extra_session.session_id = [9; 16];
+        let mut over_limit_viewer = viewer_before.clone();
+        over_limit_viewer.sessions.push(extra_session);
+        assert!(matches!(
+            viewer
+                .restore_snapshot(over_limit_viewer)
+                .expect_err("over-limit viewer snapshot must fail"),
+            ModerationEvidenceViewerError::ResourceExhausted { .. }
+        ));
+        assert_eq!(viewer.snapshot(), viewer_before);
+
+        let mut screening = ModerationScreeningRuntime::with_entry_limit(1);
+        let input = screening_input("first", ModerationScreeningVerdict::Quarantine);
+        let accepted = screening
+            .record_screening(input.clone())
+            .expect("record screening at boundary");
+        assert_eq!(
+            screening
+                .record_screening(input)
+                .expect("replay screening at capacity")
+                .record,
+            accepted.record
+        );
+        assert!(matches!(
+            screening
+                .record_screening(screening_input("second", ModerationScreeningVerdict::Pass))
+                .expect_err("new screening above capacity must fail"),
+            ModerationScreeningError::ResourceExhausted { .. }
+        ));
+        let screening_before = screening.snapshot();
+        let mut extra_screening = screening_before.screening_records[0].clone();
+        extra_screening.record_id = [8; 16];
+        let mut over_limit_screening = screening_before.clone();
+        over_limit_screening.screening_records.push(extra_screening);
+        assert!(matches!(
+            screening
+                .restore_snapshot(over_limit_screening)
+                .expect_err("over-limit screening snapshot must fail"),
+            ModerationScreeningError::ResourceExhausted { .. }
+        ));
+        assert_eq!(screening.snapshot(), screening_before);
+
+        let mut ballots = ModerationBallotRuntime::with_entry_limit(1);
+        ballots
+            .announce_ballot(ballot_announcement("first-case"))
+            .expect("announce ballot at boundary");
+        let ballots_before = ballots.snapshot();
+        let mut extra_ballot = ballots_before.ballots[0].clone();
+        extra_ballot.announcement = ballot_announcement("second-case");
+        let mut over_limit_ballots = ballots_before.clone();
+        over_limit_ballots.ballots.push(extra_ballot);
+        assert!(matches!(
+            ballots
+                .restore_snapshot(over_limit_ballots)
+                .expect_err("over-limit ballot snapshot must fail"),
+            ModerationBallotRuntimeError::ResourceExhausted { .. }
+        ));
+        assert_eq!(ballots.snapshot(), ballots_before);
     }
 }

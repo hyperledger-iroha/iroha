@@ -2158,13 +2158,17 @@ where
         .as_ref()
         .and_then(|context| context.authorization.as_ref())
     {
-        host.bind_contract_runtime_context(
-            authorization.contract_address.clone(),
-            authorization.contract_alias.clone(),
-            authorization.code_hash,
-            authorization.entrypoint.clone(),
-            authorization.permission.clone(),
-        );
+        let contract_subject = crate::smartcontracts::code::bound_contract_subject_from_world(
+            state_ro.world(),
+            &authorization.contract_address,
+        )
+        .ok_or_else(|| {
+            format!(
+                "contract instance `{}` has no valid subject binding",
+                authorization.contract_address
+            )
+        })?;
+        host.bind_contract_runtime_context(contract_subject, authorization.clone());
     }
     host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
         .map_err(|e| format!("ivm.zk_snapshots: {e}"))?;

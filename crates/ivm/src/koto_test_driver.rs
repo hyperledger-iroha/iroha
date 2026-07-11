@@ -999,7 +999,7 @@ fn apply_fixture_action(
         "state_set" => {
             expect_arg_count(action, 2)?;
             let path = eval_string_expr(&action.args[0])?;
-            let value = eval_envelope_expr(&action.args[1])?;
+            let value = eval_state_payload_expr(&action.args[1])?;
             host.inner_mut()
                 .wsv
                 .sc_set(&path, value)
@@ -1480,7 +1480,7 @@ fn decode_hex_or_raw_bytes(raw: &str) -> Result<Vec<u8>, String> {
 fn eval_seed_expr(expr: &Expr) -> Result<[u8; 32], String> {
     let bytes = match expr {
         Expr::Bytes(bytes) => bytes.clone(),
-        Expr::String(raw) | Expr::Ident(raw) | Expr::Decimal(raw) => decode_hex_or_raw_bytes(raw)?,
+        Expr::String(raw) | Expr::Ident(raw) => decode_hex_or_raw_bytes(raw)?,
         other => return Err(format!("expected 32-byte seed blob, got {other:?}")),
     };
     <[u8; 32]>::try_from(bytes.as_slice())
@@ -1551,8 +1551,8 @@ fn eval_name_expr(expr: &Expr) -> Result<Name, String> {
 
 fn eval_string_expr(expr: &Expr) -> Result<String, String> {
     match expr {
-        Expr::String(raw) | Expr::Ident(raw) | Expr::Decimal(raw) => Ok(raw.clone()),
-        Expr::Number(value) => Ok(value.to_string()),
+        Expr::String(raw) | Expr::Ident(raw) | Expr::DecimalLiteral(raw) => Ok(raw.clone()),
+        Expr::IntLiteral(value) => Ok(value.to_string()),
         Expr::Bool(value) => Ok(value.to_string()),
         other => Err(format!("expected string-like expression, got {other:?}")),
     }
@@ -1560,19 +1560,12 @@ fn eval_string_expr(expr: &Expr) -> Result<String, String> {
 
 fn eval_numeric_expr(expr: &Expr) -> Result<Numeric, String> {
     match expr {
-        Expr::Number(value) if *value >= 0 => Ok(Numeric::from(*value as u64)),
-        Expr::AmountLiteral(spelling) => spelling
-            .strip_suffix("amt")
-            .expect("Amount AST spellings carry the validated suffix")
+        Expr::IntLiteral(value) if !value.is_negative() => Ok(Numeric::new(value.clone(), 0)),
+        Expr::DecimalLiteral(raw) | Expr::String(raw) => raw
             .replace('_', "")
             .parse::<Numeric>()
-            .map_err(|_| format!("invalid Amount value `{spelling}`"))?
-            .canonicalize_amount()
-            .map_err(|error| format!("invalid Amount value `{spelling}`: {error}")),
-        Expr::Decimal(raw) | Expr::String(raw) => raw
-            .parse::<Numeric>()
             .map_err(|_| format!("invalid numeric value `{raw}`")),
-        Expr::Number(value) => Err(format!("negative balances are not allowed: {value}")),
+        Expr::IntLiteral(value) => Err(format!("negative balances are not allowed: {value}")),
         other => Err(format!("expected numeric expression, got {other:?}")),
     }
 }
@@ -1604,8 +1597,8 @@ fn eval_permission_expr(expr: &Expr) -> Result<PermissionToken, String> {
 fn eval_detail_bytes(expr: &Expr) -> Result<Vec<u8>, String> {
     match expr {
         Expr::String(raw) => Ok(raw.as_bytes().to_vec()),
-        Expr::Number(value) => Ok(value.to_string().into_bytes()),
-        Expr::Decimal(raw) | Expr::Ident(raw) => Ok(raw.as_bytes().to_vec()),
+        Expr::IntLiteral(value) => Ok(value.to_string().into_bytes()),
+        Expr::DecimalLiteral(raw) | Expr::Ident(raw) => Ok(raw.as_bytes().to_vec()),
         Expr::Bool(value) => Ok(value.to_string().into_bytes()),
         Expr::Call { name, args, .. } if name == "Json::parse" => {
             Ok(eval_json_payload(args)?.into_bytes())
@@ -1614,18 +1607,24 @@ fn eval_detail_bytes(expr: &Expr) -> Result<Vec<u8>, String> {
     }
 }
 
+fn eval_state_payload_expr(expr: &Expr) -> Result<Vec<u8>, String> {
+    let envelope = eval_envelope_expr(expr)?;
+    let tlv = crate::pointer_abi::validate_tlv_bytes(&envelope)
+        .map_err(|error| format!("invalid state fixture value: {error:?}"))?;
+    if tlv.type_id != PointerType::NoritoBytes {
+        return Err("state fixture values must use a NoritoBytes payload".to_owned());
+    }
+    Ok(tlv.payload.to_vec())
+}
+
 fn eval_envelope_expr(expr: &Expr) -> Result<Vec<u8>, String> {
     match expr {
         Expr::Bool(value) => make_norito_envelope(value),
-        Expr::Number(value) => make_norito_envelope(value),
-        Expr::Decimal(raw) | Expr::String(raw) | Expr::Ident(raw) => make_norito_envelope(raw),
-        Expr::Bytes(bytes) => Ok(make_tlv(PointerType::Blob, bytes)),
-        Expr::AmountLiteral(_) => {
-            let amount = eval_numeric_expr(expr)?;
-            let payload = norito::to_bytes(&amount)
-                .map_err(|error| format!("failed to encode Amount: {error}"))?;
-            Ok(make_tlv(PointerType::Amount, &payload))
+        Expr::IntLiteral(value) => make_norito_envelope(value),
+        Expr::DecimalLiteral(raw) | Expr::String(raw) | Expr::Ident(raw) => {
+            make_norito_envelope(raw)
         }
+        Expr::Bytes(bytes) => Ok(make_tlv(PointerType::Blob, bytes)),
         Expr::Call { name, args, .. } if name == "Json::parse" => {
             let payload = eval_json_payload(args)?;
             Ok(make_tlv(PointerType::Json, payload.as_bytes()))
@@ -2660,11 +2659,7 @@ mod tests {
         host.syscall(TEST_SYSCALL_INVOKE_ENTRYPOINT_AS, &mut vm)
             .expect("invoke increment");
         let counter_state = host.inner.wsv.sc_get("counter").expect("counter state");
-        let counter_tlv =
-            crate::pointer_abi::validate_tlv_bytes(&counter_state).expect("counter state tlv");
-        assert_eq!(counter_tlv.type_id, PointerType::NoritoBytes);
-        let counter: i64 =
-            norito::decode_from_bytes(counter_tlv.payload).expect("decode counter value");
+        let counter: i64 = norito::decode_from_bytes(&counter_state).expect("decode counter value");
         assert_eq!(counter, 5);
 
         put_blob(&mut vm, 10, "issuer");
@@ -2679,10 +2674,7 @@ mod tests {
             .wsv
             .sc_get("last_actor")
             .expect("last_actor state");
-        let remembered_tlv = crate::pointer_abi::validate_tlv_bytes(&remembered_state)
-            .expect("remembered state tlv");
-        assert_eq!(remembered_tlv.type_id, PointerType::NoritoBytes);
-        let remembered_account_tlv = crate::pointer_abi::validate_tlv_bytes(remembered_tlv.payload)
+        let remembered_account_tlv = crate::pointer_abi::validate_tlv_bytes(&remembered_state)
             .expect("remembered account tlv");
         assert_eq!(remembered_account_tlv.type_id, PointerType::AccountId);
         let remembered: AccountId = norito::decode_from_bytes(remembered_account_tlv.payload)
@@ -2974,7 +2966,10 @@ mod tests {
         apply_fixture_action(
             &FixtureAction {
                 name: "state_set".to_string(),
-                args: vec![Expr::String("demo/counter".to_string()), Expr::Number(7)],
+                args: vec![
+                    Expr::String("demo/counter".to_string()),
+                    Expr::IntLiteral(7_i64.into()),
+                ],
             },
             &mut host,
             &mut public_inputs,
@@ -3098,7 +3093,8 @@ mod tests {
 
     #[test]
     fn helper_parsers_reject_invalid_numeric_and_mintability() {
-        let err = eval_numeric_expr(&Expr::Number(-1)).expect_err("negative amount should fail");
+        let err = eval_numeric_expr(&Expr::IntLiteral((-1_i64).into()))
+            .expect_err("negative quantity should fail");
         assert!(err.contains("negative balances are not allowed"));
 
         let err = eval_mintable_expr(&Expr::String("sometimes".to_string()))
@@ -3139,7 +3135,8 @@ mod tests {
             .expect_err("invalid targeted permission should fail");
         assert!(err.contains("invalid asset definition id"));
 
-        let err = eval_json_payload(&[Expr::Number(7)]).expect_err("non-string json should fail");
+        let err = eval_json_payload(&[Expr::IntLiteral(7_i64.into())])
+            .expect_err("non-string json should fail");
         assert!(err.contains("expects a string payload"));
     }
 

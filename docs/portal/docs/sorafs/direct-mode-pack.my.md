@@ -70,7 +70,7 @@ CLI လွှမ်းခြုံမှုတစ်ခုတည်းသည် 
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
-  --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
+  --provider name=gw-regulated,provider-id=001122...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64
 ```
 
 - script သည် CLI အလံများနှင့် key=value config ဖိုင်များကို လေးစားသည် (`docs/examples/sorafs_direct_mode_smoke.conf` ကိုကြည့်ပါ)။ မလုပ်ဆောင်မီ ထုတ်လုပ်မှုတန်ဖိုးများနှင့်အတူ ထင်ရှားသောအချေအတင်နှင့် ဝန်ဆောင်မှုပေးသူ၏ ကြော်ငြာထည့်သွင်းမှုများကို ထည့်သွင်းပါ။

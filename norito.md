@@ -150,10 +150,9 @@ contents.
 
 `len_u32` is a 4-byte little-endian length of the following payload. The bytes
 are the unique minimal little-endian two's-complement representation; zero has
-an empty payload. The magnitude is capped at 512 bits. A positive value whose
-512th magnitude bit is set therefore has a 65-byte payload: 64 magnitude bytes
-followed by the required zero sign byte. Values with more than 512 magnitude
-bits and redundant sign-extension bytes are rejected.
+an empty payload. The value is bounded to the signed 4,096-bit domain
+`-2^4095..=2^4095-1`, so the canonical payload is at most 512 bytes. Values
+outside that signed domain and redundant sign-extension bytes are rejected.
 
 `Numeric` encodes as a struct `(mantissa, scale)`:
 - `mantissa` is a `BigInt` containing the raw integer value (no decimal scale
@@ -161,10 +160,53 @@ bits and redundant sign-extension bytes are rejected.
 - `scale` is a `u32` count of fractional digits (e.g., `1.88` is mantissa `188`,
   scale `2`).
 
-The V1 Kotodama `Amount` profile uses `Numeric` with a non-negative mantissa
-and scale `0..=28`. Its encoding is canonical: fractional trailing zeroes are
-removed and zero always has scale zero. Amount arithmetic never rounds unless
-the explicitly rounded division operation supplies a scale and rounding mode.
+The V1 Kotodama `decimal` profile uses `Numeric` with scale `0..=28`; its
+canonical pointer representation removes fractional trailing zeroes and stores
+zero at scale zero. `quantity` applies the same canonical representation and
+additionally requires a non-negative mantissa. Arithmetic never rounds unless
+an explicitly rounded operation supplies a scale and rounding mode.
+
+Kotodama V1 numeric pointers carry one complete, uncompressed, schema-bound
+Norito frame. Numeric frames always use header flags `0`, compression `None`,
+and no alignment padding. Their payloads are:
+
+```text
+IntValueV1      := byte_len_u32_le || mantissa_twos_complement_le
+DecimalValueV1  := byte_len_u32_le || mantissa_twos_complement_le || scale_u8
+QuantityValueV1 := byte_len_u32_le || mantissa_twos_complement_le || scale_u8
+```
+
+`byte_len_u32_le` is fixed-width (never a compact varint), is at most 512, and
+must consume the payload exactly (apart from the required scale byte in the two
+scaled forms). The signed-byte and decimal canonicality rules above are checked
+after the frame checksum, schema, declared length, compression, and flags have
+been validated. In particular, an empty mantissa is the only zero encoding;
+`[00]`, redundant `00`/`ff` sign extension, zero at nonzero scale, a nonzero
+scaled mantissa divisible by ten, scale 29 or greater, and a negative quantity
+are invalid.
+
+The normative nominal schema names and type-name hashes are:
+
+| Type | Schema name | 16-byte schema hash (hex) | Maximum frame bytes |
+|---|---|---:|---:|
+| `int` | `iroha.numeric.IntValueV1` | `07c039457363b9e1d36bbd31d93dec4a` | 556 |
+| `decimal` | `iroha.numeric.DecimalValueV1` | `ba2ffed52e4d8ee16f17efefe1828524` | 557 |
+| `quantity` | `iroha.numeric.QuantityValueV1` | `e4769984c81ce0e8b678f2eb06274ee3` | 557 |
+
+Including the 39-byte pointer-TLV envelope, the corresponding hard maxima are
+595, 596, and 596 bytes. Lengths beyond those caps must be rejected before any
+allocation based on the declared length.
+
+Exact decimal arithmetic is defined over conceptual unbounded integer
+intermediates. The exact mathematical result is normalized first; only its
+canonical mantissa and scale are checked against the value domain. Exact
+division tries output scales `0..=28` in ascending order. If all attempts have a
+remainder, reduction of the mathematical denominator distinguishes a repeating
+decimal (a remaining prime factor other than 2 or 5) from a terminating result
+whose minimum scale exceeds 28. Implementations must expose deterministic charge
+points before each attempted quotient/remainder, normalization division, and
+denominator-classification division; an out-of-gas decision occurs at that
+charge point before the arithmetic work begins.
 
 ## Kotodama V1 Schema-Bound Aggregates
 

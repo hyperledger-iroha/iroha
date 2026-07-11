@@ -5,16 +5,16 @@ seiyaku KotodamaSwap {
     }
 
     kotoage fn swap(
-        trader: AccountId,
-        pool: AccountId,
-        input_asset: AssetDefinitionId,
-        output_asset: AssetDefinitionId,
-        amount_in: Amount,
-        reserve_in: Amount,
-        reserve_out: Amount,
-    ) -> Amount authorize("Admin") {
-        let fee_numerator = Amount::from_i64(997);
-        let fee_denominator = Amount::from_i64(1000);
+        AccountId trader,
+        AccountId pool,
+        AssetDefinitionId input_asset,
+        AssetDefinitionId output_asset,
+        quantity amount_in,
+        quantity reserve_in,
+        quantity reserve_out,
+    ) -> quantity authorize("Admin") {
+        let fee_numerator = 997;
+        let fee_denominator = 1000;
         let effective = (amount_in * fee_numerator) / fee_denominator;
         let out = (reserve_out * effective) / (reserve_in + effective);
         ledger::asset::transfer(

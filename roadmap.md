@@ -79,6 +79,42 @@ or length verification before runtime construction; and gateway fetch always
 retrieves the manifest and verifies the assembled payload against it. The
 orchestrator tuning docs, plan docs, signed gateway-fetch fixtures, and rollout
 contract pin the fail-closed fetch path.
+`sorafs_fetch` operator numerics are also canonical at the first-release
+boundary: provider spec `#concurrency` and `@weight` fields plus
+`--max-parallel`, `--max-peers`, retry-budget aliases, provider-failure
+threshold, expected payload length, review-clock, and boost-delta flags reject
+zero where nonzero is required, padded decimals, signs, whitespace, duplicate
+boost entries, and overflow before scheduling starts. Telemetry JSON used by
+the fetch scoreboard rejects noncanonical unsigned string fields and
+non-finite metric strings before they can influence provider selection.
+SoraFS capacity transaction-stdin generation now follows the same first-release
+operator-input contract: `sorafs_tx_stdin_builder` rejects duplicate flags,
+noncanonical epoch decimals, uppercase/prefixed/mis-sized order ids, and
+all-zero completion order ids before emitting ledger transaction JSON.
+`sorafs_manifest_stub capacity` now keeps the capacity marketplace staging
+surface on that same fail-closed boundary: declaration epoch overrides, numeric
+string fields across declaration/telemetry/replication/dispute specs, fixed and
+variable public hex fields, completion order IDs, and dispute-kind labels reject
+noncanonical forms before Norito, base64, summary, or Torii request outputs are
+written.
+SoraFS chunk-store ingestion CLIs now follow that same boundary:
+`sorafs_chunk_store` and `sorafs_manifest_chunk_store` reject noncanonical
+profile ids, whitespace-padded profile handles, zero or padded PoR sample
+counts, uppercase/padded sample seeds, and noncanonical shared
+`--por-proof=chunk:segment:leaf` indices before building chunk metadata,
+persisting chunks, or emitting PoR proof artifacts.
+`sorafs_manifest_stub` top-level manifest generation now mirrors that
+first-release operator-input contract as well: externally supplied DAG codec,
+expected CAR size, chunker profile id, replica count, retention epoch, PoR
+sample count/seed, and shared PoR proof indices reject padded, signed,
+whitespace-bearing, uppercase-hex, or overflowed forms before manifest, CAR, or
+PoR artifacts are emitted, and chunker profile handles are no longer silently
+trimmed.
+`sorafs_manifest_stub provider-admission proposal` now applies the same strict
+boundary to provider onboarding inputs: chunker profile handles, uppercase
+jurisdiction codes, capability payloads, stream budgets, and transport hints
+reject whitespace-padded, empty, padded numeric, uppercase-hex, and malformed
+SoraNet-level forms before proposal bytes are emitted.
 
 SoraFS governance node CID binding is mandatory on public reference-validator
 paths. The C FFI no longer treats `expected_cid_len = 0` as a request to skip
@@ -156,6 +192,53 @@ The Android SoraFS codegen replay fixture now derives its `generated_at`
 metadata from the reviewed fixture `now_unix_secs` instead of process wall
 clock time, so replayed tracked SDK fixture examples are deterministic across
 operator hosts.
+The Rust SoraFS orchestrator CLI now uses canonical numeric parsing for shared
+integer and decimal flags, rejecting padded, plus-prefixed, leading-zero, and
+otherwise noncanonical operator values before command execution.
+SoraFS chunker operator CLIs now mirror that fail-closed boundary:
+`sorafs-chunk-dump` rejects noncanonical size and break-mask tokens, and
+`sorafs_chunk_digest` returns operator-visible errors for empty or mismatched
+digest replay inputs instead of panicking.
+The chunker fixture exporter also keeps the signed fixture path fail-closed:
+`export_vectors` rejects noncanonical signing keys and expected signer keys
+instead of trimming, prefix-stripping, or lowercasing operator input, and
+existing `manifest_signatures.json` files must carry lowercase fixed-width
+nonzero signer and signature hex before verification.
+SoraFS provider advertisement construction now uses the same canonical numeric
+boundary for top-level advert flags and embedded range/stream/transport
+capability fields, rejecting padded, whitespace-bearing, uppercase-hex, and
+empty comma-entry operator inputs before signed advert emission.
+Provider advert byte material now applies the same exact first-release boundary:
+fixed provider and stake-pool identifiers must be exactly 32 lowercase hex bytes
+instead of being left-padded, and capability payloads, endpoint metadata,
+signing keys, public keys, and signatures must be lowercase even-length
+prefix-free hex before any advert/report/key output is opened.
+`sorafs_cli manifest sign` now shares that fail-closed boundary for
+`--issued-at`, rejects pre-epoch host clocks as operator-visible errors, and
+returns a normal missing-digest diagnostic if required chunk digest resolution
+regresses before bundle or signature generation.
+The DA reconstruction harness now keeps fixture replay inputs fail-closed too:
+text manifest files must be canonical lowercase, even-length, prefix-free,
+whitespace-free hex before Norito decoding, and `--chunk-template` renders are
+preflighted as bounded single-component filenames under `--chunks-dir` before
+any output descriptor is opened.
+`taikai_car` now applies the same first-release metadata boundary to Taikai
+segment bundling: bitrate, segment sequence, timestamps, duration,
+ingest-latency, live-edge drift, and summary-entry values reject noncanonical
+decimal encodings before CAR/envelope generation, manifest hashes and storage
+tickets require lowercase fixed-width nonzero hex, and summary-seed
+`ingest_latency_ms` overflow fails instead of truncating into sealed metadata.
+`sorafs_cli taikai bundle` now enforces that same boundary before invoking the
+bundler: Taikai numeric flags reject padded, signed-where-unsigned,
+plus-prefixed, whitespace-bearing, non-decimal, and overflowed forms, bitrate
+and segment duration must be positive, manifest hashes and storage tickets must
+be lowercase fixed-width nonzero hex, and track-kind labels must be canonical
+lowercase before any CAR/envelope/index/ingest/summary artifact is written.
+`soranet_trustless_verifier --validation-outcome` now keeps reviewed replay
+timestamps canonical: `--generated-at` must be a positive non-padded decimal
+token, overflow and whitespace/sign-prefixed values fail before outcome JSON is
+written, and the flag is rejected in summary mode instead of being silently
+ignored.
 
 SoraFS aggregate production-readiness metadata checks now keep their
 adversarial anchor matrices tied to the configured owner-kind maps. Every
@@ -352,6 +435,10 @@ and repair-handoff anchors. The PDP evidence gate requires exactly one valid
 proof summary digest, one valid policy digest, one valid provider-roster digest,
 and one valid repair-handoff digest before proof-summary-bound, policy-bound,
 provider-roster-bound, or repair-handoff metadata can satisfy final promotion.
+
+The following direct-WSV paragraphs describe the compatibility/main-loop
+standalone-lane surface; the Sumeragi V2 global-body path does not wait for or
+directly reapply a lane certificate.
 
 Nexus autoscale scale-in now preserves certified standalone lane-block
 progress. Managed retire candidates are skipped when their current
@@ -578,8 +665,11 @@ in-memory pending queue, so restarted peers keep publishing applied
 committed-lane evidence for both canonical block receipts and direct execution
 receipts even when already receipted sessions are skipped by execution
 hydration.
-The remaining multilane execution work is the broader independent-lane
-multi-peer rollout corridor.
+The remaining multilane execution work is a four-or-more-peer V2 Nexus rollout
+corridor covering global view changes, exact-view merge-carrier failover,
+Kura-before-WSV and certificate-before-receipt restart boundaries, and lane
+retire/recreate/reset cycles. `lane_block_view` remains intentionally coupled to
+the locked global proposal view; independently paced lane views are future work.
 
 Kagemusha online-to-offline top-up now has a first-class
 `KagemushaRecursiveSpendTopUpRequestV1` producer path, a chain-side
@@ -682,10 +772,19 @@ deployment evidence pending.
 
 The first release has exactly three production remote profiles: Ethereum
 mainnet, BNB Smart Chain mainnet, and TRON mainnet, each paired with SORA Taira
-chain id `809574f5-fee7-5e69-bfcf-52451e42d50f` and I105 discriminant `369`
-(`0x0171`). Sepolia, BSC testnet, Nile, and Shasta remain exact test profiles.
+Sumeragi-v2 chain id `fc56984b-2be7-431d-840e-21514d1883f0` and I105
+discriminant `369` (`0x0171`). The archived pre-v2 Taira chain is not a
+settlement target. Sepolia, BSC testnet, Nile, and Shasta remain exact test profiles.
 Solana, TON, generic proof backends, arbitrary assets, Nexus settlement, and
 compatibility manifests are not part of SCCP V1.
+
+The live node admits only Sumeragi protocol 2 and dispatches the worker to the
+serialized v2 height runner; the legacy actor is never selected under a v2
+handshake. The runner replays its context and safety WAL before opening
+ingress, owns every body/fetch/validation/apply effect, and rolls over only from
+a Kura-authenticated finality receipt. Post-finality WAL/body/chunk cleanup is
+reported as an ordered typed partial-success outcome: cleanup diagnostics stay
+visible, but cannot undo or stop progress after a durable decision.
 
 Consensus owns one bounded `SccpRegistryV1`. Typed
 `ApplySccpRouteGovernance` actions register an exact route, change its
@@ -711,6 +810,14 @@ commit-QC validity, and continuity from the governed checkpoint. The checked-in
 labeled-signal circuit is explicitly non-production and cannot be promoted by
 metadata.
 
+The production evidence gate is implemented and fail closed. Each profile must
+provide the closed seven-role semantic artifact set, two independently signed
+canonical audit reports over identical metadata and an exact eleven-signal
+honest-proof claim, and one distinct canonical proof. The authenticated Rust
+validator re-verifies the signed policy/evidence, derives the governed claim,
+and verifies the BN254 pairing; metadata-only, fixture, smoke, placeholder, or
+self-asserted evidence cannot make a lane ready.
+
 SCCP proof bindings are payload-owned and role preserving. Closed native and
 destination variants carry the exact historical route-configuration hash;
 generic ICS and transparent-ZK variants carry only a verifier-manifest hash and
@@ -732,8 +839,9 @@ The remaining SCCP release work is final integrated validation plus external
 evidence:
 
 - complete the clean-build Rust/Core/Torii/CLI, production-validator, contract,
-  consolidated cross-SDK, and four-peer admission matrix; focused mobile
-  detached-submit suites are already complete and are no longer roadmap work;
+  consolidated cross-SDK, and four-peer admission matrix; Swift, Python,
+  JavaScript, Kotlin/JVM, and Android Java exact-schema/padding suites are
+  green, while Windows .NET execution still requires its host runtime;
 - obtain independently audited, reproducible semantic circuit, witness
   generator, proving key, verifying key, toolchain, and audit-report artifacts
   for all three production profiles;
@@ -1588,13 +1696,18 @@ launch-scope section and are not current roadmap work.
   remain enforced for carried bytes. Local RBC plan installation now moves the
   prepared session into the live session map instead of cloning it before
   broadcast, so proposal broadcast plans stop retaining a second copy of the
-  chunk buffers. P2P runtime subscriber/control update channels are now bounded
-  and coalesce to the latest pending update, Sumeragi RBC committed-session
-  cleanup clears payload metric markers and rebroadcast cursors with the live
-  session owner, and Kagemusha Pallas open-envelope archives validate the
-  Norito frame and read the sequence-length prefix before vector decode so
-  count-only frames cannot allocate count-sized vector/offset state. If RSS
-  still climbs during the guarded repro, inspect remaining persistence caches
+  chunk buffers. P2P runtime subscriber registration is now bounded, while each
+  control-update category uses an independent Arc-backed,
+  single-retained-snapshot latest-value slot that overwrites stale pending
+  state. Consensus reconnect intent is generation-tracked across coalescing,
+  peer capabilities remain independent of topology application order, and the
+  actor combines fair control selection with bounded service-message priority
+  and explicit shutdown checks. Sumeragi RBC committed-session cleanup clears
+  payload metric markers and rebroadcast cursors with the live session owner,
+  and Kagemusha Pallas open-envelope archives validate the Norito frame and
+  read the sequence-length prefix before vector decode so count-only frames
+  cannot allocate count-sized vector/offset state. If RSS still climbs during
+  the guarded repro, inspect remaining persistence caches
   and validation/commit inflight owners with the same memory report before
   changing recovery pruning semantics.
 - Kagemusha is now the only active chain implementation for offline payments.
@@ -2124,11 +2237,16 @@ launch-scope section and are not current roadmap work.
   deterministic X25519/HKDF-SHA256/XChaCha20-Poly1305 plaintext vector. Swift
   now also exposes the typed confidential transfer witness/request builders
   and verified-fold top-up bundle builders, including the
-  confidential-transfer-v2 verifier-record archive with its 32-bit `status`
-  field. Default decryption binds the plaintext owner tag to the supplied spend
-  key, while diversified notes must use the explicit expected-owner-tag
-  overload. Keep the higher-level wallet flows pinned to this contract when
-  wiring shield-note recovery into production clients. The focused JVM and
+  confidential-transfer-v2 verifier-record archive with packed direct fixed32
+  fields, length-delimited generic fixed32 `Vec`/`Option` payloads, marked Iroha
+  schema/envelope hashes, framed delegated `AssetDefinitionId` bytes, omitted
+  absent trailing attachment defaults, and a four-byte `u32` `status`
+  discriminant despite Rust's `ConfidentialStatus` `repr(u8)`. Default
+  decryption binds the plaintext
+  owner tag to the supplied spend key, while diversified notes must use the
+  explicit expected-owner-tag overload. Keep the higher-level wallet flows
+  pinned to this contract when wiring shield-note recovery into production
+  clients. The focused JVM and
   Swift SDK runners plus SDK parity guard now execute and pin the
   encrypted-payload model tests, confidential-note contract tests, Merkle-path
   parser tests, witness/request builder tests, and verified-fold top-up tests.
@@ -23740,6 +23858,21 @@ digest-bound pending-XSD source probe summaries for reviewed
   hop evidence plus caller-supplied Pallas open-envelopes archives before
   serializing recursive-spend request archives instead of constructing
   preverified folded public inputs themselves. The same
+  Swift path now assembles checked redeem attachments from the exact Torii
+  `VerifyingKeyRecord` archive: verifier-key detail responses include canonical
+  `record_norito_base64`, namespace, owner, key, and lifecycle metadata; the
+  public Swift builder performs native confidential-unshield-v3 verification;
+  and the async SDK helper owns the Torii fetch, proof build, verification, and
+  attachment sequence. Swift, Kotlin/JVM, and Java Android all enforce exact
+  unshield verifier references, marked Iroha schema/envelope hashes, inclusive
+  activation, and exclusive withdrawal before an attachment is emitted.
+  Production Apple bridge packaging keeps privacy dispatch opt-in through
+  `--privacy-production-enabled`, records that mode in the artifact manifest
+  and XCFramework marker, and uses disjoint Cargo targets for gated builds.
+  The focused macOS native lane runtime-generates the governed Rust verifier
+  record, builds and verifies a real Swift unshield proof, and has Rust decode
+  and cryptographically verify the emitted attachment without changing the
+  bridge ABI or tracking generated artifacts. The same
   SDK surfaces now expose the ABI-6 recursive aggregation proof-bundle prover,
   which accepts record-backed bundle bytes plus proof-derived Pallas
   open-envelope archive bytes and returns an admission-neutral

@@ -472,8 +472,8 @@ const DEFAULT_NETWORK_PARALLELISM_PEERS: usize = 64;
 const DEFAULT_NETWORK_PARALLELISM_LIMIT: usize = 1;
 const TEST_CONCURRENCY_OVERSUBSCRIPTION: usize = 2;
 const TEST_CONCURRENCY_MIN_THREADS: usize = 4;
-const PERMISSIONED_BLS_DOMAIN: &str = "bls-iroha2:permissioned-sumeragi:v1";
-const NPOS_BLS_DOMAIN: &str = "bls-iroha2:npos-sumeragi:v1";
+const PERMISSIONED_BLS_DOMAIN: &str = "bls-iroha2:permissioned-sumeragi:v2";
+const NPOS_BLS_DOMAIN: &str = "bls-iroha2:npos-sumeragi:v2";
 const PIPELINE_SIDECARS_DATA_FILE: &str = "sidecars.norito";
 const PIPELINE_SIDECARS_INDEX_FILE: &str = "sidecars.index";
 const PIPELINE_INDEX_ENTRY_SIZE: usize = core::mem::size_of::<u64>() * 2;
@@ -5527,6 +5527,13 @@ impl NetworkBuilder {
                     epoch_length_blocks: 0,
                     bls_domain: consensus_bls_domain.to_string(),
                     npos: None,
+                    protocol_version:
+                        iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
+                    round_timeout_ms:
+                        iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS,
+                    v2_context: Some(
+                        iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+                    ),
                 }
             },
             |config| {
@@ -10691,6 +10698,11 @@ exit 0
             epoch_length_blocks: 0,
             bls_domain: PERMISSIONED_BLS_DOMAIN.to_string(),
             npos: None,
+            protocol_version: iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
+            round_timeout_ms: iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS,
+            v2_context: Some(
+                iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+            ),
         }
     }
 

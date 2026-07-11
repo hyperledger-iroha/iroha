@@ -24,7 +24,7 @@ most common phases; values not listed fall back to the defaults in
 | **Lab / CI** | `3` | `2` | `2` | `2500` | `300` | Tight latency cap and grace window surface noisy telemetry quickly. Keep retries low to expose invalid manifests sooner. |
 | **Staging** | `4` | `3` | `3` | `4000` | `600` | Mirrors production defaults while leaving headroom for exploratory peers. |
 | **Canary** | `6` | `3` | `3` | `5000` | `900` | Matches defaults; set `telemetry_region` so dashboards can pivot on canary traffic. |
-| **General Availability** | `None` (use all eligible) | `4` | `4` | `5000` | `900` | Increase retry and failure thresholds to absorb transient faults while audits continue to enforce determinism. |
+| **General Availability** | `64` | `4` | `4` | `5000` | `900` | Keep the finite production provider cap while increasing retry and failure thresholds to absorb transient faults. |
 
 - `scoreboard.weight_scale` remains at the default `10_000` unless a downstream
   system requires a different integer resolution. Increasing the scale does not
@@ -122,14 +122,17 @@ tuning:
 
 - **Retries:** Raising `per_chunk_retry_limit` beyond `4` increases recovery
   time but risks masking provider faults. Prefer keeping `4` as the ceiling and
-  relying on the provider rotation to surface poor performers.
+  relying on the provider rotation to surface poor performers. Production
+  rejects zero, values above `16`, and `None`/unbounded programmatic settings.
 - **Failure threshold:** The `provider_failure_threshold` governs when a
   provider is disabled for the remainder of the session. Align this value with
   retry policy: a threshold lower than the retry budget forces the orchestrator
   to eject a peer before all retries are exhausted.
-- **Concurrency:** Leave `global_parallel_limit` unset (`None`) unless a
-  specific environment cannot saturate the advertised ranges. When set, ensure
-  the value is ≤ the sum of provider stream budgets to avoid starvation.
+- **Concurrency:** Keep `global_parallel_limit` explicit and finite. The default
+  is `32`, the hard ceiling is `256`, and each provider is independently capped
+  at 32 in-flight chunks even when an advert or programmatic provider requests
+  more. Values outside the envelope fail closed rather than expanding task
+  queues from attacker-controlled metadata.
 - **Verification fields:** `verify_lengths` and `verify_digests` must remain
   enabled. First-release parsers reject `false` values so every fetch validates
   chunk length and BLAKE3 digest before accepting provider bytes.

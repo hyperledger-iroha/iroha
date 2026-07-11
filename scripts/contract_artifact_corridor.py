@@ -29,19 +29,28 @@ MANIFEST_SCHEMA = "iroha.sccp.contract-artifacts.v1"
 ARTIFACT_LOCK_SCHEMA = "iroha.sccp.contract-artifact-lock.v1"
 COMPILER_LOCK_SCHEMA = "iroha.sccp.contract-compiler-lock.v1"
 TARGETS = ("evm", "tron")
-SOLIDITY_VERSION_PRAGMA = "pragma solidity 0.8.24;"
+SOLIDITY_VERSION_PRAGMA = "pragma solidity 0.7.4;"
+ABI_ENCODER_V2_PRAGMA = "pragma experimental ABIEncoderV2;"
+ABI_ENCODER_V2_SOURCES = frozenset(
+    {
+        "contracts/bsc/sccp/TairaXorBscSccpBridge.sol",
+        "contracts/ethereum/sccp/TairaXorEthereumSccpBridge.sol",
+        "contracts/evm/sccp/TairaXorExactEvmSccpBridge.sol",
+        "contracts/tron/sccp/TairaXorSccpBridge.sol",
+    }
+)
 EXPECTED_COMPILERS = {
     "evm": {
-        "identity": "solc-evm-0.8.24+commit.e11b9ed9",
-        "reported_version": "0.8.24+commit.e11b9ed9.Emscripten.clang",
-        "sha256": "11b054b55273ec55f6ab3f445eb0eb2c83a23fed43d10079d34ac3eabe6ed8b1",
-        "url": "https://binaries.soliditylang.org/wasm/soljson-v0.8.24+commit.e11b9ed9.js",
+        "identity": "solc-evm-0.7.4+commit.3f05b770",
+        "reported_version": "0.7.4+commit.3f05b770.Emscripten.clang",
+        "sha256": "2b55ed5fec4d9625b6c7b3ab1abd2b7fb7dd2a9c68543bf0323db2c7e2d55af2",
+        "url": "https://binaries.soliditylang.org/wasm/soljson-v0.7.4+commit.3f05b770.js",
     },
     "tron": {
-        "identity": "tron-solc-tvm-0.8.24+commit.7d902c66",
-        "reported_version": "0.8.24+commit.7d902c66.Emscripten.clang",
-        "sha256": "527b5363b50eee33b9d45a1619ccd3511e6304637867135396969ac93bc67116",
-        "url": "https://raw.githubusercontent.com/tronprotocol/solc-bin/main/wasm/soljson-v0.8.24+commit.7d902c66.js",
+        "identity": "tron-solc-tvm-0.7.4+commit.3f05b770",
+        "reported_version": "0.7.4+commit.3f05b770.Emscripten.clang",
+        "sha256": "2b55ed5fec4d9625b6c7b3ab1abd2b7fb7dd2a9c68543bf0323db2c7e2d55af2",
+        "url": "https://raw.githubusercontent.com/ethereum/solc-bin/gh-pages/bin/soljson-v0.7.4+commit.3f05b770.js",
     },
 }
 MAX_COMPILER_BYTES = 64 * 1024 * 1024
@@ -349,7 +358,7 @@ def load_corridor_config(path: Path = DEFAULT_COMPILER_LOCK) -> CorridorConfig:
             for field in ("identity", "reported_version", "url", "sha256")
         ):
             raise CorridorError(
-                f"{target} compiler must be the authenticated exact Solidity 0.8.24 release"
+                f"{target} compiler must be the authenticated exact Solidity 0.7.4 release"
             )
 
         source_list = source_values[target]
@@ -380,8 +389,6 @@ def load_corridor_config(path: Path = DEFAULT_COMPILER_LOCK) -> CorridorConfig:
 
     if sources["evm"] == sources["tron"]:
         raise CorridorError("EVM and TRON source maps must be distinct")
-    if compilers["evm"].sha256 == compilers["tron"].sha256:
-        raise CorridorError("EVM and TRON compiler artifacts must not alias")
     settings = _require_object(parsed["settings"], "compiler settings")
     tvm_runner = _require_object(parsed["tvm_runner"], "TVM runner")
     _require_exact_keys(tvm_runner, ("image", "platform"), "TVM runner")
@@ -515,7 +522,7 @@ def _mask_solidity_comments_and_strings(source: str, relative: str) -> str:
 
 
 def validate_solidity_source_policy(source: str, relative: str) -> None:
-    """Require only the exact first-release compiler pragma."""
+    """Require the exact first-release compiler and scoped ABI encoder pragmas."""
 
     masked = _mask_solidity_comments_and_strings(source, relative)
     pragma_tokens = list(re.finditer(r"\bpragma\b", masked))
@@ -526,10 +533,12 @@ def validate_solidity_source_policy(source: str, relative: str) -> None:
         )
     rendered = [source[match.start() : match.end()] for match in directives]
     expected = [SOLIDITY_VERSION_PRAGMA]
+    if relative in ABI_ENCODER_V2_SOURCES:
+        expected.append(ABI_ENCODER_V2_PRAGMA)
     if rendered != expected:
         raise CorridorError(
-            "contract source must use exactly one literal "
-            f"`{SOLIDITY_VERSION_PRAGMA}` with no experimental or additional pragmas: {relative}"
+            "contract source must use the exact first-release pragma sequence "
+            f"{expected!r} with no additional pragmas: {relative}"
         )
 
 
@@ -940,7 +949,7 @@ def compile_target(
 
 
 def validate_distinct_targets(evm: CompiledTarget, tron: CompiledTarget) -> None:
-    """Reject aliased EVM/TVM inputs, compilers, outputs, and manifests."""
+    """Reject aliased EVM/TVM inputs, outputs, and manifests."""
 
     if evm.target != "evm" or tron.target != "tron":
         raise CorridorError("compiled target roles are reversed or missing")
@@ -950,8 +959,6 @@ def validate_distinct_targets(evm: CompiledTarget, tron: CompiledTarget) -> None
         raise CorridorError("EVM and TVM compiler output maps are aliased")
     if evm.source_paths == tron.source_paths or evm.input_sha256 == tron.input_sha256:
         raise CorridorError("EVM and TVM compiler input maps are not distinct")
-    if evm.compiler_sha256 == tron.compiler_sha256:
-        raise CorridorError("EVM and TVM compiler identities are aliased")
     if canonical_json_bytes(evm_contracts) == canonical_json_bytes(tron_contracts):
         raise CorridorError("EVM and TVM compiler contract outputs are indistinguishable")
     if evm.manifest is tron.manifest or canonical_json_bytes(evm.manifest) == canonical_json_bytes(

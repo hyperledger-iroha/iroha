@@ -895,12 +895,9 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
             .with_genesis_instruction(Mint::asset_numeric(index + 1, asset_id))
             .with_genesis_instruction(Register::nft(Nft::new(nft_id, Metadata::default())));
     }
-    let Some(network) = sandbox::start_network_async_or_skip(
-        builder,
-        stringify!(typed_core_query_pagination_is_deterministic_on_four_peers),
-    )
-    .await?
-    else {
+    let context = stringify!(typed_core_query_pagination_is_deterministic_on_four_peers);
+    let network = sandbox::start_network_async_or_skip(builder, context).await?;
+    let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
         return Ok(());
     };
     assert_eq!(network.peers().len(), 4, "test requires four voting peers");

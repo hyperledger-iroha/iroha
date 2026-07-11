@@ -483,6 +483,14 @@ impl SignedBlock {
         {
             return false;
         }
+        if self
+            .payload
+            .execution_context
+            .as_ref()
+            .is_some_and(|context| context.merge_entry.is_some())
+        {
+            return false;
+        }
         if self.payload.header.sccp_commitment_root().is_some() {
             return false;
         }

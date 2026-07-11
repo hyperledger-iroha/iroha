@@ -1,9 +1,10 @@
 {
-  "bls_domain": "bls-iroha2:npos-sumeragi:v1",
+  "bls_domain": "bls-iroha2:npos-sumeragi:v2",
   "chain": "00000000-0000-0000-0000-000000000753",
   "chain_discriminant": 753,
-  "consensus_fingerprint": "0xd7d5873eb950baf364fc3d9658bac46a278a284201a4df5a7a0a120c3885773f",
+  "consensus_fingerprint": "0xd3bd5cc9f067c52aa03855154c047e8abe2c5b3981c8b3b1f07acb180f7d5434",
   "consensus_mode": "Npos",
+  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"ReedSolomon16"},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024},"nexus_amx_context_hash":"1779C88CBA1B2BF425369DB7DDD7BA852B53CB2488264AADBD8D648701E067D7"},
   "crypto": {
     "allowed_curve_ids": [
       1,
@@ -19,16 +20,14 @@
     "sm2_distid_default": "1234567812345678"
   },
   "executor": null,
-  "ivm_dir": [
-    "."
-  ],
+  "ivm_dir": ".",
   "transactions": [
     {
       "instructions": [
         {
           "Register": {
             "Domain": {
-              "id": "wonderland",
+              "id": "wonderland.universal",
               "logo": null,
               "metadata": {
                 "key": "value"
@@ -73,7 +72,7 @@
         {
           "Register": {
             "Domain": {
-              "id": "garden_of_live_flowers",
+              "id": "garden_of_live_flowers.universal",
               "logo": null,
               "metadata": {}
             }
@@ -104,7 +103,7 @@
         {
           "Register": {
             "Domain": {
-              "id": "universal",
+              "id": "universal.universal",
               "logo": null,
               "metadata": {}
             }
@@ -174,7 +173,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+            "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": "13"
             }
           }
@@ -182,7 +181,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M",
+            "destination": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M#sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": "44"
             }
           }
@@ -192,7 +191,7 @@
             "AssetDefinition": {
               "destination": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-              "source": "sorauﾛ1ｼﾏ2ｽﾍﾈdmcLfDBwoｽﾘｼoF5sHeｶdｶQbﾈxGVヰ8tCﾎBMY2FH"
+            "source": "sorauﾛ1Nﾉﾏ2ｽﾍﾈdmcLfDBwoｽﾘｼoF5sHeｶdｶQbﾈxGVヰ8tCﾎ4P4KX7"
             }
           }
         },
@@ -200,8 +199,8 @@
           "Transfer": {
             "Domain": {
               "destination": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-              "object": "wonderland",
-              "source": "sorauﾛ1ｼﾏ2ｽﾍﾈdmcLfDBwoｽﾘｼoF5sHeｶdｶQbﾈxGVヰ8tCﾎBMY2FH"
+            "object": "wonderland.universal",
+            "source": "sorauﾛ1Nﾉﾏ2ｽﾍﾈdmcLfDBwoｽﾘｼoF5sHeｶdｶQbﾈxGVヰ8tCﾎ4P4KX7"
             }
           }
         },
@@ -237,14 +236,13 @@
         "sumeragi": {
           "block_time_ms": 100,
           "commit_time_ms": 100,
-          "min_finality_ms": 100,
-          "next_mode": "Npos"
+          "min_finality_ms": 100
         }
       },
       "topology": []
     }
   ],
   "wire_proto_versions": [
-    1
+    2
   ]
 }

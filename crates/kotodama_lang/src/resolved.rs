@@ -5,6 +5,8 @@ use std::{
     sync::Arc,
 };
 
+use iroha_primitives::bigint::BigInt;
+
 use crate::{
     ast::{
         Block, Expr, FunctionKind, HirId, Item, Pattern, PatternBinding, Program, Statement,
@@ -710,7 +712,7 @@ module Origins {
             .source_node()
             .expect("Amount literal source identity");
         let amount_node = ast.facts.source_map.node(amount_id).expect("Amount node");
-        assert_eq!(amount_node.kind, AstNodeKind::AmountLiteral);
+        assert_eq!(amount_node.kind, AstNodeKind::DecimalLiteral);
         assert_eq!(source.slice(amount_node.range), Some("1.250_0amt"));
 
         let Statement::Let {
@@ -1980,7 +1982,7 @@ impl<'a> HirLowerer<'a> {
                 if let Some(current) = ty.take() {
                     *ty = Some(self.wrap_type(current, scope));
                 }
-                let current = std::mem::replace(value, Expr::Number(0));
+                let current = std::mem::replace(value, Expr::IntLiteral(BigInt::zero()));
                 *value = self.wrap_expr(current, scope, visible);
                 self.node_mut(id).bindings = self.declare_pattern(
                     pat,
@@ -1993,20 +1995,20 @@ impl<'a> HirLowerer<'a> {
                 );
             }
             Statement::Assign { name, value } => {
-                let current = std::mem::replace(value, Expr::Number(0));
+                let current = std::mem::replace(value, Expr::IntLiteral(BigInt::zero()));
                 *value = self.wrap_expr(current, scope, visible);
                 self.node_mut(id).target = self
                     .value_target(name, visible, source)
                     .map(ResolvedTarget::Assignment);
             }
             Statement::AssignExpr { target, value, .. } => {
-                let current = std::mem::replace(target, Expr::Number(0));
+                let current = std::mem::replace(target, Expr::IntLiteral(BigInt::zero()));
                 *target = self.wrap_expr(current, scope, visible);
-                let current = std::mem::replace(value, Expr::Number(0));
+                let current = std::mem::replace(value, Expr::IntLiteral(BigInt::zero()));
                 *value = self.wrap_expr(current, scope, visible);
             }
             Statement::Expr(expression) => {
-                let current = std::mem::replace(expression, Expr::Number(0));
+                let current = std::mem::replace(expression, Expr::IntLiteral(BigInt::zero()));
                 *expression = self.wrap_expr(current, scope, visible);
             }
             Statement::Return(expression) => {
@@ -2163,7 +2165,7 @@ impl<'a> HirLowerer<'a> {
                     AstNodeKind::Call,
                     AstNodeKind::IndexExpression,
                     AstNodeKind::ListComprehension,
-                    AstNodeKind::AmountLiteral,
+                    AstNodeKind::DecimalLiteral,
                 ],
             );
             source_node = Some(node);
@@ -2176,7 +2178,7 @@ impl<'a> HirLowerer<'a> {
                 "resolved-HIR expression wrapper was supplied as spanned AST input",
                 self.source_span(source),
             ));
-            return Expr::Number(0);
+            return Expr::IntLiteral(BigInt::zero());
         }
         if source_node.is_none() {
             self.diagnostics.push(Diagnostic::error(
@@ -2203,7 +2205,7 @@ impl<'a> HirLowerer<'a> {
                     .call_target(name, *implicit_receiver, source)
                     .map(ResolvedTarget::Call);
                 for argument in args {
-                    let current = std::mem::replace(argument, Expr::Number(0));
+                    let current = std::mem::replace(argument, Expr::IntLiteral(BigInt::zero()));
                     *argument = self.wrap_expr(current, scope, visible);
                 }
             }
@@ -2223,7 +2225,7 @@ impl<'a> HirLowerer<'a> {
                     ));
                 }
                 for field in fields {
-                    let current = std::mem::replace(&mut field.value, Expr::Number(0));
+                    let current = std::mem::replace(&mut field.value, Expr::IntLiteral(BigInt::zero()));
                     field.value = self.wrap_expr(current, scope, visible);
                 }
             }
@@ -2232,9 +2234,9 @@ impl<'a> HirLowerer<'a> {
                 target: left,
                 index: right,
             } => {
-                let current = std::mem::replace(left, Box::new(Expr::Number(0)));
+                let current = std::mem::replace(left, Box::new(Expr::IntLiteral(BigInt::zero())));
                 *left = Box::new(self.wrap_expr(*current, scope, visible));
-                let current = std::mem::replace(right, Box::new(Expr::Number(0)));
+                let current = std::mem::replace(right, Box::new(Expr::IntLiteral(BigInt::zero())));
                 *right = Box::new(self.wrap_expr(*current, scope, visible));
             }
             Expr::Unary { expr, .. }
@@ -2243,7 +2245,7 @@ impl<'a> HirLowerer<'a> {
             | Expr::ResultOk(expr)
             | Expr::ResultErr(expr)
             | Expr::Propagate(expr) => {
-                let current = std::mem::replace(expr, Box::new(Expr::Number(0)));
+                let current = std::mem::replace(expr, Box::new(Expr::IntLiteral(BigInt::zero())));
                 *expr = Box::new(self.wrap_expr(*current, scope, visible));
             }
             Expr::Conditional {
@@ -2252,7 +2254,7 @@ impl<'a> HirLowerer<'a> {
                 else_expr,
             } => {
                 for child in [cond, then_expr, else_expr] {
-                    let current = std::mem::replace(child, Box::new(Expr::Number(0)));
+                    let current = std::mem::replace(child, Box::new(Expr::IntLiteral(BigInt::zero())));
                     *child = Box::new(self.wrap_expr(*current, scope, visible));
                 }
             }
@@ -2317,7 +2319,7 @@ impl<'a> HirLowerer<'a> {
             }
             Expr::Tuple(elements) | Expr::List(elements) | Expr::JsonArray(elements) => {
                 for element in elements {
-                    let current = std::mem::replace(element, Expr::Number(0));
+                    let current = std::mem::replace(element, Expr::IntLiteral(BigInt::zero()));
                     *element = self.wrap_expr(current, scope, visible);
                 }
             }
@@ -2344,10 +2346,10 @@ impl<'a> HirLowerer<'a> {
                     item_source.or(source),
                     false,
                 )];
-                let current = std::mem::replace(item_expression, Box::new(Expr::Number(0)));
+                let current = std::mem::replace(item_expression, Box::new(Expr::IntLiteral(BigInt::zero())));
                 *item_expression =
                     Box::new(self.wrap_expr(*current, comprehension_scope, &comprehension_visible));
-                let current = std::mem::replace(list_source, Box::new(Expr::Number(0)));
+                let current = std::mem::replace(list_source, Box::new(Expr::IntLiteral(BigInt::zero())));
                 *list_source = Box::new(self.wrap_expr(*current, scope, visible));
                 if let Some(current) = condition.take() {
                     *condition = Some(Box::new(self.wrap_expr(
@@ -2359,13 +2361,12 @@ impl<'a> HirLowerer<'a> {
             }
             Expr::JsonObject(entries) => {
                 for entry in entries {
-                    let current = std::mem::replace(&mut entry.value, Expr::Number(0));
+                    let current = std::mem::replace(&mut entry.value, Expr::IntLiteral(BigInt::zero()));
                     entry.value = self.wrap_expr(current, scope, visible);
                 }
             }
-            Expr::Number(_)
-            | Expr::Decimal(_)
-            | Expr::AmountLiteral(_)
+            Expr::IntLiteral(_)
+            | Expr::DecimalLiteral(_)
             | Expr::OptionNone
             | Expr::Bool(_)
             | Expr::String(_)
@@ -2432,7 +2433,7 @@ impl<'a> HirLowerer<'a> {
                     if let Some(current) = declaration.ty.take() {
                         declaration.ty = Some(self.wrap_type(current, root));
                     }
-                    let current = std::mem::replace(&mut declaration.value, Expr::Number(0));
+                    let current = std::mem::replace(&mut declaration.value, Expr::IntLiteral(BigInt::zero()));
                     declaration.value = self.wrap_expr(current, root, &root_visible);
                 }
                 Item::State(declaration) => {
@@ -2441,7 +2442,7 @@ impl<'a> HirLowerer<'a> {
                 }
                 Item::Trigger(declaration) => {
                     for entry in &mut declaration.metadata {
-                        let current = std::mem::replace(&mut entry.value, Expr::Number(0));
+                        let current = std::mem::replace(&mut entry.value, Expr::IntLiteral(BigInt::zero()));
                         entry.value = self.wrap_expr(current, root, &root_visible);
                     }
                 }
@@ -2451,7 +2452,7 @@ impl<'a> HirLowerer<'a> {
         for fixture in &mut program.fixtures {
             for action in &mut fixture.actions {
                 for argument in &mut action.args {
-                    let current = std::mem::replace(argument, Expr::Number(0));
+                    let current = std::mem::replace(argument, Expr::IntLiteral(BigInt::zero()));
                     *argument = self.wrap_expr(current, root, &root_visible);
                 }
             }

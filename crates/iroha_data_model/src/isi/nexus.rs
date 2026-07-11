@@ -337,6 +337,7 @@ mod tests {
         LaneBlockCommitment {
             block_height: height,
             lane_id: LaneId::new(3),
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(2),
             tx_count: 1,
             total_local_micro: 10,

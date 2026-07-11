@@ -660,9 +660,8 @@ fn lint_state_path_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
             lint_state_path_expr(target, warnings);
             lint_state_path_expr(index, warnings);
         }
-        Expr::Number(_)
-        | Expr::Decimal(_)
-        | Expr::AmountLiteral(_)
+        Expr::IntLiteral(_)
+        | Expr::DecimalLiteral(_)
         | Expr::OptionNone
         | Expr::Bool(_)
         | Expr::String(_)
@@ -876,9 +875,8 @@ fn lint_opaque_access_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
             lint_opaque_access_expr(target, warnings);
             lint_opaque_access_expr(index, warnings);
         }
-        Expr::Number(_)
-        | Expr::Decimal(_)
-        | Expr::AmountLiteral(_)
+        Expr::IntLiteral(_)
+        | Expr::DecimalLiteral(_)
         | Expr::OptionNone
         | Expr::Bool(_)
         | Expr::String(_)
@@ -892,9 +890,8 @@ fn is_literal_state_key(expr: &Expr) -> bool {
         Expr::Source { .. } | Expr::Resolved { .. } => {
             unreachable!("kind() strips provenance wrappers")
         }
-        Expr::Number(_)
-        | Expr::Decimal(_)
-        | Expr::AmountLiteral(_)
+        Expr::IntLiteral(_)
+        | Expr::DecimalLiteral(_)
         | Expr::String(_)
         | Expr::Bytes(_) => true,
         Expr::Call { name, args, .. } => {
@@ -947,7 +944,7 @@ fn is_literal_state_path(expr: &Expr) -> bool {
                     return false;
                 }
                 is_literal_state_path(&args[0])
-                    && (matches!(args[1].kind(), Expr::Number(_)) || is_literal_state_key(&args[1]))
+                    && (matches!(args[1].kind(), Expr::IntLiteral(_)) || is_literal_state_key(&args[1]))
             }
             _ => false,
         },
@@ -1568,9 +1565,8 @@ fn record_expr_idents(expr: &Expr, state_lookup: &HashSet<String>, hits: &mut Ha
                 stack.push(index);
             }
             Expr::Bool(_)
-            | Expr::Number(_)
-            | Expr::Decimal(_)
-            | Expr::AmountLiteral(_)
+            | Expr::IntLiteral(_)
+            | Expr::DecimalLiteral(_)
             | Expr::OptionNone
             | Expr::String(_)
             | Expr::Bytes(_) => {}
@@ -1891,9 +1887,8 @@ fn lint_trigger_specs_in_expr(expr: &Expr, func_name: &str, warnings: &mut Vec<L
             lint_trigger_specs_in_expr(index, func_name, warnings);
         }
         Expr::Bool(_)
-        | Expr::Number(_)
-        | Expr::Decimal(_)
-        | Expr::AmountLiteral(_)
+        | Expr::IntLiteral(_)
+        | Expr::DecimalLiteral(_)
         | Expr::OptionNone
         | Expr::String(_)
         | Expr::Bytes(_)
@@ -2125,9 +2120,8 @@ fn collect_pointer_literals_from_expr(
             }
         }
         Expr::Bool(_)
-        | Expr::Number(_)
-        | Expr::Decimal(_)
-        | Expr::AmountLiteral(_)
+        | Expr::IntLiteral(_)
+        | Expr::DecimalLiteral(_)
         | Expr::OptionNone
         | Expr::String(_)
         | Expr::Bytes(_)

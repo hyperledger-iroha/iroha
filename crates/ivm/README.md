@@ -94,7 +94,7 @@ High-level smart contract language targeting IVM bytecode:
 - **Mixed Encoding:** 32-bit instructions expose full-width register fields, while
   the 16-bit variants operate on a smaller register subset. The encoding is sized to address the current 256-register file and leaves headroom for future extensions.
 - **Memory Management:** Region-based memory with permission checks. Code, heap, input, output and stack regions are predefined. Misaligned or out-of-bounds accesses cause traps.
-- **Compact Typed Literals:** `LDLIT` loads a compiler literal by a 16-bit table index in one word. The loader validates each referenced TLV and every instruction index before execution, so runtime literal loads are constant-time and cannot escape the read-only literal section.
+- **Indexed Literals:** `LDLIT` loads a validated pointer TLV and `LDI64` loads an exact signed scalar by a 16-bit table index, each in one word. Authenticated descriptor kinds, complete payload validation, and instruction-kind checks prevent aliases, malformed objects, and pointer/scalar confusion before execution.
 - **Relaxed Direct Transfers:** The compiler uses one-word `JAL` for nearby calls/jumps and automatically relaxes farther targets to signed 24-bit `JMP`/`JALS` forms. `JALS` uses `r1` as the implicit link register.
 - **Gas Accounting:** Each instruction consumes a specified amount of gas from a gas budget. Execution halts with an error if gas is exhausted before completion.
 - **GETGAS Instruction:** Programs may query the current remaining gas via opcode `0x61` which writes the value to a destination register.
@@ -146,7 +146,7 @@ unchanged memory.
 IVM now standardises on the wide encoding (8-bit primary opcode + three 8-bit operand slots). The primary opcode ranges are:
 
 - **0x01-0x26:** Integer arithmetic and logical operations (`ADD`, `SUB`, `MULH`, `DIVU`, `ADDI`, …).
-- **0x30-0x34:** Memory and typed-literal access (`LOAD64`, `STORE64`, `LOAD128`, `STORE128`, `LDLIT`).
+- **0x30-0x35:** Memory and indexed-literal access (`LOAD64`, `STORE64`, `LOAD128`, `STORE128`, `LDLIT`, `LDI64`).
 - **0x40-0x4B:** Control flow (`BEQ`, `BNE`, `JAL`, `JR`, `HALT`, `JMP`, `JALS`).
 - **0x60-0x62:** System helpers (`SCALL`, `GETGAS`, `SYSTEM`).
 - **0x70-0x78 / 0x80-0x8E:** Vector and cryptographic primitives (`VADD32`, `SETVL`, `PARBEGIN`, `SHA256BLOCK`, `POSEIDON6`, `AESENC`, `ED25519VERIFY`, `PAIRING`, …).

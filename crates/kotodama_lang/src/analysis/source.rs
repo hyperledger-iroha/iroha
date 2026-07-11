@@ -114,8 +114,9 @@ fn detect_division_by_zero(typed: &TypedProgram, findings: &mut Vec<AnalysisFind
 
 fn literal_i64(expr: &TypedExpr) -> Option<i64> {
     match &expr.expr {
-        ExprKind::Number(n) => Some(*n),
+        ExprKind::IntLiteral(n) => n.try_to_i64(),
         ExprKind::NumericCast { expr } => literal_i64(expr),
+        ExprKind::NumericTryCast { .. } => None,
         ExprKind::Unary {
             op: crate::ast::UnaryOp::Neg,
             expr,
@@ -423,9 +424,8 @@ fn visit_expr_for_host_calls(
             }
         }
         Expr::Bool(_)
-        | Expr::Number(_)
-        | Expr::Decimal(_)
-        | Expr::AmountLiteral(_)
+        | Expr::IntLiteral(_)
+        | Expr::DecimalLiteral(_)
         | Expr::OptionNone
         | Expr::String(_)
         | Expr::Bytes(_)
@@ -479,9 +479,8 @@ fn expr_targets_state(expr: &Expr, state_names: &HashSet<String>) -> bool {
         | Expr::ResultErr(_)
         | Expr::Propagate(_)
         | Expr::Bool(_)
-        | Expr::Number(_)
-        | Expr::Decimal(_)
-        | Expr::AmountLiteral(_)
+        | Expr::IntLiteral(_)
+        | Expr::DecimalLiteral(_)
         | Expr::String(_)
         | Expr::Bytes(_) => false,
     }
@@ -733,6 +732,7 @@ where
         }
         ExprKind::Unary { expr, .. }
         | ExprKind::NumericCast { expr }
+        | ExprKind::NumericTryCast { expr }
         | ExprKind::OptionSome { value: expr }
         | ExprKind::ResultOk { value: expr }
         | ExprKind::ResultErr { error: expr }
@@ -835,9 +835,8 @@ where
             visitor(func_name, index);
             visit_expr_children(index, func_name, visitor);
         }
-        ExprKind::Number(_)
-        | ExprKind::Decimal(_)
-        | ExprKind::AmountLiteral { .. }
+        ExprKind::IntLiteral(_)
+        | ExprKind::DecimalLiteral { .. }
         | ExprKind::OptionNone
         | ExprKind::Bool(_)
         | ExprKind::String(_)

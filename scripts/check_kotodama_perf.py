@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Enforce the Kotodama V1 Criterion regression budget.
 
-The gate compares workloads present before the reset against Criterion's real
-``base`` samples or an explicit checked-in baseline. New V1 List, Amount, and
-typed-query workloads remain mandatory current evidence and enforce their
-cross-workload invariants without fabricating a comparison-base sample. A
-comparable benchmark fails when its median is more than five percent slower;
-missing or malformed samples fail closed.
+The gate compares every pre-reset compiler/runtime workload against Criterion's
+real ``base`` samples or an explicit checked-in baseline. New V1 List, Amount,
+pipeline-phase, and typed-query workloads are mandatory candidate evidence;
+missing or malformed samples fail closed. A comparable workload fails when its
+median is more than five percent slower, and List sugar has an independent
+zero-slowdown check against its manual-loop counterpart.
 """
 
 from __future__ import annotations
@@ -27,8 +27,14 @@ LIST_SUGAR_BENCHMARK = "kotodama_list_comprehension_runtime_64"
 LIST_MANUAL_BENCHMARK = "kotodama_list_manual_runtime_64"
 REPRESENTATIVE_BENCHMARKS = (
     "kotodama_phase_parse",
+    "kotodama_phase_resolved_hir",
     "kotodama_phase_semantic",
+    "kotodama_phase_typed_effect_hir",
     "kotodama_phase_ir_lower",
+    "kotodama_phase_ssa_construct",
+    "kotodama_phase_ssa_optimize",
+    "kotodama_phase_de_ssa",
+    "kotodama_phase_codegen",
     "kotodama_phase_codegen_end_to_end",
     "kotodama_list_semantic_64",
     "kotodama_list_lower_64",
@@ -46,16 +52,19 @@ REPRESENTATIVE_BENCHMARKS = (
     "kotodama_amount_div_round_ceil",
     "kotodama_amount_div_round_nearest_even",
     "typed_core_query_accounts_page_64",
+    "typed_core_query_assets_page_64",
+    "typed_core_query_asset_definitions_page_64",
+    "typed_core_query_domains_page_64",
+    "typed_core_query_nfts_page_64",
     "kotodama_runtime_cold_add",
     "kotodama_runtime_warm_add",
     "kotodama_core_runtime_warm_add",
 )
 
-# These workloads predate the V1 data-processing reset and therefore have a
-# real comparison sample on the pull-request base revision. Newly introduced
-# List, Amount, and typed-query benchmarks are still mandatory current
-# evidence, but must never manufacture a "base" by comparing the candidate
-# against itself.
+# Only identities already present on the comparison revision can have honest
+# base medians. The candidate must still produce every representative sample
+# above, while these stable pre-reset identities receive the five-percent
+# regression ceiling.
 REGRESSION_BENCHMARKS = (
     "kotodama_phase_parse",
     "kotodama_phase_semantic",
@@ -314,9 +323,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 1
     print(
-        "Comparable Kotodama medians are within the 5% V1 budget, List sugar is "
-        "no slower than its manual-loop baseline, and all required V1 current "
-        "samples are present."
+        "All comparable Kotodama medians are within the 5% V1 budget, every "
+        "candidate workload is present, and List sugar is no slower than its "
+        "manual-loop baseline."
     )
     return 0
 

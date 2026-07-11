@@ -50,9 +50,11 @@ Before activation, independently verify:
 3. Verifier key, `semanticProofProfileHash`, `soraFinalityAnchorHash`, both lane
    hashes, destination binding, and route-config hash match the typed deployment
    and route revision.
-4. `TairaXOR.bridge()` is the route, and the token ABI/runtime exposes no
-   owner or bridge-mutation entrypoint. The route must create that token inside
-   its constructor so both contracts are deployed atomically.
+4. Precompute the route address, deploy `TairaXOR` with that exact immutable
+   bridge, then deploy the route at the precomputed address with the exact
+   token address. Verify `TairaXOR.bridge()`, `route.token()`, token code, and
+   token code hash before activation. Neither contract exposes an owner or
+   bridge-mutation entrypoint.
 5. The Groth16 key belongs to an audited circuit proving the complete SCCP
    statement, not merely the public-signal wiring.
 6. The optimized route runtime is at most 24,576 bytes and its BLAKE2b-256

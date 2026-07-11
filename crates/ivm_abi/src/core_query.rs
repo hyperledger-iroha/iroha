@@ -1,15 +1,16 @@
 //! Canonical V1 records for Kotodama's typed core-ledger queries.
 //!
 //! The protocol deliberately exposes only the five projections understood by
-//! the V1 core-query host.  Page and amount invariants are enforced during both
+//! the V1 core-query host. Page and quantity invariants are enforced during both
 //! construction and Norito decoding so untrusted contract payloads cannot
 //! manufacture values that the host itself would never return.
 
 use std::{fmt, io::Write};
 
 use iroha_data_model::prelude::{
-    AccountId, AssetDefinitionId, AssetId, DomainId, Json, NftId, Numeric,
+    AccountId, AssetDefinitionId, AssetId, DomainId, Json, NftId,
 };
+use iroha_primitives::numeric::{NumericOperationError, Quantity};
 use norito::{
     Decode, Encode, NoritoDeserialize, NoritoSerialize,
     core::{self as ncore, DecodeFromSlice},
@@ -114,108 +115,79 @@ impl<'de> DecodeFromSlice<'de> for CoreQueryEntityTagV1 {
     }
 }
 
-/// Why a [`Numeric`] cannot be used as a V1 `Amount` payload.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AmountValidationErrorV1 {
-    /// Amounts cannot be negative.
-    Negative,
-    /// Fractional trailing zeros (including a scaled zero) are not canonical.
-    NonCanonical,
-}
-
-impl fmt::Display for AmountValidationErrorV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Negative => formatter.write_str("V1 Amount payload must be nonnegative"),
-            Self::NonCanonical => formatter.write_str(
-                "V1 Amount payload must not contain fractional trailing zeros; zero uses scale 0",
-            ),
-        }
-    }
-}
-
-impl std::error::Error for AmountValidationErrorV1 {}
-
-/// Validate a [`Numeric`] as a canonical, nonnegative V1 `Amount` payload.
-///
-/// This is the strict boundary helper: it rejects, rather than silently
-/// normalising, alternate encodings of the same decimal value.
-pub fn validate_amount_v1(value: &Numeric) -> Result<(), AmountValidationErrorV1> {
-    if value.clone().canonicalize_amount().is_err() {
-        return Err(AmountValidationErrorV1::Negative);
-    }
-    value
-        .validate_amount()
-        .map_err(|_| AmountValidationErrorV1::NonCanonical)
-}
-
-/// Canonicalise a nonnegative [`Numeric`] for use as a V1 `Amount` payload.
-///
-/// # Errors
-///
-/// Returns [`AmountValidationErrorV1::Negative`] for a negative input.
-pub fn canonicalize_amount_v1(value: Numeric) -> Result<Numeric, AmountValidationErrorV1> {
-    value
-        .canonicalize_amount()
-        .map_err(|_| AmountValidationErrorV1::Negative)
-}
-
-/// Nominal V1 `Amount`, backed by a canonical nonnegative [`Numeric`].
+/// Nominal V1 quantity, backed by the canonical nonnegative numeric domain.
 ///
 /// The inner value is private so every constructed or decoded instance has a
 /// unique decimal representation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[repr(transparent)]
-pub struct AmountV1(Numeric);
+pub struct QuantityV1(Quantity);
 
-impl AmountV1 {
-    /// Construct an amount from an already-canonical numeric payload.
+impl QuantityV1 {
+    /// Construct a quantity from an already-canonical decimal payload.
     ///
     /// # Errors
     ///
-    /// Returns an error for negative or noncanonical input.
-    pub fn try_new(value: Numeric) -> Result<Self, AmountValidationErrorV1> {
-        validate_amount_v1(&value)?;
-        Ok(Self(value))
+    /// Returns the precise numeric-domain error for negative or noncanonical input.
+    pub fn try_new(value: Numeric) -> Result<Self, NumericOperationError> {
+        Quantity::from_canonical_numeric(value).map(Self)
     }
 
-    /// Canonicalise a nonnegative numeric payload and construct an amount.
+    /// Canonicalise a nonnegative decimal payload and construct a quantity.
     ///
     /// # Errors
     ///
-    /// Returns an error for negative input.
-    pub fn canonicalize(value: Numeric) -> Result<Self, AmountValidationErrorV1> {
-        Ok(Self(canonicalize_amount_v1(value)?))
+    /// Returns the precise numeric-domain error for negative or out-of-domain input.
+    pub fn canonicalize(value: Numeric) -> Result<Self, NumericOperationError> {
+        Quantity::try_from_numeric(value).map(Self)
+    }
+
+    /// Borrow the nominal quantity.
+    #[must_use]
+    pub fn as_quantity(&self) -> &Quantity {
+        &self.0
     }
 
     /// Borrow the canonical numeric payload.
     #[must_use]
     pub fn as_numeric(&self) -> &Numeric {
-        &self.0
+        self.0.as_numeric()
     }
 
-    /// Consume the amount and return its canonical numeric payload.
+    /// Consume the wrapper and return the nominal quantity.
+    #[must_use]
+    pub fn into_quantity(self) -> Quantity {
+        self.0
+    }
+
+    /// Consume the wrapper and return its canonical numeric payload.
     #[must_use]
     pub fn into_numeric(self) -> Numeric {
-        self.0
+        self.0.into_numeric()
     }
 }
 
-impl TryFrom<Numeric> for AmountV1 {
-    type Error = AmountValidationErrorV1;
+impl TryFrom<Numeric> for QuantityV1 {
+    type Error = NumericOperationError;
 
     fn try_from(value: Numeric) -> Result<Self, Self::Error> {
         Self::try_new(value)
     }
 }
 
-impl From<AmountV1> for Numeric {
-    fn from(value: AmountV1) -> Self {
+impl From<QuantityV1> for Quantity {
+    fn from(value: QuantityV1) -> Self {
+        value.into_quantity()
+    }
+}
+
+impl From<QuantityV1> for Numeric {
+    fn from(value: QuantityV1) -> Self {
         value.into_numeric()
     }
 }
 
-impl NoritoSerialize for AmountV1 {
+impl NoritoSerialize for QuantityV1 {
     fn serialize<W: Write>(&self, writer: W) -> Result<(), ncore::Error> {
         self.0.serialize(writer)
     }
@@ -229,9 +201,9 @@ impl NoritoSerialize for AmountV1 {
     }
 }
 
-impl<'de> NoritoDeserialize<'de> for AmountV1 {
+impl<'de> NoritoDeserialize<'de> for QuantityV1 {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
-        Self::try_deserialize(archived).expect("invalid V1 Amount payload")
+        Self::try_deserialize(archived).expect("invalid V1 quantity payload")
     }
 
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
@@ -242,12 +214,10 @@ impl<'de> NoritoDeserialize<'de> for AmountV1 {
     }
 }
 
-impl<'de> DecodeFromSlice<'de> for AmountV1 {
+impl<'de> DecodeFromSlice<'de> for QuantityV1 {
     fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), ncore::Error> {
-        let (numeric, used) = <Numeric as DecodeFromSlice>::decode_from_slice(bytes)?;
-        let amount = Self::try_new(numeric)
-            .map_err(|error| ncore::Error::Message(format!("invalid V1 Amount: {error}")))?;
-        Ok((amount, used))
+        let (quantity, used) = <Quantity as DecodeFromSlice>::decode_from_slice(bytes)?;
+        Ok((Self(quantity), used))
     }
 }
 
@@ -267,8 +237,8 @@ pub struct AccountView {
 pub struct AssetView {
     /// Canonical asset identifier.
     pub id: AssetId,
-    /// Canonical nonnegative amount held by the asset.
-    pub amount: AmountV1,
+    /// Canonical nonnegative quantity held by the asset.
+    pub amount: QuantityV1,
 }
 
 /// Typed asset-definition projection returned by V1 core queries.
@@ -284,7 +254,7 @@ pub struct AssetDefinitionView {
     /// Account that owns the definition.
     pub owned_by: AccountId,
     /// Canonical total quantity currently in existence.
-    pub total_quantity: AmountV1,
+    pub total_quantity: QuantityV1,
     /// Canonical JSON representation of asset-definition metadata.
     pub metadata: Json,
 }
@@ -703,40 +673,29 @@ mod tests {
     }
 
     #[test]
-    fn amount_validation_is_strict_and_canonicalization_is_explicit() {
+    fn quantity_validation_is_strict_and_canonicalization_is_explicit() {
         let canonical = Numeric::new(125, 2);
-        assert_eq!(validate_amount_v1(&canonical), Ok(()));
         assert_eq!(
-            validate_amount_v1(&Numeric::new(1_250, 3)),
-            Err(AmountValidationErrorV1::NonCanonical)
-        );
-        assert_eq!(
-            validate_amount_v1(&Numeric::new(0, 8)),
-            Err(AmountValidationErrorV1::NonCanonical)
-        );
-        assert_eq!(
-            validate_amount_v1(&Numeric::new(-1, 0)),
-            Err(AmountValidationErrorV1::Negative)
+            QuantityV1::try_new(Numeric::new(-1, 0)),
+            Err(NumericOperationError::NegativeQuantity)
         );
 
-        let amount = AmountV1::canonicalize(Numeric::new(1_250, 3))
+        let quantity = QuantityV1::canonicalize(Numeric::new(1_250, 3))
             .expect("nonnegative values canonicalize");
-        assert_eq!(amount.as_numeric(), &canonical);
-        let zero = AmountV1::canonicalize(Numeric::new(0, 28)).expect("zero canonicalizes");
+        assert_eq!(quantity.as_numeric(), &canonical);
+        let zero = QuantityV1::canonicalize(Numeric::new(0, 28)).expect("zero canonicalizes");
         assert_eq!(zero.as_numeric(), &Numeric::zero());
     }
 
     #[test]
-    fn amount_decoder_rejects_negative_and_noncanonical_payloads() {
-        for invalid in [Numeric::new(-1, 0), Numeric::new(10, 1)] {
-            let bytes = bare(&invalid);
-            assert!(AmountV1::decode_from_slice(&bytes).is_err());
-        }
+    fn quantity_decoder_rejects_negative_payloads() {
+        let bytes = bare(&Numeric::new(-1, 0));
+        assert!(QuantityV1::decode_from_slice(&bytes).is_err());
 
-        let amount = AmountV1::try_new(Numeric::new(125, 2)).expect("canonical amount");
-        let encoded = norito::to_bytes(&amount).expect("encode amount");
-        let decoded: AmountV1 = norito::decode_from_bytes(&encoded).expect("decode amount");
-        assert_eq!(decoded, amount);
+        let quantity = QuantityV1::try_new(Numeric::new(125, 2)).expect("canonical quantity");
+        let encoded = norito::to_bytes(&quantity).expect("encode quantity");
+        let decoded: QuantityV1 = norito::decode_from_bytes(&encoded).expect("decode quantity");
+        assert_eq!(decoded, quantity);
     }
 
     #[test]
@@ -873,7 +832,7 @@ mod tests {
             name: String,
             description: Option<String>,
             owned_by: AccountId,
-            total_quantity: AmountV1,
+            total_quantity: QuantityV1,
             metadata: Json,
         }
 
@@ -882,7 +841,7 @@ mod tests {
             name: "Rose".to_owned(),
             description: Some("A deterministic flower".to_owned()),
             owned_by: account_id(4),
-            total_quantity: AmountV1::try_new(Numeric::new(125, 2)).expect("amount"),
+            total_quantity: QuantityV1::try_new(Numeric::new(125, 2)).expect("quantity"),
             metadata: Json::default(),
         };
         let expected = FieldOrderOracle {
@@ -909,8 +868,8 @@ mod tests {
             name: full.name.clone(),
             description: full.description.clone(),
             owned_by: full.owned_by.clone(),
-            total_quantity: AmountV1::canonicalize(full.total_quantity.clone())
-                .expect("ledger quantity is a valid amount"),
+            total_quantity: QuantityV1::canonicalize(full.total_quantity.clone())
+                .expect("ledger quantity is valid"),
             metadata: Json::new(full.metadata.clone()),
         };
 
@@ -928,13 +887,13 @@ mod tests {
     fn every_projection_roundtrips_through_a_bounded_page() {
         let owner = account_id(8);
         let definition = asset_definition_id();
-        let amount = AmountV1::try_new(Numeric::new(10, 0)).expect("amount");
+        let quantity = QuantityV1::try_new(Numeric::new(10, 0)).expect("quantity");
 
         let account_page = QueryPageV1::try_new(vec![account_view(8)], None).expect("page");
         let asset_page = QueryPageV1::try_new(
             vec![AssetView {
                 id: AssetId::new(definition.clone(), owner.clone()),
-                amount: amount.clone(),
+                amount: quantity.clone(),
             }],
             None,
         )
@@ -945,7 +904,7 @@ mod tests {
                 name: "Rose".to_owned(),
                 description: None,
                 owned_by: owner.clone(),
-                total_quantity: amount,
+                total_quantity: quantity,
                 metadata: Json::default(),
             }],
             None,

@@ -710,6 +710,7 @@ fn nexus_config_diff_counter_and_event_emitted() {
         axt: NexusAxt::default(),
         lane_relay_emergency: LaneRelayEmergency::default(),
         lane_config: RuntimeLaneConfig::from_catalog(&lane_catalog),
+        configured_lane_catalog: lane_catalog.clone(),
         lane_catalog,
         dataspace_catalog,
         dataspace_fee_sponsors: BTreeMap::new(),

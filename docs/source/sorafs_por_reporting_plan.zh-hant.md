@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_por_reporting_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 73fa71aec301252df338a91ec00c67a8e95a82056c8340ecc3855ed7a8199902
+source_hash: c3b31ed0970726565298e3c2069489e5e3e1dbd93e2dcc92b93b44b6dc0db56a
 source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-06-25
 title: SoraFS PoR Validator CLI & Reporting
@@ -49,7 +49,7 @@ human-friendly Markdown. Both are generated from the same dataset and stored und
       "provider_id": "prov_8d3a…",
       "manifest_count": 14,
       "challenges": 96,
-      "success_rate": 0.989,
+      "success_rate_bps": 9890,
       "failures": 1,
       "first_failure_at": "2025-03-22T11:05:12Z",
       "last_success_latency_ms_p95": 1800,
@@ -60,7 +60,7 @@ human-friendly Markdown. Both are generated from the same dataset and stored und
   "aggregate": {
     "total_challenges": 1536,
     "total_failures": 12,
-    "success_rate": 0.992,
+    "success_rate_bps": 9920,
     "mean_latency_ms": 720,
     "p95_latency_ms": 2100
   },

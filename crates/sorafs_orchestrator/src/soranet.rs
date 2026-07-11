@@ -3288,7 +3288,7 @@ mod tests {
         );
 
         let circuits = manager.active_circuits();
-        assert!(circuits.first().is_some(), "expected an active circuit");
+        assert!(!circuits.is_empty(), "expected an active circuit");
     }
 
     #[test]

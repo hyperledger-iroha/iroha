@@ -6,27 +6,27 @@ seiyaku StablecoinSimple {
     }
 
     // Return how much stable to mint for given collateral and target ratio (bps).
-    kotoage fn mintable_amount(collateral_amount: Amount, price: Amount, target_ratio_bps: Amount) -> Amount authorize(
+    kotoage fn mintable_amount(quantity collateral_amount, quantity price, quantity target_ratio_bps) -> quantity authorize(
         "Entry"
     ) {
         // collateral_value = collateral_amount * price
         let value = collateral_amount * price;
         // mint limited by target ratio: minted * target_ratio_bps <= value * 10_000
-        let bps_scale = Amount::from_i64(10_000);
+        let bps_scale = 10_000;
         let max_mint = (value * bps_scale) / target_ratio_bps;
         return max_mint;
     }
 
     // Mint stable if health check passes (ratio >= min_ratio_bps)
     kotoage fn mint_stable(
-        user: AccountId,
-        vault_account: AccountId,
-        collateral_asset: AssetDefinitionId,
-        stable_asset: AssetDefinitionId,
-        collateral_amount: Amount,
-        price: Amount,
-        min_ratio_bps: Amount,
-        mint_amount: Amount,
+        AccountId user,
+        AccountId vault_account,
+        AssetDefinitionId collateral_asset,
+        AssetDefinitionId stable_asset,
+        quantity collateral_amount,
+        quantity price,
+        quantity min_ratio_bps,
+        quantity mint_amount,
     ) authorize("Admin") {
         // move collateral in
         ledger::asset::transfer(
@@ -38,7 +38,7 @@ seiyaku StablecoinSimple {
         );
         // health check
         let value = collateral_amount * price;
-        let bps_scale = Amount::from_i64(10_000);
+        let bps_scale = 10_000;
         let post_ratio = (value * bps_scale) / mint_amount;
         require(post_ratio >= min_ratio_bps, MintError::InsufficientCollateral);
         // mint

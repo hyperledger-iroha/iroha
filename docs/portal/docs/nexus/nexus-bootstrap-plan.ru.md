@@ -4,7 +4,7 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-bootstrap-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: aa25c267f36e3245866776d5149039e1b9833407a84126d66a21cf5296e51414
+source_hash: 1859a31eac02d839cfb032c9a2bea520272c8310554f1fbc4e3691fc35cd7318
 source_last_modified: "2025-11-10T17:34:36.494808+00:00"
 translation_last_reviewed: 2025-12-30
 ---
@@ -34,7 +34,7 @@ description: Операционный план вывода базового к�
 ## Сетевые окружения
 - Эксплуатируйте два окружения Nexus с разными сетевыми префиксами:
 - **Sora Nexus (mainnet)** - префикс продакшн сети `nexus`, размещает каноническое управление и piggyback сервисы SoraFS/SoraNet (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Taira (testnet)** - префикс staging сети `taira`, зеркалирует mainnet конфигурацию для интеграционных тестов и pre-release валидации (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Taira (testnet)** - префикс staging сети `taira`, зеркалирует mainnet конфигурацию для интеграционных тестов и pre-release валидации (chain UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - Держите отдельные genesis файлы, governance keys и инфраструктурные footprints для каждого окружения. Taira служит полигоном для всех rollouts SoraFS/SoraNet перед продвижением в Nexus.
 - CI/CD pipelines должны сначала деплоить в Taira, выполнять автоматические smoke tests и требовать ручной промоушн в Nexus после прохождения проверок.
 - Референсные конфигурационные bundles лежат в `configs/soranexus/nexus/` (mainnet) и `configs/soranexus/taira/` (testnet), каждая содержит образцы `config.toml`, `genesis.json` и каталоги admission Torii.

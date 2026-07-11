@@ -1,7 +1,10 @@
 import { test as baseTest } from "node:test";
 import assert from "node:assert/strict";
+import { ed25519 } from "@noble/curves/ed25519";
 import {
+  hashInstructionBatch,
   hashSignedTransaction,
+  hashSignedTransactionPayload,
   resignSignedTransaction,
   submitSignedTransaction,
   buildRegisterSnsNameTransaction,
@@ -19,13 +22,16 @@ import { AccountAddress } from "../src/address.js";
 import { makeNativeTest } from "./helpers/native.js";
 
 const BASE_URL = "http://localhost:8080";
-const AUTHORITY_ID_RAW =
-  "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
+const PRIVATE_KEY = Buffer.alloc(32, 0x11);
+const NEW_ACCOUNT_PRIVATE_KEY = Buffer.alloc(32, 0x22);
+const AUTHORITY_ID_RAW = AccountAddress.fromAccount({
+  publicKey: Buffer.from(ed25519.getPublicKey(PRIVATE_KEY)),
+}).toI105();
 const AUTHORITY_ID = i105FromEd25519AccountId(AUTHORITY_ID_RAW);
 const AUTHORITY_ID_INPUT = i105FromEd25519AccountId(AUTHORITY_ID_RAW);
-const PRIVATE_KEY = Buffer.alloc(32, 0x11);
-const NEW_ACCOUNT_ID_RAW =
-  "sorauﾛ1Pﾀﾚｿ1ﾍｶsFｲAfｾeB3ｽヱヱｳcyﾊyｹ1ﾂﾈヰヰ6ﾛヰEAﾃｱｳﾖLPN4XM";
+const NEW_ACCOUNT_ID_RAW = AccountAddress.fromAccount({
+  publicKey: Buffer.from(ed25519.getPublicKey(NEW_ACCOUNT_PRIVATE_KEY)),
+}).toI105();
 const NEW_ACCOUNT_ID = i105FromEd25519AccountId(NEW_ACCOUNT_ID_RAW);
 const NEW_ACCOUNT_ID_INPUT = i105FromEd25519AccountId(NEW_ACCOUNT_ID_RAW);
 const ASSET_DEFINITION_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
@@ -90,6 +96,47 @@ test("hashSignedTransaction delegates to native binding and returns hex", () => 
     const result = hashSignedTransaction(input);
     assert.equal(result, fakeHash.toString("hex"));
   });
+});
+
+test("hashSignedTransactionPayload delegates to the native payload hasher", () => {
+  const input = Buffer.from([0xca, 0xfe]);
+  const fakeHash = Buffer.alloc(32, 0x5a);
+  withNativeBinding({ hashSignedTransactionPayload: () => fakeHash }, () => {
+    assert.equal(hashSignedTransactionPayload(input), fakeHash.toString("hex"));
+    assert.deepEqual(
+      hashSignedTransactionPayload(input, { encoding: "buffer" }),
+      fakeHash,
+    );
+  });
+});
+
+test("hashInstructionBatch serializes instructions and delegates to native", () => {
+  const fakeHash = Buffer.alloc(32, 0x6b);
+  const calls = [];
+  withNativeBinding(
+    {
+      hashInstructionBatch: (instructions) => {
+        calls.push(instructions);
+        return fakeHash;
+      },
+    },
+    () => {
+      assert.equal(
+        hashInstructionBatch([{ Log: { level: "INFO", msg: "bound" } }]),
+        fakeHash.toString("hex"),
+      );
+      assert.deepEqual(
+        hashInstructionBatch([JSON.stringify({ Fail: { message: "stop" } })], {
+          encoding: "buffer",
+        }),
+        fakeHash,
+      );
+    },
+  );
+  assert.deepEqual(calls, [
+    [JSON.stringify({ Log: { level: "INFO", msg: "bound" } })],
+    [JSON.stringify({ Fail: { message: "stop" } })],
+  ]);
 });
 
 test("submitSignedTransaction submits payload and polls status until terminal", async () => {
@@ -1080,8 +1127,9 @@ test("buildRegisterAccountAndTransferTransaction expands registration and transf
 
 test("buildRegisterAccountAndTransferTransaction supports transfer arrays", () => {
   const captures = [];
-  const secondAccountIdRaw =
-    "sorauﾛ1PgﾉﾀXﾖnWｱﾊｷﾕﾈjｷZﾖrﾅxｲWﾔﾀﾘYヰﾍxｺﾀﾃﾛｽfﾖ2Gｲ8P3LSM";
+  const secondAccountIdRaw = AccountAddress.fromAccount({
+    publicKey: Buffer.from(ed25519.getPublicKey(Buffer.alloc(32, 0x33))),
+  }).toI105();
   const secondAccountId = i105FromEd25519AccountId(secondAccountIdRaw);
   withNativeBinding(
     {
@@ -1372,8 +1420,9 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction expands definition,
 
 test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer arrays", () => {
   const captures = [];
-  const secondAccountIdRaw =
-    "sorauﾛ1PuaｼﾙK2ｿｱﾓｻﾋﾉｹﾆｵﾍPcﾋ7ﾌﾇﾃｶｶvLﾓｽﾑﾏ8wﾑｵｷｦﾆCB8CNW";
+  const secondAccountIdRaw = AccountAddress.fromAccount({
+    publicKey: Buffer.from(ed25519.getPublicKey(Buffer.alloc(32, 0x44))),
+  }).toI105();
   const secondAccountId = i105FromEd25519AccountId(secondAccountIdRaw);
   const secondAccountIdInput = i105FromEd25519AccountId(secondAccountIdRaw);
   withNativeBinding(

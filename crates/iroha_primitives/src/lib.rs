@@ -8,7 +8,6 @@
 //! `iroha_data_model` directly.
 #![deny(warnings)]
 pub mod addr;
-pub mod big_numeric;
 pub mod bigint;
 pub mod calendar;
 pub mod cmpext;
@@ -20,6 +19,7 @@ pub mod erasure;
 pub mod json;
 pub mod must_use;
 pub mod numeric;
+pub mod numeric_abi;
 pub mod small;
 pub mod soradns;
 pub mod time;
@@ -36,12 +36,14 @@ pub mod json_macros {
 pub mod json_macros {}
 
 pub use crate::{
-    big_numeric::{BigNumeric, BigNumericError},
     bigint::{BigInt, BigIntError, MAX_BITS as BIGINT_MAX_BITS},
     numeric::{
-        AmountError, AmountRoundingMode, Numeric, NumericError, NumericSpec, NumericSpecError,
-        NumericSpecParseError, TryFromNumericError, numeric,
+        AmountError, AmountRoundingMode, ExactDivisionClass, Numeric, NumericError,
+        NumericOperationError, NumericSpec, NumericSpecError, NumericSpecParseError,
+        NumericWorkStep, ObservedNumericError, Quantity, RoundingMode, TryFromNumericError,
+        numeric,
     },
+    numeric_abi::{DecimalValueV1, IntValueV1, NumericAbiError, QuantityValueV1},
 };
 
 mod ffi {

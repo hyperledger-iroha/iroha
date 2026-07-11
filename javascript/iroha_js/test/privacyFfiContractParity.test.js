@@ -3514,17 +3514,17 @@ test("pending privacy backend tags stay in cross-SDK parity", () => {
   );
   const pendingRequiredBackendLabels = requiredBackendLabels
     .filter((backendFamily) => !productionAllowlistedRequiredBackends.has(backendFamily))
-    .toSorted();
+    .sort();
   assert.deepEqual(
     pendingRequiredBackendLabels,
-    [...EXPECTED_PENDING_PRIVACY_BACKEND_LABELS].toSorted(),
+    [...EXPECTED_PENDING_PRIVACY_BACKEND_LABELS].sort(),
     "public required backend families must match pending privacy backend tags until production allowlists pass",
   );
   assert.deepEqual(
     requiredBackendLabels
       .filter((backendFamily) => productionAllowlistedRequiredBackends.has(backendFamily))
-      .toSorted(),
-    [...EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_BACKEND_LABELS].toSorted(),
+      .sort(),
+    [...EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_BACKEND_LABELS].sort(),
     "public required backend families must document every production-allowlisted backend excluded from pending tags",
   );
   const productionAllowlistedRequiredRows = publicRequiredPlanRows
@@ -3688,8 +3688,8 @@ test("native chain proof admission uses explicit production verifier backend all
     ),
   );
   assert.deepEqual(
-    [...requiredAllowlistRustBackends.keys()].toSorted(),
-    [...EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_BACKEND_LABELS].toSorted(),
+    [...requiredAllowlistRustBackends.keys()].sort(),
+    [...EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_BACKEND_LABELS].sort(),
     "required production-plan backend exceptions must map every public label to a Rust verifier backend label",
   );
   for (const [publicBackendLabel, rustBackendLabels] of requiredAllowlistRustBackends.entries()) {

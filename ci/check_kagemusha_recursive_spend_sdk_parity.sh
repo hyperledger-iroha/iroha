@@ -421,20 +421,41 @@ REQUIRED_RECURSIVE_COMPACT_JNI_ALL_METHODS = (
 )
 
 SOURCE_PATHS = (
+    ".github/workflows/pr_kagemusha_payload_bench.yml",
+    ".github/workflows/mobile_sdk_artifacts.yml",
     "Cargo.toml",
     "crates/connect_norito_bridge/src/lib.rs",
     "crates/connect_norito_bridge/include/connect_norito_bridge.h",
     "crates/connect_norito_bridge/include/NoritoBridge.h",
+    "crates/iroha_core/Cargo.toml",
     "crates/iroha_core/src/zk.rs",
+    "crates/iroha_core/src/smartcontracts/isi/offline.rs",
+    "crates/iroha_core/examples/confidential_v2_vk_json.rs",
+    "crates/iroha_core/tests/swift_confidential_unshield_redeem.rs",
     "crates/iroha_data_model/src/offline/mod.rs",
     "crates/iroha_js_host/src/lib.rs",
     "crates/iroha_torii/src/lib.rs",
+    "crates/iroha_torii/src/openapi.rs",
+    "crates/iroha_torii/src/routing.rs",
+    "crates/iroha_torii/tests/grouped/zk.rs",
+    "crates/iroha_torii/tests/zk_vk_get_integration.rs",
     "crates/iroha_torii/tests/offline_readiness_smoke.rs",
     "crates/iroha_torii/tests/offline_v2_readiness_smoke.rs",
     "docs/source/offline_kagemusha.md",
+    "docs/portal/static/openapi/manifest.json",
+    "docs/portal/static/openapi/torii.json",
+    "docs/portal/static/openapi/versions.json",
+    "docs/portal/static/openapi/versions/current/manifest.json",
+    "docs/portal/static/openapi/versions/current/torii.json",
     "scripts/kagemusha_android_device_lab_slot.py",
+    "scripts/build_norito_xcframework.sh",
+    "scripts/check_mobile_sdk_artifacts.sh",
+    "scripts/check_mobile_sdk_artifacts_test.sh",
     "scripts/tests/check_android_device_lab_slot_test.py",
+    "ci/check_kagemusha_recursive_spend_swift_sdk.sh",
+    "ci/check_swift_confidential_unshield_redeem_e2e.sh",
     "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+    "IrohaSwift/Sources/IrohaSwift/Norito.swift",
     "IrohaSwift/Sources/IrohaSwift/AccountAddress.swift",
     "IrohaSwift/Sources/IrohaSwift/AssetDefinitionAddress.swift",
     "IrohaSwift/Sources/IrohaSwift/CanonicalRequest.swift",
@@ -457,6 +478,7 @@ SOURCE_PATHS = (
     "IrohaSwift/Sources/IrohaSwift/ConnectSession.swift",
     "IrohaSwift/Sources/IrohaSwift/NexusAppClient.swift",
     "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
+    "IrohaSwift/Sources/IrohaSwift/PrivacyConfidentialWitness.swift",
     "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift",
@@ -503,6 +525,7 @@ SOURCE_PATHS = (
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/ConnectAsyncSequenceTests.swift",
@@ -529,6 +552,10 @@ SOURCE_PATHS = (
     "IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/PrivacyConfidentialWitnessTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConfidentialUnshieldRedeemNativeTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKConfidentialUnshieldWorkflowTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/NoritoTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/ToriiCanonicalRequestTests.swift",
@@ -1228,6 +1255,7 @@ SDK_NATIVE_MATERIAL_README_REQUEST_FIELD_NEEDLES = {
 }
 MAIN_JOB = "kagemusha_payload_bench"
 NATIVE_BRIDGE_JOB = "kagemusha_native_bridge_tests"
+RUST_UNSHIELD_REDEEM_JOB = "kagemusha_unshield_redeem_rust_tests"
 PYTHON_SDK_JOB = "kagemusha_python_sdk_tests"
 JVM_SDK_JOB = "kagemusha_jvm_sdk_tests"
 SWIFT_SDK_JOB = "kagemusha_swift_sdk_parse"
@@ -1249,8 +1277,37 @@ WORKFLOW_REQUIRED_PATHS = SOURCE_PATHS + (
 )
 
 SDK_PRIVACY_WORKFLOW_INVENTORY_PATHS = (
+    ".github/workflows/mobile_sdk_artifacts.yml",
+    "crates/iroha_core/Cargo.toml",
+    "crates/iroha_core/src/smartcontracts/isi/offline.rs",
+    "crates/iroha_core/examples/confidential_v2_vk_json.rs",
+    "crates/iroha_core/tests/swift_confidential_unshield_redeem.rs",
+    "crates/iroha_torii/src/openapi.rs",
+    "crates/iroha_torii/src/routing.rs",
+    "crates/iroha_torii/tests/grouped/zk.rs",
+    "crates/iroha_torii/tests/zk_vk_get_integration.rs",
+    "ci/check_swift_confidential_unshield_redeem_e2e.sh",
+    "scripts/build_norito_xcframework.sh",
+    "scripts/check_mobile_sdk_artifacts.sh",
+    "scripts/check_mobile_sdk_artifacts_test.sh",
+    "docs/portal/static/openapi/manifest.json",
+    "docs/portal/static/openapi/torii.json",
+    "docs/portal/static/openapi/versions.json",
+    "docs/portal/static/openapi/versions/current/manifest.json",
+    "docs/portal/static/openapi/versions/current/torii.json",
+    "IrohaSwift/Sources/IrohaSwift/Norito.swift",
     "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
+    "IrohaSwift/Sources/IrohaSwift/PrivacyConfidentialWitness.swift",
+    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+    "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
+    "IrohaSwift/Sources/IrohaSwift/TxBuilder.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/PrivacyConfidentialWitnessTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConfidentialUnshieldRedeemNativeTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKConfidentialUnshieldWorkflowTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/NoritoTests.swift",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyConfidentialWitness.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java",
@@ -1334,12 +1391,14 @@ ABI7_SDK_MANIFEST_COVERAGE = {
 }
 JVM_SDK_TEST_COMMAND = "ci/check_kagemusha_recursive_spend_jvm_sdk.sh"
 SWIFT_SDK_PARSE_COMMAND = "ci/check_kagemusha_recursive_spend_swift_sdk.sh"
+SWIFT_UNSHIELD_E2E_COMMAND = "ci/check_swift_confidential_unshield_redeem_e2e.sh"
 CSHARP_SDK_TEST_COMMAND = "ci/check_kagemusha_recursive_spend_csharp_sdk.sh"
 JS_SDK_INSTALL_COMMAND = "npm ci --prefix javascript/iroha_js"
 JS_SDK_NATIVE_BUILD_COMMAND = "npm run build:native --prefix javascript/iroha_js"
 JS_SDK_TEST_COMMAND = "ci/check_kagemusha_recursive_spend_js_sdk.sh"
 MAIN_JOB_NEEDS_LINE = (
-    "    needs: [kagemusha_native_bridge_tests, kagemusha_swift_sdk_parse, "
+    "    needs: [kagemusha_native_bridge_tests, kagemusha_unshield_redeem_rust_tests, "
+    "kagemusha_swift_sdk_parse, "
     "kagemusha_csharp_sdk_tests, kagemusha_javascript_sdk_tests, "
     "kagemusha_jvm_sdk_tests, kagemusha_python_sdk_tests]"
 )
@@ -3784,28 +3843,83 @@ def check_workflow_runs_jvm_sdk_tests(errors):
     )
 
 
+def check_workflow_runs_unshield_redeem_rust_tests(errors):
+    workflow = read(WORKFLOW_PATH)
+    job_block = workflow_job_block(workflow, RUST_UNSHIELD_REDEEM_JOB)
+    benchmark_needs = workflow_job_needs(workflow, MAIN_JOB)
+    require(
+        job_block is not None,
+        "Kagemusha payload workflow must define the confidential-unshield redeem Rust test job",
+        errors,
+    )
+    if job_block is None:
+        return
+    require(
+        re.search(r"(?m)^\s+runs-on:\s+ubuntu-latest\s*$", job_block) is not None,
+        "Kagemusha payload workflow must run confidential-unshield redeem Rust tests on Ubuntu",
+        errors,
+    )
+    require(
+        re.search(r"(?m)^\s+timeout-minutes:\s+60\s*$", job_block) is not None,
+        "Kagemusha payload workflow must retain the confidential-unshield redeem Rust test timeout",
+        errors,
+    )
+    require(
+        re.search(r"(?m)^\s+- uses:\s+Swatinem/rust-cache@v2\s*$", job_block) is not None,
+        "Kagemusha payload workflow must cache confidential-unshield redeem Rust test artifacts",
+        errors,
+    )
+    require(
+        "cargo test -p iroha_torii --features app_api --test torii_zk zk_vk_get_returns_record_with_key -- --nocapture" in job_block,
+        "Kagemusha payload workflow must run the stored verifier-record Torii route test",
+        errors,
+    )
+    require(
+        "cargo test -p iroha_core kagemusha_recursive_redeem_resolver_enforces_unshield_verifier_lifecycle_at_block_height --lib -- --nocapture" in job_block,
+        "Kagemusha payload workflow must run the confidential-unshield resolver lifecycle test",
+        errors,
+    )
+    require(
+        RUST_UNSHIELD_REDEEM_JOB in benchmark_needs,
+        "Kagemusha payload benchmark job must wait for confidential-unshield redeem Rust tests",
+        errors,
+    )
+
+
 def check_workflow_runs_swift_sdk_parse(errors):
     workflow = read(WORKFLOW_PATH)
+    job_block = workflow_job_block(workflow, SWIFT_SDK_JOB)
     benchmark_needs = workflow_job_needs(workflow, MAIN_JOB)
-    command_match = workflow_command_match(workflow, SWIFT_SDK_PARSE_COMMAND)
     require(
-        re.search(rf"(?m)^  {re.escape(SWIFT_SDK_JOB)}:\s*$", workflow) is not None,
-        "Kagemusha payload workflow must define the Swift SDK parse job",
+        job_block is not None,
+        "Kagemusha payload workflow must define the combined Swift SDK/native interoperability job",
+        errors,
+    )
+    if job_block is None:
+        return
+    require(
+        re.search(r"(?m)^\s+runs-on:\s+macos-latest\s*$", job_block) is not None,
+        "Kagemusha payload workflow must run the combined Swift SDK/native interoperability job on macOS",
         errors,
     )
     require(
-        re.search(r"(?m)^\s+runs-on:\s+macos-latest\s*$", workflow) is not None,
-        "Kagemusha payload workflow must run the Swift SDK parse job on macOS",
+        re.search(r"(?m)^\s+timeout-minutes:\s+60\s*$", job_block) is not None,
+        "Kagemusha payload workflow must retain the combined Swift SDK/native interoperability timeout",
         errors,
     )
     require(
-        command_match is not None,
-        "Kagemusha payload workflow must run the Swift recursive spend SDK parse check",
+        re.search(r"(?m)^\s+- uses:\s+Swatinem/rust-cache@v2\s*$", job_block) is not None,
+        "Kagemusha payload workflow must cache Rust artifacts for the combined Swift SDK/native interoperability job",
+        errors,
+    )
+    require(
+        workflow_command_match(job_block, SWIFT_UNSHIELD_E2E_COMMAND) is not None,
+        "Kagemusha payload workflow must run the Swift confidential-unshield redeem E2E check in the combined job",
         errors,
     )
     require(
         SWIFT_SDK_JOB in benchmark_needs,
-        "Kagemusha payload benchmark job must wait for the Swift SDK parse job",
+        "Kagemusha payload benchmark job must wait for the combined Swift SDK/native interoperability job",
         errors,
     )
 
@@ -4494,7 +4608,7 @@ def check_c_bridge(texts, errors):
     require_regex(
         texts,
         "crates/connect_norito_bridge/src/lib.rs",
-        r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*15\s*;",
+        r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*16\s*;",
         "C native bridge ABI version",
         errors,
     )
@@ -6318,9 +6432,9 @@ def check_recursive_compact_surface(texts, errors):
             '"pallasOpenEnvelopes[0] transcript_label must be non-empty"',
             '"pallasOpenEnvelopes[0] transcript_label exceeds 128 bytes"',
             '"pallasOpenEnvelopes[0].domain_tag is required"',
-            '"pallasOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"',
-            '"pallasOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"',
-            '"pallasOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
+            '"pallasOpenEnvelopes[0].vk_commitment option tag must be 0 or 1"',
+            '"pallasOpenEnvelopes[0].public_inputs_schema_hash payload length mismatch"',
+            '"pallasOpenEnvelopes[0].domain_tag option tag must be 0 or 1"',
             '"Trailing bytes after pallasOpenEnvelopes[0]"',
             '"Unexpected end of data"',
             "assertEquals(expectedMessage, archiveError.message)",
@@ -6346,12 +6460,12 @@ def check_recursive_compact_surface(texts, errors):
             '"pallasOpenEnvelopes[0] transcript_label exceeds 128 bytes"',
             "pallasOpenEnvelopeVectorArchive { it.includeDomainTag = false } to",
             '"pallasOpenEnvelopes[0].domain_tag is required"',
-            "pallasOpenEnvelopeVectorArchive { it.vkCommitmentPayload = fixedArrayPayload(0x70, 32) } to",
-            '"pallasOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"',
-            "pallasOpenEnvelopeVectorArchive { it.publicInputsSchemaHashPayload = fixedArrayPayload(0x71, 32) } to",
-            '"pallasOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"',
-            "pallasOpenEnvelopeVectorArchive { it.domainTagPayload = fixedArrayPayload(0x72, 32) } to",
-            '"pallasOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
+            "it.vkCommitmentOptionPayload = testOptionRawWithUnknownTag()",
+            '"pallasOpenEnvelopes[0].vk_commitment option tag must be 0 or 1"',
+            "it.publicInputsSchemaHashOptionPayload = testOptionRawWithDeclaredLengthTooLong(fixedBytes(0x71))",
+            '"pallasOpenEnvelopes[0].public_inputs_schema_hash payload length mismatch"',
+            "it.domainTagOptionPayload = testOptionRawWithUnknownTag()",
+            '"pallasOpenEnvelopes[0].domain_tag option tag must be 0 or 1"',
             "pallasOpenEnvelopeVectorArchive { it.trailingEnvelopeBytes = byteArrayOf(0x7f) } to",
             '"Trailing bytes after pallasOpenEnvelopes[0]"',
             'pallasOpenEnvelopeVectorArchiveWithPayload(byteArrayOf(0x00)) to "Unexpected end of data"',
@@ -6608,9 +6722,9 @@ def check_recursive_compact_surface(texts, errors):
             '"pallasOpenEnvelopes[0] transcript_label must be non-empty"',
             '"pallasOpenEnvelopes[0] transcript_label exceeds 128 bytes"',
             '"pallasOpenEnvelopes[0].domain_tag is required"',
-            '"pallasOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"',
-            '"pallasOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"',
-            '"pallasOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
+            '"pallasOpenEnvelopes[0].vk_commitment option tag must be 0 or 1"',
+            '"pallasOpenEnvelopes[0].public_inputs_schema_hash payload length mismatch"',
+            '"pallasOpenEnvelopes[0].domain_tag option tag must be 0 or 1"',
             '"Trailing bytes after pallasOpenEnvelopes[0]"',
             '"Unexpected end of data"',
             "assert expectedMessage.equals(archiveError.getMessage());",
@@ -6636,12 +6750,12 @@ def check_recursive_compact_surface(texts, errors):
             '"pallasOpenEnvelopes[0] transcript_label exceeds 128 bytes"',
             "pallasOpenEnvelopeVectorArchive(spec -> spec.includeDomainTag = false),",
             '"pallasOpenEnvelopes[0].domain_tag is required"',
-            "pallasOpenEnvelopeVectorArchive(spec -> spec.vkCommitmentPayload = fixedArrayPayload((byte) 0x70, 32)),",
-            '"pallasOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"',
-            "spec.publicInputsSchemaHashPayload = fixedArrayPayload((byte) 0x71, 32)",
-            '"pallasOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"',
-            "pallasOpenEnvelopeVectorArchive(spec -> spec.domainTagPayload = fixedArrayPayload((byte) 0x72, 32)),",
-            '"pallasOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
+            "spec -> spec.vkCommitmentOptionPayload = testOptionRawWithUnknownTag()",
+            '"pallasOpenEnvelopes[0].vk_commitment option tag must be 0 or 1"',
+            "spec.publicInputsSchemaHashOptionPayload =",
+            '"pallasOpenEnvelopes[0].public_inputs_schema_hash payload length mismatch"',
+            "spec -> spec.domainTagOptionPayload = testOptionRawWithUnknownTag()",
+            '"pallasOpenEnvelopes[0].domain_tag option tag must be 0 or 1"',
             "pallasOpenEnvelopeVectorArchive(spec -> spec.trailingEnvelopeBytes = new byte[] {0x7f}),",
             '"Trailing bytes after pallasOpenEnvelopes[0]"',
             '{pallasOpenEnvelopeVectorArchiveWithPayload(new byte[] {0x00}), "Unexpected end of data"}',
@@ -21376,6 +21490,8 @@ def check_python(texts, errors):
 def check_swift(texts, errors):
     prover = "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift"
     asset_definition_address = "IrohaSwift/Sources/IrohaSwift/AssetDefinitionAddress.swift"
+    norito = "IrohaSwift/Sources/IrohaSwift/Norito.swift"
+    privacy_witness = "IrohaSwift/Sources/IrohaSwift/PrivacyConfidentialWitness.swift"
     request_codecs = "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift"
     compact_prover = "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift"
     recursive_aggregation_prover = "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift"
@@ -21383,9 +21499,14 @@ def check_swift(texts, errors):
     instruction_encoder = "IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift"
     test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift"
     request_codecs_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift"
+    top_up_parity_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift"
+    native_unshield_test = "IrohaSwift/Tests/IrohaSwiftTests/ConfidentialUnshieldRedeemNativeTests.swift"
+    unshield_workflow_test = "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKConfidentialUnshieldWorkflowTests.swift"
     compact_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift"
     recursive_aggregation_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift"
     instruction_encoder_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift"
+    norito_test = "IrohaSwift/Tests/IrohaSwiftTests/NoritoTests.swift"
+    privacy_witness_test = "IrohaSwift/Tests/IrohaSwiftTests/PrivacyConfidentialWitnessTests.swift"
     uc4_decode_test = "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift"
     tx_builder = "IrohaSwift/Sources/IrohaSwift/TxBuilder.swift"
     torii_client = "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"
@@ -22190,6 +22311,80 @@ def check_swift(texts, errors):
     )
     require_contains(
         texts,
+        norito,
+        (
+            "public static let maxHeaderPadding = 64",
+            "guard paddingLength <= NoritoHeader.maxHeaderPadding else { return nil }",
+        ),
+        "Swift canonical Norito header padding limit",
+        errors,
+    )
+    require_contains(
+        texts,
+        norito_test,
+        (
+            "testNoritoDecodeFrameEnforcesCanonicalHeaderPaddingLimit",
+            "NoritoHeader.maxHeaderPadding + 1",
+            "XCTAssertNil(noritoDecodeFrame(excessivelyPadded))",
+            "XCTAssertNil(noritoDecodeFrame(nonzeroPadding))",
+        ),
+        "Swift canonical Norito header padding tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        privacy_witness,
+        (
+            "public static let confidentialUnshieldV3AlgorithmId = \"unshield\"",
+            "public static let confidentialUnshieldV3Entrypoint = \"buildConfidentialUnshieldProofV3\"",
+            '"halo2-ipa-pasta:confidential_unshield_v3"',
+            "static let confidentialUnshieldPublicInputsSchemaV1 = Data(",
+            '\\"change_commitment_0\\"',
+            '\\"public_amount\\"',
+            "public static func confidentialUnshieldPublicInputsSchema() -> Data",
+            "public static func encodeUnshieldWitness(",
+            "try validateUnshieldWitness(witness)",
+            "public static func buildConfidentialUnshieldProofRequestV1(",
+            "vkRef: String = confidentialUnshieldV3VerifierRef",
+            "try validateVkRef(vkRef, expected: confidentialUnshieldV3VerifierRef)",
+            "algorithmId: confidentialUnshieldV3AlgorithmId",
+            "entrypoint: confidentialUnshieldV3Entrypoint",
+            "publicInputs: confidentialUnshieldPublicInputsSchemaV1",
+            "witness: encodeUnshieldWitness(witness)",
+            "public static func buildConfidentialUnshieldVerifyRequestV1(",
+            "guard !proof.isEmpty, proof.count <= proofMaxBytes else",
+            "witness: Data()",
+            "proof: Data(proof)",
+            "private static func validateUnshieldWitness(",
+            'PrivacyConfidentialWitnessError.invalidField("transferOutputs")',
+        ),
+        "Swift confidential unshield witness request builder",
+        errors,
+    )
+    require_contains(
+        texts,
+        privacy_witness_test,
+        (
+            "testEncodesUnshieldWitnessAndProofRequestWireShape",
+            "testUnshieldWitnessAcceptsZeroOrOneChangeAndCanonicalPublicAmount",
+            "testUnshieldProofRequestRejectsTransferOutputsAndCrossWiredVerifierRef",
+            "testBuildsCanonicalUnshieldVerifyRequestAndRejectsInvalidProofInputs",
+            "PrivacyConfidentialWitnessCodecs.encodeUnshieldWitness",
+            "PrivacyConfidentialWitnessCodecs.buildConfidentialUnshieldProofRequestV1",
+            "PrivacyConfidentialWitnessCodecs.buildConfidentialUnshieldVerifyRequestV1",
+            "PrivacyConfidentialWitnessCodecs.confidentialUnshieldPublicInputsSchema()",
+            "PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3AlgorithmId",
+            "PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3Entrypoint",
+            "PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef",
+            'XCTAssertInvalidField("transferOutputs")',
+            'XCTAssertInvalidField("vkRef")',
+            'publicAmount: "340282366920938463463374607431768211455"',
+        ),
+        "Swift confidential unshield witness request tests",
+        errors,
+    )
+    require_contains(
+        texts,
         request_codecs,
         (
             "public struct KagemushaRecursiveSpendableNoteDescriptor",
@@ -22215,6 +22410,7 @@ def check_swift(texts, errors):
             "public static func encodeAppendRequest",
             "public static func encodeVerifyRequest",
             "public static func encodeRedeemRequest",
+            "public static func buildRedeemProofAttachment(",
             "public static func decodeVerifyResult",
             "public static func decodeBundle",
             "static func initSpend(request: KagemushaRecursiveSpendInitRequest)",
@@ -22260,6 +22456,252 @@ def check_swift(texts, errors):
             "public let lineageWitnessRequiredForRedeem: Bool",
         ),
         "Swift typed recursive spend request codecs",
+        errors,
+    )
+    require_contains(
+        texts,
+        request_codecs,
+        (
+            "private static func encodePackedFixed32(_ bytes: Data, field: String) throws -> Data",
+            "private static func encodeConstVec(_ bytes: Data) -> Data",
+            'step.writeField(try encodePackedFixed32(hop.publicInputs.rootBefore, field: "rootBefore"))',
+            'step.writeField(try encodePackedFixed32(hop.rootAfter, field: "rootAfter"))',
+            "writer.writeField(encodeConstVec(value))",
+            "return encodeOptionRaw(encodeConstVec(bytes))",
+            "return encodeConstVec(bytes)",
+            "writer.writeField(encodeConstVec(parsed.definitionBytes))",
+            'field: "publicInputsSchemaHash"',
+            "record.publicInputsSchemaHash == IrohaHash.hash(expectedSchema)",
+            'field: "proofAttachment.envelopeHash"',
+            "private static let confidentialStatusActive: UInt32 = 1",
+            "OfflineCompactNorito.encodeUInt32(confidentialStatusActive)",
+            'field: "\\(label).status") { try $0.readUInt32LE() }',
+            "Rust canonical encoding omits the absent trailing default `lane_privacy` field",
+        ),
+        "Swift Kagemusha canonical fixed32/hash/status wire policy",
+        errors,
+    )
+    require_contains(
+        texts,
+        request_codecs,
+        (
+            'private static let confidentialUnshieldAlgorithmId = "unshield"',
+            'private static let confidentialUnshieldEntrypoint = "buildConfidentialUnshieldProofV3"',
+            "KagemushaRecursiveSpendRequestCodecs.parseVerifierKeyId(",
+            "expectedPaddingLength: Int? = nil",
+            "frame.paddingLength != expectedPaddingLength",
+            "frame.paddingLength == 0",
+            "expectedPaddingLength: 0",
+            "let schemaHash = IrohaHash.hash(",
+            "public static func buildRedeemProofAttachment(",
+            "unshieldProofOutputArchive: Data",
+            "unshieldVerifierRecord: KagemushaRecursiveSpendVerifierRecordRef",
+            "blockHeight: UInt64? = nil",
+            "verifyProof: PrivacyNativeBridge.verifyProofV1",
+            "verifyProof: (Data) throws -> Data",
+            "let proof = try parsePrivacyBuildResult(",
+            "expectedAlgorithmId: confidentialUnshieldAlgorithmId",
+            "expectedEntrypoint: confidentialUnshieldEntrypoint",
+            "expectedVkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef",
+            'label: "unshieldProofOutputArchive"',
+            ".buildConfidentialUnshieldVerifyRequestV1(proof: proof.proof)",
+            "let verifyResult = try verifyProof(verifyRequest)",
+            "try requireSuccessfulPrivacyVerifyResult(",
+            "proof == expectedProof",
+            "verified",
+            "static func buildRedeemProofAttachmentStructurally(",
+            "let envelope = try decodeOpenVerifyEnvelope(",
+            'label: "unshield proof"',
+            "proofBytes.contains(where: { $0 != 0 })",
+            "let verifierRecord = try decodeAndValidateVerifierRecord(",
+            "expectedCircuitId: confidentialUnshieldV3CircuitId",
+            "expectedSchema: PrivacyConfidentialWitnessCodecs.confidentialUnshieldPublicInputsSchema()",
+            "proofArchiveSize: proof.proof.count",
+            "blockHeight: blockHeight",
+            "enforceLifecycleWindow: true",
+            'label: "unshieldVerifierRecord"',
+            "record.publicInputsSchemaHash == IrohaHash.hash(expectedSchema)",
+            "try $0.readFixedBytes(32)",
+            "let activationHeight = try readField(&reader) { try readOptionUInt64Payload(&$0) }",
+            "let withdrawHeight = try readField(&reader) { try readOptionUInt64Payload(&$0) }",
+            "private static func validateVerifierRecordLifecycle(",
+            "guard let blockHeight,",
+            "record.activationHeight.map({ blockHeight >= $0 }) ?? true",
+            "record.withdrawHeight.map({ blockHeight < $0 }) ?? true",
+            "private static func requireVerifierKeyIdComponent(",
+            "typeName: proofAttachmentWireName",
+            "payload: try proofAttachmentPayload(envelope: envelope, verifierRecord: verifierRecord)",
+            "flags: requestFlags",
+            "writer.writeField(try encodeOptionFixed32(",
+            'field: "proofAttachment.vkCommitment"',
+            "IrohaHash.hash(envelope.archive)",
+            'field: "proofAttachment.envelopeHash"',
+        ),
+        "Swift checked redeem proof attachment builder",
+        errors,
+    )
+    require_contains(
+        texts,
+        request_codecs_test,
+        (
+            "testPallasMetadataAcceptsPackedAndConstVecFixed32Options",
+            "vkCommitmentPayload: Self.fixedArrayPayload(0x70, count: 32)",
+            "publicInputsSchemaHashPayload: Self.fixedArrayPayload(0x71, count: 32)",
+            "domainTagPayload: Self.fixedArrayPayload(0x72, count: 32)",
+            "for archive in [packed, constVec]",
+        ),
+        "Swift Kagemusha generic Option fixed32 compatibility tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        top_up_parity_test,
+        (
+            "testVerifierRecordArchiveUsesMarkedSchemaHashAndThirtyTwoBitStatus",
+            "testBuildRedeemProofAttachmentEmitsCanonicalArchiveAndComposesWithRedeemRequest",
+            "testBuildRedeemProofAttachmentRejectsInvalidUnshieldEvidence",
+            "testBuildRedeemProofAttachmentRequiresExactSuccessfulNativeVerification",
+            "testPublicBuildRedeemProofAttachmentFailsClosedForCanonicalKeySubstitutionAndZeroProof",
+            "testBuildRedeemProofAttachmentRejectsAdversarialUnshieldEnvelopes",
+            "testBuildRedeemProofAttachmentValidatesInlineKeyAndProofCapBoundaries",
+            "testBuildRedeemProofAttachmentRejectsNoncanonicalTypedArchivePadding",
+            "testBuildRedeemProofAttachmentRejectsElementFramedDirectFixed32Fields",
+            "testBuildRedeemProofAttachmentEnforcesVerifierLifecycleWindow",
+            "testBuildRedeemProofAttachmentRejectsMalformedVerifierRecordArchivesAndIds",
+            "testRejectsLegacyOneByteVerifierRecordStatus",
+            "KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment(",
+            "XCTAssertEqual(fields.count, 5)",
+            "XCTAssertEqual(proofBoxFields[1], byteVec(fixture.envelopeArchive))",
+            "XCTAssertEqual(try optionFixed32Payload(fields[3]), fixture.commitment)",
+            "let canonicalEnvelopeHash = IrohaHash.hash(fixture.envelopeArchive)",
+            "XCTAssertNotEqual(Blake2b.hash256(fixture.envelopeArchive), canonicalEnvelopeHash)",
+            "try optionFixed32Payload(fields[4]),",
+            "XCTAssertThrowsError(try fixed32Payload(fixture.commitment))",
+            "constVecBytes(bundleFields[1], expectedCount: 16)",
+            "KagemushaRecursiveSpendRedeemRequest(",
+            "KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(redeemRequest)",
+            '.invalidArchive("unshieldProofOutputArchive")',
+            '.invalidArchive("unshieldVerifierRecord")',
+            '.invalidArchive("unshieldVerifierRecord.key")',
+            "version: 2",
+            'status: 1',
+            'errorCode: 5',
+            "publicInputs: Data([0x01])",
+            "verified: true",
+            "trailingField: Data([0x00])",
+            "schemaByte: 0x41",
+            'algorithmId: "confidential-transfer-v2"',
+            'entrypoint: "buildConfidentialTransferProofV2"',
+            "vkRef: PrivacyConfidentialWitnessCodecs.confidentialTransferV2VerifierRef",
+            "status: 2",
+            'namespace: "privacy"',
+            "backendTag: VerifyingKeyBackendTag.halo2Bn254.rawValue",
+            'curve: "vesta"',
+            'verifierKeyId: "test:unshield-v3"',
+            "circuitId: KagemushaRecursiveSpendRequestCodecs.confidentialTransferV2CircuitId",
+            "schema: PrivacyConfidentialWitnessCodecs.confidentialTransferPublicInputsSchema()",
+            "publicInputsSchemaHash: Blake2b.hash256(",
+            "inlineKey: .absent",
+            'inlineKey: .explicit(backend: "test", bytes: key)',
+            "maxProofBytes: UInt32(fixture.envelopeArchive.count - 1)",
+            "maxProofBytes: UInt32(fixture.envelopeArchive.count)",
+            "NoritoHeader.maxHeaderPadding + 1",
+            "archiveWithHeaderPadding(fixture.proofOutputArchive, count: 1)",
+            '"halo2/ipa:Unshield-v3"',
+            '"halo2//ipa:unshield-v3"',
+            '.invalidArchive("unshieldProofVerification")',
+            "proof: Data(repeating: 0, count: 64)",
+            "let falselySuccessfulZeroProofResult = privacyBuildResult(",
+            "var zeroProofVerifyWasCalled = false",
+            "XCTAssertTrue(zeroProofVerifyWasCalled)",
+            "activationHeight: 10",
+            "withdrawHeight: 20",
+        ),
+        "Swift checked redeem proof attachment tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        torii_client,
+        (
+            "public let ownerManifestId: String?",
+            "public let namespace: String?",
+            "public let recordNorito: Data?",
+            'case recordNoritoBase64 = "record_norito_base64"',
+            "decoded.base64EncodedString() == encoded",
+            "record_norito_base64 must be canonical, non-empty Standard Base64",
+            "public func asKagemushaRecursiveSpendVerifierRecordRef() throws",
+            'verifierKeyId: "\\(id.backend):\\(id.name)"',
+            '"verifying-key detail is missing record_norito_base64"',
+        ),
+        "Swift Torii exact verifier-record acquisition",
+        errors,
+    )
+    require_contains(
+        texts,
+        torii_client_test,
+        (
+            "testGetVerifyingKeyAsync",
+            "testVerifyingKeyDetailConvertsExactNoritoRecordForKagemusha",
+            "testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64",
+            "XCTAssertEqual(detail.record.ownerManifestId",
+            "XCTAssertEqual(detail.record.namespace",
+            "XCTAssertEqual(detail.recordNorito, recordNorito)",
+            "detail.asKagemushaRecursiveSpendVerifierRecordRef()",
+            '" \\(canonical)"',
+            "String(canonical.dropLast())",
+            "XCTAssertNil(legacyDetail.recordNorito)",
+        ),
+        "Swift Torii exact verifier-record acquisition tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        tx_builder,
+        (
+            "public func buildKagemushaConfidentialUnshieldRedeemProofAttachment(",
+            "verifierKeyId: ToriiVerifyingKeyId",
+            "blockHeight: UInt64? = nil",
+            "orchestrateKagemushaConfidentialUnshieldRedeemProofAttachment(",
+            "toriiRestClient.getVerifyingKey(",
+            "PrivacyNativeBridge.buildConfidentialUnshieldProofV3",
+            "KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment(",
+            "guard detail.id == verifierKeyId else",
+            "detail.asKagemushaRecursiveSpendVerifierRecordRef()",
+            ".buildConfidentialUnshieldProofRequestV1(witness: witness)",
+        ),
+        "Swift confidential-unshield redeem SDK workflow",
+        errors,
+    )
+    require_contains(
+        texts,
+        unshield_workflow_test,
+        (
+            "testOrchestratorFetchesExactRecordBeforeBuildingProofAndAttachment",
+            "testOrchestratorRejectsCrossWiredToriiDetailBeforeProofConstruction",
+            "orchestrateKagemushaConfidentialUnshieldRedeemProofAttachment(",
+            'XCTAssertEqual(calls, ["fetch", "build", "attach"])',
+            'XCTAssertEqual(record.verifierKeyId, "halo2/ipa:unshield-v3")',
+            "XCTAssertEqual(record.recordBytes, recordNorito)",
+            "XCTAssertEqual(blockHeight, 42)",
+            "XCTAssertFalse(buildWasCalled)",
+        ),
+        "Swift confidential-unshield redeem SDK workflow tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        native_unshield_test,
+        (
+            "testRealNativeUnshieldProofBuildsRustDecodableRedeemAttachment",
+            'environment["IROHA_SWIFT_UNSHIELD_V3_RECORD_PATH"]',
+            "PrivacyNativeBridge.isNativeAvailable",
+            ".buildConfidentialUnshieldProofRequestV1(witness: witness)",
+            "PrivacyNativeBridge.buildConfidentialUnshieldProofV3(",
+            "KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment(",
+            'environment["IROHA_SWIFT_UNSHIELD_ATTACHMENT_OUT"]',
+        ),
+        "Swift confidential-unshield native interoperability test",
         errors,
     )
     require_not_regex(
@@ -22400,8 +22842,10 @@ def check_swift(texts, errors):
         (
             "readRequiredMetadataOption(",
             "readOptionRawPayload(&reader, field: field)",
-            "payload.count == 32",
-            "payload.contains(where: { $0 != 0 })",
+            "var child = CompactReader(data: payload)",
+            "let value = try child.readFixed32Flexible(field: field)",
+            "guard child.remaining == 0",
+            "value.contains(where: { $0 != 0 })",
             "private static func readOptionRawPayload(",
             "field: String",
             "guard reader.remaining >= length else {",
@@ -22410,7 +22854,7 @@ def check_swift(texts, errors):
             'readField(&reader, field: "\\(field).public_inputs_schema_hash")',
             'readField(&reader, field: "\\(field).domain_tag")',
         ),
-        "Swift Pallas metadata option raw fixed32 decoder",
+        "Swift Pallas metadata option generic fixed32 decoder",
         errors,
     )
     require_contains(
@@ -24234,6 +24678,276 @@ def check_swift(texts, errors):
     )
 
 
+def check_swift_unshield_redeem_interoperability(texts, errors):
+    require_contains(
+        texts,
+        "scripts/build_norito_xcframework.sh",
+        (
+            "PRIVACY_PRODUCTION_ENABLED=0",
+            "--privacy-production-enabled)",
+            'PRIVACY_PRODUCTION_ENABLED=1',
+            '"$PRIVACY_PRODUCTION_ENABLED" == "1" && "${NORITO_BRIDGE_SKIP_CARGO_BUILDS:-0}" == "1"',
+            "--privacy-production-enabled cannot be combined with NORITO_BRIDGE_SKIP_CARGO_BUILDS=1",
+            "CARGO_FEATURE_ARGS=()",
+            "CARGO_FEATURE_ARGS+=(--features privacy-production-enabled)",
+            'CARGO_FEATURE_PROFILE="privacy-production-enabled"',
+            'CARGO_FEATURE_PROFILE="privacy-production-disabled"',
+            'CARGO_BUILD_DIR_BASE="$BUILD_DIR/cargo-ios${IPHONEOS_DEPLOYMENT_TARGET//./_}-sim${IPHONESIMULATOR_DEPLOYMENT_TARGET//./_}-${CARGO_FEATURE_PROFILE}"',
+            '--target "$DEVICE_TRIPLE" \\\n      "${CARGO_FEATURE_ARGS[@]}"',
+            '--target "$SIM_ARM_TRIPLE" \\\n      "${CARGO_FEATURE_ARGS[@]}"',
+            '--target "$SIM_X64_TRIPLE" \\\n      "${CARGO_FEATURE_ARGS[@]}"',
+            '--target "$MACOS_TRIPLE" \\\n      "${CARGO_FEATURE_ARGS[@]}"',
+            'touch "$OUT_DIR/${FRAMEWORK_NAME}.xcframework/.privacy-production-enabled"',
+            "PRIVACY_PRODUCTION_JSON=false",
+            "PRIVACY_PRODUCTION_JSON=true",
+            '"privacy_production_enabled": $PRIVACY_PRODUCTION_JSON',
+        ),
+        "Apple privacy-production bridge packaging",
+        errors,
+    )
+    require_contains(
+        texts,
+        ".github/workflows/mobile_sdk_artifacts.yml",
+        (
+            "      privacy_production_enabled:",
+            '        default: false',
+            "        run: bash -n scripts/build_norito_xcframework.sh scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/package_mobile_sdk_artifacts.sh",
+            '          PRIVACY_PRODUCTION_ENABLED: ${{ inputs.privacy_production_enabled || false }}',
+            "          build_args=()",
+            "            build_args+=(--privacy-production-enabled)",
+            '            scripts/build_norito_xcframework.sh "${build_args[@]}"',
+            "            test -f dist/NoritoBridge.xcframework/.privacy-production-enabled",
+            "            test ! -e dist/NoritoBridge.xcframework/.privacy-production-enabled",
+        ),
+        "Apple privacy-production artifact workflow",
+        errors,
+    )
+    require_contains(
+        texts,
+        "scripts/check_mobile_sdk_artifacts.sh",
+        (
+            'local privacy_marker="$xcframework/.privacy-production-enabled"',
+            "local privacy_keys=()",
+            '\'"privacy_production_enabled"[[:space:]]*:\'',
+            '\'"privacy_production_enabled"[[:space:]]*:[[:space:]]*(true|false)\'',
+            "if [[ ${#privacy_keys[@]} -ne 1 || ${#privacy_declarations[@]} -ne 1 ]]; then",
+            "NoritoBridge artifact manifest must contain exactly one boolean privacy_production_enabled field",
+            'if [[ "$privacy_value" == "true" ]]; then',
+            'require_file "$privacy_marker" "privacy-production-enabled XCFramework marker"',
+            'elif [[ -e "$privacy_marker" ]]; then',
+            "default privacy artifact must not carry the privacy-production-enabled XCFramework marker",
+        ),
+        "Apple privacy-production artifact validation",
+        errors,
+    )
+    require_contains(
+        texts,
+        "scripts/check_mobile_sdk_artifacts_test.sh",
+        (
+            '"privacy_production_enabled": false',
+            'enabled_privacy="$TMP_DIR/enabled-privacy"',
+            '"privacy_production_enabled": true',
+            'touch "$enabled_privacy/dist/NoritoBridge.xcframework/.privacy-production-enabled"',
+            'run_expect_pass "$enabled_privacy"',
+            'enabled_without_marker="$TMP_DIR/enabled-without-marker"',
+            'run_expect_fail "$enabled_without_marker" "missing privacy-production-enabled XCFramework marker"',
+            'default_with_marker="$TMP_DIR/default-with-marker"',
+            'run_expect_fail "$default_with_marker" "default privacy artifact must not carry the privacy-production-enabled XCFramework marker"',
+            'invalid_privacy_state="$TMP_DIR/invalid-privacy-state"',
+            'run_expect_fail "$invalid_privacy_state" "must contain exactly one boolean privacy_production_enabled field"',
+            'duplicate_mixed_privacy_state="$TMP_DIR/duplicate-mixed-privacy-state"',
+            'run_expect_fail "$duplicate_mixed_privacy_state" "must contain exactly one boolean privacy_production_enabled field"',
+        ),
+        "Apple privacy-production artifact validation tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        WORKFLOW_PATH,
+        (
+            "  kagemusha_unshield_redeem_rust_tests:\n    runs-on: ubuntu-latest\n    timeout-minutes: 60",
+            "      - uses: Swatinem/rust-cache@v2",
+            "      - name: Confidential-unshield redeem Torii and resolver tests",
+            "          cargo test -p iroha_torii --features app_api --test torii_zk zk_vk_get_returns_record_with_key -- --nocapture",
+            "          cargo test -p iroha_core kagemusha_recursive_redeem_resolver_enforces_unshield_verifier_lifecycle_at_block_height --lib -- --nocapture",
+            MAIN_JOB_NEEDS_LINE,
+        ),
+        "Confidential-unshield redeem Rust CI job",
+        errors,
+    )
+    require_contains(
+        texts,
+        WORKFLOW_PATH,
+        (
+            "  kagemusha_swift_sdk_parse:\n    runs-on: macos-latest\n    timeout-minutes: 60",
+            '      - uses: Swatinem/rust-cache@v2\n        with:\n          cache-on-failure: "true"\n      - name: Swift confidential-unshield redeem SDK and native interoperability',
+            "        run: ci/check_swift_confidential_unshield_redeem_e2e.sh",
+            MAIN_JOB_NEEDS_LINE,
+        ),
+        "Swift confidential-unshield combined CI job",
+        errors,
+    )
+    require_contains(
+        texts,
+        SWIFT_SDK_PARSE_COMMAND,
+        (
+            "SWIFT_TEST_ARGS=()",
+            "KAGEMUSHA_RECURSIVE_SPEND_SWIFT_SCRATCH_PATH",
+            "--scratch-path",
+            '"${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter',
+            "ToriiClientTests/testGetVerifyingKeyAsync|ToriiClientTests/testVerifyingKeyDetailConvertsExactNoritoRecordForKagemusha|ToriiClientTests/testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64",
+        ),
+        "Swift confidential-unshield focused runner",
+        errors,
+    )
+    require_contains(
+        texts,
+        "crates/iroha_torii/src/routing.rs",
+        (
+            '"owner_manifest_id".into()',
+            '"namespace".into()',
+            "fn vk_record_norito_base64(",
+            "let bytes = norito::to_bytes(rec)",
+            '"record_norito_base64".into()',
+            "fn vk_detail_to_json(",
+            "vk_record_detail_json_preserves_identity_and_exact_norito_archive",
+            "norito::decode_from_bytes(&archive)",
+            "assert_eq!(decoded, record)",
+        ),
+        "Torii exact verifier-record response",
+        errors,
+    )
+    require_contains(
+        texts,
+        "crates/iroha_torii/tests/grouped/zk.rs",
+        ('#[path = "../zk_vk_get_integration.rs"]',),
+        "Torii stored verifier-record route test registration",
+        errors,
+    )
+    require_contains(
+        texts,
+        "crates/iroha_torii/tests/zk_vk_get_integration.rs",
+        (
+            "async fn zk_vk_get_returns_record_with_key()",
+            'rec.namespace = "offline_kagemusha".into()',
+            'rec.owner_manifest_id = Some("builtin:confidential-unshield-v3".into())',
+            "rec.activation_height = Some(10)",
+            "rec.withdraw_height = Some(20)",
+            '.get("record_norito_base64")',
+            "base64::engine::general_purpose::STANDARD.encode(&record_archive)",
+            "norito::decode_from_bytes(&record_archive).expect(\"decode stored verifier-record archive\")",
+            "assert_eq!(decoded_record, expected_record)",
+            "assert_eq!(decoded_record.activation_height, Some(10))",
+            "assert_eq!(decoded_record.withdraw_height, Some(20))",
+        ),
+        "Torii stored verifier-record route archive tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "crates/iroha_torii/src/openapi.rs",
+        (
+            '"/v1/zk/vk/{backend}/{name}".to_owned()',
+            "namespace and owner_manifest_id identity metadata plus record_norito_base64",
+            'verifying_key_get_description.contains("record_norito_base64")',
+        ),
+        "Torii exact verifier-record OpenAPI contract",
+        errors,
+    )
+    require_contains(
+        texts,
+        "crates/iroha_core/src/smartcontracts/isi/offline.rs",
+        (
+            "record.is_active_at(state_transaction.block_height())",
+            '"recursive Kagemusha redeem verifier key is not active at the current block height"',
+            "kagemusha_recursive_redeem_resolver_enforces_unshield_verifier_lifecycle_at_block_height",
+            '(9, false, "before activation")',
+            '(10, true, "at activation")',
+            '(19, true, "before withdrawal")',
+            '(20, false, "at withdrawal")',
+        ),
+        "Rust confidential-unshield redeem verifier lifecycle",
+        errors,
+    )
+    require_contains(
+        texts,
+        "crates/iroha_core/examples/confidential_v2_vk_json.rs",
+        (
+            '"unshield-v3" =>',
+            'confidential_v2::confidential_unshield_v3_vk_record("vk_unshield", version)',
+            'if kind == "unshield-v3" {',
+            "record.namespace = iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE.to_owned()",
+            "let record_norito = norito::to_bytes(&record)",
+            '\\"record_norito_base64\\": \\"{}\\"',
+            "STANDARD.encode(record_norito)",
+        ),
+        "Rust canonical unshield-v3 verifier-record exporter",
+        errors,
+    )
+    require_contains(
+        texts,
+        "crates/iroha_core/Cargo.toml",
+        (
+            'name = "swift_confidential_unshield_redeem"',
+            'path = "tests/swift_confidential_unshield_redeem.rs"',
+        ),
+        "Rust Swift confidential-unshield redeem test registration",
+        errors,
+    )
+    require_contains(
+        texts,
+        "ci/check_swift_confidential_unshield_redeem_e2e.sh",
+        (
+            "set -euo pipefail",
+            'TMP_DIR="$(mktemp -d',
+            'BRIDGE_TARGET_DIR="${SWIFT_CONFIDENTIAL_UNSHIELD_CARGO_TARGET_DIR:-${TMP_DIR}/cargo-target}"',
+            'SWIFT_SCRATCH_PATH="${TMP_DIR}/swift-build"',
+            'RUST_HOST_TARGET="aarch64-apple-darwin"',
+            'RUST_HOST_TARGET="x86_64-apple-darwin"',
+            "trap cleanup EXIT",
+            'cd "${ROOT_DIR}"',
+            'rm -rf "${BRIDGE_PATH}"',
+            'rustup target add "${RUST_HOST_TARGET}"',
+            'CARGO_TARGET_DIR="${BRIDGE_TARGET_DIR}"',
+            "cargo build -p connect_norito_bridge --lib --release",
+            '--target "${RUST_HOST_TARGET}"',
+            "--features privacy-production-enabled",
+            "xcodebuild -create-xcframework",
+            'touch "${BRIDGE_PATH}/.privacy-production-enabled"',
+            "-p iroha_core --example confidential_v2_vk_json -- unshield-v3 1",
+            "base64.b64decode(encoded, validate=True)",
+            'export IROHA_SWIFT_UNSHIELD_V3_RECORD_PATH=',
+            'export IROHA_SWIFT_UNSHIELD_ATTACHMENT_OUT=',
+            'swift test --scratch-path "${SWIFT_SCRATCH_PATH}"',
+            "--filter ConfidentialUnshieldRedeemNativeTests",
+            'test -s "${IROHA_SWIFT_UNSHIELD_ATTACHMENT_OUT}"',
+            "-p iroha_core --test swift_confidential_unshield_redeem",
+            "swift_confidential_unshield_redeem_attachment_is_canonical_and_verifies",
+            'export KAGEMUSHA_RECURSIVE_SPEND_SWIFT_SCRATCH_PATH="${SWIFT_SCRATCH_PATH}"',
+            'bash "${ROOT_DIR}/ci/check_kagemusha_recursive_spend_swift_sdk.sh"',
+        ),
+        "Swift confidential-unshield redeem native E2E runner",
+        errors,
+    )
+    require_contains(
+        texts,
+        "crates/iroha_core/tests/swift_confidential_unshield_redeem.rs",
+        (
+            "swift_confidential_unshield_redeem_attachment_is_canonical_and_verifies",
+            "norito::decode_from_bytes(&bytes)",
+            "confidential_unshield_v3_vk_record(",
+            "iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE",
+            "ensure_confidential_unshield_v3_canonical_vk_box(vk)",
+            "Some(Hash::new(&attachment.proof.bytes).into())",
+            "norito::decode_from_bytes(&attachment.proof.bytes)",
+            "CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1",
+            "verify_backend(",
+        ),
+        "Rust acceptance of Swift confidential-unshield redeem attachment",
+        errors,
+    )
+
+
 def check_swift_sdk_script_prints_swiftc_version(errors):
     script = read(SWIFT_SDK_PARSE_COMMAND)
     require(
@@ -24252,29 +24966,63 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
         errors,
     )
     require(
+        'SWIFT_TEST_ARGS=()' in script
+        and 'KAGEMUSHA_RECURSIVE_SPEND_SWIFT_SCRATCH_PATH' in script
+        and '--scratch-path' in script
+        and '"${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter' in script,
+        "Kagemusha Swift SDK script must isolate focused Swift builds in the supplied scratch path",
+        errors,
+    )
+    require(
         '"${SWIFT_BIN}" --version' in script,
         "Kagemusha Swift SDK script must print the selected swift version",
         errors,
     )
     require(
-        '"${SWIFT_BIN}" test --filter ToriiClientTests/testGetOfflineReadiness' in script,
+        '"${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter ToriiClientTests/testGetOfflineReadiness' in script,
         "Kagemusha Swift SDK script must run Torii offline readiness ABI exactness tests",
         errors,
     )
     require(
-        '"${SWIFT_BIN}" test --filter \'ToriiClientTests/testCanonicalQuerySelectorsRejectSurroundingWhitespace|ToriiClientTests/testAccountAssetQueryHelpersRejectSurroundingWhitespace|ToriiClientTests/testGetAssetsEncodesScopeSelectorFilter|ToriiClientTests/testGetAssetsRejectsPaddedScopeBeforeNetwork|ToriiClientTests/testGetUaidPortfolioRejectsPaddedLiteralBeforeNetwork\'' in script,
+        '"${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter \'ToriiClientTests/testCanonicalQuerySelectorsRejectSurroundingWhitespace|ToriiClientTests/testAccountAssetQueryHelpersRejectSurroundingWhitespace|ToriiClientTests/testGetAssetsEncodesScopeSelectorFilter|ToriiClientTests/testGetAssetsRejectsPaddedScopeBeforeNetwork|ToriiClientTests/testGetUaidPortfolioRejectsPaddedLiteralBeforeNetwork\'' in script,
         "Kagemusha Swift SDK script must run Torii query selector exactness tests",
         errors,
     )
     require(
-        '"${SWIFT_BIN}" test --filter OfflineNoteRedeemPlannerTests' in script,
+        '"${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter OfflineNoteRedeemPlannerTests' in script,
         "Kagemusha Swift SDK script must run Offline Note redeem planner draft/finalize tests",
+        errors,
+    )
+    require(
+        '"${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter PrivacyConfidentialWitnessTests' in script,
+        "Kagemusha Swift SDK script must run confidential witness request tests",
+        errors,
+    )
+    require(
+        '"${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter KagemushaTopUpParityTests' in script,
+        "Kagemusha Swift SDK script must run checked redeem proof attachment tests",
+        errors,
+    )
+    require(
+        '"${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter IrohaSDKConfidentialUnshieldWorkflowTests' in script,
+        "Kagemusha Swift SDK script must run confidential-unshield SDK workflow tests",
+        errors,
+    )
+    require(
+        '"${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter \'ToriiClientTests/testGetVerifyingKeyAsync|ToriiClientTests/testVerifyingKeyDetailConvertsExactNoritoRecordForKagemusha|ToriiClientTests/testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64\'' in script,
+        "Kagemusha Swift SDK script must run Torii verifier-record fetch, archive conversion, and noncanonical Base64 tests",
+        errors,
+    )
+    require(
+        '"${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter NoritoTests' in script,
+        "Kagemusha Swift SDK script must run canonical Norito frame tests",
         errors,
     )
     for relative in (
         "IrohaSwift/Sources/IrohaSwift/AccountAddress.swift",
         "IrohaSwift/Sources/IrohaSwift/AssetDefinitionAddress.swift",
         "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+        "IrohaSwift/Sources/IrohaSwift/Norito.swift",
         "IrohaSwift/Sources/IrohaSwift/CanonicalRequest.swift",
         "IrohaSwift/Sources/IrohaSwift/Crypto.swift",
         "IrohaSwift/Sources/IrohaSwift/ConnectAsyncSequence.swift",
@@ -24295,6 +25043,7 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
         "IrohaSwift/Sources/IrohaSwift/ConnectSession.swift",
         "IrohaSwift/Sources/IrohaSwift/NexusAppClient.swift",
         "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
+        "IrohaSwift/Sources/IrohaSwift/PrivacyConfidentialWitness.swift",
         "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift",
         "IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteProver.swift",
         "IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteV2Prover.swift",
@@ -24340,6 +25089,7 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/ConnectAsyncSequenceTests.swift",
@@ -24365,6 +25115,10 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
         "IrohaSwift/Tests/IrohaSwiftTests/NexusAppClientTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/PrivacyConfidentialWitnessTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/ConfidentialUnshieldRedeemNativeTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKConfidentialUnshieldWorkflowTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/NoritoTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/ToriiCanonicalRequestTests.swift",
@@ -24614,6 +25368,118 @@ def check_java_kotlin(texts, errors):
     )
     require_contains(
         texts,
+        kotlin_request_codecs,
+        (
+            "private const val PRIVACY_SCHEMA_VERIFY_PROOF_RESULT = 0x56",
+            "fun buildRedeemProofAttachment(",
+            "blockHeight: Long? = null",
+            "internal fun buildRedeemProofAttachmentChecked(",
+            "PrivacyNativeBridge::verifyProof",
+            "import org.hyperledger.iroha.sdk.crypto.IrohaHash",
+            "private fun irohaHash(value: ByteArray): ByteArray = IrohaHash.prehash(value)",
+            "PrivacyConfidentialWitnessCodecs.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF",
+            "requireResolvedLifecycle = true",
+            "PrivacyConfidentialWitnessCodecs.buildConfidentialUnshieldVerifyRequestV1(proof.proof)",
+            "val verifyResult = verifyProof(verifyRequest)",
+            "parsePrivacyVerifyResult(",
+            "proof.contentEquals(expectedProof)",
+            'require(verified) { "$label must confirm proof verification" }',
+            "record.publicInputsSchemaHash.contentEquals(irohaHash(expectedSchema))",
+            "writeOptionFixed32(it, irohaHash(envelope.archive))",
+            "private fun validateVerifierRecordLifecycle(",
+            "private fun requireVerifierKeyIdComponent(",
+            "private val VERIFIER_KEY_ID_FORBIDDEN_SEPARATORS",
+            "record.activationHeight == null && record.withdrawHeight == null",
+            "require(blockHeight >= activationHeight)",
+            "require(blockHeight < withdrawHeight)",
+        ),
+        "Kotlin checked redeem proof attachment parity",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_request_codecs,
+        (
+            "private static final int PRIVACY_SCHEMA_VERIFY_PROOF_RESULT = 0x56;",
+            "public static byte[] buildRedeemProofAttachment(",
+            "final Long blockHeight",
+            "static byte[] buildRedeemProofAttachmentChecked(",
+            "PrivacyNativeBridge::verifyProof",
+            "import org.hyperledger.iroha.android.crypto.IrohaHash;",
+            "return IrohaHash.prehash(value);",
+            "PrivacyConfidentialWitness.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF",
+            "final byte[] verifyResult = verifyProof.verify(verifyRequest);",
+            "parsePrivacyVerifyResult(",
+            "Arrays.equals(proof, expectedProof)",
+            'require(verified, label + " must confirm proof verification")',
+            "blockHeight,\n            true);",
+            "Arrays.equals(record.publicInputsSchemaHash, irohaHash(expectedSchema))",
+            "writeOptionFixed32(child, irohaHash(envelope.archive))",
+            "private static void validateVerifierRecordLifecycle(",
+            "private static void requireVerifierKeyIdComponent(",
+            "private static final String[] VERIFIER_KEY_ID_FORBIDDEN_SEPARATORS",
+            "record.activationHeight == null && record.withdrawHeight == null",
+            "require(blockHeight >= record.activationHeight",
+            "require(blockHeight < record.withdrawHeight",
+        ),
+        "Android Java checked redeem proof attachment parity",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_request_codecs_test,
+        (
+            "redeem proof attachment builder emits canonical proof attachment archive",
+            "redeem proof attachment requires an exact successful native verification result",
+            "redeem proof attachment resolves verifier lifecycle at the supplied block height",
+            "redeem proof attachment rejects noncanonical verifier key id aliases",
+            "buildRedeemProofAttachmentChecked(",
+            "successfulUnshieldVerifyResult(fixture.envelopeArchive)",
+            "schemaMarker = 0x56",
+            "CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF",
+            "import org.hyperledger.iroha.sdk.crypto.Blake2b",
+            "val expectedEnvelopeHash = Blake2b.digest256(fixture.envelopeArchive)",
+            "(expectedEnvelopeHash.last().toInt() or 0x01).toByte()",
+            "private fun irohaHashForTest(value: ByteArray): ByteArray {",
+            "val digest = Blake2b.digest256(value)",
+            "(digest.last().toInt() or 0x01).toByte()",
+            "buildAt(null)",
+            "buildAt(9)",
+            "buildAt(10)",
+            "buildAt(19)",
+            "buildAt(20)",
+        ),
+        "Kotlin checked redeem proof attachment parity tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_test,
+        (
+            "typedEvidenceHelpersAssembleCheckedProofArchives();",
+            "redeemAttachmentRequiresNativeVerificationAndLifecycle();",
+            "redeemAttachmentRejectsNoncanonicalVerifierKeyIdAliases();",
+            "buildRedeemProofAttachmentChecked(",
+            "successfulUnshieldVerifyResult(unshieldFixture.envelopeArchive)",
+            "PrivacyConfidentialWitness.CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF",
+            "irohaHash(unshieldFixture.envelopeArchive)",
+            "import org.hyperledger.iroha.android.crypto.Blake2b;",
+            "private static byte[] irohaHash(final byte[] value) {",
+            "final byte[] digest = Blake2b.digest256(value);",
+            "digest[digest.length - 1] = (byte) (digest[digest.length - 1] | 0x01);",
+            "return digest;",
+            "buildCheckedRedeemAttachmentAt(fixture, windowedRecord, null)",
+            "buildCheckedRedeemAttachmentAt(fixture, windowedRecord, 9L)",
+            "buildCheckedRedeemAttachmentAt(fixture, windowedRecord, 10L)",
+            "buildCheckedRedeemAttachmentAt(fixture, windowedRecord, 19L)",
+            "buildCheckedRedeemAttachmentAt(fixture, windowedRecord, 20L)",
+            "false,\n                            0x56",
+        ),
+        "Android Java checked redeem proof attachment parity tests",
+        errors,
+    )
+    require_contains(
+        texts,
         kotlin_instruction_archives,
         (
             "topUpTransactionPayloadFromInitRequest",
@@ -24768,16 +25634,16 @@ def check_java_kotlin(texts, errors):
     require_regex(
         texts,
         kotlin_request_codecs,
-        r"private fun readRequiredMetadataOption\([\s\S]*?val payload = readOptionRawPayload\(decoder, field\)[\s\S]*?require\(payload\.size == 32\) \{ \"\$field must be exactly 32 bytes\" \}[\s\S]*?val value = payload\.copyOf\(\)[\s\S]*?require\(!isZero32\(value\)\)",
-        "Kotlin Pallas metadata option raw fixed32 decoder",
+        r"private fun readRequiredMetadataOption\([\s\S]*?val payload = readOptionRawPayload\(decoder, field\)[\s\S]*?NoritoDecoder\(payload[\s\S]*?readFixed32\(field\)[\s\S]*?require\(child\.remaining\(\) == 0\)[\s\S]*?require\(!isZero32\(value\)\)",
+        "Kotlin Pallas metadata option generic fixed32 decoder",
         errors,
         flags=re.S,
     )
     require_not_regex(
         texts,
         kotlin_request_codecs,
-        r"private fun readRequiredMetadataOption\([\s\S]*?NoritoDecoder\(payload[\s\S]*?readFixed32\(field\)",
-        "Kotlin Pallas metadata option raw fixed32 decoder",
+        r"private fun readRequiredMetadataOption\([\s\S]*?require\(payload\.size == 32\)[\s\S]*?payload\.copyOf\(\)",
+        "Kotlin Pallas metadata option generic fixed32 decoder",
         errors,
         flags=re.S,
     )
@@ -25136,9 +26002,9 @@ def check_java_kotlin(texts, errors):
             '"previousProofOpenEnvelopes[0] transcript_label must be non-empty"',
             '"previousProofOpenEnvelopes[0] transcript_label exceeds 128 bytes"',
             '"previousProofOpenEnvelopes[0].vk_commitment is required"',
-            '"previousProofOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"',
-            '"previousProofOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"',
-            '"previousProofOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
+            '"previousProofOpenEnvelopes[0].vk_commitment option tag must be 0 or 1"',
+            '"previousProofOpenEnvelopes[0].public_inputs_schema_hash payload length mismatch"',
+            '"previousProofOpenEnvelopes[0].domain_tag option tag must be 0 or 1"',
             '"Trailing bytes after previousProofOpenEnvelopes[0]"',
             '"Unexpected end of data"',
             "assertEquals(expectedMessage, archiveError.message)",
@@ -25164,12 +26030,12 @@ def check_java_kotlin(texts, errors):
             '"previousProofOpenEnvelopes[0] transcript_label exceeds 128 bytes"',
             "pallasOpenEnvelopeVectorArchive { it.includeVkCommitment = false } to",
             '"previousProofOpenEnvelopes[0].vk_commitment is required"',
-            "pallasOpenEnvelopeVectorArchive { it.vkCommitmentPayload = fixedArrayPayload(0x70, 32) } to",
-            '"previousProofOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"',
-            "pallasOpenEnvelopeVectorArchive { it.publicInputsSchemaHashPayload = fixedArrayPayload(0x71, 32) } to",
-            '"previousProofOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"',
-            "pallasOpenEnvelopeVectorArchive { it.domainTagPayload = fixedArrayPayload(0x72, 32) } to",
-            '"previousProofOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
+            "it.vkCommitmentOptionPayload = testOptionRawWithUnknownTag()",
+            '"previousProofOpenEnvelopes[0].vk_commitment option tag must be 0 or 1"',
+            "it.publicInputsSchemaHashOptionPayload = testOptionRawWithDeclaredLengthTooLong(fixedBytes(0x71))",
+            '"previousProofOpenEnvelopes[0].public_inputs_schema_hash payload length mismatch"',
+            "it.domainTagOptionPayload = testOptionRawWithUnknownTag()",
+            '"previousProofOpenEnvelopes[0].domain_tag option tag must be 0 or 1"',
             "pallasOpenEnvelopeVectorArchive { it.trailingEnvelopeBytes = byteArrayOf(0x7f) } to",
             '"Trailing bytes after previousProofOpenEnvelopes[0]"',
             'pallasOpenEnvelopeVectorArchiveWithPayload(byteArrayOf(0x00)) to "Unexpected end of data"',
@@ -25190,6 +26056,7 @@ def check_java_kotlin(texts, errors):
         texts,
         kotlin_request_codecs_test,
         (
+            "recursive spend decoder accepts norito length-delimited option metadata",
             "var vkCommitmentPayload: ByteArray? = null",
             "var publicInputsSchemaHashPayload: ByteArray? = null",
             "var domainTagPayload: ByteArray? = null",
@@ -25199,14 +26066,10 @@ def check_java_kotlin(texts, errors):
             "it.vkCommitmentPayload = fixedArrayPayload(0x70, 32)",
             "it.publicInputsSchemaHashPayload = fixedArrayPayload(0x71, 32)",
             "it.domainTagPayload = fixedArrayPayload(0x72, 32)",
-            '"pallasOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"',
-            '"pallasOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"',
-            '"pallasOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
-            '"previousProofOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"',
-            '"previousProofOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"',
-            '"previousProofOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
+            "for (envelope in listOf(lengthDelimitedEnvelope, packedEnvelope))",
+            "previousProofOpenEnvelopes = lengthDelimitedEnvelope",
         ),
-        "Kotlin Pallas metadata option malformed fixed-array vectors",
+        "Kotlin Pallas metadata option generic fixed32 compatibility vectors",
         errors,
     )
     require_contains(
@@ -25295,16 +26158,16 @@ def check_java_kotlin(texts, errors):
     require_regex(
         texts,
         java_request_codecs,
-        r"private static byte\[\] readRequiredMetadataOption\([\s\S]*?final byte\[\] payload = readOptionRawPayload\(decoder, field\);[\s\S]*?require\(payload\.length == 32, field \+ \" must be exactly 32 bytes\"\);[\s\S]*?final byte\[\] value = Arrays\.copyOf\(payload, payload\.length\);[\s\S]*?require\(!isZero\(value\), field \+ \" must be non-zero\"\);",
-        "Android Java Pallas metadata option raw fixed32 decoder",
+        r"private static byte\[\] readRequiredMetadataOption\([\s\S]*?final byte\[\] payload = readOptionRawPayload\(decoder, field\);[\s\S]*?new NoritoDecoder\(payload[\s\S]*?readFixedBytes\(child, 32, field\)[\s\S]*?require\(child\.remaining\(\) == 0[\s\S]*?require\(!isZero\(value\), field \+ \" must be non-zero\"\);",
+        "Android Java Pallas metadata option generic fixed32 decoder",
         errors,
         flags=re.S,
     )
     require_not_regex(
         texts,
         java_request_codecs,
-        r"private static byte\[\] readRequiredMetadataOption\([\s\S]*?new NoritoDecoder\(payload[\s\S]*?readFixedBytes\(child, 32, field\)",
-        "Android Java Pallas metadata option raw fixed32 decoder",
+        r"private static byte\[\] readRequiredMetadataOption\([\s\S]*?require\(payload\.length == 32[\s\S]*?Arrays\.copyOf\(payload",
+        "Android Java Pallas metadata option generic fixed32 decoder",
         errors,
         flags=re.S,
     )
@@ -25627,9 +26490,9 @@ def check_java_kotlin(texts, errors):
             '"previousProofOpenEnvelopes[0] transcript_label must be non-empty"',
             '"previousProofOpenEnvelopes[0] transcript_label exceeds 128 bytes"',
             '"previousProofOpenEnvelopes[0].vk_commitment is required"',
-            '"previousProofOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"',
-            '"previousProofOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"',
-            '"previousProofOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
+            '"previousProofOpenEnvelopes[0].vk_commitment option tag must be 0 or 1"',
+            '"previousProofOpenEnvelopes[0].public_inputs_schema_hash payload length mismatch"',
+            '"previousProofOpenEnvelopes[0].domain_tag option tag must be 0 or 1"',
             '"Trailing bytes after previousProofOpenEnvelopes[0]"',
             '"Unexpected end of data"',
             "assert expectedMessage.equals(archiveError.getMessage());",
@@ -25656,12 +26519,12 @@ def check_java_kotlin(texts, errors):
             '"previousProofOpenEnvelopes[0] transcript_label exceeds 128 bytes"',
             "pallasOpenEnvelopeVectorArchive(spec -> spec.includeVkCommitment = false),",
             '"previousProofOpenEnvelopes[0].vk_commitment is required"',
-            "pallasOpenEnvelopeVectorArchive(spec -> spec.vkCommitmentPayload = fixedArrayPayload((byte) 0x70, 32)),",
-            '"previousProofOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"',
-            "spec.publicInputsSchemaHashPayload = fixedArrayPayload((byte) 0x71, 32)",
-            '"previousProofOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"',
-            "pallasOpenEnvelopeVectorArchive(spec -> spec.domainTagPayload = fixedArrayPayload((byte) 0x72, 32)),",
-            '"previousProofOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
+            "spec -> spec.vkCommitmentOptionPayload = testOptionRawWithUnknownTag()",
+            '"previousProofOpenEnvelopes[0].vk_commitment option tag must be 0 or 1"',
+            "spec.publicInputsSchemaHashOptionPayload =",
+            '"previousProofOpenEnvelopes[0].public_inputs_schema_hash payload length mismatch"',
+            "spec -> spec.domainTagOptionPayload = testOptionRawWithUnknownTag()",
+            '"previousProofOpenEnvelopes[0].domain_tag option tag must be 0 or 1"',
             "pallasOpenEnvelopeVectorArchive(spec -> spec.trailingEnvelopeBytes = new byte[] {0x7f}),",
             '"Trailing bytes after previousProofOpenEnvelopes[0]"',
             '{pallasOpenEnvelopeVectorArchiveWithPayload(new byte[] {0x00}), "Unexpected end of data"}',
@@ -25682,6 +26545,7 @@ def check_java_kotlin(texts, errors):
         texts,
         java_test,
         (
+            "recursiveSpendDecoderAcceptsNoritoLengthDelimitedOptionMetadata",
             "byte[] vkCommitmentPayload = null;",
             "byte[] publicInputsSchemaHashPayload = null;",
             "byte[] domainTagPayload = null;",
@@ -25692,14 +26556,10 @@ def check_java_kotlin(texts, errors):
             "spec.vkCommitmentPayload = fixedArrayPayload((byte) 0x70, 32)",
             "spec.publicInputsSchemaHashPayload = fixedArrayPayload((byte) 0x71, 32)",
             "spec.domainTagPayload = fixedArrayPayload((byte) 0x72, 32)",
-            '"pallasOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"',
-            '"pallasOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"',
-            '"pallasOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
-            '"previousProofOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"',
-            '"previousProofOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"',
-            '"previousProofOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
+            "for (final byte[] envelope : new byte[][] {lengthDelimitedEnvelope, packedEnvelope})",
+            "lengthDelimitedEnvelope,\n                appendArtifacts.typed",
         ),
-        "Android Java Pallas metadata option malformed fixed-array vectors",
+        "Android Java Pallas metadata option generic fixed32 compatibility vectors",
         errors,
     )
     require_contains(
@@ -29738,13 +30598,14 @@ def check_java_kotlin(texts, errors):
         texts,
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
         (
-            "vkCommitmentPayload: Self.fixedArrayPayload(0x70, count: 32)",
-            "publicInputsSchemaHashPayload: Self.fixedArrayPayload(0x71, count: 32)",
-            "domainTagPayload: Self.fixedArrayPayload(0x72, count: 32)",
+            "testPallasMetadataAcceptsPackedAndConstVecFixed32Options",
+            "requiredOptionPayloadWithTrailingByte",
+            "requiredOptionPayloadWithUnknownTag",
+            "requiredOptionPayloadWithDeclaredLengthTooLong",
             '.invalidArchive("pallasOpenEnvelopes.\\(metadataField)")',
             '.invalidArchive("previousProofOpenEnvelopes.\\(metadataField)")',
         ),
-        "Swift Pallas metadata option malformed fixed-array vectors",
+        "Swift Pallas metadata option generic fixed32 and malformed framing vectors",
         errors,
     )
     require_contains(
@@ -34152,6 +35013,7 @@ def run_checks(texts):
     check_workflow_runs_native_bridge_tests(texts, errors)
     check_workflow_runs_python_sdk_tests(errors)
     check_workflow_runs_jvm_sdk_tests(errors)
+    check_workflow_runs_unshield_redeem_rust_tests(errors)
     check_workflow_runs_swift_sdk_parse(errors)
     check_swift_sdk_script_prints_swiftc_version(errors)
     check_workflow_runs_csharp_sdk_tests(errors)
@@ -34225,6 +35087,7 @@ def run_checks(texts):
     check_javascript(texts, errors)
     check_python(texts, errors)
     check_swift(texts, errors)
+    check_swift_unshield_redeem_interoperability(texts, errors)
     check_java_kotlin(texts, errors)
     check_sdk_redeem_change_output_reserved_collisions(texts, errors)
     check_sdk_topup_anchor_nullifier_invariants(texts, errors)
@@ -34701,7 +35564,7 @@ if mode == "--negative-control-native-bridge-needs-workflow":
     original = read(target)
     mutated = original.replace(
         MAIN_JOB_NEEDS_LINE,
-        "    needs: [kagemusha_swift_sdk_parse, kagemusha_csharp_sdk_tests, kagemusha_javascript_sdk_tests, kagemusha_jvm_sdk_tests, kagemusha_python_sdk_tests]",
+        "    needs: [kagemusha_unshield_redeem_rust_tests, kagemusha_swift_sdk_parse, kagemusha_csharp_sdk_tests, kagemusha_javascript_sdk_tests, kagemusha_jvm_sdk_tests, kagemusha_python_sdk_tests]",
         1,
     )
     if mutated == original:
@@ -36853,7 +37716,7 @@ if mode == "--negative-control-python-sdk-needs-workflow":
     original = read(target)
     mutated = original.replace(
         MAIN_JOB_NEEDS_LINE,
-        "    needs: [kagemusha_native_bridge_tests, kagemusha_swift_sdk_parse, kagemusha_csharp_sdk_tests, kagemusha_javascript_sdk_tests, kagemusha_jvm_sdk_tests]",
+        "    needs: [kagemusha_native_bridge_tests, kagemusha_unshield_redeem_rust_tests, kagemusha_swift_sdk_parse, kagemusha_csharp_sdk_tests, kagemusha_javascript_sdk_tests, kagemusha_jvm_sdk_tests]",
         1,
     )
     if mutated == original:
@@ -37556,6 +38419,18 @@ if mode == "--negative-control-jvm-recursive-compact-verifier-availability":
 if mode == "--negative-control-jvm-recursive-compact-shape-classifier":
     mutated_texts = dict(texts)
     targets = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/Norito.swift",
+            "guard paddingLength <= NoritoHeader.maxHeaderPadding else { return nil }",
+            "guard paddingLength <= Int.max else { return nil }",
+            "Swift canonical Norito header padding limit",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/NoritoTests.swift",
+            "testNoritoDecodeFrameEnforcesCanonicalHeaderPaddingLimit",
+            "testNoritoDecodeFrameAllowsUnboundedHeaderPadding",
+            "Swift canonical Norito header padding tests",
+        ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
             "Kotlin recursive compact verifier tests",
@@ -38602,6 +39477,804 @@ if mode == "--negative-control-mobile-confidential-note-coverage":
 if mode == "--negative-control-mobile-confidential-witness-codecs":
     mutated_texts = dict(texts)
     targets = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/PrivacyConfidentialWitness.swift",
+            "public static func buildConfidentialUnshieldProofRequestV1(",
+            "public static func buildConfidentialGenericProofRequestV1(",
+            "Swift confidential unshield witness request builder",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/PrivacyConfidentialWitness.swift",
+            "public static func encodeUnshieldWitness(",
+            "public static func encodeGenericWitness(",
+            "Swift confidential unshield witness request builder",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/PrivacyConfidentialWitnessTests.swift",
+            "testEncodesUnshieldWitnessAndProofRequestWireShape",
+            "testEncodesGenericWitnessAndProofRequestWireShape",
+            "Swift confidential unshield witness request tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/PrivacyConfidentialWitnessTests.swift",
+            "testUnshieldWitnessAcceptsZeroOrOneChangeAndCanonicalPublicAmount",
+            "testUnshieldWitnessAcceptsAnyChangeAndPublicAmount",
+            "Swift confidential unshield witness request tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/PrivacyConfidentialWitnessTests.swift",
+            "testUnshieldProofRequestRejectsTransferOutputsAndCrossWiredVerifierRef",
+            "testUnshieldProofRequestAllowsTransferOutputsAndCrossWiredVerifierRef",
+            "Swift confidential unshield witness request tests",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "public static func buildRedeemProofAttachment(",
+            "public static func buildUncheckedRedeemProofAttachment(",
+            "Swift checked redeem proof attachment builder",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "private static let confidentialStatusActive: UInt32 = 1",
+            "private static let confidentialStatusActive: UInt8 = 1",
+            "Swift Kagemusha canonical fixed32/hash/status wire policy",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            'field: "publicInputsSchemaHash"',
+            'field: "uncheckedPublicInputsSchemaHash"',
+            "Swift Kagemusha canonical fixed32/hash/status wire policy",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "IrohaHash.hash(envelope.archive)",
+            "Blake2b.hash256(envelope.archive)",
+            "Swift checked redeem proof attachment builder",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "record.publicInputsSchemaHash == IrohaHash.hash(expectedSchema)",
+            "record.publicInputsSchemaHash == Blake2b.hash256(expectedSchema)",
+            "Swift checked redeem proof attachment builder",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "expectedVkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef",
+            "expectedVkRef: PrivacyConfidentialWitnessCodecs.confidentialTransferV2VerifierRef",
+            "Swift checked redeem proof attachment builder",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "private static func requireVerifierKeyIdComponent(",
+            "private static func requireUncheckedVerifierKeyIdComponent(",
+            "Swift checked redeem proof attachment builder",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "KagemushaRecursiveSpendRequestCodecs.parseVerifierKeyId(",
+            "KagemushaRecursiveSpendRequestCodecs.requirePortableId(",
+            "Swift checked redeem proof attachment builder",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "frame.paddingLength != expectedPaddingLength",
+            "false",
+            "Swift checked redeem proof attachment builder",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "frame.paddingLength == 0",
+            "frame.paddingLength <= NoritoHeader.maxHeaderPadding",
+            "Swift checked redeem proof attachment builder",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "proofBytes.contains(where: { $0 != 0 })",
+            "!proofBytes.isEmpty",
+            "Swift checked redeem proof attachment builder",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
+            "testBuildRedeemProofAttachmentEmitsCanonicalArchiveAndComposesWithRedeemRequest",
+            "testBuildRedeemProofAttachmentEmitsUncheckedArchive",
+            "Swift checked redeem proof attachment tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
+            "testVerifierRecordArchiveUsesMarkedSchemaHashAndThirtyTwoBitStatus",
+            "testVerifierRecordArchiveUsesNoncanonicalStatus",
+            "Swift checked redeem proof attachment tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
+            "testBuildRedeemProofAttachmentRejectsInvalidUnshieldEvidence",
+            "testBuildRedeemProofAttachmentAllowsInvalidUnshieldEvidence",
+            "Swift checked redeem proof attachment tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
+            "testBuildRedeemProofAttachmentRejectsAdversarialUnshieldEnvelopes",
+            "testBuildRedeemProofAttachmentAllowsAdversarialUnshieldEnvelopes",
+            "Swift checked redeem proof attachment tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
+            "testBuildRedeemProofAttachmentValidatesInlineKeyAndProofCapBoundaries",
+            "testBuildRedeemProofAttachmentSkipsInlineKeyAndProofCapBoundaries",
+            "Swift checked redeem proof attachment tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
+            "testBuildRedeemProofAttachmentRejectsNoncanonicalTypedArchivePadding",
+            "testBuildRedeemProofAttachmentAllowsNoncanonicalTypedArchivePadding",
+            "Swift checked redeem proof attachment tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
+            "testBuildRedeemProofAttachmentRejectsMalformedVerifierRecordArchivesAndIds",
+            "testBuildRedeemProofAttachmentAllowsMalformedVerifierRecordArchivesAndIds",
+            "Swift checked redeem proof attachment tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
+            "XCTAssertNotEqual(Blake2b.hash256(fixture.envelopeArchive), canonicalEnvelopeHash)",
+            "XCTAssertEqual(Blake2b.hash256(fixture.envelopeArchive), canonicalEnvelopeHash)",
+            "Swift checked redeem proof attachment tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
+            "testRejectsLegacyOneByteVerifierRecordStatus",
+            "testAcceptsLegacyOneByteVerifierRecordStatus",
+            "Swift checked redeem proof attachment tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
+            '.invalidArchive("unshieldProofOutputArchive")',
+            '.invalidArchive("uncheckedUnshieldProofOutputArchive")',
+            "Swift checked redeem proof attachment tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
+            '.invalidArchive("unshieldVerifierRecord")',
+            '.invalidArchive("uncheckedUnshieldVerifierRecord")',
+            "Swift checked redeem proof attachment tests",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/PrivacyConfidentialWitness.swift",
+            "public static func buildConfidentialUnshieldVerifyRequestV1(",
+            "public static func buildUncheckedConfidentialUnshieldVerifyRequestV1(",
+            "Swift confidential unshield witness request builder",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/PrivacyConfidentialWitnessTests.swift",
+            "testBuildsCanonicalUnshieldVerifyRequestAndRejectsInvalidProofInputs",
+            "testBuildsUncheckedUnshieldVerifyRequest",
+            "Swift confidential unshield witness request tests",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "verifyProof: PrivacyNativeBridge.verifyProofV1",
+            "verifyProof: { _ in Data() }",
+            "Swift checked redeem proof attachment builder",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            ".buildConfidentialUnshieldVerifyRequestV1(proof: proof.proof)",
+            ".buildConfidentialUnshieldProofRequestV1(proof: proof.proof)",
+            "Swift checked redeem proof attachment builder",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "proof == expectedProof",
+            "!proof.isEmpty",
+            "Swift checked redeem proof attachment builder",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "enforceLifecycleWindow: true",
+            "enforceLifecycleWindow: false",
+            "Swift checked redeem proof attachment builder",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "try $0.readFixedBytes(32)",
+            "try $0.readFixed32Flexible(",
+            "Swift checked redeem proof attachment builder",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
+            "testBuildRedeemProofAttachmentRequiresExactSuccessfulNativeVerification",
+            "testBuildRedeemProofAttachmentSkipsNativeVerification",
+            "Swift checked redeem proof attachment tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
+            "let falselySuccessfulZeroProofResult = privacyBuildResult(",
+            "let falselyAcceptedZeroProofResult = privacyBuildResult(",
+            "Swift checked redeem proof attachment tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
+            "XCTAssertTrue(zeroProofVerifyWasCalled)",
+            "XCTAssertFalse(zeroProofVerifyWasCalled)",
+            "Swift checked redeem proof attachment tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
+            "testPublicBuildRedeemProofAttachmentFailsClosedForCanonicalKeySubstitutionAndZeroProof",
+            "testPublicBuildRedeemProofAttachmentAllowsKeySubstitutionAndZeroProof",
+            "Swift checked redeem proof attachment tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
+            "testBuildRedeemProofAttachmentRejectsElementFramedDirectFixed32Fields",
+            "testBuildRedeemProofAttachmentAllowsElementFramedDirectFixed32Fields",
+            "Swift checked redeem proof attachment tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
+            "testBuildRedeemProofAttachmentEnforcesVerifierLifecycleWindow",
+            "testBuildRedeemProofAttachmentIgnoresVerifierLifecycleWindow",
+            "Swift checked redeem proof attachment tests",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
+            "public let recordNorito: Data?",
+            "public let recordNorito: Data",
+            "Swift Torii exact verifier-record acquisition",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
+            "decoded.base64EncodedString() == encoded",
+            "decoded.base64EncodedString() != encoded",
+            "Swift Torii exact verifier-record acquisition",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
+            "public func asKagemushaRecursiveSpendVerifierRecordRef() throws",
+            "public func asUncheckedVerifierRecordRef() throws",
+            "Swift Torii exact verifier-record acquisition",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
+            "testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64",
+            "testVerifyingKeyDetailAllowsNoncanonicalRecordNoritoBase64",
+            "Swift Torii exact verifier-record acquisition tests",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/TxBuilder.swift",
+            "public func buildKagemushaConfidentialUnshieldRedeemProofAttachment(",
+            "public func buildUncheckedKagemushaRedeemProofAttachment(",
+            "Swift confidential-unshield redeem SDK workflow",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKConfidentialUnshieldWorkflowTests.swift",
+            "testOrchestratorRejectsCrossWiredToriiDetailBeforeProofConstruction",
+            "testOrchestratorAllowsCrossWiredToriiDetail",
+            "Swift confidential-unshield redeem SDK workflow tests",
+        ),
+        (
+            "crates/iroha_torii/src/routing.rs",
+            "vk_record_detail_json_preserves_identity_and_exact_norito_archive",
+            "vk_record_detail_json_omits_exact_norito_archive",
+            "Torii exact verifier-record response",
+        ),
+        (
+            "crates/iroha_torii/tests/grouped/zk.rs",
+            '#[path = "../zk_vk_get_integration.rs"]',
+            '#[path = "../zk_vk_get_legacy.rs"]',
+            "Torii stored verifier-record route test registration",
+        ),
+        (
+            "crates/iroha_torii/tests/zk_vk_get_integration.rs",
+            '.get("record_norito_base64")',
+            '.get("reconstructed_record_norito_base64")',
+            "Torii stored verifier-record route archive tests",
+        ),
+        (
+            "crates/iroha_torii/tests/zk_vk_get_integration.rs",
+            "assert_eq!(decoded_record, expected_record)",
+            "assert_ne!(decoded_record, expected_record)",
+            "Torii stored verifier-record route archive tests",
+        ),
+        (
+            "crates/iroha_torii/tests/zk_vk_get_integration.rs",
+            "assert_eq!(decoded_record.activation_height, Some(10))",
+            "assert_eq!(decoded_record.activation_height, None)",
+            "Torii stored verifier-record route archive tests",
+        ),
+        (
+            "crates/iroha_core/src/smartcontracts/isi/offline.rs",
+            "record.is_active_at(state_transaction.block_height())",
+            "record.is_active()",
+            "Rust confidential-unshield redeem verifier lifecycle",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/ConfidentialUnshieldRedeemNativeTests.swift",
+            "testRealNativeUnshieldProofBuildsRustDecodableRedeemAttachment",
+            "testSyntheticUnshieldProofBuildsUncheckedAttachment",
+            "Swift confidential-unshield native interoperability test",
+        ),
+        (
+            "scripts/build_norito_xcframework.sh",
+            "PRIVACY_PRODUCTION_ENABLED=0",
+            "PRIVACY_PRODUCTION_ENABLED=1",
+            "Apple privacy-production bridge packaging",
+        ),
+        (
+            "scripts/build_norito_xcframework.sh",
+            "--privacy-production-enabled)",
+            "--privacy-production-disabled)",
+            "Apple privacy-production bridge packaging",
+        ),
+        (
+            "scripts/build_norito_xcframework.sh",
+            '"$PRIVACY_PRODUCTION_ENABLED" == "1" && "${NORITO_BRIDGE_SKIP_CARGO_BUILDS:-0}" == "1"',
+            '"$PRIVACY_PRODUCTION_ENABLED" == "1" && "${NORITO_BRIDGE_SKIP_CARGO_BUILDS:-0}" == "0"',
+            "Apple privacy-production bridge packaging",
+        ),
+        (
+            "scripts/build_norito_xcframework.sh",
+            "CARGO_FEATURE_ARGS+=(--features privacy-production-enabled)",
+            "CARGO_FEATURE_ARGS=()",
+            "Apple privacy-production bridge packaging",
+        ),
+        (
+            "scripts/build_norito_xcframework.sh",
+            'CARGO_FEATURE_PROFILE="privacy-production-enabled"',
+            'CARGO_FEATURE_PROFILE="privacy-production-disabled"',
+            "Apple privacy-production bridge packaging",
+        ),
+        (
+            "scripts/build_norito_xcframework.sh",
+            'CARGO_BUILD_DIR_BASE="$BUILD_DIR/cargo-ios${IPHONEOS_DEPLOYMENT_TARGET//./_}-sim${IPHONESIMULATOR_DEPLOYMENT_TARGET//./_}-${CARGO_FEATURE_PROFILE}"',
+            'CARGO_BUILD_DIR_BASE="$BUILD_DIR/cargo-ios${IPHONEOS_DEPLOYMENT_TARGET//./_}-sim${IPHONESIMULATOR_DEPLOYMENT_TARGET//./_}"',
+            "Apple privacy-production bridge packaging",
+        ),
+        (
+            "scripts/build_norito_xcframework.sh",
+            '--target "$DEVICE_TRIPLE" \\\n      "${CARGO_FEATURE_ARGS[@]}"',
+            '--target "$DEVICE_TRIPLE"',
+            "Apple privacy-production bridge packaging",
+        ),
+        (
+            "scripts/build_norito_xcframework.sh",
+            '--target "$SIM_ARM_TRIPLE" \\\n      "${CARGO_FEATURE_ARGS[@]}"',
+            '--target "$SIM_ARM_TRIPLE"',
+            "Apple privacy-production bridge packaging",
+        ),
+        (
+            "scripts/build_norito_xcframework.sh",
+            '--target "$SIM_X64_TRIPLE" \\\n      "${CARGO_FEATURE_ARGS[@]}"',
+            '--target "$SIM_X64_TRIPLE"',
+            "Apple privacy-production bridge packaging",
+        ),
+        (
+            "scripts/build_norito_xcframework.sh",
+            '--target "$MACOS_TRIPLE" \\\n      "${CARGO_FEATURE_ARGS[@]}"',
+            '--target "$MACOS_TRIPLE"',
+            "Apple privacy-production bridge packaging",
+        ),
+        (
+            "scripts/build_norito_xcframework.sh",
+            'touch "$OUT_DIR/${FRAMEWORK_NAME}.xcframework/.privacy-production-enabled"',
+            'rm -f "$OUT_DIR/${FRAMEWORK_NAME}.xcframework/.privacy-production-enabled"',
+            "Apple privacy-production bridge packaging",
+        ),
+        (
+            "scripts/build_norito_xcframework.sh",
+            '"privacy_production_enabled": $PRIVACY_PRODUCTION_JSON',
+            '"privacy_production_enabled": false',
+            "Apple privacy-production bridge packaging",
+        ),
+        (
+            ".github/workflows/mobile_sdk_artifacts.yml",
+            "      privacy_production_enabled:",
+            "      privacy_production_disabled:",
+            "Apple privacy-production artifact workflow",
+        ),
+        (
+            ".github/workflows/mobile_sdk_artifacts.yml",
+            "        run: bash -n scripts/build_norito_xcframework.sh scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/package_mobile_sdk_artifacts.sh",
+            "        run: bash -n scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/package_mobile_sdk_artifacts.sh",
+            "Apple privacy-production artifact workflow",
+        ),
+        (
+            ".github/workflows/mobile_sdk_artifacts.yml",
+            "            build_args+=(--privacy-production-enabled)",
+            "            build_args=()",
+            "Apple privacy-production artifact workflow",
+        ),
+        (
+            ".github/workflows/mobile_sdk_artifacts.yml",
+            '            scripts/build_norito_xcframework.sh "${build_args[@]}"',
+            "            scripts/build_norito_xcframework.sh",
+            "Apple privacy-production artifact workflow",
+        ),
+        (
+            ".github/workflows/mobile_sdk_artifacts.yml",
+            "            test -f dist/NoritoBridge.xcframework/.privacy-production-enabled",
+            "            true",
+            "Apple privacy-production artifact workflow",
+        ),
+        (
+            ".github/workflows/mobile_sdk_artifacts.yml",
+            "            test ! -e dist/NoritoBridge.xcframework/.privacy-production-enabled",
+            "            true",
+            "Apple privacy-production artifact workflow",
+        ),
+        (
+            "scripts/check_mobile_sdk_artifacts.sh",
+            '\'"privacy_production_enabled"[[:space:]]*:\'',
+            '\'"privacy_production_enabled"[[:space:]]*:[[:space:]]*(true|false)\'',
+            "Apple privacy-production artifact validation",
+        ),
+        (
+            "scripts/check_mobile_sdk_artifacts.sh",
+            '\'"privacy_production_enabled"[[:space:]]*:[[:space:]]*(true|false)\'',
+            '\'"privacy_production_enabled"[[:space:]]*:\'',
+            "Apple privacy-production artifact validation",
+        ),
+        (
+            "scripts/check_mobile_sdk_artifacts.sh",
+            "if [[ ${#privacy_keys[@]} -ne 1 || ${#privacy_declarations[@]} -ne 1 ]]; then",
+            "if [[ ${#privacy_declarations[@]} -ne 1 ]]; then",
+            "Apple privacy-production artifact validation",
+        ),
+        (
+            "scripts/check_mobile_sdk_artifacts.sh",
+            'require_file "$privacy_marker" "privacy-production-enabled XCFramework marker"',
+            'test -e "$privacy_marker" || true',
+            "Apple privacy-production artifact validation",
+        ),
+        (
+            "scripts/check_mobile_sdk_artifacts.sh",
+            "default privacy artifact must not carry the privacy-production-enabled XCFramework marker",
+            "default privacy artifact may carry the privacy-production-enabled XCFramework marker",
+            "Apple privacy-production artifact validation",
+        ),
+        (
+            "scripts/check_mobile_sdk_artifacts_test.sh",
+            'enabled_privacy="$TMP_DIR/enabled-privacy"',
+            'enabled_privacy="$TMP_DIR/unchecked-enabled-privacy"',
+            "Apple privacy-production artifact validation tests",
+        ),
+        (
+            "scripts/check_mobile_sdk_artifacts_test.sh",
+            'enabled_without_marker="$TMP_DIR/enabled-without-marker"',
+            'enabled_without_marker="$TMP_DIR/enabled-with-marker"',
+            "Apple privacy-production artifact validation tests",
+        ),
+        (
+            "scripts/check_mobile_sdk_artifacts_test.sh",
+            'default_with_marker="$TMP_DIR/default-with-marker"',
+            'default_with_marker="$TMP_DIR/default-without-marker"',
+            "Apple privacy-production artifact validation tests",
+        ),
+        (
+            "scripts/check_mobile_sdk_artifacts_test.sh",
+            'invalid_privacy_state="$TMP_DIR/invalid-privacy-state"',
+            'invalid_privacy_state="$TMP_DIR/valid-privacy-state"',
+            "Apple privacy-production artifact validation tests",
+        ),
+        (
+            "scripts/check_mobile_sdk_artifacts_test.sh",
+            'duplicate_mixed_privacy_state="$TMP_DIR/duplicate-mixed-privacy-state"',
+            'duplicate_mixed_privacy_state="$TMP_DIR/allowed-mixed-privacy-state"',
+            "Apple privacy-production artifact validation tests",
+        ),
+        (
+            WORKFLOW_PATH,
+            "  kagemusha_unshield_redeem_rust_tests:\n    runs-on: ubuntu-latest\n    timeout-minutes: 60",
+            "  kagemusha_unshield_redeem_rust_tests:\n    runs-on: ubuntu-latest\n    timeout-minutes: 10",
+            "Confidential-unshield redeem Rust CI job",
+        ),
+        (
+            WORKFLOW_PATH,
+            "          cargo test -p iroha_torii --features app_api --test torii_zk zk_vk_get_returns_record_with_key -- --nocapture",
+            "          cargo test -p iroha_torii --features app_api --test torii_zk zk_vk_get_not_found -- --nocapture",
+            "Confidential-unshield redeem Rust CI job",
+        ),
+        (
+            WORKFLOW_PATH,
+            "          cargo test -p iroha_core kagemusha_recursive_redeem_resolver_enforces_unshield_verifier_lifecycle_at_block_height --lib -- --nocapture",
+            "          cargo test -p iroha_core kagemusha_recursive_redeem_resolver_ignores_unshield_verifier_lifecycle --lib -- --nocapture",
+            "Confidential-unshield redeem Rust CI job",
+        ),
+        (
+            WORKFLOW_PATH,
+            MAIN_JOB_NEEDS_LINE,
+            "    needs: [kagemusha_native_bridge_tests, kagemusha_swift_sdk_parse, kagemusha_csharp_sdk_tests, kagemusha_javascript_sdk_tests, kagemusha_jvm_sdk_tests, kagemusha_python_sdk_tests]",
+            "Confidential-unshield redeem Rust CI job",
+        ),
+        (
+            WORKFLOW_PATH,
+            "  kagemusha_swift_sdk_parse:\n    runs-on: macos-latest\n    timeout-minutes: 60",
+            "  kagemusha_swift_sdk_parse:\n    runs-on: macos-latest\n    timeout-minutes: 10",
+            "Swift confidential-unshield combined CI job",
+        ),
+        (
+            WORKFLOW_PATH,
+            '      - uses: Swatinem/rust-cache@v2\n        with:\n          cache-on-failure: "true"\n      - name: Swift confidential-unshield redeem SDK and native interoperability',
+            "      - name: Swift confidential-unshield redeem SDK and native interoperability",
+            "Swift confidential-unshield combined CI job",
+        ),
+        (
+            WORKFLOW_PATH,
+            "        run: ci/check_swift_confidential_unshield_redeem_e2e.sh",
+            "        run: ci/check_kagemusha_recursive_spend_swift_sdk.sh",
+            "Swift confidential-unshield combined CI job",
+        ),
+        (
+            WORKFLOW_PATH,
+            MAIN_JOB_NEEDS_LINE,
+            "    needs: [kagemusha_native_bridge_tests, kagemusha_unshield_redeem_rust_tests, kagemusha_csharp_sdk_tests, kagemusha_javascript_sdk_tests, kagemusha_jvm_sdk_tests, kagemusha_python_sdk_tests]",
+            "Swift confidential-unshield combined CI job",
+        ),
+        (
+            SWIFT_SDK_PARSE_COMMAND,
+            "SWIFT_TEST_ARGS=()",
+            "SWIFT_TEST_ARGS=(--disable-sandbox)",
+            "Swift confidential-unshield focused runner",
+        ),
+        (
+            SWIFT_SDK_PARSE_COMMAND,
+            "KAGEMUSHA_RECURSIVE_SPEND_SWIFT_SCRATCH_PATH",
+            "KAGEMUSHA_RECURSIVE_SPEND_SWIFT_SHARED_BUILD_PATH",
+            "Swift confidential-unshield focused runner",
+        ),
+        (
+            SWIFT_SDK_PARSE_COMMAND,
+            "ToriiClientTests/testGetVerifyingKeyAsync|ToriiClientTests/testVerifyingKeyDetailConvertsExactNoritoRecordForKagemusha|ToriiClientTests/testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64",
+            "ToriiClientTests/testGetVerifyingKeyAsync",
+            "Swift confidential-unshield focused runner",
+        ),
+        (
+            "ci/check_swift_confidential_unshield_redeem_e2e.sh",
+            'BRIDGE_TARGET_DIR="${SWIFT_CONFIDENTIAL_UNSHIELD_CARGO_TARGET_DIR:-${TMP_DIR}/cargo-target}"',
+            'BRIDGE_TARGET_DIR="${ROOT_DIR}/target"',
+            "Swift confidential-unshield redeem native E2E runner",
+        ),
+        (
+            "ci/check_swift_confidential_unshield_redeem_e2e.sh",
+            'cd "${ROOT_DIR}"',
+            'cd "${ROOT_DIR}/IrohaSwift"',
+            "Swift confidential-unshield redeem native E2E runner",
+        ),
+        (
+            "ci/check_swift_confidential_unshield_redeem_e2e.sh",
+            'SWIFT_SCRATCH_PATH="${TMP_DIR}/swift-build"',
+            'SWIFT_SCRATCH_PATH="${ROOT_DIR}/IrohaSwift/.build"',
+            "Swift confidential-unshield redeem native E2E runner",
+        ),
+        (
+            "ci/check_swift_confidential_unshield_redeem_e2e.sh",
+            'RUST_HOST_TARGET="aarch64-apple-darwin"',
+            'RUST_HOST_TARGET="aarch64-apple-ios"',
+            "Swift confidential-unshield redeem native E2E runner",
+        ),
+        (
+            "ci/check_swift_confidential_unshield_redeem_e2e.sh",
+            'RUST_HOST_TARGET="x86_64-apple-darwin"',
+            'RUST_HOST_TARGET="x86_64-apple-ios"',
+            "Swift confidential-unshield redeem native E2E runner",
+        ),
+        (
+            "ci/check_swift_confidential_unshield_redeem_e2e.sh",
+            "--features privacy-production-enabled",
+            "--features privacy-stub-only",
+            "Swift confidential-unshield redeem native E2E runner",
+        ),
+        (
+            "ci/check_swift_confidential_unshield_redeem_e2e.sh",
+            'swift test --scratch-path "${SWIFT_SCRATCH_PATH}"',
+            "swift test",
+            "Swift confidential-unshield redeem native E2E runner",
+        ),
+        (
+            "ci/check_swift_confidential_unshield_redeem_e2e.sh",
+            "--filter ConfidentialUnshieldRedeemNativeTests",
+            "--filter SyntheticUnshieldRedeemTests",
+            "Swift confidential-unshield redeem native E2E runner",
+        ),
+        (
+            "ci/check_swift_confidential_unshield_redeem_e2e.sh",
+            'export KAGEMUSHA_RECURSIVE_SPEND_SWIFT_SCRATCH_PATH="${SWIFT_SCRATCH_PATH}"',
+            "unset KAGEMUSHA_RECURSIVE_SPEND_SWIFT_SCRATCH_PATH",
+            "Swift confidential-unshield redeem native E2E runner",
+        ),
+        (
+            "crates/iroha_core/examples/confidential_v2_vk_json.rs",
+            "record.namespace = iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE.to_owned()",
+            'record.namespace = "core".to_owned()',
+            "Rust canonical unshield-v3 verifier-record exporter",
+        ),
+        (
+            "crates/iroha_core/Cargo.toml",
+            'name = "swift_confidential_unshield_redeem"',
+            "",
+            "Rust Swift confidential-unshield redeem test registration",
+        ),
+        (
+            "crates/iroha_core/tests/swift_confidential_unshield_redeem.rs",
+            "swift_confidential_unshield_redeem_attachment_is_canonical_and_verifies",
+            "swift_confidential_unshield_redeem_attachment_is_unchecked",
+            "Rust acceptance of Swift confidential-unshield redeem attachment",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "internal fun buildRedeemProofAttachmentChecked(",
+            "internal fun buildRedeemProofAttachmentUnchecked(",
+            "Kotlin checked redeem proof attachment parity",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "private const val PRIVACY_SCHEMA_VERIFY_PROOF_RESULT = 0x56",
+            "private const val PRIVACY_SCHEMA_VERIFY_PROOF_RESULT = 0x42",
+            "Kotlin checked redeem proof attachment parity",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "PrivacyNativeBridge::verifyProof",
+            "{ ByteArray(0) }",
+            "Kotlin checked redeem proof attachment parity",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "PrivacyConfidentialWitnessCodecs.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF",
+            "PrivacyConfidentialWitnessCodecs.CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF",
+            "Kotlin checked redeem proof attachment parity",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "record.publicInputsSchemaHash.contentEquals(irohaHash(expectedSchema))",
+            "record.publicInputsSchemaHash.contentEquals(Blake2b.digest(expectedSchema))",
+            "Kotlin checked redeem proof attachment parity",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "writeOptionFixed32(it, irohaHash(envelope.archive))",
+            "writeOptionFixed32(it, Blake2b.digest(envelope.archive))",
+            "Kotlin checked redeem proof attachment parity",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "private fun irohaHash(value: ByteArray): ByteArray = IrohaHash.prehash(value)",
+            "private fun irohaHash(value: ByteArray): ByteArray = Blake2b.digest(value)",
+            "Kotlin checked redeem proof attachment parity",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "requireResolvedLifecycle = true",
+            "requireResolvedLifecycle = false",
+            "Kotlin checked redeem proof attachment parity",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "private fun requireVerifierKeyIdComponent(",
+            "private fun allowVerifierKeyIdComponent(",
+            "Kotlin checked redeem proof attachment parity",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "private val VERIFIER_KEY_ID_FORBIDDEN_SEPARATORS",
+            "private val VERIFIER_KEY_ID_ALLOWED_SEPARATORS",
+            "Kotlin checked redeem proof attachment parity",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "redeem proof attachment requires an exact successful native verification result",
+            "redeem proof attachment accepts unchecked native verification result",
+            "Kotlin checked redeem proof attachment parity tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "redeem proof attachment resolves verifier lifecycle at the supplied block height",
+            "redeem proof attachment ignores verifier lifecycle",
+            "Kotlin checked redeem proof attachment parity tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "redeem proof attachment rejects noncanonical verifier key id aliases",
+            "redeem proof attachment accepts noncanonical verifier key id aliases",
+            "Kotlin checked redeem proof attachment parity tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "val digest = Blake2b.digest256(value)",
+            "val digest = IrohaHash.prehash(value)",
+            "Kotlin checked redeem proof attachment parity tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "(digest.last().toInt() or 0x01).toByte()",
+            "digest.last()",
+            "Kotlin checked redeem proof attachment parity tests",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "static byte[] buildRedeemProofAttachmentChecked(",
+            "static byte[] buildRedeemProofAttachmentUnchecked(",
+            "Android Java checked redeem proof attachment parity",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "private static final int PRIVACY_SCHEMA_VERIFY_PROOF_RESULT = 0x56;",
+            "private static final int PRIVACY_SCHEMA_VERIFY_PROOF_RESULT = 0x42;",
+            "Android Java checked redeem proof attachment parity",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "PrivacyNativeBridge::verifyProof",
+            "request -> new byte[0]",
+            "Android Java checked redeem proof attachment parity",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "PrivacyConfidentialWitness.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF",
+            "PrivacyConfidentialWitness.CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF",
+            "Android Java checked redeem proof attachment parity",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "Arrays.equals(record.publicInputsSchemaHash, irohaHash(expectedSchema))",
+            "Arrays.equals(record.publicInputsSchemaHash, Blake2b.digest(expectedSchema))",
+            "Android Java checked redeem proof attachment parity",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "writeOptionFixed32(child, irohaHash(envelope.archive))",
+            "writeOptionFixed32(child, Blake2b.digest(envelope.archive))",
+            "Android Java checked redeem proof attachment parity",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "return IrohaHash.prehash(value);",
+            "return Blake2b.digest(value);",
+            "Android Java checked redeem proof attachment parity",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "blockHeight,\n            true);",
+            "blockHeight,\n            false);",
+            "Android Java checked redeem proof attachment parity",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "private static void requireVerifierKeyIdComponent(",
+            "private static void allowVerifierKeyIdComponent(",
+            "Android Java checked redeem proof attachment parity",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "private static final String[] VERIFIER_KEY_ID_FORBIDDEN_SEPARATORS",
+            "private static final String[] VERIFIER_KEY_ID_ALLOWED_SEPARATORS",
+            "Android Java checked redeem proof attachment parity",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "redeemAttachmentRequiresNativeVerificationAndLifecycle();",
+            "redeemAttachmentAllowsUncheckedVerification();",
+            "Android Java checked redeem proof attachment parity tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "redeemAttachmentRejectsNoncanonicalVerifierKeyIdAliases();",
+            "redeemAttachmentAcceptsNoncanonicalVerifierKeyIdAliases();",
+            "Android Java checked redeem proof attachment parity tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "final byte[] digest = Blake2b.digest256(value);",
+            "final byte[] digest = IrohaHash.prehash(value);",
+            "Android Java checked redeem proof attachment parity tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "digest[digest.length - 1] = (byte) (digest[digest.length - 1] | 0x01);",
+            "digest[digest.length - 1] = (byte) (digest[digest.length - 1] & 0xfe);",
+            "Android Java checked redeem proof attachment parity tests",
+        ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyConfidentialWitness.kt",
             "buildConfidentialUnshieldProofRequestV1",
@@ -44304,7 +45977,7 @@ if mode == "--negative-control-jvm-sdk-needs-workflow":
     original = read(target)
     mutated = original.replace(
         MAIN_JOB_NEEDS_LINE,
-        "    needs: [kagemusha_native_bridge_tests, kagemusha_swift_sdk_parse, kagemusha_csharp_sdk_tests, kagemusha_javascript_sdk_tests, kagemusha_python_sdk_tests]",
+        "    needs: [kagemusha_native_bridge_tests, kagemusha_unshield_redeem_rust_tests, kagemusha_swift_sdk_parse, kagemusha_csharp_sdk_tests, kagemusha_javascript_sdk_tests, kagemusha_python_sdk_tests]",
         1,
     )
     if mutated == original:
@@ -44387,8 +46060,8 @@ if mode == "--negative-control-swift-sdk-parse-workflow":
     target = WORKFLOW_PATH
     original = read(target)
     mutated = original.replace(
-        f"        run: {SWIFT_SDK_PARSE_COMMAND}",
-        "        run: ci/check_kagemusha_recursive_spend_swift_sdk.sh --skip",
+        f"        run: {SWIFT_UNSHIELD_E2E_COMMAND}",
+        "        run: ci/check_swift_confidential_unshield_redeem_e2e.sh --skip",
         1,
     )
     if mutated == original:
@@ -44398,7 +46071,7 @@ if mode == "--negative-control-swift-sdk-parse-workflow":
         run_checks(texts)
     except ParityError as error:
         message = str(error)
-        expected = "Kagemusha payload workflow must run the Swift recursive spend SDK parse check"
+        expected = "Kagemusha payload workflow must run the Swift confidential-unshield redeem E2E check in the combined job"
         expected_labels = (expected,)
         if expected not in message:
             raise SystemExit(
@@ -44539,9 +46212,49 @@ if mode == "--negative-control-swift-sdk-privacy-parse-script":
             "Kagemusha Swift SDK script must parse IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
         ),
         (
+            "  IrohaSwift/Sources/IrohaSwift/Norito.swift \\\n",
+            "",
+            "Kagemusha Swift SDK script must parse IrohaSwift/Sources/IrohaSwift/Norito.swift",
+        ),
+        (
+            "  IrohaSwift/Sources/IrohaSwift/PrivacyConfidentialWitness.swift \\\n",
+            "",
+            "Kagemusha Swift SDK script must parse IrohaSwift/Sources/IrohaSwift/PrivacyConfidentialWitness.swift",
+        ),
+        (
             "  IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift \\\n",
             "",
             "Kagemusha Swift SDK script must parse IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
+        ),
+        (
+            "  IrohaSwift/Tests/IrohaSwiftTests/PrivacyConfidentialWitnessTests.swift \\\n",
+            "",
+            "Kagemusha Swift SDK script must parse IrohaSwift/Tests/IrohaSwiftTests/PrivacyConfidentialWitnessTests.swift",
+        ),
+        (
+            "  IrohaSwift/Tests/IrohaSwiftTests/NoritoTests.swift \\\n",
+            "",
+            "Kagemusha Swift SDK script must parse IrohaSwift/Tests/IrohaSwiftTests/NoritoTests.swift",
+        ),
+        (
+            "  IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift \\\n",
+            "",
+            "Kagemusha Swift SDK script must parse IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
+        ),
+        (
+            '  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter PrivacyConfidentialWitnessTests\n',
+            "",
+            "Kagemusha Swift SDK script must run confidential witness request tests",
+        ),
+        (
+            '  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter KagemushaTopUpParityTests\n',
+            "",
+            "Kagemusha Swift SDK script must run checked redeem proof attachment tests",
+        ),
+        (
+            '  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter NoritoTests\n',
+            "",
+            "Kagemusha Swift SDK script must run canonical Norito frame tests",
         ),
     )
     detected_messages = []
@@ -45673,7 +47386,7 @@ if mode == "--negative-control-swift-sdk-needs-workflow":
     original = read(target)
     mutated = original.replace(
         MAIN_JOB_NEEDS_LINE,
-        "    needs: [kagemusha_native_bridge_tests, kagemusha_csharp_sdk_tests, kagemusha_javascript_sdk_tests, kagemusha_jvm_sdk_tests, kagemusha_python_sdk_tests]",
+        "    needs: [kagemusha_native_bridge_tests, kagemusha_unshield_redeem_rust_tests, kagemusha_csharp_sdk_tests, kagemusha_javascript_sdk_tests, kagemusha_jvm_sdk_tests, kagemusha_python_sdk_tests]",
         1,
     )
     if mutated == original:
@@ -46302,7 +48015,7 @@ if mode == "--negative-control-csharp-sdk-needs-workflow":
     original = read(target)
     mutated = original.replace(
         MAIN_JOB_NEEDS_LINE,
-        "    needs: [kagemusha_native_bridge_tests, kagemusha_swift_sdk_parse, kagemusha_javascript_sdk_tests, kagemusha_jvm_sdk_tests, kagemusha_python_sdk_tests]",
+        "    needs: [kagemusha_native_bridge_tests, kagemusha_unshield_redeem_rust_tests, kagemusha_swift_sdk_parse, kagemusha_javascript_sdk_tests, kagemusha_jvm_sdk_tests, kagemusha_python_sdk_tests]",
         1,
     )
     if mutated == original:
@@ -47560,7 +49273,7 @@ if mode == "--negative-control-js-sdk-needs-workflow":
     original = read(target)
     mutated = original.replace(
         MAIN_JOB_NEEDS_LINE,
-        "    needs: [kagemusha_native_bridge_tests, kagemusha_swift_sdk_parse, kagemusha_csharp_sdk_tests, kagemusha_jvm_sdk_tests, kagemusha_python_sdk_tests]",
+        "    needs: [kagemusha_native_bridge_tests, kagemusha_unshield_redeem_rust_tests, kagemusha_swift_sdk_parse, kagemusha_csharp_sdk_tests, kagemusha_jvm_sdk_tests, kagemusha_python_sdk_tests]",
         1,
     )
     if mutated == original:
@@ -52885,29 +54598,25 @@ if mode == "--negative-control-non-csharp-pallas-metadata-option-shape":
             "Python Pallas metadata option raw fixed32 decoder",
         ),
         "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt": (
-            """    require(payload.size == 32) { "$field must be exactly 32 bytes" }
-    val value = payload.copyOf()""",
             """    val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
     val value = child.readFixed32(field)
     require(child.remaining() == 0) { "Trailing bytes after $field" }""",
-            "Kotlin Pallas metadata option raw fixed32 decoder",
+            """    require(payload.size == 32) { "$field must be exactly 32 bytes" }
+    val value = payload.copyOf()""",
+            "Kotlin Pallas metadata option generic fixed32 decoder",
         ),
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java": (
-            """    require(payload.length == 32, field + " must be exactly 32 bytes");
-    final byte[] value = Arrays.copyOf(payload, payload.length);""",
             """    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
     final byte[] value = readFixedBytes(child, 32, field);
     require(child.remaining() == 0, "Trailing bytes after " + field);""",
-            "Android Java Pallas metadata option raw fixed32 decoder",
+            """    require(payload.length == 32, field + " must be exactly 32 bytes");
+    final byte[] value = Arrays.copyOf(payload, payload.length);""",
+            "Android Java Pallas metadata option generic fixed32 decoder",
         ),
         "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift": (
-            """        guard let payload = try readOptionRawPayload(&reader, field: field),
-              payload.count == 32,
-              payload.contains(where: { $0 != 0 }) else {""",
-            """        guard let payload = try readOptionRawPayload(&reader, field: field),
-              payload.count >= 32,
-              payload.contains(where: { $0 != 0 }) else {""",
-            "Swift Pallas metadata option raw fixed32 decoder",
+            "let value = try child.readFixed32Flexible(field: field)",
+            "let value = payload",
+            "Swift Pallas metadata option generic fixed32 decoder",
         ),
         "javascript/iroha_js/src/crypto.js": (
             """  const value = kagemushaReadFixedBytesPayload(
@@ -52933,19 +54642,19 @@ if mode == "--negative-control-non-csharp-pallas-metadata-option-shape":
             "Python Pallas metadata option malformed fixed-array vectors",
         ),
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt": (
-            "it.vkCommitmentPayload = fixedArrayPayload(0x70, 32)",
-            "it.vkCommitmentPayload = fixedBytes(0x70)",
-            "Kotlin Pallas metadata option malformed fixed-array vectors",
+            "recursive spend decoder accepts norito length-delimited option metadata",
+            "recursive spend decoder rejects norito length-delimited option metadata",
+            "Kotlin Pallas metadata option generic fixed32 compatibility vectors",
         ),
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
-            "spec.vkCommitmentPayload = fixedArrayPayload((byte) 0x70, 32)",
-            "spec.vkCommitmentPayload = repeat((byte) 0x70, 32)",
-            "Android Java Pallas metadata option malformed fixed-array vectors",
+            "recursiveSpendDecoderAcceptsNoritoLengthDelimitedOptionMetadata",
+            "recursiveSpendDecoderRejectsNoritoLengthDelimitedOptionMetadata",
+            "Android Java Pallas metadata option generic fixed32 compatibility vectors",
         ),
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift": (
-            "vkCommitmentPayload: Self.fixedArrayPayload(0x70, count: 32)",
-            "vkCommitmentPayload: Self.fixed32(0x70)",
-            "Swift Pallas metadata option malformed fixed-array vectors",
+            "testPallasMetadataAcceptsPackedAndConstVecFixed32Options",
+            "testPallasMetadataRejectsPackedAndConstVecFixed32Options",
+            "Swift Kagemusha generic Option fixed32 compatibility tests",
         ),
         "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js": (
             "options: { vkCommitmentPayload: kagemushaFixedArrayPayload(0x70, 32) },",
@@ -52960,8 +54669,7 @@ if mode == "--negative-control-non-csharp-pallas-metadata-option-shape":
     }
     detected_messages = []
     replace_all_labels = {
-        "Kotlin Pallas metadata option malformed fixed-array vectors",
-        "Android Java Pallas metadata option malformed fixed-array vectors",
+        "Android Java Pallas metadata option generic fixed32 compatibility vectors",
     }
     pallas_metadata_decoder_patterns = {
         "Python Pallas metadata option raw fixed32 decoder": (
@@ -52975,18 +54683,20 @@ if mode == "--negative-control-non-csharp-pallas-metadata-option-shape":
             r"[\s\S]*?raise ValueError\(f\"\{field\} must be exactly 32 bytes\"\)"
             r"[\s\S]*?if not any\(value\):"
         ),
-        "Kotlin Pallas metadata option raw fixed32 decoder": (
+        "Kotlin Pallas metadata option generic fixed32 decoder": (
             r"private fun readRequiredMetadataOption\([\s\S]*?"
             r"val payload = readOptionRawPayload\(decoder, field\)"
-            r"[\s\S]*?require\(payload\.size == 32\) \{ \"\$field must be exactly 32 bytes\" \}"
-            r"[\s\S]*?val value = payload\.copyOf\(\)"
+            r"[\s\S]*?NoritoDecoder\(payload"
+            r"[\s\S]*?readFixed32\(field\)"
+            r"[\s\S]*?require\(child\.remaining\(\) == 0\)"
             r"[\s\S]*?require\(!isZero32\(value\)\)"
         ),
-        "Android Java Pallas metadata option raw fixed32 decoder": (
+        "Android Java Pallas metadata option generic fixed32 decoder": (
             r"private static byte\[\] readRequiredMetadataOption\([\s\S]*?"
             r"final byte\[\] payload = readOptionRawPayload\(decoder, field\);"
-            r"[\s\S]*?require\(payload\.length == 32, field \+ \" must be exactly 32 bytes\"\);"
-            r"[\s\S]*?final byte\[\] value = Arrays\.copyOf\(payload, payload\.length\);"
+            r"[\s\S]*?new NoritoDecoder\(payload"
+            r"[\s\S]*?readFixedBytes\(child, 32, field\)"
+            r"[\s\S]*?require\(child\.remaining\(\) == 0"
             r"[\s\S]*?require\(!isZero\(value\), field \+ \" must be non-zero\"\);"
         ),
     }
@@ -52994,8 +54704,8 @@ if mode == "--negative-control-non-csharp-pallas-metadata-option-shape":
     def expected_pallas_metadata_option_shape_label(old, label):
         if label in pallas_metadata_decoder_patterns:
             return f"{label} missing pattern {pallas_metadata_decoder_patterns[label]}"
-        if label == "Swift Pallas metadata option raw fixed32 decoder":
-            return f"{label} missing payload.count == 32"
+        if label == "Swift Pallas metadata option generic fixed32 decoder":
+            return f"{label} missing let value = try child.readFixed32Flexible(field: field)"
         if label in (
             "JavaScript Pallas metadata option raw fixed32 decoder",
             "JavaScript dist Pallas metadata option raw fixed32 decoder",
@@ -53079,6 +54789,24 @@ if mode == "--negative-control-non-csharp-pallas-metadata-option-shape":
             "readOptionRawPayload(&reader, field: field)",
             "readOptionRawPayload(&reader)",
             "Swift Pallas metadata option tag diagnostics",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "private static func encodePackedFixed32(_ bytes: Data, field: String) throws -> Data",
+            "private static func encodeLegacyFixed32(_ bytes: Data, field: String) throws -> Data",
+            "Swift Kagemusha canonical fixed32/hash/status wire policy",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "record.publicInputsSchemaHash == IrohaHash.hash(expectedSchema)",
+            "record.publicInputsSchemaHash == Blake2b.hash256(expectedSchema)",
+            "Swift Kagemusha canonical fixed32/hash/status wire policy",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "OfflineCompactNorito.encodeUInt32(confidentialStatusActive)",
+            "Data([UInt8(confidentialStatusActive)])",
+            "Swift Kagemusha canonical fixed32/hash/status wire policy",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
@@ -71367,11 +73095,11 @@ if mode == "--negative-control-native-c-bridge-abi-version":
     target = "crates/connect_norito_bridge/src/lib.rs"
     original = mutated[target]
     updated = original.replace(
-        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 15;",
+        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 17;",
         "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;",
         1,
     )
-    if updated == original or "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 15;" in updated:
+    if updated == original or "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 17;" in updated:
         raise SystemExit("negative control failed: unable to mutate native C bridge ABI version")
     mutated[target] = updated
     try:
@@ -71379,7 +73107,7 @@ if mode == "--negative-control-native-c-bridge-abi-version":
     except ParityError as error:
         message = str(error)
         expected_labels = (
-            r"C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*15\s*;",
+            r"C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*17\s*;",
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:

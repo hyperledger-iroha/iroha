@@ -34,6 +34,7 @@ use iroha_data_model::{
             LaneBlockProposalV1, LaneBlockQcV1, SumeragiLaneBlockSessionStatus,
             SumeragiLanePayloadOwnership, SumeragiMembershipStatus, ValidatorIndex,
         },
+        consensus_v2::SumeragiV2Status,
     },
     consensus::{ConsensusKeyRecord, Qc, ValidatorElectionOutcome, ValidatorSetCheckpoint},
     da::commitment::DaCommitmentBundle,
@@ -301,6 +302,38 @@ static LOCKED_QC_VIEW: AtomicU64 = AtomicU64::new(0);
 static HIGHEST_QC_HASH: OnceLock<Mutex<Option<UntypedHash>>> = OnceLock::new();
 static LOCKED_QC_HASH: OnceLock<Mutex<Option<UntypedHash>>> = OnceLock::new();
 static CANONICAL_PENDING_FINALITY_HASH: OnceLock<Mutex<Option<UntypedHash>>> = OnceLock::new();
+static SUMERAGI_V2_STATUS: OnceLock<Mutex<Option<SumeragiV2Status>>> = OnceLock::new();
+
+/// Publish the exact protocol-v2 reducer snapshot served by Torii.
+///
+/// The production adapter calls this only after serializing a reducer
+/// transition. Keeping the value separate from the legacy diagnostic atomics
+/// prevents removed RBC/recovery fields from leaking into the v2 status API.
+pub fn set_v2_status(status: SumeragiV2Status) {
+    let slot = SUMERAGI_V2_STATUS.get_or_init(|| Mutex::new(None));
+    *slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(status);
+}
+
+/// Return the latest protocol-v2 reducer snapshot, if v2 has started.
+#[must_use]
+pub fn v2_status() -> Option<SumeragiV2Status> {
+    SUMERAGI_V2_STATUS.get().and_then(|slot| {
+        slot.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    })
+}
+
+/// Clear protocol-v2 status during shutdown and isolated tests.
+pub fn clear_v2_status() {
+    if let Some(slot) = SUMERAGI_V2_STATUS.get() {
+        *slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+}
 
 static RBC_ABORT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static RBC_ABORT_LAST_HEIGHT: AtomicU64 = AtomicU64::new(0);
@@ -420,6 +453,8 @@ static DEDUP_FETCH_PENDING_BLOCK_EVICT_CAPACITY_TOTAL: AtomicU64 = AtomicU64::ne
 static DEDUP_FETCH_PENDING_BLOCK_EVICT_EXPIRED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static DEDUP_RBC_CHUNK_EVICT_CAPACITY_TOTAL: AtomicU64 = AtomicU64::new(0);
 static DEDUP_RBC_CHUNK_EVICT_EXPIRED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static DEDUP_LANE_BLOCK_ARTIFACT_EVICT_CAPACITY_TOTAL: AtomicU64 = AtomicU64::new(0);
+static DEDUP_LANE_BLOCK_ARTIFACT_EVICT_EXPIRED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BG_POST_DROP_POST_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BG_POST_DROP_BROADCAST_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -2923,6 +2958,8 @@ pub enum ConsensusMessageKind {
     RbcDeliver,
     /// Fetch-pending-block requests (`FetchPendingBlock`).
     FetchPendingBlock,
+    /// Explicitly versioned global Sumeragi v2 messages.
+    V2,
     /// Consensus control-flow evidence.
     Evidence,
 }
@@ -2955,6 +2992,7 @@ impl ConsensusMessageKind {
             ConsensusMessageKind::RbcReady => "rbc_ready",
             ConsensusMessageKind::RbcDeliver => "rbc_deliver",
             ConsensusMessageKind::FetchPendingBlock => "fetch_pending_block",
+            ConsensusMessageKind::V2 => "sumeragi_v2",
             ConsensusMessageKind::Evidence => "evidence",
         }
     }
@@ -4021,6 +4059,10 @@ pub struct DedupEvictionSnapshot {
     pub rbc_chunk_capacity_total: u64,
     /// RBC chunk dedup evictions due to TTL expiry.
     pub rbc_chunk_expired_total: u64,
+    /// Lane-block proposal/vote/QC dedup evictions due to capacity.
+    pub lane_block_artifact_capacity_total: u64,
+    /// Lane-block proposal/vote/QC dedup evictions due to TTL expiry.
+    pub lane_block_artifact_expired_total: u64,
 }
 
 /// Compact snapshot of consensus status for operator APIs.
@@ -4963,6 +5005,10 @@ fn dedup_evictions_snapshot() -> DedupEvictionSnapshot {
         rbc_deliver_expired_total: DEDUP_RBC_DELIVER_EVICT_EXPIRED_TOTAL.load(Ordering::Relaxed),
         rbc_chunk_capacity_total: DEDUP_RBC_CHUNK_EVICT_CAPACITY_TOTAL.load(Ordering::Relaxed),
         rbc_chunk_expired_total: DEDUP_RBC_CHUNK_EVICT_EXPIRED_TOTAL.load(Ordering::Relaxed),
+        lane_block_artifact_capacity_total: DEDUP_LANE_BLOCK_ARTIFACT_EVICT_CAPACITY_TOTAL
+            .load(Ordering::Relaxed),
+        lane_block_artifact_expired_total: DEDUP_LANE_BLOCK_ARTIFACT_EVICT_EXPIRED_TOTAL
+            .load(Ordering::Relaxed),
     }
 }
 
@@ -5543,6 +5589,8 @@ pub(crate) enum DedupEvictionKind {
     RbcDeliver,
     /// RBC chunk payload cache evictions.
     RbcChunk,
+    /// Standalone lane-block proposal/vote/QC cache evictions.
+    LaneBlockArtifact,
 }
 
 /// Record dedup evictions for the given cache kind.
@@ -5641,6 +5689,15 @@ pub(crate) fn record_dedup_evictions(kind: DedupEvictionKind, capacity: usize, e
             }
             if expired > 0 {
                 DEDUP_RBC_CHUNK_EVICT_EXPIRED_TOTAL.fetch_add(expired, Ordering::Relaxed);
+            }
+        }
+        DedupEvictionKind::LaneBlockArtifact => {
+            if capacity > 0 {
+                DEDUP_LANE_BLOCK_ARTIFACT_EVICT_CAPACITY_TOTAL
+                    .fetch_add(capacity, Ordering::Relaxed);
+            }
+            if expired > 0 {
+                DEDUP_LANE_BLOCK_ARTIFACT_EVICT_EXPIRED_TOTAL.fetch_add(expired, Ordering::Relaxed);
             }
         }
     }
@@ -9077,6 +9134,8 @@ pub(crate) fn reset_dedup_evictions_for_tests() {
     DEDUP_RBC_DELIVER_EVICT_EXPIRED_TOTAL.store(0, Ordering::Relaxed);
     DEDUP_RBC_CHUNK_EVICT_CAPACITY_TOTAL.store(0, Ordering::Relaxed);
     DEDUP_RBC_CHUNK_EVICT_EXPIRED_TOTAL.store(0, Ordering::Relaxed);
+    DEDUP_LANE_BLOCK_ARTIFACT_EVICT_CAPACITY_TOTAL.store(0, Ordering::Relaxed);
+    DEDUP_LANE_BLOCK_ARTIFACT_EVICT_EXPIRED_TOTAL.store(0, Ordering::Relaxed);
 }
 
 /// Simple struct for phase-latencies snapshot.
@@ -9230,6 +9289,9 @@ mod tests {
             proposal_view,
             lane_id,
             dataspace_id,
+            lane_incarnation: UntypedHash::new(
+                format!("status-test-lane-incarnation-{seed}").as_bytes(),
+            ),
             lane_block_height,
             lane_block_view,
             subject_hash: UntypedHash::new(format!("status-test-subject-{seed}").as_bytes()),
@@ -9273,6 +9335,9 @@ mod tests {
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id: LaneId::new(u32::from(seed)),
             dataspace_id: DataSpaceId::new(u64::from(seed) + 100),
+            lane_incarnation: UntypedHash::new(
+                format!("status-test-lane-incarnation-{seed}").as_bytes(),
+            ),
             proposal_height: 1,
             previous_lane_block_height: 0,
             previous_lane_block_descriptor_hash: None,
@@ -9309,6 +9374,7 @@ mod tests {
             validator_set: proposal.descriptor.validator_set.clone(),
             signers_bitmap: vec![0b0000_0001],
             bls_aggregate_signature: vec![seed.max(1)],
+            payload_availability_qc: None,
         };
         let commit_qc = LaneBlockQcV1 {
             body: proposal.vote_body(CertPhase::Commit),
@@ -9317,6 +9383,7 @@ mod tests {
             validator_set: proposal.descriptor.validator_set.clone(),
             signers_bitmap: vec![0b0000_0001],
             bls_aggregate_signature: vec![seed.max(1)],
+            payload_availability_qc: None,
         };
         let session = crate::lane_consensus::CommittedLaneBlockSession {
             proposal,
@@ -9566,6 +9633,8 @@ mod tests {
         let membership_hash = [0x44; 32];
         let prf_seed = [0x55; 32];
         let caps = iroha_p2p::ConsensusConfigCaps {
+            nexus_policy_digest: [0xA5; 32],
+            v2_config_fingerprint: [0xA5; 32],
             collectors_k: 3,
             redundant_send_r: 2,
             da_enabled: true,
@@ -12648,10 +12717,19 @@ mod tests {
         super::reset_dedup_evictions_for_tests();
         super::record_dedup_evictions(super::DedupEvictionKind::Vote, 2, 1);
         super::record_dedup_evictions(super::DedupEvictionKind::Proposal, 0, 3);
+        super::record_dedup_evictions(super::DedupEvictionKind::LaneBlockArtifact, 4, 5);
         let snapshot = super::snapshot();
         assert_eq!(snapshot.dedup_evictions.vote_capacity_total, 2);
         assert_eq!(snapshot.dedup_evictions.vote_expired_total, 1);
         assert_eq!(snapshot.dedup_evictions.proposal_expired_total, 3);
+        assert_eq!(
+            snapshot.dedup_evictions.lane_block_artifact_capacity_total,
+            4
+        );
+        assert_eq!(
+            snapshot.dedup_evictions.lane_block_artifact_expired_total,
+            5
+        );
     }
 
     #[test]
@@ -13435,6 +13513,7 @@ mod tests {
         LaneBlockCommitment {
             block_height,
             lane_id: LaneId::new(lane_id),
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(dataspace_id),
             tx_count: 1,
             total_local_micro: 10,

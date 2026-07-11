@@ -1035,6 +1035,7 @@ mod codec_tests {
             result_hash,
             result_proof: dummy_proof_result(),
             result,
+            merge_inclusion: None,
         }
     }
 
@@ -1840,6 +1841,7 @@ mod committed_tx_predicate_tests {
             result_hash,
             result_proof: dummy_proof_result(),
             result,
+            merge_inclusion: None,
         }
     }
 
@@ -2010,6 +2012,7 @@ mod committed_tx_predicate_tests {
             result_hash: h_result,
             result_proof,
             result,
+            merge_inclusion: None,
         }
     }
 

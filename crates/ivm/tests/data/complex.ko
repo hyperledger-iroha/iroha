@@ -2,7 +2,7 @@
 // Computes a hash, generates a public key, commits a value
 // and combines the results.
 seiyaku Example {
-    kotoage fn complex(a: i64, b: i64) authorize("Entry") {
+    kotoage fn complex(int a, int b) authorize("Entry") {
         let c = a + b;
         let d = crypto::poseidon2(left: c, right: b);
         let e = crypto::pubkgen(d);

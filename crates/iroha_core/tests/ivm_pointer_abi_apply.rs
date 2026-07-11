@@ -70,7 +70,7 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     let to_bytes = tlv_envelope(PointerType::AccountId, &to);
     let asset_bytes = tlv_envelope(PointerType::AssetDefinitionId, &asset_def);
     let amount = Numeric::from(500_u64);
-    let amount_bytes = tlv_envelope(PointerType::Amount, &amount);
+    let amount_bytes = tlv_envelope(PointerType::Quantity, &amount);
     let dataspace = iroha_data_model::nexus::DataSpaceId::UNIVERSAL;
     let dataspace_bytes = tlv_envelope(PointerType::DataSpaceId, &dataspace);
     let align8 = |n: u64| (n + 7) & !7;
@@ -257,7 +257,7 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     let from_bytes = tlv_envelope(PointerType::AccountId, &from);
     let to_bytes = tlv_envelope(PointerType::AccountId, &to);
     let asset_bytes = tlv_envelope(PointerType::AssetDefinitionId, &asset_def);
-    let amount_bytes = tlv_envelope(PointerType::Amount, &amount);
+    let amount_bytes = tlv_envelope(PointerType::Quantity, &amount);
     let dataspace = iroha_data_model::nexus::DataSpaceId::UNIVERSAL;
     let dataspace_bytes = tlv_envelope(PointerType::DataSpaceId, &dataspace);
     let align8 = |n: u64| (n + 7) & !7;

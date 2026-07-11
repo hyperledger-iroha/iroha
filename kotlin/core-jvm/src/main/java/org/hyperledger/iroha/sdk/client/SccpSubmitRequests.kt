@@ -5,6 +5,7 @@ import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.address.AccountAddressException
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
+import org.hyperledger.iroha.sdk.norito.SchemaHash
 import org.hyperledger.iroha.sdk.sccp.SccpV1
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
@@ -28,6 +29,7 @@ class SccpDestinationProofSubmitRequest(
             it,
             "destinationProofB64",
             SCCP_MAX_DESTINATION_ARTIFACT_BYTES,
+            SCCP_DESTINATION_ARTIFACT_SCHEMA_NAME,
         )
     }
     val creationTimeMs: Long? = creationTimeMs?.also {
@@ -67,7 +69,12 @@ class SccpNativeMessageSubmitRequest(
         this.authority,
     )
     val nativeProofB64: String = nativeProofB64.also {
-        validateCanonicalSccpNoritoBase64(it, "nativeProofB64", SCCP_MAX_NATIVE_PROOF_BYTES)
+        validateCanonicalSccpNoritoBase64(
+            it,
+            "nativeProofB64",
+            SCCP_MAX_NATIVE_PROOF_BYTES,
+            SCCP_NATIVE_INBOUND_PROOF_SCHEMA_NAME,
+        )
     }
     val creationTimeMs: Long? = creationTimeMs?.also {
         require(it > 0) { "creationTimeMs must be positive" }
@@ -94,12 +101,17 @@ private const val SCCP_MAX_DESTINATION_ARTIFACT_BYTES = 16 * 1024 * 1024 + 64 * 
 private const val SCCP_MAX_NATIVE_PROOF_BYTES = 16 * 1024 * 1024
 internal const val SCCP_MAX_TRANSACTION_PAYLOAD_BYTES = 16 * 1024 * 1024
 private const val SCCP_MAX_DETACHED_SIGNATURE_BYTES = 16 * 1024
+internal const val SCCP_DESTINATION_ARTIFACT_SCHEMA_NAME =
+    "iroha_sccp::SccpGroth16Bn254ProofArtifactV1"
+internal const val SCCP_NATIVE_INBOUND_PROOF_SCHEMA_NAME =
+    "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1"
 private val SCCP_TRANSACTION_CODEC = NoritoJavaCodecAdapter()
 
 internal fun validateCanonicalSccpNoritoBase64(
     value: String,
     field: String,
     maximum: Int,
+    expectedSchemaName: String,
 ): ByteArray {
     require(value.isNotEmpty() && value == value.trim()) {
         "$field must be canonical padded base64"
@@ -119,7 +131,7 @@ internal fun validateCanonicalSccpNoritoBase64(
         "$field must be canonical padded base64"
     }
     val result = try {
-        NoritoHeader.decode(decoded, null)
+        NoritoHeader.decode(decoded, SchemaHash.hash16(expectedSchemaName))
     } catch (ex: IllegalArgumentException) {
         throw IllegalArgumentException("$field must contain a canonical Norito envelope", ex)
     }
@@ -128,11 +140,8 @@ internal fun validateCanonicalSccpNoritoBase64(
         "$field must use uncompressed canonical Norito"
     }
     val headerPadding = decoded.size - NoritoHeader.HEADER_LENGTH - header.payloadLength
-    require(headerPadding == 0 || headerPadding == 8) {
-        "$field must use canonical Norito header alignment padding"
-    }
-    require(header.schemaHash.any { it.toInt() != 0 }) {
-        "$field must advertise a nonzero Norito schema"
+    require(headerPadding == 0) {
+        "$field must use the exact zero-padded SCCP Norito alignment"
     }
     require(header.encode().contentEquals(decoded.copyOfRange(0, NoritoHeader.HEADER_LENGTH))) {
         "$field contains a non-canonical Norito header"

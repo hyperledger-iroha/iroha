@@ -15,6 +15,7 @@ pub struct StorageConfig {
     max_parallel_fetches: usize,
     max_pins: usize,
     por_sample_interval_secs: u64,
+    runtime_retention: RuntimeRetentionPolicy,
     alias: Option<String>,
     adverts: AdvertOverrides,
     metering_smoothing: MeteringSmoothingConfig,
@@ -70,6 +71,12 @@ impl StorageConfig {
     #[must_use]
     pub fn por_sample_interval_secs(&self) -> u64 {
         self.por_sample_interval_secs
+    }
+
+    /// Safety ceilings for auxiliary runtime state and replay histories.
+    #[must_use]
+    pub fn runtime_retention(&self) -> RuntimeRetentionPolicy {
+        self.runtime_retention
     }
 
     /// Optional human-friendly alias reported in telemetry.
@@ -178,6 +185,7 @@ impl StorageConfig {
             max_parallel_fetches: storage.max_parallel_fetches,
             max_pins: storage.max_pins,
             por_sample_interval_secs: storage.por_sample_interval_secs,
+            runtime_retention: RuntimeRetentionPolicy::from(storage.runtime),
             alias: storage.alias.clone(),
             adverts: AdvertOverrides::from(&storage.adverts),
             metering_smoothing: MeteringSmoothingConfig::from(&storage.metering_smoothing),
@@ -252,6 +260,13 @@ impl StorageConfigBuilder {
     #[must_use]
     pub fn por_sample_interval_secs(mut self, interval: u64) -> Self {
         self.inner.por_sample_interval_secs = interval;
+        self
+    }
+
+    /// Override auxiliary runtime retention and checkpoint safety ceilings.
+    #[must_use]
+    pub fn runtime_retention(mut self, policy: RuntimeRetentionPolicy) -> Self {
+        self.inner.runtime_retention = policy;
         self
     }
 
@@ -366,6 +381,59 @@ impl StorageConfigBuilder {
     #[must_use]
     pub fn build(self) -> StorageConfig {
         self.inner
+    }
+}
+
+/// Config-backed safety ceilings for auxiliary embedded runtime state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeRetentionPolicy {
+    event_history_limit: usize,
+    state_entry_limit: usize,
+    checkpoint_max_bytes: u64,
+}
+
+impl RuntimeRetentionPolicy {
+    /// Construct a policy, clamping every safety ceiling to at least one.
+    #[must_use]
+    pub fn new(
+        event_history_limit: usize,
+        state_entry_limit: usize,
+        checkpoint_max_bytes: u64,
+    ) -> Self {
+        let event_history_limit = event_history_limit.max(1);
+        Self {
+            event_history_limit,
+            state_entry_limit: state_entry_limit.max(event_history_limit),
+            checkpoint_max_bytes: checkpoint_max_bytes.max(1),
+        }
+    }
+
+    /// Maximum replay events retained for each event stream.
+    #[must_use]
+    pub fn event_history_limit(self) -> usize {
+        self.event_history_limit
+    }
+
+    /// Maximum entries retained in each auxiliary state index.
+    #[must_use]
+    pub fn state_entry_limit(self) -> usize {
+        self.state_entry_limit
+    }
+
+    /// Maximum encoded bytes accepted for one auxiliary runtime checkpoint.
+    #[must_use]
+    pub fn checkpoint_max_bytes(self) -> u64 {
+        self.checkpoint_max_bytes
+    }
+}
+
+impl From<actual::SorafsRuntimeRetention> for RuntimeRetentionPolicy {
+    fn from(policy: actual::SorafsRuntimeRetention) -> Self {
+        Self::new(
+            policy.event_history_limit,
+            policy.state_entry_limit,
+            policy.checkpoint_max_bytes.0,
+        )
     }
 }
 
@@ -949,6 +1017,11 @@ mod tests {
         actual.max_parallel_fetches = 99;
         actual.max_pins = 1_001;
         actual.por_sample_interval_secs = 42;
+        actual.runtime = actual::SorafsRuntimeRetention {
+            event_history_limit: 17,
+            state_entry_limit: 23,
+            checkpoint_max_bytes: iroha_config::base::util::Bytes(4_096),
+        };
         actual.alias = Some("tenant.alpha".into());
         actual.adverts = actual::SorafsAdvertOverrides {
             stake_pointer: Some("stake.pool:abcd".into()),
@@ -986,6 +1059,10 @@ mod tests {
         assert_eq!(cfg.max_parallel_fetches(), 99);
         assert_eq!(cfg.max_pins(), 1_001);
         assert_eq!(cfg.por_sample_interval_secs(), 42);
+        assert_eq!(
+            cfg.runtime_retention(),
+            RuntimeRetentionPolicy::new(17, 23, 4_096)
+        );
         assert_eq!(cfg.alias(), Some(&"tenant.alpha".to_string()));
         let adverts = cfg.adverts();
         assert_eq!(
@@ -1029,6 +1106,14 @@ mod tests {
         assert_eq!(
             penalty.cooldown_secs,
             u64::from(defaults.cooldown_windows).saturating_mul(60 * 60)
+        );
+    }
+
+    #[test]
+    fn runtime_retention_clamps_zero_safety_ceilings() {
+        assert_eq!(
+            RuntimeRetentionPolicy::new(0, 0, 0),
+            RuntimeRetentionPolicy::new(1, 1, 1)
         );
     }
 

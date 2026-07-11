@@ -36,6 +36,9 @@ Options:
     --break-mask <mask>   Override rolling-hash break mask (decimal or 0x-prefixed hex)
     -h, --help            Show this help message
 
+Numeric values must be canonical: no whitespace, plus signs, underscores, or
+leading zeroes; hex masks use lowercase 0x-prefixed digits.
+
 Examples:
     sorafs-chunk-dump --profile sf1 fixtures/sorafs_chunker/sf1_profile_v1_input.bin
     sorafs-chunk-dump --min-size 4096 --target-size 32768 --max-size 65536 myfile.bin
@@ -184,23 +187,52 @@ fn resolve_profile(value: &str) -> Result<ChunkProfile, ParseError> {
 }
 
 fn parse_usize(value: &str, flag: &str) -> Result<usize, ParseError> {
-    value
-        .parse::<usize>()
-        .map_err(|err| ParseError::Message(format!("{flag} expects an integer value: {err}")))
+    require_canonical_unsigned_decimal(value, flag)?;
+    value.parse::<usize>().map_err(|err| {
+        ParseError::Message(format!("{flag} expects a canonical integer value: {err}"))
+    })
+}
+
+fn require_canonical_unsigned_decimal(value: &str, flag: &str) -> Result<(), ParseError> {
+    let digits = value.as_bytes();
+    if digits.is_empty()
+        || !digits.iter().all(u8::is_ascii_digit)
+        || (digits.len() > 1 && digits[0] == b'0')
+    {
+        return Err(ParseError::Message(format!(
+            "{flag} expects a canonical unsigned decimal integer"
+        )));
+    }
+    Ok(())
+}
+
+fn require_canonical_hex_mask(value: &str) -> Result<(), ParseError> {
+    let digits = value.as_bytes();
+    if digits.is_empty()
+        || !digits
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+        || (digits.len() > 1 && digits[0] == b'0')
+    {
+        return Err(ParseError::Message(
+            "--break-mask expects canonical lowercase 0x-prefixed hex".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn parse_mask(value: &str) -> Result<u64, ParseError> {
-    let trimmed = value.trim();
-    if let Some(hex) = trimmed
-        .strip_prefix("0x")
-        .or_else(|| trimmed.strip_prefix("0X"))
-    {
+    if let Some(hex) = value.strip_prefix("0x") {
+        require_canonical_hex_mask(hex)?;
         u64::from_str_radix(hex, 16).map_err(|err| {
-            ParseError::Message(format!("--break-mask invalid hex value `{trimmed}`: {err}"))
+            ParseError::Message(format!("--break-mask invalid hex value `{value}`: {err}"))
         })
     } else {
-        trimmed.parse::<u64>().map_err(|err| {
-            ParseError::Message(format!("--break-mask expects an integer value: {err}"))
+        require_canonical_unsigned_decimal(value, "--break-mask")?;
+        value.parse::<u64>().map_err(|err| {
+            ParseError::Message(format!(
+                "--break-mask expects a canonical integer value: {err}"
+            ))
         })
     }
 }
@@ -309,6 +341,43 @@ mod tests {
     }
 
     #[test]
+    fn parse_cli_rejects_noncanonical_size_values() {
+        for value in ["", " 256", "256 ", "+256", "0256", "2_56", "-256"] {
+            match parse(&["--min-size", value, "input.bin"]) {
+                Err(ParseError::Message(msg)) => assert!(
+                    msg.contains("canonical unsigned decimal integer"),
+                    "unexpected error for {value:?}: {msg}"
+                ),
+                other => panic!("expected parse error for {value:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn parse_cli_rejects_noncanonical_break_masks() {
+        for value in [
+            "", " 255", "255 ", "+255", "0255", "2_55", "-255", "0Xff", "0x0f", "0xFF",
+        ] {
+            match parse(&["--break-mask", value, "input.bin"]) {
+                Err(ParseError::Message(msg)) => assert!(
+                    msg.contains("canonical"),
+                    "unexpected error for {value:?}: {msg}"
+                ),
+                other => panic!("expected parse error for {value:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn parse_cli_accepts_canonical_decimal_and_hex_masks() {
+        let decimal = parse(&["--break-mask", "255", "input.bin"]).expect("decimal mask");
+        assert_eq!(decimal.profile.break_mask, 255);
+
+        let hex = parse(&["--break-mask", "0xff", "input.bin"]).expect("hex mask");
+        assert_eq!(hex.profile.break_mask, 255);
+    }
+
+    #[test]
     fn generate_output_respects_profile() {
         let profile = ChunkProfile {
             min_size: 2,
@@ -351,7 +420,7 @@ mod tests {
         match parse(&["--break-mask", "0xZZ", "input.bin"]) {
             Err(ParseError::Message(msg)) => {
                 assert!(
-                    msg.contains("invalid hex"),
+                    msg.contains("canonical lowercase"),
                     "unexpected error message: {msg}"
                 );
             }

@@ -34,7 +34,8 @@ public struct ToriiBridgeProofSubmitRequest: Encodable, Equatable, Sendable {
         _ = try SccpSubmitValidation.canonicalNoritoBase64(
             destinationProofB64,
             field: "destination_proof_b64",
-            maximumBytes: SccpSubmitValidation.maximumDestinationArtifactBytes
+            maximumBytes: SccpSubmitValidation.maximumDestinationArtifactBytes,
+            expectedTypeName: SccpSubmitValidation.destinationArtifactTypeName
         )
         self.destinationProofB64 = destinationProofB64
         if let creationTimeMs, creationTimeMs == 0 {
@@ -85,7 +86,8 @@ public struct ToriiBridgeMessageSubmitRequest: Encodable, Equatable, Sendable {
         _ = try SccpSubmitValidation.canonicalNoritoBase64(
             nativeProofB64,
             field: "native_proof_b64",
-            maximumBytes: SccpSubmitValidation.maximumNativeArtifactBytes
+            maximumBytes: SccpSubmitValidation.maximumNativeArtifactBytes,
+            expectedTypeName: SccpSubmitValidation.nativeInboundProofTypeName
         )
         self.nativeProofB64 = nativeProofB64
         if let creationTimeMs, creationTimeMs == 0 {
@@ -291,6 +293,14 @@ public struct SccpBridgeSubmitResponse: Equatable, Sendable {
 }
 
 enum SccpSubmitValidation {
+    static let destinationArtifactTypeName =
+        "iroha_sccp::SccpGroth16Bn254ProofArtifactV1"
+    static let nativeInboundProofTypeName =
+        "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1"
+    static let registryTypeName =
+        "iroha_data_model::bridge::sccp_registry::SccpRegistryV1"
+    static let messageBundleTypeName = "iroha_sccp::TairaSccpMessageProofV1"
+    static let proofRequestTypeName = "iroha_sccp::SccpGroth16Bn254ProofRequestV1"
     static let maximumNativeArtifactBytes = 16 * 1024 * 1024
     static let maximumDestinationArtifactBytes = maximumNativeArtifactBytes + 64 * 1024
     static let maximumDetachedSignatureBytes = 16 * 1024
@@ -346,15 +356,22 @@ enum SccpSubmitValidation {
         }
     }
 
-    static func canonicalNoritoBase64(_ value: String, field: String, maximumBytes: Int) throws -> Data {
+    static func canonicalNoritoBase64(
+        _ value: String,
+        field: String,
+        maximumBytes: Int,
+        expectedTypeName: String
+    ) throws -> Data {
         let data = try canonicalBase64(value, field: field, maximumBytes: maximumBytes)
         guard let frame = noritoDecodeFrame(data),
               frame.header.compression == .none,
-              frame.header.schema.contains(where: { $0 != 0 }),
-              frame.paddingLength == 0 || frame.paddingLength == 8,
+              frame.header.schema == noritoSchemaHash(forTypeName: expectedTypeName),
+              frame.paddingLength == 0,
               data.prefix(NoritoHeader.encodedLength) == frame.header.encode()
         else {
-            throw SccpV1Error.invalid("\(field) must contain one canonical uncompressed Norito envelope")
+            throw SccpV1Error.invalid(
+                "\(field) must contain the exact canonical uncompressed SCCP Norito type"
+            )
         }
         return data
     }

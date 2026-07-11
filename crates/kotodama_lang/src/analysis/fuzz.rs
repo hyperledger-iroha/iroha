@@ -213,8 +213,8 @@ fn convert_type_expr(expr: &TypeExpr) -> Result<Type, String> {
         }
         TypeExpr::Path(name) => match name.as_str() {
             "i64" => Type::Int,
-            "u128" => Type::FixedU128,
-            "Amount" => Type::Amount,
+            "u128" => Type::Int,
+            "Amount" => Type::Quantity,
             "bool" => Type::Bool,
             "()" => Type::Unit,
             other => Type::NamedStruct(other.to_string()),
@@ -271,12 +271,6 @@ fn supported_type_samples(ty: &Type) -> Option<Vec<Value>> {
             Value::Int(1),
             Value::Int(2),
             Value::Int(i32::MIN as i64),
-            Value::Int(i32::MAX as i64),
-        ]),
-        Type::FixedU128 | Type::Amount => Some(vec![
-            Value::Int(0),
-            Value::Int(1),
-            Value::Int(2),
             Value::Int(i32::MAX as i64),
         ]),
         Type::Bool => Some(vec![Value::Bool(false), Value::Bool(true)]),
@@ -549,9 +543,13 @@ impl<'a> Evaluator<'a> {
         depth: usize,
     ) -> Result<Value, EvalError> {
         match &expr.expr {
-            ExprKind::Number(n) => Ok(Value::Int(*n)),
-            ExprKind::Decimal(_) => Err(EvalError::UnsupportedFeature("decimal literal")),
-            ExprKind::AmountLiteral { .. } => Err(EvalError::UnsupportedFeature("Amount literal")),
+            ExprKind::IntLiteral(n) => n
+                .try_to_i64()
+                .map(Value::Int)
+                .ok_or(EvalError::UnsupportedFeature("wide int literal")),
+            ExprKind::DecimalLiteral { .. } => {
+                Err(EvalError::UnsupportedFeature("exact decimal literal"))
+            }
             ExprKind::Bool(b) => Ok(Value::Bool(*b)),
             ExprKind::String(_) | ExprKind::Bytes(_) => {
                 Err(EvalError::UnsupportedFeature("string literal"))
@@ -592,6 +590,10 @@ impl<'a> Evaluator<'a> {
                     ))
                 }
             }
+            ExprKind::NumericTryCast { .. } => Err(EvalError::Runtime(
+                "recoverable numeric conversions are not interpreted by the bounded fuzzer"
+                    .into(),
+            )),
             ExprKind::Binary { op, left, right } => {
                 let lval = self.eval_expr(left, locals, depth)?;
                 let rval = self.eval_expr(right, locals, depth)?;

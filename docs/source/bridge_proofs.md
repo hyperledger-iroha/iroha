@@ -46,11 +46,13 @@ evidence are rejected rather than reported as supported-but-unready.
 
 The closed network enum represents `sora-taira` as its sole SORA endpoint;
 `sora-nexus` has no SCCP V1 representation. Every value-moving governed V1
-route targets Taira. The exact local identity is chain id
-`809574f5-fee7-5e69-bfcf-52451e42d50f` with I105 discriminant `369`
+route targets Taira. The exact local identity is the public Sumeragi-v2 chain id
+`fc56984b-2be7-431d-840e-21514d1883f0` with I105 discriminant `369`
 (`0x0171`, the canonical `test...` sentinel family). Discriminant `753`, a
 generic/default discriminant, or any custom numeric discriminant does not name
-Taira. A governed route is stored in its external-to-Taira direction and also
+Taira. The archived pre-v2 chain id `809574f5-fee7-5e69-bfcf-52451e42d50f`
+is read-only history and is not an SCCP V1 settlement target. A governed route
+is stored in its external-to-Taira direction and also
 binds the exact reverse destination deployment. Network and lane commitments
 are derived only with
 `sccp_network_identity_hash_v1` and `sccp_lane_id_hash_v1` from
@@ -180,16 +182,25 @@ encodes the revision immediately after the nonce. Its route-config asset tuple
 is exactly `(keccak256(assetKey), keccak256(routeId), uint32 revision,
 amountMultiplier)`.
 
-The route constructor deploys its wrapped token atomically, passing
-`address(this)` as the token's immutable bridge. It then requires the child
-token's `bridge()` readback to equal the route before construction can succeed.
-No production constructor accepts an external `tokenAddress`, and no operator
-precomputes a token address or deploys a token before its route. There is no
-owner-set bridge, `setBridge`, `lockBridge`, or `bridgeLocked` security state.
+Deployment tooling precomputes the route address, deploys the wrapped token
+with that exact immutable bridge, then deploys the route at the precomputed
+address with the exact external `tokenAddress`. The route constructor requires
+`token.bridge() == address(this)`, nonempty token code, the governed token code
+hash, distinct token/verifier roles, and the complete typed outbound proof
+policy before construction succeeds. There is no owner-set bridge,
+`setBridge`, `lockBridge`, or `bridgeLocked` security state.
 EVM and BSC route hashing uses the EIP-152 BLAKE2F precompile. TRON uses the
 deterministic software implementation because TVM assigns address `0x09`
 differently. The production smoke enforces the 24,576-byte runtime limit for
 every deployed contract role.
+
+The checked-in artifact lock pins corridor manifest digest
+`92837bdfeb0a7a4df8b7ec7b158991445240c7c3ae88822ad79ae7fafb3ab200`
+and canonical compiler-lock digest
+`4e47b010e2c6475a3711d79f22ba58355534a5b519c99609094bf9b97d968c99`.
+Any compiler identity, setting, source input, creation bytecode, deployed
+runtime, ABI, immutable reference, or size drift invalidates that lock before a
+provider is created.
 
 The release TVM corridor runs only the authenticated TRON artifact on the
 digest-pinned official TRE image. Before execution, it copies the manifest and
@@ -376,10 +387,18 @@ allocation or completion. Transports stream and count the actual post-decoding
 body, cancel/close it on the first over-limit chunk, and enforce the bound when
 `Content-Length` is missing, understated, or describes compressed bytes. An
 empty body, invalid UTF-8 JSON, ambiguous framing, the wrong media type, or a
-trailing/oversized Norito envelope fails before model parsing. JavaScript and
-Python additionally preflight the canonical uncompressed Norito envelope and
-checksum but intentionally return its embedded message as opaque bytes; that
-transport check does not claim to decode or bind the embedded SCCP message id.
+trailing/oversized Norito envelope fails before model parsing.
+
+Every SDK preflights SCCP binary values as canonical, uncompressed NRT0 frames
+with a nonempty payload, valid CRC64, the exact endpoint-specific schema hash,
+and exactly zero header-padding bytes. Destination submissions are bound to
+`iroha_sccp::SccpGroth16Bn254ProofArtifactV1`; native submissions are bound to
+`iroha_sccp::native_admission::SccpNativeInboundMessageProofV1`. Typed registry,
+message-bundle, and proof-request reads likewise bind their own exact schemas.
+Cross-type replay, one-, eight-, and 64-byte padded alternatives, nonzero
+padding, compression, unknown flags, bad lengths, checksum drift, and trailing
+bytes fail before a request is sent or opaque response bytes are returned. This
+framing check does not claim to decode or bind the embedded SCCP message id.
 
 `GET /v1/sccp/capabilities` requires two closed limit objects in every V1
 response. `registry_limits` advertises the fixed lane/live/retained capacities,
@@ -471,6 +490,23 @@ semantics, message inclusion, Taira commit-QC finality, and continuity from the
 governed checkpoint rather than merely checking a syntactically valid Groth16
 equation. The bundle commits the complete policy hash.
 
+Production evidence must also carry the actual content-addressed bytes, not
+only their policy digests. For every profile, both auditors independently sign
+the same closed seven-role inventory: semantic circuit artifact, witness
+generator, verifying key, prover build, toolchain lock, honest witness, and
+canonical honest-proof Norito artifact. Their canonical reports must contain
+the identical artifact metadata and identical honest-proof claim. The claim
+binds the governed route, message, payload, commitment, finality, destination,
+request/result, verifier key, semantic profile, finality anchor, and the exact
+ordered eleven 32-byte public-signal words.
+
+The honest proof is bounded by the consensus proof-artifact ceiling of 16 MiB
+plus 64 KiB. Each other semantic artifact is bounded to 64 MiB, each audit
+report to 2 MiB, the complete inventory to 64 files and 256 MiB, and every
+content digest is role-separated. Empty, all-zero, fixture-only, smoke-test,
+unlisted, substituted, shared-across-role, or report-disagreeing material fails
+closed.
+
 ## External release trust policy
 
 Production tooling accepts exactly `sccp-release-trust-policy-v1` with
@@ -513,6 +549,8 @@ One canonical `sccp-release-evidence-v1` document contains:
 - three lanes in canonical profile order;
 - one typed lane-evidence artifact for every lane;
 - one transcript for every required corridor phase;
+- the closed semantic artifact set and two signed canonical audit reports per
+  profile, including one distinct honest witness/proof pair per profile;
 - a sorted, hash- and size-bound artifact inventory; and
 - two detached Ed25519 release signatures.
 
@@ -531,16 +569,24 @@ python3 scripts/sccp_all_lanes_evidence.py path/to/evidence.json \
 ```
 
 The Python layer checks canonical files, external signatures, policy audits,
-inventory, bounds, path safety, hard/symbolic links, and credential leakage.
-It invokes the Rust validator independently for all three lane artifacts. Each
-invocation receives the lane bytes plus the complete signed policy and evidence;
-Rust re-verifies the signatures, selects the profile-pinned attestor and circuit,
-and binds the result to the signed artifact digest and status. There is no CLI
-that accepts a Python-projected attestor key, verifier hash, revision, or runtime
-hash. Python independently recomputes only the two small, fixed policy hashes
-(semantic profile and Taira anchor) and pins their Rust/Solidity golden vectors;
-lane, message, route, destination, and verifying-key preimages remain solely in
-the canonical Rust/data-model implementation.
+inventory, bounds, path safety, hard/symbolic links, credential leakage, exact
+semantic roles, and agreement between both auditors. It invokes the Rust
+validator independently for all three lane artifacts and all three honest
+proofs. Each invocation receives the bytes plus the complete signed policy and
+evidence; Rust re-verifies the signatures, selects the profile-pinned attestor
+and circuit, and binds the result to the signed artifact digest and status.
+
+For an honest proof, Rust additionally canonical-decodes the Norito artifact,
+validates target/backend, derives the exact eleven signals from the governed
+statement and full Taira finality anchor, verifies the BN254 pairing, checks the
+circuit/witness/key/build/toolchain metadata and route revision, and emits a
+canonical receipt. Python requires that receipt to equal the claim signed by
+both auditors exactly. There is no CLI that accepts a Python-projected attestor
+key, verifier hash, revision, signal vector, or runtime hash. Python
+independently recomputes only the two small, fixed policy hashes (semantic
+profile and Taira anchor) and pins their Rust/Solidity golden vectors; lane,
+message, route, destination, public-signal, and verifying-key preimages remain
+solely in the canonical Rust/data-model implementation.
 
 ## Deterministic release bundle
 

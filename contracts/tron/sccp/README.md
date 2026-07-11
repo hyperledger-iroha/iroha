@@ -106,9 +106,11 @@ Before activating a route, independently verify all of the following:
    `soraFinalityAnchorHash`, `tokenCodeHash`,
    `destinationBindingHash`, both lane hashes, and `routeConfigHash` match the
    governed typed deployment record.
-4. The token's immutable bridge equals the route and its ABI/runtime exposes
-   no owner or bridge-mutation entrypoint. The route creates the token inside
-   its constructor, so token and route creation succeed or revert atomically.
+4. Precompute the route address, deploy the token with that exact immutable
+   bridge, then deploy the route at the precomputed address with the exact
+   token address. Verify `token.bridge()`, `route.token()`, token code, and the
+   governed token code hash. Neither contract exposes an owner or
+   bridge-mutation entrypoint.
 5. The Groth16 verifying key belongs to an independently audited,
    reproducibly generated circuit and witness generator that prove canonical
    payload semantics, message inclusion, block commitment, commit-QC finality,
@@ -126,9 +128,9 @@ Deployment, signing, and broadcasting are intentionally out of process. Do not
 store deployer keys, bearer tokens, or wallet secrets in repository artifacts,
 route manifests, evidence bundles, or documentation.
 
-Production sources require exact Solidity `0.8.24`. The governed TVM artifact
-is built with the authenticated target-specific TRON 0.8.24 compiler, optimizer
-run count `200`, and the `istanbul` opcode target. Its exact compiler, complete
+Production sources require exact Solidity `0.7.4`. The governed TVM artifact
+is built with authenticated `0.7.4+commit.3f05b770`, optimizer run count `200`,
+and the `istanbul` opcode target. Its exact compiler, complete
 standard-json input, ABI, creation/runtime bytes, immutable-runtime patch
 ranges, and hashes are release-policy inputs and must match the governed route
 exactly; ordinary EVM execution is never accepted as TVM evidence.
@@ -142,9 +144,9 @@ bash scripts/sccp_evm_contract_smoke.sh
 ```
 
 The suite verifies every production artifact against the target-specific
-compiler and artifact locks. It never sends exact TVM creation code to an EVM;
-TRON behavior coverage uses a separately compiled, explicitly test-only EVM
-compatibility copy under the locked EVM 0.8.24 compiler. It covers
+source-map and artifact locks. It executes the exact reviewed TRON creation
+code under an EVM compatibility runtime, while still treating the real-TRE
+phase as the only TVM deployment evidence. It covers
 canonical cross-language vectors, zero and mismatched revisions, malformed
 payloads and codecs, hash-role separation, wrong networks/routes/assets, token
 failures, reentrancy, changed code/key identities, deployment-size and

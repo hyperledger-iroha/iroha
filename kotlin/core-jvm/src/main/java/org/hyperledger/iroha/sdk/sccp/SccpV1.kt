@@ -242,7 +242,7 @@ object SccpV1 {
             writeU32(out, network.domainId)
             when (network) {
                 SccpNetworkV1.SORA_TAIRA ->
-                    out.write(hex("809574f5fee75e69bfcf52451e42d50f"))
+                    out.write(hex("fc56984b2be7431d840e21514d1883f0"))
                 SccpNetworkV1.ETHEREUM_MAINNET -> writeUnsignedLe(out, BigInteger.ONE, 8)
                 SccpNetworkV1.ETHEREUM_SEPOLIA ->
                     writeUnsignedLe(out, BigInteger.valueOf(11_155_111L), 8)

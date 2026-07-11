@@ -212,6 +212,7 @@ tmp/*
 *.tmp
 security_*
 _apalache-out*
+.tlacache/
 
 # Root-level scratch artifacts from ad-hoc experiments or local builds
 /output/
@@ -237,6 +238,7 @@ _apalache-out*
 /bench_trace.json
 /fastpq_*.json
 /libtest.rlib
+/libverus_macro_*.rlib
 /clippy_errors.txt
 /.playwright-cli*
 /*.log
@@ -301,3 +303,6 @@ artifacts/*.json
 # Deployment manifests are signed with runtime-only operator material and must
 # be regenerated for the exact deployable artifact rather than checked in.
 /demo/*.deploy.manifest.json
+
+# Runtime output from the interactive setup wizard (may contain private keys).
+/wizard-output/

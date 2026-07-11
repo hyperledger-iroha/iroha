@@ -67,7 +67,7 @@ const SECP256K1_FIELD =
 const SEMANTIC_PROOF_PROFILE_HASH =
   "0xce5a1e17aca3cafe47a403fd66479f0a36339eb56092dafa67c8d97bdeeb60ef";
 const SORA_FINALITY_ANCHOR_HASH =
-  "0x60c7628fe7a8e8c6a73a21ef30c270b6944bb33a4feb03e0b302aabe210cf0c6";
+  "0x7dda271d98d9e4333093da84236157e39ce67f6f68680fedbdc17fbe8b7b6a4a";
 const ALTERNATE_SEMANTIC_PROOF_PROFILE_HASH = ethers.keccak256(
   ethers.toUtf8Bytes("sccp:test:semantic-proof-profile:alternate:v1"),
 );
@@ -119,12 +119,12 @@ const GROTH16_PROOF_ABI_TYPES = [
   "uint256[4]",
   "uint256[2]",
 ];
-const PINNED_EVM_SOLC_BUILD = "0.8.24+commit.e11b9ed9.Emscripten.clang";
+const PINNED_EVM_SOLC_BUILD = "0.7.4+commit.3f05b770.Emscripten.clang";
 const PINNED_EVM_SOLJSON_SHA256 =
-  "11b054b55273ec55f6ab3f445eb0eb2c83a23fed43d10079d34ac3eabe6ed8b1";
-const PINNED_TRON_SOLC_BUILD = "0.8.24+commit.7d902c66.Emscripten.clang";
+  "2b55ed5fec4d9625b6c7b3ab1abd2b7fb7dd2a9c68543bf0323db2c7e2d55af2";
+const PINNED_TRON_SOLC_BUILD = "0.7.4+commit.3f05b770.Emscripten.clang";
 const PINNED_TRON_SOLJSON_SHA256 =
-  "527b5363b50eee33b9d45a1619ccd3511e6304637867135396969ac93bc67116";
+  "2b55ed5fec4d9625b6c7b3ab1abd2b7fb7dd2a9c68543bf0323db2c7e2d55af2";
 const MAX_MANIFEST_BYTES = 128 * 1024 * 1024;
 
 function source(file) {
@@ -377,7 +377,8 @@ function compile() {
   ];
   const mocks = `
 // SPDX-License-Identifier: Apache-2.0
-pragma solidity 0.8.24;
+pragma solidity 0.7.4;
+pragma experimental ABIEncoderV2;
 import "contracts/evm/sccp/SccpExactTransferCodec.sol";
 import "contracts/evm/sccp/TairaXorExactEvmSccpBridge.sol";
 import {TairaXOR as BscTairaXOR} from "contracts/bsc/sccp/TairaXOR.sol";
@@ -571,14 +572,14 @@ contract CodeAliasedVerifier {
   const compatibilityRoute = tronCompatibilityByFile[
     "contracts/tron/sccp/TairaXorSccpBridge.sol"
   ].TairaXorSccpBridge;
-  assert.notEqual(
+  assert.equal(
     compatibilityRoute.bytecode,
     exactTvmRoute.bytecode,
-    "TRON EVM compatibility bytecode must not alias exact TVM production bytecode",
+    "the shared pinned 0.7.4 compiler must reproduce the exact TRON route bytecode",
   );
   return {
     evmContracts: production.targets.evm,
-    tvmContracts: tronCompatibilityByFile,
+    tvmContracts: production.targets.tron,
     mockContracts: mocksByFile,
     runtimeSizes: production.runtimeSizes,
   };
@@ -960,6 +961,33 @@ async function nextCreateAddress(signer, offset = 0) {
   });
 }
 
+async function deployPreboundRoute(
+  signer,
+  tokenArtifact,
+  routeArtifact,
+  routeArgs,
+) {
+  const routeAddress = await nextCreateAddress(signer, 1);
+  const token = await deploy(signer, tokenArtifact, [routeAddress]);
+  assert.equal(
+    await nextCreateAddress(signer),
+    routeAddress,
+    "token deployment must leave the precomputed route address next",
+  );
+  const route = await deploy(signer, routeArtifact, [
+    await token.getAddress(),
+    ...routeArgs,
+  ]);
+  assert.equal(
+    await route.getAddress(),
+    routeAddress,
+    "route deployment address drifted from the token's immutable binding",
+  );
+  assert.equal(await token.bridge(), routeAddress);
+  assert.equal(await route.token(), await token.getAddress());
+  return { route, token };
+}
+
 function le(value, bytes) {
   let current = BigInt(value);
   const out = Buffer.alloc(bytes);
@@ -1009,7 +1037,7 @@ function transferPayload({
 
 function network(profile) {
   if (profile === "sora-taira") {
-    return Buffer.from("010100000000809574f5fee75e69bfcf52451e42d50f", "hex");
+    return Buffer.from("010100000000fc56984b2be7431d840e21514d1883f0", "hex");
   }
   if (profile === "sora-nexus") {
     return Buffer.from("01000000000000000000000000000000000000000753", "hex");
@@ -1618,9 +1646,13 @@ async function main() {
     await assertConstructorRevertsWith(
       signer,
       exactTokenArtifact,
-      [await outsider.getAddress()],
-      exactTokenArtifact.target === "evm" ? "Bridge must create token" : undefined,
+      [ethers.ZeroAddress],
+      "Bridge address is required",
     );
+    const preboundToken = await deploy(signer, exactTokenArtifact, [
+      await outsider.getAddress(),
+    ]);
+    assert.equal(await preboundToken.bridge(), await outsider.getAddress());
   }
 
   for (const [label, exactRouteArtifact] of [
@@ -1634,12 +1666,23 @@ async function main() {
     assert(constructor, `${label} route constructor ABI is missing`);
     assert.equal(
       constructor.inputs.length,
-      3,
-      `${label} route constructor must accept only verifier policy, profile, and revision`,
+      4,
+      `${label} route constructor must accept token, verifier policy, profile, and revision`,
     );
-    assert(
-      !constructor.inputs.some((input) => input.name === "tokenAddress"),
-      `${label} route constructor must deploy its token atomically`,
+    assert.equal(constructor.inputs[0].name, "tokenAddress");
+    assert.equal(constructor.inputs[0].type, "address");
+    assert.equal(constructor.inputs[1].name, "configuredVerifierPolicy");
+    assert.equal(constructor.inputs[1].type, "tuple");
+    assert.deepEqual(
+      constructor.inputs[1].components.map(({ name, type }) => [name, type]),
+      [
+        ["verifierAddress", "address"],
+        ["verifierCodeHash", "bytes32"],
+        ["verifierKeyHash", "bytes32"],
+        ["semanticProofProfileHash", "bytes32"],
+        ["soraFinalityAnchorHash", "bytes32"],
+      ],
+      `${label} route verifier policy ABI drifted`,
     );
   }
 
@@ -2053,6 +2096,7 @@ async function main() {
     signer,
     tronBridgeArtifact,
     [
+      await outsider.getAddress(),
       verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
       TRON_NILE_PROFILE,
       ROUTE_REVISION,
@@ -2096,44 +2140,48 @@ async function main() {
     SORA_FINALITY_ANCHOR_HASH,
   );
 
-  const tronBridge = await deploy(signer, tronBridgeArtifact, [
-    verifierPolicy(tronVerifierAddress, tronVerifierCodeHash, verifierKeyHash),
-    TRON_NILE_PROFILE,
-    ROUTE_REVISION,
-  ]);
-  const tronBridgeAddress = await tronBridge.getAddress();
-  const tronTokenAddress = await tronBridge.token();
-  const tronToken = new ethers.Contract(
-    tronTokenAddress,
-    tronTokenArtifact.abi,
+  const tronRoute = await deployPreboundRoute(
     signer,
+    tronTokenArtifact,
+    tronBridgeArtifact,
+    [
+      verifierPolicy(tronVerifierAddress, tronVerifierCodeHash, verifierKeyHash),
+      TRON_NILE_PROFILE,
+      ROUTE_REVISION,
+    ],
   );
-  await assertRuntimeAtAddress(provider, tronTokenAddress, tronTokenArtifact);
+  const tronBridge = tronRoute.route;
+  const tronBridgeAddress = await tronBridge.getAddress();
+  const tronToken = tronRoute.token;
+  const tronTokenAddress = await tronToken.getAddress();
   const tronTokenCodeHash = ethers.keccak256(
     await provider.getCode(tronTokenAddress),
   );
   assert.equal(await tronToken.bridge(), tronBridgeAddress);
   assert.equal(await tronBridge.networkId(), tronNetworkId);
   assert.equal(await tronBridge.routeRevision(), BigInt(ROUTE_REVISION));
-  const secondTronBridge = await deploy(signer, tronBridgeArtifact, [
-    verifierPolicy(tronVerifierAddress, tronVerifierCodeHash, verifierKeyHash),
-    TRON_NILE_PROFILE,
-    ROUTE_REVISION,
-  ]);
-  const secondTronBridgeAddress = await secondTronBridge.getAddress();
-  const secondTronToken = new ethers.Contract(
-    await secondTronBridge.token(),
-    tronTokenArtifact.abi,
+  const secondTronRoute = await deployPreboundRoute(
     signer,
-  );
-  await assertRuntimeAtAddress(
-    provider,
-    await secondTronBridge.token(),
     tronTokenArtifact,
+    tronBridgeArtifact,
+    [
+      verifierPolicy(tronVerifierAddress, tronVerifierCodeHash, verifierKeyHash),
+      TRON_NILE_PROFILE,
+      ROUTE_REVISION,
+    ],
   );
+  const secondTronBridge = secondTronRoute.route;
+  const secondTronBridgeAddress = await secondTronBridge.getAddress();
+  const secondTronToken = secondTronRoute.token;
   assert.equal(await secondTronToken.bridge(), secondTronBridgeAddress);
+  const rejectedTronRouteAddress = await nextCreateAddress(signer, 1);
+  const rejectedTronToken = await deploy(signer, tronTokenArtifact, [
+    rejectedTronRouteAddress,
+  ]);
+  const rejectedTronTokenAddress = await rejectedTronToken.getAddress();
   await assert.rejects(
     deploy(signer, tronBridgeArtifact, [
+      rejectedTronTokenAddress,
       verifierPolicy(tronVerifierAddress, tronVerifierCodeHash, verifierKeyHash),
       TRON_NILE_PROFILE,
       0,
@@ -2142,6 +2190,7 @@ async function main() {
   );
   await assert.rejects(
     deploy(signer, tronBridgeArtifact, [
+      rejectedTronTokenAddress,
       verifierPolicy(
         tronVerifierAddress,
         tronVerifierCodeHash,
@@ -2155,6 +2204,7 @@ async function main() {
   );
   await assert.rejects(
     deploy(signer, tronBridgeArtifact, [
+      rejectedTronTokenAddress,
       verifierPolicy(
         tronVerifierAddress,
         tronVerifierCodeHash,
@@ -2181,8 +2231,13 @@ async function main() {
     await tronCodeAliasedVerifier.soraFinalityAnchorHash(),
     tronCodeAliasedVerifierCodeHash,
   );
+  const aliasedTronRouteAddress = await nextCreateAddress(signer, 1);
+  const aliasedTronToken = await deploy(signer, tronTokenArtifact, [
+    aliasedTronRouteAddress,
+  ]);
   await assert.rejects(
     deploy(signer, tronBridgeArtifact, [
+      await aliasedTronToken.getAddress(),
       verifierPolicy(
         tronCodeAliasedVerifierAddress,
         tronCodeAliasedVerifierCodeHash,
@@ -2475,15 +2530,20 @@ async function main() {
   await tronEip1193Provider.disconnect();
   }
 
-  const bridge = await deploy(signer, bridgeArtifact, [
-    verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
-    BSC_TESTNET_PROFILE,
-    ROUTE_REVISION,
-  ]);
+  const bscRoute = await deployPreboundRoute(
+    signer,
+    tokenArtifact,
+    bridgeArtifact,
+    [
+      verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
+      BSC_TESTNET_PROFILE,
+      ROUTE_REVISION,
+    ],
+  );
+  const bridge = bscRoute.route;
   const bridgeAddress = await bridge.getAddress();
-  const tokenAddress = await bridge.token();
-  const token = new ethers.Contract(tokenAddress, tokenArtifact.abi, signer);
-  await assertRuntimeAtAddress(provider, tokenAddress, tokenArtifact);
+  const token = bscRoute.token;
+  const tokenAddress = await token.getAddress();
   assert.equal(await token.bridge(), bridgeAddress);
   assert.equal(await bridge.routeRevision(), BigInt(ROUTE_REVISION));
   assert.equal(
@@ -2527,8 +2587,14 @@ async function main() {
     ]),
     rejectedWith(),
   );
+  const rejectedBscRouteAddress = await nextCreateAddress(signer, 1);
+  const rejectedBscToken = await deploy(signer, tokenArtifact, [
+    rejectedBscRouteAddress,
+  ]);
+  const rejectedBscTokenAddress = await rejectedBscToken.getAddress();
   await assert.rejects(
     deploy(signer, bridgeArtifact, [
+      rejectedBscTokenAddress,
       verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
       BSC_TESTNET_PROFILE,
       0,
@@ -2537,6 +2603,7 @@ async function main() {
   );
   await assert.rejects(
     deploy(signer, bridgeArtifact, [
+      rejectedBscTokenAddress,
       verifierPolicy(verifierAddress, ethers.ZeroHash, verifierKeyHash),
       5,
       ROUTE_REVISION,
@@ -2545,6 +2612,7 @@ async function main() {
   );
   await assert.rejects(
     deploy(signer, bridgeArtifact, [
+      rejectedBscTokenAddress,
       verifierPolicy(verifierAddress, verifierCodeHash, ethers.ZeroHash),
       5,
       ROUTE_REVISION,
@@ -2553,6 +2621,7 @@ async function main() {
   );
   await assert.rejects(
     deploy(signer, bridgeArtifact, [
+      rejectedBscTokenAddress,
       verifierPolicy(
         verifierAddress,
         verifierCodeHash,
@@ -2566,6 +2635,7 @@ async function main() {
   );
   await assert.rejects(
     deploy(signer, bridgeArtifact, [
+      rejectedBscTokenAddress,
       verifierPolicy(
         verifierAddress,
         verifierCodeHash,
@@ -2592,8 +2662,14 @@ async function main() {
     await evmCodeAliasedVerifier.semanticProofProfileHash(),
     evmCodeAliasedVerifierCodeHash,
   );
+  const aliasedBscRouteAddress = await nextCreateAddress(signer, 1);
+  const aliasedBscToken = await deploy(signer, tokenArtifact, [
+    aliasedBscRouteAddress,
+  ]);
+  const aliasedBscTokenAddress = await aliasedBscToken.getAddress();
   await assert.rejects(
     deploy(signer, bridgeArtifact, [
+      aliasedBscTokenAddress,
       verifierPolicy(
         evmCodeAliasedVerifierAddress,
         evmCodeAliasedVerifierCodeHash,
@@ -2608,6 +2684,7 @@ async function main() {
   );
   await assert.rejects(
     deploy(signer, bridgeArtifact, [
+      aliasedBscTokenAddress,
       verifierPolicy(
         verifierAddress,
         verifierCodeHash,
@@ -2621,6 +2698,7 @@ async function main() {
   );
   await assert.rejects(
     deploy(signer, bridgeArtifact, [
+      aliasedBscTokenAddress,
       verifierPolicy(
         verifierAddress,
         verifierCodeHash,
@@ -2635,6 +2713,7 @@ async function main() {
   );
   await assert.rejects(
     deploy(signer, bridgeArtifact, [
+      aliasedBscTokenAddress,
       verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
       4,
       ROUTE_REVISION,
@@ -3477,27 +3556,24 @@ async function main() {
     await ethereumVerifier.soraFinalityAnchorHash(),
     SORA_FINALITY_ANCHOR_HASH,
   );
-  const ethereumBridge = await deploy(ethereumSigner, ethereumBridgeArtifact, [
-    verifierPolicy(
-      ethereumVerifierAddress,
-      ethereumVerifierCodeHash,
-      ethereumVerifierKeyHash,
-    ),
-    ETHEREUM_SEPOLIA_PROFILE,
-    ROUTE_REVISION,
-  ]);
-  const ethereumBridgeAddress = await ethereumBridge.getAddress();
-  const ethereumTokenAddress = await ethereumBridge.token();
-  const ethereumToken = new ethers.Contract(
-    ethereumTokenAddress,
-    ethereumTokenArtifact.abi,
+  const ethereumRoute = await deployPreboundRoute(
     ethereumSigner,
-  );
-  await assertRuntimeAtAddress(
-    ethereumProvider,
-    ethereumTokenAddress,
     ethereumTokenArtifact,
+    ethereumBridgeArtifact,
+    [
+      verifierPolicy(
+        ethereumVerifierAddress,
+        ethereumVerifierCodeHash,
+        ethereumVerifierKeyHash,
+      ),
+      ETHEREUM_SEPOLIA_PROFILE,
+      ROUTE_REVISION,
+    ],
   );
+  const ethereumBridge = ethereumRoute.route;
+  const ethereumBridgeAddress = await ethereumBridge.getAddress();
+  const ethereumToken = ethereumRoute.token;
+  const ethereumTokenAddress = await ethereumToken.getAddress();
   assert.equal(await ethereumToken.bridge(), ethereumBridgeAddress);
   assert.equal(
     await ethereumBridge.semanticProofProfileHash(),
@@ -3543,8 +3619,19 @@ async function main() {
   );
   assert.notEqual(await ethereumBridge.routeConfigHash(), bscRouteConfigHash);
 
+  const rejectedEthereumRouteAddress = await nextCreateAddress(
+    ethereumSigner,
+    1,
+  );
+  const rejectedEthereumToken = await deploy(
+    ethereumSigner,
+    ethereumTokenArtifact,
+    [rejectedEthereumRouteAddress],
+  );
+  const rejectedEthereumTokenAddress = await rejectedEthereumToken.getAddress();
   await assert.rejects(
     deploy(ethereumSigner, ethereumBridgeArtifact, [
+      rejectedEthereumTokenAddress,
       verifierPolicy(
         ethereumVerifierAddress,
         ethereumVerifierCodeHash,
@@ -3557,6 +3644,7 @@ async function main() {
   );
   await assert.rejects(
     deploy(ethereumSigner, bridgeArtifact, [
+      rejectedEthereumTokenAddress,
       verifierPolicy(
         ethereumVerifierAddress,
         ethereumVerifierCodeHash,

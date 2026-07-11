@@ -54,16 +54,16 @@ final class SccpV1Tests: XCTestCase {
             (
                 .bscMainnet,
                 "020102000000000000000700000000000000000000000103000000786f724d00000000000000000000000000000002140000001111111111111111111111111111111111111111010b000000616c696365407461697261010d00000074616972615f6273635f786f72",
-                "d9e1e2c69af5795970f172947321e63257b7be98214c41b24da4fc90bdadf219",
-                "5e747cfd5119981d7c75e673e3d055a51c065469b33f881a60b26dc125332dbb",
-                "5050d6d02c555627119face798d51c868c535a8c26b6a69c50d2b8ffc7dde008"
+                "e92d89d1adb34dbe5420fe660a0893f0edfd9493c3c683bdefabc89c24d0e1b7",
+                "6aa2f80325682c6be5466ca2051b274d1e3a7da07ace3a21c31b4ac3a811f201",
+                "0030b2d41f4da251b991659b871cde9e236fe654033d6204d9d6bae02266d3a5"
             ),
             (
                 .tronMainnet,
                 "020105000000000000000700000000000000000000000103000000786f724d0000000000000000000000000000000515000000412222222222222222222222222222222222222222010b000000616c696365407461697261010e00000074616972615f74726f6e5f786f72",
-                "7f7e0f0165de518d135f63118c05f250e6467ea812fa5f9911bedab67a834cc9",
-                "568ea09b5c63e54850dc3cd9d033a4d5e9f2c89c3e7d03d099657e246e83b55a",
-                "32cd52d171e0c917e159d3b0fa9264534dac0eb45beb4ec7076c780dec850540"
+                "fd03a7719fb4a47ec1dadb83cde2ab98e09b4f477e91efc68913d1d6881ab5e3",
+                "ac0f23529cafee260c92167a7df27a7c3c87d0a6188b2b833dba5f1ebc36df89",
+                "6e8843e3f022d5fa810f32fec0bbd0e6ababedbaa64841caea2ece0e64191bec"
             ),
         ]
         for (source, payloadHex, laneHashHex, messageIdHex, digestHex) in vectors {
@@ -129,6 +129,10 @@ final class SccpV1Tests: XCTestCase {
             .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
         let artifact = noritoEncode(typeName: "iroha_sccp::SccpGroth16Bn254ProofArtifactV1", payload: Data([1]))
             .base64EncodedString()
+        let nativeArtifact = noritoEncode(
+            typeName: "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1",
+            payload: Data([1])
+        ).base64EncodedString()
         let signature = try privateKey.signature(for: Data(repeating: 7, count: 32)).base64EncodedString()
         let transactionPayload = Data([1, 2, 3]).base64EncodedString()
         let request = try ToriiBridgeProofSubmitRequest(
@@ -146,7 +150,7 @@ final class SccpV1Tests: XCTestCase {
         XCTAssertEqual(json["transaction_payload_b64"] as? String, transactionPayload)
         let messageRequest = try ToriiBridgeMessageSubmitRequest(
             authority: authority,
-            nativeProofB64: artifact,
+            nativeProofB64: nativeArtifact,
             signatureB64: signature,
             transactionPayloadB64: transactionPayload,
             creationTimeMs: 7
@@ -206,7 +210,7 @@ final class SccpV1Tests: XCTestCase {
             transactionPayloadB64: transactionPayload,
             creationTimeMs: 7
         ))
-        XCTAssertThrowsError(try ToriiBridgeMessageSubmitRequest(authority: authority, nativeProofB64: artifact, creationTimeMs: 0))
+        XCTAssertThrowsError(try ToriiBridgeMessageSubmitRequest(authority: authority, nativeProofB64: nativeArtifact, creationTimeMs: 0))
     }
 
     func testSubmitAuthorityRequiresExactTairaDiscriminant() throws {
@@ -214,6 +218,10 @@ final class SccpV1Tests: XCTestCase {
         let authority = try address.toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
         let artifact = noritoEncode(
             typeName: "iroha_sccp::SccpGroth16Bn254ProofArtifactV1",
+            payload: Data([1])
+        ).base64EncodedString()
+        let nativeArtifact = noritoEncode(
+            typeName: "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1",
             payload: Data([1])
         ).base64EncodedString()
         XCTAssertEqual(SccpV1.tairaI105DiscriminantV1, 369)
@@ -224,7 +232,7 @@ final class SccpV1Tests: XCTestCase {
         ))
         XCTAssertNoThrow(try ToriiBridgeMessageSubmitRequest(
             authority: authority,
-            nativeProofB64: artifact
+            nativeProofB64: nativeArtifact
         ))
 
         var checksumMutation = authority
@@ -245,8 +253,54 @@ final class SccpV1Tests: XCTestCase {
             ), label)
             XCTAssertThrowsError(try ToriiBridgeMessageSubmitRequest(
                 authority: invalidAuthority,
-                nativeProofB64: artifact
+                nativeProofB64: nativeArtifact
             ), label)
+        }
+    }
+
+    func testSubmitArtifactsRequireExactSchemaAndZeroAlignmentPadding() throws {
+        let authority = try AccountAddress
+            .fromAccount(publicKey: Data(repeating: 0x42, count: 32))
+            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
+        let destination = noritoEncode(
+            typeName: SccpSubmitValidation.destinationArtifactTypeName,
+            payload: Data([1, 2, 3])
+        )
+        let native = noritoEncode(
+            typeName: SccpSubmitValidation.nativeInboundProofTypeName,
+            payload: Data([1, 2, 3])
+        )
+        XCTAssertNoThrow(try ToriiBridgeProofSubmitRequest(
+            authority: authority,
+            destinationProofB64: destination.base64EncodedString()
+        ))
+        XCTAssertNoThrow(try ToriiBridgeMessageSubmitRequest(
+            authority: authority,
+            nativeProofB64: native.base64EncodedString()
+        ))
+        XCTAssertThrowsError(try ToriiBridgeProofSubmitRequest(
+            authority: authority,
+            destinationProofB64: native.base64EncodedString()
+        ))
+        XCTAssertThrowsError(try ToriiBridgeMessageSubmitRequest(
+            authority: authority,
+            nativeProofB64: destination.base64EncodedString()
+        ))
+        for frame in [destination, native] {
+            var padded = Data(frame.prefix(NoritoHeader.encodedLength))
+            padded.append(Data(repeating: 0, count: 8))
+            padded.append(frame.dropFirst(NoritoHeader.encodedLength))
+            if frame == destination {
+                XCTAssertThrowsError(try ToriiBridgeProofSubmitRequest(
+                    authority: authority,
+                    destinationProofB64: padded.base64EncodedString()
+                ))
+            } else {
+                XCTAssertThrowsError(try ToriiBridgeMessageSubmitRequest(
+                    authority: authority,
+                    nativeProofB64: padded.base64EncodedString()
+                ))
+            }
         }
     }
 
@@ -565,6 +619,14 @@ final class SccpV1Tests: XCTestCase {
         XCTAssertEqual(parsed.targetNetwork, .bscMainnet)
         XCTAssertEqual(parsed.soraFinalityAnchor.anchorHash, finalityAnchor().hash)
 
+        var archivedIdentity = try jsonObject(request, mutableContainers: true)
+        var archivedAnchor = archivedIdentity["sora_finality_anchor"] as! [String: Any]
+        archivedAnchor["chain_id_hash"] = irohaKeccak256(
+            Data(hexString: "809574f5fee75e69bfcf52451e42d50f")!
+        ).hexEncodedString().uppercased()
+        archivedIdentity["sora_finality_anchor"] = archivedAnchor
+        XCTAssertThrowsError(try SccpGroth16ProofRequestV1.parse(jsonData(archivedIdentity)))
+
         let requestMutations: [(inout [String: Any]) -> Void] = [
             { $0["allow_unready"] = true },
             { $0["backend"] = ["backend": "solana_recursive_v1", "family": NSNull()] },
@@ -720,6 +782,68 @@ final class SccpV1Tests: XCTestCase {
             } catch {}
         }
         XCTAssertEqual(observed.count, calls)
+    }
+
+    func testToriiClientNativeReadsRequireExactSchemaAndZeroPadding() async throws {
+        let id = String(repeating: "11", count: 32)
+        SccpStubURLProtocol.handler = { request in
+            let typeName: String
+            if request.url!.path == "/v1/sccp/registry" {
+                typeName = SccpSubmitValidation.registryTypeName
+            } else if request.url!.path.contains("proof-requests") {
+                typeName = SccpSubmitValidation.proofRequestTypeName
+            } else {
+                typeName = SccpSubmitValidation.messageBundleTypeName
+            }
+            let body = noritoEncode(typeName: typeName, payload: Data([1]))
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: nil,
+                headerFields: ["Content-Type": "application/x-norito"]
+            )!
+            return (response, body)
+        }
+        let client = makeClient()
+        _ = try await client.getSccpRegistryNorito()
+        _ = try await client.getSccpMessageBundleNorito(messageIdHex: id)
+        _ = try await client.getSccpProofRequestNorito(messageIdHex: id)
+
+        let wrongSchema = noritoEncode(
+            typeName: SccpSubmitValidation.destinationArtifactTypeName,
+            payload: Data([1])
+        )
+        var paddedMessage = Data(
+            noritoEncode(
+                typeName: SccpSubmitValidation.messageBundleTypeName,
+                payload: Data([1])
+            ).prefix(NoritoHeader.encodedLength)
+        )
+        paddedMessage.append(Data(repeating: 0, count: 8))
+        paddedMessage.append(
+            noritoEncode(
+                typeName: SccpSubmitValidation.messageBundleTypeName,
+                payload: Data([1])
+            ).dropFirst(NoritoHeader.encodedLength)
+        )
+        for (body, operation) in [
+            (wrongSchema, { try await client.getSccpRegistryNorito() }),
+            (wrongSchema, { try await client.getSccpMessageBundleNorito(messageIdHex: id) }),
+            (wrongSchema, { try await client.getSccpProofRequestNorito(messageIdHex: id) }),
+            (paddedMessage, { try await client.getSccpMessageBundleNorito(messageIdHex: id) }),
+        ] {
+            SccpStubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!, statusCode: 200, httpVersion: nil,
+                    headerFields: ["Content-Type": "application/x-norito"]
+                )!
+                return (response, body)
+            }
+            do {
+                _ = try await operation()
+                XCTFail("accepted a wrong-schema or padded SCCP Norito response")
+            } catch {
+                // Expected.
+            }
+        }
     }
 
     func testToriiClientAcceptsExactCapabilityResponseLimit() async throws {
@@ -1159,7 +1283,7 @@ final class SccpV1Tests: XCTestCase {
     }
 
     private func finalityAnchor() -> (object: [String: Any], hash: Data) {
-        let chainId = Data(hexString: "809574f5fee75e69bfcf52451e42d50f")!
+        let chainId = Data(hexString: "fc56984b2be7431d840e21514d1883f0")!
         let chainHash = irohaKeccak256(chainId)
         let checkpoint = Data(repeating: 0xa1, count: 32)
         let validator = Data(repeating: 0xa2, count: 32)

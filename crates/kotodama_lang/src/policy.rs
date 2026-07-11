@@ -159,6 +159,7 @@ impl Checker {
             }
             ExprKind::Unary { expr: inner, .. }
             | ExprKind::NumericCast { expr: inner }
+            | ExprKind::NumericTryCast { expr: inner }
             | ExprKind::OptionSome { value: inner }
             | ExprKind::ResultOk { value: inner }
             | ExprKind::ResultErr { error: inner }
@@ -237,9 +238,8 @@ impl Checker {
                 self.visit_expr(target, origin);
                 self.visit_expr(index, origin);
             }
-            ExprKind::Number(_)
-            | ExprKind::Decimal(_)
-            | ExprKind::AmountLiteral { .. }
+            ExprKind::IntLiteral(_)
+            | ExprKind::DecimalLiteral { .. }
             | ExprKind::OptionNone
             | ExprKind::Bool(_)
             | ExprKind::String(_)
@@ -292,9 +292,9 @@ fn is_allowed_map_key_type(ty: &Type) -> bool {
 
 fn display_type(ty: &Type) -> String {
     match semantic::resolve_struct_type(ty) {
-        Type::Int => "i64".to_string(),
-        Type::FixedU128 => "u128".to_string(),
-        Type::Amount => "Amount".to_string(),
+        Type::Int => "int".to_string(),
+        Type::Decimal => "decimal".to_string(),
+        Type::Quantity => "quantity".to_string(),
         Type::Bool => "bool".to_string(),
         Type::String => "string".to_string(),
         Type::Bytes => "bytes".to_string(),
@@ -357,8 +357,8 @@ mod tests {
     fn every_canonical_scalar_map_key_is_allowed() {
         for ty in [
             Type::Int,
-            Type::FixedU128,
-            Type::Amount,
+            Type::Int,
+            Type::Quantity,
             Type::Bool,
             Type::String,
             Type::Bytes,

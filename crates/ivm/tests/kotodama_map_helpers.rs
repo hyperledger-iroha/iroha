@@ -3,7 +3,7 @@
 use std::{collections::HashMap, str::FromStr};
 
 use ivm::{
-    IVM, PointerType,
+    IVM,
     kotodama::{
         compiler::Compiler,
         ir::{self, Instr, Terminator},
@@ -11,7 +11,6 @@ use ivm::{
         semantic::analyze,
     },
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
-    validate_tlv_bytes,
 };
 mod common;
 
@@ -259,7 +258,5 @@ fn runtime_durable_ensure_state_map() {
         val = host.wsv.sc_get(&namespaced_path);
     }
     let val = val.expect("durable state entry should exist");
-    let tlv = validate_tlv_bytes(&val).expect("state entry should use NoritoBytes TLV");
-    assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-    assert_eq!(common::decode_i64_state_value(tlv.payload), 0);
+    assert_eq!(common::decode_i64_state_value(&val), 0);
 }

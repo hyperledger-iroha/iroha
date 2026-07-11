@@ -47,7 +47,7 @@ PUBLIC_SIGNAL_SCHEMA_HASH_HEX = (
     "7567439f41173d6745a3d51923cb70371acc7d66f23cefb4100d6d5d7a432cbb"
 )
 SORA_TAIRA_CHAIN_ID_HASH_HEX = (
-    "3f139c4b2a31457994d17be5ce922d87fc702939116359f0e47314ab36a7f588"
+    "cf1cfc0f57b0bfa4c21882a9870317a1f4812f86533897095e3944be34c5bba7"
 )
 SEMANTIC_PROFILE_HASH_DOMAIN = b"sccp:semantic-proof-profile:v1"
 SORA_FINALITY_ANCHOR_HASH_DOMAIN = b"sccp:sora-finality-anchor:v1"
@@ -146,9 +146,9 @@ PROFILE_ORDER = (
     "tron-mainnet",
 )
 
-HUB_CHAIN_IDS = {"sora-taira": "809574f5-fee7-5e69-bfcf-52451e42d50f"}
+HUB_CHAIN_IDS = {"sora-taira": "fc56984b-2be7-431d-840e-21514d1883f0"}
 
-# Public fixture keys are intentionally derivable. Production policy loading
+# Fixture keys are disposable and non-production. Production policy loading
 # denies every published generation even if an attacker relabels the fixture
 # schema/environment and signer IDs.
 FORBIDDEN_FIXTURE_PUBLIC_KEYS = frozenset(
@@ -178,6 +178,17 @@ FORBIDDEN_FIXTURE_PUBLIC_KEYS = frozenset(
         "3b6b6fa357dcec265b24a70ce8808a4a75e2393994be06ad3958be3c9c68749a",
         "a5b2610c54fcf817d94fb832578cc477eaeade34bd0a58de9b503213ef908e64",
         "f40674938b1a40e4670d318b42b47ba9fef3582099bcfefc92790244b0f4cb68",
+        # Current fixture-only generation.
+        "7b93db743c32a07ccc2c48569645a3cf2a980a1733da7f07d60161a09cef679b",
+        "1c0f6ccb3f6003808376dd4090ed76d9e1f4c830fcd4bf8df2aa8a0616ea754f",
+        "4eb6252d1332fe20b1baa620e80635f3a4cd0a131d6d3abcb93cfa925732ce12",
+        "05f80c4badfbc7015606fcb192dda45f7536f7c1191ef063260bf982ae4e52c0",
+        "07ecef22532a6859823046b92b183b90e38b6c367fc1af6ead429be7cbbdc0f5",
+        "1b60f8f63d68bb772e5cb5ff7dd98996895a5a7430d9e82f48f48d4776cd1a3b",
+        "366e703d99bdbe0a2a4db1a664acd52c43b03f9d053025eb19bda13a5e0a6066",
+        # Current ephemeral release-role seal.
+        "df62654404d5e37e3ba68dd14b97117eb199803f4a10a2473e3b7b848e67a1b5",
+        "073fb6ce0ac504252d2fe848ad7cbf6afe92bc727a340667f9d2ca56e3331ad7",
     )
 )
 
@@ -1417,9 +1428,7 @@ def validator_build_identity_hex(identity: Mapping[str, Any]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _validate_validator_identity(
-    value: Any, *, allow_historical_fixture_features: bool = False
-) -> dict[str, Any]:
+def _validate_validator_identity(value: Any) -> dict[str, Any]:
     identity = _require_object(
         value,
         label="validator identity",
@@ -1457,9 +1466,7 @@ def _validate_validator_identity(
     features = _require_list(
         identity["enabled_features"], label="validator enabled_features"
     )
-    if features and not (
-        allow_historical_fixture_features and features == ["bls"]
-    ):
+    if features:
         _fail("validator must use the exact production feature set []")
     profile = _require_id(identity["build_profile"], label="validator build_profile")
     if profile not in ("debug", "release"):
@@ -1492,11 +1499,10 @@ def _validate_validator_identity(
         ("cargo_lock_sha256_hex", CARGO_LOCK, "workspace Cargo lock", 2 * 1024 * 1024),
         ("toolchain_lock_sha256_hex", RUST_TOOLCHAIN_LOCK, "Rust toolchain lock", 16 * 1024),
     )
-    if not allow_historical_fixture_features:
-        for field, path, label, maximum in local_files:
-            data = read_direct_file(path, label=label, maximum=maximum)
-            if identity[field] != sha256_hex(data):
-                _fail(f"validator {field} does not match the canonical repository input")
+    for field, path, label, maximum in local_files:
+        data = read_direct_file(path, label=label, maximum=maximum)
+        if identity[field] != sha256_hex(data):
+            _fail(f"validator {field} does not match the canonical repository input")
     if identity["build_identity_hex"] != validator_build_identity_hex(identity):
         _fail("validator build identity does not bind its exact build inputs")
     return identity
@@ -2030,10 +2036,7 @@ def validate_evidence(
     )
     if trust_policy_hash != sha256_hex(canonical_json_file_bytes(trust_policy)):
         _fail("release evidence does not bind the exact external trust policy")
-    validator = _validate_validator_identity(
-        evidence["validator"],
-        allow_historical_fixture_features=trust_policy["environment"] == "test-fixture",
-    )
+    validator = _validate_validator_identity(evidence["validator"])
     if trust_policy["environment"] == "production" and validator["build_profile"] != "release":
         _fail("production release evidence requires a release-profile validator build")
     artifacts, artifact_by_path = _validate_artifacts(evidence["artifacts"])

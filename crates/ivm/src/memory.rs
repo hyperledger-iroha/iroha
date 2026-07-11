@@ -816,6 +816,20 @@ impl Memory {
         &self.data[start..end]
     }
 
+    /// Number of bytes in the append-only prefix written by the guest.
+    #[inline]
+    pub fn output_used_len(&self) -> u64 {
+        self.output_cursor
+    }
+
+    /// Borrow only the append-only output prefix written by the guest.
+    #[inline]
+    pub fn read_output_used(&self) -> &[u8] {
+        let start = Memory::OUTPUT_START as usize;
+        let used = usize::try_from(self.output_cursor).unwrap_or(Memory::OUTPUT_SIZE as usize);
+        &self.data[start..start.saturating_add(used)]
+    }
+
     /// Clear the OUTPUT region and reset the append-only cursor.
     pub(crate) fn clear_output(&mut self) {
         let start = Memory::OUTPUT_START as usize;

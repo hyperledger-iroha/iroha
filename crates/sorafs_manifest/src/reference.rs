@@ -44,8 +44,8 @@ use crate::{
     SignedAuditorRequestV1, SignedReplicationOrderV1, SignedReplicationOrderValidationError,
     TradeEventV1, XorAmount, sign_order_cancel_ed25519_v1, sign_order_request_ed25519_v1,
     sign_settlement_receipt_ed25519_v1, validate_governance_dag_head_against_chain_v1,
-    verify_envelope, verify_pop_commitment_root_signature_v1, verify_pop_credential_signature_v1,
-    verify_pop_revocation_list_signature_v1,
+    verify_envelope_untrusted_signers, verify_pop_commitment_root_signature_v1,
+    verify_pop_credential_signature_v1, verify_pop_revocation_list_signature_v1,
 };
 
 /// Current schema version for [`ValidationOutcomeV1`].
@@ -641,7 +641,7 @@ fn validate_fixture_bundle_payload(
                     "SFS-SIG-001",
                     CATEGORY_SIGNATURE,
                     format!("provider advert signature validation failed: {error}"),
-                    "Resign the advert body with the governed provider Ed25519 key.",
+                    "Resign the canonical advert envelope with the governed provider Ed25519 key.",
                     context,
                     vec![ValidationInputV1::new(
                         payload.kind.input_kind(),
@@ -661,7 +661,7 @@ fn validate_fixture_bundle_payload(
             let envelope =
                 decode_bundle_payload::<ProviderAdmissionEnvelopeV1>(payload, generated_at)?;
             let mut context = provider_admission_context(&envelope);
-            if let Err(error) = verify_envelope(&envelope) {
+            if let Err(error) = verify_envelope_untrusted_signers(&envelope) {
                 let code = provider_admission_envelope_code(&error);
                 let category = provider_admission_envelope_category(&error);
                 context.push(ValidationContextFieldV1::new(
@@ -1400,7 +1400,7 @@ pub fn validate_governance_log_node_bytes(
             "SFS-SIG-001",
             CATEGORY_SIGNATURE,
             format!("governance provider advert signature validation failed: {error}"),
-            "Resign the embedded advert body with the governed provider Ed25519 key.",
+            "Resign the embedded canonical advert envelope with the governed provider Ed25519 key.",
             vec![
                 "sorafs.reference.governance".to_owned(),
                 "sorafs.reference.code.SFS-SIG-001".to_owned(),
@@ -1867,6 +1867,10 @@ fn orderbook_runtime_snapshot_context(
         ValidationContextFieldV1::new("version", snapshot.version.to_string()),
         ValidationContextFieldV1::new("next_sequence", snapshot.next_sequence.to_string()),
         ValidationContextFieldV1::new("generated_at_unix", snapshot.generated_at_unix.to_string()),
+        ValidationContextFieldV1::new(
+            "owner_nonce_high_water_count",
+            snapshot.owner_nonce_high_waters.len().to_string(),
+        ),
         ValidationContextFieldV1::new("open_order_count", snapshot.open_orders.len().to_string()),
         ValidationContextFieldV1::new("trade_count", snapshot.trades.len().to_string()),
         ValidationContextFieldV1::new(
@@ -2970,8 +2974,6 @@ pub enum OrderbookPayloadSigningError {
 /// Field-level input for building a signed [`OrderRequestV1`] payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderbookOrderRequestFieldsV1 {
-    /// Unique order identifier.
-    pub order_id: [u8; 32],
     /// Bid or ask.
     pub side: OrderSideV1,
     /// Storage tier priced by the order.
@@ -3055,9 +3057,10 @@ pub fn build_signed_orderbook_order_request_bytes_ed25519_v1(
     signing_key_bytes: &[u8],
 ) -> Result<Vec<u8>, OrderbookPayloadSigningError> {
     let signing_key = orderbook_signing_key_from_bytes(signing_key_bytes)?;
+    let order_id = crate::derive_orderbook_order_id_v1(&fields.owner_account, fields.nonce);
     let payload = OrderRequestV1 {
         version: ORDERBOOK_ORDER_VERSION_V1,
-        order_id: fields.order_id,
+        order_id,
         side: fields.side,
         tier: fields.tier,
         price_per_gib: XorAmount::from_micro(fields.price_per_gib_micro_xor),
@@ -3550,7 +3553,7 @@ pub fn validate_provider_advert_bytes(
             "SFS-SIG-001",
             CATEGORY_SIGNATURE,
             format!("provider advert signature validation failed: {error}"),
-            "Resign the advert body with the governed provider Ed25519 key.",
+            "Resign the canonical advert envelope with the governed provider Ed25519 key.",
             vec![
                 "sorafs.reference.advert".to_owned(),
                 "sorafs.reference.code.SFS-SIG-001".to_owned(),
@@ -3920,15 +3923,19 @@ pub fn validate_provider_admission_envelope_bytes(
     };
 
     let mut context = provider_admission_context(&envelope);
-    match verify_envelope(&envelope) {
+    match verify_envelope_untrusted_signers(&envelope) {
         Ok(advert_digest) => {
             context.push(ValidationContextFieldV1::new(
                 "verified_advert_body_digest_hex",
                 hex::encode(advert_digest),
             ));
+            context.push(ValidationContextFieldV1::new(
+                "council_signer_trust",
+                "not_evaluated_reference_only",
+            ));
             ValidationOutcomeV1::ok(
                 "SFS-OK-000",
-                "provider admission envelope accepted",
+                "provider admission envelope integrity valid; council trust not evaluated",
                 vec![
                     "sorafs.reference.admission".to_owned(),
                     "sorafs.reference.code.SFS-OK-000".to_owned(),
@@ -4017,7 +4024,7 @@ pub fn validate_provider_admission_renewal_bytes(
     };
 
     let mut context = provider_admission_renewal_context(&renewal);
-    let previous_record = match AdmissionRecord::new(previous_envelope) {
+    let previous_record = match AdmissionRecord::new_untrusted_signers(previous_envelope) {
         Ok(record) => record,
         Err(error) => {
             let code = provider_admission_envelope_code(&error);
@@ -4042,15 +4049,19 @@ pub fn validate_provider_admission_renewal_bytes(
         }
     };
 
-    match previous_record.apply_renewal(&renewal) {
+    match previous_record.apply_renewal_untrusted_signers(&renewal) {
         Ok(updated_record) => {
             context.push(ValidationContextFieldV1::new(
                 "updated_advert_body_digest_hex",
                 hex::encode(updated_record.advert_body_digest),
             ));
+            context.push(ValidationContextFieldV1::new(
+                "council_signer_trust",
+                "not_evaluated_reference_only",
+            ));
             ValidationOutcomeV1::ok(
                 "SFS-OK-000",
-                "provider admission renewal accepted",
+                "provider admission renewal integrity valid; council trust not evaluated",
                 vec![
                     "sorafs.reference.admission".to_owned(),
                     "sorafs.reference.code.SFS-OK-000".to_owned(),
@@ -4137,7 +4148,7 @@ pub fn validate_provider_admission_revocation_bytes(
     };
 
     let mut context = provider_admission_revocation_context(&revocation);
-    let record = match AdmissionRecord::new(envelope) {
+    let record = match AdmissionRecord::new_untrusted_signers(envelope) {
         Ok(record) => record,
         Err(error) => {
             let code = provider_admission_envelope_code(&error);
@@ -4162,18 +4173,24 @@ pub fn validate_provider_admission_revocation_bytes(
         }
     };
 
-    match record.verify_revocation(&revocation) {
-        Ok(()) => ValidationOutcomeV1::ok(
-            "SFS-OK-000",
-            "provider admission revocation accepted",
-            vec![
-                "sorafs.reference.admission".to_owned(),
-                "sorafs.reference.code.SFS-OK-000".to_owned(),
-            ],
-            context,
-            inputs,
-            generated_at,
-        ),
+    match record.verify_revocation_untrusted_signers(&revocation) {
+        Ok(()) => {
+            context.push(ValidationContextFieldV1::new(
+                "council_signer_trust",
+                "not_evaluated_reference_only",
+            ));
+            ValidationOutcomeV1::ok(
+                "SFS-OK-000",
+                "provider admission revocation integrity valid; council trust not evaluated",
+                vec![
+                    "sorafs.reference.admission".to_owned(),
+                    "sorafs.reference.code.SFS-OK-000".to_owned(),
+                ],
+                context,
+                inputs,
+                generated_at,
+            )
+        }
         Err(error) => {
             let code = provider_admission_revocation_code(&error);
             let category = provider_admission_revocation_category(&error);
@@ -4796,16 +4813,16 @@ pub fn validate_por_challenge_proof_bytes(
             generated_at,
         );
     }
-    if proof.submitted_at > challenge.deadline_at {
+    if proof.submitted_at < challenge.issued_at || proof.submitted_at > challenge.deadline_at {
         context.push(ValidationContextFieldV1::new(
             "deadline_error",
-            "proof submitted after challenge deadline",
+            "proof submitted outside challenge validity window",
         ));
         return ValidationOutcomeV1::error(
             "SFS-POL-002",
             CATEGORY_POLICY,
-            "PoR proof missed the challenge deadline",
-            "Treat the proof as late unless a governed policy override explicitly extends the deadline.",
+            "PoR proof timestamp falls outside the challenge validity window",
+            "Reject the proof and regenerate it while the exact challenge is active.",
             vec![
                 "sorafs.reference.por".to_owned(),
                 "sorafs.reference.code.SFS-POL-002".to_owned(),
@@ -4815,16 +4832,12 @@ pub fn validate_por_challenge_proof_bytes(
             generated_at,
         );
     }
-    let challenge_indices: BTreeSet<u64> = challenge.sample_indices.iter().copied().collect();
-    let proof_indices: BTreeSet<u64> = proof
+    let proof_indices: Vec<u64> = proof
         .samples
         .iter()
         .map(|sample| sample.sample_index)
         .collect();
-    if challenge_indices.len() != challenge.sample_indices.len()
-        || proof_indices.len() != proof.samples.len()
-        || challenge_indices != proof_indices
-    {
+    if challenge.sample_indices != proof_indices {
         context.push(ValidationContextFieldV1::new(
             "sample_coverage_error",
             "proof samples do not match challenge sample indices",
@@ -4837,6 +4850,26 @@ pub fn validate_por_challenge_proof_bytes(
             vec![
                 "sorafs.reference.por".to_owned(),
                 "sorafs.reference.code.SFS-POR-001".to_owned(),
+            ],
+            context,
+            inputs,
+            generated_at,
+        );
+    }
+
+    if let Err(error) = proof.verify_signature() {
+        context.push(ValidationContextFieldV1::new(
+            "proof_signature_error",
+            error.to_string(),
+        ));
+        return ValidationOutcomeV1::error(
+            "SFS-SIG-008",
+            CATEGORY_SIGNATURE,
+            format!("PoR proof signature verification failed: {error}"),
+            "Reject the proof and require the provider to sign the canonical domain-separated PoR proof payload.",
+            vec![
+                "sorafs.reference.por".to_owned(),
+                "sorafs.reference.code.SFS-SIG-008".to_owned(),
             ],
             context,
             inputs,
@@ -5836,6 +5869,7 @@ fn advert_validation_code(error: &AdvertValidationError) -> &'static str {
         | AdvertValidationError::DuplicateProfileAlias { .. } => "SFS-VAL-003",
         AdvertValidationError::InvalidTimestamps
         | AdvertValidationError::TtlOutOfRange { .. }
+        | AdvertValidationError::IssuedInFuture { .. }
         | AdvertValidationError::Expired { .. } => "SFS-POL-001",
         _ => "SFS-VAL-004",
     }
@@ -6085,7 +6119,8 @@ fn provider_admission_renewal_code(error: &ProviderAdmissionRenewalError) -> &'s
         ProviderAdmissionRenewalError::ProfileIdChanged { .. }
         | ProviderAdmissionRenewalError::ProfileAliasesChanged
         | ProviderAdmissionRenewalError::CapabilitiesChanged
-        | ProviderAdmissionRenewalError::AdvertKeyChanged => "SFS-VAL-006",
+        | ProviderAdmissionRenewalError::AdvertKeyChanged
+        | ProviderAdmissionRenewalError::PorVrfKeyChanged => "SFS-VAL-006",
     }
 }
 
@@ -6207,6 +6242,7 @@ fn advert_validation_category(error: &AdvertValidationError) -> &'static str {
     match error {
         AdvertValidationError::InvalidTimestamps
         | AdvertValidationError::TtlOutOfRange { .. }
+        | AdvertValidationError::IssuedInFuture { .. }
         | AdvertValidationError::Expired { .. } => CATEGORY_POLICY,
         _ => CATEGORY_VALIDATION,
     }
@@ -6568,17 +6604,19 @@ mod tests {
     }
 
     fn orderbook_order_request() -> OrderRequestV1 {
+        let owner_account = b"buyer@sora".to_vec();
+        let nonce = 7;
         OrderRequestV1 {
             version: crate::ORDERBOOK_ORDER_VERSION_V1,
-            order_id: [0x71; 32],
+            order_id: crate::derive_orderbook_order_id_v1(&owner_account, nonce),
             side: OrderSideV1::Bid,
             tier: OrderTierV1::Hot,
             price_per_gib: crate::XorAmount::from_micro(1_250_000),
             quantity_gib: 64,
             remaining_gib: 64,
-            owner_account: b"buyer@sora".to_vec(),
+            owner_account,
             expiry_unix: 1_800_000_000,
-            nonce: 7,
+            nonce,
             maker_fee_bps: 10,
             taker_fee_bps: 15,
             signature: orderbook_signature(),
@@ -6586,10 +6624,11 @@ mod tests {
     }
 
     fn orderbook_order_cancel() -> OrderCancelV1 {
+        let order = orderbook_order_request();
         OrderCancelV1 {
             version: crate::ORDERBOOK_CANCEL_VERSION_V1,
-            order_id: [0x71; 32],
-            owner_account: b"buyer@sora".to_vec(),
+            order_id: order.order_id,
+            owner_account: order.owner_account,
             reason: OrderCancelReasonV1::OwnerRequested,
             nonce: 9,
             signature: orderbook_signature(),
@@ -6644,11 +6683,11 @@ mod tests {
 
     fn orderbook_runtime_snapshot() -> OrderbookRuntimeSnapshotV1 {
         let mut open = orderbook_order_request();
-        open.order_id = [0x73; 32];
         open.side = OrderSideV1::Ask;
         open.owner_account = b"provider@sora".to_vec();
         open.expiry_unix = 1_800_000_500;
         open.nonce = 8;
+        open.order_id = crate::derive_orderbook_order_id_v1(&open.owner_account, open.nonce);
         let trade = orderbook_trade_event();
         let channel = orderbook_settlement_channel(&trade);
         let mut receipt = orderbook_settlement_receipt();
@@ -6660,6 +6699,10 @@ mod tests {
             version: crate::ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
             next_sequence: 4,
             generated_at_unix: 1_800_000_020,
+            owner_nonce_high_waters: vec![crate::OrderbookOwnerNonceHighWaterV1 {
+                owner_account: open.owner_account.clone(),
+                highest_nonce: open.nonce,
+            }],
             open_orders: vec![crate::OrderBookEntryV1 {
                 order: open,
                 sequence: 3,
@@ -7010,9 +7053,7 @@ mod tests {
             transport_hints: None,
         };
         let signing_key = SigningKey::from_bytes(&[0xA5; 32]);
-        let body_bytes = norito::to_bytes(&body).expect("encode advert body");
-        let signature = signing_key.sign(&body_bytes);
-        ProviderAdvertV1 {
+        let mut advert = ProviderAdvertV1 {
             version: crate::PROVIDER_ADVERT_VERSION_V1,
             issued_at: now,
             expires_at: now + REFRESH_RECOMMENDATION_SECS,
@@ -7020,11 +7061,16 @@ mod tests {
             signature: AdvertSignature {
                 algorithm: SignatureAlgorithm::Ed25519,
                 public_key: signing_key.verifying_key().to_bytes().to_vec(),
-                signature: signature.to_bytes().to_vec(),
+                signature: vec![0; 64],
             },
             signature_strict: true,
             allow_unknown_capabilities: false,
-        }
+        };
+        let payload = advert
+            .signature_payload_bytes()
+            .expect("encode advert signature envelope");
+        advert.signature.signature = signing_key.sign(&payload).to_bytes().to_vec();
+        advert
     }
 
     fn replication_order() -> ReplicationOrderV1 {
@@ -7762,6 +7808,25 @@ mod tests {
     }
 
     #[test]
+    fn validate_por_challenge_proof_bytes_rejects_preissued_proof() {
+        let challenge = por_challenge();
+        let mut proof = por_proof();
+        proof.submitted_at = challenge.issued_at - 1;
+        let challenge_bytes = to_bytes(&challenge).expect("encode challenge");
+        let proof_bytes = to_bytes(&proof).expect("encode proof");
+        let outcome = validate_por_challenge_proof_bytes(
+            &challenge_bytes,
+            &proof_bytes,
+            "challenge.to",
+            "preissued-proof.to",
+            17,
+        );
+        assert!(!outcome.is_ok());
+        assert_eq!(outcome.code, "SFS-POL-002");
+        assert_eq!(outcome.category, CATEGORY_POLICY);
+    }
+
+    #[test]
     fn validate_por_challenge_proof_bytes_rejects_sample_coverage_mismatch() {
         let challenge = por_challenge();
         let mut proof = por_proof();
@@ -7778,6 +7843,44 @@ mod tests {
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-POR-001");
         assert_eq!(outcome.category, CATEGORY_VALIDATION);
+    }
+
+    #[test]
+    fn validate_por_challenge_proof_bytes_rejects_reordered_samples() {
+        let challenge = por_challenge();
+        let mut proof = por_proof();
+        proof.samples.swap(0, 1);
+        let challenge_bytes = to_bytes(&challenge).expect("encode challenge");
+        let proof_bytes = to_bytes(&proof).expect("encode proof");
+        let outcome = validate_por_challenge_proof_bytes(
+            &challenge_bytes,
+            &proof_bytes,
+            "challenge.to",
+            "reordered-proof.to",
+            18,
+        );
+        assert!(!outcome.is_ok());
+        assert_eq!(outcome.code, "SFS-POR-001");
+        assert_eq!(outcome.category, CATEGORY_VALIDATION);
+    }
+
+    #[test]
+    fn validate_por_challenge_proof_bytes_rejects_forged_signature() {
+        let challenge = por_challenge();
+        let mut proof = por_proof();
+        proof.signature.signature[0] ^= 0x80;
+        let challenge_bytes = to_bytes(&challenge).expect("encode challenge");
+        let proof_bytes = to_bytes(&proof).expect("encode proof");
+        let outcome = validate_por_challenge_proof_bytes(
+            &challenge_bytes,
+            &proof_bytes,
+            "challenge.to",
+            "forged-proof.to",
+            18,
+        );
+        assert!(!outcome.is_ok());
+        assert_eq!(outcome.code, "SFS-SIG-008");
+        assert_eq!(outcome.category, CATEGORY_SIGNATURE);
     }
 
     #[test]
@@ -8220,17 +8323,19 @@ mod tests {
             .to_bytes()
             .to_vec();
 
+        let owner_account = vec![0x03; 32];
+        let order_nonce = 1;
+        let order_id = crate::derive_orderbook_order_id_v1(&owner_account, order_nonce);
         let order_bytes = build_signed_orderbook_order_request_bytes_ed25519_v1(
             OrderbookOrderRequestFieldsV1 {
-                order_id: [0x01; 32],
                 side: OrderSideV1::Bid,
                 tier: OrderTierV1::Hot,
                 price_per_gib_micro_xor: 1_500_000,
                 quantity_gib: 10,
                 remaining_gib: 10,
-                owner_account: vec![0x03; 32],
+                owner_account: owner_account.clone(),
                 expiry_unix: 1_800_000_000,
-                nonce: 1,
+                nonce: order_nonce,
                 maker_fee_bps: 5,
                 taker_fee_bps: 10,
             },
@@ -8244,8 +8349,8 @@ mod tests {
 
         let cancel_bytes = build_signed_orderbook_order_cancel_bytes_ed25519_v1(
             OrderbookOrderCancelFieldsV1 {
-                order_id: [0x01; 32],
-                owner_account: vec![0x03; 32],
+                order_id,
+                owner_account,
                 reason: OrderCancelReasonV1::OwnerRequested,
                 nonce: 2,
             },
@@ -8356,6 +8461,10 @@ mod tests {
 
         assert!(outcome.is_ok(), "{outcome:?}");
         assert_eq!(outcome.code, "SFS-OK-000");
+        assert!(outcome.context.iter().any(|field| {
+            field.key == "owner_nonce_high_water_count"
+                && field.value == snapshot.owner_nonce_high_waters.len().to_string()
+        }));
         assert!(outcome.context.iter().any(|field| {
             field.key == "settlement_receipt_count"
                 && field.value == snapshot.settlement_receipts.len().to_string()

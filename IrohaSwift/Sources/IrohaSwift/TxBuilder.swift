@@ -923,6 +923,11 @@ public final class IrohaSDK: @unchecked Sendable {
     /// Provides the creation time (ms since epoch) used when signing transactions.
     public var creationTimeProvider: @Sendable () -> UInt64
 
+    // Instance-scoped to keep deterministic unit-test encoders isolated from other tests. The
+    // production path remains nil and always uses the validated native bridge.
+    var validationFeeTransferNativeEncoderForTests:
+        SwiftTransactionEncoder.ValidationFeeTransferNativeEncoder?
+
     public init(baseURL: URL,
                 session: URLSession = .shared,
                 defaultSigningAlgorithm: SigningAlgorithm = .ed25519,
@@ -1077,7 +1082,8 @@ public final class IrohaSDK: @unchecked Sendable {
         let creationTimeMs = makeCreationTimeMs()
         return try SwiftTransactionEncoder.encodeValidationFeeTransfer(request: request,
                                                                        keypair: keypair,
-                                                                       creationTimeMs: creationTimeMs)
+                                                                       creationTimeMs: creationTimeMs,
+                                                                       nativeEncoder: validationFeeTransferNativeEncoderForTests)
     }
 
     /// Build a signed validation-fee transfer transaction using a `SigningKey`.
@@ -1086,7 +1092,8 @@ public final class IrohaSDK: @unchecked Sendable {
         let creationTimeMs = makeCreationTimeMs()
         return try SwiftTransactionEncoder.encodeValidationFeeTransfer(request: request,
                                                                        signingKey: signingKey,
-                                                                       creationTimeMs: creationTimeMs)
+                                                                       creationTimeMs: creationTimeMs,
+                                                                       nativeEncoder: validationFeeTransferNativeEncoderForTests)
     }
 
     /// Build and submit a transfer transaction using the experimental Swift encoder.
@@ -1720,6 +1727,64 @@ public final class IrohaSDK: @unchecked Sendable {
             throw Self.restUnavailableError()
         }
         return try await toriiRestClient.cancelRuntimeUpgrade(idHex: idHex)
+    }
+
+    /// Builds the native confidential-unshield proof and binds it to the exact
+    /// verifier record returned by Torii for a recursive Kagemusha redemption.
+    @available(iOS 15.0, macOS 12.0, *)
+    public func buildKagemushaConfidentialUnshieldRedeemProofAttachment(
+        witness: PrivacyConfidentialWitnessV1,
+        verifierKeyId: ToriiVerifyingKeyId,
+        blockHeight: UInt64? = nil
+    ) async throws -> Data {
+        guard let toriiRestClient else {
+            throw Self.restUnavailableError()
+        }
+        return try await Self.orchestrateKagemushaConfidentialUnshieldRedeemProofAttachment(
+            witness: witness,
+            verifierKeyId: verifierKeyId,
+            blockHeight: blockHeight,
+            fetchVerifierKey: { id in
+                try await toriiRestClient.getVerifyingKey(
+                    backend: id.backend,
+                    name: id.name
+                )
+            },
+            buildProof: PrivacyNativeBridge.buildConfidentialUnshieldProofV3,
+            buildAttachment: { proofOutput, verifierRecord, height in
+                try KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment(
+                    unshieldProofOutputArchive: proofOutput,
+                    unshieldVerifierRecord: verifierRecord,
+                    blockHeight: height
+                )
+            }
+        )
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    static func orchestrateKagemushaConfidentialUnshieldRedeemProofAttachment(
+        witness: PrivacyConfidentialWitnessV1,
+        verifierKeyId: ToriiVerifyingKeyId,
+        blockHeight: UInt64?,
+        fetchVerifierKey: (ToriiVerifyingKeyId) async throws -> ToriiVerifyingKeyDetail,
+        buildProof: (Data) throws -> Data,
+        buildAttachment: (
+            Data,
+            KagemushaRecursiveSpendVerifierRecordRef,
+            UInt64?
+        ) throws -> Data
+    ) async throws -> Data {
+        let detail = try await fetchVerifierKey(verifierKeyId)
+        guard detail.id == verifierKeyId else {
+            throw ToriiClientError.invalidPayload(
+                "verifying-key detail identifier does not match the requested verifier key"
+            )
+        }
+        let verifierRecord = try detail.asKagemushaRecursiveSpendVerifierRecordRef()
+        let proofRequest = try PrivacyConfidentialWitnessCodecs
+            .buildConfidentialUnshieldProofRequestV1(witness: witness)
+        let proofOutput = try buildProof(proofRequest)
+        return try buildAttachment(proofOutput, verifierRecord, blockHeight)
     }
 
     public func deriveConfidentialKeyset(seedHex: String? = nil,

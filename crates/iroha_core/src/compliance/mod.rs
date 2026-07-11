@@ -7,17 +7,17 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
-use iroha_crypto::privacy::LaneCommitmentId;
+use iroha_crypto::{Hash, privacy::LaneCommitmentId};
 use iroha_data_model::{
     account::AccountId,
     domain::DomainId,
     nexus::{
-        DataSpaceId, LaneCompliancePolicy, LaneCompliancePolicyId, LaneComplianceRule, LaneId,
-        ParticipantSelector, UniversalAccountId,
+        DataSpaceId, LaneCatalog, LaneCompliancePolicy, LaneCompliancePolicyId, LaneComplianceRule,
+        LaneId, ParticipantSelector, UniversalAccountId,
     },
 };
 use iroha_logger::warn;
-use norito::codec::DecodeAll;
+use norito::codec::{DecodeAll, Encode};
 
 use crate::interlane::LanePrivacyRegistryHandle;
 
@@ -104,8 +104,30 @@ impl LaneComplianceEngine {
     #[must_use]
     pub fn evaluate(&self, ctx: &LaneComplianceContext<'_>) -> LaneComplianceEvaluation {
         let Some(policy) = self.policies.get(&ctx.lane_id) else {
+            let mode = if self.audit_only {
+                "audit_only_allow"
+            } else {
+                "enforced_deny"
+            };
+            warn!(
+                lane = %ctx.lane_id.as_u32(),
+                dataspace = %ctx.dataspace_id.as_u64(),
+                authority = %ctx.authority,
+                mode,
+                "no exact lane compliance policy is configured"
+            );
             return LaneComplianceEvaluation::NotConfigured;
         };
+        if policy.dataspace_id != ctx.dataspace_id {
+            return LaneComplianceEvaluation::Denied(LaneComplianceDecisionRecord::new(
+                policy.id,
+                ctx.lane_id,
+                ctx.dataspace_id,
+                ctx.authority.clone(),
+                LaneComplianceDecision::Deny,
+                Some("lane compliance policy dataspace mismatch".to_string()),
+            ));
+        }
         if let Some(rule) = Self::match_rule(&policy.deny, ctx) {
             return LaneComplianceEvaluation::Denied(LaneComplianceDecisionRecord::new(
                 policy.id,
@@ -164,6 +186,62 @@ impl LaneComplianceEngine {
     #[must_use]
     pub fn audit_only(&self) -> bool {
         self.audit_only
+    }
+
+    /// Return whether an exact policy is loaded for `lane_id`.
+    #[must_use]
+    pub fn has_policy(&self, lane_id: LaneId, dataspace_id: DataSpaceId) -> bool {
+        self.policies
+            .get(&lane_id)
+            .is_some_and(|policy| policy.dataspace_id == dataspace_id)
+    }
+
+    /// Validate exact lane/dataspace policy coverage for every active lane.
+    ///
+    /// Policies for prospective lanes may remain pre-provisioned, but each
+    /// currently active lane must have a policy whose dataspace matches the
+    /// active catalog exactly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaneComplianceCoverageError`] when an active lane has no policy
+    /// or its loaded policy targets a different dataspace.
+    pub fn validate_active_catalog(
+        &self,
+        lane_catalog: &LaneCatalog,
+    ) -> Result<(), LaneComplianceCoverageError> {
+        for lane in lane_catalog.lanes() {
+            let Some(policy) = self.policies.get(&lane.id) else {
+                return Err(LaneComplianceCoverageError::MissingPolicy {
+                    lane_id: lane.id,
+                    dataspace_id: lane.dataspace_id,
+                });
+            };
+            if policy.dataspace_id != lane.dataspace_id {
+                return Err(LaneComplianceCoverageError::DataspaceMismatch {
+                    lane_id: lane.id,
+                    expected: lane.dataspace_id,
+                    actual: policy.dataspace_id,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Compute a canonical digest of every loaded compliance policy.
+    ///
+    /// Policies are stored by lane identifier in a [`BTreeMap`], so their Norito preimage order is
+    /// stable regardless of filesystem directory iteration order.
+    #[must_use]
+    pub fn consensus_policy_digest(&self) -> [u8; 32] {
+        const DOMAIN: &[u8] = b"iroha:nexus:lane-compliance-policy-set:v1\0";
+        let policies = self
+            .policies
+            .values()
+            .map(|policy| policy.as_ref().clone())
+            .collect::<Vec<_>>();
+        let encoded = (1_u8, self.audit_only, policies).encode();
+        Hash::new_from_chunks(&[DOMAIN, encoded.as_slice()]).into()
     }
 }
 
@@ -386,6 +464,31 @@ pub enum LaneComplianceLoadError {
     Empty(PathBuf),
 }
 
+/// Active-catalog compliance coverage failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum LaneComplianceCoverageError {
+    /// No policy exists for an active lane.
+    #[error("active lane {lane_id} in dataspace {dataspace_id} has no compliance policy")]
+    MissingPolicy {
+        /// Active lane without a policy.
+        lane_id: LaneId,
+        /// Dataspace required by the active catalog.
+        dataspace_id: DataSpaceId,
+    },
+    /// The loaded policy targets a different dataspace than the active lane.
+    #[error(
+        "active lane {lane_id} requires compliance dataspace {expected}, but the loaded policy targets {actual}"
+    )]
+    DataspaceMismatch {
+        /// Active lane with mismatched policy binding.
+        lane_id: LaneId,
+        /// Dataspace required by the active catalog.
+        expected: DataSpaceId,
+        /// Dataspace encoded in the loaded policy.
+        actual: DataSpaceId,
+    },
+}
+
 impl LaneComplianceDecisionRecord {
     /// Helper for logging evaluation summaries.
     pub fn log(&self, audit_only: bool) {
@@ -453,6 +556,35 @@ mod tests {
         assert!(
             KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
             "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
+    }
+
+    #[test]
+    fn consensus_policy_digest_binds_loaded_policy_content() {
+        let alice = account("alice", "wonderland");
+        let bob = account("bob", "wonderland");
+        let left = LaneComplianceEngine::from_policies(
+            vec![sample_policy(
+                LaneId::SINGLE,
+                std::slice::from_ref(&alice),
+                &[],
+            )],
+            false,
+        )
+        .expect("left policy engine");
+        let right = LaneComplianceEngine::from_policies(
+            vec![sample_policy(
+                LaneId::SINGLE,
+                std::slice::from_ref(&bob),
+                &[],
+            )],
+            false,
+        )
+        .expect("right policy engine");
+
+        assert_ne!(
+            left.consensus_policy_digest(),
+            right.consensus_policy_digest()
         );
     }
 
@@ -552,6 +684,82 @@ mod tests {
             err,
             LaneComplianceLoadError::DuplicateLane { lane_id } if lane_id == LaneId::SINGLE
         ));
+    }
+
+    #[test]
+    fn active_catalog_coverage_rejects_missing_and_mismatched_policies() {
+        let lane_one = LaneId::new(1);
+        let dataspace_one = DataSpaceId::new(7);
+        let catalog = iroha_data_model::nexus::LaneCatalog::new(
+            nonzero_ext::nonzero!(2_u32),
+            vec![
+                iroha_data_model::nexus::LaneConfig::default(),
+                iroha_data_model::nexus::LaneConfig {
+                    id: lane_one,
+                    dataspace_id: dataspace_one,
+                    alias: "regulated".to_owned(),
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+            ],
+        )
+        .expect("active lane catalog");
+        let default_policy = sample_policy(LaneId::SINGLE, &[], &[]);
+        let missing = LaneComplianceEngine::from_policies(vec![default_policy.clone()], false)
+            .expect("missing engine");
+        assert_eq!(
+            missing
+                .validate_active_catalog(&catalog)
+                .expect_err("active lane without policy must fail"),
+            LaneComplianceCoverageError::MissingPolicy {
+                lane_id: lane_one,
+                dataspace_id: dataspace_one,
+            }
+        );
+
+        let mismatched_policy = LaneCompliancePolicy {
+            lane_id: lane_one,
+            dataspace_id: DataSpaceId::new(8),
+            ..sample_policy(lane_one, &[], &[])
+        };
+        let mismatched =
+            LaneComplianceEngine::from_policies(vec![default_policy, mismatched_policy], false)
+                .expect("mismatched engine");
+        assert_eq!(
+            mismatched
+                .validate_active_catalog(&catalog)
+                .expect_err("dataspace mismatch must fail"),
+            LaneComplianceCoverageError::DataspaceMismatch {
+                lane_id: lane_one,
+                expected: dataspace_one,
+                actual: DataSpaceId::new(8),
+            }
+        );
+    }
+
+    #[test]
+    fn not_configured_evaluation_preserves_enforcement_mode() {
+        let authority = account("alice", "wonderland");
+        let ctx = LaneComplianceContext::new(LaneId::new(9), DataSpaceId::UNIVERSAL, &authority);
+        let enforced = LaneComplianceEngine::from_policies(
+            vec![sample_policy(LaneId::SINGLE, &[], &[])],
+            false,
+        )
+        .expect("enforced engine");
+        let audit = LaneComplianceEngine::from_policies(
+            vec![sample_policy(LaneId::SINGLE, &[], &[])],
+            true,
+        )
+        .expect("audit engine");
+        assert!(matches!(
+            enforced.evaluate(&ctx),
+            LaneComplianceEvaluation::NotConfigured
+        ));
+        assert!(!enforced.audit_only());
+        assert!(matches!(
+            audit.evaluate(&ctx),
+            LaneComplianceEvaluation::NotConfigured
+        ));
+        assert!(audit.audit_only());
     }
 
     #[test]

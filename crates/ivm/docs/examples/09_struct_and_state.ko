@@ -1,10 +1,10 @@
 // Demonstrates struct declaration and durable state.
 seiyaku StructAndState {
     struct Pair {
-        first: i64, second: i64
+        int first, int second
     }
 
-    state stored_pair: Pair;
+    state Pair stored_pair;
     hajimari() {
         stored_pair = Pair {
             first: 0,
@@ -12,7 +12,7 @@ seiyaku StructAndState {
         };
     }
 
-    kotoage fn set_pair(a: i64, b: i64) authorize("Entry") {
+    kotoage fn set_pair(int a, int b) authorize("Entry") {
         stored_pair = Pair {
             first: a,
             second: b,

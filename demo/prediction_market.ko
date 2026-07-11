@@ -1,9 +1,9 @@
 seiyaku PredictionMarket {
     // Fixed-size demo market: two bettors (Alice/Bob) and two oracle keys (YES/NO).
     // Durable state guards prevent double-staking or double-resolution.
-    state alice_staked: bool;
-    state bob_staked: bool;
-    state resolved: bool;
+    state bool alice_staked;
+    state bool bob_staked;
+    state bool resolved;
     hajimari() {
         alice_staked = false;
         bob_staked = false;
@@ -18,8 +18,8 @@ seiyaku PredictionMarket {
         let bob = AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76", );
         let oracle_yes = AccountId::parse("sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888", );
         let oracle_no = AccountId::parse("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", );
-        let stake = Amount::from_i64(10);
-        let payout = Amount::from_i64(20);
+        let stake = 10;
+        let payout = 20;
         if (caller == oracle_yes) {
             if (!resolved && alice_staked && bob_staked) {
                 ledger::asset::transfer(

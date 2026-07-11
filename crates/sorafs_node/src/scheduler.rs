@@ -6,15 +6,18 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Condvar, Mutex, RwLock},
-    thread,
+    sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant},
 };
+
+use thiserror::Error;
 
 use crate::config::StorageConfig;
 
 const LOCAL_PROVIDER_LABEL: &str = "local";
 const FETCH_RATE_SMOOTHING_WEIGHT: u64 = 4;
+const MAX_PROVIDER_KEY_BYTES: usize = 128;
+const MAX_TRACKED_FETCH_PROVIDERS: usize = 4_096;
 
 /// Configuration governing the pin/fetch/PoR schedulers.
 #[derive(Debug, Clone)]
@@ -40,11 +43,13 @@ impl StorageSchedulerConfig {
     #[must_use]
     pub fn from_storage_config(config: &StorageConfig) -> Self {
         let mut scheduler = StorageSchedulerConfig::default();
-        let max_pins = config.max_pins().max(1);
         let fetch_parallel = config.max_parallel_fetches().max(1);
         let por_interval = config.por_sample_interval_secs().max(1);
 
-        scheduler.pin_queue_max_inflight = max_pins;
+        // `max_pins` bounds durable manifest cardinality, not concurrent disk
+        // writers. Reuse the explicit I/O concurrency budget so a high pin
+        // inventory limit cannot create thousands of simultaneous ingests.
+        scheduler.pin_queue_max_inflight = fetch_parallel;
         scheduler.fetch_concurrency = fetch_parallel;
         scheduler.fetch_concurrency_per_provider = fetch_parallel;
         scheduler.por_concurrency = fetch_parallel;
@@ -65,6 +70,84 @@ impl Default for StorageSchedulerConfig {
             por_idle_interval: Duration::from_secs(60),
         }
     }
+}
+
+/// Scope of a fetch byte-budget refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchRateScope {
+    /// Aggregate budget shared by every provider.
+    Global,
+    /// Budget assigned to one provider identity.
+    Provider,
+}
+
+impl std::fmt::Display for FetchRateScope {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Global => "global",
+            Self::Provider => "provider",
+        })
+    }
+}
+
+/// Admission failures returned without parking an unbounded request thread.
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum SchedulerAdmissionError {
+    /// Every pin worker slot is occupied.
+    #[error("SoraFS pin scheduler is saturated at {limit} in-flight operations")]
+    PinSaturated {
+        /// Configured in-flight ceiling.
+        limit: usize,
+    },
+    /// Every PoR worker slot is occupied.
+    #[error("SoraFS PoR scheduler is saturated at {limit} in-flight operations")]
+    PorSaturated {
+        /// Configured in-flight ceiling.
+        limit: usize,
+    },
+    /// The global fetch concurrency ceiling is occupied.
+    #[error("SoraFS fetch scheduler is saturated at {limit} global in-flight operations")]
+    FetchSaturated {
+        /// Configured global in-flight ceiling.
+        limit: usize,
+    },
+    /// One provider has exhausted its fetch concurrency budget.
+    #[error(
+        "SoraFS provider fetch scheduler is saturated at {limit} in-flight operations for this provider"
+    )]
+    ProviderFetchSaturated {
+        /// Configured per-provider in-flight ceiling.
+        limit: usize,
+    },
+    /// A provider label is empty, oversized, or contains unsafe bytes.
+    #[error("SoraFS fetch provider label is not canonical")]
+    InvalidProviderLabel,
+    /// The bounded per-provider rate-limiter registry has no free slot.
+    #[error("SoraFS provider rate-limiter registry is full at {limit} entries")]
+    ProviderRegistryFull {
+        /// Maximum tracked provider count.
+        limit: usize,
+    },
+    /// A single request exceeds the configured one-second burst budget.
+    #[error(
+        "SoraFS {scope} fetch request of {requested_bytes} bytes exceeds the {burst_bytes}-byte burst budget"
+    )]
+    RequestExceedsBurst {
+        /// Budget that rejected the request.
+        scope: FetchRateScope,
+        /// Requested byte reservation.
+        requested_bytes: u64,
+        /// Maximum one-request burst.
+        burst_bytes: u64,
+    },
+    /// The current token bucket cannot admit the request immediately.
+    #[error("SoraFS {scope} fetch byte budget is exhausted; retry after {retry_after:?}")]
+    RateLimited {
+        /// Budget that rejected the request.
+        scope: FetchRateScope,
+        /// Minimum delay before the same reservation can be retried.
+        retry_after: Duration,
+    },
 }
 
 /// In-memory counters emitted by the storage telemetry layer.
@@ -165,30 +248,44 @@ impl StorageSchedulersRuntime {
         self.inner.config()
     }
 
-    /// Run a pin operation under the configured queue limits.
-    pub fn with_pin<F, R>(&self, work: F) -> R
+    /// Attempt a pin operation without waiting for an occupied worker slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SchedulerAdmissionError::PinSaturated`] when the configured
+    /// in-flight ceiling is already occupied.
+    pub fn try_with_pin<F, R>(&self, work: F) -> Result<R, SchedulerAdmissionError>
     where
         F: FnOnce() -> R,
     {
-        let mut scope = QueueScope::new_pin(&self.inner);
+        let mut scope = QueueScope::try_new_pin(&self.inner)?;
         let result = work();
         scope.finish();
-        result
+        Ok(result)
     }
 
-    /// Run a fetch operation under the configured concurrency and byte budgets.
-    pub fn run_fetch<F, T, E>(
+    /// Attempt a fetch operation without parking on concurrency or rate limits.
+    ///
+    /// Scheduler refusal is returned by the outer result. The inner result is
+    /// the storage operation's own success or failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SchedulerAdmissionError`] when concurrency, provider-map,
+    /// or byte-budget admission cannot be granted immediately.
+    pub fn try_run_fetch<F, T, E>(
         &self,
         requested_bytes: u64,
         provider: Option<&str>,
         work: F,
-    ) -> Result<T, E>
+    ) -> Result<Result<T, E>, SchedulerAdmissionError>
     where
         F: FnOnce() -> Result<T, E>,
         T: AsRef<[u8]>,
     {
         let provider_key = provider.unwrap_or(LOCAL_PROVIDER_LABEL);
-        let mut scope = FetchScope::new(&self.inner, provider_key.to_string(), requested_bytes);
+        let mut scope =
+            FetchScope::try_new(&self.inner, provider_key.to_string(), requested_bytes)?;
         let start = Instant::now();
         let result = work();
         let elapsed = start.elapsed();
@@ -197,18 +294,23 @@ impl StorageSchedulersRuntime {
             Err(_) => scope.complete(0, elapsed),
         }
         scope.finish();
-        result
+        Ok(result)
     }
 
-    /// Run a PoR sampling operation respecting the concurrency limit.
-    pub fn with_por<F, R>(&self, work: F) -> R
+    /// Attempt a PoR operation without waiting for an occupied worker slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SchedulerAdmissionError::PorSaturated`] when the configured
+    /// in-flight ceiling is already occupied.
+    pub fn try_with_por<F, R>(&self, work: F) -> Result<R, SchedulerAdmissionError>
     where
         F: FnOnce() -> R,
     {
-        let mut scope = QueueScope::new_por(&self.inner);
+        let mut scope = QueueScope::try_new_por(&self.inner)?;
         let result = work();
         scope.finish();
-        result
+        Ok(result)
     }
 
     /// Update the storage byte usage snapshot.
@@ -243,7 +345,14 @@ struct RuntimeInner {
 }
 
 impl RuntimeInner {
-    fn new(config: StorageSchedulerConfig) -> Self {
+    fn new(mut config: StorageSchedulerConfig) -> Self {
+        // A zero concurrency value must never turn a production limiter into
+        // an unbounded one. Configuration conversion already supplies positive
+        // values; this clamp keeps programmatic construction fail-safe too.
+        config.pin_queue_max_inflight = config.pin_queue_max_inflight.max(1);
+        config.fetch_concurrency = config.fetch_concurrency.max(1);
+        config.fetch_concurrency_per_provider = config.fetch_concurrency_per_provider.max(1);
+        config.por_concurrency = config.por_concurrency.max(1);
         Self {
             pin: QueueLimiter::new(config.pin_queue_max_inflight),
             fetch: FetchLimiter::new(
@@ -268,7 +377,7 @@ impl RuntimeInner {
     fn refresh_pin_metrics(&self) {
         let stats = self.pin.stats();
         let mut sched = self.schedulers.write().expect("scheduler state poisoned");
-        sched.telemetry.pin_queue_depth = stats.inflight + stats.waiting;
+        sched.telemetry.pin_queue_depth = stats.inflight;
         sched.utilisation.pin_queue_utilisation_bps =
             utilisation_ratio(stats.inflight, sched.config.pin_queue_max_inflight);
     }
@@ -293,7 +402,11 @@ impl RuntimeInner {
         let sample_rate = if bytes == 0 || elapsed.is_zero() {
             0
         } else {
-            (bytes as f64 / elapsed.as_secs_f64()).round() as u64
+            let rate = u128::from(bytes)
+                .saturating_mul(1_000_000_000)
+                .checked_div(elapsed.as_nanos())
+                .unwrap_or(0);
+            u64::try_from(rate).unwrap_or(u64::MAX)
         };
 
         let mut sched = self.schedulers.write().expect("scheduler state poisoned");
@@ -349,36 +462,29 @@ impl RuntimeInner {
 struct QueueLimiter {
     limit: usize,
     state: Mutex<QueueState>,
-    condvar: Condvar,
 }
 
 impl QueueLimiter {
     fn new(limit: usize) -> Self {
         Self {
-            limit,
+            limit: limit.max(1),
             state: Mutex::new(QueueState::default()),
-            condvar: Condvar::new(),
         }
     }
 
-    fn acquire(&self) -> QueueGuard<'_> {
+    fn try_acquire(&self) -> Option<QueueGuard<'_>> {
         let mut guard = self.state.lock().expect("queue state poisoned");
-        loop {
-            if self.limit == 0 || guard.inflight < self.limit {
-                guard.inflight = guard.inflight.saturating_add(1);
-                return QueueGuard { limiter: self };
-            }
-            guard.waiting = guard.waiting.saturating_add(1);
-            guard = self.condvar.wait(guard).expect("queue state poisoned");
-            guard.waiting = guard.waiting.saturating_sub(1);
+        if guard.inflight >= self.limit {
+            return None;
         }
+        guard.inflight = guard.inflight.saturating_add(1);
+        Some(QueueGuard { limiter: self })
     }
 
     fn stats(&self) -> QueueStats {
         let guard = self.state.lock().expect("queue state poisoned");
         QueueStats {
             inflight: guard.inflight,
-            waiting: guard.waiting,
         }
     }
 }
@@ -386,7 +492,6 @@ impl QueueLimiter {
 #[derive(Debug, Default)]
 struct QueueState {
     inflight: usize,
-    waiting: usize,
 }
 
 #[derive(Debug)]
@@ -398,16 +503,12 @@ impl Drop for QueueGuard<'_> {
     fn drop(&mut self) {
         let mut guard = self.limiter.state.lock().expect("queue state poisoned");
         guard.inflight = guard.inflight.saturating_sub(1);
-        if self.limiter.limit != 0 {
-            self.limiter.condvar.notify_one();
-        }
     }
 }
 
 #[derive(Debug, Default)]
 struct QueueStats {
     inflight: usize,
-    waiting: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -424,27 +525,37 @@ struct QueueScope<'a> {
 }
 
 impl<'a> QueueScope<'a> {
-    fn new_pin(runtime: &'a RuntimeInner) -> Self {
-        Self::new(runtime, QueueKind::Pin)
+    fn try_new_pin(runtime: &'a RuntimeInner) -> Result<Self, SchedulerAdmissionError> {
+        Self::try_new(runtime, QueueKind::Pin)
     }
 
-    fn new_por(runtime: &'a RuntimeInner) -> Self {
-        Self::new(runtime, QueueKind::Por)
+    fn try_new_por(runtime: &'a RuntimeInner) -> Result<Self, SchedulerAdmissionError> {
+        Self::try_new(runtime, QueueKind::Por)
     }
 
-    fn new(runtime: &'a RuntimeInner, kind: QueueKind) -> Self {
+    fn try_new(
+        runtime: &'a RuntimeInner,
+        kind: QueueKind,
+    ) -> Result<Self, SchedulerAdmissionError> {
         let limiter = match kind {
             QueueKind::Pin => &runtime.pin,
             QueueKind::Por => &runtime.por,
         };
-        let guard = limiter.acquire();
+        let guard = limiter.try_acquire().ok_or_else(|| match kind {
+            QueueKind::Pin => SchedulerAdmissionError::PinSaturated {
+                limit: limiter.limit,
+            },
+            QueueKind::Por => SchedulerAdmissionError::PorSaturated {
+                limit: limiter.limit,
+            },
+        })?;
         let scope = Self {
             runtime,
             kind,
             guard: Some(guard),
         };
         scope.refresh();
-        scope
+        Ok(scope)
     }
 
     fn finish(&mut self) {
@@ -473,7 +584,6 @@ struct FetchLimiter {
     global_limit: usize,
     per_provider_limit: usize,
     state: Mutex<FetchState>,
-    condvar: Condvar,
     global_rate: Option<Arc<RateLimiter>>,
     provider_rate: Option<RateLimiterMap>,
 }
@@ -486,10 +596,9 @@ impl FetchLimiter {
         provider_rate: Option<u64>,
     ) -> Self {
         Self {
-            global_limit,
-            per_provider_limit,
+            global_limit: global_limit.max(1),
+            per_provider_limit: per_provider_limit.max(1),
             state: Mutex::new(FetchState::default()),
-            condvar: Condvar::new(),
             global_rate: (global_rate > 0).then(|| Arc::new(RateLimiter::new(global_rate))),
             provider_rate: provider_rate
                 .filter(|limit| *limit > 0)
@@ -497,46 +606,60 @@ impl FetchLimiter {
         }
     }
 
-    fn acquire(&self, provider_key: &str, requested_bytes: u64) -> FetchPermit<'_> {
-        let mut guard = self.state.lock().expect("fetch state poisoned");
-        loop {
+    fn try_acquire(
+        &self,
+        provider_key: &str,
+        requested_bytes: u64,
+    ) -> Result<FetchPermit<'_>, SchedulerAdmissionError> {
+        if !canonical_provider_label(provider_key) {
+            return Err(SchedulerAdmissionError::InvalidProviderLabel);
+        }
+
+        {
+            let mut guard = self.state.lock().expect("fetch state poisoned");
+            if guard.inflight >= self.global_limit {
+                return Err(SchedulerAdmissionError::FetchSaturated {
+                    limit: self.global_limit,
+                });
+            }
             let provider_inflight = guard
                 .per_provider_inflight
                 .get(provider_key)
                 .copied()
                 .unwrap_or(0);
-
-            let global_ok = self.global_limit == 0 || guard.inflight < self.global_limit;
-            let provider_ok =
-                self.per_provider_limit == 0 || provider_inflight < self.per_provider_limit;
-
-            if global_ok && provider_ok {
-                guard.inflight = guard.inflight.saturating_add(1);
-                *guard
-                    .per_provider_inflight
-                    .entry(provider_key.to_string())
-                    .or_default() += 1;
-                break;
+            if provider_inflight >= self.per_provider_limit {
+                return Err(SchedulerAdmissionError::ProviderFetchSaturated {
+                    limit: self.per_provider_limit,
+                });
             }
-
-            guard.waiting = guard.waiting.saturating_add(1);
-            guard = self.condvar.wait(guard).expect("fetch state poisoned");
-            guard.waiting = guard.waiting.saturating_sub(1);
-        }
-        drop(guard);
-
-        if let Some(rate) = &self.global_rate {
-            rate.acquire(requested_bytes);
-        }
-        if let Some(map) = &self.provider_rate {
-            map.acquire(provider_key, requested_bytes);
+            guard.inflight = guard.inflight.saturating_add(1);
+            *guard
+                .per_provider_inflight
+                .entry(provider_key.to_owned())
+                .or_default() += 1;
         }
 
-        FetchPermit {
+        if let Some(rate) = &self.global_rate
+            && let Err(err) = rate.try_acquire(requested_bytes, FetchRateScope::Global)
+        {
+            self.release_concurrency(provider_key);
+            return Err(err);
+        }
+        if let Some(map) = &self.provider_rate
+            && let Err(err) = map.try_acquire(provider_key, requested_bytes)
+        {
+            if let Some(rate) = &self.global_rate {
+                rate.refund(requested_bytes);
+            }
+            self.release_concurrency(provider_key);
+            return Err(err);
+        }
+
+        Ok(FetchPermit {
             limiter: self,
-            provider_key: provider_key.to_string(),
+            provider_key: provider_key.to_owned(),
             requested_bytes,
-        }
+        })
     }
 
     fn release(&self, provider_key: &str, requested_bytes: u64, actual_bytes: u64) {
@@ -550,6 +673,10 @@ impl FetchLimiter {
             }
         }
 
+        self.release_concurrency(provider_key);
+    }
+
+    fn release_concurrency(&self, provider_key: &str) {
         let mut guard = self.state.lock().expect("fetch state poisoned");
         guard.inflight = guard.inflight.saturating_sub(1);
         if let Some(entry) = guard.per_provider_inflight.get_mut(provider_key) {
@@ -557,9 +684,6 @@ impl FetchLimiter {
             if *entry == 0 {
                 guard.per_provider_inflight.remove(provider_key);
             }
-        }
-        if self.global_limit != 0 || self.per_provider_limit != 0 {
-            self.condvar.notify_one();
         }
     }
 
@@ -571,10 +695,17 @@ impl FetchLimiter {
     }
 }
 
+fn canonical_provider_label(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_PROVIDER_KEY_BYTES
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+}
+
 #[derive(Debug, Default)]
 struct FetchState {
     inflight: usize,
-    waiting: usize,
     per_provider_inflight: HashMap<String, usize>,
 }
 
@@ -599,8 +730,12 @@ struct FetchScope<'a> {
 }
 
 impl<'a> FetchScope<'a> {
-    fn new(runtime: &'a RuntimeInner, provider_key: String, requested_bytes: u64) -> Self {
-        let permit = runtime.fetch.acquire(&provider_key, requested_bytes);
+    fn try_new(
+        runtime: &'a RuntimeInner,
+        provider_key: String,
+        requested_bytes: u64,
+    ) -> Result<Self, SchedulerAdmissionError> {
+        let permit = runtime.fetch.try_acquire(&provider_key, requested_bytes)?;
         let scope = Self {
             runtime,
             permit: Some(permit),
@@ -608,7 +743,7 @@ impl<'a> FetchScope<'a> {
             duration: Duration::ZERO,
         };
         scope.runtime.refresh_fetch_metrics();
-        scope
+        Ok(scope)
     }
 
     fn complete(&mut self, actual_bytes: u64, duration: Duration) {
@@ -647,39 +782,41 @@ impl RateLimiter {
         Self {
             capacity_per_sec,
             state: Mutex::new(RateState {
-                tokens: capacity_per_sec as f64,
+                tokens: capacity_per_sec,
                 last_refill: Instant::now(),
+                fractional_token_nanos: 0,
             }),
         }
     }
 
-    fn acquire(&self, amount: u64) {
+    fn try_acquire(
+        &self,
+        amount: u64,
+        scope: FetchRateScope,
+    ) -> Result<(), SchedulerAdmissionError> {
         if self.capacity_per_sec == 0 || amount == 0 {
-            return;
+            return Ok(());
         }
-        let mut remaining = amount;
-        while remaining > 0 {
-            let chunk = remaining.min(self.capacity_per_sec);
-            self.acquire_chunk(chunk);
-            remaining = remaining.saturating_sub(chunk);
+        if amount > self.capacity_per_sec {
+            return Err(SchedulerAdmissionError::RequestExceedsBurst {
+                scope,
+                requested_bytes: amount,
+                burst_bytes: self.capacity_per_sec,
+            });
         }
-    }
-
-    fn acquire_chunk(&self, amount: u64) {
         let mut state = self.state.lock().expect("rate limiter state poisoned");
-        loop {
-            state.refill(self.capacity_per_sec);
-            if state.tokens >= amount as f64 {
-                state.tokens -= amount as f64;
-                return;
-            }
-            let deficit = amount as f64 - state.tokens;
-            let wait_secs = deficit / self.capacity_per_sec as f64;
-            let wait = Duration::from_secs_f64(wait_secs.max(0.001));
-            drop(state);
-            thread::sleep(wait);
-            state = self.state.lock().expect("rate limiter state poisoned");
+        state.refill(self.capacity_per_sec);
+        if state.tokens < amount {
+            return Err(SchedulerAdmissionError::RateLimited {
+                scope,
+                retry_after: retry_after_for_deficit(
+                    amount.saturating_sub(state.tokens),
+                    self.capacity_per_sec,
+                ),
+            });
         }
+        state.tokens -= amount;
+        Ok(())
     }
 
     fn refund(&self, amount: u64) {
@@ -688,14 +825,18 @@ impl RateLimiter {
         }
         let mut state = self.state.lock().expect("rate limiter state poisoned");
         state.refill(self.capacity_per_sec);
-        state.tokens = (state.tokens + amount as f64).min(self.capacity_per_sec as f64);
+        state.tokens = state
+            .tokens
+            .saturating_add(amount)
+            .min(self.capacity_per_sec);
     }
 }
 
 #[derive(Debug)]
 struct RateState {
-    tokens: f64,
+    tokens: u64,
     last_refill: Instant,
+    fractional_token_nanos: u128,
 }
 
 impl RateState {
@@ -705,15 +846,41 @@ impl RateState {
         if elapsed.is_zero() {
             return;
         }
-        let replenished = elapsed.as_secs_f64() * capacity_per_sec as f64;
-        self.tokens = (self.tokens + replenished).min(capacity_per_sec as f64);
+        let scaled = elapsed
+            .as_nanos()
+            .saturating_mul(u128::from(capacity_per_sec))
+            .saturating_add(self.fractional_token_nanos);
+        let replenished = scaled / 1_000_000_000;
+        self.fractional_token_nanos = scaled % 1_000_000_000;
+        self.tokens = self
+            .tokens
+            .saturating_add(u64::try_from(replenished).unwrap_or(u64::MAX))
+            .min(capacity_per_sec);
+        if self.tokens == capacity_per_sec {
+            self.fractional_token_nanos = 0;
+        }
         self.last_refill = now;
     }
+}
+
+fn retry_after_for_deficit(deficit: u64, capacity_per_sec: u64) -> Duration {
+    if deficit == 0 || capacity_per_sec == 0 {
+        return Duration::ZERO;
+    }
+    let numerator = u128::from(deficit).saturating_mul(1_000_000_000);
+    let denominator = u128::from(capacity_per_sec);
+    let nanos = numerator
+        .saturating_add(denominator.saturating_sub(1))
+        .checked_div(denominator)
+        .unwrap_or(u128::MAX)
+        .max(1);
+    Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
 }
 
 #[derive(Debug)]
 struct RateLimiterMap {
     limit_per_sec: u64,
+    max_entries: usize,
     map: Mutex<HashMap<String, Arc<RateLimiter>>>,
 }
 
@@ -721,18 +888,40 @@ impl RateLimiterMap {
     fn new(limit_per_sec: u64) -> Self {
         Self {
             limit_per_sec,
+            max_entries: MAX_TRACKED_FETCH_PROVIDERS,
             map: Mutex::new(HashMap::new()),
         }
     }
 
-    fn acquire(&self, key: &str, amount: u64) {
+    #[cfg(test)]
+    fn with_max_entries(limit_per_sec: u64, max_entries: usize) -> Self {
+        Self {
+            limit_per_sec,
+            max_entries,
+            map: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn try_acquire(&self, key: &str, amount: u64) -> Result<(), SchedulerAdmissionError> {
+        if !canonical_provider_label(key) {
+            return Err(SchedulerAdmissionError::InvalidProviderLabel);
+        }
         let limiter = {
             let mut map = self.map.lock().expect("rate limiter map poisoned");
-            map.entry(key.to_string())
-                .or_insert_with(|| Arc::new(RateLimiter::new(self.limit_per_sec)))
-                .clone()
+            if let Some(limiter) = map.get(key) {
+                Arc::clone(limiter)
+            } else {
+                if map.len() >= self.max_entries {
+                    return Err(SchedulerAdmissionError::ProviderRegistryFull {
+                        limit: self.max_entries,
+                    });
+                }
+                let limiter = Arc::new(RateLimiter::new(self.limit_per_sec));
+                map.insert(key.to_owned(), Arc::clone(&limiter));
+                limiter
+            }
         };
-        limiter.acquire(amount);
+        limiter.try_acquire(amount, FetchRateScope::Provider)
     }
 
     fn refund(&self, key: &str, amount: u64) {
@@ -756,119 +945,170 @@ fn utilisation_ratio(inflight: usize, limit: usize) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc, Barrier,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    };
-
     use super::*;
 
     #[test]
-    fn pin_queue_respects_inflight_limit() {
-        let config = StorageSchedulerConfig {
+    fn fail_fast_pin_and_por_refuse_without_waiting() {
+        let runtime = StorageSchedulersRuntime::new(StorageSchedulerConfig {
             pin_queue_max_inflight: 1,
-            ..StorageSchedulerConfig::default()
-        };
-        let runtime = StorageSchedulersRuntime::new(config);
-
-        let barrier = Arc::new(Barrier::new(2));
-        let done = Arc::new(AtomicBool::new(false));
-
-        let runtime_clone = runtime.clone();
-        let barrier_clone = barrier.clone();
-        let done_clone = done.clone();
-        let handle = thread::spawn(move || {
-            runtime_clone.with_pin(|| {
-                barrier_clone.wait();
-                thread::sleep(Duration::from_millis(60));
-                done_clone.store(true, Ordering::SeqCst);
-            });
-        });
-
-        barrier.wait();
-        let start = Instant::now();
-        runtime.with_pin(|| {});
-        let elapsed = start.elapsed();
-
-        assert!(done.load(Ordering::SeqCst));
-        assert!(
-            elapsed >= Duration::from_millis(50),
-            "expected pin queue to block for at least 50ms, got {elapsed:?}"
-        );
-        handle.join().expect("pin worker thread panicked");
-    }
-
-    #[test]
-    fn fetch_rate_budget_enforced() {
-        let config = StorageSchedulerConfig {
-            fetch_concurrency: 1,
-            fetch_concurrency_per_provider: 1,
-            fetch_global_bytes_per_sec: 1_000_000, // 1 MiB/s
-            ..StorageSchedulerConfig::default()
-        };
-        let runtime = StorageSchedulersRuntime::new(config);
-
-        runtime
-            .run_fetch(1_000_000, None, || -> Result<Vec<u8>, ()> {
-                Ok(vec![0_u8; 1_000_000])
-            })
-            .expect("initial fetch should succeed");
-
-        let start = Instant::now();
-        runtime
-            .run_fetch(10_000, None, || -> Result<Vec<u8>, ()> {
-                Ok(vec![0_u8; 10_000])
-            })
-            .expect("second fetch should succeed");
-        let elapsed = start.elapsed();
-
-        assert!(
-            elapsed >= Duration::from_millis(8),
-            "expected rate limiter to delay second fetch, got {elapsed:?}"
-        );
-    }
-
-    #[test]
-    fn por_concurrency_limit_is_respected() {
-        let config = StorageSchedulerConfig {
             por_concurrency: 1,
             ..StorageSchedulerConfig::default()
-        };
-        let runtime = StorageSchedulersRuntime::new(config);
-
-        let barrier = Arc::new(Barrier::new(2));
-        let runtime_clone = runtime.clone();
-        let barrier_clone = barrier.clone();
-        let handle = thread::spawn(move || {
-            runtime_clone.with_por(|| {
-                barrier_clone.wait();
-                thread::sleep(Duration::from_millis(40));
-            });
         });
 
-        barrier.wait();
+        let pin_guard = runtime.inner.pin.try_acquire().expect("acquire pin slot");
         let start = Instant::now();
-        runtime.with_por(|| {});
-        let elapsed = start.elapsed();
-
-        assert!(
-            elapsed >= Duration::from_millis(35),
-            "expected PoR limiter to block, got {elapsed:?}"
+        assert_eq!(
+            runtime.try_with_pin(|| ()),
+            Err(SchedulerAdmissionError::PinSaturated { limit: 1 })
         );
-        handle.join().expect("PoR worker thread panicked");
+        assert!(start.elapsed() < Duration::from_millis(50));
+        drop(pin_guard);
+
+        let por_guard = runtime.inner.por.try_acquire().expect("acquire PoR slot");
+        let start = Instant::now();
+        assert_eq!(
+            runtime.try_with_por(|| ()),
+            Err(SchedulerAdmissionError::PorSaturated { limit: 1 })
+        );
+        assert!(start.elapsed() < Duration::from_millis(50));
+        drop(por_guard);
     }
 
     #[test]
-    fn fetch_rate_budget_handles_large_request() {
-        let limiter = RateLimiter::new(100);
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            limiter.acquire(150);
-            let _ = tx.send(());
+    fn fail_fast_fetch_refuses_global_and_provider_saturation() {
+        let runtime = StorageSchedulersRuntime::new(StorageSchedulerConfig {
+            fetch_concurrency: 1,
+            fetch_concurrency_per_provider: 1,
+            fetch_global_bytes_per_sec: 0,
+            ..StorageSchedulerConfig::default()
         });
+        let scope = FetchScope::try_new(&runtime.inner, "provider-a".to_owned(), 0)
+            .expect("acquire global fetch slot");
 
-        rx.recv_timeout(Duration::from_secs(2))
-            .expect("large rate limit request should complete");
+        let error = runtime
+            .try_run_fetch(0, Some("provider-b"), || -> Result<Vec<u8>, ()> {
+                Ok(Vec::new())
+            })
+            .expect_err("occupied global slot must refuse immediately");
+        assert_eq!(error, SchedulerAdmissionError::FetchSaturated { limit: 1 });
+        drop(scope);
+
+        let runtime = StorageSchedulersRuntime::new(StorageSchedulerConfig {
+            fetch_concurrency: 2,
+            fetch_concurrency_per_provider: 1,
+            fetch_global_bytes_per_sec: 0,
+            ..StorageSchedulerConfig::default()
+        });
+        let scope = FetchScope::try_new(&runtime.inner, "provider-a".to_owned(), 0)
+            .expect("acquire provider fetch slot");
+        let error = runtime
+            .try_run_fetch(0, Some("provider-a"), || -> Result<Vec<u8>, ()> {
+                Ok(Vec::new())
+            })
+            .expect_err("occupied provider slot must refuse immediately");
+        assert_eq!(
+            error,
+            SchedulerAdmissionError::ProviderFetchSaturated { limit: 1 }
+        );
+        drop(scope);
+    }
+
+    #[test]
+    fn fail_fast_rate_limiter_is_integer_and_burst_bounded() {
+        let limiter = RateLimiter::new(100);
+        limiter
+            .try_acquire(100, FetchRateScope::Global)
+            .expect("initial burst must be available");
+        let error = limiter
+            .try_acquire(1, FetchRateScope::Global)
+            .expect_err("depleted bucket must refuse");
+        assert!(matches!(
+            error,
+            SchedulerAdmissionError::RateLimited {
+                scope: FetchRateScope::Global,
+                retry_after,
+            } if retry_after > Duration::ZERO
+        ));
+        assert_eq!(
+            limiter.try_acquire(101, FetchRateScope::Global),
+            Err(SchedulerAdmissionError::RequestExceedsBurst {
+                scope: FetchRateScope::Global,
+                requested_bytes: 101,
+                burst_bytes: 100,
+            })
+        );
+    }
+
+    #[test]
+    fn provider_rate_registry_and_labels_are_bounded() {
+        let map = RateLimiterMap::with_max_entries(100, 1);
+        map.try_acquire("provider-a", 0)
+            .expect("first provider fits registry");
+        assert_eq!(
+            map.try_acquire("provider-b", 0),
+            Err(SchedulerAdmissionError::ProviderRegistryFull { limit: 1 })
+        );
+        assert_eq!(
+            map.try_acquire(" provider-a", 0),
+            Err(SchedulerAdmissionError::InvalidProviderLabel)
+        );
+        assert_eq!(
+            map.try_acquire(&"a".repeat(MAX_PROVIDER_KEY_BYTES + 1), 0),
+            Err(SchedulerAdmissionError::InvalidProviderLabel)
+        );
+    }
+
+    #[test]
+    fn failed_fetch_work_releases_fail_fast_permit() {
+        let runtime = StorageSchedulersRuntime::new(StorageSchedulerConfig {
+            fetch_concurrency: 1,
+            fetch_concurrency_per_provider: 1,
+            fetch_global_bytes_per_sec: 0,
+            ..StorageSchedulerConfig::default()
+        });
+        let work_error = runtime
+            .try_run_fetch(
+                0,
+                Some("provider-a"),
+                || -> Result<Vec<u8>, &'static str> { Err("injected") },
+            )
+            .expect("scheduler must admit first request")
+            .expect_err("work failure must be preserved");
+        assert_eq!(work_error, "injected");
+
+        runtime
+            .try_run_fetch(0, Some("provider-a"), || -> Result<Vec<u8>, ()> {
+                Ok(Vec::new())
+            })
+            .expect("permit must be released after work failure")
+            .expect("second work succeeds");
+    }
+
+    #[test]
+    fn zero_concurrency_configuration_clamps_to_one() {
+        let runtime = StorageSchedulersRuntime::new(StorageSchedulerConfig {
+            pin_queue_max_inflight: 0,
+            fetch_concurrency: 0,
+            fetch_concurrency_per_provider: 0,
+            por_concurrency: 0,
+            ..StorageSchedulerConfig::default()
+        });
+        let config = runtime.config();
+        assert_eq!(config.pin_queue_max_inflight, 1);
+        assert_eq!(config.fetch_concurrency, 1);
+        assert_eq!(config.fetch_concurrency_per_provider, 1);
+        assert_eq!(config.por_concurrency, 1);
+    }
+
+    #[test]
+    fn storage_pin_inventory_does_not_expand_ingest_concurrency() {
+        let storage = StorageConfig::builder()
+            .max_pins(100_000)
+            .max_parallel_fetches(3)
+            .build();
+        let config = StorageSchedulerConfig::from_storage_config(&storage);
+        assert_eq!(config.pin_queue_max_inflight, 3);
+        assert_eq!(config.fetch_concurrency, 3);
+        assert_eq!(config.por_concurrency, 3);
     }
 }

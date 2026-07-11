@@ -73,9 +73,9 @@ enum NoritoBridgeLoader {
         expectedBridgeAbiVersion(for: currentIdentifier())
     }
     private static let expectedHashes: [String: String] = [
-        "macos-arm64": "7c6a5b157cdc61ac0022e8486bd709da806e1c6cc714643afb78659252379013",
-        "ios-arm64": "975baedc27e5f77e7694701439d68c1901d1c337f40a6f359e779139a8452ab2",
-        "ios-arm64_x86_64-simulator": "33cddff0a5f47516b46b2f176c195d65fcf4c02c9d84c23d0c6770cf0e857712"
+        "macos-arm64": "fc77593666772726caf3ca96516b943c7a6b89fb003a39c5fd6bb26d9b01851a",
+        "ios-arm64": "0de8b53c56f4ded6c0bed760ce8c527eeb9bc6cab0033e0aeb51ba034d8620dc",
+        "ios-arm64_x86_64-simulator": "c091e66c9fca491a2633ce65dc7920889a8b88fe9e3d2cda417930ba8cf7fb56"
     ]
     private static let requiredSymbols = [
         "connect_norito_bridge_abi_version",
@@ -551,6 +551,8 @@ enum NativeBridgeError: Error, Equatable {
     case offlineNoteProve
     case kagemushaProve
     case kagemushaRecursiveCompactUnavailable
+    case kagemushaRecursiveSpendV2Unavailable
+    case kagemushaRecursiveSpendV2Artifact
     case invalidKagemushaVerifierOutput
     case unsupportedAlgorithm
     case metadataTarget
@@ -609,6 +611,8 @@ enum NativeBridgeError: Error, Equatable {
         case -310: return .offlineNoteProve
         case -311: return .kagemushaProve
         case -312: return .kagemushaRecursiveCompactUnavailable
+        case -314: return .kagemushaRecursiveSpendV2Unavailable
+        case -315: return .kagemushaRecursiveSpendV2Artifact
         case -402: return .multisigSpec
         case -406: return .identifierReceipt
         case -403: return .verifyingKeyId
@@ -657,6 +661,25 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }
         let function = unsafeBitCast(symbol, to: LoadedBridgeAbiVersionFn.self)
         return function()
+    }
+
+    private static func loadKagemushaArchiveFunction(
+        from handle: UnsafeMutableRawPointer?,
+        symbol: String
+    ) -> KagemushaRecursiveSpendArchiveFn? {
+        guard let handle, let address = dlsym(handle, symbol) else { return nil }
+        return unsafeBitCast(address, to: KagemushaRecursiveSpendArchiveFn.self)
+    }
+
+    func resolveKagemushaV2Symbol<T>(_ symbol: String, as type: T.Type) -> T? {
+        #if canImport(Darwin)
+        guard let bridgeHandle, let address = dlsym(bridgeHandle, symbol) else { return nil }
+        return unsafeBitCast(address, to: type)
+        #else
+        _ = symbol
+        _ = type
+        return nil
+        #endif
     }
 
     static func copyKagemushaNativeArchiveOutput(
@@ -1844,6 +1867,11 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
+    private typealias SorafsReferenceOrderbookOrderIdDeriveFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64,
+        UnsafeMutablePointer<UInt8>?, CUnsignedLong
+    ) -> Int32
     private typealias SorafsReferenceOrderbookOrderRequestBuilderFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong,
         UInt32, UInt32,
@@ -2161,6 +2189,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var sorafsLocalFetchFn: SorafsLocalFetchFn? = nil
     private var sorafsReferenceValidateOrderbookFn: SorafsReferencePayloadFn? = nil
     private var sorafsReferenceSignOrderbookFn: SorafsReferenceOrderbookSignFn? = nil
+    private var sorafsReferenceDeriveOrderbookOrderIdFn: SorafsReferenceOrderbookOrderIdDeriveFn? = nil
     private var sorafsReferenceBuildOrderbookOrderRequestFn: SorafsReferenceOrderbookOrderRequestBuilderFn? = nil
     private var sorafsReferenceBuildOrderbookOrderCancelFn: SorafsReferenceOrderbookCancelBuilderFn? = nil
     private var sorafsReferenceBuildOrderbookSettlementReceiptFn: SorafsReferenceOrderbookSettlementReceiptBuilderFn? = nil
@@ -2191,6 +2220,11 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var kagemushaRecursiveSpendLineageWitnessAppendResultFn: KagemushaRecursiveSpendLineageWitnessAppendResultFn? = nil
     private var kagemushaRecursiveSpendVerifyFn: KagemushaRecursiveSpendArchiveFn? = nil
     private var kagemushaRecursiveSpendRedeemFn: KagemushaRecursiveSpendArchiveFn? = nil
+    private var kagemushaRecursiveSpendInitV2Fn: KagemushaRecursiveSpendArchiveFn? = nil
+    private var kagemushaRecursiveSpendTopUpV2Fn: KagemushaRecursiveSpendArchiveFn? = nil
+    private var kagemushaRecursiveSpendAppendV2Fn: KagemushaRecursiveSpendArchiveFn? = nil
+    private var kagemushaRecursiveSpendVerifyV2Fn: KagemushaRecursiveSpendArchiveFn? = nil
+    private var kagemushaRecursiveSpendRedeemV2Fn: KagemushaRecursiveSpendArchiveFn? = nil
     private var privacyCapabilitiesFn: PrivacyCapabilitiesFn? = nil
     private var privacyProofRequestFn: PrivacyProofRequestFn? = nil
     private var privacyBuildProofFn: PrivacyProofArchiveFn? = nil
@@ -2317,6 +2351,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let sorafsLocalFetchFn: Any? = nil
     private let sorafsReferenceValidateOrderbookFn: Any? = nil
     private let sorafsReferenceSignOrderbookFn: Any? = nil
+    private let sorafsReferenceDeriveOrderbookOrderIdFn: Any? = nil
     private let sorafsReferenceBuildOrderbookOrderRequestFn: Any? = nil
     private let sorafsReferenceBuildOrderbookOrderCancelFn: Any? = nil
     private let sorafsReferenceBuildOrderbookSettlementReceiptFn: Any? = nil
@@ -2347,6 +2382,11 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let kagemushaRecursiveSpendLineageWitnessAppendResultFn: Any? = nil
     private let kagemushaRecursiveSpendVerifyFn: Any? = nil
     private let kagemushaRecursiveSpendRedeemFn: Any? = nil
+    private let kagemushaRecursiveSpendInitV2Fn: Any? = nil
+    private let kagemushaRecursiveSpendTopUpV2Fn: Any? = nil
+    private let kagemushaRecursiveSpendAppendV2Fn: Any? = nil
+    private let kagemushaRecursiveSpendVerifyV2Fn: Any? = nil
+    private let kagemushaRecursiveSpendRedeemV2Fn: Any? = nil
     private let privacyCapabilitiesFn: Any? = nil
     private let privacyProofRequestFn: Any? = nil
     private let privacyBuildProofFn: Any? = nil
@@ -2660,6 +2700,26 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         } else {
             self.kagemushaRecursiveSpendRedeemFn = nil
         }
+        self.kagemushaRecursiveSpendInitV2Fn = Self.loadKagemushaArchiveFunction(
+            from: staticHandle,
+            symbol: "connect_norito_kagemusha_recursive_spend_init_v2"
+        )
+        self.kagemushaRecursiveSpendTopUpV2Fn = Self.loadKagemushaArchiveFunction(
+            from: staticHandle,
+            symbol: "connect_norito_kagemusha_recursive_spend_topup_v2"
+        )
+        self.kagemushaRecursiveSpendAppendV2Fn = Self.loadKagemushaArchiveFunction(
+            from: staticHandle,
+            symbol: "connect_norito_kagemusha_recursive_spend_append_v2"
+        )
+        self.kagemushaRecursiveSpendVerifyV2Fn = Self.loadKagemushaArchiveFunction(
+            from: staticHandle,
+            symbol: "connect_norito_kagemusha_recursive_spend_verify_v2"
+        )
+        self.kagemushaRecursiveSpendRedeemV2Fn = Self.loadKagemushaArchiveFunction(
+            from: staticHandle,
+            symbol: "connect_norito_kagemusha_recursive_spend_redeem_v2"
+        )
         self.freeFn = connect_norito_free
         self.setChainDiscriminantFn = connect_norito_set_chain_discriminant
         self.bridgeStatus = .valid(path: "static", identifier: NoritoBridgeLoader.currentIdentifier())
@@ -3280,6 +3340,14 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.sorafsReferenceSignOrderbookFn = nil
             }
+            if let symbol = dlsym(handle, "connect_norito_sorafs_reference_derive_orderbook_order_id") {
+                self.sorafsReferenceDeriveOrderbookOrderIdFn = unsafeBitCast(
+                    symbol,
+                    to: SorafsReferenceOrderbookOrderIdDeriveFn.self
+                )
+            } else {
+                self.sorafsReferenceDeriveOrderbookOrderIdFn = nil
+            }
             if let symbol = dlsym(handle, "connect_norito_sorafs_reference_build_signed_orderbook_order_request") {
                 self.sorafsReferenceBuildOrderbookOrderRequestFn = unsafeBitCast(
                     symbol,
@@ -3543,6 +3611,26 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.kagemushaRecursiveSpendRedeemFn = nil
             }
+            self.kagemushaRecursiveSpendInitV2Fn = Self.loadKagemushaArchiveFunction(
+                from: handle,
+                symbol: "connect_norito_kagemusha_recursive_spend_init_v2"
+            )
+            self.kagemushaRecursiveSpendTopUpV2Fn = Self.loadKagemushaArchiveFunction(
+                from: handle,
+                symbol: "connect_norito_kagemusha_recursive_spend_topup_v2"
+            )
+            self.kagemushaRecursiveSpendAppendV2Fn = Self.loadKagemushaArchiveFunction(
+                from: handle,
+                symbol: "connect_norito_kagemusha_recursive_spend_append_v2"
+            )
+            self.kagemushaRecursiveSpendVerifyV2Fn = Self.loadKagemushaArchiveFunction(
+                from: handle,
+                symbol: "connect_norito_kagemusha_recursive_spend_verify_v2"
+            )
+            self.kagemushaRecursiveSpendRedeemV2Fn = Self.loadKagemushaArchiveFunction(
+                from: handle,
+                symbol: "connect_norito_kagemusha_recursive_spend_redeem_v2"
+            )
             if let sm2DefaultSymbol = dlsym(handle, "connect_norito_sm2_default_distid") {
                 self.sm2DefaultDistidFn = unsafeBitCast(sm2DefaultSymbol, to: Sm2DefaultDistidFn.self)
             } else {
@@ -3679,6 +3767,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.sorafsLocalFetchFn = nil
             self.sorafsReferenceValidateOrderbookFn = nil
             self.sorafsReferenceSignOrderbookFn = nil
+            self.sorafsReferenceDeriveOrderbookOrderIdFn = nil
             self.sorafsReferenceBuildOrderbookOrderRequestFn = nil
             self.sorafsReferenceBuildOrderbookOrderCancelFn = nil
             self.sorafsReferenceBuildOrderbookSettlementReceiptFn = nil
@@ -3709,6 +3798,11 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.kagemushaRecursiveSpendLineageWitnessAppendResultFn = nil
             self.kagemushaRecursiveSpendVerifyFn = nil
             self.kagemushaRecursiveSpendRedeemFn = nil
+            self.kagemushaRecursiveSpendInitV2Fn = nil
+            self.kagemushaRecursiveSpendTopUpV2Fn = nil
+            self.kagemushaRecursiveSpendAppendV2Fn = nil
+            self.kagemushaRecursiveSpendVerifyV2Fn = nil
+            self.kagemushaRecursiveSpendRedeemV2Fn = nil
             self.privacyCapabilitiesFn = nil
             self.privacyProofRequestFn = nil
             self.privacyBuildProofFn = nil
@@ -4310,6 +4404,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         return sorafsReferenceBuildOrderbookOrderRequestFn != nil
             && sorafsReferenceBuildOrderbookOrderCancelFn != nil
             && sorafsReferenceBuildOrderbookSettlementReceiptFn != nil
+            && sorafsReferenceDeriveOrderbookOrderIdFn != nil
             && freeFn != nil
         #else
         return false
@@ -4410,6 +4505,27 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             && loadedBridgeAbiVersion.map { $0 >= KagemushaRecursiveSpendProver.topUpRequiredNativeBridgeAbiVersion } == true
             && kagemushaRecursiveSpendTopUpFn != nil
             && kagemushaRecursiveSpendTopUpNativeProbeOk
+        #else
+        return false
+        #endif
+    }
+
+    /// Whether ABI 17 exposes every reserved V2 negotiation stub.
+    ///
+    /// This does not mean the V2 proof backend is available; every stub must
+    /// return the canonical unavailable status until that backend is enabled.
+    public var isKagemushaRecursiveSpendV2StubAvailable: Bool {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime else { return false }
+        return loadedBridgeAbiVersion.map {
+            $0 >= KagemushaRecursiveSpendV2.requiredNativeBridgeAbiVersion
+        } == true
+            && kagemushaRecursiveSpendInitV2Fn != nil
+            && kagemushaRecursiveSpendTopUpV2Fn != nil
+            && kagemushaRecursiveSpendAppendV2Fn != nil
+            && kagemushaRecursiveSpendVerifyV2Fn != nil
+            && kagemushaRecursiveSpendRedeemV2Fn != nil
+            && freeFn != nil
         #else
         return false
         #endif
@@ -7918,6 +8034,42 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         )
     }
 
+    func kagemushaRecursiveSpendInitV2(requestArchive: Data) throws -> Data? {
+        try callKagemushaRecursiveSpend(
+            requestArchive: requestArchive,
+            function: kagemushaRecursiveSpendInitV2Fn
+        )
+    }
+
+    func kagemushaRecursiveSpendTopUpV2(requestArchive: Data) throws -> Data? {
+        try callKagemushaRecursiveSpend(
+            requestArchive: requestArchive,
+            function: kagemushaRecursiveSpendTopUpV2Fn
+        )
+    }
+
+    /// Returns a `KagemushaRecursiveSpendSplitResultV2` archive when enabled.
+    func kagemushaRecursiveSpendAppendV2(requestArchive: Data) throws -> Data? {
+        try callKagemushaRecursiveSpend(
+            requestArchive: requestArchive,
+            function: kagemushaRecursiveSpendAppendV2Fn
+        )
+    }
+
+    func kagemushaRecursiveSpendVerifyV2(requestArchive: Data) throws -> Data? {
+        try callKagemushaRecursiveSpend(
+            requestArchive: requestArchive,
+            function: kagemushaRecursiveSpendVerifyV2Fn
+        )
+    }
+
+    func kagemushaRecursiveSpendRedeemV2(requestArchive: Data) throws -> Data? {
+        try callKagemushaRecursiveSpend(
+            requestArchive: requestArchive,
+            function: kagemushaRecursiveSpendRedeemV2Fn
+        )
+    }
+
     func privacyCapabilitiesV1() throws -> Data? {
         #if canImport(Darwin)
         guard let privacyCapabilitiesFn, let freePrivacyFn = privacyFreeFn ?? freeFn else {
@@ -9376,6 +9528,23 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             return nil
         }
         return takeData(pointer: outPtr, length: UInt(outLen))
+        #else
+        return nil
+        #endif
+    }
+
+    func sorafsReferenceDeriveOrderbookOrderId(ownerAccount: Data, nonce: UInt64) -> Data? {
+        #if canImport(Darwin)
+        guard let function = sorafsReferenceDeriveOrderbookOrderIdFn else { return nil }
+        var output = Data(count: 32)
+        let status = output.withUnsafeMutableBytes { outputBytes in
+            let outputPtr = outputBytes.baseAddress?.assumingMemoryBound(to: UInt8.self)
+            return withDataPointer(ownerAccount) { ownerPtr, ownerLen in
+                function(ownerPtr, ownerLen, nonce, outputPtr, CUnsignedLong(outputBytes.count))
+            }
+        }
+        guard status == 0 else { return nil }
+        return output
         #else
         return nil
         #endif

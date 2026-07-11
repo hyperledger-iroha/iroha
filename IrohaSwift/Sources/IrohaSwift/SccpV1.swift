@@ -192,7 +192,7 @@ public enum SccpV1 {
         appendUInt32LE(network.domainId, to: &out)
         switch network {
         case .soraTaira:
-            out.append(try! decodeLowerHex("809574f5fee75e69bfcf52451e42d50f"))
+            out.append(try! decodeLowerHex("fc56984b2be7431d840e21514d1883f0"))
         case .ethereumMainnet:
             appendUInt64LE(1, to: &out)
         case .ethereumSepolia:

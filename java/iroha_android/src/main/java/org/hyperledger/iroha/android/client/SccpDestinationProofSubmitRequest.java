@@ -27,7 +27,8 @@ public final class SccpDestinationProofSubmitRequest {
     SccpSubmitEncoding.validateCanonicalNoritoBase64(
         destinationProofB64,
         "destinationProofB64",
-        SccpSubmitEncoding.MAX_DESTINATION_ARTIFACT_BYTES);
+        SccpSubmitEncoding.MAX_DESTINATION_ARTIFACT_BYTES,
+        SccpSubmitEncoding.DESTINATION_ARTIFACT_SCHEMA_NAME);
     this.destinationProofB64 = destinationProofB64;
     this.creationTimeMs = SccpSubmitEncoding.normalizeOptionalCreationTimeMs(creationTimeMs);
     SccpSubmitEncoding.validateDetachedSigningState(

@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs/storage_capacity_marketplace.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2f830d4a4549c49d0c9649b728ab6ec00b0b7bcfcbd5a50230686ff0cd0648d7
+source_hash: f41d78061e19b0881f2bf984fd4a27c30b4fd6d3c897dcdec27974ffc0fdf8c2
 source_last_modified: "2026-01-22T15:38:30.696290+00:00"
 translation_last_reviewed: 2026-01-30
 ---

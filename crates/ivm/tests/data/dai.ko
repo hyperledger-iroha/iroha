@@ -9,12 +9,12 @@ module DaiLibrary {
 
     // Transfer tokens between two accounts using the Iroha syscall.
     fn transfer(
-        src_balance: Amount,
-        dst_balance: Amount,
-        from_account: AccountId,
-        to_account: AccountId,
-        asset: AssetDefinitionId,
-        wad: Amount,
+        quantity src_balance,
+        quantity dst_balance,
+        AccountId from_account,
+        AccountId to_account,
+        AssetDefinitionId asset,
+        quantity wad,
     ) {
         require(src_balance >= wad, DaiError::InsufficientBalance);
         let new_src = src_balance - wad;
@@ -29,19 +29,19 @@ module DaiLibrary {
     }
 
     // Approve a spender allowance.
-    fn approve(_current_allowance: Amount, wad: Amount) {
+    fn approve(quantity _current_allowance, quantity wad) {
         let new_allowance = wad;
     }
 
     // Transfer tokens using an allowance.
     fn transfer_from(
-        src_balance: Amount,
-        dst_balance: Amount,
-        allowance: Amount,
-        from_account: AccountId,
-        to_account: AccountId,
-        asset: AssetDefinitionId,
-        wad: Amount,
+        quantity src_balance,
+        quantity dst_balance,
+        quantity allowance,
+        AccountId from_account,
+        AccountId to_account,
+        AssetDefinitionId asset,
+        quantity wad,
     ) {
         require(src_balance >= wad, DaiError::InsufficientBalance);
         require(allowance >= wad, DaiError::InsufficientAllowance);
@@ -59,17 +59,17 @@ module DaiLibrary {
 
     // Mint new tokens using the Iroha ledger syscall.
     // `mint_asset` writes to registers r10-r12 and performs the ISI.
-    fn mint(account: AccountId, asset: AssetDefinitionId, wad: Amount) {
+    fn mint(AccountId account, AssetDefinitionId asset, quantity wad) {
         ledger::asset::mint(account: account, asset_definition: asset, amount: wad);
     }
 
     // Burn tokens from an account using the Iroha syscall.
     fn burn(
-        balance: Amount,
-        total_supply: Amount,
-        account: AccountId,
-        asset: AssetDefinitionId,
-        wad: Amount,
+        quantity balance,
+        quantity total_supply,
+        AccountId account,
+        AssetDefinitionId asset,
+        quantity wad,
     ) {
         require(balance >= wad, DaiError::InsufficientBalance);
         let new_balance = balance - wad;

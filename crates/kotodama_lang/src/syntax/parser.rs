@@ -277,7 +277,7 @@ mod tests {
                 .tree
                 .tokens()
                 .iter()
-                .any(|token| token.kind == SyntaxKind::Amount)
+                .any(|token| token.kind == SyntaxKind::Decimal)
         );
     }
 

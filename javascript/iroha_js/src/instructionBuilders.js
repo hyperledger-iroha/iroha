@@ -10233,10 +10233,10 @@ function normalizeEntrypointValueKind(value, name) {
   const kind = normalizeRequiredManifestString(source.kind, `${name}.kind`);
   const allowed = new Set([
     "Int",
-    "U128",
+    "Decimal",
+    "Quantity",
     "Bool",
     "String",
-    "Amount",
     "Json",
     "Name",
     "AccountId",
@@ -11186,6 +11186,31 @@ export function buildGrantAccountPermissionInstruction(options = {}) {
           source.accountId ?? source.destinationAccountId ?? source.destination,
           "grantAccountPermission.accountId",
         ),
+      },
+    },
+  };
+}
+
+/**
+ * Build a `SetKeyValue::Account` instruction payload.
+ *
+ * This is an on-ledger account metadata mutation. It is useful when a signed
+ * instruction batch needs a protocol-visible, deterministic identity marker.
+ *
+ * @param {{ accountId: string, key: string, value: any }} options
+ * @returns {{SetKeyValue: {Account: {object: string, key: string, value: any}}}}
+ */
+export function buildSetAccountKeyValueInstruction(options = {}) {
+  const source = assertPlainObject(options, "setAccountKeyValue");
+  return {
+    SetKeyValue: {
+      Account: {
+        object: normalizeAccountId(
+          source.accountId,
+          "setAccountKeyValue.accountId",
+        ),
+        key: assertString(source.key, "setAccountKeyValue.key"),
+        value: normalizeJsonValue(source.value, "setAccountKeyValue.value"),
       },
     },
   };

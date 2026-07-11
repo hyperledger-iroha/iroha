@@ -79,20 +79,12 @@ public final class HttpClientTransport implements IrohaClient {
 
   private final HttpTransportExecutor executor;
   private final ClientConfig config;
-  private final SorafsGatewayClient sorafsGatewayClient;
+  private volatile SorafsGatewayClient sorafsGatewayClient;
   private final AtomicBoolean deviceProfileEmitted = new AtomicBoolean(false);
 
   public HttpClientTransport(final HttpTransportExecutor executor, final ClientConfig config) {
     this.executor = Objects.requireNonNull(executor, "executor");
     this.config = Objects.requireNonNull(config, "config");
-    this.sorafsGatewayClient =
-        SorafsGatewayClient.builder()
-            .setExecutor(this.executor)
-            .setBaseUri(config.sorafsGatewayUri())
-            .setTimeout(config.requestTimeout())
-            .setDefaultHeaders(config.defaultHeaders())
-            .setObservers(config.observers())
-            .build();
   }
 
   @Override
@@ -367,18 +359,28 @@ public final class HttpClientTransport implements IrohaClient {
 
   /** Returns the SoraFS gateway client wired to this transport's configuration. */
   public SorafsGatewayClient sorafsGatewayClient() {
-    return sorafsGatewayClient;
+    SorafsGatewayClient client = sorafsGatewayClient;
+    if (client == null) {
+      synchronized (this) {
+        client = sorafsGatewayClient;
+        if (client == null) {
+          client = newSorafsGatewayClient(config.sorafsGatewayUri());
+          sorafsGatewayClient = client;
+        }
+      }
+    }
+    return client;
   }
 
   /** Post a gateway fetch request and return the raw response. */
   public CompletableFuture<ClientResponse> sorafsGatewayFetch(final GatewayFetchRequest request) {
-    return sorafsGatewayClient.fetch(request);
+    return sorafsGatewayClient().fetch(request);
   }
 
   /** Post a gateway fetch request and parse the response summary. */
   public CompletableFuture<GatewayFetchSummary> sorafsGatewayFetchSummary(
       final GatewayFetchRequest request) {
-    return sorafsGatewayClient.fetchSummary(request);
+    return sorafsGatewayClient().fetchSummary(request);
   }
 
   /** Fetches `/v1/accounts/{uaid}/portfolio`. */
@@ -2770,14 +2772,18 @@ public final class HttpClientTransport implements IrohaClient {
     if ("/v1/bridge/messages".equals(path)) {
       final String nativeProof = requiredSccpArtifact(fields, "native_proof_b64");
       SccpSubmitEncoding.validateCanonicalNoritoBase64(
-          nativeProof, "native_proof_b64", SccpSubmitEncoding.MAX_NATIVE_PROOF_BYTES);
+          nativeProof,
+          "native_proof_b64",
+          SccpSubmitEncoding.MAX_NATIVE_PROOF_BYTES,
+          SccpSubmitEncoding.NATIVE_INBOUND_PROOF_SCHEMA_NAME);
       return;
     }
     final String destinationProof = requiredSccpArtifact(fields, "destination_proof_b64");
     SccpSubmitEncoding.validateCanonicalNoritoBase64(
         destinationProof,
         "destination_proof_b64",
-        SccpSubmitEncoding.MAX_DESTINATION_ARTIFACT_BYTES);
+        SccpSubmitEncoding.MAX_DESTINATION_ARTIFACT_BYTES,
+        SccpSubmitEncoding.DESTINATION_ARTIFACT_SCHEMA_NAME);
   }
 
   static String normalizeHex32(final String value, final String field) {

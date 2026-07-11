@@ -169,25 +169,43 @@ pub fn sample_to_map(flat_index: usize, proof: &PorProof) -> Map {
 /// Parse a `chunk:segment:leaf` specification used by CLI flags.
 pub fn parse_proof_spec(spec: &str) -> Result<(usize, usize, usize), String> {
     let mut parts = spec.split(':');
-    let chunk = parts
-        .next()
-        .ok_or_else(|| "missing chunk index in --por-proof".to_string())?
-        .parse::<usize>()
-        .map_err(|err| format!("invalid chunk index: {err}"))?;
-    let segment = parts
-        .next()
-        .ok_or_else(|| "missing segment index in --por-proof".to_string())?
-        .parse::<usize>()
-        .map_err(|err| format!("invalid segment index: {err}"))?;
-    let leaf = parts
-        .next()
-        .ok_or_else(|| "missing leaf index in --por-proof".to_string())?
-        .parse::<usize>()
-        .map_err(|err| format!("invalid leaf index: {err}"))?;
+    let chunk = parse_proof_index(
+        parts
+            .next()
+            .ok_or_else(|| "missing chunk index in --por-proof".to_string())?,
+        "chunk index",
+    )?;
+    let segment = parse_proof_index(
+        parts
+            .next()
+            .ok_or_else(|| "missing segment index in --por-proof".to_string())?,
+        "segment index",
+    )?;
+    let leaf = parse_proof_index(
+        parts
+            .next()
+            .ok_or_else(|| "missing leaf index in --por-proof".to_string())?,
+        "leaf index",
+    )?;
     if parts.next().is_some() {
         return Err("unexpected extra components in --por-proof".to_string());
     }
     Ok((chunk, segment, leaf))
+}
+
+fn parse_proof_index(value: &str, label: &str) -> Result<usize, String> {
+    let bytes = value.as_bytes();
+    if bytes.is_empty()
+        || !bytes.iter().all(u8::is_ascii_digit)
+        || (bytes.len() > 1 && bytes[0] == b'0')
+    {
+        return Err(format!(
+            "{label} in --por-proof must be a canonical unsigned decimal integer"
+        ));
+    }
+    value
+        .parse::<usize>()
+        .map_err(|err| format!("invalid {label} in --por-proof: {err}"))
 }
 
 /// SplitMix64 PRNG helper used for deterministic sampling.
@@ -326,4 +344,50 @@ fn to_hex(bytes: &[u8]) -> String {
         out.push(TABLE[(byte & 0x0f) as usize] as char);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_proof_spec_accepts_canonical_indices() {
+        assert_eq!(
+            parse_proof_spec("0:1:2").expect("canonical proof spec"),
+            (0, 1, 2)
+        );
+    }
+
+    #[test]
+    fn parse_proof_spec_rejects_noncanonical_indices() {
+        for spec in ["01:0:0", "+1:0:0", "1 :0:0", "1:00:0", "1:0: 0"] {
+            let err = parse_proof_spec(spec).expect_err("noncanonical spec must fail");
+            assert!(
+                err.contains("canonical unsigned decimal"),
+                "unexpected error for {spec}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_proof_spec_rejects_missing_extra_and_overflow_indices() {
+        let missing = parse_proof_spec("1:2").expect_err("missing leaf must fail");
+        assert!(
+            missing.contains("missing leaf index"),
+            "unexpected missing error: {missing}"
+        );
+
+        let extra = parse_proof_spec("1:2:3:4").expect_err("extra component must fail");
+        assert!(
+            extra.contains("unexpected extra components"),
+            "unexpected extra error: {extra}"
+        );
+
+        let overflow =
+            parse_proof_spec("184467440737095516160:0:0").expect_err("overflow must fail");
+        assert!(
+            overflow.contains("invalid chunk index") || overflow.contains("out of range"),
+            "unexpected overflow error: {overflow}"
+        );
+    }
 }

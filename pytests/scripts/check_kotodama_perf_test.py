@@ -89,7 +89,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
         )
 
         payload = json.loads(baseline.read_text(encoding="utf-8"))
-        del payload["benchmarks"][PERF.REPRESENTATIVE_BENCHMARKS[0]]
+        del payload["benchmarks"][PERF.REGRESSION_BENCHMARKS[0]]
         baseline.write_text(json.dumps(payload), encoding="utf-8")
         self.assertEqual(
             PERF.main(
@@ -102,7 +102,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
             "schema": PERF.SCHEMA,
             "unit": "ns",
             "benchmarks": {
-                name: 1_000.0 for name in PERF.REPRESENTATIVE_BENCHMARKS
+                name: 1_000.0 for name in PERF.REGRESSION_BENCHMARKS
             },
         }
         payload["benchmarks"]["unreviewed_benchmark"] = 1_000.0
@@ -142,8 +142,13 @@ class KotodamaPerfGateTests(unittest.TestCase):
             "kotodama_amount_div_exact",
             "kotodama_amount_div_round_nearest_even",
             "typed_core_query_accounts_page_64",
+            "typed_core_query_assets_page_64",
+            "typed_core_query_asset_definitions_page_64",
+            "typed_core_query_domains_page_64",
+            "typed_core_query_nfts_page_64",
         }
         self.assertLessEqual(required, set(PERF.REPRESENTATIVE_BENCHMARKS))
+        self.assertTrue(required.isdisjoint(PERF.REGRESSION_BENCHMARKS))
 
         populate(self.root, "base")
         populate(self.root, "new")
@@ -153,20 +158,30 @@ class KotodamaPerfGateTests(unittest.TestCase):
             self.assertEqual(PERF.main(["--criterion-dir", str(self.root)]), 1)
             write_estimate(sample, 1_000.0)
 
-    def test_new_v1_benchmarks_require_current_evidence_but_not_fake_base_samples(self) -> None:
+    def test_only_pre_reset_comparable_benchmarks_require_base_evidence(self) -> None:
         populate(self.root, "base")
         populate(self.root, "new")
-        candidate_only = set(PERF.REPRESENTATIVE_BENCHMARKS) - set(
-            PERF.REGRESSION_BENCHMARKS
+        self.assertLess(
+            set(PERF.REGRESSION_BENCHMARKS),
+            set(PERF.REPRESENTATIVE_BENCHMARKS),
         )
-        self.assertTrue(candidate_only)
-        for name in candidate_only:
-            (self.root / name / "base" / "estimates.json").unlink()
-        self.assertEqual(PERF.main(["--criterion-dir", str(self.root)]), 0)
+        for name in PERF.REGRESSION_BENCHMARKS:
+            with self.subTest(name=name):
+                sample = self.root / name / "base" / "estimates.json"
+                baseline_median = PERF.read_criterion_median(sample)
+                sample.unlink()
+                self.assertEqual(
+                    PERF.main(["--criterion-dir", str(self.root)]), 1
+                )
+                write_estimate(sample, baseline_median)
 
-        missing = next(iter(candidate_only))
-        (self.root / missing / "new" / "estimates.json").unlink()
-        self.assertEqual(PERF.main(["--criterion-dir", str(self.root)]), 1)
+        candidate_only = next(
+            name
+            for name in PERF.REPRESENTATIVE_BENCHMARKS
+            if name not in PERF.REGRESSION_BENCHMARKS
+        )
+        (self.root / candidate_only / "base" / "estimates.json").unlink()
+        self.assertEqual(PERF.main(["--criterion-dir", str(self.root)]), 0)
 
     def test_baseline_capture_and_comparison_are_mutually_exclusive(self) -> None:
         with self.assertRaises(SystemExit):
@@ -183,6 +198,29 @@ class KotodamaPerfGateTests(unittest.TestCase):
         workflow = (
             ROOT / ".github" / "workflows" / "kotodama_perf.yml"
         ).read_text(encoding="utf-8")
+        inventory_marker = "      - name: Require the pre-reset base workloads\n"
+        self.assertEqual(workflow.count(inventory_marker), 1)
+        inventory_step = workflow.split(inventory_marker, 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        for name in PERF.REGRESSION_BENCHMARKS:
+            self.assertIn(name, inventory_step)
+
+        base_marker = "      - name: Measure base revision\n"
+        self.assertEqual(workflow.count(base_marker), 1)
+        base_step = workflow.split(base_marker, 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        self.assertIn("cargo bench -p ivm --bench bench_kotodama", base_step)
+        self.assertNotIn("typed_core_query_", base_step)
+
+        candidate_marker = "      - name: Measure candidate revision\n"
+        self.assertEqual(workflow.count(candidate_marker), 1)
+        candidate_step = workflow.split(candidate_marker, 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        self.assertIn("--bench queries -- typed_core_query_", candidate_step)
+
         marker = "      - name: Enforce complete artifact release gate\n"
         self.assertEqual(workflow.count(marker), 1)
         release_gate = workflow.split(marker, 1)[1]

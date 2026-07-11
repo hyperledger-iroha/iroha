@@ -1,6 +1,7 @@
 "use strict";
 
 import { blake2b256 } from "./blake2b.js";
+import { assertValidEd25519PublicKey } from "./ed25519Strict.js";
 import {
   canonicalCurveAlgorithm,
   CURVE_PUBLIC_KEY_LENGTH,
@@ -319,6 +320,19 @@ function validatePublicKeyForCurve(curveId, keyBytes, context = "public key") {
   if (entry.id === CurveId.ED25519) {
     assertEd25519CanonicalEncoding(keyBytes, context);
     assertEd25519NotSmallOrder(keyBytes, context);
+    try {
+      assertValidEd25519PublicKey(keyBytes);
+    } catch (error) {
+      const description =
+        error?.code === "small_order"
+          ? `ed25519 ${context} is small-order (weak); rejected`
+          : `invalid compressed ed25519 ${context}: ${error.message}`;
+      throw new AccountAddressError(
+        AccountAddressErrorCode.INVALID_PUBLIC_KEY,
+        description,
+        { details: { curveId: CurveId.ED25519 }, cause: error },
+      );
+    }
   }
 }
 

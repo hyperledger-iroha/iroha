@@ -11,6 +11,7 @@ set -euo pipefail
 # Usage:
 #   scripts/build_norito_xcframework.sh
 #   scripts/build_norito_xcframework.sh --bridge-version 1.0.0
+#   scripts/build_norito_xcframework.sh --privacy-production-enabled
 #
 # Outputs into ./dist/NoritoBridge.xcframework
 
@@ -31,9 +32,9 @@ FRAMEWORK_BUNDLE_ID="${FRAMEWORK_BUNDLE_ID:-org.hyperledger.iroha.NoritoBridge}"
 : "${MACOSX_DEPLOYMENT_TARGET:=12.0}"
 export IPHONESIMULATOR_DEPLOYMENT_TARGET
 export MACOSX_DEPLOYMENT_TARGET
-CARGO_BUILD_DIR_BASE="$BUILD_DIR/cargo-ios${IPHONEOS_DEPLOYMENT_TARGET//./_}-sim${IPHONESIMULATOR_DEPLOYMENT_TARGET//./_}"
 
 BRIDGE_VERSION=""
+PRIVACY_PRODUCTION_ENABLED=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --bridge-version)
@@ -47,14 +48,35 @@ while [[ $# -gt 0 ]]; do
     --bridge-version=*)
       BRIDGE_VERSION="${1#*=}"
       ;;
+    --privacy-production-enabled)
+      PRIVACY_PRODUCTION_ENABLED=1
+      ;;
     *)
       echo "[-] Unknown argument: $1" >&2
-      echo "    Usage: $0 [--bridge-version <version>]" >&2
+      echo "    Usage: $0 [--bridge-version <version>] [--privacy-production-enabled]" >&2
       exit 1
       ;;
   esac
   shift
 done
+
+if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" && "${NORITO_BRIDGE_SKIP_CARGO_BUILDS:-0}" == "1" ]]; then
+  echo "[-] --privacy-production-enabled cannot be combined with NORITO_BRIDGE_SKIP_CARGO_BUILDS=1" >&2
+  exit 1
+fi
+
+CARGO_FEATURE_ARGS=()
+if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
+  CARGO_FEATURE_ARGS+=(--features privacy-production-enabled)
+  CARGO_FEATURE_PROFILE="privacy-production-enabled"
+  echo "[+] Enabling the audited privacy production bridge feature for every Apple slice" >&2
+else
+  CARGO_FEATURE_PROFILE="privacy-production-disabled"
+  echo "[+] Privacy proof dispatch remains fail-closed (default bridge build)" >&2
+fi
+# Keep feature variants in disjoint Cargo targets. In particular, the default
+# skip-build fast path must never package libraries left by an enabled build.
+CARGO_BUILD_DIR_BASE="$BUILD_DIR/cargo-ios${IPHONEOS_DEPLOYMENT_TARGET//./_}-sim${IPHONESIMULATOR_DEPLOYMENT_TARGET//./_}-${CARGO_FEATURE_PROFILE}"
 
 echo "[+] Using iOS deployment target (device): $IPHONEOS_DEPLOYMENT_TARGET" >&2
 echo "[+] Using iOS deployment target (simulator): $IPHONESIMULATOR_DEPLOYMENT_TARGET" >&2
@@ -88,21 +110,25 @@ else
   env IPHONEOS_DEPLOYMENT_TARGET="$IPHONEOS_DEPLOYMENT_TARGET" \
     NORITO_SKIP_BINDINGS_SYNC=1 \
     CARGO_TARGET_DIR="$CARGO_BUILD_DIR_DEVICE" \
-    cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$DEVICE_TRIPLE"
+    cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$DEVICE_TRIPLE" \
+      "${CARGO_FEATURE_ARGS[@]}"
   env IPHONEOS_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
     IPHONESIMULATOR_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
     NORITO_SKIP_BINDINGS_SYNC=1 \
     CARGO_TARGET_DIR="$CARGO_BUILD_DIR_SIM_ARM" \
-    cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$SIM_ARM_TRIPLE"
+    cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$SIM_ARM_TRIPLE" \
+      "${CARGO_FEATURE_ARGS[@]}"
   env IPHONEOS_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
     IPHONESIMULATOR_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
     NORITO_SKIP_BINDINGS_SYNC=1 \
     CARGO_TARGET_DIR="$CARGO_BUILD_DIR_SIM_X64" \
-    cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$SIM_X64_TRIPLE"
+    cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$SIM_X64_TRIPLE" \
+      "${CARGO_FEATURE_ARGS[@]}"
   env MACOSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
     NORITO_SKIP_BINDINGS_SYNC=1 \
     CARGO_TARGET_DIR="$CARGO_BUILD_DIR_MACOS" \
-    cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$MACOS_TRIPLE"
+    cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$MACOS_TRIPLE" \
+      "${CARGO_FEATURE_ARGS[@]}"
 fi
 
 LIB_DEV="$CARGO_BUILD_DIR_DEVICE/$DEVICE_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
@@ -276,6 +302,9 @@ if ! xcodebuild -create-xcframework \
 fi
 
 echo "[+] XCFramework created: $OUT_DIR/${FRAMEWORK_NAME}.xcframework" >&2
+if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
+  touch "$OUT_DIR/${FRAMEWORK_NAME}.xcframework/.privacy-production-enabled"
+fi
 
 IOS_BIN="$OUT_DIR/${FRAMEWORK_NAME}.xcframework/ios-arm64/${STATIC_LIB_NAME}"
 SIM_BIN="$OUT_DIR/${FRAMEWORK_NAME}.xcframework/ios-arm64_x86_64-simulator/${STATIC_LIB_NAME}"
@@ -288,10 +317,158 @@ fi
 IOS_HASH=$(shasum -a 256 "$IOS_BIN" | awk '{print $1}')
 SIM_HASH=$(shasum -a 256 "$SIM_BIN" | awk '{print $1}')
 MAC_HASH=$(shasum -a 256 "$MAC_BIN" | awk '{print $1}')
+HEADER_HASH=$(shasum -a 256 "$INC_DIR/connect_norito_bridge.h" | awk '{print $1}')
+BRIDGE_ABI_VERSION=$(sed -nE \
+  's/.*CONNECT_NORITO_BRIDGE_ABI_VERSION:[[:space:]]*u32[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' \
+  "$CRATE_DIR/src/lib.rs" | head -n1)
+if [[ -z "$BRIDGE_ABI_VERSION" ]]; then
+  echo "[-] Unable to determine native bridge ABI version" >&2
+  exit 1
+fi
+SOURCE_COMMIT=$(git -C "$ROOT_DIR" rev-parse HEAD)
+SOURCE_TREE_DIRTY=false
+if [[ -n "$(git -C "$ROOT_DIR" status --porcelain -- crates/connect_norito_bridge IrohaSwift/Sources/IrohaSwift)" ]]; then
+  SOURCE_TREE_DIRTY=true
+fi
+SOURCE_FINGERPRINT=$(python3 - "$ROOT_DIR" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+source_roots = [root / "crates/connect_norito_bridge", root / "IrohaSwift/Sources/IrohaSwift"]
+paths = [
+    path.relative_to(root).as_posix()
+    for source_root in source_roots
+    for path in source_root.rglob("*")
+    if path.is_file() and not path.is_symlink()
+]
+digest = hashlib.sha256()
+for relative in sorted(paths):
+    path = root / relative
+    if not path.is_file():
+        continue
+    digest.update(relative.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(path.read_bytes())
+    digest.update(b"\0")
+print(digest.hexdigest())
+PY
+)
+PRIVACY_PRODUCTION_JSON=false
+if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
+  PRIVACY_PRODUCTION_JSON=true
+fi
 
 cat > "$OUT_DIR/NoritoBridge.artifacts.json" <<EOF
 {
   "version": "$BRIDGE_VERSION",
+  "native_bridge_abi_version": $BRIDGE_ABI_VERSION,
+  "privacy_production_enabled": $PRIVACY_PRODUCTION_JSON,
+  "source_commit": "$SOURCE_COMMIT",
+  "source_tree_dirty": $SOURCE_TREE_DIRTY,
+  "source_fingerprint_sha256": "$SOURCE_FINGERPRINT",
+  "bridge_header_sha256": "$HEADER_HASH",
+  "required_symbols": [
+    "connect_norito_bridge_abi_version",
+    "connect_norito_kagemusha_recursive_spend_init",
+    "connect_norito_kagemusha_recursive_spend_append",
+    "connect_norito_kagemusha_recursive_spend_verify",
+    "connect_norito_kagemusha_recursive_spend_redeem",
+    "connect_norito_kagemusha_recursive_spend_topup",
+    "connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result",
+    "connect_norito_kagemusha_recursive_spend_lineage_witness_append_result",
+    "connect_norito_kagemusha_recursive_spend_init_v2",
+    "connect_norito_kagemusha_recursive_spend_topup_v2",
+    "connect_norito_kagemusha_recursive_spend_append_v2",
+    "connect_norito_kagemusha_recursive_spend_verify_v2",
+    "connect_norito_kagemusha_recursive_spend_redeem_v2"
+  ],
+  "kagemusha_mobile_artifact_roles": [
+    {
+      "role": "native_bridge",
+      "purpose": "typed Norito codecs and privacy proof execution",
+      "circuit_id": null,
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "xcframework",
+      "delivery": "bridge_embedded",
+      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
+    },
+    {
+      "role": "transfer_proving_key",
+      "purpose": "prove exact confidential top-up and offline split transitions",
+      "circuit_id": "confidential-transfer-v2",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "halo2_ipa_proving_key",
+      "delivery": "bridge_runtime_generated",
+      "production_ready": false,
+      "required_by": ["topup", "peer_send"]
+    },
+    {
+      "role": "transfer_verifier_record",
+      "purpose": "verify top-up and offline split evidence at an active height",
+      "circuit_id": "confidential-transfer-v2",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "norito_verifying_key_record",
+      "delivery": "torii_readiness_snapshot",
+      "required_by": ["topup", "peer_send", "peer_receive"]
+    },
+    {
+      "role": "unshield_proving_key",
+      "purpose": "prove full or partial offline-to-online redemption",
+      "circuit_id": "confidential-unshield-v3",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "halo2_ipa_proving_key",
+      "delivery": "bridge_runtime_generated",
+      "production_ready": false,
+      "required_by": ["redemption"]
+    },
+    {
+      "role": "unshield_verifier_record",
+      "purpose": "verify proof-bound public credit and optional offline change",
+      "circuit_id": "confidential-unshield-v3",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "norito_verifying_key_record",
+      "delivery": "torii_readiness_snapshot",
+      "required_by": ["redemption"]
+    },
+    {
+      "role": "reserved_lineage_init_keys",
+      "purpose": "prove witnessless first-hop lineage",
+      "circuit_id": "kagemusha-recursive-spend-lineage-onehop-v1",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "KagemushaRecursiveSpendLineageKeyArtifactsV1",
+      "delivery": "content_addressed_external",
+      "required_by": ["topup"]
+    },
+    {
+      "role": "reserved_lineage_append_keys",
+      "purpose": "prove witnessless recursive lineage append",
+      "circuit_id": "kagemusha-recursive-spend-lineage-append-v1",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "KagemushaRecursiveSpendLineageKeyArtifactsV1",
+      "delivery": "content_addressed_external",
+      "required_by": ["peer_send"]
+    },
+    {
+      "role": "reserved_lineage_init_verifier_record",
+      "purpose": "verify witnessless first-hop lineage",
+      "circuit_id": "kagemusha-recursive-spend-lineage-onehop-v1",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "norito_verifying_key_record",
+      "delivery": "torii_readiness_snapshot",
+      "required_by": ["topup", "peer_receive", "redemption"]
+    },
+    {
+      "role": "reserved_lineage_append_verifier_record",
+      "purpose": "verify witnessless appended lineage",
+      "circuit_id": "kagemusha-recursive-spend-lineage-append-v1",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "norito_verifying_key_record",
+      "delivery": "torii_readiness_snapshot",
+      "required_by": ["peer_send", "peer_receive", "redemption"]
+    }
+  ],
   "hashes": {
     "ios-arm64": "$IOS_HASH",
     "ios-arm64_x86_64-simulator": "$SIM_HASH",
@@ -300,3 +477,4 @@ cat > "$OUT_DIR/NoritoBridge.artifacts.json" <<EOF
 }
 EOF
 echo "[+] Wrote artifact manifest: $OUT_DIR/NoritoBridge.artifacts.json" >&2
+bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only

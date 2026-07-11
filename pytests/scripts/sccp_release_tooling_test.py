@@ -959,6 +959,11 @@ def test_policy_hash_derivation_matches_rust_and_solidity_golden_vectors() -> No
     assert common.keccak256(b"abc").hex() == (
         "4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45"
     )
+    public_taira_id = common.HUB_CHAIN_IDS["sora-taira"]
+    assert public_taira_id == "fc56984b-2be7-431d-840e-21514d1883f0"
+    assert common.keccak256(bytes.fromhex(public_taira_id.replace("-", ""))).hex() == (
+        common.SORA_TAIRA_CHAIN_ID_HASH_HEX
+    )
     for length, expected in (
         (135, "cbdfd9dee5faad3818d6b06f95a219fd290b0e1706f6a82e5a595b9ce9faca62"),
         (136, "7ce759f1ab7f9ce437719970c26b0a66ff11fe3e38e17df89cf5d29c7d7f807e"),
@@ -986,7 +991,7 @@ def test_policy_hash_derivation_matches_rust_and_solidity_golden_vectors() -> No
         }
     )
     assert anchor_hash.hex() == (
-        "60c7628fe7a8e8c6a73a21ef30c270b6944bb33a4feb03e0b302aabe210cf0c6"
+        "7dda271d98d9e4333093da84236157e39ce67f6f68680fedbdc17fbe8b7b6a4a"
     )
 
 
@@ -1062,6 +1067,43 @@ def test_validator_build_attestation_rejects_placeholders_aliases_and_drift() ->
         mutation(candidate)
         with pytest.raises(common.SccpReleaseError):
             common._validate_validator_identity(candidate)
+
+
+def test_validator_build_attestation_rejects_historical_bls_feature() -> None:
+    identity = {
+        "protocol_version": 1,
+        "crate_name": "iroha_sccp",
+        "crate_version": common._workspace_crate_version(),
+        "enabled_features": ["bls"],
+        "build_profile": "debug",
+        "target_triple": "aarch64-apple-darwin",
+        "rustc_version": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
+        "source_sha256_hex": hashlib.sha256(
+            common.RUST_VALIDATOR_SOURCE.read_bytes()
+        ).hexdigest(),
+        "crate_manifest_sha256_hex": hashlib.sha256(
+            common.SCCP_CRATE_MANIFEST.read_bytes()
+        ).hexdigest(),
+        "build_script_sha256_hex": hashlib.sha256(
+            common.SCCP_BUILD_SCRIPT.read_bytes()
+        ).hexdigest(),
+        "workspace_manifest_sha256_hex": hashlib.sha256(
+            common.WORKSPACE_MANIFEST.read_bytes()
+        ).hexdigest(),
+        "cargo_lock_sha256_hex": hashlib.sha256(common.CARGO_LOCK.read_bytes()).hexdigest(),
+        "toolchain_lock_sha256_hex": hashlib.sha256(
+            common.RUST_TOOLCHAIN_LOCK.read_bytes()
+        ).hexdigest(),
+        "executable_sha256_hex": "a7" * 32,
+        "build_identity_hex": "a8" * 32,
+    }
+    identity["build_identity_hex"] = common.validator_build_identity_hex(identity)
+
+    with pytest.raises(
+        common.SccpReleaseError,
+        match=r"exact production feature set \[\]",
+    ):
+        common._validate_validator_identity(identity)
 
 
 @pytest.mark.parametrize(

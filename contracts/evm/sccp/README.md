@@ -3,10 +3,10 @@
 These contracts provide the shared exact V1 implementation used by Ethereum
 and BNB Smart Chain routes.
 
-Production sources require exact Solidity `0.8.24`. EVM artifacts use the
-authenticated `0.8.24+commit.e11b9ed9` compiler, optimizer run count `200`, and
-the `istanbul` EVM target; TVM artifacts use the separately authenticated TRON
-0.8.24 compiler. Their compiler identities, complete standard-json inputs,
+Production sources require exact Solidity `0.7.4`. EVM and TVM artifacts use
+the authenticated `0.7.4+commit.3f05b770` compiler, optimizer run count `200`,
+and the `istanbul` target over distinct reviewed source maps. Their target
+identities, complete standard-json inputs,
 ABIs, creation/runtime bytes, immutable-runtime patch ranges, and hashes are
 reviewed release-policy inputs. The fixed opcode target avoids instructions
 that are not shared by every first-release destination. The runtime smoke loads
@@ -50,12 +50,13 @@ absent. Generic proof-only message wrappers are also absent: accepting a proof
 without executing the value-moving route is not settlement. A production
 source event must be coupled to the concrete token burn, and a production
 destination proof must call `finalizeFromTaira` on the immutable typed route.
-Each concrete production route creates its token inside the route constructor.
-Token creation, immutable back-reference validation, verifier validation, and
-route creation therefore succeed or revert as one transaction; there is no
-address-precomputation cycle, privileged initialization window, or orphan
-token. The abstract shared route accepts an injected token only for adversarial
-false-return, binding, and reentrancy harnesses. The revision is encoded
+Each concrete production route accepts one exact predeployed token address.
+Deployment tooling first precomputes the route address, deploys the token with
+that address as its immutable `bridge`, and then deploys the route at the exact
+precomputed address with the exact token address. The route constructor rejects
+token/route readback, code, policy, or role drift before storing any binding.
+There is no privileged initialization window or mutable bridge setter. The
+revision is encoded
 immediately after the Transfer nonce and is included in `routeConfigHash`, so
 nonce reuse by a replacement route cannot collide with an older route's
 message identity.
@@ -129,10 +130,10 @@ bash scripts/sccp_evm_contract_smoke.sh
 ```
 
 The suite verifies the authenticated EVM/TVM manifest against the current
-sources and deploys the exact reviewed EVM artifacts in an EVM runtime. Test
-harnesses and the explicitly non-production TRON-on-EVM compatibility copy are
-compiled separately with the locked EVM compiler; exact TVM creation code is
-never sent to Hardhat. The suite enforces runtime, initcode, and deployment-gas
+sources and deploys the exact reviewed EVM and TRON artifacts in an EVM
+runtime. Test harnesses are compiled separately with the same locked compiler,
+and their TRON output must reproduce the reviewed TRON creation code exactly.
+The suite enforces runtime, initcode, and deployment-gas
 ceilings, cross-checks precompiled and
 software BLAKE2b results, and exercises positive accounting plus malformed
 payloads, zero or mismatched route revisions, wrong routes/networks/codecs,

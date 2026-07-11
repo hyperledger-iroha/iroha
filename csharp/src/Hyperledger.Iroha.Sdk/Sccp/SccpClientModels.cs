@@ -425,7 +425,7 @@ internal static class SccpSubmitValidation
         "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1";
     private const string SubmitBridgeProofWireName =
         "iroha_data_model::isi::bridge::SubmitBridgeProof";
-    private const string TairaChainId = "809574f5-fee7-5e69-bfcf-52451e42d50f";
+    private const string TairaChainId = "fc56984b-2be7-431d-840e-21514d1883f0";
     internal const int MaximumNativeArtifactBytes = 16 * 1024 * 1024;
     internal const int MaximumDestinationArtifactBytes = MaximumNativeArtifactBytes + 64 * 1024;
     internal const int MaximumArtifactBytes = MaximumDestinationArtifactBytes;

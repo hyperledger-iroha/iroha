@@ -3,10 +3,38 @@
 //!   cargo run -p ivm --bin gen_syscalls_doc -- --write
 //!   cargo run -p ivm --bin gen_syscalls_doc -- --check
 
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 const BEGIN: &str = "<!-- BEGIN GENERATED SYSCALLS -->";
 const END: &str = "<!-- END GENERATED SYSCALLS -->";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Mode {
+    Write,
+    Check,
+}
+
+fn parse_mode(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
+    let mut mode = None;
+    for arg in args {
+        let requested = match arg.as_str() {
+            "--write" => Mode::Write,
+            "--check" => Mode::Check,
+            _ => {
+                return Err(format!(
+                    "unknown argument `{arg}`; usage: --write or --check"
+                ));
+            }
+        };
+        if mode.replace(requested).is_some() {
+            return Err("select exactly one of --write or --check".to_owned());
+        }
+    }
+    mode.ok_or_else(|| "usage: --write or --check".to_owned())
+}
 
 fn guess_defaults(n: u32) -> (String, String, String) {
     let name = ivm::syscalls::syscall_name(n).unwrap_or("");
@@ -99,7 +127,7 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         gas = "G_schema + bytes".into();
     } else if up.contains("GET_ACCOUNT_BALANCE") || n == 0xF9 {
         args = "r10=&AccountId, r11=&AssetDefinitionId".into();
-        ret = "ptr (&Amount)".into();
+        ret = "ptr (&Quantity)".into();
         gas = "G_get_bal".into();
     } else if up.contains("NAME_DECODE") || n == 0x5C {
         args = "r10=&NoritoBytes(UTF-8 string)".into();
@@ -427,21 +455,80 @@ fn render_table(map: &std::collections::BTreeMap<u32, (String, String, String)>)
     out
 }
 
-fn main() {
-    let mut write = false;
-    let mut check = false;
-    let mut gen_code = true;
-    for arg in std::env::args().skip(1) {
-        match arg.as_str() {
-            "--write" => write = true,
-            "--check" => check = true,
-            "--no-code" => gen_code = false,
-            _ => {}
+fn render_docs(text: &str, table: &str) -> Result<String, String> {
+    let replacement = format!("{BEGIN}\n{table}{END}\n");
+    let begin = text.find(BEGIN);
+    let end = text.find(END);
+    match (begin, end) {
+        (Some(begin), Some(end)) if begin < end => {
+            if text[begin + BEGIN.len()..].contains(BEGIN) || text[end + END.len()..].contains(END)
+            {
+                return Err("syscalls.md contains duplicate generated-section markers".to_owned());
+            }
+            let mut replace_end = end + END.len();
+            if text[replace_end..].starts_with('\n') {
+                replace_end += 1;
+            }
+            let mut rendered =
+                String::with_capacity(text.len() - (replace_end - begin) + replacement.len());
+            rendered.push_str(&text[..begin]);
+            rendered.push_str(&replacement);
+            rendered.push_str(&text[replace_end..]);
+            Ok(rendered)
+        }
+        (None, None) => {
+            let mut rendered = text.to_owned();
+            if !rendered.is_empty() {
+                if !rendered.ends_with('\n') {
+                    rendered.push('\n');
+                }
+                rendered.push('\n');
+            }
+            rendered.push_str(&replacement);
+            Ok(rendered)
+        }
+        _ => Err("syscalls.md contains malformed generated-section markers".to_owned()),
+    }
+}
+
+fn sync_generated_file(
+    path: &Path,
+    expected: &str,
+    mode: Mode,
+    regenerate_command: &str,
+) -> Result<bool, String> {
+    let current = match fs::read(path) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(format!("failed to read {}: {error}", path.display())),
+    };
+    if current.as_deref() == Some(expected.as_bytes()) {
+        return Ok(false);
+    }
+    match mode {
+        Mode::Check => Err(format!(
+            "{} is out of date; run: {regenerate_command}",
+            path.display()
+        )),
+        Mode::Write => {
+            fs::write(path, expected)
+                .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
+            Ok(true)
         }
     }
+}
+
+fn main() {
+    let mode = match parse_mode(std::env::args().skip(1)) {
+        Ok(mode) => mode,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+    };
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let path = PathBuf::from(manifest_dir).join("docs/syscalls.md");
-    let mut text = fs::read_to_string(&path).expect("read syscalls.md");
+    let text = fs::read_to_string(&path).expect("read syscalls.md");
 
     // The explicit spec is the canonical source for ABI signatures and gas
     // documentation. Heuristic defaults are diagnostic suggestions only.
@@ -520,11 +607,10 @@ fn main() {
         );
     }
 
-    // If requested, generate code and gas assets for the `ivm_abi` crate, which
-    // owns the syscall renderer used by docs/tests.
-    if gen_code {
-        let abi_src_dir = PathBuf::from(manifest_dir).join("../ivm_abi/src");
-        let code_path = abi_src_dir.join("syscalls_doc_gen.rs");
+    // Generate the expected code and gas assets for the `ivm_abi` crate, which
+    // owns the syscall renderer used by docs/tests. Rendering is deliberately
+    // side-effect free; publication happens only after every output is ready.
+    let (generated_docs_code, generated_gas_code) = {
         let mut buf = String::new();
         buf.push_str("// @generated by gen_syscalls_doc.rs; do not edit manually\n");
         buf.push_str("#[rustfmt::skip]\n");
@@ -547,10 +633,8 @@ fn main() {
             ));
         }
         buf.push_str("];\n");
-        fs::write(&code_path, buf.as_bytes()).expect("write generated code table");
 
         // Generate gas_spec.rs
-        let gas_code_path = abi_src_dir.join("gas_spec.rs");
         let mut gbuf = String::new();
         gbuf.push_str("// @generated by gen_syscalls_doc.rs; do not edit manually\n");
         gbuf.push_str("#[rustfmt::skip]\n");
@@ -565,7 +649,6 @@ fn main() {
             ));
         }
         gbuf.push_str("];\n");
-        fs::write(&gas_code_path, gbuf.as_bytes()).expect("write gas spec code");
 
         // Lint prose gas tokens in docs against generated gas assets
         let mut prose_tokens: std::collections::BTreeSet<String> = Default::default();
@@ -625,43 +708,65 @@ fn main() {
                 code_minus_prose.join(", ")
             );
         }
-    }
+        (buf, gbuf)
+    };
 
-    // Render docs table: prefer spec-enriched strings via the generated code table
+    // Render the documentation from the same canonical specification as the
+    // Rust assets so check mode can compare all outputs without mutating any.
     let table = render_table(&map);
-    let replacement = format!("{BEGIN}\n{table}{END}\n");
-
-    if let (Some(beg), Some(end)) = (text.find(BEGIN), text.find(END)) {
-        let mut end_ix = end + END.len();
-        if text[end_ix..].starts_with('\n') {
-            end_ix += 1;
-        }
-        let mut new = String::new();
-        new.push_str(&text[..beg]);
-        new.push_str(&replacement);
-        new.push_str(&text[end_ix..]);
-        if write {
-            fs::write(&path, new.as_bytes()).expect("write syscalls.md");
-            return;
-        }
-        if check && new != text {
-            eprintln!("syscalls.md is out of date; re-run with --write");
+    let rendered_docs = match render_docs(&text, &table) {
+        Ok(rendered) => rendered,
+        Err(error) => {
+            eprintln!("{error}");
             std::process::exit(1);
         }
-    } else if write {
-        // Append a generated section if markers are missing
-        text.push_str("\n\n");
-        text.push_str(&replacement);
-        fs::write(&path, text.as_bytes()).expect("write syscalls.md");
-    } else if check {
-        eprintln!("syscalls.md missing generated markers");
+    };
+
+    let abi_src_dir = PathBuf::from(manifest_dir).join("../ivm_abi/src");
+    let code_path = abi_src_dir.join("syscalls_doc_gen.rs");
+    let gas_code_path = abi_src_dir.join("gas_spec.rs");
+    let regenerate_command = "cargo run -p ivm --bin gen_syscalls_doc -- --write";
+    let outputs = [
+        (&code_path, generated_docs_code.as_str()),
+        (&gas_code_path, generated_gas_code.as_str()),
+        (&path, rendered_docs.as_str()),
+    ];
+    let mut failures = Vec::new();
+    for (output_path, expected) in outputs {
+        match sync_generated_file(output_path, expected, mode, regenerate_command) {
+            Ok(true) => eprintln!("updated: {}", output_path.display()),
+            Ok(false) => {}
+            Err(error) => failures.push(error),
+        }
+    }
+    if !failures.is_empty() {
+        for failure in failures {
+            eprintln!("{failure}");
+        }
         std::process::exit(1);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::rewrite_gas_tokens;
+    use std::{
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    use super::{
+        BEGIN, END, Mode, parse_mode, render_docs, rewrite_gas_tokens, sync_generated_file,
+    };
+
+    static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
+
+    fn temp_file(name: &str) -> std::path::PathBuf {
+        let serial = NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "ivm-gen-syscalls-doc-{}-{serial}-{name}",
+            std::process::id()
+        ))
+    }
 
     #[test]
     fn rewrite_gas_tokens_preserves_parenthesized_plus_text() {
@@ -673,5 +778,95 @@ mod tests {
             "asset:gas/G_soracloud@ivm.core/v2 + request bytes (+ response bytes under host)"
         );
         assert_eq!(keys, ["G_soracloud"]);
+    }
+
+    #[test]
+    fn command_mode_is_explicit_and_unambiguous() {
+        assert_eq!(parse_mode(["--check".to_owned()]), Ok(Mode::Check));
+        assert_eq!(parse_mode(["--write".to_owned()]), Ok(Mode::Write));
+        assert!(parse_mode(Vec::new()).is_err());
+        assert!(parse_mode(["--check".to_owned(), "--write".to_owned()]).is_err());
+        assert!(parse_mode(["--no-code".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn document_rendering_is_idempotent() {
+        let table = "| Number |\n|---|\n";
+        let stale = format!("prose\n\n{BEGIN}\nstale\n{END}\n\ntail\n");
+        let rendered = render_docs(&stale, table).expect("render generated section");
+        assert_eq!(
+            render_docs(&rendered, table).expect("render generated section again"),
+            rendered
+        );
+
+        let without_markers = "prose\n";
+        let appended = render_docs(without_markers, table).expect("append generated section");
+        assert_eq!(
+            render_docs(&appended, table).expect("render appended section again"),
+            appended
+        );
+
+        assert!(render_docs(&format!("{BEGIN}\nunterminated\n"), table).is_err());
+        assert!(
+            render_docs(
+                &format!("{BEGIN}\none\n{END}\n{BEGIN}\ntwo\n{END}\n"),
+                table,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn check_is_nonmutating_and_write_is_idempotent() {
+        let path = temp_file("asset.rs");
+        fs::write(&path, "stale\n").expect("create stale generated asset");
+        let before = fs::read(&path).expect("read stale generated asset");
+
+        let error = sync_generated_file(&path, "current\n", Mode::Check, "generator --write")
+            .expect_err("check must reject stale output");
+        assert!(error.contains("generator --write"));
+        assert_eq!(
+            fs::read(&path).expect("read after check"),
+            before,
+            "check mode must not mutate stale output"
+        );
+
+        assert!(
+            sync_generated_file(&path, "current\n", Mode::Write, "generator --write")
+                .expect("publish generated output")
+        );
+        assert_eq!(
+            fs::read_to_string(&path).expect("read published output"),
+            "current\n"
+        );
+        assert!(
+            !sync_generated_file(&path, "current\n", Mode::Write, "generator --write")
+                .expect("repeat publication")
+        );
+
+        fs::remove_file(path).expect("remove temporary generated asset");
+
+        let missing_path = temp_file("missing.rs");
+        sync_generated_file(
+            &missing_path,
+            "generated\n",
+            Mode::Check,
+            "generator --write",
+        )
+        .expect_err("check must reject a missing output");
+        assert!(
+            !missing_path.exists(),
+            "check mode must not create a missing output"
+        );
+        assert!(
+            sync_generated_file(
+                &missing_path,
+                "generated\n",
+                Mode::Write,
+                "generator --write",
+            )
+            .expect("create missing generated output")
+        );
+        fs::remove_file(missing_path).expect("remove temporary generated asset");
     }
 }

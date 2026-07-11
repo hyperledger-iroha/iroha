@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-pragma solidity 0.8.24;
+pragma solidity 0.7.4;
+pragma experimental ABIEncoderV2;
 
 import "./ISccpMessageVerifier.sol";
 import "./SccpExactTransferCodec.sol";
@@ -13,10 +14,9 @@ interface ITairaXorExactEvmToken {
 /**
  * @title TairaXorExactEvmSccpBridge
  * @dev Shared implementation for the concrete Ethereum and BSC XOR routes.
- * The shared base validates an immutable token plus a closed SCCP network
- * profile and verifies the executing chain id. Concrete production wrappers
- * create the token in their own constructor expression, making token and route
- * deployment atomic. There is no owner, arbitrary digest submission, mutable
+ * The shared base validates an immutable token bound to the precomputed route
+ * address plus a closed SCCP network profile, and verifies the executing chain
+ * id. There is no owner, arbitrary digest submission, mutable
  * route, configurable asset, signer committee, or proof bypass.
  */
 abstract contract TairaXorExactEvmSccpBridge {
@@ -529,7 +529,7 @@ abstract contract TairaXorExactEvmSccpBridge {
         return SccpExactTransferCodec.isCanonicalTairaAccountRange(value, start, length);
     }
 
-    function _chainId() private view returns (uint256 value) {
+    function _chainId() private pure returns (uint256 value) {
         assembly { value := chainid() }
     }
 

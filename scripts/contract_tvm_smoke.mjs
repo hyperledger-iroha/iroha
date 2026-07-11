@@ -16,9 +16,9 @@ const require = createRequire(import.meta.url);
 const { blake2b } = require("@noble/hashes/blake2b");
 const { TronWeb, utils } = require("tronweb");
 
-const TRON_COMPILER_IDENTITY = "tron-solc-tvm-0.8.24+commit.7d902c66";
+const TRON_COMPILER_IDENTITY = "tron-solc-tvm-0.7.4+commit.3f05b770";
 const TRON_COMPILER_SHA256 =
-  "527b5363b50eee33b9d45a1619ccd3511e6304637867135396969ac93bc67116";
+  "2b55ed5fec4d9625b6c7b3ab1abd2b7fb7dd2a9c68543bf0323db2c7e2d55af2";
 const TRON_MAINNET_PROFILE = 10;
 const TRON_MAINNET_CHAIN_ID = 0x2b6653dcn;
 const DOMAIN_TAIRA = 0;
@@ -32,7 +32,7 @@ const METHOD_FEE_LIMIT = 1_000_000_000;
 const SEMANTIC_PROOF_PROFILE_HASH =
   "0xce5a1e17aca3cafe47a403fd66479f0a36339eb56092dafa67c8d97bdeeb60ef";
 const TAIRA_FINALITY_ANCHOR_HASH =
-  "0x60c7628fe7a8e8c6a73a21ef30c270b6944bb33a4feb03e0b302aabe210cf0c6";
+  "0x7dda271d98d9e4333093da84236157e39ce67f6f68680fedbdc17fbe8b7b6a4a";
 const CANONICAL_SORA_I105 =
   "sorauﾛ1PYﾛ9ｵﾆﾘﾐ3Yf8wﾜｿﾋﾉajｼｱ6eﾑbHｱﾜｶBｳdUｺcヰｲnﾌNP21YC";
 const CANONICAL_TAIRA_I105 = `test${CANONICAL_SORA_I105.slice(4)}`;
@@ -773,7 +773,7 @@ const canonicalTronMainnet = Buffer.concat([
   le(DOMAIN_TRON, 4),
   le(TRON_MAINNET_CHAIN_ID, 4),
 ]);
-const canonicalTaira = Buffer.from("010100000000809574f5fee75e69bfcf52451e42d50f", "hex");
+const canonicalTaira = Buffer.from("010100000000fc56984b2be7431d840e21514d1883f0", "hex");
 const expectedSourceLane = canonicalLane(canonicalTronMainnet, canonicalTaira);
 assert.equal(expectedSourceLane.toString("hex"), tronMainnetVector.canonical_lane_hex);
 const expectedSourceLaneHash = `0x${tronMainnetVector.lane_hash_hex}`;

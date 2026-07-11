@@ -122,13 +122,14 @@ pub mod wide {
         )
     }
 
-    /// Encode a typed literal-table load with an unsigned 16-bit index.
+    /// Encode an indexed literal-table load with an unsigned 16-bit index.
     #[inline]
     pub const fn encode_literal(op: u8, rd: u8, index: u16) -> u32 {
+        assert!(op == instruction::wide::memory::LDLIT || op == instruction::wide::memory::LDI64);
         ((op as u32) << 24) | ((rd as u32) << 16) | index as u32
     }
 
-    /// Decode a typed literal-table load.
+    /// Decode an indexed literal-table load.
     #[inline]
     pub const fn decode_literal(word: u32) -> (u8, u8, u16) {
         (
@@ -280,14 +281,25 @@ mod tests {
 
     #[test]
     fn literal_index_roundtrips_full_u16_range() {
-        for index in [0, 1, 255, 256, u16::MAX] {
-            let word = wide::encode_literal(instruction::wide::memory::LDLIT, 23, index);
-            let (op, rd, decoded) = wide::decode_literal(word);
-            assert_eq!(op, instruction::wide::memory::LDLIT);
-            assert_eq!(rd, 23);
-            assert_eq!(decoded, index);
-            assert_eq!(instruction::wide::literal_index(word), usize::from(index));
+        for opcode in [
+            instruction::wide::memory::LDLIT,
+            instruction::wide::memory::LDI64,
+        ] {
+            for index in [0, 1, 255, 256, u16::MAX] {
+                let word = wide::encode_literal(opcode, 23, index);
+                let (op, rd, decoded) = wide::decode_literal(word);
+                assert_eq!(op, opcode);
+                assert_eq!(rd, 23);
+                assert_eq!(decoded, index);
+                assert_eq!(instruction::wide::literal_index(word), usize::from(index));
+            }
         }
+    }
+
+    #[test]
+    #[should_panic]
+    fn literal_encoder_rejects_non_literal_opcode() {
+        let _ = wide::encode_literal(instruction::wide::memory::LOAD64, 23, 0);
     }
 
     #[test]

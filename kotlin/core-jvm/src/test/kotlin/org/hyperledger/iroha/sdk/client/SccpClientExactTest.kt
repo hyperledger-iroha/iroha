@@ -21,6 +21,7 @@ import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.norito.CRC64
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
+import org.hyperledger.iroha.sdk.norito.SchemaHash
 import org.hyperledger.iroha.sdk.sccp.SccpLaneIdV1
 import org.hyperledger.iroha.sdk.sccp.SccpNetworkV1
 import org.hyperledger.iroha.sdk.sccp.SccpV1
@@ -37,6 +38,7 @@ class SccpClientExactTest {
     @Test
     fun submitDtosExposeOnlyClosedArtifactFields() {
         val artifact = canonicalArtifact()
+        val nativeArtifact = canonicalNativeArtifact()
         val proof = SccpDestinationProofSubmitRequest(authority, artifact)
         assertEquals(setOf("authority", "destination_proof_b64"), proof.toJsonMap().keys)
         HttpClientTransport.preflightSccpBridgeSubmitJson(
@@ -44,7 +46,7 @@ class SccpClientExactTest {
             "/v1/bridge/proofs/submit",
         )
 
-        val message = SccpNativeMessageSubmitRequest(authority, artifact)
+        val message = SccpNativeMessageSubmitRequest(authority, nativeArtifact)
         assertEquals(setOf("authority", "native_proof_b64"), message.toJsonMap().keys)
         HttpClientTransport.preflightSccpBridgeSubmitJson(
             message.toJsonBytes(),
@@ -78,7 +80,7 @@ class SccpClientExactTest {
         )
         val signedMessage = SccpNativeMessageSubmitRequest(
             authority = authority,
-            nativeProofB64 = artifact,
+            nativeProofB64 = nativeArtifact,
             signatureB64 = signature,
             transactionPayloadB64 = transaction,
             creationTimeMs = 7,
@@ -139,10 +141,11 @@ class SccpClientExactTest {
         val address = AccountAddress.fromAccount(ByteArray(32) { 0x41 }, "ed25519")
         val tairaAuthority = address.toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
         val artifact = canonicalArtifact()
+        val nativeArtifact = canonicalNativeArtifact()
         assertEquals(369, SccpV1.TAIRA_I105_DISCRIMINANT_V1)
         assertEquals(369, AccountAddress.detectI105Discriminant(tairaAuthority))
         SccpDestinationProofSubmitRequest(tairaAuthority, artifact)
-        SccpNativeMessageSubmitRequest(tairaAuthority, artifact)
+        SccpNativeMessageSubmitRequest(tairaAuthority, nativeArtifact)
 
         val checksumMutation = tairaAuthority.dropLast(1) +
             if (tairaAuthority.last() == '1') "2" else "1"
@@ -159,7 +162,7 @@ class SccpClientExactTest {
                 SccpDestinationProofSubmitRequest(invalidAuthority, artifact)
             }
             assertFailsWith<IllegalArgumentException>(label) {
-                SccpNativeMessageSubmitRequest(invalidAuthority, artifact)
+                SccpNativeMessageSubmitRequest(invalidAuthority, nativeArtifact)
             }
             assertFailsWith<IllegalArgumentException>(label) {
                 HttpClientTransport.preflightSccpBridgeSubmitJson(
@@ -289,7 +292,7 @@ class SccpClientExactTest {
 
     @Test
     fun submitArtifactValidationRejectsAliasesCorruptionTrailingAndZeroSchema() {
-        val canonical = canonicalArtifactBytes()
+        val canonical = canonicalArtifactBytes(SCCP_DESTINATION_ARTIFACT_SCHEMA_NAME)
         val encoded = Base64.getEncoder().encodeToString(canonical)
         assertFailsWith<IllegalArgumentException> {
             SccpDestinationProofSubmitRequest("alice", encoded)
@@ -398,10 +401,33 @@ class SccpClientExactTest {
                 creationTimeMs = 7,
             )
         }
-        SccpNativeMessageSubmitRequest(
-            authority,
-            Base64.getEncoder().encodeToString(canonicalArtifactBytes(8)),
-        )
+        val native = canonicalArtifactBytes(SCCP_NATIVE_INBOUND_PROOF_SCHEMA_NAME)
+        SccpNativeMessageSubmitRequest(authority, Base64.getEncoder().encodeToString(native))
+        assertFailsWith<IllegalArgumentException> {
+            SccpNativeMessageSubmitRequest(authority, encoded)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpDestinationProofSubmitRequest(
+                authority,
+                Base64.getEncoder().encodeToString(native),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpNativeMessageSubmitRequest(
+                authority,
+                Base64.getEncoder().encodeToString(
+                    canonicalArtifactBytes(SCCP_NATIVE_INBOUND_PROOF_SCHEMA_NAME, 8),
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpDestinationProofSubmitRequest(
+                authority,
+                Base64.getEncoder().encodeToString(
+                    canonicalArtifactBytes(SCCP_DESTINATION_ARTIFACT_SCHEMA_NAME, 8),
+                ),
+            )
+        }
     }
 
     @Test
@@ -967,6 +993,16 @@ class SccpClientExactTest {
         }
         assertFailsWith<IllegalArgumentException> {
             SccpJsonParser.parseProofRequest(jsonBytes(anchorHashMismatch))
+        }
+        val archivedIdentity = proofRequest().also {
+            @Suppress("UNCHECKED_CAST")
+            val anchor = it["sora_finality_anchor"] as MutableMap<String, Any?>
+            anchor["chain_id_hash"] = keccak(
+                "809574f5fee75e69bfcf52451e42d50f".hexToBytes(),
+            ).toUpperHex()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseProofRequest(jsonBytes(archivedIdentity))
         }
         val oversizedAmount = messageBundle()
         @Suppress("UNCHECKED_CAST")
@@ -1538,10 +1574,17 @@ class SccpClientExactTest {
     )
 
     private fun canonicalArtifact(): String =
-        Base64.getEncoder().encodeToString(canonicalArtifactBytes())
+        Base64.getEncoder().encodeToString(
+            canonicalArtifactBytes(SCCP_DESTINATION_ARTIFACT_SCHEMA_NAME),
+        )
 
-    private fun canonicalArtifactBytes(padding: Int = 0): ByteArray {
-        val schema = ByteArray(16) { (it + 1).toByte() }
+    private fun canonicalNativeArtifact(): String =
+        Base64.getEncoder().encodeToString(
+            canonicalArtifactBytes(SCCP_NATIVE_INBOUND_PROOF_SCHEMA_NAME),
+        )
+
+    private fun canonicalArtifactBytes(schemaName: String, padding: Int = 0): ByteArray {
+        val schema = SchemaHash.hash16(schemaName)
         val payload = byteArrayOf(1, 2, 3)
         val header = NoritoHeader(
             schema,
@@ -1605,7 +1648,7 @@ class SccpClientExactTest {
     }
 
     private fun tairaChainIdHash(): String = keccak(
-        "809574f5fee75e69bfcf52451e42d50f".hexToBytes(),
+        "fc56984b2be7431d840e21514d1883f0".hexToBytes(),
     ).toUpperHex()
 
     private fun semanticProfileHash(): String = keccak(
@@ -1674,9 +1717,9 @@ class SccpClientExactTest {
 
     private companion object {
         const val DEFAULT_ROUTE_CONFIG_HASH =
-            "3054EC1DC859DC1D269169D09F942B7A03787E201278A6CD24EAC1D354BCF213"
+            "368647C0EA13EBF50ADDC9CFACA0923625F12EB3A5D1D11350AFD65A2C11E683"
         const val TRON_ROUTE_CONFIG_HASH =
-            "93FC70B3378A18C82A98ED5077B8B7F8086788B26FB55B2F44AACA41DB8C76DF"
+            "4C162A59B6A3003ADF2DBC767A6FF5E0A74B628712A51F73D4B2AA65362969F1"
         val MESSAGE_ID: String = "11".repeat(32)
     }
 }

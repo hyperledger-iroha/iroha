@@ -88,8 +88,8 @@ pub enum SyntaxKind {
     Ident,
     /// Integer literal.
     Number,
-    /// Exact non-negative decimal Amount literal, including its `amt` suffix.
-    Amount,
+    /// Exact base-10 decimal literal.
+    Decimal,
     /// String or raw-string literal.
     String,
     /// Byte-string or raw-byte-string literal.

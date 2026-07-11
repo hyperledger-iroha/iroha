@@ -248,6 +248,11 @@ mod block {
             &self.revert
         }
 
+        /// Return whether this block has staged any storage mutation.
+        pub fn is_dirty(&self) -> bool {
+            self.dirty
+        }
+
         /// Get mutable access to the value stored in
         pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
             let dirty = &mut self.dirty;

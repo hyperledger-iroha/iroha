@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.tx;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -9,11 +10,13 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import org.hyperledger.iroha.android.model.Executable;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.JsonValue;
@@ -36,10 +39,40 @@ final class TransactionPayloadFixtures {
     @SuppressWarnings("unchecked")
     final List<Object> fixturesRaw = (List<Object>) parsed;
     final List<Fixture> fixtures = new ArrayList<>();
+    final Set<String> names = new HashSet<>();
+    final Set<ByteBuffer> encodedPayloads = new HashSet<>();
     for (Object entry : fixturesRaw) {
-      fixtures.add(Fixture.fromObject(entry));
+      final Fixture fixture = Fixture.fromObject(entry);
+      if (!names.add(fixture.name())) {
+        throw new IllegalStateException("Duplicate fixture name: " + fixture.name());
+      }
+      fixture
+          .encoded()
+          .ifPresent(
+              encoded -> {
+                final ByteBuffer identity =
+                    ByteBuffer.wrap(decodeCanonicalBase64(encoded, fixture.name() + ".encoded"))
+                        .asReadOnlyBuffer();
+                if (!encodedPayloads.add(identity)) {
+                  throw new IllegalStateException(
+                      "Duplicate fixture payload bytes: " + fixture.name());
+                }
+              });
+      fixtures.add(fixture);
     }
     return fixtures;
+  }
+
+  private static byte[] decodeCanonicalBase64(final String value, final String context) {
+    try {
+      final byte[] decoded = Base64.getDecoder().decode(value);
+      if (!Base64.getEncoder().encodeToString(decoded).equals(value)) {
+        throw new IllegalStateException(context + " is not canonical base64");
+      }
+      return decoded;
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalStateException(context + " is not valid base64", ex);
+    }
   }
 
   static Path resolveFixturePath() throws IOException {
@@ -162,7 +195,8 @@ final class TransactionPayloadFixtures {
       final Map<String, Object> exec = asMap(payload.get("executable"), "executable", name);
       if (exec.containsKey("Ivm")) {
         final String base64 = asString(exec.get("Ivm"), "executable.Ivm");
-        builder.setExecutable(Executable.ivm(java.util.Base64.getDecoder().decode(base64)));
+        builder.setExecutable(
+            Executable.ivm(decodeCanonicalBase64(base64, name + ".executable.Ivm")));
       } else if (exec.containsKey("Instructions")) {
         final List<?> instructionsRaw = asList(exec.get("Instructions"), "executable.Instructions");
         final List<InstructionBox> instructions = new ArrayList<>(instructionsRaw.size());
@@ -182,8 +216,10 @@ final class TransactionPayloadFixtures {
           final String payloadBase64 = Objects.toString(wirePayloadRaw);
           final byte[] wirePayload;
           try {
-            wirePayload = Base64.getDecoder().decode(payloadBase64);
-          } catch (final IllegalArgumentException ex) {
+            wirePayload =
+                decodeCanonicalBase64(
+                    payloadBase64, name + ".instruction.payload_base64");
+          } catch (final IllegalStateException ex) {
             throw new IllegalStateException(
                 name + ": instruction payload_base64 is not valid base64", ex);
           }
@@ -227,7 +263,7 @@ final class TransactionPayloadFixtures {
 
     private static TransactionPayload decodePayload(final String name, final String encoded) {
       try {
-        final byte[] bytes = java.util.Base64.getDecoder().decode(encoded);
+        final byte[] bytes = decodeCanonicalBase64(encoded, name + ".encoded");
         return DECODER.decodeTransaction(bytes);
       } catch (final Exception ex) {
         System.err.println("[fixture] " + name + ": failed to decode encoded payload (" + ex.getMessage() + ")");

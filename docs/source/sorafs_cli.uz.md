@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_cli.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f752fac98bf3c70620089732451eea8ef09ad5d05db15b0d787ea82425b13752
+source_hash: 3d851bd6de4000a88f81c57dc6a4930fab02afd8f1821986c795cf66f4d879b9
 source_last_modified: "2026-06-25T16:00:00+00:00"
 translation_last_reviewed: 2026-06-25
 title: SoraFS CLI
@@ -338,7 +338,7 @@ The primary CLI now exposes the orchestrator facade directly:
 sorafs_cli fetch \
   --plan artifacts/payload_plan.json \
   --manifest-id 7bb2…9d31 \
-  --provider name=alpha,provider-id=9f5c…73aa,base-url=https://gw-alpha.example.org/,stream-token="$(cat alpha.token)" \
+  --provider name=alpha,provider-id=9f5c…73aa,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw-alpha.example.org/,stream-token="$(cat alpha.token)" \
   --output artifacts/payload.bin \
   --json-out artifacts/fetch_summary.json \
   --local-proxy-manifest-out artifacts/proxy_manifest.json \
@@ -461,7 +461,7 @@ iroha app sorafs moderation honey-audit \
   --honey 35c60c0f4cf6a1116fd17c2a930f37390f34030e7c5f23d77ecbb543c1a2d9ba \
   --expected-cache-version cache-v7 \
   --moderation-key-b64 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
-  --provider name=alpha,provider-id=AAAA...,base-url=https://gateway.example/,stream-token=BASE64 \
+  --provider name=alpha,provider-id=AAAA...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gateway.example/,stream-token=BASE64 \
   --json-out artifacts/sorafs_gateway/honey_audit.json \
   --markdown-out artifacts/sorafs_gateway/honey_audit.md
 ```

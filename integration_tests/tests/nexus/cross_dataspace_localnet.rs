@@ -112,6 +112,11 @@ const SOAK_FALLBACK_LOG_LIMIT: usize = 3;
 const SOAK_ITERATION_ATTEMPTS: usize = 3;
 const SOAK_ITERATIONS: usize = 10;
 const SOAK_ITERATIONS_ENV: &str = "IROHA_NEXUS_CROSS_SOAK_ITERATIONS";
+// The PR soak must demonstrate repeatable progress rather than one lucky iteration. Allow one
+// persistent failure and at most two retry attempts in the default ten-iteration run so shared
+// host noise remains diagnosable without masking broad lane-consensus instability.
+const SOAK_MIN_PASS_RATE_PERCENT: usize = 90;
+const SOAK_MAX_RETRY_RATE_PERCENT: usize = 20;
 const CROSS_DATASPACE_LOCALNET_STACK_BYTES: usize = 32 * 1024 * 1024;
 
 fn stake_asset_definition_id() -> AssetDefinitionId {
@@ -143,6 +148,111 @@ fn soak_iterations() -> usize {
         std::env::var(SOAK_ITERATIONS_ENV).ok().as_deref(),
         SOAK_ITERATIONS,
     )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SoakGateMetrics {
+    iterations: usize,
+    passes: usize,
+    failures: usize,
+    retries_used: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SoakGateFailure {
+    NoIterations,
+    AccountingMismatch {
+        iterations: usize,
+        passes: usize,
+        failures: usize,
+    },
+    PassRateBelowMinimum {
+        iterations: usize,
+        passes: usize,
+        minimum_passes: usize,
+    },
+    RetryBudgetExceeded {
+        iterations: usize,
+        retries_used: usize,
+        maximum_retries: usize,
+    },
+}
+
+impl core::fmt::Display for SoakGateFailure {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::NoIterations => formatter.write_str("no soak iterations were scheduled"),
+            Self::AccountingMismatch {
+                iterations,
+                passes,
+                failures,
+            } => write!(
+                formatter,
+                "soak accounting mismatch: iterations={iterations}, passes={passes}, failures={failures}"
+            ),
+            Self::PassRateBelowMinimum {
+                iterations,
+                passes,
+                minimum_passes,
+            } => write!(
+                formatter,
+                "soak pass rate below {SOAK_MIN_PASS_RATE_PERCENT}%: passes={passes}, required={minimum_passes}, iterations={iterations}"
+            ),
+            Self::RetryBudgetExceeded {
+                iterations,
+                retries_used,
+                maximum_retries,
+            } => write!(
+                formatter,
+                "soak retry budget exceeded ({SOAK_MAX_RETRY_RATE_PERCENT}% of scheduled iterations): retries={retries_used}, maximum={maximum_retries}, iterations={iterations}"
+            ),
+        }
+    }
+}
+
+fn soak_gate_minimum_passes(iterations: usize) -> usize {
+    (iterations / 100) * SOAK_MIN_PASS_RATE_PERCENT
+        + ((iterations % 100) * SOAK_MIN_PASS_RATE_PERCENT).div_ceil(100)
+}
+
+fn soak_gate_maximum_retries(iterations: usize) -> usize {
+    (iterations / 100) * SOAK_MAX_RETRY_RATE_PERCENT
+        + ((iterations % 100) * SOAK_MAX_RETRY_RATE_PERCENT) / 100
+}
+
+fn validate_soak_gate(metrics: SoakGateMetrics) -> core::result::Result<(), SoakGateFailure> {
+    if metrics.iterations == 0 {
+        return Err(SoakGateFailure::NoIterations);
+    }
+    if metrics.passes > metrics.iterations
+        || metrics.failures != metrics.iterations.saturating_sub(metrics.passes)
+    {
+        return Err(SoakGateFailure::AccountingMismatch {
+            iterations: metrics.iterations,
+            passes: metrics.passes,
+            failures: metrics.failures,
+        });
+    }
+
+    let minimum_passes = soak_gate_minimum_passes(metrics.iterations);
+    if metrics.passes < minimum_passes {
+        return Err(SoakGateFailure::PassRateBelowMinimum {
+            iterations: metrics.iterations,
+            passes: metrics.passes,
+            minimum_passes,
+        });
+    }
+
+    let maximum_retries = soak_gate_maximum_retries(metrics.iterations);
+    if metrics.retries_used > maximum_retries {
+        return Err(SoakGateFailure::RetryBudgetExceeded {
+            iterations: metrics.iterations,
+            retries_used: metrics.retries_used,
+            maximum_retries,
+        });
+    }
+
+    Ok(())
 }
 
 fn cross_dataspace_gas_account_id() -> AccountId {
@@ -542,6 +652,24 @@ fn wait_for_height_with_tick_timeout_across_clients(
     timeout_duration: Duration,
     tick_every_polls: u64,
 ) -> Result<SumeragiStatusWire> {
+    wait_for_height_with_tick_submitters_timeout_across_clients(
+        &mut clients_factory,
+        None,
+        target_height,
+        context,
+        timeout_duration,
+        tick_every_polls,
+    )
+}
+
+fn wait_for_height_with_tick_submitters_timeout_across_clients(
+    mut clients_factory: impl FnMut() -> Vec<Client>,
+    tick_submitters: Option<&[Client]>,
+    target_height: u64,
+    context: &str,
+    timeout_duration: Duration,
+    tick_every_polls: u64,
+) -> Result<SumeragiStatusWire> {
     let started = Instant::now();
     let mut last_height = 0;
     let mut last_error: Option<String> = None;
@@ -550,14 +678,17 @@ fn wait_for_height_with_tick_timeout_across_clients(
         let mut best_status = None;
         let clients = clients_factory();
         if should_submit_tick(poll_count, tick_every_polls) {
-            submit_wait_ticks(
-                &clients,
-                context,
-                poll_count,
-                started,
-                timeout_duration,
-                &mut last_error,
-            );
+            let tick_clients = tick_submitters.unwrap_or(clients.as_slice());
+            if !tick_clients.is_empty() {
+                submit_wait_ticks(
+                    tick_clients,
+                    context,
+                    poll_count,
+                    started,
+                    timeout_duration,
+                    &mut last_error,
+                );
+            }
         }
         for client in clients {
             match client.get_sumeragi_status_wire() {
@@ -746,7 +877,6 @@ fn submit_wait_ticks(
     last_error: &mut Option<String>,
 ) {
     if tick_submitters.is_empty() {
-        *last_error = Some("tick submit error: no tick submitters available".to_owned());
         return;
     }
     for tick_submitter in tick_submitters {
@@ -847,6 +977,44 @@ async fn torii_json_get(
         route_lane_id: routed_header_string(&headers, "x-iroha-route-lane-id"),
         route_dataspace_id: routed_header_string(&headers, "x-iroha-route-dataspace-id"),
     })
+}
+
+async fn torii_json_get_with_retry(
+    client: &Client,
+    path_segments: &[String],
+    query_pairs: &[(String, String)],
+    context: &str,
+) -> Result<RoutedJsonGetResponse> {
+    let started = Instant::now();
+    let mut last_error: Option<String> = None;
+    let mut attempts = 0_u64;
+    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
+        attempts = attempts.saturating_add(1);
+        match timeout(
+            OBSERVER_QUERY_TIMEOUT_CAP,
+            torii_json_get(client, path_segments, query_pairs),
+        )
+        .await
+        {
+            Ok(Ok(response)) => return Ok(response),
+            Ok(Err(err)) => {
+                last_error = Some(render_error_with_debug(&err));
+            }
+            Err(_) => {
+                last_error = Some(format!(
+                    "request attempt timed out after {}s",
+                    OBSERVER_QUERY_TIMEOUT_CAP.as_secs()
+                ));
+            }
+        }
+        sleep(STATUS_POLL_INTERVAL).await;
+    }
+    let suffix = last_error
+        .map(|err| format!("; last error: {err}"))
+        .unwrap_or_default();
+    Err(eyre!(
+        "{context}: timed out after {attempts} attempts waiting for routed Torii GET{suffix}"
+    ))
 }
 
 fn expect_local_or_proxy_fanout_headers(
@@ -1151,6 +1319,7 @@ fn latest_lane_payload_ownership_progress(
         .map(|ownership| LanePayloadOwnershipProgress {
             lane_id,
             dataspace_id,
+            lane_incarnation: ownership.lane_incarnation,
             lane_block_height: ownership.lane_block_height,
             lane_block_view: ownership.lane_block_view,
             proposal_height: ownership.proposal_height,
@@ -1316,17 +1485,30 @@ fn lane_domain_progress_observations(
     dataspace_id: DataSpaceId,
     last_error: &mut Option<String>,
 ) -> Vec<LaneDomainProgress> {
-    peer_indices_for_committed_lane_evidence(network.peers().len())
+    let started = Instant::now();
+    let indices = peer_indices_for_committed_lane_evidence(network.peers().len());
+    let request_count = indices.len();
+    indices
         .into_iter()
-        .filter_map(
-            |index| match network.peers()[index].client().get_sumeragi_status_wire() {
+        .enumerate()
+        .filter_map(|(position, index)| {
+            let mut client = network.peers()[index].client();
+            client.torii_request_timeout =
+                client
+                    .torii_request_timeout
+                    .min(bounded_observer_request_timeout(
+                        started,
+                        OBSERVER_QUERY_TIMEOUT_CAP,
+                        request_count.saturating_sub(position),
+                    ));
+            match client.get_sumeragi_status_wire() {
                 Ok(status) => latest_lane_domain_progress(&status, lane_id, dataspace_id),
                 Err(err) => {
                     *last_error = Some(err.to_string());
                     None
                 }
-            },
-        )
+            }
+        })
         .collect()
 }
 
@@ -1336,17 +1518,30 @@ fn lane_domain_application_observations(
     dataspace_id: DataSpaceId,
     last_error: &mut Option<String>,
 ) -> Vec<LaneDomainProgress> {
-    peer_indices_for_committed_lane_evidence(network.peers().len())
+    let started = Instant::now();
+    let indices = peer_indices_for_committed_lane_evidence(network.peers().len());
+    let request_count = indices.len();
+    indices
         .into_iter()
-        .filter_map(
-            |index| match network.peers()[index].client().get_sumeragi_status_wire() {
+        .enumerate()
+        .filter_map(|(position, index)| {
+            let mut client = network.peers()[index].client();
+            client.torii_request_timeout =
+                client
+                    .torii_request_timeout
+                    .min(bounded_observer_request_timeout(
+                        started,
+                        OBSERVER_QUERY_TIMEOUT_CAP,
+                        request_count.saturating_sub(position),
+                    ));
+            match client.get_sumeragi_status_wire() {
                 Ok(status) => applied_lane_domain_progress(&status, lane_id, dataspace_id),
                 Err(err) => {
                     *last_error = Some(err.to_string());
                     None
                 }
-            },
-        )
+            }
+        })
         .collect()
 }
 
@@ -1355,10 +1550,22 @@ fn raw_lane_domain_observation_summaries(
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
 ) -> Vec<String> {
-    peer_indices_for_committed_lane_evidence(network.peers().len())
+    let started = Instant::now();
+    let indices = peer_indices_for_committed_lane_evidence(network.peers().len());
+    let request_count = indices.len();
+    indices
         .into_iter()
-        .map(
-            |index| match network.peers()[index].client().get_sumeragi_status_wire() {
+        .enumerate()
+        .map(|(position, index)| {
+            let mut client = network.peers()[index].client();
+            client.torii_request_timeout = client.torii_request_timeout.min(
+                bounded_observer_request_timeout(
+                    started,
+                    OBSERVER_QUERY_TIMEOUT_CAP,
+                    request_count.saturating_sub(position),
+                ),
+            );
+            match client.get_sumeragi_status_wire() {
                 Ok(status) => {
                     let committed = status
                         .committed_lane_blocks
@@ -1443,8 +1650,8 @@ fn raw_lane_domain_observation_summaries(
                     )
                 }
                 Err(err) => format!("peer#{index}: status error={}", err),
-            },
-        )
+            }
+        })
         .collect()
 }
 
@@ -1455,10 +1662,23 @@ fn lane_payload_ownership_progress_observations(
     dataspace_id: DataSpaceId,
     last_error: &mut Option<String>,
 ) -> Vec<LanePayloadOwnershipProgress> {
-    lane_bounded_peer_indices(network, status_client, lane_id.as_u32())
+    let started = Instant::now();
+    let indices = lane_bounded_peer_indices(network, status_client, lane_id.as_u32());
+    let request_count = indices.len();
+    indices
         .into_iter()
-        .filter_map(
-            |index| match network.peers()[index].client().get_sumeragi_status_wire() {
+        .enumerate()
+        .filter_map(|(position, index)| {
+            let mut client = network.peers()[index].client();
+            client.torii_request_timeout =
+                client
+                    .torii_request_timeout
+                    .min(bounded_observer_request_timeout(
+                        started,
+                        OBSERVER_QUERY_TIMEOUT_CAP,
+                        request_count.saturating_sub(position),
+                    ));
+            match client.get_sumeragi_status_wire() {
                 Ok(status) => {
                     latest_lane_payload_ownership_progress(&status, lane_id, dataspace_id)
                 }
@@ -1466,8 +1686,8 @@ fn lane_payload_ownership_progress_observations(
                     *last_error = Some(err.to_string());
                     None
                 }
-            },
-        )
+            }
+        })
         .collect()
 }
 
@@ -2803,6 +3023,7 @@ struct CommittedSuccessOrHeightFallback {
 
 fn wait_for_committed_success_or_height_fallback_across_clients(
     mut observer_factory: impl FnMut() -> Vec<Client>,
+    tick_submitters: &[Client],
     entry_hash: HashOf<TransactionEntrypoint>,
     committed_context: &str,
     fallback_context: &str,
@@ -2835,8 +3056,9 @@ fn wait_for_committed_success_or_height_fallback_across_clients(
                 return Err(err);
             }
             eprintln!("[swap] committed outcome inconclusive; falling back to height barrier");
-            let barrier_status = wait_for_height_with_tick_timeout_across_clients(
+            let barrier_status = wait_for_height_with_tick_submitters_timeout_across_clients(
                 &mut observer_factory,
+                Some(tick_submitters),
                 pre_barrier_height.saturating_add(1),
                 fallback_context,
                 STATUS_WAIT_TIMEOUT,
@@ -3111,20 +3333,20 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
         BOB_KEYPAIR.private_key(),
         NEXUS_LANE_INDEX,
     );
-    let ds1_tick_submitters = lane_targeted_clients_for_lane(
+    let ds1_tick_submitters = vec![leader_targeted_client_for_lane(
         &network,
         &alice,
         &ALICE_ID,
         ALICE_KEYPAIR.private_key(),
         DS1_LANE_INDEX,
-    );
-    let ds2_tick_submitters = lane_targeted_clients_for_lane(
+    )];
+    let ds2_tick_submitters = vec![leader_targeted_client_for_lane(
         &network,
         &bob,
         &BOB_ID,
         BOB_KEYPAIR.private_key(),
         DS2_LANE_INDEX,
-    );
+    )];
     let neutral_tick_submitter_a_keypair = validator_authority_keypair(0);
     let neutral_tick_submitter_a_account = validator_authority_account_for_peer(0);
     let neutral_tick_submitter_a = leader_targeted_client_for_lane(
@@ -3389,7 +3611,13 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
             "summary".to_owned(),
         ];
         rt.block_on(async {
-            let validators = torii_json_get(&nexus_alice_submitter, &validators_path, &[]).await?;
+            let validators = torii_json_get_with_retry(
+                &nexus_alice_submitter,
+                &validators_path,
+                &[],
+                "DS1 validator query through Nexus ingress",
+            )
+            .await?;
             ensure!(
                 validators.routed_by.as_deref() == Some("proxy"),
                 "DS1 validator query through Nexus ingress should be proxied, observed {:?}",
@@ -3416,8 +3644,13 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                 expected_ds1_validators
             );
 
-            let account_assets =
-                torii_json_get(&nexus_alice_submitter, &account_assets_path, &[]).await?;
+            let account_assets = torii_json_get_with_retry(
+                &nexus_alice_submitter,
+                &account_assets_path,
+                &[],
+                "account assets query through Nexus ingress",
+            )
+            .await?;
             expect_local_or_proxy_fanout_headers(
                 &account_assets,
                 "account assets query through Nexus ingress",
@@ -3436,8 +3669,13 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                 account_asset_items
             );
 
-            let asset_definition =
-                torii_json_get(&nexus_alice_submitter, &asset_definition_path, &[]).await?;
+            let asset_definition = torii_json_get_with_retry(
+                &nexus_alice_submitter,
+                &asset_definition_path,
+                &[],
+                "asset definition query through Nexus ingress",
+            )
+            .await?;
             expect_local_or_proxy_fanout_headers(
                 &asset_definition,
                 "asset definition query through Nexus ingress",
@@ -3448,8 +3686,13 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                 asset_definition.body["id"].as_str()
             );
 
-            let account_summary =
-                torii_json_get(&nexus_alice_submitter, &account_summary_path, &[]).await?;
+            let account_summary = torii_json_get_with_retry(
+                &nexus_alice_submitter,
+                &account_summary_path,
+                &[],
+                "dataspace summary query through Nexus ingress",
+            )
+            .await?;
             expect_local_or_proxy_fanout_headers(
                 &account_summary,
                 "dataspace summary query through Nexus ingress",
@@ -3597,6 +3840,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                     setup_grants_authoritative_lane_index,
                 )
             },
+            &[],
             setup_grants_entry_hash,
             "setup grants committed outcome on authoritative observer",
             "setup grants commit barrier on authoritative observer",
@@ -3659,6 +3903,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                                 setup_grants_authoritative_lane_index,
                             )
                         },
+                        &[],
                         setup_grants_retry_entry_hash,
                         "setup grants retry committed outcome on authoritative observer",
                         "setup grants retry commit barrier on authoritative observer",
@@ -3693,10 +3938,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
         let _phase = phase_timings.phase("setup grants: Nexus lane application");
         match wait_for_lane_application_progress_after(
             &network,
-            &[
-                neutral_tick_submitter_a.clone(),
-                neutral_tick_submitter_b.clone(),
-            ],
+            &[],
             setup_grants_lane,
             setup_grants_application_baseline.as_ref(),
             "setup grants Nexus lane application",
@@ -3720,7 +3962,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
         let _phase = phase_timings.phase("setup grants: query/assert");
         // Confirm Bob-facing routed views before proceeding to the swap path that depends on them.
         wait_for_account_permissions_across_clients(
-            std::slice::from_ref(&neutral_tick_submitter_a),
+            &[],
             || {
                 let mut clients = Vec::new();
                 for lane_index in [NEXUS_LANE_INDEX, DS1_LANE_INDEX, DS2_LANE_INDEX] {
@@ -3858,6 +4100,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                         NEXUS_LANE_INDEX,
                     )
                 },
+                &[],
                 successful_swap_entry_hash,
                 "successful swap confirmation on Nexus authoritative observer",
                 "successful swap barrier on Nexus authoritative observer (height fallback)",
@@ -4270,13 +4513,22 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
         for failure in soak_failures.iter().take(3) {
             eprintln!("[soak] failure detail: {failure}");
         }
-        // Treat soak as a stress signal instead of a hard gate under shared-host contention.
-        ensure!(
-            soak_passes > 0,
-            "soak produced zero successful iterations; failed {}",
-            soak_failures.len()
-        );
     }
+    let soak_gate_metrics = SoakGateMetrics {
+        iterations: soak_iterations,
+        passes: soak_passes,
+        failures: soak_failures.len(),
+        retries_used: soak_iteration_retries_used,
+    };
+    eprintln!(
+        "[soak] gate requires at least {} passes and at most {} retries",
+        soak_gate_minimum_passes(soak_iterations),
+        soak_gate_maximum_retries(soak_iterations)
+    );
+    // Evaluate retries even when every iteration eventually passes. Otherwise the inner retry
+    // loop can turn repeated transient consensus failures into a silent green PR result.
+    validate_soak_gate(soak_gate_metrics)
+        .map_err(|failure| eyre!("cross-dataspace soak quality gate failed: {failure}"))?;
     {
         let _phase = phase_timings.phase("execute failing swap + rollback verification");
         let mut failure_text = None;
@@ -4490,9 +4742,10 @@ mod tests {
         DS1_MANIFEST_HASH, DS2_ID_U64, DS2_LANE_INDEX, DS2_MANIFEST_HASH,
         ExpectedLaneValidatorBinding, KeyPair, LaneDomainProgress, LanePayloadOwnershipProgress,
         NEXUS_ALIAS, NEXUS_ID_U64, NEXUS_LANE_INDEX, OBSERVER_QUERY_TIMEOUT_CAP, PeerId,
-        RoutedJsonGetResponse, TOTAL_PEERS, VALIDATORS_PER_LANE, applied_lane_domain_progress,
-        bounded_observer_request_timeout, committed_lane_block_has_expected_quorum,
-        committed_tx_outcome_quorum, cross_dataspace_gas_account_id, duration_min_avg_max_secs,
+        RoutedJsonGetResponse, SoakGateFailure, SoakGateMetrics, TOTAL_PEERS, VALIDATORS_PER_LANE,
+        applied_lane_domain_progress, bounded_observer_request_timeout,
+        committed_lane_block_has_expected_quorum, committed_tx_outcome_quorum,
+        cross_dataspace_gas_account_id, duration_min_avg_max_secs,
         expect_local_or_proxy_fanout_headers, expected_lane_binding_for_peer,
         is_expected_rollback_failure_text, is_inconclusive_blocking_submit_error,
         is_inconclusive_committed_outcome_error, lane_domain_progress_is_after_baseline,
@@ -4503,7 +4756,7 @@ mod tests {
         peer_indices_for_committed_lane_evidence, quorum_lane_domain_progress,
         quorum_lane_payload_ownership_progress, render_error_with_debug, render_rejection_reason,
         routed_header_string, should_submit_tick, stake_asset_definition_id,
-        stake_asset_id_literal, total_balance_observer_request_slots,
+        stake_asset_id_literal, total_balance_observer_request_slots, validate_soak_gate,
         validator_authority_account_for_peer, validator_authority_seed,
     };
     use iroha::crypto::{Hash, HashOf};
@@ -4577,6 +4830,79 @@ mod tests {
         assert_eq!(parse_positive_usize_override(Some("1.5"), 10), 10);
         assert_eq!(parse_positive_usize_override(Some("not-a-number"), 10), 10);
         assert_eq!(parse_positive_usize_override(Some(""), 10), 10);
+    }
+
+    #[test]
+    fn soak_gate_accepts_exact_pass_and_retry_boundaries() {
+        assert_eq!(
+            validate_soak_gate(SoakGateMetrics {
+                iterations: 10,
+                passes: 9,
+                failures: 1,
+                retries_used: 2,
+            }),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn soak_gate_rejects_pass_rate_below_boundary() {
+        assert_eq!(
+            validate_soak_gate(SoakGateMetrics {
+                iterations: 10,
+                passes: 8,
+                failures: 2,
+                retries_used: 0,
+            }),
+            Err(SoakGateFailure::PassRateBelowMinimum {
+                iterations: 10,
+                passes: 8,
+                minimum_passes: 9,
+            })
+        );
+    }
+
+    #[test]
+    fn soak_gate_rejects_excess_retries_even_when_every_iteration_passes() {
+        assert_eq!(
+            validate_soak_gate(SoakGateMetrics {
+                iterations: 10,
+                passes: 10,
+                failures: 0,
+                retries_used: 3,
+            }),
+            Err(SoakGateFailure::RetryBudgetExceeded {
+                iterations: 10,
+                retries_used: 3,
+                maximum_retries: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn soak_gate_rejects_inconsistent_or_empty_metrics() {
+        assert_eq!(
+            validate_soak_gate(SoakGateMetrics {
+                iterations: 10,
+                passes: 9,
+                failures: 0,
+                retries_used: 0,
+            }),
+            Err(SoakGateFailure::AccountingMismatch {
+                iterations: 10,
+                passes: 9,
+                failures: 0,
+            })
+        );
+        assert_eq!(
+            validate_soak_gate(SoakGateMetrics {
+                iterations: 0,
+                passes: 0,
+                failures: 0,
+                retries_used: 0,
+            }),
+            Err(SoakGateFailure::NoIterations)
+        );
     }
 
     #[test]
@@ -4920,6 +5246,7 @@ mod tests {
             proposal_view: 0,
             lane_id,
             dataspace_id,
+            lane_incarnation: test_hash(0x0F),
             lane_block_height,
             lane_block_view: 0,
             subject_hash: test_hash(0x10),

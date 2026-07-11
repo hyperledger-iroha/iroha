@@ -52,6 +52,11 @@ async fn zk_vk_get_returns_record_with_key() {
     rec.key = Some(vk);
     rec.status = ConfidentialStatus::Active;
     rec.gas_schedule_id = Some("test_schedule".into());
+    rec.namespace = "offline_kagemusha".into();
+    rec.owner_manifest_id = Some("builtin:confidential-unshield-v3".into());
+    rec.activation_height = Some(10);
+    rec.withdraw_height = Some(20);
+    let expected_record = rec.clone();
     let id = VerifyingKeyId::new(backend, name.clone());
     // Drop block view before mutating state via helper to avoid borrow conflict
     drop(stx);
@@ -115,6 +120,22 @@ async fn zk_vk_get_returns_record_with_key() {
         record.get("status").and_then(|x| x.as_str()),
         Some("Active")
     );
+    assert_eq!(
+        record.get("namespace").and_then(|x| x.as_str()),
+        Some(expected_record.namespace.as_str())
+    );
+    assert_eq!(
+        record.get("owner_manifest_id").and_then(|x| x.as_str()),
+        expected_record.owner_manifest_id.as_deref()
+    );
+    assert_eq!(
+        record.get("activation_height").and_then(|x| x.as_u64()),
+        expected_record.activation_height
+    );
+    assert_eq!(
+        record.get("withdraw_height").and_then(|x| x.as_u64()),
+        expected_record.withdraw_height
+    );
     // key section
     let key = record
         .get("key")
@@ -126,6 +147,31 @@ async fn zk_vk_get_returns_record_with_key() {
         .decode(b64)
         .unwrap();
     assert_eq!(decoded, vk_bytes);
+
+    let record_b64 = v
+        .get("record_norito_base64")
+        .and_then(|x| x.as_str())
+        .expect("record_norito_base64");
+    let record_archive = base64::engine::general_purpose::STANDARD
+        .decode(record_b64)
+        .expect("decode canonical verifier-record archive");
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD.encode(&record_archive),
+        record_b64
+    );
+    assert_eq!(
+        record_archive,
+        norito::to_bytes(&expected_record).expect("encode expected verifier record")
+    );
+    let decoded_record: VerifyingKeyRecord =
+        norito::decode_from_bytes(&record_archive).expect("decode stored verifier-record archive");
+    assert_eq!(decoded_record, expected_record);
+    assert_eq!(
+        decoded_record.key.as_ref().map(|key| key.bytes.as_slice()),
+        Some(vk_bytes.as_slice())
+    );
+    assert_eq!(decoded_record.activation_height, Some(10));
+    assert_eq!(decoded_record.withdraw_height, Some(20));
 }
 
 #[tokio::test]

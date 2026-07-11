@@ -12,7 +12,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::capacity::{DeclarationWindow, ReplicationPlan, ReplicationRelease};
+use crate::capacity::{DeclarationWindow, OutstandingOrder, ReplicationPlan, ReplicationRelease};
 
 /// Outstanding replication order tracked for utilisation accounting.
 #[derive(Debug, Clone, Copy)]
@@ -423,6 +423,37 @@ impl CapacityMeter {
             declared_gib: committed_gib,
             effective_gib: committed_gib,
             deductions_gib: 0,
+            ..WindowCounters::default()
+        };
+        guard.smoothing.reset();
+    }
+
+    /// Rebuild declaration and outstanding-order gauges from a durable capacity checkpoint.
+    pub(crate) fn restore_capacity_runtime(
+        &self,
+        committed_gib: u64,
+        window: DeclarationWindow,
+        outstanding: &[OutstandingOrder],
+    ) {
+        let mut guard = self.state.write().expect("metering state poisoned");
+        guard.outstanding = outstanding
+            .iter()
+            .map(|order| {
+                (
+                    order.order_id,
+                    OutstandingAllocation {
+                        slice_gib: order.slice_gib,
+                        issued_at: order.issued_at,
+                    },
+                )
+            })
+            .collect();
+        guard.window = WindowCounters {
+            window_start_epoch: Some(window.valid_from_epoch),
+            window_end_epoch: Some(window.valid_until_epoch),
+            declared_gib: committed_gib,
+            effective_gib: committed_gib,
+            orders_issued: u64::try_from(outstanding.len()).unwrap_or(u64::MAX),
             ..WindowCounters::default()
         };
         guard.smoothing.reset();

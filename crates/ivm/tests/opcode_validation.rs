@@ -10,6 +10,9 @@ fn first_release_extension_opcodes_are_valid_but_reserved_iso_slot_is_invalid() 
     assert!(instruction::wide::is_valid_opcode(
         instruction::wide::memory::LDLIT
     ));
+    assert!(instruction::wide::is_valid_opcode(
+        instruction::wide::memory::LDI64
+    ));
     for opcode in [
         instruction::wide::control::JAL,
         instruction::wide::control::JMP,

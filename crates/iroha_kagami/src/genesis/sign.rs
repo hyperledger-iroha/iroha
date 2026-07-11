@@ -3,11 +3,20 @@ use std::{
     fs::File,
     io::{BufWriter, Write},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use clap::Parser;
 use color_eyre::eyre::{WrapErr, eyre};
 use iroha_config::{base::toml::TomlSource, parameters::actual};
+use iroha_core::{
+    block::ValidBlock,
+    kura::Kura,
+    query::store::LiveQueryStore,
+    smartcontracts::isi::Registrable as _,
+    state::{State, World},
+    sumeragi::{VotingBlock, network_topology::Topology},
+};
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
 use iroha_data_model::{
     asset::AssetDefinitionAlias,
@@ -17,10 +26,11 @@ use iroha_data_model::{
     prelude::*,
 };
 use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
+use iroha_primitives::time::TimeSource;
 
 use super::{
     ConsensusPolicy, build_line_from_env, ensure_npos_parameters, generate::ConsensusModeArg,
-    validate_consensus_mode_for_line,
+    require_v2_wire_protocol_only, validate_consensus_mode_for_line,
 };
 use crate::{
     Outcome, RunArgs,
@@ -369,6 +379,109 @@ fn load_peer_config(config_path: &Path) -> Result<actual::Root, color_eyre::eyre
     })
 }
 
+fn bind_staged_sumeragi_v2_context(
+    genesis: RawGenesisTransaction,
+    genesis_key_pair: &KeyPair,
+    config: Option<&actual::Root>,
+    da_proof_policies: Option<DaProofPolicyBundle>,
+    confidential_policy_hash: [u8; 32],
+) -> Result<iroha_genesis::GenesisBlock, color_eyre::eyre::Error> {
+    let mut parameters = genesis
+        .sumeragi_v2_context_parameters()
+        .ok_or_else(|| eyre!("genesis manifest is missing required `sumeragi_v2` parameters"))?;
+    parameters.nexus_amx_context_hash = staged_sumeragi_v2_context_hash(
+        &genesis,
+        genesis_key_pair,
+        config,
+        da_proof_policies.as_ref(),
+        confidential_policy_hash,
+    )?
+    .into();
+
+    genesis
+        .with_sumeragi_v2_context_parameters(parameters)
+        .with_consensus_meta()
+        .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
+            genesis_key_pair,
+            da_proof_policies,
+            Some(confidential_policy_hash),
+        )
+}
+
+/// Stage a raw genesis transaction and return its exact Nexus/AMX consensus
+/// commitment without committing state or writing Kura.
+fn staged_sumeragi_v2_context_hash(
+    genesis: &RawGenesisTransaction,
+    genesis_key_pair: &KeyPair,
+    config: Option<&actual::Root>,
+    da_proof_policies: Option<&DaProofPolicyBundle>,
+    confidential_policy_hash: [u8; 32],
+) -> Result<iroha_crypto::Hash, color_eyre::eyre::Error> {
+    let provisional = genesis
+        .clone()
+        .with_consensus_meta()
+        .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
+            genesis_key_pair,
+            da_proof_policies.cloned(),
+            Some(confidential_policy_hash),
+        )?;
+
+    let authority = AccountId::new(genesis_key_pair.public_key().clone());
+    let world = World::with(
+        [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&authority)],
+        [Account::new(authority.clone()).build(&authority)],
+        [],
+    );
+    let kura = Kura::blank_kura_for_testing();
+    let mut state = State::new_with_chain_for_testing(
+        world,
+        Arc::clone(&kura),
+        LiveQueryStore::start_test(),
+        genesis.chain_id().clone(),
+    );
+    match config {
+        Some(config) => {
+            state.set_pipeline(config.pipeline.clone());
+            state
+                .set_nexus(config.nexus.clone())
+                .map_err(|error| eyre!("invalid Nexus config for staged genesis: {error}"))?;
+            state.set_crypto(config.crypto.clone());
+        }
+        None => {
+            state.set_pipeline(actual::Pipeline::default());
+            state
+                .set_nexus(actual::Nexus::default())
+                .map_err(|error| eyre!("invalid default Nexus config: {error}"))?;
+            state.set_crypto(actual::Crypto::default());
+        }
+    }
+
+    let voters = iroha_core::sumeragi::signed_genesis_voting_peers(&provisional)
+        .map_err(|error| eyre!("invalid signed Sumeragi v2 genesis roster: {error}"))?;
+    if voters.is_empty() {
+        return Err(eyre!(
+            "Sumeragi v2 genesis roster is empty; inject BLS topology entries and PoPs before signing"
+        ));
+    }
+    let topology = Topology::new(voters);
+    let mut voting_block: Option<VotingBlock> = None;
+    let (_valid, staged) = ValidBlock::validate_keep_voting_block(
+        provisional.0,
+        &topology,
+        genesis.chain_id(),
+        &authority,
+        &TimeSource::new_system(),
+        &state,
+        &mut voting_block,
+        false,
+    )
+    .unpack(|_| {})
+    .map_err(|(_block, error)| eyre!("staged genesis execution failed: {error}"))?;
+    let hash = iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&staged);
+    drop(staged);
+    Ok(hash)
+}
+
 fn should_auto_bootstrap_npos_validators(
     config_path: Option<&Path>,
 ) -> Result<bool, color_eyre::eyre::Error> {
@@ -423,6 +536,7 @@ impl<T: Write> RunArgs<T> for Args {
                 "genesis manifest missing consensus_mode; regenerate with `kagami genesis generate --consensus-mode <mode>`"
             )
         })?;
+        require_v2_wire_protocol_only(&genesis)?;
         let consensus_mode = consensus_mode_override.unwrap_or(manifest_consensus_mode);
         let params = genesis.effective_parameters();
         let staged_next_mode = params.sumeragi().next_mode();
@@ -493,18 +607,13 @@ impl<T: Write> RunArgs<T> for Args {
         )?;
         let da_proof_policies = resolve_da_proof_policies(self.config.as_deref())?;
         let confidential_policy_hash = resolve_confidential_policy_hash(self.config.as_deref())?;
+        let peer_config = self.config.as_deref().map(load_peer_config).transpose()?;
         let direct_sign_safe = topology_override.is_none()
             && next_consensus_mode.is_none()
             && self.mode_activation_height.is_none()
             && !needs_npos_bootstrap;
-        let genesis_block = if direct_sign_safe {
-            genesis
-                .with_consensus_mode(consensus_mode)
-                .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
-                    &genesis_key_pair,
-                    da_proof_policies,
-                    Some(confidential_policy_hash),
-                )?
+        let prepared_genesis = if direct_sign_safe {
+            genesis.with_consensus_mode(consensus_mode)
         } else {
             let mut builder = genesis.into_builder();
 
@@ -542,12 +651,14 @@ impl<T: Write> RunArgs<T> for Args {
                 .build_raw()
                 .with_consensus_mode(consensus_mode)
                 .with_consensus_meta()
-                .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
-                    &genesis_key_pair,
-                    da_proof_policies,
-                    Some(confidential_policy_hash),
-                )?
         };
+        let genesis_block = bind_staged_sumeragi_v2_context(
+            prepared_genesis,
+            &genesis_key_pair,
+            peer_config.as_ref(),
+            da_proof_policies,
+            confidential_policy_hash,
+        )?;
 
         eprintln!("Genesis public key: {}", genesis_key_pair.public_key());
 
@@ -719,6 +830,7 @@ mod tests {
         fs,
         io::{BufWriter, Write},
         path::PathBuf,
+        str::FromStr,
     };
 
     use super::*;
@@ -726,18 +838,293 @@ mod tests {
     use iroha_data_model::{
         ChainId,
         asset::AssetDefinitionAlias,
-        block::decode_framed_signed_block,
+        block::{consensus_v2::SumeragiV2GenesisContextParameters, decode_framed_signed_block},
         isi::{
-            asset_alias::SetAssetDefinitionAlias, mint_burn::MintBox,
+            SetParameter, asset_alias::SetAssetDefinitionAlias, mint_burn::MintBox,
             staking::RegisterPublicLaneValidator,
         },
         parameter::{
             Parameter,
-            system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
+            system::{
+                SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter,
+                consensus_metadata,
+            },
         },
         transaction::Executable,
     };
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
+    use norito::derive::JsonDeserialize;
+
+    fn checked_in_config(path: &std::path::Path) -> actual::Root {
+        if let Ok(config) = load_peer_config(path) {
+            return config;
+        }
+
+        // Some archived/generated examples carry obsolete or runtime-secret
+        // fields outside consensus. Reparse only the two tables consumed by
+        // the v2 commitment, while retaining the source chain/discriminant,
+        // through the production config parser. No Nexus or Pipeline value is
+        // synthesized or decoded by this test helper.
+        let source = fs::read_to_string(path).expect("read checked-in config");
+        let header = || {
+            source
+                .lines()
+                .take_while(|line| !line.trim_start().starts_with('['))
+        };
+        let chain = header()
+            .find(|line| line.trim_start().starts_with("chain ="))
+            .expect("checked-in config has chain");
+        let chain_discriminant = header()
+            .find(|line| line.trim_start().starts_with("chain_discriminant ="))
+            .unwrap_or("");
+        let mut projected = format!(
+            r#"{chain}
+{chain_discriminant}
+public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+trusted_peers_pop = [
+  {{ public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }}
+]
+
+[network]
+address = "addr:127.0.0.1:1337#8F78"
+public_address = "addr:127.0.0.1:1337#8F78"
+
+[torii]
+address = "addr:127.0.0.1:8080#8942"
+
+[genesis]
+public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+
+[streaming]
+identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
+"#
+        );
+        let mut include = false;
+        for line in source.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with('[') {
+                let section = trimmed.trim_start_matches('[');
+                include = section.starts_with("nexus") || section.starts_with("pipeline");
+            }
+            if include {
+                projected.push_str(line);
+                projected.push('\n');
+            }
+        }
+        let table = toml::Table::from_str(&projected).unwrap_or_else(|error| {
+            panic!(
+                "failed to parse consensus projection from {}: {error}",
+                path.display()
+            )
+        });
+        actual::Root::from_toml_source(TomlSource::inline(table)).unwrap_or_else(|error| {
+            panic!(
+                "failed to validate consensus projection from {}: {error}",
+                path.display()
+            )
+        })
+    }
+
+    #[derive(Debug, Clone, JsonDeserialize, PartialEq, Eq)]
+    struct ConsensusHandshakeMetaTest {
+        mode: String,
+        bls_domain: String,
+        wire_proto_versions: Vec<u32>,
+        consensus_fingerprint: String,
+        sumeragi_v2: SumeragiV2GenesisContextParameters,
+    }
+
+    fn sign_checked_in_profile(
+        root: &std::path::Path,
+        genesis_path: &str,
+        config_path: &str,
+    ) -> ConsensusHandshakeMetaTest {
+        let args = Args {
+            genesis_file: root.join(genesis_path),
+            out_file: None,
+            topology: None,
+            peer_pops: Vec::new(),
+            private_key: Some(test_private_key_hex()),
+            seed: None,
+            algorithm: Algorithm::Ed25519,
+            config: Some(root.join(config_path)),
+            consensus_mode: None,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+        let mut writer = BufWriter::new(Vec::new());
+        args.run(&mut writer)
+            .unwrap_or_else(|error| panic!("failed to sign {genesis_path}: {error:#}"));
+        let bytes = writer.into_inner().expect("flush signed genesis buffer");
+        let block = decode_framed_signed_block(&bytes)
+            .unwrap_or_else(|error| panic!("failed to decode signed {genesis_path}: {error}"));
+
+        for transaction in block.external_transactions() {
+            if let Executable::Instructions(batch) = transaction.instructions() {
+                for instruction in batch {
+                    if let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>()
+                        && let Parameter::Custom(custom) = set_parameter.inner()
+                        && custom.id() == &consensus_metadata::handshake_meta_id()
+                    {
+                        return custom
+                            .payload()
+                            .try_into_any()
+                            .expect("decode signed consensus handshake metadata");
+                    }
+                }
+            }
+        }
+        panic!("signed {genesis_path} omitted consensus handshake metadata");
+    }
+
+    #[test]
+    fn checked_in_genesis_templates_are_current_v2_and_parse() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for path in [
+            "defaults/genesis.json",
+            "defaults/kagami/iroha3-dev/genesis.json",
+            "defaults/kagami/iroha3-nexus/genesis.json",
+            "defaults/kagami/iroha3-taira/genesis.json",
+            "defaults/nexus/genesis.json",
+            "configs/soranexus/nexus/genesis.json",
+            "configs/soranexus/taira/genesis.json",
+        ] {
+            let manifest = RawGenesisTransaction::from_path(root.join(path))
+                .unwrap_or_else(|error| panic!("checked-in {path} must parse: {error:#}"));
+            assert_eq!(manifest.wire_proto_versions(), &[2], "{path}");
+            let expected_domain = match manifest
+                .consensus_mode()
+                .expect("checked-in manifest has consensus mode")
+            {
+                SumeragiConsensusMode::Permissioned => {
+                    iroha_data_model::block::consensus_v2::PERMISSIONED_BLS_DOMAIN
+                }
+                SumeragiConsensusMode::Npos => {
+                    iroha_data_model::block::consensus_v2::NPOS_BLS_DOMAIN
+                }
+            };
+            assert_eq!(manifest.bls_domain(), Some(expected_domain), "{path}");
+            let context = manifest
+                .sumeragi_v2_context_parameters()
+                .unwrap_or_else(|| panic!("{path} omitted sumeragi_v2"));
+            assert_ne!(context.nexus_amx_context_hash, [0; 32], "{path}");
+            let refreshed = manifest.clone().with_consensus_meta();
+            assert_eq!(
+                manifest.consensus_fingerprint(),
+                refreshed.consensus_fingerprint(),
+                "{path} has a stale consensus fingerprint"
+            );
+        }
+    }
+
+    #[test]
+    fn checked_in_unsigned_templates_use_canonical_config_projection() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let fixtures = [
+            (
+                "defaults/kagami/iroha3-nexus/genesis.json",
+                "defaults/kagami/iroha3-nexus/config.toml",
+                true,
+            ),
+            (
+                "defaults/nexus/genesis.json",
+                "defaults/nexus/config.toml",
+                false,
+            ),
+            (
+                "configs/soranexus/nexus/genesis.json",
+                "configs/soranexus/nexus/config.toml",
+                false,
+            ),
+            (
+                "configs/soranexus/taira/genesis.json",
+                "configs/soranexus/taira/config.toml",
+                false,
+            ),
+        ];
+        for (genesis_path, config_path, has_sample_topology) in fixtures {
+            let manifest = RawGenesisTransaction::from_path(root.join(genesis_path))
+                .unwrap_or_else(|error| panic!("checked-in {genesis_path} must parse: {error:#}"));
+            let has_topology = manifest
+                .transactions()
+                .iter()
+                .any(|transaction| !transaction.topology().is_empty());
+            assert_eq!(has_topology, has_sample_topology, "{genesis_path}");
+            let config = checked_in_config(&root.join(config_path));
+            let expected = actual::sumeragi_v2_nexus_amx_context_hash(
+                &config.nexus,
+                &config.pipeline,
+                &[],
+                &[],
+            );
+            assert_eq!(
+                manifest
+                    .sumeragi_v2_context_parameters()
+                    .expect("v2 context")
+                    .nexus_amx_context_hash,
+                <[u8; 32]>::from(expected),
+                "{genesis_path} must carry the config-only projection; a deployable signer rebinds it after the final roster and operator-supplied public XOR identity are present"
+            );
+        }
+    }
+
+    #[test]
+    fn checked_in_profile_commitments_match_production_signing() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let fixtures = [
+            (
+                "defaults/kagami/iroha3-dev/genesis.json",
+                "defaults/kagami/iroha3-dev/config.toml",
+            ),
+            (
+                "defaults/kagami/iroha3-taira/genesis.json",
+                "defaults/kagami/iroha3-taira/config.toml",
+            ),
+        ];
+        for (genesis_path, config_path) in fixtures {
+            let manifest = RawGenesisTransaction::from_path(root.join(genesis_path))
+                .unwrap_or_else(|error| panic!("checked-in {genesis_path} must parse: {error:#}"));
+            let signed = sign_checked_in_profile(&root, genesis_path, config_path);
+            assert_eq!(signed.wire_proto_versions, vec![2], "{genesis_path}");
+            assert_eq!(
+                signed.sumeragi_v2,
+                manifest
+                    .sumeragi_v2_context_parameters()
+                    .expect("checked-in profile has v2 context"),
+                "{genesis_path} must carry the exact context produced by the production signing path"
+            );
+            assert_eq!(
+                Some(signed.consensus_fingerprint.as_str()),
+                manifest.consensus_fingerprint(),
+                "{genesis_path} fingerprint must cover the exact staged context"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "read-only maintainer utility for refreshing generated profile commitments"]
+    fn print_checked_in_profile_commitments() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for (genesis_path, config_path) in [
+            (
+                "defaults/kagami/iroha3-dev/genesis.json",
+                "defaults/kagami/iroha3-dev/config.toml",
+            ),
+            (
+                "defaults/kagami/iroha3-taira/genesis.json",
+                "defaults/kagami/iroha3-taira/config.toml",
+            ),
+        ] {
+            let signed = sign_checked_in_profile(&root, genesis_path, config_path);
+            eprintln!(
+                "{genesis_path}: {} {}",
+                hex::encode(signed.sumeragi_v2.nexus_amx_context_hash),
+                signed.consensus_fingerprint
+            );
+        }
+    }
 
     fn checked_genesis_sign_keypair() -> CryptoKeyPair {
         CryptoKeyPair::try_random().expect("genesis sign fixture key generation should succeed")
@@ -746,6 +1133,54 @@ mod tests {
     fn checked_genesis_sign_keypair_with_algorithm(algorithm: Algorithm) -> CryptoKeyPair {
         CryptoKeyPair::try_random_with_algorithm(algorithm)
             .expect("genesis sign fixture key generation should succeed")
+    }
+
+    fn replace_manifest_wire_protocols(path: &std::path::Path, versions: &[u32]) {
+        let bytes = fs::read(path).expect("read genesis fixture");
+        let mut value: norito::json::Value =
+            norito::json::from_slice(&bytes).expect("parse genesis fixture JSON");
+        value
+            .as_object_mut()
+            .expect("genesis fixture is an object")
+            .insert(
+                "wire_proto_versions".to_owned(),
+                norito::json::value::to_value(&versions.to_vec()).expect("serialize protocol list"),
+            );
+        fs::write(
+            path,
+            norito::json::to_json_pretty(&value).expect("serialize genesis fixture JSON"),
+        )
+        .expect("rewrite genesis fixture");
+    }
+
+    #[test]
+    fn signing_rejects_legacy_mixed_empty_and_duplicate_protocol_lists() {
+        for versions in [Vec::new(), vec![1], vec![1, 2], vec![2, 1], vec![2, 2]] {
+            let genesis_file = minimal_genesis_file();
+            replace_manifest_wire_protocols(&genesis_file, &versions);
+            let args = Args {
+                genesis_file,
+                out_file: None,
+                topology: None,
+                peer_pops: Vec::new(),
+                private_key: Some(test_private_key_hex()),
+                seed: None,
+                algorithm: Algorithm::Ed25519,
+                config: None,
+                consensus_mode: None,
+                next_consensus_mode: None,
+                mode_activation_height: None,
+            };
+            let error = args
+                .run(&mut BufWriter::new(Vec::new()))
+                .expect_err("non-canonical protocol list must be rejected before signing");
+            assert!(
+                error
+                    .to_string()
+                    .contains("exactly wire_proto_versions = [2]"),
+                "unexpected error for {versions:?}: {error}"
+            );
+        }
     }
 
     #[test]
@@ -1028,7 +1463,8 @@ mod tests {
         ))
         .set_topology(vec![GenesisTopologyEntry::new(existing_peer, existing_pop)])
         .build_raw()
-        .with_consensus_mode(SumeragiConsensusMode::Npos);
+        .with_consensus_mode(SumeragiConsensusMode::Npos)
+        .with_consensus_meta();
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
 
@@ -1097,7 +1533,8 @@ mod tests {
         .append_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)))
         .append_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)))
         .build_raw()
-        .with_consensus_mode(SumeragiConsensusMode::Permissioned);
+        .with_consensus_mode(SumeragiConsensusMode::Permissioned)
+        .with_consensus_meta();
 
         let genesis_file = tempfile::NamedTempFile::new().expect("create temp genesis file");
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
@@ -1777,7 +2214,8 @@ mod tests {
         let manifest =
             GenesisBuilder::new_without_executor(ChainId::from("test-chain"), PathBuf::from("."))
                 .build_raw()
-                .with_consensus_mode(SumeragiConsensusMode::Permissioned);
+                .with_consensus_mode(SumeragiConsensusMode::Permissioned)
+                .with_consensus_meta();
         let genesis_json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
         fs::write(genesis_file.path(), genesis_json).expect("write genesis json");
         let (_file, path) = genesis_file.keep().expect("persist temp genesis");
@@ -1814,7 +2252,8 @@ mod tests {
                     SumeragiNposParameters::default().into_custom_parameter(),
                 ))
                 .build_raw()
-                .with_consensus_mode(SumeragiConsensusMode::Npos);
+                .with_consensus_mode(SumeragiConsensusMode::Npos)
+                .with_consensus_meta();
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
         let (_file, path) = genesis_file.keep().expect("persist temp genesis");
@@ -1848,7 +2287,8 @@ mod tests {
             SumeragiNposParameters::default().into_custom_parameter(),
         ))
         .build_raw()
-        .with_consensus_mode(SumeragiConsensusMode::Npos);
+        .with_consensus_mode(SumeragiConsensusMode::Npos)
+        .with_consensus_meta();
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
         let (_file, path) = genesis_file.keep().expect("persist temp genesis");
@@ -1883,7 +2323,8 @@ mod tests {
                 ))
                 .build_raw()
                 .with_consensus_mode(SumeragiConsensusMode::Npos)
-                .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT);
+                .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT)
+                .with_consensus_meta();
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
         let (_file, path) = genesis_file.keep().expect("persist temp genesis");
@@ -1902,7 +2343,8 @@ mod tests {
                 ))
                 .build_raw()
                 .with_consensus_mode(SumeragiConsensusMode::Npos)
-                .with_chain_discriminant(crate::genesis::profile::NEXUS_CHAIN_DISCRIMINANT);
+                .with_chain_discriminant(crate::genesis::profile::NEXUS_CHAIN_DISCRIMINANT)
+                .with_consensus_meta();
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
         let (_file, path) = genesis_file.keep().expect("persist temp genesis");
@@ -1946,7 +2388,8 @@ mod tests {
                 ))
                 .build_raw()
                 .with_consensus_mode(SumeragiConsensusMode::Npos)
-                .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT);
+                .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT)
+                .with_consensus_meta();
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
         let (_file, path) = genesis_file.keep().expect("persist temp genesis");
@@ -1970,7 +2413,8 @@ mod tests {
                     SumeragiParameter::ModeActivationHeight(5),
                 ))
                 .build_raw()
-                .with_consensus_mode(SumeragiConsensusMode::Npos);
+                .with_consensus_mode(SumeragiConsensusMode::Npos)
+                .with_consensus_meta();
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
         let (_file, path) = genesis_file.keep().expect("persist temp genesis");

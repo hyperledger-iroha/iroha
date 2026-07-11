@@ -40,26 +40,26 @@ seiyaku Counter {
         NonPositiveDelta = 1,
     }
 
-    state value: i64;
+    state int value;
 
     hajimari() {
         value = 0;
     }
 
-    kotoage fn increment(delta: i64) -> i64 authorize("CanIncrementCounter") {
+    kotoage fn increment(int delta) -> int authorize("CanIncrementCounter") {
         require(delta > 0, CounterError::NonPositiveDelta);
-        let next = value + delta;
+        let int next = value + delta;
         value = next;
         return next;
     }
 
-    view fn current() -> i64 {
+    view fn current() -> int {
         return value;
     }
 }
 ```
 
-Error variants have explicit, stable, non-zero `u32` codes. Public failures use
+Error variants have explicit, stable, non-zero `int` codes. Public failures use
 `require(condition, Error::Variant)`; free-form strings are not a seiyaku error
 protocol. Arithmetic is checked, so `value + delta` deterministically fails and
 reverts if it overflows. Use an explicit `math::wrapping_*` operation only when
@@ -78,7 +78,7 @@ seiyaku TransferDemo {
             source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
             destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
             asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-            amount: Amount::from_i64(10),
+            amount: 10,
             dataspace: DataSpaceId::parse("0"),
         );
     }
@@ -136,8 +136,8 @@ In-memory `Map`, implicit defaults, unbounded iteration, recursive calls, and
 A reusable source has this shape:
 
 ```kotodama
-module AmountRules {
-    fn is_positive(amount: i64) -> bool {
+module QuantityRules {
+    fn is_positive(quantity amount) -> bool {
         return amount > 0;
     }
 }

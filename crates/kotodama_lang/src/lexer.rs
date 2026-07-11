@@ -77,14 +77,10 @@ pub enum TokenKind {
     Arrow,
     FatArrow,
     Ident(String),
-    /// Unsuffixed or explicitly suffixed integer token.
-    ///
-    /// The lexer retains the full V1 `u128` domain. The parser assigns an
-    /// `i64` type to unsuffixed literals and requires the adjacent `u128`
-    /// suffix for values of that type.
-    Number(u128),
-    /// Exact source spelling of a non-negative decimal Amount literal.
-    AmountLiteral(String),
+    /// Exact source spelling of an unsuffixed integer literal.
+    Number(String),
+    /// Exact source spelling of an unsuffixed base-10 decimal literal.
+    DecimalLiteral(String),
     String(String),
     Bytes(Vec<u8>),
     Plus,
@@ -283,8 +279,14 @@ fn lower_token_kind(kind: SyntaxKind, text: &str) -> Result<Option<TokenKind>, S
             return Ok(None);
         }
         SyntaxKind::Ident => TokenKind::Ident(text.to_owned()),
-        SyntaxKind::Number => TokenKind::Number(parse_integer_literal(text)?),
-        SyntaxKind::Amount => TokenKind::AmountLiteral(text.to_owned()),
+        SyntaxKind::Number => {
+            validate_integer_literal(text)?;
+            TokenKind::Number(text.to_owned())
+        }
+        SyntaxKind::Decimal => {
+            validate_decimal_literal(text)?;
+            TokenKind::DecimalLiteral(text.to_owned())
+        }
         SyntaxKind::String => TokenKind::String(decode_string_literal(text)?),
         SyntaxKind::Bytes => TokenKind::Bytes(decode_byte_literal(text)?),
         SyntaxKind::Eof => TokenKind::EOF,
@@ -396,28 +398,74 @@ fn lower_token_kind(kind: SyntaxKind, text: &str) -> Result<Option<TokenKind>, S
     Ok(Some(lowered))
 }
 
-fn parse_integer_literal(text: &str) -> Result<u128, String> {
-    let compact = text
-        .chars()
-        .filter(|character| *character != '_')
-        .collect::<String>();
-    let (digits, radix) = if let Some(digits) = compact
+fn validate_integer_literal(text: &str) -> Result<(), String> {
+    let (digits, radix) = if let Some(digits) = text
         .strip_prefix("0x")
-        .or_else(|| compact.strip_prefix("0X"))
+        .or_else(|| text.strip_prefix("0X"))
     {
         (digits, 16)
-    } else if let Some(digits) = compact
+    } else if let Some(digits) = text
         .strip_prefix("0b")
-        .or_else(|| compact.strip_prefix("0B"))
+        .or_else(|| text.strip_prefix("0B"))
     {
         (digits, 2)
     } else {
-        (compact.as_str(), 10)
+        (text, 10)
     };
     if digits.is_empty() {
         return Err("integer literal requires at least one digit".to_owned());
     }
-    u128::from_str_radix(digits, radix).map_err(|_| "numeric literal overflow".to_owned())
+    validate_digit_component(digits, radix, "integer")?;
+    Ok(())
+}
+
+fn validate_decimal_literal(text: &str) -> Result<(), String> {
+    let (coefficient, exponent) = text
+        .split_once(['e', 'E'])
+        .map_or((text, None), |(coefficient, exponent)| {
+            (coefficient, Some(exponent))
+        });
+    if exponent.is_some_and(|exponent| exponent.contains(['e', 'E'])) {
+        return Err("decimal literal contains more than one exponent".to_owned());
+    }
+    let (whole, fractional) = coefficient
+        .split_once('.')
+        .map_or((coefficient, None), |(whole, fractional)| {
+            (whole, Some(fractional))
+        });
+    if fractional.is_some_and(|fractional| fractional.contains('.')) {
+        return Err("decimal literal contains more than one decimal point".to_owned());
+    }
+    validate_digit_component(whole, 10, "decimal whole-number")?;
+    if let Some(fractional) = fractional {
+        validate_digit_component(fractional, 10, "decimal fractional")?;
+    }
+    if let Some(exponent) = exponent {
+        let digits = exponent
+            .strip_prefix(['+', '-'])
+            .unwrap_or(exponent);
+        validate_digit_component(digits, 10, "decimal exponent")?;
+    }
+    if fractional.is_none() && exponent.is_none() {
+        return Err("decimal literal requires a decimal point or exponent".to_owned());
+    }
+    Ok(())
+}
+
+fn validate_digit_component(text: &str, radix: u32, context: &str) -> Result<(), String> {
+    if text.is_empty()
+        || text.starts_with('_')
+        || text.ends_with('_')
+        || text.contains("__")
+        || !text
+            .chars()
+            .all(|character| character == '_' || character.is_digit(radix))
+    {
+        return Err(format!(
+            "{context} digits require underscores only between valid base-{radix} digits"
+        ));
+    }
+    Ok(())
 }
 
 fn raw_literal_contents(text: &str) -> Option<&str> {
@@ -673,7 +721,7 @@ mod tests {
         let spellings = tokens
             .iter()
             .filter_map(|token| match &token.kind {
-                TokenKind::AmountLiteral(spelling) => Some(spelling.as_str()),
+                TokenKind::DecimalLiteral(spelling) => Some(spelling.as_str()),
                 _ => None,
             })
             .collect::<Vec<_>>();

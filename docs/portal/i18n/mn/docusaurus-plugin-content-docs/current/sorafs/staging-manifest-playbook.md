@@ -90,7 +90,7 @@ translation_last_reviewed: 2026-02-07
    ```bash
    sorafs-fetch \
      --plan fixtures/chunk_fetch_specs.json \
-     --gateway-provider name=staging,provider-id=<hex>,base-url=https://staging-gateway/,stream-token=<base64> \
+     --gateway-provider name=staging,provider-id=<hex>,gateway-key=<ed25519-public-key-hex>,base-url=https://staging-gateway/,stream-token=<base64> \
      --gateway-manifest-id <manifest_id_hex> \
      --gateway-chunker-handle sorafs.sf1@1.0.0 \
      --json-out=reports/staging_manifest.json

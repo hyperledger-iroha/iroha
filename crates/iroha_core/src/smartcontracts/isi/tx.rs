@@ -1,18 +1,22 @@
 //! Implementations for transaction queries.
 
-use std::{collections::BTreeSet, num::NonZeroUsize};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroUsize,
+};
 
 use eyre::Result;
-use iroha_crypto::HashOf;
+use iroha_crypto::{Hash, HashOf, MerkleTree};
 use iroha_data_model::{
     AccountId,
-    block::{BlockHeader, SignedBlock},
+    block::{BlockHeader, CertifiedMergeLedgerReference, SignedBlock},
+    merge::MergeLedgerEntry,
     prelude::*,
     query::{
-        CommittedTransaction, CommittedTxFilters, dsl::CompoundPredicate,
-        error::QueryExecutionFail, json::PredicateJson,
+        CertifiedMergeTransactionInclusion, CommittedTransaction, CommittedTxFilters,
+        dsl::CompoundPredicate, error::QueryExecutionFail, json::PredicateJson,
     },
-    transaction::signed::TransactionEntrypoint,
+    transaction::{TransactionResult, signed::TransactionEntrypoint},
 };
 use iroha_telemetry::metrics;
 use nonzero_ext::nonzero;
@@ -461,10 +465,222 @@ fn block_committed_transactions(block: &SignedBlock) -> Vec<CommittedTransaction
                     result_hash,
                     result_proof,
                     result,
+                    merge_inclusion: None,
                 }
             },
         )
         .collect()
+}
+
+fn merge_query_corruption(message: impl std::fmt::Display) -> QueryExecutionFail {
+    QueryExecutionFail::Conversion(format!(
+        "certified merge transaction history is inconsistent: {message}"
+    ))
+}
+
+fn certified_merge_committed_transactions(
+    carrier_hash: HashOf<BlockHeader>,
+    reference: &CertifiedMergeLedgerReference,
+    entry: &MergeLedgerEntry,
+) -> Result<Vec<CommittedTransaction>, QueryExecutionFail> {
+    if !reference.matches_entry(entry) {
+        return Err(merge_query_corruption(
+            "carrier compact reference does not identify its full sidecar",
+        ));
+    }
+    let batch = entry.execution_batch.as_ref().ok_or_else(|| {
+        merge_query_corruption("execution carrier references an entry without an execution batch")
+    })?;
+    if batch.version != 1 || !crate::merge::merge_execution_batch_commitments_match(batch) {
+        return Err(merge_query_corruption(
+            "merge execution batch commitments are not canonical",
+        ));
+    }
+    let entrypoint_count = usize::try_from(batch.entrypoint_count)
+        .map_err(|_| merge_query_corruption("entrypoint count does not fit this platform"))?;
+    if entrypoint_count == 0 || u32::try_from(entrypoint_count).is_err() {
+        return Err(merge_query_corruption(
+            "entrypoint count is outside the supported Merkle proof range",
+        ));
+    }
+
+    let mut entrypoints = Vec::with_capacity(entrypoint_count);
+    let mut results = Vec::with_capacity(entrypoint_count);
+    for execution in &batch.lanes {
+        let lane_len = execution.entrypoints.len();
+        if lane_len == 0
+            || execution.entrypoint_hashes.len() != lane_len
+            || execution.results.len() != lane_len
+            || execution.result_hashes.len() != lane_len
+        {
+            return Err(merge_query_corruption(
+                "lane transcript arrays are empty or not aligned",
+            ));
+        }
+        if execution
+            .entrypoints
+            .iter()
+            .zip(&execution.entrypoint_hashes)
+            .any(|(entrypoint, expected)| Hash::from(entrypoint.hash()) != *expected)
+            || execution
+                .results
+                .iter()
+                .zip(&execution.result_hashes)
+                .any(|(result, expected)| Hash::from(result.hash()) != *expected)
+        {
+            return Err(merge_query_corruption(
+                "lane transcript content differs from its authenticated hashes",
+            ));
+        }
+        entrypoints.extend(execution.entrypoints.iter().cloned());
+        results.extend(execution.results.iter().cloned());
+    }
+    if entrypoints.len() != entrypoint_count || results.len() != entrypoint_count {
+        return Err(merge_query_corruption(
+            "flattened lane transcript differs from the certified entrypoint count",
+        ));
+    }
+
+    let entrypoint_hashes = entrypoints
+        .iter()
+        .map(TransactionEntrypoint::hash)
+        .collect::<Vec<_>>();
+    let result_hashes = results
+        .iter()
+        .map(TransactionResult::hash)
+        .collect::<Vec<_>>();
+    let entrypoint_tree = entrypoint_hashes
+        .iter()
+        .copied()
+        .collect::<MerkleTree<TransactionEntrypoint>>();
+    let result_tree = result_hashes
+        .iter()
+        .copied()
+        .collect::<MerkleTree<TransactionResult>>();
+    if entrypoint_tree.root() != Some(batch.entrypoint_merkle_root)
+        || result_tree.root() != Some(batch.result_merkle_root)
+    {
+        return Err(merge_query_corruption(
+            "reconstructed transaction proof roots differ from the certified batch",
+        ));
+    }
+
+    let inclusion = CertifiedMergeTransactionInclusion {
+        version: 1,
+        merge_entry_hash: entry.canonical_hash(),
+        merge_epoch_id: entry.epoch_id,
+        execution_batch_hash: batch.batch_hash,
+        entrypoint_count: batch.entrypoint_count,
+        entrypoint_merkle_root: batch.entrypoint_merkle_root,
+        result_merkle_root: batch.result_merkle_root,
+    };
+    let mut committed = Vec::with_capacity(entrypoint_count);
+    for index in (0..entrypoint_count).rev() {
+        let proof_index = u32::try_from(index)
+            .map_err(|_| merge_query_corruption("Merkle proof index exceeds u32"))?;
+        let entrypoint_proof = entrypoint_tree.get_proof(proof_index).ok_or_else(|| {
+            merge_query_corruption("entrypoint Merkle tree did not yield a required proof")
+        })?;
+        let result_proof = result_tree.get_proof(proof_index).ok_or_else(|| {
+            merge_query_corruption("result Merkle tree did not yield a required proof")
+        })?;
+        committed.push(CommittedTransaction {
+            block_hash: carrier_hash,
+            entrypoint_hash: entrypoint_hashes[index],
+            entrypoint_proof,
+            entrypoint: entrypoints[index].clone(),
+            result_hash: result_hashes[index],
+            result_proof,
+            result: results[index].clone(),
+            merge_inclusion: Some(inclusion.clone()),
+        });
+    }
+    Ok(committed)
+}
+
+fn committed_merge_transactions_by_height(
+    state_ro: &impl StateReadOnly,
+) -> Result<BTreeMap<NonZeroUsize, Vec<CommittedTransaction>>, QueryExecutionFail> {
+    let carried_entries = state_ro
+        .kura()
+        .committed_merge_execution_entries()
+        .map_err(merge_query_corruption)?;
+    let mut by_height = BTreeMap::new();
+    for (carrier, entry) in carried_entries {
+        let height = usize::try_from(carrier.block_height)
+            .ok()
+            .and_then(NonZeroUsize::new)
+            .ok_or_else(|| merge_query_corruption("carrier height is zero or out of range"))?;
+        let block = state_ro.kura().get_block(height).ok_or_else(|| {
+            merge_query_corruption(format!(
+                "canonical carrier block {} body is unavailable",
+                carrier.block_height
+            ))
+        })?;
+        if block.hash() != carrier.block_hash {
+            return Err(merge_query_corruption(format!(
+                "carrier record at height {} does not match the canonical block hash",
+                carrier.block_height
+            )));
+        }
+        let reference = block
+            .execution_context()
+            .and_then(|context| context.merge_entry.as_ref())
+            .ok_or_else(|| {
+                merge_query_corruption(format!(
+                    "carrier block {} has no certified merge reference",
+                    carrier.block_height
+                ))
+            })?;
+        let transactions =
+            certified_merge_committed_transactions(carrier.block_hash, reference, &entry)?;
+        if by_height.insert(height, transactions).is_some() {
+            return Err(merge_query_corruption(format!(
+                "multiple execution entries claim carrier height {}",
+                carrier.block_height
+            )));
+        }
+    }
+    Ok(by_height)
+}
+
+fn block_committed_transactions_with_merge(
+    block: &SignedBlock,
+    merge_by_height: &BTreeMap<NonZeroUsize, Vec<CommittedTransaction>>,
+) -> Vec<CommittedTransaction> {
+    let mut committed = block_committed_transactions(block);
+    if let Some(merge) = usize::try_from(block.header().height().get())
+        .ok()
+        .and_then(NonZeroUsize::new)
+        .and_then(|height| merge_by_height.get(&height))
+    {
+        // Merge execution precedes ordinary block transactions. Both groups are
+        // individually reversed so query order remains newest-first.
+        committed.extend(merge.iter().cloned());
+    }
+    committed
+}
+
+/// Materialize complete canonical transaction history in newest-first order.
+///
+/// This includes transactions executed by globally ordered certified merge
+/// sidecars. The durable sparse carrier index and every full sidecar are
+/// revalidated before any history is returned, so callers never receive a
+/// cache-truncated or partially fabricated view.
+///
+/// # Errors
+///
+/// Returns [`QueryExecutionFail::Conversion`] when durable carrier, block, or
+/// sidecar evidence is unavailable, malformed, or mutually inconsistent.
+pub fn committed_transactions_snapshot(
+    state_ro: &impl StateReadOnly,
+) -> Result<Vec<CommittedTransaction>, QueryExecutionFail> {
+    let merge_by_height = committed_merge_transactions_by_height(state_ro)?;
+    Ok(state_ro
+        .all_blocks(nonzero!(1_usize))
+        .rev()
+        .flat_map(|block| block_committed_transactions_with_merge(&block, &merge_by_height))
+        .collect())
 }
 
 impl ValidQuery for FindTransactions {
@@ -491,6 +707,15 @@ impl ValidQuery for FindTransactions {
             intersect_block_candidate_heights(&mut candidate_heights, candidates);
         }
 
+        let merge_by_height = committed_merge_transactions_by_height(state_ro)?;
+        if let Some(candidate_heights) = candidate_heights.as_mut() {
+            // The ordinary block index and sparse merge-carrier index are
+            // published by separate durable steps. Always union certified
+            // carrier heights before applying the predicate so a concurrent
+            // index refresh cannot create a false-negative query result.
+            candidate_heights.extend(merge_by_height.keys().copied());
+        }
+
         let iter: Box<dyn Iterator<Item = CommittedTransaction> + '_> =
             if let Some(candidate_heights) = candidate_heights {
                 Box::new(
@@ -498,7 +723,9 @@ impl ValidQuery for FindTransactions {
                         .into_iter()
                         .rev()
                         .filter_map(|height| state_ro.kura().get_block(height))
-                        .flat_map(|block| block_committed_transactions(&block)),
+                        .flat_map(move |block| {
+                            block_committed_transactions_with_merge(&block, &merge_by_height)
+                        }),
                 )
             } else {
                 Box::new(
@@ -506,7 +733,9 @@ impl ValidQuery for FindTransactions {
                         .all_blocks(nonzero!(1_usize))
                         // Iterate over blocks in descending order (most recent first).
                         .rev()
-                        .flat_map(|block| block_committed_transactions(&block)),
+                        .flat_map(move |block| {
+                            block_committed_transactions_with_merge(&block, &merge_by_height)
+                        }),
                 )
             };
 
@@ -521,9 +750,234 @@ impl ValidQuery for FindTransactions {
 
 #[cfg(test)]
 mod tests {
-    use iroha_data_model::prelude::{TransactionEntrypoint, TransactionResult};
+    use std::num::{NonZeroU64, NonZeroUsize};
 
+    use iroha_crypto::{Hash, HashOf, KeyPair};
+    use iroha_data_model::{
+        block::{
+            BlockHeader,
+            consensus::{
+                CertPhase, LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockProposalV1,
+                LaneBlockQcV1,
+            },
+        },
+        consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        merge::{
+            MergeExecutionBatch, MergeLaneExecution, MergeLedgerEntry, MergeQuorumCertificate,
+        },
+        prelude::{
+            AccountId, ChainId, DataSpaceId, DataTriggerSequence, InstructionBox, LaneId, PeerId,
+            TransactionBuilder, TransactionEntrypoint, TransactionResult,
+        },
+    };
+
+    use super::*;
     use crate::tx::tests::*;
+
+    fn sample_certified_merge_execution_entry() -> MergeLedgerEntry {
+        let chain_id: ChainId = "merge-query-projection".parse().expect("chain id");
+        let entrypoints = (0..2)
+            .map(|_| {
+                let key_pair = KeyPair::random();
+                let authority = AccountId::new(key_pair.public_key().clone());
+                TransactionEntrypoint::External(
+                    TransactionBuilder::new(chain_id.clone(), authority)
+                        .with_instructions::<InstructionBox>([])
+                        .sign(key_pair.private_key()),
+                )
+            })
+            .collect::<Vec<_>>();
+        let results = (0..entrypoints.len())
+            .map(|_| TransactionResult::from(Ok(DataTriggerSequence::default())))
+            .collect::<Vec<_>>();
+        let entrypoint_hashes = entrypoints
+            .iter()
+            .map(|entrypoint| Hash::from(entrypoint.hash()))
+            .collect::<Vec<_>>();
+        let result_hashes = results
+            .iter()
+            .map(|result| Hash::from(result.hash()))
+            .collect::<Vec<_>>();
+        let validator_set = Vec::<PeerId>::new();
+        let lane_incarnation = Hash::new(b"merge-query-lane-incarnation");
+        let mut descriptor = LaneBlockDescriptorV1 {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            lane_incarnation,
+            proposal_height: 2,
+            previous_lane_block_height: 0,
+            previous_lane_block_descriptor_hash: None,
+            lane_block_height: 1,
+            lane_block_view: 0,
+            subject_hash: Hash::new(b"merge-query-subject"),
+            payload_ownership_hash: Hash::new(b"merge-query-ownership"),
+            rbc_instance_hash: Hash::new(b"merge-query-rbc"),
+            accepted_candidate_indices: vec![0, 1],
+            accepted_transaction_hashes: entrypoint_hashes.clone(),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set: validator_set.clone(),
+            validator_count: 0,
+            min_quorum: 0,
+            qc_mode_tag: "merge-query-test".to_owned(),
+            descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+        let mut proposal = LaneBlockProposalV1 {
+            descriptor,
+            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            payload_block_hint: None,
+        };
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        let qc = |phase| LaneBlockQcV1 {
+            body: proposal.vote_body(phase),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set: validator_set.clone(),
+            signers_bitmap: Vec::new(),
+            bls_aggregate_signature: Vec::new(),
+            payload_availability_qc: None,
+        };
+        let prepare_qc = qc(CertPhase::Prepare);
+        let commit_qc = qc(CertPhase::Commit);
+        let settlement_commitment = LaneBlockCommitment {
+            block_height: 1,
+            lane_id: LaneId::SINGLE,
+            lane_incarnation,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            tx_count: 0,
+            total_local_micro: 0,
+            total_xor_due_micro: 0,
+            total_xor_after_haircut_micro: 0,
+            total_xor_variance_micro: 0,
+            swap_metadata: None,
+            receipts: Vec::new(),
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
+        };
+        let execution = MergeLaneExecution {
+            source_bundle: vec![1],
+            source_bundle_hash: Hash::new(b"merge-query-source"),
+            proposal: proposal.clone(),
+            origin_proposal: proposal,
+            prepare_qc,
+            commit_qc,
+            signer_proofs: Vec::new(),
+            autonomous_chain_id_hash: Hash::new(b"merge-query-chain"),
+            autonomous_epoch: 0,
+            autonomous_payload_hash: Hash::new(b"merge-query-payload"),
+            entrypoint_hashes,
+            entrypoints,
+            reservation_keys: vec![vec![1], vec![2]],
+            routing_plans: vec![vec![3], vec![4]],
+            native_amx_receipts: vec![None, None],
+            result_hashes,
+            results,
+            settlement_hash: iroha_data_model::nexus::compute_settlement_hash(
+                &settlement_commitment,
+            )
+            .expect("test settlement should hash canonically"),
+            settlement_commitment,
+        };
+        let lanes = vec![execution];
+        let entrypoint_count = 2;
+        let entrypoint_merkle_root = crate::merge::merge_execution_entrypoint_merkle_root(&lanes)
+            .expect("non-empty entrypoint tree");
+        let result_merkle_root = crate::merge::merge_execution_result_merkle_root(&lanes)
+            .expect("non-empty result tree");
+        let write_set_root = Hash::new(b"merge-query-write-set");
+        let base_state_hash = HashOf::from_untyped_unchecked(Hash::new(b"merge-query-base-state"));
+        let mut batch = MergeExecutionBatch {
+            version: 1,
+            base_state_height: 1,
+            base_state_hash,
+            application_block_header: BlockHeader::new(
+                NonZeroU64::new(2).expect("non-zero height"),
+                Some(HashOf::from_untyped_unchecked(Hash::new(
+                    b"merge-query-previous-block",
+                ))),
+                None,
+                None,
+                1,
+                0,
+            ),
+            execution_root: crate::merge::merge_execution_root(&lanes),
+            lanes,
+            entrypoint_count,
+            entrypoint_merkle_root,
+            result_merkle_root,
+            application_write_set_root: Hash::new(b"merge-query-application-write-set"),
+            write_set_root,
+            expected_post_state_hash: crate::merge::merge_expected_post_state_hash(
+                1,
+                base_state_hash,
+                write_set_root,
+            ),
+            batch_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        batch.batch_hash = crate::merge::merge_execution_batch_hash(&batch);
+        let merge_validators = Vec::<PeerId>::new();
+        MergeLedgerEntry {
+            epoch_id: 1,
+            lane_catalog_hash: Hash::new(b"merge-query-catalog"),
+            active_lanes: Vec::new(),
+            incarnation_root: Hash::new(b"merge-query-incarnations"),
+            activation_root: Hash::new(b"merge-query-activations"),
+            lane_snapshots: Vec::new(),
+            global_state_root: Hash::new(b"merge-query-global-state"),
+            merge_qc: MergeQuorumCertificate::new(
+                0,
+                1,
+                2,
+                HashOf::from_untyped_unchecked(Hash::new(b"merge-query-previous-block")),
+                Hash::new(b"merge-query-chain"),
+                VALIDATOR_SET_HASH_VERSION_V1,
+                HashOf::new(&merge_validators),
+                merge_validators,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Hash::new(b"merge-query-message"),
+            ),
+            execution_batch: Some(batch),
+        }
+    }
+
+    #[test]
+    fn certified_merge_projection_is_reverse_ordered_and_rejects_tampering() {
+        let entry = sample_certified_merge_execution_entry();
+        let reference = CertifiedMergeLedgerReference::new(&entry);
+        let carrier_hash = HashOf::from_untyped_unchecked(Hash::new(b"merge-query-carrier-block"));
+
+        let committed = certified_merge_committed_transactions(carrier_hash, &reference, &entry)
+            .expect("canonical merge projection");
+        assert_eq!(committed.len(), 2);
+        assert_eq!(committed[0].entrypoint_proof.leaf_index(), 1);
+        assert_eq!(committed[1].entrypoint_proof.leaf_index(), 0);
+        assert!(
+            committed.iter().all(|tx| tx.block_hash == carrier_hash
+                && tx.verify_certified_merge_inclusion(&reference))
+        );
+
+        let mut wrong_reference = reference.clone();
+        wrong_reference.encoded_len = wrong_reference.encoded_len.saturating_add(1);
+        assert!(
+            certified_merge_committed_transactions(carrier_hash, &wrong_reference, &entry).is_err()
+        );
+
+        let mut tampered = entry;
+        tampered
+            .execution_batch
+            .as_mut()
+            .expect("execution batch")
+            .lanes[0]
+            .result_hashes[0] = Hash::new(b"forged-result-hash");
+        let tampered_reference = CertifiedMergeLedgerReference::new(&tampered);
+        assert!(
+            certified_merge_committed_transactions(carrier_hash, &tampered_reference, &tampered)
+                .is_err()
+        );
+    }
 
     /// Verifies that all per-field iterators over a committed block are consistent.
     #[tokio::test]
@@ -558,6 +1012,19 @@ mod tests {
             ("eve", 30),
         ]);
         let block = committed_block.as_ref();
+
+        let ordinary = block_committed_transactions(block);
+        let mut merge_by_height = BTreeMap::new();
+        merge_by_height.insert(
+            NonZeroUsize::new(
+                usize::try_from(block.header().height().get()).expect("height fits usize"),
+            )
+            .expect("non-zero block height"),
+            vec![ordinary[0].clone()],
+        );
+        let combined = block_committed_transactions_with_merge(block, &merge_by_height);
+        assert_eq!(combined.len(), ordinary.len() + 1);
+        assert_eq!(combined.last(), ordinary.first());
 
         // All entrypoint-related iterators yield the same number of elements.
         assert_eq!(10, block.entrypoint_hashes().len());

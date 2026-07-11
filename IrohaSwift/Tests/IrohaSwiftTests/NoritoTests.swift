@@ -36,16 +36,32 @@ final class NoritoTests: XCTestCase {
         XCTAssertEqual(frame.header.schema, noritoSchemaHash(forTypeName: typeName))
     }
 
-    func testNoritoDecodeFrameEnforcesGenericPaddingBoundary() {
-        let payload = Data([0x01, 0x02])
-        let framed = noritoEncode(typeName: "test.PaddingBoundary", payload: payload)
-        var exact = framed
-        exact.insert(contentsOf: [UInt8](repeating: 0, count: 64), at: NoritoHeader.encodedLength)
-        XCTAssertEqual(noritoDecodeFrame(exact)?.paddingLength, 64)
+    func testNoritoDecodeFrameEnforcesCanonicalHeaderPaddingLimit() throws {
+        let framed = noritoEncode(
+            typeName: "test.PaddingBoundary",
+            payload: Data([0x01, 0x02]),
+            flags: NoritoHeader.compactLen
+        )
 
-        var over = framed
-        over.insert(contentsOf: [UInt8](repeating: 0, count: 65), at: NoritoHeader.encodedLength)
-        XCTAssertNil(noritoDecodeFrame(over))
+        var maximallyPadded = framed
+        maximallyPadded.insert(
+            contentsOf: Data(repeating: 0, count: NoritoHeader.maxHeaderPadding),
+            at: NoritoHeader.encodedLength
+        )
+        let frame = try XCTUnwrap(noritoDecodeFrame(maximallyPadded))
+        XCTAssertEqual(frame.paddingLength, NoritoHeader.maxHeaderPadding)
+        XCTAssertEqual(frame.payload, Data([0x01, 0x02]))
+
+        var excessivelyPadded = framed
+        excessivelyPadded.insert(
+            contentsOf: Data(repeating: 0, count: NoritoHeader.maxHeaderPadding + 1),
+            at: NoritoHeader.encodedLength
+        )
+        XCTAssertNil(noritoDecodeFrame(excessivelyPadded))
+
+        var nonzeroPadding = framed
+        nonzeroPadding.insert(0x01, at: NoritoHeader.encodedLength)
+        XCTAssertNil(noritoDecodeFrame(nonzeroPadding))
     }
 
     func testNoritoDecodeFrameRejectsReservedFlags() {

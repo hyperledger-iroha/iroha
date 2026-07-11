@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-pragma solidity 0.8.24;
+pragma solidity 0.7.4;
+pragma experimental ABIEncoderV2;
 
 import "../../evm/sccp/SccpExactTransferCodec.sol";
-import "./TairaXOR.sol";
 
 interface ITairaXorTronToken {
     function bridge() external view returns (address);
@@ -26,7 +26,7 @@ interface ISccpTronExactVerifier {
     ) external view returns (bytes32 messageId, uint32 sourceDomain, bytes32 commitmentRoot);
 }
 
-/** Exact TRON/Taira route that atomically creates its immutable token. */
+/** Exact TRON/Taira route bound to one predeployed immutable token. */
 contract TairaXorSccpBridge {
     struct VerifierPolicyV1 {
         address verifierAddress;
@@ -112,14 +112,17 @@ contract TairaXorSccpBridge {
     }
 
     constructor(
+        address tokenAddress,
         VerifierPolicyV1 memory configuredVerifierPolicy,
         uint8 configuredTronProfile,
         uint32 configuredRouteRevision
     ) {
         require(
-            configuredVerifierPolicy.verifierAddress != address(0),
-            "Verifier address is required"
+            tokenAddress != address(0) && configuredVerifierPolicy.verifierAddress != address(0),
+            "Zero bridge address"
         );
+        require(tokenAddress != configuredVerifierPolicy.verifierAddress,
+            "Bridge roles must differ");
         require(configuredTronProfile >= 10 && configuredTronProfile <= 12,
             "Unsupported TRON profile");
         bytes32 configuredNetworkId = _networkIdWord(configuredTronProfile);
@@ -164,11 +167,7 @@ contract TairaXorSccpBridge {
             "SORA finality anchor hash mismatch"
         );
 
-        TairaXOR deployedToken = new TairaXOR(address(this));
-        address tokenAddress = address(deployedToken);
         ITairaXorTronToken configuredToken = ITairaXorTronToken(tokenAddress);
-        require(tokenAddress != configuredVerifierPolicy.verifierAddress,
-            "Bridge roles must differ");
         require(configuredToken.bridge() == address(this), "Token route mismatch");
         bytes32 actualTokenCodeHash = _codeHash(tokenAddress);
         require(actualTokenCodeHash != bytes32(0) && actualTokenCodeHash != EMPTY_CODE_HASH,
@@ -508,7 +507,7 @@ contract TairaXorSccpBridge {
     function _codeHash(address account) private view returns (bytes32 codeHash) {
         assembly { codeHash := extcodehash(account) }
     }
-    function _chainId() private view returns (uint256 value) {
+    function _chainId() private pure returns (uint256 value) {
         assembly { value := chainid() }
     }
 }

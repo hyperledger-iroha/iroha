@@ -58,6 +58,13 @@ impl<'a> norito::core::DecodeFromSlice<'a> for TrustTestMessage {
 
 #[allow(clippy::too_many_lines)]
 fn make_config(addr: &SocketAddr, trust_gossip: bool) -> Config {
+    // Admission puzzles are covered by `p2p_puzzle`; keeping them out of this
+    // suite makes trust-gossip timing assertions test only gossip behavior.
+    let pow = SoranetPow {
+        required: false,
+        puzzle: None,
+        ..SoranetPow::default()
+    };
     Config {
         address: WithOrigin::inline(addr.clone()),
         public_address: WithOrigin::inline(addr.clone()),
@@ -72,7 +79,7 @@ fn make_config(addr: &SocketAddr, trust_gossip: bool) -> Config {
             kem_id: 1,
             sig_id: 1,
             resume_hash: None,
-            pow: SoranetPow::default(),
+            pow,
         },
         soranet_privacy: SoranetPrivacy::default(),
         soranet_vpn: SoranetVpn::default(),
@@ -315,13 +322,6 @@ async fn trust_gossip_disabled_drops_frames_and_keeps_peer_gossip() {
         }
     };
 
-    let peer_a = Peer::new(addr_a.clone(), kp_a.public_key().clone());
-    let peer_b = Peer::new(addr_b.clone(), kp_b.public_key().clone());
-    connect_topology(&net_a, &net_b, &peer_a, &peer_b);
-    wait_for_peer(&net_a).await;
-    wait_for_peer(&net_b).await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
     let (mut rx_a, mut rx_b) = {
         let (tx_a, rx_a) = mpsc::channel(4);
         let (tx_b, rx_b) = mpsc::channel(4);
@@ -333,6 +333,13 @@ async fn trust_gossip_disabled_drops_frames_and_keeps_peer_gossip() {
             .expect("subscribe net_b");
         (rx_a, rx_b)
     };
+
+    let peer_a = Peer::new(addr_a.clone(), kp_a.public_key().clone());
+    let peer_b = Peer::new(addr_b.clone(), kp_b.public_key().clone());
+    connect_topology(&net_a, &net_b, &peer_a, &peer_b);
+    wait_for_peer(&net_a).await;
+    wait_for_peer(&net_b).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
 
     net_a.post(Post {
         data: TrustTestMessage::Trust(1),
@@ -417,13 +424,6 @@ async fn trust_gossip_enabled_reaches_both_peers() {
         }
     };
 
-    let peer_a = Peer::new(addr_a.clone(), kp_a.public_key().clone());
-    let peer_b = Peer::new(addr_b.clone(), kp_b.public_key().clone());
-    connect_topology(&net_a, &net_b, &peer_a, &peer_b);
-    wait_for_peer(&net_a).await;
-    wait_for_peer(&net_b).await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
     let (mut rx_a, mut rx_b) = {
         let (tx_a, rx_a) = mpsc::channel(4);
         let (tx_b, rx_b) = mpsc::channel(4);
@@ -435,6 +435,13 @@ async fn trust_gossip_enabled_reaches_both_peers() {
             .expect("subscribe net_b");
         (rx_a, rx_b)
     };
+
+    let peer_a = Peer::new(addr_a.clone(), kp_a.public_key().clone());
+    let peer_b = Peer::new(addr_b.clone(), kp_b.public_key().clone());
+    connect_topology(&net_a, &net_b, &peer_a, &peer_b);
+    wait_for_peer(&net_a).await;
+    wait_for_peer(&net_b).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
 
     net_a.post(Post {
         data: TrustTestMessage::Trust(10),

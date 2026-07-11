@@ -32,12 +32,12 @@ class ContractManifestTest {
         assertEquals(64, tagsType.nodes.first().listValue!!.capacity)
         assertEquals("List<Name, 64>", tagsType.canonicalTypeName)
         assertEquals(1, returnSchema.wordCount)
-        assertEquals("Result<(bool, u128), string>", returnSchema.canonicalTypeName)
+        assertEquals("Result<(bool, decimal), string>", returnSchema.canonicalTypeName)
         assertEquals(ContractTriggerRepeatsKind.INDEFINITELY, entrypoint.triggers.single().repeats.kind)
         assertNull(entrypoint.triggers.single().repeats.exactly)
         assertEquals("transfer", entrypoint.triggers.single().callback.entrypoint)
         assertEquals("daily-settlement", entrypoint.triggers.single().metadata["purpose"])
-        assertEquals("StateMap<AccountId, Amount>", manifest.states!!.single().typeName)
+        assertEquals("StateMap<AccountId, quantity>", manifest.states!!.single().typeName)
         assertEquals(1001, manifest.errorCodes!!.single().code)
         assertEquals("ja", manifest.kotoba!!.single().translations.last().language)
         assertEquals("ed25519:fixture", manifest.provenance!!.signer)
@@ -99,7 +99,7 @@ class ContractManifestTest {
         val listNode = """{"kind":"List","value":{"capacity":1}},"""
         val leafNode = """{"kind":"Leaf","value":{"kind":"Int","value":null}}"""
         val validNodes = listNode.repeat(255) + leafNode
-        var validTypeName = "i64"
+        var validTypeName = "int"
         repeat(255) { validTypeName = "List<$validTypeName, 1>" }
 
         val valid = parseBoundarySchema(validNodes, validTypeName)
@@ -120,7 +120,7 @@ class ContractManifestTest {
         )
         malformed.forEach { nodes ->
             assertFailsWith<IllegalStateException> {
-                parseBoundarySchema(nodes, "i64")
+                parseBoundarySchema(nodes, "int")
             }
         }
     }
@@ -186,7 +186,7 @@ class ContractManifestTest {
             "AssetView" to listOf(
                 structNode("AssetView", "id", "amount"),
                 leafNode("AssetId"),
-                leafNode("U128"),
+                leafNode("Decimal"),
             ),
             "AssetDefinitionView" to listOf(
                 structNode(
@@ -203,7 +203,7 @@ class ContractManifestTest {
                 optionNode,
                 leafNode("Bool"),
                 leafNode("AccountId"),
-                leafNode("Amount"),
+                leafNode("Quantity"),
                 leafNode("Json"),
             ),
             "DomainView" to listOf(
@@ -310,7 +310,7 @@ class ContractManifestTest {
             "AssetView" -> listOf(
                 structNode(name, "id", "amount"),
                 leafNode("AssetId"),
-                leafNode("Amount"),
+                leafNode("Quantity"),
             )
             "AssetDefinitionView" -> listOf(
                 structNode(name, "id", "name", "description", "owned_by", "total_quantity", "metadata"),
@@ -319,7 +319,7 @@ class ContractManifestTest {
                 optionNode,
                 leafNode("String"),
                 leafNode("AccountId"),
-                leafNode("Amount"),
+                leafNode("Quantity"),
                 leafNode("Json"),
             )
             "DomainView" -> listOf(
@@ -379,7 +379,7 @@ class ContractManifestTest {
                   "argument_schema":{"fields":[
                     {"name":"request","ty":{"nodes":[
                       {"kind":"Struct","value":{"name":"Transfer","fields":["amount","memo"]}},
-                      {"kind":"Leaf","value":{"kind":"Amount","value":null}},
+                      {"kind":"Leaf","value":{"kind":"Quantity","value":null}},
                       {"kind":"Option","value":null},
                       {"kind":"Leaf","value":{"kind":"String","value":null}}
                     ]}},
@@ -388,12 +388,12 @@ class ContractManifestTest {
                       {"kind":"Leaf","value":{"kind":"Name","value":null}}
                     ]}}
                   ]},
-                  "return_type":"Result<(bool, u128), string>",
+                  "return_type":"Result<(bool, decimal), string>",
                   "return_schema":{"nodes":[
                     {"kind":"Result","value":null},
                     {"kind":"Tuple","value":2},
                     {"kind":"Leaf","value":{"kind":"Bool","value":null}},
-                    {"kind":"Leaf","value":{"kind":"U128","value":null}},
+                    {"kind":"Leaf","value":{"kind":"Decimal","value":null}},
                     {"kind":"Leaf","value":{"kind":"String","value":null}}
                   ]},
                   "permission":"TransferAsset",
@@ -410,7 +410,7 @@ class ContractManifestTest {
                     "callback":{"namespace":null,"entrypoint":"transfer"}
                   }]
                 }],
-                "states":[{"name":"Balances","type_name":"StateMap<AccountId, Amount>"}],
+                "states":[{"name":"Balances","type_name":"StateMap<AccountId, quantity>"}],
                 "error_codes":[{"namespace":"TransferError","name":"InsufficientFunds","code":1001}],
                 "kotoba":[{
                   "msg_id":"transfer.denied",

@@ -3,6 +3,8 @@
 //! These structures represent the parsed Kotodama source surface accepted by
 //! the compiler.
 
+use iroha_primitives::bigint::BigInt;
+
 use crate::source::{SourceRange, TextRange};
 
 /// Stable identity assigned when a spanned AST node enters resolved HIR.
@@ -602,14 +604,10 @@ pub enum Expr {
     /// Native canonical JSON array construction.
     JsonArray(Vec<Expr>),
     Bool(bool),
-    Number(i64),
-    /// Canonical text of an explicitly `u128`-suffixed integer literal.
-    ///
-    /// The historical variant name is internal; V1 source does not support
-    /// decimal-fraction literals.
-    Decimal(String),
-    /// Exact source spelling of a non-negative decimal Amount literal.
-    AmountLiteral(String),
+    /// A source `int` literal after one signed-domain range check.
+    IntLiteral(BigInt),
+    /// Exact source spelling of an exact base-10 `decimal` literal.
+    DecimalLiteral(String),
     String(String),
     Bytes(Vec<u8>),
     Ident(String),
@@ -932,7 +930,7 @@ fn normalize_expr_provenance(expression: &mut Expr, action: ProvenanceAction) ->
             }
         }
         ProvenanceAction::Strip => loop {
-            let current = std::mem::replace(expression, Expr::Number(0));
+            let current = std::mem::replace(expression, Expr::IntLiteral(BigInt::zero()));
             match current {
                 Expr::Source {
                     expression: inner, ..
@@ -1166,9 +1164,8 @@ fn transform_program_provenance(program: &mut Program, action: ProvenanceAction)
                         .iter_mut()
                         .map(|entry| Pending::Expr(&mut entry.value)),
                 ),
-                Expr::Number(_)
-                | Expr::Decimal(_)
-                | Expr::AmountLiteral(_)
+                Expr::IntLiteral(_)
+                | Expr::DecimalLiteral(_)
                 | Expr::OptionNone
                 | Expr::Bool(_)
                 | Expr::String(_)
@@ -1424,9 +1421,8 @@ pub(crate) fn drop_program_iterative(program: Program) {
                     pending.extend(fields.into_iter().map(|field| Pending::Expr(field.value)))
                 }
                 Expr::Bool(_)
-                | Expr::Number(_)
-                | Expr::Decimal(_)
-                | Expr::AmountLiteral(_)
+                | Expr::IntLiteral(_)
+                | Expr::DecimalLiteral(_)
                 | Expr::OptionNone
                 | Expr::String(_)
                 | Expr::Bytes(_)
@@ -1443,7 +1439,7 @@ mod provenance_tests {
 
     fn deeply_sourced_program(depth: u32) -> Program {
         let old_source = SourceId(11);
-        let mut expression = Expr::Number(1);
+        let mut expression = Expr::IntLiteral(1);
         for index in (0..depth).rev() {
             expression = Expr::Source {
                 node: NodeId(index),
@@ -1492,7 +1488,7 @@ mod provenance_tests {
                     };
                     current = expr;
                 }
-                Expr::Number(1) => break,
+                Expr::IntLiteral(1) => break,
                 other => panic!("unexpected nested expression: {other:?}"),
             }
         }
@@ -1509,7 +1505,7 @@ mod provenance_tests {
             };
             current = expr;
         }
-        assert!(matches!(current, Expr::Number(1)));
+        assert!(matches!(current, Expr::IntLiteral(1)));
         drop_program_iterative(program);
     }
 }

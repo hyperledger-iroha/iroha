@@ -52,7 +52,7 @@ fn run() -> Result<(), String> {
                                 "use either --profile-id or --chunker-profile (not both)".into()
                             );
                         }
-                        opts.profile_handle = Some(value.trim().to_string());
+                        opts.profile_handle = Some(value.to_string());
                     }
                     "--provider-id" => opts.provider_id = Some(parse_hex_fixed::<32>(value)?),
                     "--stake-pool-id" => opts.stake_pool_id = Some(parse_hex_fixed::<32>(value)?),
@@ -147,24 +147,10 @@ fn handle_emit(opts: EmitOptions) -> Result<(), String> {
                 .into(),
         );
     }
-    let mut advert = build_advert(&opts)?;
-    let mut signature_verified = true;
-    if opts.signing_key_file.is_some() {
-        advert.signature_strict = true;
-        verify_advert_signature(&advert)
-            .map_err(|err| format!("signature validation failed: {err}"))?;
-    } else {
-        match verify_advert_signature(&advert) {
-            Ok(()) => {
-                advert.signature_strict = true;
-            }
-            Err(err) => {
-                advert.signature_strict = false;
-                signature_verified = false;
-                eprintln!("warning: signature validation failed: {err}");
-            }
-        }
-    }
+    let advert = build_advert(&opts)?;
+    verify_advert_signature(&advert)
+        .map_err(|err| format!("signature validation failed: {err}"))?;
+    let signature_verified = true;
 
     let bytes = norito::to_bytes(&advert).map_err(|err| err.to_string())?;
 
@@ -209,17 +195,9 @@ fn handle_verify(opts: VerifyOptions) -> Result<(), String> {
     advert
         .validate_with_body(now)
         .map_err(|err| err.to_string())?;
-    let mut signature_verified = true;
-    match verify_advert_signature(&advert) {
-        Ok(()) => {}
-        Err(err) => {
-            if advert.signature_strict {
-                return Err(format!("signature validation failed: {err}"));
-            }
-            signature_verified = false;
-            eprintln!("warning: signature validation failed: {err}");
-        }
-    }
+    verify_advert_signature(&advert)
+        .map_err(|err| format!("signature validation failed: {err}"))?;
+    let signature_verified = true;
 
     let report = build_report(&advert, &bytes, signature_verified);
     let mut report_string =
@@ -475,12 +453,13 @@ fn build_advert(opts: &EmitOptions) -> Result<ProviderAdvertV1, String> {
     })?;
 
     if let Some(signing_key) = signing_key.take() {
-        let body_bytes =
-            norito::to_bytes(&advert.body).map_err(|err| format!("encode advert body: {err}"))?;
-        let sig = signing_key.sign(&body_bytes);
         advert.signature.algorithm = SignatureAlgorithm::Ed25519;
         advert.signature.public_key = signing_key.verifying_key().to_bytes().to_vec();
-        advert.signature.signature = sig.to_bytes().to_vec();
+        advert.signature.signature = vec![0; 64];
+        let payload = advert
+            .signature_payload_bytes()
+            .map_err(|err| format!("encode advert envelope: {err}"))?;
+        advert.signature.signature = signing_key.sign(&payload).to_bytes().to_vec();
     }
 
     Ok(advert)
@@ -812,8 +791,8 @@ fn parse_capability(value: &str) -> Result<CapabilityTlv, String> {
         }
     };
     let payload = match (cap_type, payload_str) {
-        (CapabilityType::VendorReserved, Some(rest)) => parse_hex_vec(rest.trim())?,
-        (CapabilityType::SoraNetHybridPq, Some(rest)) => parse_soranet_pq(rest.trim())?
+        (CapabilityType::VendorReserved, Some(rest)) => parse_hex_vec(rest)?,
+        (CapabilityType::SoraNetHybridPq, Some(rest)) => parse_soranet_pq(rest)?
             .to_bytes()
             .map_err(|err| format!("invalid soranet-pq capability: {err}"))?,
         (CapabilityType::SoraNetHybridPq, None) => ProviderCapabilitySoranetPqV1 {
@@ -823,7 +802,7 @@ fn parse_capability(value: &str) -> Result<CapabilityTlv, String> {
         }
         .to_bytes()
         .map_err(|err| format!("invalid soranet-pq capability: {err}"))?,
-        (_, Some(rest)) => parse_hex_vec(rest.trim())?,
+        (_, Some(rest)) => parse_hex_vec(rest)?,
         _ => Vec::new(),
     };
     Ok(CapabilityTlv { cap_type, payload })
@@ -879,32 +858,31 @@ fn parse_range_capability(value: &str) -> Result<ProviderCapabilityRangeV1, Stri
     let mut max_span = None;
     let mut min_granularity = None;
     for part in value.split(',') {
-        let trimmed = part.trim();
-        if trimmed.is_empty() {
-            continue;
+        if part.is_empty() {
+            return Err("range-capability must not contain empty entries".to_string());
         }
-        let (key, raw) = trimmed.split_once('=').ok_or_else(|| {
-            format!("range-capability requires key=value entries, got: {trimmed}")
-        })?;
-        let key_lower = key.trim().to_ascii_lowercase();
-        let raw_trimmed = raw.trim();
+        require_no_ascii_whitespace(part, "range-capability entry")?;
+        let (key, raw) = part
+            .split_once('=')
+            .ok_or_else(|| format!("range-capability requires key=value entries, got: {part}"))?;
+        let key_lower = key.to_ascii_lowercase();
         match key_lower.as_str() {
             "max_span" | "max-chunk-span" | "max_chunk_span" => {
-                let span = parse_u32(raw_trimmed)?;
+                let span = parse_u32(raw)?;
                 max_span = Some(span);
             }
             "min_granularity" | "min-granularity" => {
-                let granularity = parse_u32(raw_trimmed)?;
+                let granularity = parse_u32(raw)?;
                 min_granularity = Some(granularity);
             }
             "sparse" | "supports_sparse_offsets" | "supports-sparse-offsets" => {
-                capability.supports_sparse_offsets = parse_bool(raw_trimmed)?;
+                capability.supports_sparse_offsets = parse_bool(raw)?;
             }
             "alignment" | "requires_alignment" | "requires-alignment" => {
-                capability.requires_alignment = parse_bool(raw_trimmed)?;
+                capability.requires_alignment = parse_bool(raw)?;
             }
             "merkle" | "supports_merkle_proof" | "supports-merkle-proof" => {
-                capability.supports_merkle_proof = parse_bool(raw_trimmed)?;
+                capability.supports_merkle_proof = parse_bool(raw)?;
             }
             other => {
                 return Err(format!(
@@ -928,26 +906,25 @@ fn parse_stream_budget(value: &str) -> Result<StreamBudgetV1, String> {
     let mut max_bytes_per_sec = None;
     let mut burst_bytes = None;
     for part in value.split(',') {
-        let trimmed = part.trim();
-        if trimmed.is_empty() {
-            continue;
+        if part.is_empty() {
+            return Err("stream-budget must not contain empty entries".to_string());
         }
-        let (key, raw) = trimmed
+        require_no_ascii_whitespace(part, "stream-budget entry")?;
+        let (key, raw) = part
             .split_once('=')
-            .ok_or_else(|| format!("stream-budget requires key=value entries, got: {trimmed}"))?;
-        let key_lower = key.trim().to_ascii_lowercase();
-        let raw_trimmed = raw.trim();
+            .ok_or_else(|| format!("stream-budget requires key=value entries, got: {part}"))?;
+        let key_lower = key.to_ascii_lowercase();
         match key_lower.as_str() {
             "max_in_flight" | "max-in-flight" | "inflight" => {
-                let inflight = parse_u16(raw_trimmed)?;
+                let inflight = parse_u16(raw)?;
                 max_in_flight = Some(inflight);
             }
             "max_bytes_per_sec" | "max-bytes-per-sec" | "max_rate" | "max-rate" => {
-                let rate = parse_u64(raw_trimmed)?;
+                let rate = parse_u64(raw)?;
                 max_bytes_per_sec = Some(rate);
             }
             "burst" | "burst_bytes" | "burst-bytes" => {
-                let burst = parse_u64(raw_trimmed)?;
+                let burst = parse_u64(raw)?;
                 burst_bytes = Some(burst);
             }
             other => {
@@ -974,8 +951,10 @@ fn parse_transport_hint(value: &str) -> Result<TransportHintV1, String> {
     let (protocol_str, priority_str) = value
         .split_once(':')
         .ok_or_else(|| "transport-hint requires protocol:priority".to_string())?;
-    let protocol = parse_transport_protocol(protocol_str.trim())?;
-    let priority = parse_u8(priority_str.trim())?;
+    require_no_ascii_whitespace(protocol_str, "transport-hint protocol")?;
+    require_no_ascii_whitespace(priority_str, "transport-hint priority")?;
+    let protocol = parse_transport_protocol(protocol_str)?;
+    let priority = parse_u8(priority_str)?;
     let hint = TransportHintV1 { protocol, priority };
     hint.validate()
         .map_err(|err| format!("invalid transport hint: {err}"))?;
@@ -1059,17 +1038,21 @@ fn parse_signature_alg(value: &str) -> Result<SignatureAlgorithm, String> {
 }
 
 fn resolve_profile_handle(input: &str) -> Result<String, String> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
+    if input.is_empty() {
         return Err("chunker profile cannot be empty".into());
     }
-    if let Some(descriptor) = chunker_registry::lookup_by_handle(trimmed) {
+    require_no_ascii_whitespace(input, "chunker profile")?;
+    if let Some(descriptor) = chunker_registry::lookup_by_handle(input) {
         return Ok(format!(
             "{}.{}@{}",
             descriptor.namespace, descriptor.name, descriptor.semver
         ));
     }
-    if let Ok(id) = trimmed.parse::<u32>() {
+    if input.as_bytes().iter().all(u8::is_ascii_digit) && !is_canonical_unsigned_decimal(input) {
+        return Err("chunker profile id must be a canonical unsigned decimal integer".to_string());
+    }
+    if is_canonical_unsigned_decimal(input) {
+        let id = parse_u32(input)?;
         if let Some(descriptor) = chunker_registry::lookup(ProfileId(id)) {
             return Ok(format!(
                 "{}.{}@{}",
@@ -1084,7 +1067,7 @@ fn resolve_profile_handle(input: &str) -> Result<String, String> {
         entry
             .aliases
             .iter()
-            .any(|alias| alias.eq_ignore_ascii_case(trimmed))
+            .any(|alias| alias.eq_ignore_ascii_case(input))
     }) {
         return Ok(format!(
             "{}.{}@{}",
@@ -1092,19 +1075,15 @@ fn resolve_profile_handle(input: &str) -> Result<String, String> {
         ));
     }
     Err(format!(
-        "unknown chunker profile handle '{trimmed}'. expected namespace.name@semver"
+        "unknown chunker profile handle '{input}'. expected namespace.name@semver"
     ))
 }
 
 fn parse_hex_vec(value: &str) -> Result<Vec<u8>, String> {
-    let mut out = Vec::with_capacity(value.len().div_ceil(2));
+    require_canonical_hex(value, "hex input")?;
+    let mut out = Vec::with_capacity(value.len() / 2);
     let bytes = value.as_bytes();
     let mut idx = 0;
-    if !value.len().is_multiple_of(2) {
-        let low = decode_hex(bytes[0])?;
-        out.push(low);
-        idx = 1;
-    }
     while idx < bytes.len() {
         let high = decode_hex(bytes[idx])?;
         let low = decode_hex(bytes[idx + 1])?;
@@ -1116,52 +1095,124 @@ fn parse_hex_vec(value: &str) -> Result<Vec<u8>, String> {
 
 fn parse_hex_fixed<const N: usize>(value: &str) -> Result<[u8; N], String> {
     let vec = parse_hex_vec(value)?;
-    if vec.len() > N {
-        return Err(format!("expected at most {N} hex bytes, got {}", vec.len()));
+    if vec.len() != N {
+        return Err(format!("expected exactly {N} hex bytes, got {}", vec.len()));
     }
     let mut arr = [0u8; N];
-    let start = N - vec.len();
-    arr[start..].copy_from_slice(&vec);
+    arr.copy_from_slice(&vec);
     Ok(arr)
 }
 
 fn parse_u64(value: &str) -> Result<u64, String> {
     if let Some(stripped) = value.strip_prefix("0x") {
+        require_canonical_hex_unsigned(stripped, "u64")?;
         u64::from_str_radix(stripped, 16).map_err(|err| err.to_string())
     } else {
+        require_canonical_unsigned_decimal(value, "u64")?;
         value.parse::<u64>().map_err(|err| err.to_string())
     }
 }
 
 fn parse_u128(value: &str) -> Result<u128, String> {
     if let Some(stripped) = value.strip_prefix("0x") {
+        require_canonical_hex_unsigned(stripped, "u128")?;
         u128::from_str_radix(stripped, 16).map_err(|err| err.to_string())
     } else {
+        require_canonical_unsigned_decimal(value, "u128")?;
         value.parse::<u128>().map_err(|err| err.to_string())
     }
 }
 
 fn parse_u32(value: &str) -> Result<u32, String> {
     if let Some(stripped) = value.strip_prefix("0x") {
+        require_canonical_hex_unsigned(stripped, "u32")?;
         u32::from_str_radix(stripped, 16).map_err(|err| err.to_string())
     } else {
+        require_canonical_unsigned_decimal(value, "u32")?;
         value.parse::<u32>().map_err(|err| err.to_string())
     }
 }
 
 fn parse_u16(value: &str) -> Result<u16, String> {
     if let Some(stripped) = value.strip_prefix("0x") {
+        require_canonical_hex_unsigned(stripped, "u16")?;
         u16::from_str_radix(stripped, 16).map_err(|err| err.to_string())
     } else {
+        require_canonical_unsigned_decimal(value, "u16")?;
         value.parse::<u16>().map_err(|err| err.to_string())
     }
 }
 
 fn parse_u8(value: &str) -> Result<u8, String> {
     if let Some(stripped) = value.strip_prefix("0x") {
+        require_canonical_hex_unsigned(stripped, "u8")?;
         u8::from_str_radix(stripped, 16).map_err(|err| err.to_string())
     } else {
+        require_canonical_unsigned_decimal(value, "u8")?;
         value.parse::<u8>().map_err(|err| err.to_string())
+    }
+}
+
+fn is_canonical_unsigned_decimal(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.iter().all(u8::is_ascii_digit)
+        && (bytes.len() == 1 || bytes[0] != b'0')
+}
+
+fn require_canonical_unsigned_decimal(value: &str, ty: &str) -> Result<(), String> {
+    if is_canonical_unsigned_decimal(value) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{ty} value must be a canonical unsigned decimal integer or lowercase 0x-prefixed hex"
+        ))
+    }
+}
+
+fn require_canonical_hex_unsigned(value: &str, ty: &str) -> Result<(), String> {
+    let bytes = value.as_bytes();
+    if !bytes.is_empty()
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+        && (bytes.len() == 1 || bytes[0] != b'0')
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "{ty} value must be a canonical unsigned decimal integer or lowercase 0x-prefixed hex"
+        ))
+    }
+}
+
+fn require_no_ascii_whitespace(value: &str, label: &str) -> Result<(), String> {
+    if value.as_bytes().iter().any(u8::is_ascii_whitespace) {
+        Err(format!("{label} must not contain ASCII whitespace"))
+    } else {
+        Ok(())
+    }
+}
+
+fn require_canonical_hex(value: &str, label: &str) -> Result<(), String> {
+    if value.is_empty()
+        || !value.len().is_multiple_of(2)
+        || value.starts_with("0x")
+        || value.starts_with("0X")
+        || value
+            .as_bytes()
+            .iter()
+            .any(|byte| byte.is_ascii_whitespace())
+        || !value
+            .as_bytes()
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+    {
+        Err(format!(
+            "{label} must be lowercase even-length hex without a 0x prefix or whitespace"
+        ))
+    } else {
+        Ok(())
     }
 }
 
@@ -1179,7 +1230,6 @@ fn decode_hex(byte: u8) -> Result<u8, String> {
     match byte {
         b'0'..=b'9' => Ok(byte - b'0'),
         b'a'..=b'f' => Ok(byte - b'a' + 10),
-        b'A'..=b'F' => Ok(byte - b'A' + 10),
         _ => Err(format!("invalid hex digit: {}", byte as char)),
     }
 }
@@ -1511,6 +1561,142 @@ mod tests {
     }
 
     #[test]
+    fn numeric_parsers_reject_noncanonical_unsigned_tokens() {
+        for value in [
+            "", " 1", "1 ", "+1", "01", "1_000", "0Xff", "0x0f", "0xFF", "-1",
+        ] {
+            let err = parse_u64(value).expect_err("noncanonical u64 token must fail");
+            assert!(
+                err.contains("canonical unsigned"),
+                "unexpected u64 error for {value:?}: {err}"
+            );
+        }
+
+        assert_eq!(parse_u64("0").expect("canonical zero"), 0);
+        assert_eq!(parse_u64("0x0").expect("canonical hex zero"), 0);
+        assert_eq!(parse_u64("0xff").expect("canonical lowercase hex"), 255);
+        assert_eq!(
+            parse_u128("123456789").expect("canonical u128"),
+            123_456_789
+        );
+        assert_eq!(parse_u32("42").expect("canonical u32"), 42);
+        assert_eq!(parse_u16("7").expect("canonical u16"), 7);
+        assert_eq!(parse_u8("15").expect("canonical u8"), 15);
+
+        let err = parse_u16("70000").expect_err("u16 overflow must still fail");
+        assert!(
+            err.contains("number too large"),
+            "unexpected overflow error: {err}"
+        );
+    }
+
+    #[test]
+    fn hex_parsers_reject_noncanonical_material() {
+        assert_eq!(
+            parse_hex_vec("00ff10").expect("canonical lowercase hex"),
+            vec![0x00, 0xff, 0x10]
+        );
+
+        for value in ["", "f", "0x00", "0X00", "00 ", " 00", "AA", "aA", "gg"] {
+            let err = parse_hex_vec(value).expect_err("noncanonical hex must fail");
+            assert!(
+                err.contains("lowercase even-length hex"),
+                "unexpected error for {value:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn fixed_hex_parser_requires_exact_width() {
+        let exact = "11".repeat(32);
+        assert_eq!(
+            parse_hex_fixed::<32>(&exact).expect("exact provider id"),
+            [0x11; 32]
+        );
+
+        for (value, expected) in [
+            ("11".repeat(31), "expected exactly 32 hex bytes"),
+            ("11".repeat(33), "expected exactly 32 hex bytes"),
+            ("AA".repeat(32), "lowercase even-length hex"),
+        ] {
+            let err = parse_hex_fixed::<32>(&value).expect_err("fixed hex must fail");
+            assert!(
+                err.contains(expected),
+                "expected {expected:?} for {value:?}, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn structured_hex_payloads_reject_noncanonical_forms() {
+        for (value, expected) in [
+            ("vendor:ABCDEF", "lowercase even-length hex"),
+            ("vendor:abc", "lowercase even-length hex"),
+            ("vendor:0xabcdef", "lowercase even-length hex"),
+            ("torii: aa", "lowercase even-length hex"),
+        ] {
+            let err = parse_capability(value).expect_err("noncanonical capability payload fails");
+            assert!(
+                err.contains(expected),
+                "expected {expected:?} for {value:?}, got: {err}"
+            );
+        }
+
+        let mut opts = EmitOptions {
+            endpoints: vec![AdvertEndpoint {
+                kind: EndpointKind::Torii,
+                host_pattern: "localhost".into(),
+                metadata: Vec::new(),
+            }],
+            ..EmitOptions::default()
+        };
+        let err = parse_endpoint_metadata("tls:AA", &mut opts)
+            .expect_err("noncanonical endpoint metadata hex fails");
+        assert!(
+            err.contains("lowercase even-length hex"),
+            "unexpected endpoint metadata error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_range_capability_rejects_noncanonical_numeric_fields() {
+        for value in [
+            "max_span=016,min_granularity=4",
+            "max_span=16,min_granularity=04",
+            "max_span=16, min_granularity=4",
+            "max_span=16,min_granularity=4,",
+        ] {
+            let err =
+                parse_range_capability(value).expect_err("noncanonical range capability must fail");
+            assert!(
+                err.contains("canonical")
+                    || err.contains("whitespace")
+                    || err.contains("empty entries"),
+                "unexpected range capability error for {value:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_stream_budget_rejects_noncanonical_numeric_fields() {
+        for value in [
+            "max_in_flight=05,max_bytes_per_sec=1000",
+            "max_in_flight=5,max_bytes_per_sec=01000",
+            "max_in_flight=5,max_bytes_per_sec=1000,burst=0x0f",
+            "max_in_flight=5, max_bytes_per_sec=1000",
+            "max_in_flight=5,max_bytes_per_sec=1000,",
+        ] {
+            let err = parse_stream_budget(value).expect_err("noncanonical stream budget must fail");
+            assert!(
+                err.contains("canonical")
+                    || err.contains("whitespace")
+                    || err.contains("empty entries"),
+                "unexpected stream budget error for {value:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
     fn parse_transport_hint_enforces_priority() {
         let hint = parse_transport_hint("torii:0").expect("valid hint parses");
         assert_eq!(hint.protocol, TransportProtocol::ToriiHttpRange);
@@ -1521,6 +1707,18 @@ mod tests {
             err.contains("invalid transport hint"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn parse_transport_hint_rejects_noncanonical_priority() {
+        for value in ["torii:01", "torii:+1", "torii: 1", " torii:1"] {
+            let err =
+                parse_transport_hint(value).expect_err("noncanonical transport hint must fail");
+            assert!(
+                err.contains("canonical") || err.contains("whitespace"),
+                "unexpected transport hint error for {value:?}: {err}"
+            );
+        }
     }
 
     #[test]
@@ -1645,6 +1843,22 @@ mod tests {
     }
 
     #[test]
+    fn rejects_noncanonical_numeric_id() {
+        let err = resolve_profile_handle("01").expect_err("padded numeric id must fail");
+        assert!(
+            err.contains("canonical unsigned decimal"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_whitespace_padded_profile_handle() {
+        let err = resolve_profile_handle(" sorafs.sf1@1.0.0")
+            .expect_err("whitespace-padded handle must fail");
+        assert!(err.contains("whitespace"), "unexpected error: {err}");
+    }
+
+    #[test]
     fn resolves_alias_with_dash() {
         let handle = resolve_profile_handle("sorafs-sf1").expect("alias resolves");
         assert_eq!(handle, "sorafs.sf1@1.0.0");
@@ -1661,7 +1875,7 @@ mod tests {
 
     #[test]
     fn rejects_empty_input() {
-        let err = resolve_profile_handle("   ").expect_err("empty input");
+        let err = resolve_profile_handle("").expect_err("empty input");
         assert!(err.contains("cannot be empty"));
     }
 }

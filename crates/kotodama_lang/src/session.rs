@@ -67,6 +67,12 @@ struct IterativeResolvedGuard {
     program: Option<crate::resolved::ResolvedProgram>,
 }
 
+impl Clone for IterativeResolvedGuard {
+    fn clone(&self) -> Self {
+        Self::new(self.get().clone())
+    }
+}
+
 impl IterativeResolvedGuard {
     fn new(program: crate::resolved::ResolvedProgram) -> Self {
         Self {
@@ -92,6 +98,28 @@ impl Drop for IterativeResolvedGuard {
             crate::ast::drop_program_iterative(program.into_program());
         }
     }
+}
+
+/// Canonically parsed source retained between compiler phases.
+///
+/// The fields stay crate-private so instrumentation can time phase boundaries
+/// without exposing forgeable frontend artifacts to compiler clients.
+#[derive(Clone)]
+pub(crate) struct ParsedCompilationUnit {
+    source: SourceFile,
+    program: crate::spanned_ast::SpannedProgram,
+    source_name: Option<String>,
+}
+
+/// Canonically resolved HIR retained between compiler phases.
+///
+/// The iterative guard preserves the normal compiler's bounded-drop behavior
+/// when a benchmark discards a cloned phase input.
+#[derive(Clone)]
+pub(crate) struct ResolvedCompilationUnit {
+    source: SourceFile,
+    program: IterativeResolvedGuard,
+    source_name: Option<String>,
 }
 
 impl CompilerSession {
@@ -166,7 +194,11 @@ impl CompilerSession {
         Ok(warnings)
     }
 
-    fn checked_program(&self, request: CompileRequest<'_>) -> Result<Program, DiagnosticBundle> {
+    /// Parse one source through the canonical, budgeted lossless frontend.
+    pub(crate) fn parse_compilation_unit(
+        &self,
+        request: CompileRequest<'_>,
+    ) -> Result<ParsedCompilationUnit, DiagnosticBundle> {
         enforce_source_budget(request)?;
         let source = SourceFile::new(
             SourceId(0),
@@ -180,29 +212,72 @@ impl CompilerSession {
             request.source_name,
             Some((&source, &tokens)),
         )?;
-        let resolved = IterativeResolvedGuard::new(crate::resolved::resolve(program, &source)?);
+        Ok(ParsedCompilationUnit {
+            source,
+            program,
+            source_name: request.source_name.map(ToOwned::to_owned),
+        })
+    }
+
+    /// Resolve one canonical parsed source into fail-closed named HIR.
+    pub(crate) fn resolve_compilation_unit(
+        &self,
+        parsed: ParsedCompilationUnit,
+    ) -> Result<ResolvedCompilationUnit, DiagnosticBundle> {
+        let ParsedCompilationUnit {
+            source,
+            program,
+            source_name,
+        } = parsed;
+        let program = crate::resolved::resolve(program, &source)?;
+        Ok(ResolvedCompilationUnit {
+            source,
+            program: IterativeResolvedGuard::new(program),
+            source_name,
+        })
+    }
+
+    /// Type- and effect-check one resolved-HIR source with this session's policy.
+    pub(crate) fn type_effect_compilation_unit(
+        &self,
+        resolved: ResolvedCompilationUnit,
+    ) -> Result<TypedProgram, DiagnosticBundle> {
+        self.type_effect_compilation_unit_ref(&resolved)
+    }
+
+    fn type_effect_compilation_unit_ref(
+        &self,
+        resolved: &ResolvedCompilationUnit,
+    ) -> Result<TypedProgram, DiagnosticBundle> {
         let semantic = crate::semantic::SemanticContext::with_capabilities(
             self.options.force_zk,
             self.options.mode == crate::compiler::CompilerMode::Test,
         );
         let typed = semantic
-            .analyze_resolved(resolved.get())
+            .analyze_resolved(resolved.program.get())
             .map_err(|failures| {
                 crate::semantic_diagnostics::from_semantic_failures(
                     failures,
-                    request.source_name,
-                    Some(&source),
-                    Some(resolved.get()),
+                    resolved.source_name.as_deref(),
+                    Some(&resolved.source),
+                    Some(resolved.program.get()),
                 )
             })?;
-        enforce_argument_register_window(&typed, &source, resolved.get())?;
+        enforce_argument_register_window(&typed, &resolved.source, resolved.program.get())?;
+        Ok(typed)
+    }
+
+    fn checked_program(&self, request: CompileRequest<'_>) -> Result<Program, DiagnosticBundle> {
+        let parsed = self.parse_compilation_unit(request)?;
+        let resolved = self.resolve_compilation_unit(parsed)?;
+        let typed = self.type_effect_compilation_unit_ref(&resolved)?;
         crate::semantic::validate_linked_program(&typed, self.options.force_zk).map_err(
             |error| {
                 crate::semantic_diagnostics::from_semantic_failures(
                     error.into(),
                     request.source_name,
-                    Some(&source),
-                    Some(resolved.get()),
+                    Some(&resolved.source),
+                    Some(resolved.program.get()),
                 )
             },
         )?;
@@ -221,41 +296,14 @@ impl CompilerSession {
                     .collect(),
             )
         })?;
-        Ok(resolved.take_program())
+        Ok(resolved.program.take_program())
     }
 
     /// Compile one named source unit into a deployable artifact and sidecar report.
     pub fn build(&self, request: CompileRequest<'_>) -> Result<CompileOutput, DiagnosticBundle> {
-        enforce_source_budget(request)?;
-        let source = SourceFile::new(
-            SourceId(0),
-            request.source_name.unwrap_or("<source>"),
-            request.source,
-        );
-        let (program, tokens) = crate::parser::parse_source_spanned(&source, FrontendBudget::v1())?;
-        reject_production_test_surface(
-            self.options.mode,
-            &program.program,
-            request.source_name,
-            Some((&source, &tokens)),
-        )?;
-        let resolved = IterativeResolvedGuard::new(crate::resolved::resolve(program, &source)?);
-        let semantic = crate::semantic::SemanticContext::with_capabilities(
-            self.options.force_zk,
-            self.options.mode == crate::compiler::CompilerMode::Test,
-        );
-        let typed = semantic
-            .analyze_resolved(resolved.get())
-            .map_err(|failures| {
-                crate::semantic_diagnostics::from_semantic_failures(
-                    failures,
-                    request.source_name,
-                    Some(&source),
-                    Some(resolved.get()),
-                )
-            })?;
-        enforce_argument_register_window(&typed, &source, resolved.get())?;
-        drop(resolved);
+        let parsed = self.parse_compilation_unit(request)?;
+        let resolved = self.resolve_compilation_unit(parsed)?;
+        let typed = self.type_effect_compilation_unit(resolved)?;
         self.build_typed_program(typed, request.source_name)
     }
 

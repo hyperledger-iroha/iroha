@@ -34,12 +34,12 @@ export const KOTODAMA_V1_KEYWORDS = Object.freeze([
 
 /** Source declaration names reserved by canonical V1 types and compiler intrinsics. */
 export const KOTODAMA_V1_DECLARATION_RESERVED = Object.freeze([
-  "i64",
-  "u128",
+  "int",
+  "decimal",
+  "quantity",
   "bool",
   "string",
   "bytes",
-  "Amount",
   "Json",
   "AccountId",
   "AssetDefinitionId",
@@ -69,6 +69,7 @@ export const KOTODAMA_V1_DECLARATION_RESERVED = Object.freeze([
 
 const KEYWORD_SET = new Set(KOTODAMA_V1_KEYWORDS);
 const DECLARATION_RESERVED_SET = new Set(KOTODAMA_V1_DECLARATION_RESERVED);
+const NUMERIC_TYPE_KEYWORD_SET = new Set(["int", "decimal", "quantity"]);
 
 /** Return whether a string is one exact source identifier under V1 resolution rules. */
 export function isCanonicalKotodamaIdentifier(value, { declaration = false } = {}) {
@@ -76,6 +77,7 @@ export function isCanonicalKotodamaIdentifier(value, { declaration = false } = {
     typeof value === "string" &&
     /^[A-Za-z_][A-Za-z0-9_]*$/u.test(value) &&
     !KEYWORD_SET.has(value) &&
+    !NUMERIC_TYPE_KEYWORD_SET.has(value) &&
     !value.startsWith("__kotodama_link_") &&
     (!declaration || !DECLARATION_RESERVED_SET.has(value))
   );

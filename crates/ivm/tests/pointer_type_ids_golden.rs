@@ -19,7 +19,10 @@ fn pointer_type_ids_match_golden() {
         P::ProofBlob,
         P::SoracloudRequest,
         P::SoracloudResponse,
-        P::Amount,
+        P::RetiredAmount,
+        P::Int,
+        P::Decimal,
+        P::Quantity,
     ];
     assert_eq!(
         P::all(),
@@ -43,7 +46,10 @@ fn pointer_type_ids_match_golden() {
     assert_eq!(P::ProofBlob as u16, 0x000D);
     assert_eq!(P::SoracloudRequest as u16, 0x000E);
     assert_eq!(P::SoracloudResponse as u16, 0x000F);
-    assert_eq!(P::Amount as u16, 0x0010);
+    assert_eq!(P::RetiredAmount as u16, 0x0010);
+    assert_eq!(P::Int as u16, 0x0011);
+    assert_eq!(P::Decimal as u16, 0x0012);
+    assert_eq!(P::Quantity as u16, 0x0013);
 }
 
 #[test]
@@ -65,8 +71,14 @@ fn pointer_policy_allows_expected_types_for_v1() {
         P::ProofBlob,
         P::SoracloudRequest,
         P::SoracloudResponse,
-        P::Amount,
+        P::Int,
+        P::Decimal,
+        P::Quantity,
     ] {
         assert!(is_type_allowed_for_policy(SyscallPolicy::AbiV1, ty));
     }
+    assert!(!is_type_allowed_for_policy(
+        SyscallPolicy::AbiV1,
+        P::RetiredAmount
+    ));
 }

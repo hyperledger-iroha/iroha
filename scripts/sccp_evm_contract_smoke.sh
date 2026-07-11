@@ -8,9 +8,9 @@ WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/iroha-sccp-evm-smoke.XXXXXX")"
 PYTHON_BIN="${SCCP_CORRIDOR_PYTHON_BIN:-python3}"
 NODE_BIN="${SCCP_CORRIDOR_NODE_BIN:-node}"
 NPM_BIN="${SCCP_CORRIDOR_NPM_BIN:-npm}"
-PINNED_SOLC_BUILD="0.8.24+commit.e11b9ed9.Emscripten.clang"
-PINNED_SOLC_URL="https://binaries.soliditylang.org/wasm/soljson-v0.8.24+commit.e11b9ed9.js"
-PINNED_SOLC_SHA256="11b054b55273ec55f6ab3f445eb0eb2c83a23fed43d10079d34ac3eabe6ed8b1"
+PINNED_SOLC_BUILD="0.7.4+commit.3f05b770.Emscripten.clang"
+PINNED_SOLC_URL="https://binaries.soliditylang.org/wasm/soljson-v0.7.4+commit.3f05b770.js"
+PINNED_SOLC_SHA256="2b55ed5fec4d9625b6c7b3ab1abd2b7fb7dd2a9c68543bf0323db2c7e2d55af2"
 
 cleanup() {
   rm -rf "$WORK_DIR"
@@ -108,7 +108,7 @@ RUNTIME_ARTIFACT_LOCK="$WORK_DIR/runtime-artifact-lock.json"
 cp scripts/contract_tooling/artifact-lock.json "$RUNTIME_ARTIFACT_LOCK"
 chmod 0444 "$RUNTIME_ARTIFACT_LOCK"
 
-EVM_SOLJSON="$WORK_DIR/soljson-evm-0.8.24.js"
+EVM_SOLJSON="$WORK_DIR/soljson-evm-0.7.4.js"
 EVM_SOLJSON_SHA256="$("$PYTHON_BIN" - \
   "$EVM_SOLJSON" \
   "$PINNED_SOLC_URL" \
@@ -122,7 +122,7 @@ import contract_artifact_corridor as corridor
 
 compiler = corridor.CompilerSpec(
     target="evm-compatibility",
-    identity="solc-evm-0.8.24+commit.e11b9ed9",
+    identity="solc-evm-0.7.4+commit.3f05b770",
     reported_version=sys.argv[4],
     url=sys.argv[2],
     sha256=sys.argv[3],
@@ -136,7 +136,7 @@ if ! [[ "$EVM_SOLJSON_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
   exit 1
 fi
 
-MUTATED_SOLJSON="$WORK_DIR/mutated-soljson-evm-0.8.24.js"
+MUTATED_SOLJSON="$WORK_DIR/mutated-soljson-evm-0.7.4.js"
 cp "$EVM_SOLJSON" "$MUTATED_SOLJSON"
 "$PYTHON_BIN" - "$MUTATED_SOLJSON" <<'PY'
 import sys

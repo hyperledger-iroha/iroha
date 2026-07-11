@@ -167,7 +167,7 @@ mod tests {
         assert_eq!(
             lane_hash,
             crate::decode_fixed_hex_bytes::<32>(
-                "c6105d1dff4f36791f9417ddd609e3337f3e51dc05c35a6609dfe0408f22017a",
+                "647fa252d0f3a6a52574ff713b02f80a35542af4abc77de6d36eef2b18a62819",
             )
             .expect("lane hash vector"),
         );
@@ -181,7 +181,7 @@ mod tests {
         assert_eq!(
             identity_hash,
             crate::decode_fixed_hex_bytes::<32>(
-                "6508ac99cbb551334d8af7cf5205b0476569b564bea24cb672d3cd8ee28792f8",
+                "10ee71fd8d22ce7ba84f72eefe154cd21cf5414fdd7168719338a22d905ec27f",
             )
             .expect("source identity hash vector"),
         );
@@ -257,7 +257,7 @@ mod tests {
         assert_eq!(
             expected,
             crate::decode_fixed_hex_bytes::<32>(
-                "59c8bc571273d1d3080a4d589c4bfb9c7d04bab03ace2ce967f7da979b680698",
+                "dd71a2bb21c6213d7b07c9c45197c4ff41db5cc4c059c41342b490e2879fd9a4",
             )
             .expect("lane-bound event digest vector")
         );

@@ -241,6 +241,21 @@ final class TxBuilderTests: XCTestCase {
     private static let fixtureCreationTimeMs: UInt64 = 1_700_000_000_000
     private enum FixtureError: Error { case invalidKey }
 
+    private static func deterministicValidationFeeNativeTransaction() -> NativeSignedTransaction {
+        NativeSignedTransaction(
+            signedBytes: Data([1, 0xA5]),
+            hash: Data(repeating: 0x5A, count: 32)
+        )
+    }
+
+    private func validationFeeMetadata(
+        from input: SwiftTransactionEncoder.ValidationFeeTransferNativeInput
+    ) throws -> [String: Any] {
+        try XCTUnwrap(
+            JSONSerialization.jsonObject(with: input.transactionMetadataJSON) as? [String: Any]
+        )
+    }
+
     private func makeFixtureKeypair() throws -> Keypair {
         guard let keyData = Data(hexString: Self.fixturePrivateKeyHex) else {
             XCTFail("Invalid fixture private key hex")
@@ -389,7 +404,7 @@ final class TxBuilderTests: XCTestCase {
                     openedAtMs: Self.fixtureClaimResolvedAtMs,
                     expiresAtMs: Self.fixtureClaimExpiresAtMs
                 ),
-                signature: String(repeating: "ff", count: 64)
+                signature: Self.fixtureClaimSignatureHex
             )
         )
         guard let payloadJSON = String(data: try JSONEncoder().encode(payload), encoding: .utf8) else {
@@ -400,6 +415,7 @@ final class TxBuilderTests: XCTestCase {
           "payload":\(payloadJSON),
           "attestation":{
             "kind":"signed",
+            "algorithm":"ed25519",
             "signature":"\(Self.fixtureClaimSignatureHex)"
           }
         }
@@ -958,6 +974,7 @@ final class TxBuilderTests: XCTestCase {
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = try makeClaimIdentifierRequest(authority: authority, ttlMs: 60)
+        XCTAssertEqual(request.receipt.attestation.algorithm, SigningAlgorithm.ed25519.wireName)
         let envelope = try sdk.buildClaimIdentifier(request: request, keypair: keypair)
         XCTAssertEqual(envelope.norito.first, 1)
         XCTAssertEqual(Data(envelope.norito.dropFirst()), envelope.signedTransaction)
@@ -997,6 +1014,7 @@ final class TxBuilderTests: XCTestCase {
             creationTimeMs: Self.fixtureCreationTimeMs
         )
 
+        XCTAssertCanonicalExternalEntrypointHash(global)
         XCTAssertNotEqual(global.transactionHash, paynet.transactionHash)
         XCTAssertNotEqual(global.signedTransaction, paynet.signedTransaction)
     }
@@ -1573,28 +1591,50 @@ final class TxBuilderTests: XCTestCase {
         )
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
         sdk.creationTimeProvider = { Self.fixtureCreationTimeMs }
+        var nativeInput: SwiftTransactionEncoder.ValidationFeeTransferNativeInput?
+        sdk.validationFeeTransferNativeEncoderForTests = { input in
+            nativeInput = input
+            return Self.deterministicValidationFeeNativeTransaction()
+        }
 
         let envelope = try sdk.buildSignedTransferWithValidationFee(request: request, keypair: keypair)
 
-        XCTAssertEqual(envelope.transactionHash.count, 32)
-        XCTAssertEqual(envelope.norito.first, 1)
-        XCTAssertFalse(envelope.signedTransaction.isEmpty)
+        XCTAssertEqual(envelope.norito, Data([1, 0xA5]))
+        XCTAssertEqual(envelope.signedTransaction, Data([0xA5]))
+        XCTAssertEqual(envelope.transactionHash, Data(repeating: 0x5A, count: 32))
 
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native decoder not linked")
-        }
-        let json = try XCTUnwrap(sdk.decodeSignedTransaction(envelope: envelope))
-        XCTAssertTrue(json.contains("\"instructions\""), json)
-        XCTAssertGreaterThanOrEqual(asciiOccurrenceCount("transfer_asset", in: Data(json.utf8)), 2, json)
-        XCTAssertTrue(json.contains(IrohaValidationFeeTransactionMetadataKey.policyVersion), json)
-        XCTAssertTrue(json.contains(IrohaValidationFeeTransactionMetadataKey.policyHash), json)
-        XCTAssertTrue(json.contains(IrohaValidationFeeTransactionMetadataKey.instructionIndex), json)
-        XCTAssertTrue(json.contains(policyHash.lowercased()), json)
-        XCTAssertTrue(json.contains("client_trace"), json)
-        XCTAssertTrue(json.contains("\"fee_sponsor\""), json)
-        XCTAssertTrue(json.contains(feeSponsor), json)
-        XCTAssertTrue(json.contains("\"memo\""), json)
-        XCTAssertTrue(json.contains("invoice-123"), json)
+        let input = try XCTUnwrap(nativeInput)
+        XCTAssertEqual(input.chainId, Self.fixtureChainId)
+        XCTAssertEqual(input.authority, authority)
+        XCTAssertEqual(input.creationTimeMs, Self.fixtureCreationTimeMs)
+        XCTAssertEqual(input.ttlMs, 120_000)
+        XCTAssertEqual(input.nonce, 9)
+        XCTAssertEqual(input.principalAssetDefinitionId, principal.assetDefinitionId)
+        XCTAssertEqual(input.principalQuantity, principal.quantity)
+        XCTAssertEqual(input.destination, destination)
+        XCTAssertEqual(input.feeAssetDefinitionId, principal.assetDefinitionId)
+        XCTAssertEqual(input.feeQuantity, request.feeQuantity)
+        XCTAssertEqual(input.treasury, treasury)
+        XCTAssertEqual(input.policyVersion, request.policyVersion)
+        XCTAssertEqual(input.policyHashHex, policyHash.lowercased())
+        XCTAssertEqual(input.feeInstructionIndex, 1)
+        XCTAssertEqual(input.feeSponsor, feeSponsor)
+        XCTAssertEqual(input.memo, "invoice-123")
+
+        let metadata = try validationFeeMetadata(from: input)
+        XCTAssertEqual(
+            (metadata[IrohaValidationFeeTransactionMetadataKey.policyVersion] as? NSNumber)?.uint64Value,
+            7
+        )
+        XCTAssertEqual(
+            metadata[IrohaValidationFeeTransactionMetadataKey.policyHash] as? String,
+            policyHash.lowercased()
+        )
+        XCTAssertEqual(
+            (metadata[IrohaValidationFeeTransactionMetadataKey.instructionIndex] as? NSNumber)?.uint64Value,
+            1
+        )
+        XCTAssertEqual(metadata["client_trace"] as? String, "abc123")
     }
 
     func testBuildSignedTransferWithValidationFeePreservesExplicitMemoMetadata() throws {
@@ -1624,16 +1664,21 @@ final class TxBuilderTests: XCTestCase {
         )
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
         sdk.creationTimeProvider = { Self.fixtureCreationTimeMs }
+        var nativeInput: SwiftTransactionEncoder.ValidationFeeTransferNativeInput?
+        sdk.validationFeeTransferNativeEncoderForTests = { input in
+            nativeInput = input
+            return Self.deterministicValidationFeeNativeTransaction()
+        }
 
         let envelope = try sdk.buildSignedTransferWithValidationFee(request: request, keypair: keypair)
 
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native decoder not linked")
-        }
-        let json = try XCTUnwrap(sdk.decodeSignedTransaction(envelope: envelope))
-        XCTAssertTrue(json.contains("\"memo\""), json)
-        XCTAssertTrue(json.contains(explicitMemo), json)
-        XCTAssertFalse(json.contains(descriptionMemo), json)
+        XCTAssertEqual(envelope.norito, Data([1, 0xA5]))
+        let input = try XCTUnwrap(nativeInput)
+        XCTAssertNil(input.memo, "explicit metadata must suppress the description-derived memo")
+        let metadata = try validationFeeMetadata(from: input)
+        XCTAssertEqual(metadata["memo"] as? String, explicitMemo)
+        let metadataJSON = try XCTUnwrap(String(data: input.transactionMetadataJSON, encoding: .utf8))
+        XCTAssertFalse(metadataJSON.contains(descriptionMemo), metadataJSON)
     }
 
     func testBuildSignedTransferWithValidationFeeRejectsMalformedPolicyHash() throws {
@@ -1680,6 +1725,9 @@ final class TxBuilderTests: XCTestCase {
             policyHashHex: String(repeating: "ab", count: 32)
         )
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
+        sdk.validationFeeTransferNativeEncoderForTests = { _ in
+            throw SwiftTransactionEncoderError.nativeBridgeUnavailable
+        }
 
         XCTAssertThrowsError(try sdk.buildSignedTransferWithValidationFee(request: request, keypair: keypair)) { error in
             XCTAssertEqual(error as? TransactionInputError,

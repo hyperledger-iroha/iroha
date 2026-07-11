@@ -3,7 +3,8 @@ use crate::{
     asset::{AssetDefinitionId, AssetId},
     offline::{
         KagemushaRecursiveSpendBundleV1, KagemushaRecursiveSpendInitRequestV1,
-        KagemushaRecursiveSpendLineageWitnessV1, OfflineDeviceAttestationPolicy,
+        KagemushaRecursiveSpendLineageWitnessV1, KagemushaRecursiveSpendRedeemRequestV2,
+        KagemushaRecursiveSpendTopUpRequestV2, OfflineDeviceAttestationPolicy,
         OfflineDeviceAttestationRegistration, OfflineNoteAuditBundle, OfflineNoteIssue,
         OfflineNoteRedeem,
     },
@@ -115,6 +116,29 @@ isi! {
 }
 
 isi! {
+    /// Charge an online balance and create the first scale-bound Kagemusha V2 state.
+    ///
+    /// V2 is additive: the complete, self-authorizing request is carried without
+    /// changing the V1 instruction contract or interpreting V1 payloads as V2.
+    pub struct TopUpKagemushaRecursiveV2 {
+        /// Canonical V2 top-up request, including payer/device authorization.
+        pub request: KagemushaRecursiveSpendTopUpRequestV2,
+    }
+}
+
+isi! {
+    /// Redeem a branch-safe, scale-bound Kagemusha V2 state.
+    ///
+    /// The complete request carries the Reserved-lineage recursive proof,
+    /// unshield-v3 attachment, optional proof-bound change, and recipient/device
+    /// authorization needed for deterministic chain admission.
+    pub struct RedeemKagemushaRecursiveV2 {
+        /// Canonical V2 redemption request.
+        pub request: KagemushaRecursiveSpendRedeemRequestV2,
+    }
+}
+
+isi! {
     /// Register a platform-attested Offline note key for trustless issuance.
     pub struct RegisterOfflineDeviceAttestation {
         /// Platform attestation registration material.
@@ -136,6 +160,8 @@ impl crate::seal::Instruction for AuditOfflineNote {}
 impl crate::seal::Instruction for KagemushaTransfer {}
 impl crate::seal::Instruction for TopUpKagemushaRecursive {}
 impl crate::seal::Instruction for RedeemKagemushaRecursive {}
+impl crate::seal::Instruction for TopUpKagemushaRecursiveV2 {}
+impl crate::seal::Instruction for RedeemKagemushaRecursiveV2 {}
 impl crate::seal::Instruction for RegisterOfflineDeviceAttestation {}
 impl crate::seal::Instruction for SetOfflineDeviceAttestationPolicy {}
 
@@ -270,6 +296,22 @@ impl RedeemKagemushaRecursive {
     }
 }
 
+impl TopUpKagemushaRecursiveV2 {
+    /// Construct a scale-bound recursive Kagemusha V2 top-up instruction.
+    #[must_use]
+    pub fn new(request: KagemushaRecursiveSpendTopUpRequestV2) -> Self {
+        Self { request }
+    }
+}
+
+impl RedeemKagemushaRecursiveV2 {
+    /// Construct a branch-safe recursive Kagemusha V2 redemption instruction.
+    #[must_use]
+    pub fn new(request: KagemushaRecursiveSpendRedeemRequestV2) -> Self {
+        Self { request }
+    }
+}
+
 impl RegisterOfflineDeviceAttestation {
     /// Construct an Offline device attestation registration instruction.
     #[must_use]
@@ -322,6 +364,37 @@ impl_decode_one_offline_field!(RedeemOfflineNote {
 });
 impl_decode_one_offline_field!(AuditOfflineNote {
     audit: OfflineNoteAuditBundle
+});
+
+macro_rules! impl_decode_one_canonical_offline_field {
+    ($ty:ident { $field:ident: $field_ty:ty }) => {
+        impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+                let flags = offline_decode_flags();
+                if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+                    return super::decode_packed_instruction_payload::<Self>(bytes);
+                }
+
+                let mut offset = 0usize;
+                let $field = super::decode_aos_canonical_field::<$field_ty>(
+                    super::read_aos_field(bytes, &mut offset, flags)?,
+                    flags,
+                )?;
+                if offset != bytes.len() {
+                    return Err(norito::core::Error::LengthMismatch);
+                }
+                norito::core::note_payload_access(bytes, offset);
+                Ok((Self { $field }, offset))
+            }
+        }
+    };
+}
+
+impl_decode_one_canonical_offline_field!(TopUpKagemushaRecursiveV2 {
+    request: KagemushaRecursiveSpendTopUpRequestV2
+});
+impl_decode_one_canonical_offline_field!(RedeemKagemushaRecursiveV2 {
+    request: KagemushaRecursiveSpendRedeemRequestV2
 });
 
 impl<'a> norito::core::DecodeFromSlice<'a> for TopUpKagemushaRecursive {

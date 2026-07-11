@@ -68,7 +68,7 @@ Foydalanish misoli:
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
-  --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
+  --provider name=gw-regulated,provider-id=001122...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64
 ```
 
 - Skript CLI bayroqlari va kalit=value konfiguratsiya fayllarini hurmat qiladi (qarang: `docs/examples/sorafs_direct_mode_smoke.conf`). Manifest dayjestini va provayder reklama yozuvlarini ishga tushirishdan oldin ishlab chiqarish qiymatlari bilan to'ldiring.

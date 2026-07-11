@@ -49,7 +49,10 @@ use iroha_data_model::{
         BlockExecutionContextBundle, BlockHeader, BlockPayload, BlockSignature,
         ExternalExecutionContext, SignedBlock,
         builder::BlockBuilder,
-        consensus::{LaneBlockCommitment, LaneSettlementReceipt, SumeragiLanePayloadOwnership},
+        consensus::{
+            LaneBlockCommitment, LaneSettlementReceipt, NativeAmxPhase,
+            SumeragiLanePayloadOwnership,
+        },
     },
     consensus::{
         NposConsensusEffects, NposMarkVrfPenaltiesAppliedAction, NposPenaltyAction,
@@ -721,6 +724,41 @@ fn take_background_log(
 ) -> Vec<super::BackgroundRequestLogEntry> {
     let mut guard = log.lock().expect("background request log mutex poisoned");
     std::mem::take(&mut *guard)
+}
+
+fn assert_lane_rebroadcast_cooldown_skips_without_progress(
+    actor: &mut Actor,
+    log: &Arc<Mutex<Vec<super::BackgroundRequestLogEntry>>>,
+) {
+    let last_sent = actor
+        .last_lane_block_rebroadcast
+        .expect("the first periodic lane retry should record its send time");
+    let cursor = actor.lane_block_rebroadcast_cursor;
+    assert!(
+        !actor.broadcast_ready_local_lane_block_votes(),
+        "an immediate periodic retry must not report false tick progress"
+    );
+    assert!(
+        take_background_log(log).is_empty(),
+        "an immediate retry inside the cooldown must not schedule transport work"
+    );
+    assert_eq!(actor.last_lane_block_rebroadcast, Some(last_sent));
+    assert_eq!(actor.lane_block_rebroadcast_cursor, cursor);
+    let next_due = actor
+        .lane_block_rebroadcast_next_due(Instant::now())
+        .expect("unresolved lane work should keep an idle wakeup deadline");
+    assert!(next_due > Instant::now());
+}
+
+fn expire_lane_rebroadcast_cooldown(actor: &mut Actor) {
+    let cooldown = actor
+        .payload_rebroadcast_cooldown()
+        .max(super::CACHED_PROPOSAL_REBROADCAST_COOLDOWN_FLOOR);
+    actor.last_lane_block_rebroadcast = Some(
+        Instant::now()
+            .checked_sub(cooldown.saturating_add(Duration::from_millis(1)))
+            .expect("test instant supports cooldown backdating"),
+    );
 }
 
 fn roster_validation_inputs_for_view(
@@ -1412,6 +1450,35 @@ fn sample_lane_relay_envelope(
     )
 }
 
+fn fixture_lane_incarnation_at_height(
+    state: &State,
+    lane_id: LaneId,
+    proposal_height: u64,
+) -> Hash {
+    state
+        .lane_incarnation_at_height(lane_id, proposal_height)
+        .or_else(|| {
+            (!state.nexus_snapshot().enabled)
+                .then(|| state.lane_incarnation(lane_id))
+                .flatten()
+        })
+        .expect("fixture lane is active at the requested proposal height")
+}
+
+fn rebind_lane_relay_to_active_incarnation(
+    mut relay: LaneRelayEnvelope,
+    state: &State,
+) -> LaneRelayEnvelope {
+    let lane_incarnation =
+        fixture_lane_incarnation_at_height(state, relay.lane_id, relay.block_header.height().get());
+    relay.lane_incarnation = lane_incarnation;
+    relay.settlement_commitment.lane_incarnation = lane_incarnation;
+    relay.settlement_hash =
+        iroha_data_model::nexus::compute_settlement_hash(&relay.settlement_commitment)
+            .expect("rebinding lane relay incarnation keeps settlement hash canonical");
+    relay
+}
+
 fn sample_lane_relay_envelope_with_bitmap(
     height: u64,
     lane_id: LaneId,
@@ -1442,6 +1509,7 @@ fn sample_lane_relay_envelope_with_bitmap(
     let settlement = LaneBlockCommitment {
         block_height: height,
         lane_id,
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id: DataSpaceId::UNIVERSAL,
         tx_count: 1,
         total_local_micro: 1,
@@ -1593,6 +1661,14 @@ fn sample_lane_payload_ownership_status(
         proposal_view: 3,
         lane_id,
         dataspace_id,
+        lane_incarnation: Hash::new(
+            format!(
+                "main-loop-status-incarnation:{}:{}",
+                lane_id.as_u32(),
+                dataspace_id.as_u64()
+            )
+            .as_bytes(),
+        ),
         lane_block_height: 777,
         lane_block_view: 2,
         subject_hash: Hash::prehashed([0x51; Hash::LENGTH]),
@@ -1645,6 +1721,7 @@ fn sample_block_with_lane_payload_artifact(
         proposal_view,
         lane_id,
         dataspace_id,
+        lane_incarnation: Hash::new(format!("{preimage}:incarnation").as_bytes()),
         lane_block_height,
         lane_block_view: proposal_view,
         subject_hash: Hash::new(preimage.as_bytes()),
@@ -1760,6 +1837,7 @@ fn block_with_lane_payload_transactions(
         proposal_view,
         lane_id,
         dataspace_id,
+        lane_incarnation: Hash::new(format!("{preimage}:incarnation").as_bytes()),
         lane_block_height,
         lane_block_view: proposal_view,
         subject_hash: Hash::new(preimage.as_bytes()),
@@ -1823,6 +1901,42 @@ fn rebind_lane_payload_artifact_predecessor(
     let replay_hashes = ownership
         .compute_replay_hashes()
         .expect("rebinding predecessor keeps replay hashes canonical");
+    ownership.subject_hash = replay_hashes.subject_hash;
+    ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+    ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+    ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+    let execution_context = BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+        entrypoint_hash,
+        ownership.lane_id,
+        ownership.dataspace_id,
+    )])
+    .with_lane_payload_ownerships(vec![ownership.clone()]);
+    block.set_execution_context(Some(execution_context));
+    ownership
+}
+
+fn rebind_lane_payload_artifact_to_active_incarnation(
+    block: &mut SignedBlock,
+    state: &State,
+) -> SumeragiLanePayloadOwnership {
+    let entrypoint_hash = block
+        .external_entrypoints_cloned()
+        .next()
+        .map(|entrypoint| entrypoint.hash())
+        .expect("lane payload fixture block has external entrypoint");
+    let mut ownership = block
+        .execution_context()
+        .expect("lane payload fixture block has execution context")
+        .lane_payload_ownerships
+        .first()
+        .expect("lane payload fixture block has ownership")
+        .clone();
+    let lane_incarnation =
+        fixture_lane_incarnation_at_height(state, ownership.lane_id, ownership.proposal_height);
+    ownership.lane_incarnation = lane_incarnation;
+    let replay_hashes = ownership
+        .compute_replay_hashes()
+        .expect("rebinding lane incarnation keeps replay hashes canonical");
     ownership.subject_hash = replay_hashes.subject_hash;
     ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
     ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
@@ -2894,9 +3008,12 @@ fn quorum_downgraded_shared_lane_block_proposal_for_test(
         "shared committee fixture must make quorum downgrades observable"
     );
     let downgraded_quorum = expected_quorum - 1;
-    let proposal = sample_lane_block_proposal_for_validators_with_min_quorum(
-        validators.clone(),
-        downgraded_quorum,
+    let proposal = rebind_lane_block_proposal_to_active_incarnation(
+        sample_lane_block_proposal_for_validators_with_min_quorum(
+            validators.clone(),
+            downgraded_quorum,
+        ),
+        actor.state.as_ref(),
     );
     assert_eq!(
         proposal.descriptor.validator_set_hash,
@@ -3055,6 +3172,128 @@ fn push_sample_transaction(actor: &Actor) {
             actor.state.view(),
         )
         .expect("push sample transaction");
+}
+
+fn local_leader_proposal_slot(
+    actor: &Actor,
+    height: u64,
+) -> (super::network_topology::Topology, u64, usize, u32) {
+    local_leader_proposal_slot_at_or_after(actor, height, 0)
+}
+
+fn local_leader_proposal_slot_at_or_after(
+    actor: &Actor,
+    height: u64,
+    min_view: u64,
+) -> (super::network_topology::Topology, u64, usize, u32) {
+    let roster = actor.effective_commit_topology();
+    let search_len = u64::try_from(roster.len().saturating_mul(3)).unwrap_or(u64::MAX);
+    (min_view..=min_view.saturating_add(search_len))
+        .find_map(|view| {
+            let mut topology = super::network_topology::Topology::new(roster.clone());
+            let leader_index = actor.leader_index_for(&mut topology, height, view).ok()?;
+            let local_index = actor.local_validator_index_for_topology(&topology)?;
+            (u32::try_from(leader_index).ok()? == local_index).then_some((
+                topology,
+                view,
+                leader_index,
+                local_index,
+            ))
+        })
+        .expect("test harness should find a proposal view led by the local peer")
+}
+
+fn path_snapshot(path: &Path) -> (bool, bool, Option<Vec<u8>>) {
+    (
+        path.exists(),
+        path.is_dir(),
+        if path.is_file() {
+            Some(fs::read(path).expect("read snapshot file"))
+        } else {
+            None
+        },
+    )
+}
+
+fn seed_canonical_genesis_qc_for_proposal(actor: &Actor) -> QcHeaderRef {
+    let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let committed_height = actor.committed_height_snapshot();
+    assert_eq!(
+        committed_height, 1,
+        "proposal fixture must seed exactly one canonical parent"
+    );
+    QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: genesis_hash,
+        height: committed_height,
+        view: 0,
+        epoch: actor.epoch_for_height(committed_height),
+    }
+}
+
+fn unique_log_transaction(actor: &Actor, index: usize, message_len: usize) -> SignedTransaction {
+    TransactionBuilder::new(
+        actor.common_config.chain.clone(),
+        SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+    )
+    .with_instructions([Log::new(
+        Level::INFO,
+        format!("da-proposal-{index}:{}", "x".repeat(message_len)),
+    )])
+    .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+}
+
+fn push_unique_log_transactions(
+    actor: &Actor,
+    count: usize,
+    message_len: usize,
+) -> Vec<HashOf<SignedTransaction>> {
+    (0..count)
+        .map(|index| {
+            let tx = unique_log_transaction(actor, index, message_len);
+            let hash = tx.hash();
+            actor
+                .queue
+                .push(
+                    AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+                    actor.state.view(),
+                )
+                .expect("push unique proposal transaction");
+            hash
+        })
+        .collect()
+}
+
+fn replace_actor_queue_with_capacity(
+    actor: &mut Actor,
+    capacity: usize,
+    journal_path: Option<&Path>,
+) {
+    let capacity = NonZeroUsize::new(capacity).expect("non-zero queue capacity");
+    let config = QueueConfig {
+        capacity,
+        capacity_per_user: NonZeroUsize::new(usize::MAX).expect("usize::MAX is non-zero"),
+        ..QueueConfig::default()
+    };
+    let queue = Queue::test(config, &TimeSource::new_system());
+    if let Some(path) = journal_path {
+        queue
+            .install_plan_journal(path, 16 * 1024 * 1024, true)
+            .expect("install proposal ownership queue journal");
+    }
+    actor.queue = Arc::new(queue);
+}
+
+fn proposal_admission_flood(
+    actor: &Actor,
+    start: usize,
+    count: usize,
+) -> Vec<AcceptedTransaction<'static>> {
+    (start..start.saturating_add(count))
+        .map(|index| {
+            AcceptedTransaction::new_unchecked(Cow::Owned(unique_log_transaction(actor, index, 32)))
+        })
+        .collect()
 }
 
 #[test]
@@ -3722,6 +3961,10 @@ fn block_with_da_commitment(manifest_hash: ManifestDigest) -> SignedBlock {
 
 fn test_sumeragi_config() -> SumeragiConfig {
     SumeragiConfig {
+        protocol_version: iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
+        round_timeout: Duration::from_millis(
+            iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS,
+        ),
         role: NodeRole::Validator,
         consensus_mode: ConsensusMode::Npos,
         mode_flip: SumeragiModeFlip {
@@ -4115,6 +4358,8 @@ fn handshake_fingerprint_uses_wsv_params_for_npos() {
     let state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
     let view = state.view();
     let config_caps = ConsensusConfigCaps {
+        nexus_policy_digest: [0u8; 32],
+        v2_config_fingerprint: [0xA1; 32],
         collectors_k: 0,
         redundant_send_r: 0,
         da_enabled: false,
@@ -4135,7 +4380,8 @@ fn handshake_fingerprint_uses_wsv_params_for_npos() {
             &common_config,
             &consensus_cfg,
             &config_caps,
-        );
+        )
+        .expect("valid v2 handshake configuration");
     let (mode_tag_from_world, bls_domain_from_world, caps_from_world) = {
         let world = state.world_view();
         let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
@@ -4146,12 +4392,13 @@ fn handshake_fingerprint_uses_wsv_params_for_npos() {
             &consensus_cfg,
             &config_caps,
         )
+        .expect("valid v2 handshake configuration")
     };
     assert_eq!(mode_tag_from_world, mode_tag);
     assert_eq!(bls_domain_from_world, bls_domain);
     assert_eq!(caps_from_world, caps);
     assert_eq!(mode_tag, NPOS_TAG.to_string());
-    assert_eq!(bls_domain, "bls-iroha2:npos-sumeragi:v1");
+    assert_eq!(bls_domain, "bls-iroha2:npos-sumeragi:v2");
 
     let duration_ms = |value: Duration| -> u64 {
         let ms = value.as_millis();
@@ -4200,6 +4447,9 @@ fn handshake_fingerprint_uses_wsv_params_for_npos() {
                 activation_lag_blocks: 7,
                 slashing_delay_blocks: 9,
             }),
+            protocol_version: consensus_cfg.protocol_version,
+            round_timeout_ms: duration_ms(consensus_cfg.round_timeout),
+            v2_context: None,
         },
         &mode_tag,
     );
@@ -4274,6 +4524,8 @@ fn handshake_fingerprint_uses_chain_seed_without_npos_params() {
     let state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
     let view = state.view();
     let config_caps = ConsensusConfigCaps {
+        nexus_policy_digest: [0u8; 32],
+        v2_config_fingerprint: [0xB2; 32],
         collectors_k: 0,
         redundant_send_r: 0,
         da_enabled: false,
@@ -4294,9 +4546,10 @@ fn handshake_fingerprint_uses_chain_seed_without_npos_params() {
             &common_config,
             &consensus_cfg,
             &config_caps,
-        );
+        )
+        .expect("valid v2 handshake configuration");
     assert_eq!(mode_tag, NPOS_TAG.to_string());
-    assert_eq!(bls_domain, "bls-iroha2:npos-sumeragi:v1");
+    assert_eq!(bls_domain, "bls-iroha2:npos-sumeragi:v2");
 
     let chain_bytes = common_config.chain.clone().into_inner();
     let chain_hash = iroha_crypto::Hash::new(chain_bytes.as_bytes());
@@ -4353,6 +4606,9 @@ fn handshake_fingerprint_uses_chain_seed_without_npos_params() {
                 activation_lag_blocks: consensus_cfg.npos.reconfig.activation_lag_blocks,
                 slashing_delay_blocks: consensus_cfg.npos.reconfig.slashing_delay_blocks,
             }),
+            protocol_version: consensus_cfg.protocol_version,
+            round_timeout_ms: duration_ms(consensus_cfg.round_timeout),
+            v2_context: None,
         },
         &mode_tag,
     );
@@ -4486,6 +4742,81 @@ async fn real_network_opt_in_is_ignored_on_current_thread() {
         !real_network_allowed_for_tests(true),
         "current-thread runtime should not attempt real networking in tests"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn recompute_consensus_caps_reads_live_nexus_policy() {
+    let baseline = test_actor_harness(4).await;
+    let before = baseline
+        .actor
+        .recompute_consensus_caps()
+        .expect("default Nexus policy digest");
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let updated = test_actor_harness_with_config_and_height_and_kura_and_state_setup(
+        4,
+        consensus_cfg,
+        None,
+        0,
+        Kura::blank_kura_for_testing(),
+        |state, _| {
+            let mut nexus = state.nexus_snapshot();
+            nexus.autoscale.target_block_ms =
+                NonZeroU64::new(nexus.autoscale.target_block_ms.get().saturating_add(1))
+                    .expect("nonzero autoscale target");
+            state
+                .set_nexus(nexus)
+                .expect("install updated Nexus policy");
+        },
+    )
+    .await;
+    let after = updated
+        .actor
+        .recompute_consensus_caps()
+        .expect("updated Nexus policy digest");
+    assert_ne!(before.nexus_policy_digest, after.nexus_policy_digest);
+
+    baseline.shutdown.send();
+    updated.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn recompute_consensus_caps_binds_compliance_engine_stably() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let harness = test_actor_harness_with_config_and_height_and_kura_and_state_setup(
+        4,
+        consensus_cfg,
+        None,
+        0,
+        Kura::blank_kura_for_testing(),
+        |state, _| {
+            let mut nexus = state.nexus_snapshot();
+            nexus.compliance.enabled = true;
+            nexus.compliance.audit_only = false;
+            state
+                .set_nexus(nexus)
+                .expect("install compliance-enabled Nexus policy");
+            let engine = crate::compliance::LaneComplianceEngine::from_policies(Vec::new(), false)
+                .expect("empty deterministic compliance fixture");
+            state.install_lane_compliance_engine(Some(Arc::new(engine)));
+        },
+    )
+    .await;
+
+    let first = harness
+        .actor
+        .recompute_consensus_caps()
+        .expect("compliance-enabled policy digest");
+    let second = harness
+        .actor
+        .recompute_consensus_caps()
+        .expect("stable compliance-enabled policy digest");
+    assert_eq!(first.nexus_policy_digest, second.nexus_policy_digest);
+
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -5504,6 +5835,7 @@ where
     let genesis_network = crate::sumeragi::GenesisWithPubKey {
         genesis: None,
         public_key: key_pair.public_key().clone(),
+        v2_bootstrap: None,
     };
     let rbc_status_handle = rbc_status::register_handle();
     let (background_tx, background_rx) = std::sync::mpsc::sync_channel(1024);
@@ -7208,7 +7540,7 @@ async fn observer_skips_qc_aggregation() {
             bls_sig: Vec::new(),
         };
         sign_vote_for_view(&mut vote, &chain, &topology, &harness.key_pairs);
-        actor.vote_log.insert(vote_log_key_for_vote(&vote), vote);
+        actor.handle_vote(vote);
     }
 
     let _ = harness.background_rx.try_iter().count();
@@ -7318,7 +7650,7 @@ async fn first_validated_qc_is_relayed_once_to_commit_topology() {
             bls_sig: Vec::new(),
         };
         sign_vote_for_view(&mut vote, &chain, &topology, &harness.key_pairs);
-        actor.vote_log.insert(vote_log_key_for_vote(&vote), vote);
+        actor.handle_vote(vote);
     }
 
     let _ = harness.background_rx.try_iter().count();
@@ -7678,6 +8010,7 @@ fn effective_commit_topology_falls_back_to_genesis_roster_when_empty() {
     let genesis_network = crate::sumeragi::GenesisWithPubKey {
         genesis: Some(genesis.clone()),
         public_key: key_pair.public_key().clone(),
+        v2_bootstrap: None,
     };
     let rbc_status_handle = rbc_status::register_handle();
     let block_sync_gossip_limit =
@@ -7755,7 +8088,7 @@ fn effective_commit_topology_falls_back_to_genesis_roster_when_empty() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn merge_committee_signatures_commit_merge_entry() {
+async fn merge_committee_signatures_persist_pending_globally_ordered_entry() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
@@ -7786,6 +8119,7 @@ async fn merge_committee_signatures_commit_merge_entry() {
     topo.clear();
     topo.push(actor.common_config.peer.id().clone());
     topo.commit();
+    let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
 
     let signers: Vec<&KeyPair> = lane_keypairs.iter().collect();
     let (_, mode_tag, _) = actor.consensus_context_for_height(1);
@@ -7801,11 +8135,15 @@ async fn merge_committee_signatures_commit_merge_entry() {
         .on_lane_relay_message(super::LaneRelayMessage::Envelope(envelope.clone()))
         .expect("lane relay handled");
 
-    let entry = actor
-        .state
-        .merge_ledger()
-        .latest()
-        .expect("merge entry committed");
+    assert!(
+        actor.state.merge_ledger().latest().is_none(),
+        "merge QC completion must not publish state outside global block order"
+    );
+    let (_, entry) = actor
+        .kura
+        .select_pending_certified_merge_entry()
+        .expect("pending merge store readable")
+        .expect("certified merge sidecar persisted");
     assert_eq!(entry.epoch_id, 1);
     assert_eq!(
         entry.lane_tips().as_slice(),
@@ -7818,9 +8156,108 @@ async fn merge_committee_signatures_commit_merge_entry() {
     assert_eq!(entry.merge_qc.signers_bitmap, vec![0x01]);
     assert!(!entry.merge_qc.aggregate_signature.is_empty());
 
-    let candidate = crate::merge::MergeLedgerCandidate::from(entry.as_ref());
-    let expected = crate::merge::merge_qc_message_digest(&actor.chain_id, &candidate);
+    let candidate = crate::merge::MergeLedgerCandidate::from(&entry);
+    let expected = crate::merge::merge_qc_message_digest(
+        &actor.chain_id,
+        &candidate,
+        entry.merge_qc.validator_set_hash_version,
+        entry.merge_qc.validator_set_hash,
+    );
     assert_eq!(entry.merge_qc.message_digest, expected);
+
+    let height = 2;
+    let view = 0;
+    let highest_qc = QcHeaderRef {
+        height: 1,
+        view: 0,
+        epoch: actor.epoch_for_height(1),
+        subject_block_hash: genesis_hash,
+        phase: crate::sumeragi::consensus::Phase::Commit,
+    };
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let assembled = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect("merge-only proposal assembly succeeds");
+    assert!(
+        assembled,
+        "certified merge work must make a proposal nonempty"
+    );
+    let proposed = actor
+        .pending
+        .pending_blocks
+        .values()
+        .find(|pending| pending.height == height && pending.view == view)
+        .expect("merge-only pending proposal");
+    assert_eq!(proposed.block.external_entrypoint_count(), 0);
+    let reference = proposed
+        .block
+        .execution_context()
+        .and_then(|bundle| bundle.merge_entry.as_ref())
+        .expect("merge-only block carries a compact certified reference");
+    assert!(reference.matches_entry(&entry));
+    assert!(!proposed.block.is_empty());
+    let proposed_block = proposed.block.clone();
+    let proposed_block_hash = proposed_block.hash();
+    let missing_hash = reference.entry_hash;
+    let reference_digest = crate::merge_sidecar::certified_merge_reference_digest(reference);
+    actor
+        .kura
+        .remove_pending_certified_merge_entry(missing_hash)
+        .expect("remove pending sidecar for negative validation");
+    {
+        let mut voting_block = None;
+        let validation = crate::block::ValidBlock::validate_keep_voting_block(
+            proposed_block,
+            &topology,
+            &actor.chain_id,
+            &actor.genesis_account,
+            &TimeSource::new_system(),
+            actor.state.as_ref(),
+            &mut voting_block,
+            false,
+        )
+        .unpack(|_| {});
+        match validation {
+            Err((_, err)) => assert!(matches!(
+                *err,
+                crate::block::BlockValidationError::MissingCertifiedMergeSidecar { entry_hash }
+                    if entry_hash == missing_hash
+            )),
+            Ok(_) => panic!("missing full merge sidecar must fail closed"),
+        }
+    }
+    assert!(matches!(
+        actor.validate_pending_block_for_voting_inline(proposed_block_hash, topology.as_ref()),
+        super::pending_block::ValidationGateOutcome::Deferred
+    ));
+    actor
+        .kura
+        .persist_pending_certified_merge_entry(&entry)
+        .expect("restore complete certified sidecar");
+    let requester = actor.common_config.peer.id().clone();
+    let (deferred, retry) = actor.subsystems.merge.sidecars.finish_completed(
+        missing_hash,
+        reference_digest,
+        true,
+        &requester,
+        Instant::now(),
+    );
+    assert!(retry.is_none());
+    assert_eq!(deferred.len(), 1, "only the exact carrier is resumed");
+    actor.resume_certified_merge_sidecar_blocks(deferred);
+    assert!(matches!(
+        actor.validate_pending_block_for_voting_inline(proposed_block_hash, topology.as_ref()),
+        super::pending_block::ValidationGateOutcome::Valid
+    ));
     harness.shutdown.send();
 }
 
@@ -7885,6 +8322,13 @@ async fn merge_committee_accepts_remote_signature() {
     topo.push(actor.common_config.peer.id().clone());
     topo.push(PeerId::new(harness.key_pairs[1].public_key().clone()));
     topo.commit();
+    seed_genesis_block_for_state(actor.state.as_ref());
+    let merge_view = (0_u64..16)
+        .find(|view| actor.local_is_round_leader(2, *view))
+        .expect("local validator leads one bounded merge view");
+    actor
+        .phase_tracker
+        .on_view_change(2, merge_view, Instant::now());
 
     let signers: Vec<&KeyPair> = lane_keypairs.iter().collect();
     let (_, mode_tag, _) = actor.consensus_context_for_height(1);
@@ -7904,13 +8348,27 @@ async fn merge_committee_accepts_remote_signature() {
         "quorum requires remote signature"
     );
 
-    let candidates = actor.state.merge_entry_candidates_from_lane_relays();
+    let candidates = actor
+        .state
+        .merge_entry_candidates_from_lane_relays_for_view(merge_view);
     assert_eq!(candidates.len(), 1);
     let candidate = &candidates[0];
-    let message_digest = crate::merge::merge_qc_message_digest(&actor.chain_id, candidate);
+    let validator_set = actor
+        .state
+        .commit_topology
+        .view()
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    let message_digest = crate::merge::merge_qc_message_digest(
+        &actor.chain_id,
+        candidate,
+        iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        HashOf::new(&validator_set),
+    );
     let inert_merge_signature = MergeCommitteeSignature {
         epoch_id: candidate.epoch_id,
-        view: 0,
+        view: candidate.view,
         signer: 1,
         message_digest,
         bls_sig: vec![0_u8; 96],
@@ -7928,7 +8386,7 @@ async fn merge_committee_accepts_remote_signature() {
     let signature = checked_signature(harness.key_pairs[1].private_key(), message_digest.as_ref());
     let merge_signature = MergeCommitteeSignature {
         epoch_id: candidate.epoch_id,
-        view: 0,
+        view: candidate.view,
         signer: 1,
         message_digest,
         bls_sig: signature.payload().to_vec(),
@@ -7938,14 +8396,93 @@ async fn merge_committee_accepts_remote_signature() {
         .on_lane_relay_message(super::LaneRelayMessage::MergeSignature(merge_signature))
         .expect("merge signature handled");
 
-    let entry = actor
-        .state
-        .merge_ledger()
-        .latest()
-        .expect("merge entry committed");
+    assert!(
+        actor.state.merge_ledger().latest().is_none(),
+        "merge QC completion must not publish state before a global carrier commits"
+    );
+    let (_, entry) = actor
+        .kura
+        .select_pending_certified_merge_entry()
+        .expect("pending merge store readable")
+        .expect("merge QC must persist a pending certified sidecar");
     assert_eq!(entry.epoch_id, candidate.epoch_id);
     assert_eq!(entry.merge_qc.signers_bitmap, vec![0x03]);
     assert!(!entry.merge_qc.aggregate_signature.is_empty());
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn merge_committee_rejects_an_old_global_view_share() {
+    let mut harness = test_actor_harness(2).await;
+    let actor = &mut harness.actor;
+    seed_genesis_block_for_state(actor.state.as_ref());
+    actor.phase_tracker.on_view_change(2, 1, Instant::now());
+
+    let topology = actor.state.commit_topology.view();
+    let signer = topology
+        .iter()
+        .position(|peer| peer == actor.common_config.peer.id())
+        .and_then(|index| u32::try_from(index).ok())
+        .expect("local peer belongs to commit topology");
+    let message_digest = Hash::new(b"stale-merge-view-share");
+    let signature = checked_signature(
+        actor.common_config.key_pair.private_key(),
+        message_digest.as_ref(),
+    );
+    actor
+        .on_merge_signature(MergeCommitteeSignature {
+            epoch_id: 1,
+            view: 0,
+            signer,
+            message_digest,
+            bls_sig: signature.payload().to_vec(),
+        })
+        .expect("stale share is handled without mutating committee state");
+
+    assert!(actor.subsystems.merge.committee.pending.is_empty());
+    assert!(actor.subsystems.merge.committee.remote_signers.is_empty());
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn merge_preparation_grace_expires_and_resets_on_round_change() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    seed_genesis_block_for_state(actor.state.as_ref());
+    let validator_set = actor
+        .state
+        .commit_topology
+        .view()
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    let validator_set_hash = HashOf::new(&validator_set);
+    let (round, _) = actor
+        .current_merge_execution_round(validator_set_hash)
+        .expect("exact merge round");
+    let started_at = Instant::now();
+    actor
+        .subsystems
+        .merge
+        .committee
+        .mark_preparation(round, started_at);
+    assert!(actor.merge_preparation_grace_active(round.height, round.view, started_at));
+
+    let timeout = actor.effective_timing.get().commit_quorum_timeout;
+    let after_timeout = started_at
+        .checked_add(timeout.saturating_add(Duration::from_millis(1)))
+        .expect("test instant remains representable");
+    assert!(
+        !actor.merge_preparation_grace_active(round.height, round.view, after_timeout),
+        "ordinary progress must resume after the configured merge grace"
+    );
+
+    let next_round = super::MergeExecutionRound {
+        view: round.view.saturating_add(1),
+        ..round
+    };
+    actor.subsystems.merge.committee.retain_round(next_round);
+    assert!(actor.subsystems.merge.committee.preparation.is_none());
     harness.shutdown.send();
 }
 
@@ -36546,9 +37083,7 @@ async fn authoritative_exact_frontier_slot_keeps_rbc_runtime_until_delivery() {
     let background_log = attach_background_log(actor);
     let _ = take_background_log(&background_log);
 
-    actor
-        .install_rbc_session_plan(&mut plan)
-        .expect("install session plan");
+    actor.install_rbc_session_plan(&mut plan);
     assert!(
         plan.session.is_none(),
         "installing an RBC session plan should move the session out of the broadcast plan"
@@ -38053,7 +38588,7 @@ async fn tick_rebroadcasts_stalled_rbc_sidecars_and_respects_cooldown() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
-    consensus_cfg.rbc.chunk_max_bytes = 32;
+    consensus_cfg.rbc.chunk_max_bytes = 20;
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 5).await;
     let _ = harness.background_rx.try_iter().count();
 
@@ -46940,6 +47475,125 @@ async fn deferred_frontier_commit_qc_prompts_exact_payload_fetch_before_ttl() {
             .iter()
             .any(|entry| entry.msg_kind == Some("CertifiedBlockFetchRequest")),
         "deferred frontier commit-QC repair should also request the certified block"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn deferred_frontier_new_view_qc_prompts_exact_payload_repair_before_ttl() {
+    let _missing_block_guard = status::missing_block_fetch_test_guard();
+    status::reset_missing_block_fetch_counters_for_tests();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+    let _ = seed_genesis_block_for_state(&actor.state);
+
+    let target_height = actor.active_consensus_round_height();
+    let target_view = 0_u64;
+    let qc_height = target_height.saturating_add(1);
+    let qc_view = 0_u64;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(target_height, now);
+    actor
+        .phase_tracker
+        .on_view_change(target_height, target_view, now);
+    let mut block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE7; Hash::LENGTH]));
+    if actor.block_known_locally(block_hash) {
+        block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE8; Hash::LENGTH]));
+    }
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signature_topology = super::topology_for_view(
+        &topology,
+        qc_height,
+        qc_view,
+        actor.mode_tag(),
+        actor.npos_prf_seed(),
+    );
+    let signers: BTreeSet<ValidatorIndex> = (0..signature_topology.as_ref().len())
+        .map(|idx| {
+            ValidatorIndex::try_from(u32::try_from(idx).expect("signer index fits u32"))
+                .expect("validator index fits")
+        })
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, signature_topology.as_ref().len());
+    let highest_qc = QcHeaderRef {
+        subject_block_hash: block_hash,
+        height: target_height,
+        view: target_view,
+        epoch: actor.epoch_for_height(target_height),
+        phase: Phase::Commit,
+    };
+    let qc = qc_with_bitmap_and_highest_for_actor(
+        actor,
+        block_hash,
+        qc_height,
+        qc_view,
+        actor.epoch_for_height(qc_height),
+        signers_bitmap,
+        Phase::NewView,
+        Some(highest_qc),
+        &topology,
+        &harness.key_pairs,
+    );
+    let key = super::Actor::qc_tally_key(&qc);
+    let retry_floor = actor
+        .config
+        .recovery
+        .exact_body_fetch_retry_floor
+        .max(Duration::from_millis(1));
+    actor.deferred_missing_payload_qcs.insert(
+        key,
+        super::DeferredQcEntry {
+            qc,
+            first_seen: now,
+            last_attempt: now
+                .checked_sub(retry_floor + Duration::from_millis(1))
+                .expect("time subtraction should be valid"),
+            attempts: 0,
+            escalated_fetch: false,
+            reason: "test_deferred_frontier_new_view_payload_fetch",
+        },
+    );
+
+    let _ = take_background_log(&background_log);
+    assert!(
+        actor.try_replay_deferred_missing_payload_qcs(now),
+        "frontier NewView-QC payload repair should not wait for deferred-QC TTL"
+    );
+
+    let entry = actor
+        .deferred_missing_payload_qcs
+        .get(&key)
+        .expect("deferred QC should remain queued until the payload arrives");
+    assert_eq!(
+        entry.attempts, 1,
+        "prompt fetch should consume one bounded repair attempt"
+    );
+    let slot = actor
+        .frontier_slot
+        .as_ref()
+        .expect("frontier NewView-QC repair should own the exact frontier slot");
+    assert_eq!(slot.height, target_height);
+    assert_eq!(slot.view, target_view);
+    assert_eq!(slot.block_hash, block_hash);
+    assert!(
+        slot.exact_fetch_armed,
+        "deferred NewView-QC repair should arm exact body fetching"
+    );
+
+    let entries = take_background_log(&background_log);
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry.msg_kind != Some("CertifiedBlockFetchRequest")),
+        "NewView-QC payload repair must not request a certified commit block"
     );
 
     harness.shutdown.send();
@@ -56398,7 +57052,7 @@ async fn insert_seed_rbc_session_does_not_cache_unverified_leader_signature() {
 #[tokio::test(flavor = "current_thread")]
 async fn maybe_emit_rbc_ready_for_local_kura_payload_hydrates_before_ready() {
     let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.rbc.chunk_max_bytes = 32;
+    consensus_cfg.rbc.chunk_max_bytes = 20;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
     let height = actor
@@ -72267,7 +72921,10 @@ async fn consensus_caps_use_on_chain_collectors() {
         block.commit();
     }
 
-    let caps = harness.actor.recompute_consensus_caps();
+    let caps = harness
+        .actor
+        .recompute_consensus_caps()
+        .expect("on-chain collector settings should produce consensus capabilities");
     assert_eq!(caps.collectors_k, 2);
     assert_eq!(caps.redundant_send_r, 3);
 
@@ -72281,7 +72938,10 @@ async fn consensus_caps_zero_plain_rbc_erasure_profile() {
     harness.actor.config.rbc.data_shards = 4;
     harness.actor.config.rbc.parity_shards = 2;
 
-    let caps = harness.actor.recompute_consensus_caps();
+    let caps = harness
+        .actor
+        .recompute_consensus_caps()
+        .expect("plain RBC settings should produce consensus capabilities");
     assert_eq!(
         caps.rbc_encoding,
         iroha_data_model::block::consensus::RbcEncoding::Plain
@@ -72379,9 +73039,9 @@ async fn assemble_proposal_rejects_unreadable_da_spool() {
 
     let committed_height = actor.state.view().height() as u64;
     let height = committed_height.saturating_add(1);
-    let view = 0_u64;
     let highest_qc = sample_qc_ref(0, 0);
-    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (mut topology, view, leader_index, local_validator_index) =
+        local_leader_proposal_slot(actor, height);
 
     let err = actor
         .assemble_and_broadcast_proposal(
@@ -72389,16 +73049,20 @@ async fn assemble_proposal_rejects_unreadable_da_spool() {
             view,
             highest_qc,
             &mut topology,
-            0,
-            0,
+            leader_index,
+            local_validator_index,
             None,
             Instant::now(),
         )
         .expect_err("unreadable DA spool must fail proposal assembly");
     let message = err.to_string();
     assert!(
-        message.contains("failed to load DA commitments from spool"),
-        "expected DA commitment spool failure, got {message}"
+        message.contains("failed to read DA receipt spool"),
+        "expected Nexus DA receipt spool failure, got {message}"
+    );
+    assert!(
+        message.contains("DA spool path is not a directory"),
+        "error should identify the invalid spool shape: {message}"
     );
     assert!(
         message.contains(&broken_spool.display().to_string()),
@@ -72463,12 +73127,14 @@ async fn assemble_proposal_rejects_invalid_da_commitment_file() {
     record.storage_ticket = StorageTicketId::new([0; 32]);
     write_da_commitment_spool_file(&spool_dir, &record, [0x79; 32]);
     write_da_manifest_spool_file(&spool_dir, &record, manifest, [0x7A; 32]);
+    let receipt = sample_da_receipt_for_record(&record);
+    write_da_receipt_spool_file(&spool_dir, &receipt, record.sequence, [0x7B; 32]);
 
     let committed_height = actor.state.view().height() as u64;
     let height = committed_height.saturating_add(1);
-    let view = 0_u64;
     let highest_qc = sample_qc_ref(0, 0);
-    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (mut topology, view, leader_index, local_validator_index) =
+        local_leader_proposal_slot(actor, height);
 
     let err = actor
         .assemble_and_broadcast_proposal(
@@ -72476,8 +73142,8 @@ async fn assemble_proposal_rejects_invalid_da_commitment_file() {
             view,
             highest_qc,
             &mut topology,
-            0,
-            0,
+            leader_index,
+            local_validator_index,
             None,
             Instant::now(),
         )
@@ -72493,12 +73159,9 @@ async fn assemble_proposal_rejects_invalid_da_commitment_file() {
     );
     assert!(
         !actor
-            .subsystems
-            .da_rbc
-            .da
-            .sealed_commitments
-            .contains(&iroha_data_model::da::commitment::DaCommitmentKey::from_record(&record)),
-        "invalid commitment must not be marked sealed after assembly rejection"
+            .state
+            .da_commitments_contains_record_identity_cached(&record),
+        "invalid commitment must not enter canonical state after assembly rejection"
     );
 
     harness.shutdown.send();
@@ -72553,12 +73216,9 @@ async fn assemble_proposal_rejects_stale_geometry_da_commitment_file() {
     );
     assert!(
         !actor
-            .subsystems
-            .da_rbc
-            .da
-            .sealed_commitments
-            .contains(&iroha_data_model::da::commitment::DaCommitmentKey::from_record(&record)),
-        "stale-lane commitment must not be marked sealed after assembly rejection"
+            .state
+            .da_commitments_contains_record_identity_cached(&record),
+        "stale-lane commitment must not enter canonical state after assembly rejection"
     );
 
     harness.shutdown.send();
@@ -72582,12 +73242,14 @@ async fn assemble_proposal_rejects_mismatched_da_manifest_file() {
         b"manifest-with-conflicting-digest",
         [0x7D; 32],
     );
+    let receipt = sample_da_receipt_for_record(&record);
+    write_da_receipt_spool_file(&spool_dir, &receipt, record.sequence, [0x7E; 32]);
 
     let committed_height = actor.state.view().height() as u64;
     let height = committed_height.saturating_add(1);
-    let view = 0_u64;
     let highest_qc = sample_qc_ref(0, 0);
-    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (mut topology, view, leader_index, local_validator_index) =
+        local_leader_proposal_slot(actor, height);
 
     let err = actor
         .assemble_and_broadcast_proposal(
@@ -72595,15 +73257,15 @@ async fn assemble_proposal_rejects_mismatched_da_manifest_file() {
             view,
             highest_qc,
             &mut topology,
-            0,
-            0,
+            leader_index,
+            local_validator_index,
             None,
             Instant::now(),
         )
         .expect_err("mismatched DA manifest must fail proposal assembly");
     let message = err.to_string();
     assert!(
-        message.contains("DA manifest guard failed before sealing commitment"),
+        message.contains("DA manifest guard failed before including commitment in proposal"),
         "expected manifest guard failure, got {message}"
     );
     assert!(
@@ -72612,12 +73274,9 @@ async fn assemble_proposal_rejects_mismatched_da_manifest_file() {
     );
     assert!(
         !actor
-            .subsystems
-            .da_rbc
-            .da
-            .sealed_commitments
-            .contains(&iroha_data_model::da::commitment::DaCommitmentKey::from_record(&record)),
-        "mismatched manifest must not mark the commitment sealed"
+            .state
+            .da_commitments_contains_record_identity_cached(&record),
+        "mismatched manifest must not enter canonical state"
     );
 
     harness.shutdown.send();
@@ -72674,22 +73333,44 @@ async fn assemble_proposal_rejects_corrupt_da_pin_intent_file() {
 async fn assemble_proposal_rejects_invalid_da_pin_intent_file() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    actor.config.da.max_commitments_per_block = 1;
+    actor.config.da.max_proof_openings_per_block = 1;
+    let highest_qc = seed_canonical_genesis_qc_for_proposal(actor);
+    let background_log = attach_background_log(actor);
 
     let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+    let manifest = b"transactional-da-sidecar-manifest";
+    let mut record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x73; 32])));
+    record.manifest_hash = ManifestDigest::new(*blake3_hash(manifest).as_bytes());
+    write_da_commitment_spool_file(&spool_dir, &record, [0x74; 32]);
+    write_da_manifest_spool_file(&spool_dir, &record, manifest, [0x75; 32]);
+    let receipt = sample_da_receipt_for_record(&record);
+    write_da_receipt_spool_file(&spool_dir, &receipt, record.sequence, [0x76; 32]);
+
     let intent = DaPinIntent::new(
         LaneId::new(0),
         1,
         2,
-        StorageTicketId::new([0x76; 32]),
+        StorageTicketId::new([0x77; 32]),
         ManifestDigest::new([0; 32]),
     );
-    write_da_pin_intent_spool_file(&spool_dir, &intent, [0x77; 32]);
+    let invalid_pin_path = write_da_pin_intent_spool_file(&spool_dir, &intent, [0x78; 32]);
+
+    let lane_config = actor.state.nexus_snapshot().lane_config;
+    let shard_id = lane_config.shard_id(record.lane_id);
+    let cursor_before = actor
+        .state
+        .da_shard_cursor_index_snapshot_cached()
+        .get(shard_id)
+        .copied();
+    let journal_path =
+        crate::da::DaShardCursorJournal::journal_path(&actor.state.kura().store_root());
+    let journal_before = path_snapshot(&journal_path);
 
     let committed_height = actor.state.view().height() as u64;
     let height = committed_height.saturating_add(1);
-    let view = 0_u64;
-    let highest_qc = sample_qc_ref(0, 0);
-    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (mut topology, view, leader_index, local_validator_index) =
+        local_leader_proposal_slot(actor, height);
 
     let err = actor
         .assemble_and_broadcast_proposal(
@@ -72697,8 +73378,8 @@ async fn assemble_proposal_rejects_invalid_da_pin_intent_file() {
             view,
             highest_qc,
             &mut topology,
-            0,
-            0,
+            leader_index,
+            local_validator_index,
             None,
             Instant::now(),
         )
@@ -72717,12 +73398,85 @@ async fn assemble_proposal_rejects_invalid_da_pin_intent_file() {
         "error should identify the semantic validation failure: {message}"
     );
     assert!(
-        !actor.subsystems.da_rbc.da.sealed_pin_intents.contains(&(
-            intent.lane_id.as_u32(),
-            intent.epoch,
-            intent.sequence
-        )),
-        "invalid pin intent must not be marked sealed after assembly rejection"
+        !actor
+            .state
+            .da_pin_intents_contains_intent_identity_cached(&intent),
+        "invalid pin intent must not enter canonical state after assembly rejection"
+    );
+    assert_eq!(
+        path_snapshot(&journal_path),
+        journal_before,
+        "invalid later pin work must not mutate the canonical shard cursor journal"
+    );
+    assert!(
+        !actor
+            .state
+            .da_commitments_contains_record_identity_cached(&record),
+        "failed proposal must not add its valid commitment to canonical state"
+    );
+    assert_eq!(
+        actor
+            .state
+            .da_shard_cursor_index_snapshot_cached()
+            .get(shard_id)
+            .copied(),
+        cursor_before,
+        "failed proposal must not advance the canonical shard cursor"
+    );
+    assert!(
+        take_background_log(&background_log).is_empty(),
+        "pre-finalization rejection must not schedule consensus transport"
+    );
+
+    fs::remove_file(&invalid_pin_path).expect("remove invalid pin before retry");
+    let (mut topology, retry_view, retry_leader_index, retry_local_validator_index) =
+        local_leader_proposal_slot(actor, height);
+    let assembled = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            retry_view,
+            highest_qc,
+            &mut topology,
+            retry_leader_index,
+            retry_local_validator_index,
+            None,
+            Instant::now(),
+        )
+        .expect("retry after removing invalid pin should assemble");
+    assert!(assembled);
+    let pending = actor
+        .pending
+        .pending_blocks
+        .values()
+        .find(|pending| pending.height == height && pending.view == retry_view && !pending.aborted)
+        .expect("successful retry retains its pending block");
+    let pending_bundle = pending
+        .block
+        .da_commitments()
+        .expect("final pending block carries DA commitments");
+    assert_eq!(
+        pending_bundle.commitments.as_slice(),
+        std::slice::from_ref(&record)
+    );
+    assert!(
+        !actor
+            .state
+            .da_commitments_contains_record_identity_cached(&record),
+        "proposal assembly alone must not add the commitment to canonical state"
+    );
+    assert_eq!(
+        actor
+            .state
+            .da_shard_cursor_index_snapshot_cached()
+            .get(shard_id)
+            .copied(),
+        cursor_before,
+        "proposal assembly alone must not advance the canonical shard cursor"
+    );
+    assert_eq!(
+        path_snapshot(&journal_path),
+        journal_before,
+        "proposal assembly alone must not mutate the canonical shard cursor journal"
     );
 
     harness.shutdown.send();
@@ -72774,12 +73528,10 @@ async fn assemble_proposal_rejects_stale_geometry_da_pin_intent_file() {
         "error should identify the inactive lane catalog: {message}"
     );
     assert!(
-        !actor.subsystems.da_rbc.da.sealed_pin_intents.contains(&(
-            intent.lane_id.as_u32(),
-            intent.epoch,
-            intent.sequence
-        )),
-        "stale-lane pin intent must not be marked sealed after assembly rejection"
+        !actor
+            .state
+            .da_pin_intents_contains_intent_identity_cached(&intent),
+        "stale-lane pin intent must not enter canonical state after assembly rejection"
     );
 
     harness.shutdown.send();
@@ -72835,12 +73587,10 @@ async fn assemble_proposal_rejects_future_created_autoscale_da_pin_intent_file()
         "error should identify the inactive lane catalog: {message}"
     );
     assert!(
-        !actor.subsystems.da_rbc.da.sealed_pin_intents.contains(&(
-            intent.lane_id.as_u32(),
-            intent.epoch,
-            intent.sequence
-        )),
-        "future-created lane pin intent must not be marked sealed after assembly rejection"
+        !actor
+            .state
+            .da_pin_intents_contains_intent_identity_cached(&intent),
+        "future-created lane pin intent must not enter canonical state after assembly rejection"
     );
 
     harness.shutdown.send();
@@ -72897,12 +73647,10 @@ async fn assemble_proposal_rejects_duplicate_da_pin_intent_spool_entries() {
         "error should identify the duplicate pin-intent tuple: {message}"
     );
     assert!(
-        !actor.subsystems.da_rbc.da.sealed_pin_intents.contains(&(
-            first.lane_id.as_u32(),
-            first.epoch,
-            first.sequence
-        )),
-        "duplicate pin intent must not be marked sealed after assembly rejection"
+        !actor
+            .state
+            .da_pin_intents_contains_intent_identity_cached(&first),
+        "duplicate pin intent must not enter canonical state after assembly rejection"
     );
 
     harness.shutdown.send();
@@ -72997,11 +73745,12 @@ async fn assemble_proposal_rejects_duplicate_da_receipt_key() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn assemble_proposal_rejects_unreadable_da_shard_cursor_journal() {
+async fn assemble_proposal_ignores_unreadable_proposal_spool_da_shard_cursor_journal() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     actor.config.da.max_commitments_per_block = 1;
     actor.config.da.max_proof_openings_per_block = 1;
+    let highest_qc = seed_canonical_genesis_qc_for_proposal(actor);
     let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
 
     let manifest = b"manifest-for-blocked-shard-cursor-journal";
@@ -73010,37 +73759,170 @@ async fn assemble_proposal_rejects_unreadable_da_shard_cursor_journal() {
     record.manifest_hash = ManifestDigest::new(*blake3_hash(manifest).as_bytes());
     write_da_commitment_spool_file(&spool_dir, &record, [0x89; 32]);
     write_da_manifest_spool_file(&spool_dir, &record, manifest, [0x8A; 32]);
+    let receipt = sample_da_receipt_for_record(&record);
+    write_da_receipt_spool_file(&spool_dir, &receipt, record.sequence, [0x8B; 32]);
 
     let shard_cursor_path = crate::da::DaShardCursorJournal::journal_path(&spool_dir);
     fs::create_dir(&shard_cursor_path).expect("block shard cursor journal path with directory");
 
+    let lane_config = actor.state.nexus_snapshot().lane_config;
+    let shard_id = lane_config.shard_id(record.lane_id);
+    let cursor_before = actor
+        .state
+        .da_shard_cursor_index_snapshot_cached()
+        .get(shard_id)
+        .copied();
+    let canonical_journal_path =
+        crate::da::DaShardCursorJournal::journal_path(&actor.state.kura().store_root());
+    let canonical_journal_before = path_snapshot(&canonical_journal_path);
+
     let committed_height = actor.state.view().height() as u64;
     let height = committed_height.saturating_add(1);
-    let view = 0_u64;
-    let highest_qc = sample_qc_ref(0, 0);
-    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (mut topology, view, leader_index, local_validator_index) =
+        local_leader_proposal_slot(actor, height);
 
-    let err = actor
+    let assembled = actor
         .assemble_and_broadcast_proposal(
             height,
             view,
             highest_qc,
             &mut topology,
-            0,
-            0,
+            leader_index,
+            local_validator_index,
             None,
             Instant::now(),
         )
-        .expect_err("unreadable DA shard cursor journal must fail proposal assembly");
-    let message = err.to_string();
+        .expect("proposal assembly must ignore the non-canonical spool journal");
+    assert!(assembled);
     assert!(
-        message.contains("failed to load DA shard cursor journal"),
-        "expected shard cursor journal load failure, got {message}"
+        shard_cursor_path.is_dir(),
+        "proposal assembly must not read or replace the spool-local journal path"
     );
+    let pending = actor
+        .pending
+        .pending_blocks
+        .values()
+        .find(|pending| pending.height == height && pending.view == view && !pending.aborted)
+        .expect("proposal with DA sidecar remains pending");
+    assert_eq!(
+        pending
+            .block
+            .da_commitments()
+            .expect("pending proposal carries DA commitment")
+            .commitments
+            .as_slice(),
+        std::slice::from_ref(&record)
+    );
+    assert_eq!(
+        actor
+            .state
+            .da_shard_cursor_index_snapshot_cached()
+            .get(shard_id)
+            .copied(),
+        cursor_before,
+        "proposal assembly must not advance canonical shard cursors"
+    );
+    assert_eq!(
+        path_snapshot(&canonical_journal_path),
+        canonical_journal_before,
+        "proposal assembly must not mutate the canonical Kura-root journal"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_fails_closed_when_canonical_da_indexes_are_not_hydrated() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.da.max_commitments_per_block = 1;
+    actor.config.da.max_proof_openings_per_block = 1;
+    let background_log = attach_background_log(actor);
+
+    let tx = sample_transaction();
+    let tx_hash = tx.hash();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push proposal transaction");
+
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+    let manifest = b"manifest-for-failed-da-index-hydration";
+    let mut record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x8C; 32])));
+    record.kzg_commitment = None;
+    record.manifest_hash = ManifestDigest::new(*blake3_hash(manifest).as_bytes());
+    let commitment_path = write_da_commitment_spool_file(&spool_dir, &record, [0x8D; 32]);
+    let manifest_path = write_da_manifest_spool_file(&spool_dir, &record, manifest, [0x8E; 32]);
+    let receipt = sample_da_receipt_for_record(&record);
+    let receipt_path =
+        write_da_receipt_spool_file(&spool_dir, &receipt, record.sequence, [0x8F; 32]);
+
+    let height = actor.state.view().height() as u64 + 1;
+    let (mut topology, view, leader_index, local_validator_index) =
+        local_leader_proposal_slot(actor, height);
+    let hydration_error = crate::state::DaIndexHydrationError::ReceiptCursor(
+        crate::da::receipts::DaReceiptCursorError::MissingSequence {
+            lane: record.lane_id,
+            epoch: record.epoch,
+            expected: 1,
+            observed: 2,
+        },
+    );
+    actor
+        .state
+        .set_da_indexes_hydration_result_for_test(Some(Err(hydration_error)));
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            sample_qc_ref(0, 0),
+            &mut topology,
+            leader_index,
+            local_validator_index,
+            None,
+            Instant::now(),
+        )
+        .expect_err("failed canonical DA hydration must block proposal assembly");
     assert!(
-        message.contains(&shard_cursor_path.display().to_string()),
-        "error should identify the blocked journal path: {message}"
+        err.to_string()
+            .contains("canonical DA index hydration failed"),
+        "unexpected hydration gate error: {err}"
     );
+    assert!(actor.queue.contains_transaction_hash(tx_hash));
+    assert!(actor.pending.pending_blocks.is_empty());
+    assert!(actor.subsystems.propose.proposal_cache.hints.is_empty());
+    assert!(actor.subsystems.propose.proposal_cache.proposals.is_empty());
+    assert!(take_background_log(&background_log).is_empty());
+    assert!(commitment_path.exists() && manifest_path.exists() && receipt_path.exists());
+
+    actor.state.set_da_indexes_hydration_result_for_test(None);
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            sample_qc_ref(0, 0),
+            &mut topology,
+            leader_index,
+            local_validator_index,
+            None,
+            Instant::now(),
+        )
+        .expect_err("unknown canonical DA hydration status must block proposal assembly");
+    assert!(
+        err.to_string()
+            .contains("before canonical DA indexes are hydrated"),
+        "unexpected missing hydration status error: {err}"
+    );
+    assert!(actor.queue.contains_transaction_hash(tx_hash));
+    assert!(actor.pending.pending_blocks.is_empty());
+    assert!(actor.subsystems.propose.proposal_cache.hints.is_empty());
+    assert!(actor.subsystems.propose.proposal_cache.proposals.is_empty());
+    assert!(take_background_log(&background_log).is_empty());
+    assert!(commitment_path.exists() && manifest_path.exists() && receipt_path.exists());
 
     harness.shutdown.send();
 }
@@ -73049,15 +73931,1232 @@ async fn assemble_proposal_rejects_unreadable_da_shard_cursor_journal() {
 async fn internal_proposal_work_detects_da_commitments() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    actor.state.nexus.write().enabled = true;
     let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
 
     let record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x55; 32])));
     write_da_commitment_spool_file(&spool_dir, &record, [0x78; 32]);
+    let receipt = sample_da_receipt_for_record(&record);
+    write_da_receipt_spool_file(&spool_dir, &receipt, record.sequence, [0x79; 32]);
 
     let proposal_height = actor.state.view().height() as u64 + 1;
-    let work = actor.internal_proposal_work(proposal_height, None);
-    assert!(work.da_commitments);
+    let work = actor.internal_proposal_work(proposal_height, None, false);
+    assert!(
+        work.da_commitments,
+        "a receipt-aligned DA commitment must remain visible as proposal work"
+    );
+    assert!(work.da_receipts);
     assert!(work.has_work());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn internal_proposal_work_ignores_unreceipted_nexus_commitment() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.state.nexus.write().enabled = true;
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+
+    let record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x5A; 32])));
+    let path = write_da_commitment_spool_file(&spool_dir, &record, [0x5B; 32]);
+
+    let proposal_height = actor.state.view().height() as u64 + 1;
+    for _ in 0..2 {
+        let work = actor.internal_proposal_work(proposal_height, None, false);
+        assert!(
+            !work.da_commitments,
+            "an unreceipted Nexus commitment is not yet committable proposal work"
+        );
+        assert!(!work.da_receipts);
+        assert!(
+            !work.has_work(),
+            "an unreceipted commitment must not keep an otherwise idle proposal alive"
+        );
+    }
+    assert!(path.exists(), "deferred commitment must remain spooled");
+    assert!(
+        !actor
+            .state
+            .da_commitments_contains_record_identity_cached(&record),
+        "deferred commitment must not enter canonical state"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_defers_unreceipted_nexus_commitment_without_broadcast() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.state.nexus.write().enabled = true;
+    let background_log = attach_background_log(actor);
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+
+    let record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x5C; 32])));
+    let path = write_da_commitment_spool_file(&spool_dir, &record, [0x5D; 32]);
+    let height = actor.state.view().height() as u64 + 1;
+    let (mut topology, view, leader_index, local_validator_index) =
+        local_leader_proposal_slot(actor, height);
+
+    for _ in 0..2 {
+        let assembled = actor
+            .assemble_and_broadcast_proposal(
+                height,
+                view,
+                sample_qc_ref(0, 0),
+                &mut topology,
+                leader_index,
+                local_validator_index,
+                None,
+                Instant::now(),
+            )
+            .expect("unreceipted DA work should defer cleanly");
+        assert!(!assembled, "unreceipted DA work must not create a proposal");
+        assert!(
+            take_background_log(&background_log).is_empty(),
+            "deferred DA work must not schedule consensus transport"
+        );
+    }
+
+    assert!(path.exists(), "deferred commitment must remain spooled");
+    assert!(actor.pending.pending_blocks.is_empty());
+    assert!(actor.slot_tracker.proposals_seen.is_empty());
+    assert!(actor.subsystems.propose.proposal_cache.hints.is_empty());
+    assert!(actor.subsystems.propose.proposal_cache.proposals.is_empty());
+    assert!(
+        !actor
+            .state
+            .da_commitments_contains_record_identity_cached(&record),
+        "deferred commitment must not enter canonical state"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_defers_receipt_aligned_commitment_until_strict_manifest_arrives() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.state.nexus.write().enabled = true;
+    let background_log = attach_background_log(actor);
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+
+    let absent_manifest = b"strict-manifest-not-yet-spooled";
+    let mut record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x5E; 32])));
+    record.manifest_hash = ManifestDigest::new(*blake3_hash(absent_manifest).as_bytes());
+    let commitment_path = write_da_commitment_spool_file(&spool_dir, &record, [0x5F; 32]);
+    let receipt = sample_da_receipt_for_record(&record);
+    let receipt_path =
+        write_da_receipt_spool_file(&spool_dir, &receipt, record.sequence, [0x60; 32]);
+    let height = actor.state.view().height() as u64 + 1;
+
+    let work = actor.internal_proposal_work(height, None, false);
+    assert!(work.da_commitments);
+    assert!(work.da_receipts);
+    assert!(
+        work.has_work(),
+        "receipt alignment should schedule assembly so the manifest guard can recheck availability"
+    );
+
+    for _ in 0..2 {
+        let (mut topology, view, leader_index, local_validator_index) =
+            local_leader_proposal_slot(actor, height);
+        let assembled = actor
+            .assemble_and_broadcast_proposal(
+                height,
+                view,
+                sample_qc_ref(0, 0),
+                &mut topology,
+                leader_index,
+                local_validator_index,
+                None,
+                Instant::now(),
+            )
+            .expect("missing strict manifest should defer cleanly");
+        assert!(
+            !assembled,
+            "a receipt-aligned commitment without its strict manifest must not create a proposal"
+        );
+        assert!(
+            take_background_log(&background_log).is_empty(),
+            "post-filter deferral must not schedule consensus transport"
+        );
+        assert!(actor.pending.pending_blocks.is_empty());
+        assert!(actor.slot_tracker.proposals_seen.is_empty());
+        assert!(actor.subsystems.propose.proposal_cache.hints.is_empty());
+        assert!(actor.subsystems.propose.proposal_cache.proposals.is_empty());
+        assert!(
+            !actor
+                .state
+                .da_commitments_contains_record_identity_cached(&record),
+            "manifest-deferred commitment must not enter canonical state"
+        );
+    }
+
+    assert!(commitment_path.exists());
+    assert!(receipt_path.exists());
+    assert!(
+        !spool_dir
+            .join(da_manifest_spool_file_name(&record, [0x61; 32]))
+            .exists(),
+        "test requires the strict manifest to remain absent"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn da_sidecar_survives_real_rbc_chunk_cap_rebuild_without_precommit_state() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.block.max_transactions = NonZeroUsize::new(128);
+    consensus_cfg.block.fast_finality_max_transactions = None;
+    consensus_cfg.rbc.encoding = iroha_data_model::block::consensus::RbcEncoding::Plain;
+    // Keep the hard 1,024-chunk cap below the full batch while leaving room for the
+    // DA sidecar plus at least one transaction after the real rebuild loop trims.
+    consensus_cfg.rbc.chunk_max_bytes = 18;
+    consensus_cfg.rbc.pending_max_chunks = 65_536;
+    consensus_cfg.rbc.pending_max_bytes = 1024 * 1024;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    widen_sumeragi_timing_for_heavy_proposal_test(actor);
+    actor.config.da.max_commitments_per_block = 1;
+    actor.config.da.max_proof_openings_per_block = 1;
+    actor.state.nexus.write().enabled = true;
+    let highest_qc = seed_canonical_genesis_qc_for_proposal(actor);
+
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+    let queue_journal_path = spool_dir.join("proposal-guard-return-queue-journal.norito");
+    replace_actor_queue_with_capacity(actor, 128, Some(&queue_journal_path));
+    let input_hashes = push_unique_log_transactions(actor, 128, 0);
+    let retained_bytes_before = actor.queue.retained_bytes();
+    let queue_journal_before =
+        fs::read(&queue_journal_path).expect("read queue journal before proposal");
+    let manifest = b"manifest-for-real-rbc-cap-rebuild";
+    let mut record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x62; 32])));
+    record.kzg_commitment = None;
+    record.manifest_hash = ManifestDigest::new(*blake3_hash(manifest).as_bytes());
+    write_da_commitment_spool_file(&spool_dir, &record, [0x63; 32]);
+    write_da_manifest_spool_file(&spool_dir, &record, manifest, [0x64; 32]);
+    let receipt = sample_da_receipt_for_record(&record);
+    write_da_receipt_spool_file(&spool_dir, &receipt, record.sequence, [0x65; 32]);
+
+    let lane_config = actor.state.nexus_snapshot().lane_config;
+    let shard_id = lane_config.shard_id(record.lane_id);
+    let cursor_before = actor
+        .state
+        .da_shard_cursor_index_snapshot_cached()
+        .get(shard_id)
+        .copied();
+    let canonical_journal_path =
+        crate::da::DaShardCursorJournal::journal_path(&actor.state.kura().store_root());
+    let canonical_journal_before = path_snapshot(&canonical_journal_path);
+
+    let height = actor.state.view().height() as u64 + 1;
+    let (mut topology, view, leader_index, local_validator_index) =
+        local_leader_proposal_slot(actor, height);
+    super::propose::reset_proposal_inner_rebuild_count();
+    let _flood_guard = super::propose::flood_proposal_guard_return_admission_once(
+        proposal_admission_flood(actor, 10_000, 32),
+    );
+    let assembled = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            leader_index,
+            local_validator_index,
+            None,
+            Instant::now(),
+        )
+        .expect("RBC-capped proposal should rebuild and assemble");
+    assert!(assembled);
+    assert!(
+        super::propose::proposal_inner_rebuild_count() > 0,
+        "fixture must traverse a real inner-loop chunk-cap continue"
+    );
+
+    let pending = actor
+        .pending
+        .pending_blocks
+        .values()
+        .find(|pending| pending.height == height && pending.view == view && !pending.aborted)
+        .expect("rebuilt proposal remains pending");
+    let final_hashes = super::block_external_transaction_hashes(&pending.block);
+    assert!(!final_hashes.is_empty());
+    assert!(final_hashes.len() < input_hashes.len());
+    for hash in &input_hashes {
+        assert!(
+            actor.queue.contains_transaction_hash(*hash),
+            "every selected transaction remains mempool-owned until canonical commit"
+        );
+    }
+    assert_eq!(actor.queue.active_len(), input_hashes.len());
+    assert_eq!(actor.queue.queued_len(), input_hashes.len());
+    assert_eq!(actor.queue.retained_bytes(), retained_bytes_before);
+    assert_eq!(
+        fs::read(&queue_journal_path).expect("read queue journal after proposal"),
+        queue_journal_before,
+        "proposal selection and guard return must not rewrite durable admission metadata"
+    );
+    assert_eq!(
+        super::propose::proposal_guard_return_admission_flood_report(),
+        super::propose::ProposalGuardReturnAdmissionFloodReport {
+            attempted: 32,
+            admitted: 0,
+            full: 32,
+        },
+        "full-capacity reservations must reject admission flood at the atomic return boundary"
+    );
+
+    let pending_bundle = pending
+        .block
+        .da_commitments()
+        .expect("final rebuilt proposal carries its staged commitment");
+    assert_eq!(
+        pending_bundle.commitments.as_slice(),
+        std::slice::from_ref(&record)
+    );
+    assert!(
+        !actor
+            .state
+            .da_commitments_contains_record_identity_cached(&record),
+        "rebuilt proposal must not enter the canonical commitment index before commit"
+    );
+    assert_eq!(
+        actor
+            .state
+            .da_shard_cursor_index_snapshot_cached()
+            .get(shard_id)
+            .copied(),
+        cursor_before,
+        "inner-loop rebuild must not advance canonical shard cursors"
+    );
+    assert_eq!(
+        path_snapshot(&canonical_journal_path),
+        canonical_journal_before,
+        "inner-loop rebuild must not mutate the canonical Kura-root journal"
+    );
+
+    let removed = actor
+        .queue
+        .remove_committed_hashes(final_hashes.iter().copied(), None);
+    assert_eq!(removed, final_hashes.len());
+    assert_eq!(
+        actor.queue.active_len(),
+        input_hashes.len().saturating_sub(final_hashes.len())
+    );
+    assert_eq!(actor.queue.queued_len(), actor.queue.active_len());
+    assert_ne!(
+        fs::read(&queue_journal_path).expect("read queue journal after canonical removal"),
+        queue_journal_before,
+        "canonical removal must durably tombstone committed proposal transactions"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_processing_tail_failure_retains_pending_and_returns_all_guards() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.block.max_transactions = NonZeroUsize::new(128);
+    consensus_cfg.block.fast_finality_max_transactions = None;
+    consensus_cfg.rbc.encoding = iroha_data_model::block::consensus::RbcEncoding::Plain;
+    // Exercise the same real chunk-cap rebuild without making the sidecar itself
+    // consume the entire payload budget.
+    consensus_cfg.rbc.chunk_max_bytes = 18;
+    consensus_cfg.rbc.pending_max_chunks = 65_536;
+    consensus_cfg.rbc.pending_max_bytes = 1024 * 1024;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    widen_sumeragi_timing_for_heavy_proposal_test(actor);
+    let highest_qc = seed_canonical_genesis_qc_for_proposal(actor);
+    let background_log = attach_background_log(actor);
+    let queue_journal_path = actor
+        .subsystems
+        .da_rbc
+        .spool_dir
+        .join("proposal-tail-failure-queue-journal.norito");
+    replace_actor_queue_with_capacity(actor, 128, Some(&queue_journal_path));
+    let input_hashes = push_unique_log_transactions(actor, 128, 0);
+    let retained_bytes_before = actor.queue.retained_bytes();
+    let queue_journal_before =
+        fs::read(&queue_journal_path).expect("read queue journal before tail failure");
+
+    let height = actor.state.view().height() as u64 + 1;
+    let (mut topology, view, leader_index, local_validator_index) =
+        local_leader_proposal_slot(actor, height);
+    super::propose::reset_proposal_inner_rebuild_count();
+    let _failpoint = super::propose::fail_proposal_publication_tail_once();
+    let _flood_guard = super::propose::flood_proposal_guard_return_admission_once(
+        proposal_admission_flood(actor, 20_000, 16),
+    );
+    let assembled = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            leader_index,
+            local_validator_index,
+            None,
+            Instant::now(),
+        )
+        .expect("processing-tail failure must retain exact local proposal ownership");
+    assert!(assembled);
+    assert!(
+        super::propose::proposal_inner_rebuild_count() > 0,
+        "fixture must trim transactions through the real RBC chunk-cap rebuild path"
+    );
+    let pending = actor
+        .pending
+        .pending_blocks
+        .values()
+        .find(|pending| pending.height == height && pending.view == view && !pending.aborted)
+        .expect("local block installation must retain the finalized pending block");
+    let included_hashes = super::block_external_transaction_hashes(&pending.block);
+    assert!(
+        !included_hashes.is_empty() && included_hashes.len() < input_hashes.len(),
+        "fixture must retain included transactions and trim at least one input"
+    );
+    for hash in &input_hashes {
+        assert!(
+            actor.queue.contains_transaction_hash(*hash),
+            "both included and excluded transactions must remain mempool-owned until commit"
+        );
+    }
+    assert_eq!(actor.queue.active_len(), input_hashes.len());
+    assert_eq!(actor.queue.queued_len(), input_hashes.len());
+    assert_eq!(actor.queue.retained_bytes(), retained_bytes_before);
+    assert_eq!(
+        fs::read(&queue_journal_path).expect("read queue journal after tail failure"),
+        queue_journal_before,
+        "post-publication processing failure must not rewrite queue admission metadata"
+    );
+    assert_eq!(
+        super::propose::proposal_guard_return_admission_flood_report(),
+        super::propose::ProposalGuardReturnAdmissionFloodReport {
+            attempted: 16,
+            admitted: 0,
+            full: 16,
+        }
+    );
+    let entries = take_background_log(&background_log);
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.msg_kind == Some("Proposal")),
+        "the failpoint must fire only after Proposal transport was scheduled"
+    );
+    let removed = actor
+        .queue
+        .remove_committed_hashes(included_hashes.iter().copied(), None);
+    assert_eq!(removed, included_hashes.len());
+    assert_eq!(
+        actor.queue.active_len(),
+        input_hashes.len().saturating_sub(included_hashes.len())
+    );
+    assert_ne!(
+        fs::read(&queue_journal_path).expect("read queue journal after canonical removal"),
+        queue_journal_before,
+        "canonical removal must settle the returned included guards exactly once"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn single_validator_proposal_requeues_when_local_handler_retains_no_block() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.rbc.chunk_max_bytes = 1024 * 1024;
+    consensus_cfg.rbc.inline_block_created_backup = false;
+    let mut harness = test_actor_harness_with_config(1, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let highest_qc = seed_canonical_genesis_qc_for_proposal(actor);
+    let background_log = attach_background_log(actor);
+    replace_actor_queue_with_capacity(actor, 1, None);
+
+    let tx = sample_transaction();
+    let tx_hash = tx.hash();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push proposal transaction");
+    let height = actor.state.view().height() as u64 + 1;
+    let (mut topology, view, leader_index, local_validator_index) =
+        local_leader_proposal_slot(actor, height);
+    let _removed = LocalRemovedGuard::new(true);
+    let _flood_guard = super::propose::flood_proposal_guard_return_admission_once(
+        proposal_admission_flood(actor, 30_000, 8),
+    );
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            leader_index,
+            local_validator_index,
+            None,
+            Instant::now(),
+        )
+        .expect_err("a one-validator proposal without a retained block owner must fail");
+    assert!(
+        err.to_string()
+            .contains("proposal processing did not retain an exact active block owner"),
+        "unexpected zero-owner error: {err}"
+    );
+    assert!(
+        actor.queue.contains_transaction_hash(tx_hash),
+        "pre-boundary owner failure must requeue the exact transaction"
+    );
+    assert_eq!(actor.queue.active_len(), 1);
+    assert_eq!(actor.queue.queued_len(), 1);
+    assert_eq!(
+        super::propose::proposal_guard_return_admission_flood_report(),
+        super::propose::ProposalGuardReturnAdmissionFloodReport {
+            attempted: 8,
+            admitted: 0,
+            full: 8,
+        },
+        "prepublication failure must keep original reservations live during return"
+    );
+    assert!(actor.pending.pending_blocks.is_empty());
+    assert!(actor.subsystems.propose.proposal_cache.hints.is_empty());
+    assert!(actor.subsystems.propose.proposal_cache.proposals.is_empty());
+    let entries = take_background_log(&background_log);
+    assert!(
+        entries
+            .iter()
+            .all(|entry| !matches!(entry.msg_kind, Some("BlockCreated" | "Proposal"))),
+        "zero-owner failure must not expose the block body or proposal metadata: {entries:?}"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn multi_peer_inline_handler_drop_requeues_and_retains_occupied_slot() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.rbc.chunk_max_bytes = 1024 * 1024;
+    consensus_cfg.rbc.inline_block_created_backup = false;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let highest_qc = seed_canonical_genesis_qc_for_proposal(actor);
+    let background_log = attach_background_log(actor);
+    replace_actor_queue_with_capacity(actor, 1, None);
+
+    let tx = sample_transaction();
+    let tx_hash = tx.hash();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push proposal transaction");
+    let height = actor.state.view().height() as u64 + 1;
+    let (mut topology, view, leader_index, local_validator_index) =
+        local_leader_proposal_slot(actor, height);
+    let _removed = LocalRemovedGuard::new(true);
+    let _flood_guard = super::propose::flood_proposal_guard_return_admission_once(
+        proposal_admission_flood(actor, 40_000, 8),
+    );
+
+    let assembled = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            leader_index,
+            local_validator_index,
+            None,
+            Instant::now(),
+        )
+        .expect("remote-exposed owner drop should retain the occupied slot");
+    assert!(assembled);
+    assert!(actor.pending.pending_blocks.is_empty());
+    assert!(
+        actor
+            .deferred_block_sync_updates
+            .keys()
+            .all(|(backup_height, backup_view, _)| {
+                *backup_height != height || *backup_view != view
+            }),
+        "failed proposal must not rely on the generic deferred block-sync cache as transaction ownership"
+    );
+    assert!(
+        actor.queue.contains_transaction_hash(tx_hash),
+        "the exact transaction must be requeued when local ownership is absent"
+    );
+    assert_eq!(actor.queue.active_len(), 1);
+    assert_eq!(actor.queue.queued_len(), 1);
+    assert_eq!(
+        super::propose::proposal_guard_return_admission_flood_report(),
+        super::propose::ProposalGuardReturnAdmissionFloodReport {
+            attempted: 8,
+            admitted: 0,
+            full: 8,
+        },
+        "remote exposure without a local owner must not open an admission race"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_hint(height, view)
+            .is_some(),
+        "remote-exposed failure must retain the slot hint"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(height, view)
+            .is_some(),
+        "remote-exposed failure must retain proposal metadata"
+    );
+    assert!(
+        actor.slot_tracker.proposals_seen.contains(&(height, view)),
+        "remote-exposed failure must keep the slot occupied to prevent same-view reassembly"
+    );
+    let entries = take_background_log(&background_log);
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.msg_kind == Some("BlockCreated")),
+        "inline body transport should still precede the local handler"
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.msg_kind == Some("Proposal")),
+        "proposal metadata transport should precede the local handler"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn canonical_commit_hashes_remove_mixed_external_entrypoints_from_queue() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    replace_actor_queue_with_capacity(actor, 2, None);
+
+    let plain = unique_log_transaction(actor, 59_900, 32);
+    let inner = unique_log_transaction(actor, 59_901, 32);
+    let commitment = iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
+        &actor.common_config.chain,
+        &inner,
+        [0xA7; 32],
+        8,
+    );
+    let payload = iroha_data_model::transaction::signed::SealedTransactionCommitmentPayload::new(
+        actor.common_config.chain.clone(),
+        SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+        commitment,
+        2,
+        8,
+        None,
+    );
+    let sealed_entrypoint = TransactionEntrypoint::SealedCommitment(
+        iroha_data_model::transaction::signed::SignedSealedTransactionCommitment::sign(
+            payload,
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+        ),
+    );
+    let plain_accepted = AcceptedTransaction::new_unchecked(Cow::Owned(plain.clone()));
+    let sealed_accepted =
+        AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(sealed_entrypoint.clone()));
+    let expected_hashes = BTreeSet::from([plain_accepted.hash(), sealed_accepted.hash()]);
+    actor
+        .queue
+        .push(plain_accepted, actor.state.view())
+        .expect("push plain canonical-removal fixture");
+    actor
+        .queue
+        .push(sealed_accepted, actor.state.view())
+        .expect("push sealed canonical-removal fixture");
+
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let mut builder = BlockBuilder::new(header);
+    builder.push_transaction(plain.clone());
+    let mut committed_block =
+        builder.build_with_signature(0, SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+    committed_block.set_external_entrypoints(vec![
+        TransactionEntrypoint::External(plain),
+        sealed_entrypoint,
+    ]);
+
+    let committed_hashes = super::block_external_transaction_hashes(&committed_block);
+    assert_eq!(committed_hashes, expected_hashes);
+    actor.queue.remove_committed_hashes(committed_hashes, None);
+    assert_eq!(actor.queue.active_len(), 0);
+    assert_eq!(actor.queue.queued_len(), 0);
+    for hash in expected_hashes {
+        assert!(!actor.queue.contains_transaction_hash(hash));
+    }
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_guard_batch_unwind_preserves_queue_accounting_and_journal() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    let journal_path = actor
+        .subsystems
+        .da_rbc
+        .spool_dir
+        .join("proposal-guard-unwind-journal.norito");
+    replace_actor_queue_with_capacity(actor, 1, Some(&journal_path));
+    let tx = unique_log_transaction(actor, 60_000, 32);
+    let tx_hash = tx.hash();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push unwind fixture transaction");
+    let active_before = actor.queue.active_len();
+    let retained_bytes_before = actor.queue.retained_bytes();
+    let journal_before = fs::read(&journal_path).expect("read journal before unwind");
+    let queue = Arc::clone(&actor.queue);
+    let state = Arc::clone(&actor.state);
+
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let mut guards =
+            super::propose::ProposalTransactionGuards::new(Arc::clone(&queue), Arc::clone(&state));
+        queue.get_transactions_for_block_with_state(state.as_ref(), nonzero!(1_usize), &mut guards);
+        assert_eq!(guards.len(), 1);
+        panic!("injected post-pop proposal panic");
+    }));
+    assert!(unwind.is_err(), "fixture must unwind after queue pop");
+    assert_eq!(actor.queue.active_len(), active_before);
+    assert_eq!(
+        actor.queue.queued_len(),
+        active_before,
+        "panic recovery must settle every in-flight reservation back into the scheduler"
+    );
+    assert_eq!(actor.queue.retained_bytes(), retained_bytes_before);
+    assert!(actor.queue.contains_transaction_hash(tx_hash));
+    assert_eq!(
+        fs::read(&journal_path).expect("read journal after unwind"),
+        journal_before,
+        "unexpected unwind must not tombstone durable queue ownership"
+    );
+
+    let mut recovered = Vec::new();
+    actor.queue.get_transactions_for_block_with_state(
+        actor.state.as_ref(),
+        nonzero!(1_usize),
+        &mut recovered,
+    );
+    assert_eq!(
+        recovered.len(),
+        1,
+        "recovered transaction must be selectable"
+    );
+    assert_eq!(recovered[0].hash(), tx_hash);
+    actor
+        .queue
+        .return_transaction_guards(&mut recovered, actor.state.as_ref())
+        .expect("return recovered panic fixture guard");
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_guard_return_error_quarantines_batch_and_blocks_new_selection_until_retry() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    replace_actor_queue_with_capacity(actor, 1, None);
+    let original_queue = Arc::clone(&actor.queue);
+    let tx = unique_log_transaction(actor, 61_000, 32);
+    let tx_hash = tx.hash();
+    original_queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push quarantined transaction");
+    let mut guards = Vec::new();
+    original_queue.get_transactions_for_block_with_state(
+        actor.state.as_ref(),
+        nonzero!(1_usize),
+        &mut guards,
+    );
+    assert_eq!(guards.len(), 1);
+
+    let foreign_queue = Arc::new(Queue::test(
+        QueueConfig {
+            capacity: nonzero!(1_usize),
+            capacity_per_user: nonzero!(1_usize),
+            ..QueueConfig::default()
+        },
+        &TimeSource::new_system(),
+    ));
+    let foreign_tx = unique_log_transaction(actor, 61_001, 32);
+    let foreign_hash = foreign_tx.hash();
+    foreign_queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(foreign_tx)),
+            actor.state.view(),
+        )
+        .expect("push foreign-queue transaction");
+    actor.queue = Arc::clone(&foreign_queue);
+
+    assert!(
+        !actor.return_proposal_guards_or_quarantine(
+            &mut guards,
+            "foreign queue quarantine regression",
+        )
+    );
+    assert!(guards.is_empty());
+    assert_eq!(actor.proposal_guard_return_quarantine.guards.len(), 1);
+    assert_eq!(original_queue.active_len(), 1);
+    assert_eq!(original_queue.queued_len(), 0);
+    assert!(original_queue.contains_transaction_hash(tx_hash));
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let (mut topology, view, leader_index, local_validator_index) =
+        local_leader_proposal_slot(actor, height);
+    let assembled = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            sample_qc_ref(0, 0),
+            &mut topology,
+            leader_index,
+            local_validator_index,
+            None,
+            Instant::now(),
+        )
+        .expect("blocked quarantine should defer proposal selection cleanly");
+    assert!(!assembled);
+    assert_eq!(foreign_queue.active_len(), 1);
+    assert_eq!(foreign_queue.queued_len(), 1);
+    assert!(foreign_queue.contains_transaction_hash(foreign_hash));
+    assert_eq!(actor.proposal_guard_return_quarantine.guards.len(), 1);
+
+    actor.queue = Arc::clone(&original_queue);
+    assert!(actor.retry_quarantined_proposal_guards());
+    assert!(actor.proposal_guard_return_quarantine.guards.is_empty());
+    assert_eq!(original_queue.active_len(), 1);
+    assert_eq!(original_queue.queued_len(), 1);
+    assert!(original_queue.contains_transaction_hash(tx_hash));
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn tick_retries_zero_queued_proposal_guard_quarantine_without_direct_assembly() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    replace_actor_queue_with_capacity(actor, 1, None);
+    let original_queue = Arc::clone(&actor.queue);
+    let tx = unique_log_transaction(actor, 61_100, 32);
+    let tx_hash = tx.hash();
+    original_queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tick quarantine fixture");
+    let mut guards = Vec::new();
+    original_queue.get_transactions_for_block_with_state(
+        actor.state.as_ref(),
+        nonzero!(1_usize),
+        &mut guards,
+    );
+    assert_eq!(original_queue.queued_len(), 0);
+
+    let foreign_queue = Arc::new(Queue::test(
+        QueueConfig {
+            capacity: nonzero!(1_usize),
+            capacity_per_user: nonzero!(1_usize),
+            ..QueueConfig::default()
+        },
+        &TimeSource::new_system(),
+    ));
+    actor.queue = foreign_queue;
+    let (wake_tx, wake_rx) = mpsc::sync_channel(1);
+    actor.wake_tx = Some(wake_tx);
+    actor.subsystems.propose.pacemaker.next_deadline = Instant::now() + Duration::from_secs(30);
+    assert!(
+        !actor
+            .return_proposal_guards_or_quarantine(&mut guards, "tick quarantine retry regression",)
+    );
+    assert!(guards.is_empty());
+    assert_eq!(actor.proposal_guard_return_quarantine.guards.len(), 1);
+    wake_rx
+        .try_recv()
+        .expect("quarantine insertion must wake the actor");
+    assert!(actor.subsystems.propose.pacemaker.next_deadline <= Instant::now());
+
+    actor.queue = Arc::clone(&original_queue);
+    assert!(actor.next_tick_deadline(Instant::now()).is_some());
+    let _ = actor.tick();
+
+    assert!(actor.proposal_guard_return_quarantine.guards.is_empty());
+    assert_eq!(original_queue.active_len(), 1);
+    assert_eq!(original_queue.queued_len(), 1);
+    assert!(original_queue.contains_transaction_hash(tx_hash));
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn returned_proposal_transaction_is_not_duplicated_and_stale_drop_sees_it_available() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let highest_qc = seed_canonical_genesis_qc_for_proposal(actor);
+    replace_actor_queue_with_capacity(actor, 1, None);
+    let tx = unique_log_transaction(actor, 62_000, 32);
+    let tx_hash = tx.hash();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push proposal transaction");
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let (mut topology, view, leader_index, local_validator_index) =
+        local_leader_proposal_slot(actor, height);
+
+    assert!(
+        actor
+            .assemble_and_broadcast_proposal(
+                height,
+                view,
+                highest_qc,
+                &mut topology,
+                leader_index,
+                local_validator_index,
+                None,
+                Instant::now(),
+            )
+            .expect("assemble initial proposal")
+    );
+    let pending_hash = actor
+        .pending
+        .pending_blocks
+        .iter()
+        .find_map(|(hash, pending)| {
+            (pending.height == height && pending.view == view && !pending.aborted).then_some(*hash)
+        })
+        .expect("initial proposal pending owner");
+    assert_eq!(actor.queue.active_len(), 1);
+    assert_eq!(actor.queue.queued_len(), 1);
+    assert!(actor.queue.contains_transaction_hash(tx_hash));
+
+    for _ in 0..3 {
+        let _ = actor
+            .assemble_and_broadcast_proposal(
+                height,
+                view,
+                highest_qc,
+                &mut topology,
+                leader_index,
+                local_validator_index,
+                None,
+                Instant::now(),
+            )
+            .expect("repeated same-slot selection must fail closed or reuse existing owner");
+        let matching = actor
+            .pending
+            .pending_blocks
+            .values()
+            .filter(|pending| pending.height == height && pending.view == view && !pending.aborted)
+            .count();
+        assert_eq!(
+            matching, 1,
+            "same slot must retain exactly one concrete owner"
+        );
+        assert!(actor.pending.pending_blocks.contains_key(&pending_hash));
+        assert_eq!(actor.queue.active_len(), 1);
+        assert_eq!(actor.queue.queued_len(), 1);
+    }
+
+    let outcome = actor
+        .drop_pending_block_for_memory_cap(pending_hash, height, view)
+        .expect("drop stale proposal owner");
+    assert_eq!(outcome, (1, 0, 0, 1, false));
+    assert!(!actor.pending.pending_blocks.contains_key(&pending_hash));
+    assert_eq!(actor.queue.active_len(), 1);
+    assert_eq!(actor.queue.queued_len(), 1);
+    assert!(actor.queue.contains_transaction_hash(tx_hash));
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn abandoned_da_proposal_reassembles_full_sequence_and_pin_in_later_view() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    actor.config.da.max_commitments_per_block = 2;
+    actor.config.da.max_proof_openings_per_block = 2;
+    actor.state.nexus.write().enabled = true;
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let committed_height = actor.committed_height_snapshot();
+    assert_eq!(
+        committed_height, 1,
+        "fixture must seed one canonical parent"
+    );
+    let highest_qc = QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: genesis_hash,
+        height: committed_height,
+        view: 0,
+        epoch: actor.epoch_for_height(committed_height),
+    };
+
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+    let manifest = b"manifest-for-abandoned-da-reproposal";
+    let mut record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x66; 32])));
+    record.kzg_commitment = None;
+    record.manifest_hash = ManifestDigest::new(*blake3_hash(manifest).as_bytes());
+    write_da_commitment_spool_file(&spool_dir, &record, [0x67; 32]);
+    write_da_manifest_spool_file(&spool_dir, &record, manifest, [0x68; 32]);
+    let receipt = sample_da_receipt_for_record(&record);
+    write_da_receipt_spool_file(&spool_dir, &receipt, record.sequence, [0x69; 32]);
+    let pin = DaPinIntent::new(
+        record.lane_id,
+        record.epoch,
+        record.sequence,
+        record.storage_ticket,
+        record.manifest_hash,
+    );
+    write_da_pin_intent_spool_file(&spool_dir, &pin, [0x6A; 32]);
+
+    let lane_config = actor.state.nexus_snapshot().lane_config;
+    let shard_id = lane_config.shard_id(record.lane_id);
+    let cursor_before = actor
+        .state
+        .da_shard_cursor_index_snapshot_cached()
+        .get(shard_id)
+        .copied();
+    let canonical_journal_path =
+        crate::da::DaShardCursorJournal::journal_path(&actor.state.kura().store_root());
+    let canonical_journal_before = path_snapshot(&canonical_journal_path);
+    let receipt_cursors_before = actor.state.da_receipt_cursor_snapshot_cached();
+
+    let height = committed_height.saturating_add(1);
+    let (mut topology, first_view, leader_index, local_validator_index) =
+        local_leader_proposal_slot(actor, height);
+    let first_abandonment = super::propose::fail_proposal_publication_tail_once();
+    assert!(
+        actor
+            .assemble_and_broadcast_proposal(
+                height,
+                first_view,
+                highest_qc,
+                &mut topology,
+                leader_index,
+                local_validator_index,
+                None,
+                Instant::now(),
+            )
+            .expect("first DA proposal should assemble")
+    );
+    drop(first_abandonment);
+    let first_pending = actor
+        .pending
+        .pending_blocks
+        .values()
+        .find(|pending| pending.height == height && pending.view == first_view && !pending.aborted)
+        .expect("first proposal remains pending");
+    let first_hash = first_pending.block.hash();
+    assert!(!first_pending.block.is_empty());
+    assert_eq!(
+        first_pending.block.header().prev_block_hash(),
+        Some(genesis_hash)
+    );
+    assert_eq!(
+        first_pending
+            .block
+            .da_commitments()
+            .expect("first proposal carries the DA sidecar")
+            .commitments
+            .as_slice(),
+        std::slice::from_ref(&record)
+    );
+    assert_eq!(
+        first_pending
+            .block
+            .da_pin_intents()
+            .expect("first proposal carries the pin sidecar")
+            .intents
+            .as_slice(),
+        std::slice::from_ref(&pin)
+    );
+    assert!(
+        !actor
+            .state
+            .da_commitments_contains_record_identity_cached(&record),
+        "an uncommitted proposal must not alter canonical identity state"
+    );
+    assert!(
+        !actor
+            .state
+            .da_pin_intents_contains_intent_identity_cached(&pin),
+        "an uncommitted proposal must not alter the canonical pin store"
+    );
+    assert_eq!(actor.committed_height_snapshot(), committed_height);
+    assert_eq!(actor.state.view().latest_block_hash(), Some(genesis_hash));
+    assert!(
+        actor.kura.get_block_height_by_hash(first_hash).is_none(),
+        "the abandoned proposal must never enter Kura"
+    );
+
+    let second_manifest = b"manifest-for-later-sequence-after-abandonment";
+    let mut second_record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x6B; 32])));
+    second_record.sequence = 2;
+    second_record.client_blob_id = BlobDigest::new([0x6C; 32]);
+    second_record.storage_ticket = StorageTicketId::new([0x6D; 32]);
+    second_record.kzg_commitment = None;
+    second_record.manifest_hash = ManifestDigest::new(*blake3_hash(second_manifest).as_bytes());
+    write_da_commitment_spool_file(&spool_dir, &second_record, [0x6E; 32]);
+    write_da_manifest_spool_file(&spool_dir, &second_record, second_manifest, [0x6F; 32]);
+    let second_receipt = sample_da_receipt_for_record(&second_record);
+    write_da_receipt_spool_file(
+        &spool_dir,
+        &second_receipt,
+        second_record.sequence,
+        [0x70; 32],
+    );
+
+    let (mut topology, later_view, leader_index, local_validator_index) =
+        local_leader_proposal_slot_at_or_after(actor, height, first_view.saturating_add(1));
+    assert!(later_view > first_view);
+    assert_eq!(
+        actor.drop_stale_pending_block(first_hash, height, first_view),
+        Some((0, 0, 0, 0, false)),
+        "ordinary stale-owner cleanup must abandon the sidecar-only proposal without queue work"
+    );
+    let view_change_at = Instant::now();
+    actor
+        .phase_tracker
+        .on_view_change(height, later_view, view_change_at);
+    actor.prune_stale_view_state(height, later_view);
+    assert!(
+        !actor.has_active_pending_blocks(),
+        "ordinary view change must leave no active owner for the abandoned proposal"
+    );
+    assert_eq!(actor.committed_height_snapshot(), committed_height);
+    assert_eq!(actor.state.view().latest_block_hash(), Some(genesis_hash));
+    assert!(actor.kura.get_block_height_by_hash(first_hash).is_none());
+
+    let later_abandonment = super::propose::fail_proposal_publication_tail_once();
+    assert!(
+        actor
+            .assemble_and_broadcast_proposal(
+                height,
+                later_view,
+                highest_qc,
+                &mut topology,
+                leader_index,
+                local_validator_index,
+                None,
+                Instant::now(),
+            )
+            .expect("later-view DA reproposal should assemble")
+    );
+    drop(later_abandonment);
+    let later_pending = actor
+        .pending
+        .pending_blocks
+        .values()
+        .find(|pending| pending.height == height && pending.view == later_view && !pending.aborted)
+        .expect("later-view proposal remains pending");
+    let later_hash = later_pending.block.hash();
+    assert_ne!(
+        later_hash, first_hash,
+        "later view must build a distinct block"
+    );
+    assert!(!later_pending.block.is_empty());
+    assert_eq!(
+        later_pending.block.header().prev_block_hash(),
+        Some(genesis_hash)
+    );
+    assert_eq!(
+        later_pending
+            .block
+            .da_commitments()
+            .expect("later-view proposal carries the same DA sidecar")
+            .commitments
+            .as_slice(),
+        &[record.clone(), second_record.clone()]
+    );
+    assert_eq!(
+        later_pending
+            .block
+            .da_pin_intents()
+            .expect("later-view proposal retains the original pin sidecar")
+            .intents
+            .as_slice(),
+        std::slice::from_ref(&pin)
+    );
+    assert!(
+        !actor
+            .state
+            .da_commitments_contains_record_identity_cached(&record)
+            && !actor
+                .state
+                .da_commitments_contains_record_identity_cached(&second_record),
+        "abandonment and reproposal must not mutate the canonical commitment store"
+    );
+    assert!(
+        !actor
+            .state
+            .da_pin_intents_contains_intent_identity_cached(&pin),
+        "abandonment and reproposal must not mutate the canonical pin store"
+    );
+    assert_eq!(
+        actor.state.da_receipt_cursor_snapshot_cached(),
+        receipt_cursors_before,
+        "abandonment and reproposal must not advance canonical receipt cursors"
+    );
+    assert_eq!(
+        actor
+            .state
+            .da_shard_cursor_index_snapshot_cached()
+            .get(shard_id)
+            .copied(),
+        cursor_before,
+        "abandonment and reproposal must not advance canonical shard cursors"
+    );
+    assert_eq!(
+        path_snapshot(&canonical_journal_path),
+        canonical_journal_before,
+        "abandonment and reproposal must not mutate the canonical Kura-root journal"
+    );
+    assert_eq!(actor.committed_height_snapshot(), committed_height);
+    assert_eq!(actor.state.view().latest_block_hash(), Some(genesis_hash));
+    assert!(
+        actor.kura.get_block_height_by_hash(later_hash).is_none(),
+        "the later uncommitted proposal must remain outside Kura"
+    );
 
     harness.shutdown.send();
 }
@@ -73073,7 +75172,7 @@ async fn internal_proposal_work_treats_commitment_spool_errors_as_work() {
     fs::write(&path, b"corrupt commitment").expect("write corrupt DA commitment");
 
     let proposal_height = actor.state.view().height() as u64 + 1;
-    let work = actor.internal_proposal_work(proposal_height, None);
+    let work = actor.internal_proposal_work(proposal_height, None, false);
     assert!(
         work.da_commitments,
         "commitment spool errors must keep DA proposal work visible"
@@ -73095,7 +75194,7 @@ async fn internal_proposal_work_detects_da_receipts() {
     write_da_receipt_spool_file(&spool_dir, &receipt, record.sequence, [0x45; 32]);
 
     let proposal_height = actor.state.view().height() as u64 + 1;
-    let work = actor.internal_proposal_work(proposal_height, None);
+    let work = actor.internal_proposal_work(proposal_height, None, false);
     assert!(
         work.da_receipts,
         "pending DA receipts must keep proposal work visible"
@@ -73122,7 +75221,7 @@ async fn internal_proposal_work_treats_receipt_spool_errors_as_work() {
     fs::write(&path, b"corrupt receipt").expect("write corrupt DA receipt");
 
     let proposal_height = actor.state.view().height() as u64 + 1;
-    let work = actor.internal_proposal_work(proposal_height, None);
+    let work = actor.internal_proposal_work(proposal_height, None, false);
     assert!(
         work.da_receipts,
         "receipt spool errors must keep DA proposal work visible"
@@ -73136,6 +75235,7 @@ async fn internal_proposal_work_treats_receipt_spool_errors_as_work() {
 async fn internal_proposal_work_ignores_committed_da_commitments() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    actor.state.nexus.write().enabled = false;
     let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
 
     let mut record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x94; 32])));
@@ -73154,7 +75254,7 @@ async fn internal_proposal_work_ignores_committed_da_commitments() {
         .insert_bundle(1, DaCommitmentBundle::new(vec![record]));
 
     let proposal_height = actor.state.view().height() as u64 + 1;
-    let work = actor.internal_proposal_work(proposal_height, None);
+    let work = actor.internal_proposal_work(proposal_height, None, false);
     assert!(
         !work.da_commitments,
         "duplicate committed commitment must not keep DA proposal work alive"
@@ -73179,7 +75279,7 @@ async fn internal_proposal_work_detects_da_pin_intents() {
     write_da_pin_intent_spool_file(&spool_dir, &intent, [0xB2; 32]);
 
     let proposal_height = actor.state.view().height() as u64 + 1;
-    let work = actor.internal_proposal_work(proposal_height, None);
+    let work = actor.internal_proposal_work(proposal_height, None, false);
     assert!(work.da_pin_intents);
     assert!(work.has_work());
 
@@ -73203,7 +75303,7 @@ async fn internal_proposal_work_treats_pin_spool_errors_as_work() {
     fs::write(&path, b"corrupt pin intent").expect("write corrupt DA pin intent");
 
     let proposal_height = actor.state.view().height() as u64 + 1;
-    let work = actor.internal_proposal_work(proposal_height, None);
+    let work = actor.internal_proposal_work(proposal_height, None, false);
     assert!(
         work.da_pin_intents,
         "pin-intent spool errors must keep DA proposal work visible"
@@ -73256,10 +75356,58 @@ async fn internal_proposal_work_ignores_committed_da_pin_intent_identities() {
     }
 
     let proposal_height = actor.state.view().height() as u64 + 1;
-    let work = actor.internal_proposal_work(proposal_height, None);
+    let work = actor.internal_proposal_work(proposal_height, None, false);
     assert!(
         !work.da_pin_intents,
         "pin intents colliding with committed ticket or manifest identities must not keep DA proposal work alive"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn internal_proposal_work_keeps_idle_autoscale_scale_in_live_until_floor() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let mut elastic = ModelLaneConfig {
+        id: LaneId::new(1),
+        dataspace_id: DataSpaceId::UNIVERSAL,
+        alias: "elastic-lane-1".to_owned(),
+        ..ModelLaneConfig::default()
+    };
+    elastic
+        .metadata
+        .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+    elastic
+        .metadata
+        .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "1".to_owned());
+    {
+        let mut nexus = actor.state.nexus.write();
+        nexus.enabled = true;
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero floor");
+        nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero ceiling");
+        nexus.lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("two lanes"),
+            vec![ModelLaneConfig::default(), elastic],
+        )
+        .expect("valid elastic catalog");
+    }
+
+    let proposal_height = actor.state.view().height() as u64 + 1;
+    let work = actor.internal_proposal_work(proposal_height, None, false);
+    assert!(work.autoscale_maintenance);
+    assert!(work.has_work());
+
+    actor.state.nexus.write().lane_catalog = LaneCatalog::new(
+        NonZeroU32::new(1).expect("one lane"),
+        vec![ModelLaneConfig::default()],
+    )
+    .expect("floor catalog");
+    let floor_work = actor.internal_proposal_work(proposal_height, None, false);
+    assert!(
+        !floor_work.autoscale_maintenance,
+        "maintenance proposals must stop once managed elastic capacity reaches its floor"
     );
 
     harness.shutdown.send();
@@ -75103,6 +77251,7 @@ async fn stale_pending_block_requeues_transactions() {
     let genesis_network = crate::sumeragi::GenesisWithPubKey {
         genesis: None,
         public_key: key_pair.public_key().clone(),
+        v2_bootstrap: None,
     };
     let rbc_status_handle = rbc_status::register_handle();
     let (background_tx, _background_rx) = mpsc::sync_channel(1024);
@@ -75253,13 +77402,17 @@ async fn stale_pending_block_requeues_transactions() {
     ));
     assert_eq!(actor.queue.queued_len(), 0, "queue starts empty");
 
-    let (tx_count, requeued, failures, duplicate_failures) = actor
+    let (tx_count, requeued, failures, duplicate_failures, retained_for_retry) = actor
         .drop_stale_pending_block(pending_hash, 2, 0)
         .expect("pending block dropped");
     assert_eq!(tx_count, 1, "one transaction should be requeued");
     assert_eq!(requeued, 1, "requeue should succeed");
     assert_eq!(failures, 0, "requeue should not fail");
     assert_eq!(duplicate_failures, 0, "requeue should not hit duplicates");
+    assert!(
+        !retained_for_retry,
+        "successful requeue releases pending ownership"
+    );
     assert_eq!(
         actor.queue.queued_len(),
         1,
@@ -109568,7 +111721,17 @@ fn message_projection_helpers_match_formal_gate() {
     );
 
     let native_amx_body = |phase: NativeAmxPhase| {
-        iroha_data_model::block::consensus::NativeAmxAttestationBodyV1 {
+        iroha_data_model::block::consensus::NativeAmxAttestationBodyV2 {
+            round: iroha_data_model::block::consensus_v2::ConsensusRound {
+                context_id: iroha_data_model::block::consensus_v2::HeightContextId(
+                    HashOf::<iroha_data_model::block::consensus_v2::HeightContext>::from_untyped_unchecked(
+                        Hash::new(b"message-projection-native-amx-context"),
+                    ),
+                ),
+                height: 42,
+                view: 3,
+            },
+            epoch: 7,
             source_id: [0x77; iroha_crypto::Hash::LENGTH],
             tx_entrypoint_hash:
                 HashOf::<iroha_data_model::transaction::TransactionEntrypoint>::from_untyped_unchecked(
@@ -109583,10 +111746,29 @@ fn message_projection_helpers_match_formal_gate() {
             planned_coordinator_block_height: 42,
         }
     };
-    let native_amx_vote = |phase: NativeAmxPhase| crate::native_amx::NativeAmxVoteV1 {
+    let native_amx_vote = |phase: NativeAmxPhase| crate::native_amx::NativeAmxVoteV2 {
         body: native_amx_body(phase),
         signer: PeerId::from(checked_keypair().public_key().clone()),
         bls_signature: vec![0x79; 96],
+    };
+    let native_amx_commit_request = || {
+        let body = native_amx_body(NativeAmxPhase::Commit);
+        let prepare_body = iroha_data_model::block::consensus::NativeAmxAttestationBodyV2 {
+            phase: NativeAmxPhase::Prepare,
+            ..body
+        };
+        crate::native_amx::NativeAmxCommitRequestV2 {
+            body,
+            prepare_qc: iroha_data_model::block::consensus::NativeAmxAttestationQcV2 {
+                body: prepare_body,
+                validator_set_hash_version:
+                    iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
+                validator_set: Vec::new(),
+                signers_bitmap: Vec::new(),
+                bls_aggregate_signature: Vec::new(),
+            },
+        }
     };
     let native_amx_cases = [
         (
@@ -109602,9 +111784,7 @@ fn message_projection_helpers_match_formal_gate() {
             "NativeAmxPrepareVote",
         ),
         (
-            crate::native_amx::NativeAmxMessage::CommitRequest(native_amx_body(
-                NativeAmxPhase::Commit,
-            )),
+            crate::native_amx::NativeAmxMessage::CommitRequest(native_amx_commit_request()),
             "NativeAmxCommitRequest",
         ),
         (
@@ -112841,7 +115021,7 @@ async fn drop_stale_pending_block_retains_vote_backed_payload_for_exact_body_rep
 
     assert_eq!(
         actor.drop_stale_pending_block(block_hash, height, view),
-        Some((0, 0, 0, 0)),
+        Some((0, 0, 0, 0, true)),
         "vote-backed stale payload should be retained without requeueing transactions"
     );
     let retained = actor
@@ -130235,6 +132415,33 @@ async fn proposal_assembly_allows_absent_stale_local_commit_after_recovery_view_
         assembled,
         "fresh proposal should assemble after the stale local-voted body disappears and the recovery view gap is exhausted"
     );
+    let (fresh_hash, fresh_parent) = actor
+        .pending
+        .pending_blocks
+        .iter()
+        .find_map(|(hash, pending)| {
+            (pending.height == height && pending.view == fresh_view)
+                .then_some((*hash, pending.block.header().prev_block_hash()))
+        })
+        .expect("fresh proposal should create a pending block");
+    assert!(
+        actor.emit_precommit_vote(
+            fresh_hash,
+            height,
+            fresh_view,
+            actor.epoch_for_height(height),
+            ValidationStatus::Valid,
+            &vote_topology,
+            fresh_parent,
+            Some((zero_state_root(), zero_state_root())),
+        ),
+        "fresh precommit should record once stale same-height local vote recovery is exhausted"
+    );
+    let latest_vote = actor
+        .local_same_height_vote(height, actor.epoch_for_height(height))
+        .expect("fresh local same-height vote should be recorded");
+    assert_eq!(latest_vote.block_hash, fresh_hash);
+    assert_eq!(latest_vote.view, fresh_view);
 
     harness.shutdown.send();
 }
@@ -131698,6 +133905,101 @@ async fn proposal_escalates_lagged_body_repair_to_passive_catchup_under_backlog(
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn proposal_escalates_lagged_body_repair_to_passive_catchup_without_backlog() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+    let _ = seed_genesis_block_for_state(&actor.state);
+
+    assert_eq!(
+        actor.queue.queued_len(),
+        0,
+        "test setup must exercise an empty local transaction queue"
+    );
+
+    let frontier_height = actor.committed_height_snapshot().saturating_add(1);
+    let owner_view = 0_u64;
+    let fresh_view = owner_view.saturating_add(1);
+    let now = Instant::now();
+    let lagged_at = now
+        .checked_sub(
+            actor
+                .frontier_slot_lag_window()
+                .max(Duration::from_millis(1))
+                .saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(now);
+    let owner_hash = sample_block(
+        frontier_height,
+        owner_view,
+        actor.state.latest_block_hash_fast(),
+    )
+    .hash();
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        frontier_height,
+        owner_view,
+        owner_hash,
+        lagged_at,
+        actor
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1)),
+        None,
+        BTreeSet::new(),
+        false,
+        false,
+        false,
+        None,
+        None,
+    ));
+    {
+        let slot = actor.frontier_slot.as_mut().expect("frontier slot");
+        slot.quorum_progress.commit_qc_observed = true;
+        slot.quorum_progress.last_commit_qc_at = Some(lagged_at);
+        slot.phase = super::FrontierSlotPhase::AwaitBody;
+        slot.exact_fetch_armed = true;
+    }
+    actor.range_pull_escalation_cooldowns.clear();
+    let _ = take_background_log(&background_log);
+
+    assert!(
+        !actor.maybe_yield_stale_frontier_owner_for_fresh_proposal(
+            frontier_height,
+            fresh_view,
+            owner_hash,
+            owner_view,
+            now,
+            actor.queue.queued_len(),
+        ),
+        "lagged commit-QC owner should stay protected while catch-up is requested"
+    );
+    assert!(
+        actor.frontier_slot_passive_catchup_active_at_height(frontier_height),
+        "lagged exact-body repair without backlog should hand off to passive catch-up"
+    );
+    assert!(
+        actor
+            .range_pull_escalation_cooldowns
+            .keys()
+            .any(|(_, _, height, reason)| {
+                *height == frontier_height && *reason == "stale_frontier_owner_body_repair"
+            }),
+        "passive handoff should emit a bounded range pull even when the local queue is empty"
+    );
+    assert!(
+        take_background_log(&background_log)
+            .into_iter()
+            .any(|entry| entry.msg_kind == Some("FetchBlockBody")),
+        "the exact body repair should still be attempted before range catch-up"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn proposal_clears_hard_stale_no_pending_commit_qc_marker_without_cached_qc() {
     use std::borrow::Cow;
 
@@ -132464,57 +134766,10 @@ async fn cached_recovery_proposal_with_hint_repairs_missing_body_before_rotation
         .observed_at
         .insert((height, view), active_repair_started_at);
 
-    let deferred = actor.on_pacemaker_propose_ready(Instant::now());
-    assert!(
-        !deferred,
-        "active body repair should still defer proposal reassembly past the active-backlog cap"
-    );
-    assert!(
-        actor
-            .subsystems
-            .propose
-            .proposal_cache
-            .get_proposal(height, view)
-            .is_some(),
-        "cached proposal should remain while exact or RBC recovery is active"
-    );
-    assert!(
-        actor
-            .subsystems
-            .propose
-            .proposal_cache
-            .get_hint(height, view)
-            .is_some(),
-        "cached hint should remain while exact or RBC recovery is active"
-    );
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(view),
-        "active recovery should not rotate at the capped backlog deadline"
-    );
-
-    let expired_repair_started_at = Instant::now()
-        .checked_sub(full_repair_window.saturating_add(Duration::from_millis(1)))
-        .expect("repair window should fit in Instant range");
-    actor
-        .frontier_slot
-        .as_mut()
-        .expect("frontier slot should remain armed")
-        .timers
-        .lag_window_started_at = Some(expired_repair_started_at);
-    actor
-        .subsystems
-        .propose
-        .proposal_cache
-        .observed_at
-        .insert((height, view), expired_repair_started_at);
-    actor.pending.pending_processing.set(Some(missing_hash));
-    actor.pending.pending_processing_parent.set(Some(parent));
-
     let rotated = actor.on_pacemaker_propose_ready(Instant::now());
     assert!(
         !rotated,
-        "expired body repair should rotate away from the orphaned cached proposal even if stale local processing still references it"
+        "active backlog without precommit votes should rotate after the capped repair window"
     );
     assert!(
         actor
@@ -132523,7 +134778,7 @@ async fn cached_recovery_proposal_with_hint_repairs_missing_body_before_rotation
             .proposal_cache
             .get_proposal(height, view)
             .is_none(),
-        "orphaned cached proposal should be dropped after the exact repair window expires"
+        "cached proposal should be dropped once backlog-capped body repair expires"
     );
     assert!(
         actor
@@ -132532,14 +134787,14 @@ async fn cached_recovery_proposal_with_hint_repairs_missing_body_before_rotation
             .proposal_cache
             .get_hint(height, view)
             .is_none(),
-        "orphaned cached hint should be dropped after the exact repair window expires"
+        "cached hint should be dropped once backlog-capped body repair expires"
     );
     assert!(
         actor
             .phase_tracker
             .current_view(height)
             .is_some_and(|current| current > view),
-        "expired exact repair should advance the recovery view"
+        "active backlog should advance the recovery view after the capped repair window"
     );
 
     harness.shutdown.send();
@@ -145051,7 +147306,7 @@ async fn proposal_queue_scan_budget_limits_fetch() {
     assert!(deferred.is_empty(), "budgeted scan should not defer txs");
     assert_eq!(tx_guards.len(), 2, "scan budget should cap selection");
 
-    drop(tx_guards);
+    actor.queue.release_transaction_guards(&mut tx_guards);
 
     assert_eq!(actor.queue.queued_len(), 3, "remaining txs stay queued");
 
@@ -145095,7 +147350,7 @@ async fn proposal_queue_scan_budget_does_not_overfetch_single_lane_slots() {
         "single-lane overfetch should not pop transactions that cannot fit"
     );
 
-    drop(tx_guards);
+    actor.queue.release_transaction_guards(&mut tx_guards);
 
     assert_eq!(actor.queue.queued_len(), 3, "remaining txs stay queued");
 
@@ -145155,7 +147410,7 @@ async fn proposal_queue_scan_budget_ignores_future_created_autoscale_lane_for_lo
         "future-created autoscale lanes must not enable multilane lookahead overfetch"
     );
 
-    drop(tx_guards);
+    actor.queue.release_transaction_guards(&mut tx_guards);
 
     assert_eq!(
         actor.queue.queued_len(),
@@ -145237,7 +147492,7 @@ async fn proposal_queue_scan_budget_ignores_unrouted_same_dataspace_sidecar_for_
         "unrouted sidecar lanes must not enable multilane lookahead overfetch"
     );
 
-    drop(tx_guards);
+    actor.queue.release_transaction_guards(&mut tx_guards);
 
     assert_eq!(
         actor.queue.queued_len(),
@@ -145394,17 +147649,16 @@ async fn proposal_queue_scan_budget_looks_ahead_for_rotated_lane() {
     assert!(
         deferred
             .iter()
-            .all(|(_, plan)| plan.coordinator_route().lane_id == LaneId::SINGLE),
+            .all(|guard| guard.routing_plan().coordinator_route().lane_id == LaneId::SINGLE),
         "only the lane0 burst should be deferred after the rotated lane wins"
     );
 
-    drop(tx_guards);
-    for (tx, routing_plan) in deferred {
-        actor
-            .queue
-            .push_requeued_with_routing_plan(tx, routing_plan, actor.state.as_ref())
-            .expect("requeue deferred tx");
-    }
+    actor.queue.release_transaction_guards(&mut tx_guards);
+    let mut deferred = deferred;
+    actor
+        .queue
+        .return_transaction_guards(&mut deferred, actor.state.as_ref())
+        .expect("atomically return deferred guards");
     assert_eq!(actor.queue.queued_len(), 3);
 
     harness.shutdown.send();
@@ -145558,14 +147812,17 @@ async fn proposal_multilane_records_lane_payload_ownership_status() {
         ownership.lane_block_height, 1,
         "without a prior lane-local tip, the first lane block should start at height 1"
     );
-    assert_eq!(ownership.lane_block_view, view);
+    assert_eq!(
+        ownership.lane_block_view, 0,
+        "new lane-local blocks use a stable initial lane view independent of global proposal retries"
+    );
     assert_eq!(ownership.accepted_candidate_indices, vec![0]);
     assert_ne!(
         ownership.payload_ownership_hash, ownership.rbc_instance_hash,
         "payload ownership and RBC instance identities must remain domain-separated"
     );
 
-    drop(tx_guards);
+    actor.queue.release_transaction_guards(&mut tx_guards);
     super::status::clear_lane_payload_ownerships();
     harness.shutdown.send();
 }
@@ -145938,6 +148195,7 @@ async fn assemble_proposal_emits_two_independent_lane_block_artifacts_without_id
     lane1_tip_block
         .set_transaction_results(Vec::new(), &lane1_tip_entrypoint_hashes, lane1_tip_results)
         .expect("attach lane1 tip transaction results");
+    rebind_lane_payload_artifact_to_active_incarnation(&mut lane1_tip_block, actor.state.as_ref());
     let lane1_tip_validator_keypair = checked_bls_keypair();
     let lane1_tip_validator = PeerId::new(lane1_tip_validator_keypair.public_key().clone());
     let lane1_tip_ownership = rebind_lane_payload_artifact_validator_set(
@@ -146132,8 +148390,8 @@ async fn assemble_proposal_emits_two_independent_lane_block_artifacts_without_id
                     && entry.msg_kind == Some("LaneBlockPrepareVote")
             )
             .count(),
-        2,
-        "final assembly should broadcast the local prepare vote for each active lane"
+        0,
+        "prepare votes must wait until the assembled global block is canonical in Kura"
     );
 
     super::status::clear_lane_payload_ownerships();
@@ -146142,7 +148400,7 @@ async fn assemble_proposal_emits_two_independent_lane_block_artifacts_without_id
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn assemble_proposal_defers_lane_work_when_local_leader_is_not_lane_slot_author() {
+async fn assemble_proposal_includes_lane_work_when_local_leader_is_not_lane_validator() {
     use iroha_config::parameters::actual::{
         LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule,
     };
@@ -146371,20 +148629,20 @@ async fn assemble_proposal_defers_lane_work_when_local_leader_is_not_lane_slot_a
     assert!(assembled, "proposal assembly should produce a block");
     assert_eq!(
         actor.queue.queued_len(),
-        1,
-        "assembled proposal should requeue lane work assigned to another lane-slot author"
+        0,
+        "assembled proposal should consume all lane work with authoritative committees"
     );
     assert_eq!(
         actor.subsystems.lane_blocks.len(),
-        1,
-        "final assembly should cache only the locally authorable lane-block proposal"
+        2,
+        "final assembly should cache one lane-block proposal per active lane"
     );
 
     let ownerships = super::status::lane_payload_ownerships_snapshot();
     assert_eq!(
         ownerships.len(),
-        1,
-        "final status should expose only the locally authorable lane-block handoff"
+        2,
+        "final status should expose every lane-block handoff included in the proposal"
     );
     let ownerships_by_lane = ownerships
         .iter()
@@ -146393,15 +148651,20 @@ async fn assemble_proposal_defers_lane_work_when_local_leader_is_not_lane_slot_a
     let lane1_ownership = ownerships_by_lane
         .get(&lane1.lane_id)
         .expect("lane1 ownership");
-    assert!(
-        ownerships_by_lane.get(&lane2.lane_id).is_none(),
-        "lane2 ownership must not be published when the local leader is not the lane-slot author"
-    );
+    let lane2_ownership = ownerships_by_lane
+        .get(&lane2.lane_id)
+        .expect("lane2 ownership");
     assert!(
         lane1_ownership
             .lane_block_descriptor_validator_set
             .contains(&local_peer_id),
         "lane1 descriptor should bind a committee containing the local peer"
+    );
+    assert!(
+        !lane2_ownership
+            .lane_block_descriptor_validator_set
+            .contains(&local_peer_id),
+        "lane2 descriptor should bind its lane committee without adding the global proposer"
     );
     for ownership in ownerships {
         ownership
@@ -146418,8 +148681,8 @@ async fn assemble_proposal_defers_lane_work_when_local_leader_is_not_lane_slot_a
                     && entry.msg_kind == Some("LaneBlockProposal")
             )
             .count(),
-        1,
-        "final assembly should broadcast only the locally authorable lane-block proposal"
+        2,
+        "final assembly should broadcast a lane-block proposal for each active lane"
     );
     assert_eq!(
         entries
@@ -146430,11 +148693,427 @@ async fn assemble_proposal_defers_lane_work_when_local_leader_is_not_lane_slot_a
             )
             .count(),
         1,
-        "final assembly must broadcast the local prepare vote for the authorable lane"
+        "final assembly must only broadcast prepare votes signed by a lane committee member"
     );
 
     super::status::clear_lane_payload_ownerships();
     super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_defers_all_lane_work_when_local_leader_is_not_lane_committee_member() {
+    use iroha_config::parameters::actual::{
+        LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule,
+    };
+    use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig};
+
+    let _status_guard = super::status::lane_relay_test_guard();
+    let _message_guard = super::status::message_handling_test_guard();
+    super::status::clear_lane_payload_ownerships();
+    super::status::reset_message_handling_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+    let lane0 = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let lane1 = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(2_u32),
+        vec![
+            LaneConfig::default(),
+            LaneConfig {
+                id: lane1.lane_id,
+                dataspace_id: lane1.dataspace_id,
+                alias: "lane-1".to_string(),
+                ..LaneConfig::default()
+            },
+        ],
+    )
+    .expect("lane catalog");
+    let dataspace_catalog = DataSpaceCatalog::new(vec![
+        DataSpaceMetadata::default(),
+        DataSpaceMetadata {
+            id: lane1.dataspace_id,
+            alias: "space-1".to_string(),
+            description: None,
+            fault_tolerance: 1,
+        },
+    ])
+    .expect("dataspace catalog");
+
+    let key_pair = checked_keypair();
+    let (_, private_key) = key_pair.clone().into_parts();
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let tx = TransactionBuilder::new(actor.common_config.chain.clone(), authority.clone())
+        .with_instructions([Log::new(
+            Level::INFO,
+            "all non-authoritative lane work must defer cleanly".to_string(),
+        )])
+        .sign(&private_key);
+
+    let routing_policy = LaneRoutingPolicy {
+        default_lane: lane0.lane_id,
+        default_dataspace: lane0.dataspace_id,
+        rules: vec![LaneRoutingRule {
+            lane: lane1.lane_id,
+            dataspace: Some(lane1.dataspace_id),
+            matcher: LaneRoutingMatcher {
+                account: Some(authority.to_string()),
+                instruction: None,
+                description: None,
+            },
+        }],
+    };
+    let mut nexus = actor.state.nexus_snapshot();
+    nexus.enabled = true;
+    nexus.lane_catalog = lane_catalog.clone();
+    nexus.dataspace_catalog = dataspace_catalog.clone();
+    nexus.routing_policy = routing_policy.clone();
+    nexus.fees.base_fee = Numeric::zero();
+    nexus.fees.per_byte_fee = Numeric::zero();
+    nexus.fees.per_instruction_fee = Numeric::zero();
+    nexus.fees.per_gas_unit_fee = Numeric::zero();
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .set_nexus(nexus)
+        .expect("set Nexus config");
+
+    let lane_validators = harness
+        .key_pairs
+        .iter()
+        .map(account_id_for_keypair)
+        .collect::<Vec<_>>();
+    let local_validator_account = AccountId::new(actor.common_config.key_pair.public_key().clone());
+    let nonlocal_lane_validators = lane_validators
+        .iter()
+        .filter(|account| *account != &local_validator_account)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        nonlocal_lane_validators.len(),
+        lane_validators.len().saturating_sub(1),
+        "fixture should remove only the local validator from lane1"
+    );
+    install_lane_manifest_registry(
+        actor.state.as_ref(),
+        &[
+            (lane0.lane_id, lane0.dataspace_id, lane_validators),
+            (lane1.lane_id, lane1.dataspace_id, nonlocal_lane_validators),
+        ],
+    );
+    assert!(
+        !actor
+            .state
+            .authoritative_lane_peer_ids(lane1.lane_id)
+            .contains(&actor.common_config.peer.id().clone()),
+        "local peer must not be able to sign lane1 prepare votes"
+    );
+
+    let queue_router = Arc::new(ConfigLaneRouter::new(
+        routing_policy,
+        dataspace_catalog,
+        lane_catalog,
+    ));
+    actor.queue = Arc::new(Queue::test_with_router_for_routes(
+        QueueConfig::default(),
+        &time_source,
+        queue_router,
+        &[
+            (lane0.lane_id, lane0.dataspace_id),
+            (lane1.lane_id, lane1.dataspace_id),
+        ],
+    ));
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push lane1 tx");
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let highest_qc = sample_qc_ref(height.saturating_sub(1), 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (_, _, prf_seed) = actor.consensus_context_for_height(height);
+    let seed = prf_seed.expect("PRF seed available");
+    topology.canonicalize_order();
+    topology.shuffle_prf(seed, height);
+    let local_pos = topology
+        .position(actor.common_config.peer.id().public_key())
+        .expect("local peer in topology");
+    let view = u64::try_from(local_pos).expect("view fits u64");
+    let leader_index = actor
+        .leader_index_for(&mut topology, height, view)
+        .expect("leader index");
+    let local_idx = actor
+        .local_validator_index_for_topology(&topology)
+        .expect("local validator index");
+    assert_eq!(
+        u32::try_from(leader_index).expect("leader index fits u32"),
+        local_idx,
+        "local peer must be leader for proposal assembly"
+    );
+
+    let assembled = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            leader_index,
+            local_idx,
+            None,
+            Instant::now(),
+        )
+        .expect("non-authoritative lane work should defer without assembly failure");
+    assert!(
+        !assembled,
+        "all non-authoritative lane work should not produce a global block"
+    );
+    assert_eq!(
+        actor.queue.queued_len(),
+        1,
+        "deferred lane work should be requeued for an eligible lane committee proposer"
+    );
+    assert_eq!(
+        actor.subsystems.lane_blocks.len(),
+        0,
+        "no lane-block proposal should be cached when no local-authorized lane remains"
+    );
+    assert!(
+        super::status::lane_payload_ownerships_snapshot().is_empty(),
+        "no ownership status should be published for fully deferred lane work"
+    );
+    let entries = take_background_log(&background_log);
+    assert!(
+        entries.iter().all(|entry| {
+            !matches!(
+                entry.msg_kind,
+                Some("BlockCreated" | "Proposal" | "LaneBlockProposal" | "LaneBlockPrepareVote")
+            )
+        }),
+        "fully deferred lane work should not broadcast proposal artifacts"
+    );
+
+    super::status::clear_lane_payload_ownerships();
+    super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_multilane_accepts_lane_work_when_local_leader_is_committee_member_but_not_slot_author()
+ {
+    use iroha_config::parameters::actual::{
+        LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule,
+    };
+    use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig};
+
+    let _status_guard = super::status::lane_relay_test_guard();
+    super::status::clear_lane_payload_ownerships();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+    let lane0 = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let lane1 = RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL);
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(2_u32),
+        vec![
+            LaneConfig::default(),
+            LaneConfig {
+                id: lane1.lane_id,
+                dataspace_id: lane1.dataspace_id,
+                alias: "lane-1".to_string(),
+                ..LaneConfig::default()
+            },
+        ],
+    )
+    .expect("lane catalog");
+    let dataspace_catalog =
+        DataSpaceCatalog::new(vec![DataSpaceMetadata::default()]).expect("dataspace catalog");
+
+    let key_pair = checked_keypair();
+    let (_, private_key) = key_pair.clone().into_parts();
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let tx = TransactionBuilder::new(actor.common_config.chain.clone(), authority.clone())
+        .with_instructions([Log::new(
+            Level::INFO,
+            "committee member may propose lane payload".to_string(),
+        )])
+        .sign(&private_key);
+    let tx_hash = tx.hash();
+
+    let routing_policy = LaneRoutingPolicy {
+        default_lane: lane0.lane_id,
+        default_dataspace: lane0.dataspace_id,
+        rules: vec![LaneRoutingRule {
+            lane: lane1.lane_id,
+            dataspace: Some(lane1.dataspace_id),
+            matcher: LaneRoutingMatcher {
+                account: Some(authority.to_string()),
+                instruction: None,
+                description: None,
+            },
+        }],
+    };
+    let mut nexus = actor.state.nexus_snapshot();
+    nexus.enabled = true;
+    nexus.lane_catalog = lane_catalog.clone();
+    nexus.dataspace_catalog = dataspace_catalog.clone();
+    nexus.routing_policy = routing_policy.clone();
+    nexus.fees.base_fee = Numeric::zero();
+    nexus.fees.per_byte_fee = Numeric::zero();
+    nexus.fees.per_instruction_fee = Numeric::zero();
+    nexus.fees.per_gas_unit_fee = Numeric::zero();
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .set_nexus(nexus)
+        .expect("set Nexus config");
+
+    let lane_validators = harness
+        .key_pairs
+        .iter()
+        .map(account_id_for_keypair)
+        .collect::<Vec<_>>();
+    install_lane_manifest_registry(
+        actor.state.as_ref(),
+        &[
+            (lane0.lane_id, lane0.dataspace_id, lane_validators.clone()),
+            (lane1.lane_id, lane1.dataspace_id, lane_validators),
+        ],
+    );
+    let mut lane1_authority_peers = actor.state.authoritative_lane_peer_ids(lane1.lane_id);
+    lane1_authority_peers.sort();
+    let local_peer = actor.common_config.peer.id().clone();
+    assert!(
+        lane1_authority_peers.contains(&local_peer),
+        "local peer should be a lane committee member"
+    );
+    let non_local_slot_author = lane1_authority_peers
+        .iter()
+        .find(|peer| *peer != &local_peer)
+        .cloned()
+        .expect("fixture should include a non-local lane committee member");
+    let artifact_tip_height =
+        lane_tip_height_before_author_slot(&lane1_authority_peers, &non_local_slot_author, 3);
+    let slot_author_index = usize::try_from(
+        artifact_tip_height
+            % u64::try_from(lane1_authority_peers.len()).expect("validator count fits u64"),
+    )
+    .expect("slot author index fits usize");
+    assert_eq!(
+        lane1_authority_peers[slot_author_index],
+        non_local_slot_author
+    );
+    assert_ne!(
+        lane1_authority_peers[slot_author_index], local_peer,
+        "regression fixture must make the old deterministic slot author non-local"
+    );
+
+    let mut artifact_block = sample_block_with_lane_payload_artifact(
+        2,
+        0,
+        lane1.lane_id,
+        lane1.dataspace_id,
+        artifact_tip_height,
+    );
+    let artifact_entrypoint_hashes: Vec<_> = artifact_block
+        .external_entrypoints_cloned()
+        .map(|entrypoint| entrypoint.hash())
+        .collect();
+    let artifact_results = artifact_entrypoint_hashes
+        .iter()
+        .map(|_| TransactionResultInner::Ok(DataTriggerSequence::new()))
+        .collect();
+    artifact_block
+        .set_transaction_results(Vec::new(), &artifact_entrypoint_hashes, artifact_results)
+        .expect("attach artifact-tip transaction results");
+    rebind_lane_payload_artifact_to_active_incarnation(&mut artifact_block, actor.state.as_ref());
+    let artifact_validator_keypair = checked_bls_keypair();
+    let artifact_validator = PeerId::new(artifact_validator_keypair.public_key().clone());
+    let artifact_ownership = rebind_lane_payload_artifact_validator_set(
+        &mut artifact_block,
+        vec![artifact_validator],
+        1,
+    );
+    let (artifact_session, artifact_signer_pops) =
+        signed_committed_lane_block_session_from_lane_payload_ownership(
+            &artifact_ownership,
+            &artifact_validator_keypair,
+        );
+    store_block_with_test_ancestors(actor.kura.as_ref(), artifact_block);
+    actor
+        .kura
+        .persist_committed_lane_block_session(&artifact_session, &artifact_signer_pops)
+        .expect("persist applied artifact-tip certified session");
+    actor
+        .kura
+        .persist_lane_block_application_receipt(&artifact_session.proposal)
+        .expect("persist applied artifact-tip application receipt");
+
+    let queue_router = Arc::new(ConfigLaneRouter::new(
+        routing_policy,
+        dataspace_catalog,
+        lane_catalog,
+    ));
+    actor.queue = Arc::new(Queue::test_with_router_for_routes(
+        QueueConfig::default(),
+        &time_source,
+        queue_router,
+        &[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (LaneId::new(1), DataSpaceId::UNIVERSAL),
+        ],
+    ));
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let height = 12;
+    let view = 0;
+    let mut tx_guards = Vec::new();
+    let deferred = actor.pull_transactions_for_proposal(
+        actor.state.as_ref(),
+        nonzero!(1_usize),
+        1,
+        None,
+        None,
+        false,
+        &mut tx_guards,
+        height,
+        view,
+    );
+
+    assert!(
+        deferred.is_empty(),
+        "lane work should not be stranded when the local proposer is in the lane committee"
+    );
+    assert_eq!(tx_guards.len(), 1);
+    assert_eq!(tx_guards[0].as_accepted().hash(), tx_hash);
+    assert_eq!(tx_guards[0].routing(), lane1);
+
+    let ownerships = super::status::lane_payload_ownerships_snapshot();
+    assert_eq!(ownerships.len(), 1);
+    assert_eq!(ownerships[0].lane_id, lane1.lane_id);
+    assert_eq!(ownerships[0].lane_block_height, artifact_tip_height + 1);
+
+    actor.queue.release_transaction_guards(&mut tx_guards);
+    super::status::clear_lane_payload_ownerships();
     harness.shutdown.send();
 }
 
@@ -146549,6 +149228,7 @@ async fn proposal_multilane_uses_lane_relay_tip_for_payload_ownership_status() {
     artifact_block
         .set_transaction_results(Vec::new(), &artifact_entrypoint_hashes, artifact_results)
         .expect("attach descriptor-backed artifact transaction results");
+    rebind_lane_payload_artifact_to_active_incarnation(&mut artifact_block, actor.state.as_ref());
     let artifact_validator_keypair = checked_bls_keypair();
     let artifact_validator = PeerId::new(artifact_validator_keypair.public_key().clone());
     let artifact_ownership = rebind_lane_payload_artifact_validator_set(
@@ -146586,6 +149266,7 @@ async fn proposal_multilane_uses_lane_relay_tip_for_payload_ownership_status() {
         vec![(
             lane1.lane_id,
             lane1.dataspace_id,
+            artifact_ownership.lane_incarnation,
             artifact_tip_height,
             artifact_descriptor_hash
         )]
@@ -146622,13 +149303,16 @@ async fn proposal_multilane_uses_lane_relay_tip_for_payload_ownership_status() {
     .expect("test signer bitmap fits u8");
     let (_, mode_tag, _) = actor.consensus_context_for_height(relay_tip_height);
     let relay_descriptor_hash = Hash::new(b"proposal relay descriptor hash");
-    let relay = sample_lane_relay_envelope(
-        relay_tip_height,
-        lane1.lane_id,
-        &actor.chain_id,
-        mode_tag,
-        &signers,
-        signer_bitmap,
+    let relay = rebind_lane_relay_to_active_incarnation(
+        sample_lane_relay_envelope(
+            relay_tip_height,
+            lane1.lane_id,
+            &actor.chain_id,
+            mode_tag,
+            &signers,
+            signer_bitmap,
+        ),
+        actor.state.as_ref(),
     )
     .with_lane_block_descriptor_hash(Some(relay_descriptor_hash));
     actor
@@ -146698,7 +149382,10 @@ async fn proposal_multilane_uses_lane_relay_tip_for_payload_ownership_status() {
         ownership.lane_block_height, height,
         "a lane with relay history must not fall back to the global compatibility height"
     );
-    assert_eq!(ownership.lane_block_view, view);
+    assert_eq!(
+        ownership.lane_block_view, 0,
+        "new lane-local blocks use a stable initial lane view independent of global proposal retries"
+    );
     assert_eq!(
         ownership.previous_lane_block_descriptor_hash,
         Some(relay_descriptor_hash),
@@ -146706,7 +149393,7 @@ async fn proposal_multilane_uses_lane_relay_tip_for_payload_ownership_status() {
     );
     assert_eq!(ownership.accepted_candidate_indices, vec![0]);
 
-    drop(tx_guards);
+    actor.queue.release_transaction_guards(&mut tx_guards);
     super::status::set_lane_relay_envelopes(Vec::new());
     super::status::clear_lane_payload_ownerships();
     harness.shutdown.send();
@@ -146823,6 +149510,7 @@ async fn proposal_multilane_ignores_descriptorless_lane_relay_tip_for_payload_ow
     artifact_block
         .set_transaction_results(Vec::new(), &artifact_entrypoint_hashes, artifact_results)
         .expect("attach descriptor-backed artifact transaction results");
+    rebind_lane_payload_artifact_to_active_incarnation(&mut artifact_block, actor.state.as_ref());
     let artifact_validator_keypair = checked_bls_keypair();
     let artifact_validator = PeerId::new(artifact_validator_keypair.public_key().clone());
     let artifact_ownership = rebind_lane_payload_artifact_validator_set(
@@ -146884,13 +149572,16 @@ async fn proposal_multilane_ignores_descriptorless_lane_relay_tip_for_payload_ow
     )
     .expect("test signer bitmap fits u8");
     let (_, mode_tag, _) = actor.consensus_context_for_height(relay_tip_height);
-    let descriptorless_relay = sample_lane_relay_envelope(
-        relay_tip_height,
-        lane1.lane_id,
-        &actor.chain_id,
-        mode_tag,
-        &signers,
-        signer_bitmap,
+    let descriptorless_relay = rebind_lane_relay_to_active_incarnation(
+        sample_lane_relay_envelope(
+            relay_tip_height,
+            lane1.lane_id,
+            &actor.chain_id,
+            mode_tag,
+            &signers,
+            signer_bitmap,
+        ),
+        actor.state.as_ref(),
     );
     assert!(
         descriptorless_relay.is_merge_admissible(),
@@ -146979,7 +149670,7 @@ async fn proposal_multilane_ignores_descriptorless_lane_relay_tip_for_payload_ow
         "proposal must keep binding to the latest descriptor-backed predecessor"
     );
 
-    drop(tx_guards);
+    actor.queue.release_transaction_guards(&mut tx_guards);
     super::status::set_lane_relay_envelopes(Vec::new());
     super::status::clear_lane_payload_ownerships();
     harness.shutdown.send();
@@ -147065,12 +149756,16 @@ async fn proposal_multilane_blocks_unapplied_lane_artifact_without_advancing_tip
     );
 
     let raw_artifact_height = 3_u64;
-    let raw_artifact_block = sample_block_with_lane_payload_artifact(
+    let mut raw_artifact_block = sample_block_with_lane_payload_artifact(
         2,
         0,
         lane1.lane_id,
         lane1.dataspace_id,
         raw_artifact_height,
+    );
+    rebind_lane_payload_artifact_to_active_incarnation(
+        &mut raw_artifact_block,
+        actor.state.as_ref(),
     );
     store_block_with_test_ancestors(actor.kura.as_ref(), raw_artifact_block);
 
@@ -147108,6 +149803,317 @@ async fn proposal_multilane_blocks_unapplied_lane_artifact_without_advancing_tip
             .contains(&lane1.lane_id),
         "proposal assembly should defer new work while the raw artifact awaits certification"
     );
+    let mut final_tx_batch = vec!["blocked-lane", "open-lane"];
+    let mut final_routing_batch = vec![lane1, lane0];
+    let mut final_routing_plan_batch = vec![
+        crate::queue::RoutingPlan::single(lane1),
+        crate::queue::RoutingPlan::single(lane0),
+    ];
+    let mut final_sizes = vec![1_usize, 1_usize];
+    let mut removed_for_readiness: Vec<(&str, crate::queue::RoutingPlan)> = Vec::new();
+    let (blocked_lane_ids, removed) = actor.defer_batch_lanes_with_unapplied_lane_blocks(
+        next_proposal_height_for_state(actor.state.as_ref()),
+        &mut final_tx_batch,
+        &mut final_routing_batch,
+        &mut final_routing_plan_batch,
+        &mut final_sizes,
+        &mut removed_for_readiness,
+    );
+    assert_eq!(removed, 1);
+    assert_eq!(blocked_lane_ids, BTreeSet::from([lane1.lane_id]));
+    assert_eq!(
+        final_tx_batch,
+        vec!["open-lane"],
+        "final proposal assembly must keep unblocked lane work in the batch"
+    );
+    assert_eq!(final_routing_batch, vec![lane0]);
+    assert_eq!(final_sizes, vec![1_usize]);
+    assert_eq!(
+        removed_for_readiness
+            .iter()
+            .map(|(label, plan)| (*label, plan.coordinator_route()))
+            .collect::<Vec<_>>(),
+        vec![("blocked-lane", lane1)],
+        "final proposal assembly must defer only routes blocked by unapplied lane artifacts"
+    );
+
+    super::status::set_lane_relay_envelopes(Vec::new());
+    super::status::clear_lane_payload_ownerships();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_multilane_treats_hash_only_snapshot_lane_artifact_as_applied_tip() {
+    use iroha_config::parameters::actual::{
+        LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule,
+    };
+    use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig};
+
+    let _status_guard = super::status::lane_relay_test_guard();
+    super::status::set_lane_relay_envelopes(Vec::new());
+    super::status::clear_lane_payload_ownerships();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let lane0 = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let lane1 = RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL);
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(2_u32),
+        vec![
+            LaneConfig::default(),
+            LaneConfig {
+                id: lane1.lane_id,
+                dataspace_id: lane1.dataspace_id,
+                alias: "lane-1".to_string(),
+                ..LaneConfig::default()
+            },
+        ],
+    )
+    .expect("lane catalog");
+    let dataspace_catalog =
+        DataSpaceCatalog::new(vec![DataSpaceMetadata::default()]).expect("dataspace catalog");
+
+    let key_pair = checked_keypair();
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let routing_policy = LaneRoutingPolicy {
+        default_lane: lane0.lane_id,
+        default_dataspace: lane0.dataspace_id,
+        rules: vec![LaneRoutingRule {
+            lane: lane1.lane_id,
+            dataspace: Some(lane1.dataspace_id),
+            matcher: LaneRoutingMatcher {
+                account: Some(authority.to_string()),
+                instruction: None,
+                description: None,
+            },
+        }],
+    };
+    let mut nexus = actor.state.nexus_snapshot();
+    nexus.enabled = true;
+    nexus.lane_catalog = lane_catalog;
+    nexus.dataspace_catalog = dataspace_catalog;
+    nexus.routing_policy = routing_policy;
+    nexus.fees.base_fee = Numeric::zero();
+    nexus.fees.per_byte_fee = Numeric::zero();
+    nexus.fees.per_instruction_fee = Numeric::zero();
+    nexus.fees.per_gas_unit_fee = Numeric::zero();
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .set_nexus(nexus)
+        .expect("set Nexus config");
+    let lane_validators = harness
+        .key_pairs
+        .iter()
+        .map(account_id_for_keypair)
+        .collect::<Vec<_>>();
+    let local_lane_validators = vec![AccountId::new(
+        actor.common_config.key_pair.public_key().clone(),
+    )];
+    install_lane_manifest_registry(
+        actor.state.as_ref(),
+        &[
+            (lane0.lane_id, lane0.dataspace_id, lane_validators.clone()),
+            (lane1.lane_id, lane1.dataspace_id, local_lane_validators),
+        ],
+    );
+
+    let snapshot_artifact_height = 3_u64;
+    let mut snapshot_artifact_block = sample_block_with_lane_payload_artifact(
+        2,
+        0,
+        lane1.lane_id,
+        lane1.dataspace_id,
+        snapshot_artifact_height,
+    );
+    rebind_lane_payload_artifact_to_active_incarnation(
+        &mut snapshot_artifact_block,
+        actor.state.as_ref(),
+    );
+    let snapshot_artifact_ownership = snapshot_artifact_block
+        .execution_context()
+        .expect("artifact block has execution context")
+        .lane_payload_ownerships
+        .first()
+        .expect("artifact block has lane ownership")
+        .clone();
+    let snapshot_artifact_descriptor_hash = snapshot_artifact_ownership.lane_block_descriptor_hash;
+    assert_eq!(
+        snapshot_artifact_ownership.proposal_height, 2,
+        "fixture should anchor the lane artifact to global block height 2"
+    );
+    store_block_with_test_ancestors(actor.kura.as_ref(), snapshot_artifact_block);
+    actor
+        .kura
+        .force_hash_only_block_for_testing(nonzero!(2_usize))
+        .expect("convert artifact anchor to hash-only snapshot block");
+    assert!(
+        actor.kura.is_hash_only_block_height(nonzero!(2_usize)),
+        "fixture should mirror hard-fork snapshot state with no block body at the artifact height"
+    );
+
+    let committed_height = actor.state.committed_height();
+    let block_hashes = (1..=actor.kura.blocks_count())
+        .map(|height| {
+            let height = NonZeroUsize::new(height).expect("non-zero Kura height");
+            actor
+                .kura
+                .get_block_hash(height)
+                .or_else(|| actor.kura.get_durable_block_hash(height))
+                .expect("canonical Kura hash exists")
+        })
+        .skip(committed_height)
+        .collect::<Vec<_>>();
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    for block_hash in block_hashes {
+        state.push_block_hash_for_testing(block_hash);
+    }
+
+    let (snapshot_certified_session, snapshot_signer_pops) =
+        signed_committed_lane_block_session_from_lane_payload_ownership(
+            &snapshot_artifact_ownership,
+            &lane_payload_artifact_validator_keypair(),
+        );
+    actor
+        .kura
+        .persist_committed_lane_block_session(&snapshot_certified_session, &snapshot_signer_pops)
+        .expect("persist snapshot-anchored certified lane block");
+    assert!(
+        actor
+            .state
+            .certified_lane_block_session_is_applied_or_snapshot_anchored_cached(
+                &snapshot_certified_session,
+            ),
+        "certified sessions matching hash-only snapshot artifacts should be treated as restored"
+    );
+    assert!(
+        actor
+            .state
+            .unapplied_certified_lane_block_heights_snapshot_cached()
+            .is_empty(),
+        "hash-only snapshot-anchored certified sessions must not block proposal readiness"
+    );
+    let mut restart_queue = super::CommittedLaneBlockQueue::new(1);
+    assert_eq!(
+        restart_queue.hydrate_unapplied_from_certified_sessions_for_state(
+            vec![snapshot_certified_session.clone()],
+            actor.state.as_ref(),
+        ),
+        0,
+        "startup hydration should skip hash-only snapshot-anchored certified sessions"
+    );
+    assert!(
+        restart_queue.front().is_none(),
+        "snapshot-anchored certified session should not enter the committed-lane blocker queue"
+    );
+    let mut successor_artifact_block = sample_block_with_lane_payload_artifact(
+        3,
+        0,
+        lane1.lane_id,
+        lane1.dataspace_id,
+        snapshot_artifact_height.saturating_add(1),
+    );
+    rebind_lane_payload_artifact_to_active_incarnation(
+        &mut successor_artifact_block,
+        actor.state.as_ref(),
+    );
+    let successor_ownership = rebind_lane_payload_artifact_predecessor(
+        &mut successor_artifact_block,
+        snapshot_artifact_descriptor_hash.expect("snapshot descriptor hash"),
+    );
+    let successor_certified_session =
+        committed_lane_block_session_from_lane_payload_ownership(&successor_ownership);
+    assert!(
+        actor
+            .state
+            .certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(
+                &successor_certified_session.proposal,
+            ),
+        "a successor should treat a hash-only snapshot-anchored predecessor as applied"
+    );
+    let mut successor_queue = super::CommittedLaneBlockQueue::new(1);
+    assert_eq!(
+        successor_queue.hydrate_from_certified_sessions(vec![successor_certified_session.clone()]),
+        1,
+        "the successor itself is still unapplied and should enter the execution queue"
+    );
+    let successor_status = successor_queue.status_snapshot_for_state(actor.state.as_ref());
+    assert_eq!(successor_status.len(), 1);
+    assert_ne!(
+        successor_status[0].execution_status,
+        super::status::CommittedLaneBlockExecutionStatus::AwaitingPredecessorApplication,
+        "snapshot-anchored predecessor should not leave successor backlog waiting on predecessor"
+    );
+
+    assert_eq!(
+        actor.state.lane_block_artifact_tips_snapshot_cached(),
+        vec![(
+            lane1.lane_id,
+            lane1.dataspace_id,
+            snapshot_artifact_ownership.lane_incarnation,
+            snapshot_artifact_height,
+            snapshot_artifact_descriptor_hash
+        )],
+        "hash-only snapshot-anchored lane artifacts should seed proposal-planning tips"
+    );
+    assert!(
+        actor
+            .state
+            .unapplied_lane_block_artifact_heights_snapshot_cached()
+            .is_empty(),
+        "hash-only snapshot-anchored lane artifacts are already part of the restored state"
+    );
+    assert!(
+        actor
+            .known_lane_block_tips_for_proposal(next_proposal_height_for_state(
+                actor.state.as_ref()
+            ))
+            .iter()
+            .any(|tip| {
+                tip.lane_id == lane1.lane_id
+                    && tip.dataspace_id == lane1.dataspace_id
+                    && tip.latest_lane_block_height == snapshot_artifact_height
+                    && tip.latest_lane_block_descriptor_hash == snapshot_artifact_descriptor_hash
+            }),
+        "proposal planning should advance from the snapshot artifact tip"
+    );
+    assert!(
+        !actor
+            .unapplied_lane_block_lanes_for_proposal(
+                actor.state.as_ref(),
+                next_proposal_height_for_state(actor.state.as_ref()),
+            )
+            .contains(&lane1.lane_id),
+        "proposal assembly must not block lanes covered by snapshot-anchored artifacts"
+    );
+    let mut final_tx_batch = vec!["snapshot-lane", "open-lane"];
+    let mut final_routing_batch = vec![lane1, lane0];
+    let mut final_routing_plan_batch = vec![
+        crate::queue::RoutingPlan::single(lane1),
+        crate::queue::RoutingPlan::single(lane0),
+    ];
+    let mut final_sizes = vec![1_usize, 1_usize];
+    let mut removed_for_readiness: Vec<(&str, crate::queue::RoutingPlan)> = Vec::new();
+    let (blocked_lane_ids, removed) = actor.defer_batch_lanes_with_unapplied_lane_blocks(
+        next_proposal_height_for_state(actor.state.as_ref()),
+        &mut final_tx_batch,
+        &mut final_routing_batch,
+        &mut final_routing_plan_batch,
+        &mut final_sizes,
+        &mut removed_for_readiness,
+    );
+    assert_eq!(removed, 0);
+    assert!(
+        blocked_lane_ids.is_empty(),
+        "snapshot-anchored artifacts must not produce readiness blockers"
+    );
+    assert_eq!(final_tx_batch, vec!["snapshot-lane", "open-lane"]);
+    assert_eq!(final_routing_batch, vec![lane1, lane0]);
+    assert_eq!(final_sizes, vec![1_usize, 1_usize]);
+    assert!(removed_for_readiness.is_empty());
 
     super::status::set_lane_relay_envelopes(Vec::new());
     super::status::clear_lane_payload_ownerships();
@@ -147222,6 +150228,7 @@ async fn proposal_multilane_uses_lane_artifact_tip_for_payload_ownership_status(
     artifact_block
         .set_transaction_results(Vec::new(), &artifact_entrypoint_hashes, artifact_results)
         .expect("attach artifact-tip transaction results");
+    rebind_lane_payload_artifact_to_active_incarnation(&mut artifact_block, actor.state.as_ref());
     let artifact_validator_keypair = checked_bls_keypair();
     let artifact_validator = PeerId::new(artifact_validator_keypair.public_key().clone());
     let artifact_ownership = rebind_lane_payload_artifact_validator_set(
@@ -147275,6 +150282,7 @@ async fn proposal_multilane_uses_lane_artifact_tip_for_payload_ownership_status(
         vec![(
             lane1.lane_id,
             lane1.dataspace_id,
+            artifact_ownership.lane_incarnation,
             artifact_tip_height,
             artifact_descriptor_hash
         )],
@@ -147349,21 +150357,24 @@ async fn proposal_multilane_uses_lane_artifact_tip_for_payload_ownership_status(
         ownership.lane_block_height, height,
         "a lane with artifact history must not fall back to the global compatibility height"
     );
-    assert_eq!(ownership.lane_block_view, view);
+    assert_eq!(
+        ownership.lane_block_view, 0,
+        "new lane-local blocks use a stable initial lane view independent of global proposal retries"
+    );
     assert_eq!(
         ownership.previous_lane_block_descriptor_hash, artifact_descriptor_hash,
         "artifact tip metadata must bind the new lane block to the previous descriptor"
     );
     assert_eq!(ownership.accepted_candidate_indices, vec![0]);
 
-    drop(tx_guards);
+    actor.queue.release_transaction_guards(&mut tx_guards);
     super::status::set_lane_relay_envelopes(Vec::new());
     super::status::clear_lane_payload_ownerships();
     harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn proposal_multilane_floors_lane_payload_ownership_status_at_reset_watermark() {
+async fn proposal_multilane_restarts_lane_payload_ownership_after_reset_watermark() {
     use iroha_config::parameters::actual::{
         LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule,
     };
@@ -147453,13 +150464,17 @@ async fn proposal_multilane_floors_lane_payload_ownership_status_at_reset_waterm
 
     let stale_relay_height = 5_u64;
     let reset_height = 8_u64;
-    let stale_artifact_height = reset_height.saturating_sub(1);
-    let stale_artifact_block = sample_block_with_lane_payload_artifact(
+    let stale_artifact_height = reset_height.saturating_add(5);
+    let mut stale_artifact_block = sample_block_with_lane_payload_artifact(
         2,
         0,
         lane1.lane_id,
         lane1.dataspace_id,
         stale_artifact_height,
+    );
+    rebind_lane_payload_artifact_to_active_incarnation(
+        &mut stale_artifact_block,
+        actor.state.as_ref(),
     );
     store_block_with_test_ancestors(actor.kura.as_ref(), stale_artifact_block);
     assert_eq!(
@@ -147470,7 +150485,7 @@ async fn proposal_multilane_floors_lane_payload_ownership_status_at_reset_waterm
             .ownership
             .lane_block_height,
         stale_artifact_height,
-        "test setup should expose the old-incarnation committed artifact before reset"
+        "test setup should expose the committed artifact before reset"
     );
     assert_eq!(
         actor
@@ -147486,13 +150501,16 @@ async fn proposal_multilane_floors_lane_payload_ownership_status_at_reset_waterm
         u8::try_from((1_u16 << signers.len()) - 1).expect("test signer bitmap fits u8");
     let (_, mode_tag, _) = actor.consensus_context_for_height(stale_relay_height);
     let stale_relay_descriptor_hash = Hash::new(b"stale reset relay descriptor hash");
-    let stale_relay = sample_lane_relay_envelope(
-        stale_relay_height,
-        lane1.lane_id,
-        &actor.chain_id,
-        mode_tag,
-        &signers,
-        signer_bitmap,
+    let stale_relay = rebind_lane_relay_to_active_incarnation(
+        sample_lane_relay_envelope(
+            stale_relay_height,
+            lane1.lane_id,
+            &actor.chain_id,
+            mode_tag,
+            &signers,
+            signer_bitmap,
+        ),
+        actor.state.as_ref(),
     )
     .with_lane_block_descriptor_hash(Some(stale_relay_descriptor_hash));
     actor
@@ -147505,20 +150523,20 @@ async fn proposal_multilane_floors_lane_payload_ownership_status_at_reset_waterm
         .state
         .da_shard_cursors
         .write()
-        .mark_lanes_reset(&BTreeSet::from([lane1.lane_id]), reset_height);
+        .mark_lanes_canonically_reset(&BTreeSet::from([lane1.lane_id]), reset_height);
     assert!(
         actor
             .state
             .lane_block_artifact_tips_snapshot_cached()
             .is_empty(),
-        "old-incarnation committed artifact tips at or below the reset watermark must not seed proposal planning"
+        "artifact tips proposed at or below the reset watermark must not seed proposal planning even when their lane-local height is higher"
     );
     assert!(
         actor
             .state
             .unapplied_lane_block_artifact_heights_snapshot_cached()
             .is_empty(),
-        "old-incarnation unapplied committed artifacts at or below the reset watermark must not block proposal readiness"
+        "unapplied artifacts proposed at or below the reset watermark must not block readiness even when their lane-local height is higher"
     );
     assert_eq!(
         actor.state.lane_relay_snapshot(),
@@ -147531,7 +150549,7 @@ async fn proposal_multilane_floors_lane_payload_ownership_status_at_reset_waterm
                 actor.state.as_ref()
             ))
             .is_empty(),
-        "old-incarnation relay and committed artifact tips at or below the reset watermark must not enter proposal planning"
+        "relay and committed artifact tips at or below the reset watermark must not enter proposal planning"
     );
 
     let queue_router = Arc::new(ConfigLaneRouter::new(
@@ -147587,9 +150605,8 @@ async fn proposal_multilane_floors_lane_payload_ownership_status_at_reset_waterm
     assert_eq!(ownership.lane_id, lane1.lane_id);
     assert_eq!(ownership.dataspace_id, lane1.dataspace_id);
     assert_eq!(
-        ownership.lane_block_height,
-        reset_height + 1,
-        "lane-local ownership must advance from the reset watermark when the cached relay belongs to an older incarnation"
+        ownership.lane_block_height, 1,
+        "lane-local ownership must restart at height one after the reset watermark retires prior tips"
     );
     assert_ne!(
         ownership.lane_block_height,
@@ -147598,23 +150615,26 @@ async fn proposal_multilane_floors_lane_payload_ownership_status_at_reset_waterm
     );
     assert_ne!(
         ownership.lane_block_height, height,
-        "reset-aware lane-local ownership should not fall back to the global compatibility height"
+        "reset-aware lane-local ownership should restart independently of the global height"
     );
-    assert_eq!(ownership.lane_block_view, view);
+    assert_eq!(
+        ownership.lane_block_view, 0,
+        "new lane-local blocks use a stable initial lane view independent of global proposal retries"
+    );
     assert_eq!(
         ownership.previous_lane_block_descriptor_hash, None,
         "reset-floored proposal tips must not carry stale old-incarnation artifact descriptor hashes"
     );
     assert_eq!(ownership.accepted_candidate_indices, vec![0]);
 
-    drop(tx_guards);
+    actor.queue.release_transaction_guards(&mut tx_guards);
     super::status::set_lane_relay_envelopes(Vec::new());
     super::status::clear_lane_payload_ownerships();
     harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn proposal_multilane_defers_lane_work_when_local_leader_is_not_lane_slot_author() {
+async fn proposal_multilane_defers_lane_work_when_local_leader_is_not_lane_validator() {
     use iroha_config::parameters::actual::{
         LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule,
     };
@@ -147819,41 +150839,46 @@ async fn proposal_multilane_defers_lane_work_when_local_leader_is_not_lane_slot_
     assert_eq!(
         tx_guards.len(),
         1,
-        "proposal selection should keep locally authorable lane work"
+        "proposal selection should keep work only for lanes the local producer may author"
     );
     assert_eq!(tx_guards[0].as_accepted().hash(), lane1_hash);
     assert_eq!(tx_guards[0].routing(), lane1);
     assert_eq!(
         deferred.len(),
         1,
-        "proposal selection should defer only the lane assigned to another lane-slot author"
+        "work for a lane outside the local producer's committee must be deferred"
     );
-    assert_eq!(deferred[0].0.hash(), lane2_hash);
-    assert_eq!(deferred[0].1.coordinator_route(), lane2);
+    assert_eq!(deferred[0].as_accepted().hash(), lane2_hash);
+    assert_eq!(deferred[0].routing(), lane2);
 
     let ownerships = super::status::lane_payload_ownerships_snapshot();
     assert_eq!(
         ownerships.len(),
         1,
-        "planned ownership status should describe only accepted local-author lane work"
+        "planned ownership status should describe only the locally authorable lane handoff"
     );
-    let ownership = &ownerships[0];
-    assert_eq!(ownership.proposal_height, height);
-    assert_eq!(ownership.proposal_view, view);
-    assert_eq!(ownership.lane_id, lane1.lane_id);
-    assert_eq!(ownership.dataspace_id, lane1.dataspace_id);
+    let lane1_ownership = &ownerships[0];
+    assert_eq!(lane1_ownership.proposal_height, height);
+    assert_eq!(lane1_ownership.proposal_view, view);
+    assert_eq!(lane1_ownership.lane_id, lane1.lane_id);
+    assert_eq!(lane1_ownership.dataspace_id, lane1.dataspace_id);
     assert_eq!(
-        ownership.accepted_transaction_hashes,
+        lane1_ownership.accepted_transaction_hashes,
         vec![Hash::from(lane1_hash)]
     );
     assert!(
-        ownership
+        lane1_ownership
             .lane_block_descriptor_validator_set
             .contains(&local_peer_id),
-        "lane ownership descriptor must include the local author"
+        "lane1 descriptor should bind a committee containing the local signer"
     );
 
-    drop(tx_guards);
+    actor.queue.release_transaction_guards(&mut tx_guards);
+    let mut deferred = deferred;
+    actor
+        .queue
+        .return_transaction_guards(&mut deferred, actor.state.as_ref())
+        .expect("atomically return deferred lane guard");
     super::status::clear_lane_payload_ownerships();
     harness.shutdown.send();
 }
@@ -147983,20 +151008,19 @@ async fn proposal_multilane_defers_candidate_when_lane_authority_is_missing() {
         1,
         "candidate should be returned for requeue"
     );
-    assert_eq!(deferred[0].0.hash(), tx_hash);
-    assert_eq!(deferred[0].1.coordinator_route(), lane1);
+    assert_eq!(deferred[0].as_accepted().hash(), tx_hash);
+    assert_eq!(deferred[0].routing_plan().coordinator_route(), lane1);
     assert!(
         super::status::lane_payload_ownerships_snapshot().is_empty(),
         "failed lane-consensus planning must clear stale planned ownership status"
     );
 
-    drop(tx_guards);
-    for (tx, routing_plan) in deferred {
-        actor
-            .queue
-            .push_requeued_with_routing_plan(tx, routing_plan, actor.state.as_ref())
-            .expect("requeue missing-authority tx");
-    }
+    actor.queue.release_transaction_guards(&mut tx_guards);
+    let mut deferred = deferred;
+    actor
+        .queue
+        .return_transaction_guards(&mut deferred, actor.state.as_ref())
+        .expect("atomically return missing-authority guard");
     assert_eq!(actor.queue.queued_len(), 1);
 
     harness.shutdown.send();
@@ -148192,7 +151216,12 @@ async fn proposal_multilane_defers_entire_batch_when_one_lane_authority_is_missi
     );
     let deferred_by_hash = deferred
         .iter()
-        .map(|(tx, routing_plan)| (tx.hash(), routing_plan.coordinator_route()))
+        .map(|guard| {
+            (
+                guard.as_accepted().hash(),
+                guard.routing_plan().coordinator_route(),
+            )
+        })
         .collect::<BTreeMap<_, _>>();
     assert_eq!(deferred_by_hash.get(&lane1_hash), Some(&lane1));
     assert_eq!(deferred_by_hash.get(&lane2_hash), Some(&lane2));
@@ -148201,13 +151230,12 @@ async fn proposal_multilane_defers_entire_batch_when_one_lane_authority_is_missi
         "failed cross-lane consensus planning must clear stale planned ownership status"
     );
 
-    drop(tx_guards);
-    for (tx, routing_plan) in deferred {
-        actor
-            .queue
-            .push_requeued_with_routing_plan(tx, routing_plan, actor.state.as_ref())
-            .expect("requeue missing-authority batch tx");
-    }
+    actor.queue.release_transaction_guards(&mut tx_guards);
+    let mut deferred = deferred;
+    actor
+        .queue
+        .return_transaction_guards(&mut deferred, actor.state.as_ref())
+        .expect("atomically return missing-authority batch guards");
     assert_eq!(actor.queue.queued_len(), 2);
 
     harness.shutdown.send();
@@ -148385,15 +151413,14 @@ async fn proposal_gas_budget_prefers_fitting_cross_lane_tx_over_oversized_first_
         1,
         "oversized first-lane tx should be deferred"
     );
-    assert_eq!(deferred[0].0.hash(), oversized_hash);
+    assert_eq!(deferred[0].as_accepted().hash(), oversized_hash);
 
-    drop(tx_guards);
-    for (tx, routing_plan) in deferred {
-        actor
-            .queue
-            .push_requeued_with_routing_plan(tx, routing_plan, actor.state.as_ref())
-            .expect("requeue deferred oversized tx");
-    }
+    actor.queue.release_transaction_guards(&mut tx_guards);
+    let mut deferred = deferred;
+    actor
+        .queue
+        .return_transaction_guards(&mut deferred, actor.state.as_ref())
+        .expect("atomically return deferred oversized guard");
     assert_eq!(actor.queue.queued_len(), 1);
 
     harness.shutdown.send();
@@ -148456,13 +151483,13 @@ async fn proposal_gas_budget_keeps_oversized_first_candidate_when_no_fit_exists(
     assert_eq!(tx_guards.len(), 1);
     assert_eq!(tx_guards[0].as_accepted().hash(), tx_hash);
 
-    drop(tx_guards);
+    actor.queue.release_transaction_guards(&mut tx_guards);
 
     harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn proposal_filter_drops_committed_transactions_after_queue_scan() {
+async fn proposal_filter_excludes_committed_payload_without_dropping_guard_ownership() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     install_active_single_lane_nexus(actor.state.as_ref());
@@ -148502,19 +151529,19 @@ async fn proposal_filter_drops_committed_transactions_after_queue_scan() {
 
     assert_eq!(tx_guards.len(), 2, "queue should return both transactions");
 
-    let transactions: Vec<_> = tx_guards
+    let mut transactions: Vec<_> = tx_guards
         .iter()
         .map(crate::queue::TransactionGuard::clone_accepted)
         .collect();
-    let routing: Vec<_> = tx_guards
+    let mut routing: Vec<_> = tx_guards
         .iter()
         .map(crate::queue::TransactionGuard::routing)
         .collect();
-    let routing_plans: Vec<_> = tx_guards
+    let mut routing_plans: Vec<_> = tx_guards
         .iter()
         .map(crate::queue::TransactionGuard::routing_plan)
         .collect();
-    let tx_sizes: Vec<_> = tx_guards
+    let mut tx_sizes: Vec<_> = tx_guards
         .iter()
         .map(crate::queue::TransactionGuard::encoded_len)
         .collect();
@@ -148531,20 +151558,13 @@ async fn proposal_filter_drops_committed_transactions_after_queue_scan() {
         tx_block.commit().expect("commit transactions block");
     }
 
-    let (
-        filtered_guards,
-        filtered_transactions,
-        _filtered_routing,
-        _filtered_routing_plans,
-        _filtered_sizes,
-        dropped,
-    ) = Actor::filter_committed_transactions_for_proposal(
+    let dropped = Actor::filter_committed_transactions_for_proposal(
         actor.state.as_ref(),
-        tx_guards,
-        transactions,
-        routing,
-        routing_plans,
-        tx_sizes,
+        &mut tx_guards,
+        &mut transactions,
+        &mut routing,
+        &mut routing_plans,
+        &mut tx_sizes,
         height,
         view,
     )
@@ -148552,17 +151572,97 @@ async fn proposal_filter_drops_committed_transactions_after_queue_scan() {
 
     assert_eq!(dropped, 1, "one committed transaction should be dropped");
     assert_eq!(
-        filtered_transactions.len(),
+        transactions.len(),
         1,
         "only the live transaction should remain"
     );
     assert_eq!(
-        filtered_transactions[0].hash(),
+        transactions[0].hash(),
         live_tx.hash(),
         "live transaction should remain in proposal batch"
     );
+    assert_eq!(
+        tx_guards.len(),
+        2,
+        "both terminal and live guards remain owned for one atomic disposition"
+    );
+    assert!(
+        actor.return_proposal_guards_or_quarantine(
+            &mut tx_guards,
+            "committed-filter ownership test",
+        )
+    );
+    assert!(tx_guards.is_empty());
+    assert_eq!(actor.queue.active_len(), 1);
+    assert_eq!(actor.queue.queued_len(), 1);
+    assert!(!actor.queue.contains_transaction_hash(committed_tx.hash()));
+    assert!(actor.queue.contains_transaction_hash(live_tx.hash()));
 
-    drop(filtered_guards);
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_filter_length_mismatch_preserves_and_atomically_returns_live_guards() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let tx = sample_transaction();
+    let tx_hash = tx.hash();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push transaction");
+
+    let mut tx_guards = Vec::new();
+    actor.queue.get_transactions_for_block_with_state(
+        actor.state.as_ref(),
+        nonzero!(1_usize),
+        &mut tx_guards,
+    );
+    let mut transactions = tx_guards
+        .iter()
+        .map(crate::queue::TransactionGuard::clone_accepted)
+        .collect::<Vec<_>>();
+    let mut routing = Vec::new();
+    let mut routing_plans = tx_guards
+        .iter()
+        .map(crate::queue::TransactionGuard::routing_plan)
+        .collect::<Vec<_>>();
+    let mut tx_sizes = tx_guards
+        .iter()
+        .map(crate::queue::TransactionGuard::encoded_len)
+        .collect::<Vec<_>>();
+
+    let err = Actor::filter_committed_transactions_for_proposal(
+        actor.state.as_ref(),
+        &mut tx_guards,
+        &mut transactions,
+        &mut routing,
+        &mut routing_plans,
+        &mut tx_sizes,
+        1,
+        0,
+    )
+    .expect_err("route-vector mismatch must fail before ownership mutation");
+    assert!(err.to_string().contains("vector length mismatch"));
+    assert_eq!(tx_guards.len(), 1);
+    assert_eq!(transactions.len(), 1);
+    assert!(routing.is_empty());
+    assert_eq!(routing_plans.len(), 1);
+    assert_eq!(tx_sizes.len(), 1);
+    assert_eq!(actor.queue.active_len(), 1);
+    assert_eq!(actor.queue.queued_len(), 0);
+
+    assert!(actor.return_proposal_guards_or_quarantine(
+        &mut tx_guards,
+        "length-mismatch ownership test",
+    ));
+    assert!(tx_guards.is_empty());
+    assert_eq!(actor.queue.active_len(), 1);
+    assert_eq!(actor.queue.queued_len(), 1);
+    assert!(actor.queue.contains_transaction_hash(tx_hash));
 
     harness.shutdown.send();
 }
@@ -148619,14 +151719,12 @@ async fn proposal_gas_budget_limits_fetch() {
     assert_eq!(tx_guards.len(), 1, "gas cap should allow one tx");
     assert_eq!(deferred.len(), 1, "second tx should be deferred");
 
-    drop(tx_guards);
-
-    for (tx, routing_plan) in deferred {
-        actor
-            .queue
-            .push_requeued_with_routing_plan(tx, routing_plan, actor.state.as_ref())
-            .expect("requeue deferred tx");
-    }
+    actor.queue.release_transaction_guards(&mut tx_guards);
+    let mut deferred = deferred;
+    actor
+        .queue
+        .return_transaction_guards(&mut deferred, actor.state.as_ref())
+        .expect("atomically return gas-deferred guard");
 
     assert_eq!(
         actor.queue.queued_len(),
@@ -148689,13 +151787,12 @@ async fn proposal_ivm_budget_defers_extra_ivm_and_keeps_cheap_slots() {
         "proposal should respect IVM-heavy cap"
     );
 
-    drop(tx_guards);
-    for (tx, routing_plan) in deferred {
-        actor
-            .queue
-            .push_requeued_with_routing_plan(tx, routing_plan, actor.state.as_ref())
-            .expect("requeue deferred tx");
-    }
+    actor.queue.release_transaction_guards(&mut tx_guards);
+    let mut deferred = deferred;
+    actor
+        .queue
+        .return_transaction_guards(&mut deferred, actor.state.as_ref())
+        .expect("atomically return IVM-deferred guard");
     assert_eq!(actor.queue.queued_len(), 1, "deferred IVM tx stays queued");
 
     harness.shutdown.send();
@@ -148900,8 +151997,13 @@ async fn stale_proposal_assembly_aborts_before_broadcast_and_requeues() {
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
     install_active_single_lane_nexus(actor.state.as_ref());
+    actor.config.da.max_commitments_per_block = 1;
+    actor.config.da.max_proof_openings_per_block = 1;
+    let background_log = attach_background_log(actor);
+    replace_actor_queue_with_capacity(actor, 1, None);
 
     let tx = sample_transaction();
+    let tx_hash = tx.hash();
     actor
         .queue
         .push(
@@ -148910,17 +152012,39 @@ async fn stale_proposal_assembly_aborts_before_broadcast_and_requeues() {
         )
         .expect("push tx");
 
-    let height = 1u64;
-    let view = 0u64;
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+    let manifest = b"manifest-for-stale-proposal-canonicality";
+    let mut record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x81; 32])));
+    record.kzg_commitment = None;
+    record.manifest_hash = ManifestDigest::new(*blake3_hash(manifest).as_bytes());
+    let commitment_path = write_da_commitment_spool_file(&spool_dir, &record, [0x82; 32]);
+    let manifest_path = write_da_manifest_spool_file(&spool_dir, &record, manifest, [0x83; 32]);
+    let receipt = sample_da_receipt_for_record(&record);
+    let receipt_path =
+        write_da_receipt_spool_file(&spool_dir, &receipt, record.sequence, [0x84; 32]);
+
+    let lane_config = actor.state.nexus_snapshot().lane_config;
+    let shard_id = lane_config.shard_id(record.lane_id);
+    let shard_cursor_before = actor
+        .state
+        .da_shard_cursor_index_snapshot_cached()
+        .get(shard_id)
+        .copied();
+    let receipt_cursors_before = actor.state.da_receipt_cursor_snapshot_cached();
+    let canonical_journal_path =
+        crate::da::DaShardCursorJournal::journal_path(&actor.state.kura().store_root());
+    let canonical_journal_before = path_snapshot(&canonical_journal_path);
+
+    let height = actor.state.view().height() as u64 + 1;
     let highest_qc = sample_qc_ref(0, 0);
-    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let local_idx = actor
-        .local_validator_index(&actor.state.view())
-        .expect("local validator index");
+    let (mut topology, view, leader_index, local_idx) = local_leader_proposal_slot(actor, height);
     let stale_started_at = Instant::now()
         - actor
             .quorum_timeout(actor.runtime_da_enabled())
             .saturating_add(Duration::from_millis(1));
+    let _flood_guard = super::propose::flood_proposal_guard_return_admission_once(
+        proposal_admission_flood(actor, 50_000, 8),
+    );
 
     let err = actor
         .assemble_and_broadcast_proposal(
@@ -148928,8 +152052,8 @@ async fn stale_proposal_assembly_aborts_before_broadcast_and_requeues() {
             view,
             highest_qc,
             &mut topology,
-            /*leader_index*/ 0,
-            /*local_validator_index*/ local_idx,
+            leader_index,
+            local_idx,
             None,
             stale_started_at,
         )
@@ -148946,12 +152070,66 @@ async fn stale_proposal_assembly_aborts_before_broadcast_and_requeues() {
         "aborted stale proposal should requeue its transaction"
     );
     assert!(
+        actor.queue.contains_transaction_hash(tx_hash),
+        "the exact transaction removed during stale assembly must be requeued"
+    );
+    assert_eq!(actor.queue.active_len(), 1);
+    assert_eq!(
+        super::propose::proposal_guard_return_admission_flood_report(),
+        super::propose::ProposalGuardReturnAdmissionFloodReport {
+            attempted: 8,
+            admitted: 0,
+            full: 8,
+        },
+        "stale prepublication abort must reject concurrent admission at capacity"
+    );
+    assert!(
         actor.subsystems.propose.proposal_cache.hints.is_empty(),
         "stale proposal abort must not leave proposal hints"
     );
     assert!(
         actor.subsystems.propose.proposal_cache.proposals.is_empty(),
         "stale proposal abort must not leave cached proposals"
+    );
+    assert_eq!(
+        take_background_log(&background_log),
+        vec![super::BackgroundRequestLogEntry {
+            kind: super::BackgroundRequestLogKind::Broadcast,
+            msg_kind: Some("ConsensusParams"),
+            peer: None,
+        }],
+        "stale proposal abort may advertise collector membership but must not schedule proposal or RBC transport"
+    );
+    assert!(
+        !actor
+            .state
+            .da_commitments_contains_record_identity_cached(&record),
+        "stale proposal abort must not mutate the canonical commitment store"
+    );
+    assert_eq!(
+        actor
+            .state
+            .da_shard_cursor_index_snapshot_cached()
+            .get(shard_id)
+            .copied(),
+        shard_cursor_before,
+        "stale proposal abort must not advance canonical shard cursors"
+    );
+    assert_eq!(
+        actor.state.da_receipt_cursor_snapshot_cached(),
+        receipt_cursors_before,
+        "stale proposal abort must not advance canonical receipt cursors"
+    );
+    assert_eq!(
+        path_snapshot(&canonical_journal_path),
+        canonical_journal_before,
+        "stale proposal abort must not mutate the canonical Kura-root journal"
+    );
+    assert!(commitment_path.exists() && manifest_path.exists() && receipt_path.exists());
+    let work = actor.internal_proposal_work(height, None, false);
+    assert!(
+        work.da_commitments && work.da_receipts,
+        "stale-aborted spool evidence must remain eligible for a later view"
     );
 
     harness.shutdown.send();
@@ -150181,7 +153359,7 @@ async fn pacemaker_skips_proposal_when_only_inflight_transactions() {
         "proposal cache should remain empty with only in-flight txs"
     );
 
-    drop(guards);
+    actor.queue.release_transaction_guards(&mut guards);
 
     harness.shutdown.send();
 }
@@ -155981,6 +159159,147 @@ async fn remote_precommit_allows_stale_uncommitted_same_height_vote_after_exhaus
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn local_precommit_allows_stale_higher_view_vote_to_complete_lower_recovery_quorum() {
+    let _commit_history_guard = isolate_commit_history_state();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    seed_genesis_block_for_state(&actor.state);
+
+    let highest_qc = actor
+        .latest_committed_qc()
+        .expect("genesis commit QC should be available");
+    let height = highest_qc.height.saturating_add(1);
+    let recovery_view = 1_u64;
+    let higher_view = recovery_view.saturating_add(2);
+    let parent_hash = Some(highest_qc.subject_block_hash);
+    let recovery_block = sample_block(height, recovery_view, parent_hash);
+    let recovery_hash = insert_validated_pending(actor, recovery_block);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let required = topology.min_votes_for_commit().max(1);
+    assert!(
+        required >= 3,
+        "test requires enough validators for a remote near-quorum"
+    );
+    let seeded = seed_cached_remote_commit_votes_for_block(
+        actor,
+        &harness.key_pairs,
+        recovery_hash,
+        height,
+        recovery_view,
+        required.saturating_sub(1),
+    );
+    assert_eq!(seeded, required.saturating_sub(1));
+    let before_status =
+        actor.commit_vote_quorum_status_for_block_detail(recovery_hash, height, recovery_view);
+    assert_eq!(
+        before_status.vote_count,
+        required.saturating_sub(1),
+        "test setup requires the local validator to be the missing commit vote"
+    );
+    assert!(
+        !before_status.quorum_reached,
+        "remote near-quorum alone must not already form a commit QC"
+    );
+
+    let higher_block = block_with_txs(
+        height,
+        higher_view,
+        parent_hash,
+        vec![sample_transaction(), sample_transaction()],
+    );
+    let higher_hash = higher_block.hash();
+    assert_ne!(
+        higher_hash, recovery_hash,
+        "test setup requires a conflicting same-height branch"
+    );
+    assert!(
+        actor.emit_precommit_vote(
+            higher_hash,
+            height,
+            higher_view,
+            actor.epoch_for_height(height),
+            ValidationStatus::Valid,
+            &topology,
+            parent_hash,
+            Some((zero_state_root(), zero_state_root())),
+        ),
+        "test setup should record a local higher-view precommit"
+    );
+    assert!(
+        !actor.local_same_height_vote_has_live_proposal_material(height, higher_hash),
+        "the higher-view local vote must have no live body or pending owner"
+    );
+    let existing_vote = actor
+        .local_same_height_vote(height, actor.epoch_for_height(height))
+        .expect("local same-height vote should be recorded");
+    assert_eq!(existing_vote.block_hash, higher_hash);
+    assert_eq!(existing_vote.view, higher_view);
+
+    assert!(
+        !actor.emit_precommit_vote(
+            recovery_hash,
+            height,
+            recovery_view,
+            actor.epoch_for_height(height),
+            ValidationStatus::Valid,
+            &topology,
+            parent_hash,
+            Some((zero_state_root(), zero_state_root())),
+        ),
+        "fresh higher-view local precommit should still block lower-view recovery"
+    );
+
+    let now = Instant::now();
+    let hard_stale_age = actor
+        .quorum_timeout(actor.runtime_da_enabled())
+        .max(actor.frontier_slot_lag_window())
+        .max(Duration::from_millis(1))
+        .saturating_mul(3);
+    let stale_at = now
+        .checked_sub(hard_stale_age.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    actor.frontier_recovery = Some(super::FrontierRecoveryState {
+        frontier_height: height,
+        phase: super::FrontierRecoveryPhase::CatchUp,
+        entered_at: stale_at,
+        last_progress_at: stale_at,
+        last_dependency_progress_at: None,
+        last_action_at: None,
+        no_progress_windows: 1,
+        cleanup_done: false,
+        last_view: higher_view,
+        last_rotation_view: Some(higher_view),
+        last_cause: "quorum_timeout",
+    });
+
+    assert!(
+        actor.emit_precommit_vote(
+            recovery_hash,
+            height,
+            recovery_view,
+            actor.epoch_for_height(height),
+            ValidationStatus::Valid,
+            &topology,
+            parent_hash,
+            Some((zero_state_root(), zero_state_root())),
+        ),
+        "exhausted same-height recovery should let the local vote complete the lower-view quorum"
+    );
+    let after_status =
+        actor.commit_vote_quorum_status_for_block_detail(recovery_hash, height, recovery_view);
+    assert!(
+        after_status.quorum_reached,
+        "local recovery precommit should complete the commit quorum"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn fresh_proposal_defers_from_exhausted_same_height_vote_lock_with_prepare_qc() {
     use std::borrow::Cow;
 
@@ -157681,6 +161000,82 @@ async fn missing_qc_nonleader_frontier_rotates_after_proposal_timeout() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn pacemaker_adopts_selected_new_view_quorum_before_nonleader_deferral() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    seed_genesis_block_for_state(&actor.state);
+    let committed_qc = actor.latest_committed_qc().expect("committed qc");
+    let height = committed_qc.height.saturating_add(1);
+    let search_limit = u64::try_from(actor.effective_commit_topology().len().saturating_mul(8))
+        .unwrap_or(8)
+        .max(2);
+    let selected_view = (1..search_limit)
+        .find(|candidate| !actor.local_is_round_leader(height, *candidate))
+        .expect("find non-leader view");
+
+    let topology = actor.effective_commit_topology();
+    for peer in &topology {
+        actor.subsystems.propose.new_view_tracker.record(
+            height,
+            selected_view,
+            peer.clone(),
+            committed_qc,
+        );
+    }
+    push_sample_transaction(actor);
+
+    let started_at = Instant::now();
+    actor.phase_tracker.on_view_change(height, 0, started_at);
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(0),
+        "test setup starts behind the selected NEW_VIEW quorum"
+    );
+
+    let adopted_at = started_at
+        .checked_add(Duration::from_millis(1))
+        .unwrap_or(started_at);
+    assert!(
+        !actor.on_pacemaker_propose_ready(adopted_at),
+        "local peer is not leader for the selected view, so proposal assembly should defer"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(selected_view),
+        "pacemaker must adopt the selected NEW_VIEW quorum before non-leader deferral"
+    );
+
+    let timeout = actor.cap_active_block_production_gap(
+        super::idle_view_timeout(
+            false,
+            actor.commit_quorum_timeout(),
+            actor.subsystems.propose.pacemaker.propose_interval,
+            actor.runtime_da_enabled(),
+        ),
+        true,
+    );
+    let after_timeout = adopted_at
+        .checked_add(timeout.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(adopted_at);
+    assert!(
+        actor.maybe_rotate_missing_qc_nonleader_after_proposal_timeout(
+            height,
+            selected_view,
+            actor.queue.queued_len(),
+            after_timeout,
+        ),
+        "after adopting the selected view, the normal non-leader timeout can rotate it"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(selected_view.saturating_add(1))
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn missing_qc_nonleader_rotation_ignores_lower_view_pending_superseded_by_new_view_quorum() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -158866,6 +162261,13 @@ async fn new_view_qc_completion_emits_late_local_vote_for_stale_same_highest_vie
         "test requires enough remote signers to leave only the local vote missing"
     );
     let epoch = actor.epoch_for_height(height);
+    let chain_id = actor.common_config.chain.clone();
+    let evidence_context = super::evidence::EvidenceValidationContext {
+        topology: &topology,
+        chain_id: &chain_id,
+        mode_tag,
+        prf_seed,
+    };
 
     for remote_signer in remote_signers {
         let mut vote = crate::sumeragi::consensus::Vote {
@@ -158890,7 +162292,16 @@ async fn new_view_qc_completion_emits_late_local_vote_for_stale_same_highest_vie
             mode_tag,
             prf_seed,
         );
-        actor.vote_log.insert(vote_log_key_for_vote(&vote), vote);
+        assert!(
+            actor.validate_and_record_vote_with_signature_result(
+                &vote,
+                &signature_topology,
+                &evidence_context,
+                mode_tag,
+                Some(Ok(())),
+            ),
+            "setup should record a remote stale same-highest NEW_VIEW vote"
+        );
     }
 
     actor.try_form_qc_from_votes(
@@ -158902,6 +162313,26 @@ async fn new_view_qc_completion_emits_late_local_vote_for_stale_same_highest_vie
         &topology,
     );
 
+    let accepted_after_completion_attempt = actor.accepted_votes_for_qc_slot(
+        Phase::NewView,
+        committed_qc.subject_block_hash,
+        height,
+        stale_view,
+        epoch,
+        &signature_topology,
+    );
+    let accepted_signers_after_completion_attempt: BTreeSet<_> =
+        accepted_after_completion_attempt.keys().copied().collect();
+    let groups_after_completion_attempt = super::new_view_highest_qc_signer_groups(
+        &accepted_after_completion_attempt,
+        &accepted_signers_after_completion_attempt,
+        height,
+        stale_view,
+        epoch,
+    );
+    let local_stale_idx = actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local peer in stale signature topology");
     assert!(
         actor.stored_votes().any(|vote| {
             vote.phase == Phase::NewView
@@ -158912,8 +162343,37 @@ async fn new_view_qc_completion_emits_late_local_vote_for_stale_same_highest_vie
                     .as_ref()
                     .is_some_and(|peer| peer == &local_peer)
         }),
-        "local validator should add the third same-highest NEW_VIEW vote even after voting in a higher view"
+        "local validator should add the third same-highest NEW_VIEW vote even after voting in a higher view (local_idx={local_stale_idx}, accepted={accepted_signers_after_completion_attempt:?}, groups={groups_after_completion_attempt:?})"
     );
+    let accepted = actor.accepted_votes_for_qc_slot(
+        Phase::NewView,
+        committed_qc.subject_block_hash,
+        height,
+        stale_view,
+        epoch,
+        &signature_topology,
+    );
+    let accepted_signers: BTreeSet<_> = accepted.keys().copied().collect();
+    let groups = super::new_view_highest_qc_signer_groups(
+        &accepted,
+        &accepted_signers,
+        height,
+        stale_view,
+        epoch,
+    );
+    let local_stale_votes: Vec<_> = actor
+        .stored_votes()
+        .filter(|vote| {
+            vote.phase == Phase::NewView
+                && vote.height == height
+                && vote.view == stale_view
+                && actor
+                    .vote_signer_peer(vote)
+                    .as_ref()
+                    .is_some_and(|peer| peer == &local_peer)
+        })
+        .cloned()
+        .collect();
     assert!(
         actor
             .qc_cache
@@ -158924,7 +162384,7 @@ async fn new_view_qc_completion_emits_late_local_vote_for_stale_same_highest_vie
                     && *qc_height == height
                     && *qc_view == stale_view
             }),
-        "stale same-highest NEW_VIEW quorum should cache a QC"
+        "stale same-highest NEW_VIEW quorum should cache a QC (accepted={accepted_signers:?}, groups={groups:?}, local={local_stale_votes:?})"
     );
 
     harness.shutdown.send();
@@ -165172,7 +168632,7 @@ async fn fresh_proposal_yield_retires_vote_backed_stale_pending_payload_for_body
 
     assert_eq!(
         dropped,
-        Some((0, 0, 0, 0)),
+        Some((0, 0, 0, 0, true)),
         "vote-backed pending payload should be retained without requeueing transactions"
     );
     let pending_after = actor
@@ -168782,15 +172242,14 @@ async fn pending_block_hydration_invalidates_mismatched_root_and_clears_deferral
         seeded.total_chunks(),
         Some(payload_hash),
         Some(mismatched_root),
-        Some(
-            seeded
-                .expected_chunk_digests
-                .clone()
-                .expect("chunk digests"),
-        ),
+        None,
         epoch,
     )
     .expect("init session");
+    assert!(
+        !init_session.is_invalid(),
+        "root-only metadata must remain live until payload hydration"
+    );
 
     let key = Actor::session_key(&block_hash, height, view);
     actor
@@ -178063,6 +181522,90 @@ async fn validation_defers_block_ahead_of_local_height() {
         ValidationStatus::Pending,
         "deferred validation should not mark block invalid"
     );
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn validation_drops_stale_pending_block_before_static_parent_check() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let committed_height = actor.committed_height_snapshot();
+    assert!(committed_height >= 1, "test requires a committed tip");
+    assert_eq!(
+        actor.state.latest_block_hash_fast(),
+        Some(committed_hash),
+        "test setup should expose the seeded committed tip"
+    );
+
+    let stale_block = sample_block(committed_height, 1, None);
+    let stale_hash = stale_block.hash();
+    assert_ne!(
+        stale_hash, committed_hash,
+        "test needs a stale pending body that is not the canonical block"
+    );
+    let stale_payload_hash = Hash::new(super::proposals::block_payload_bytes(&stale_block));
+    actor.pending.pending_blocks.insert(
+        stale_hash,
+        PendingBlock::new(stale_block, stale_payload_hash, committed_height, 1),
+    );
+    actor
+        .slot_tracker
+        .proposals_seen
+        .insert((committed_height, 1));
+    actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .insert_hint(sample_hint(stale_hash, committed_height, 1, None));
+
+    let commit_topology = actor.effective_commit_topology();
+    let outcome = actor.validate_pending_block_for_voting_inline(stale_hash, &commit_topology);
+    assert!(
+        matches!(outcome, ValidationGateOutcome::Deferred),
+        "stale pending block should be cleaned up, not marked as an invalid fork"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&stale_hash),
+        "stale pending block should be removed before static validation"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .inflight
+            .contains_key(&stale_hash),
+        "stale pending block should not dispatch validation work"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&stale_hash),
+        "stale pending block should clear vNext validation ownership"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_hint(committed_height, 1)
+            .is_none(),
+        "stale pending cleanup should prune obsolete proposal hints"
+    );
+    assert_eq!(
+        actor.committed_height_snapshot(),
+        committed_height,
+        "stale pending cleanup must not mutate committed height"
+    );
+    assert_eq!(
+        actor.state.latest_block_hash_fast(),
+        Some(committed_hash),
+        "stale pending cleanup must preserve the committed tip"
+    );
+
     harness.shutdown.send();
 }
 
@@ -192866,7 +196409,17 @@ fn background_dispatch_formal_gate_matrix() {
 
     fn native_amx_message() -> crate::native_amx::NativeAmxMessage {
         crate::native_amx::NativeAmxMessage::PrepareRequest(
-            iroha_data_model::block::consensus::NativeAmxAttestationBodyV1 {
+            iroha_data_model::block::consensus::NativeAmxAttestationBodyV2 {
+                round: iroha_data_model::block::consensus_v2::ConsensusRound {
+                    context_id: iroha_data_model::block::consensus_v2::HeightContextId(
+                        HashOf::<iroha_data_model::block::consensus_v2::HeightContext>::from_untyped_unchecked(
+                            Hash::new(b"background-dispatch-native-amx-context"),
+                        ),
+                    ),
+                    height: 42,
+                    view: 3,
+                },
+                epoch: 7,
                 source_id: [0x63; iroha_crypto::Hash::LENGTH],
                 tx_entrypoint_hash:
                     HashOf::<iroha_data_model::transaction::TransactionEntrypoint>::from_untyped_unchecked(
@@ -193143,7 +196696,17 @@ fn background_bypass_formal_gate_matrix() {
 
     fn native_amx_message() -> crate::native_amx::NativeAmxMessage {
         crate::native_amx::NativeAmxMessage::PrepareRequest(
-            iroha_data_model::block::consensus::NativeAmxAttestationBodyV1 {
+            iroha_data_model::block::consensus::NativeAmxAttestationBodyV2 {
+                round: iroha_data_model::block::consensus_v2::ConsensusRound {
+                    context_id: iroha_data_model::block::consensus_v2::HeightContextId(
+                        HashOf::<iroha_data_model::block::consensus_v2::HeightContext>::from_untyped_unchecked(
+                            Hash::new(b"background-bypass-native-amx-context"),
+                        ),
+                    ),
+                    height: 42,
+                    view: 3,
+                },
+                epoch: 7,
                 source_id: [0x73; iroha_crypto::Hash::LENGTH],
                 tx_entrypoint_hash:
                     HashOf::<iroha_data_model::transaction::TransactionEntrypoint>::from_untyped_unchecked(
@@ -193580,7 +197143,17 @@ fn background_fallback_formal_gate_matrix() {
 
     fn native_amx_message() -> crate::native_amx::NativeAmxMessage {
         crate::native_amx::NativeAmxMessage::PrepareRequest(
-            iroha_data_model::block::consensus::NativeAmxAttestationBodyV1 {
+            iroha_data_model::block::consensus::NativeAmxAttestationBodyV2 {
+                round: iroha_data_model::block::consensus_v2::ConsensusRound {
+                    context_id: iroha_data_model::block::consensus_v2::HeightContextId(
+                        HashOf::<iroha_data_model::block::consensus_v2::HeightContext>::from_untyped_unchecked(
+                            Hash::new(b"background-fallback-native-amx-context"),
+                        ),
+                    ),
+                    height: 42,
+                    view: 3,
+                },
+                epoch: 7,
                 source_id: [0x83; iroha_crypto::Hash::LENGTH],
                 tx_entrypoint_hash:
                     HashOf::<iroha_data_model::transaction::TransactionEntrypoint>::from_untyped_unchecked(
@@ -198402,6 +201975,7 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
     let genesis_network = crate::sumeragi::GenesisWithPubKey {
         genesis: None,
         public_key: key_pair.public_key().clone(),
+        v2_bootstrap: None,
     };
     let events_sender: crate::EventsSender = tokio::sync::broadcast::Sender::new(1);
     let block_sync_gossip_limit =
@@ -198696,9 +202270,11 @@ fn qc_commit_failure_with_quorum_requeues_and_realigns_qcs() {
         "pending block should be marked aborted"
     );
     assert!(
-        !outcome.drop_pending,
-        "pending block should be retained when requeue succeeds"
+        outcome.drop_pending,
+        "pending block should be dropped after queue custody transfer succeeds"
     );
+    assert!(!outcome.pending.requeue_pending);
+    assert!(outcome.pending.requeue_retry_payload.is_empty());
     assert_eq!(outcome.requeued, 1);
     assert_eq!(outcome.failed_requeues, 0);
     assert_eq!(
@@ -198715,7 +202291,7 @@ fn qc_commit_failure_with_quorum_requeues_and_realigns_qcs() {
 }
 
 #[test]
-fn qc_commit_failure_with_quorum_drops_pending_when_requeue_fails() {
+fn qc_commit_failure_with_quorum_retains_retry_payload_when_requeue_is_full() {
     use std::{borrow::Cow, num::NonZeroUsize, time::Duration};
 
     use iroha_config::parameters::actual::Queue as QueueConfig;
@@ -198778,14 +202354,22 @@ fn qc_commit_failure_with_quorum_drops_pending_when_requeue_fails() {
     assert_eq!(outcome.requeued, 0);
     assert_eq!(outcome.failed_requeues, 1);
     assert!(
-        outcome.drop_pending,
-        "pending block should be dropped when requeueing fails"
+        !outcome.drop_pending,
+        "pending block must retain custody while queue admission is retryable"
     );
+    assert!(outcome.pending.aborted);
+    assert!(outcome.pending.requeue_pending);
+    assert_eq!(outcome.pending.requeue_retry_payload.len(), 1);
+    let retained_hash = AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(
+        &outcome.pending.requeue_retry_payload[0],
+    ))
+    .hash();
+    assert_eq!(retained_hash, tx.hash());
     assert!(outcome.clean_block_hash);
 }
 
 #[test]
-fn qc_commit_failure_with_quorum_drops_pending_when_requeue_fails_with_duplicates() {
+fn qc_commit_failure_with_quorum_retains_only_retryable_payload_with_duplicates() {
     use std::{borrow::Cow, num::NonZeroUsize, time::Duration};
 
     use iroha_config::parameters::actual::Queue as QueueConfig;
@@ -198816,7 +202400,7 @@ fn qc_commit_failure_with_quorum_drops_pending_when_requeue_fails_with_duplicate
     );
 
     let other_tx = sample_transaction();
-    let block = block_with_txs(4, 2, None, vec![duplicate_tx.clone(), other_tx]);
+    let block = block_with_txs(4, 2, None, vec![duplicate_tx.clone(), other_tx.clone()]);
     let failed_block = block.clone();
     let block_hash = block.hash();
     let payload_hash = Hash::new(block.encode());
@@ -198847,9 +202431,16 @@ fn qc_commit_failure_with_quorum_drops_pending_when_requeue_fails_with_duplicate
     assert_eq!(outcome.requeued, 0);
     assert_eq!(outcome.failed_requeues, 1);
     assert!(
-        outcome.drop_pending,
-        "pending block should be dropped when requeueing fails, even with duplicates"
+        !outcome.drop_pending,
+        "retryable payload must remain owned even when another hash is already queued"
     );
+    assert!(outcome.pending.requeue_pending);
+    assert_eq!(outcome.pending.requeue_retry_payload.len(), 1);
+    let retained_hash = AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(
+        &outcome.pending.requeue_retry_payload[0],
+    ))
+    .hash();
+    assert_eq!(retained_hash, other_tx.hash());
     assert!(outcome.clean_block_hash);
 }
 
@@ -208926,6 +212517,54 @@ async fn pending_block_cap_evicts_lowest_ranked_body() {
     harness.shutdown.send();
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn pending_block_cap_rejects_new_body_when_retry_owner_fills_cap() {
+    let _status_guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.recovery.pending_block_cap = 1;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let retry_tx = sample_transaction();
+    let owner_block = block_with_txs(3, 0, None, vec![retry_tx.clone()]);
+    let owner_hash = owner_block.hash();
+    let owner_payload_hash = Hash::new(super::proposals::block_payload_bytes(&owner_block));
+    let mut owner = PendingBlock::new(owner_block, owner_payload_hash, 3, 0);
+    owner.mark_requeue_pending(
+        Instant::now(),
+        super::PENDING_REQUEUE_BASE_BACKOFF,
+        vec![TransactionEntrypoint::External(retry_tx.clone())],
+    );
+    actor.pending.pending_blocks.insert(owner_hash, owner);
+    let protected_key = insert_pending_block(actor, 4, 0);
+    let evictions_before = super::status::snapshot().pending_queue_evictions_total;
+
+    assert!(
+        !actor.enforce_pending_block_cap(protected_key.0, "test_retry_owner_cap"),
+        "new body must be deferred when the bounded slot is an active retry owner"
+    );
+    assert_eq!(actor.pending.pending_blocks.len(), 1);
+    assert!(actor.pending.pending_blocks.contains_key(&owner_hash));
+    assert!(!actor.pending.pending_blocks.contains_key(&protected_key.0));
+    let retained = actor
+        .pending
+        .pending_blocks
+        .get(&owner_hash)
+        .expect("retry owner remains bounded and resident");
+    assert!(retained.requeue_pending);
+    assert_eq!(retained.requeue_retry_payload.len(), 1);
+    assert_eq!(
+        super::status::snapshot().pending_queue_evictions_total,
+        evictions_before,
+        "rejecting a new body is not an eviction"
+    );
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    harness.shutdown.send();
+}
+
 fn insert_active_pending_block(actor: &mut Actor, view: u64) -> SessionKey {
     let height = actor
         .state
@@ -209846,7 +213485,9 @@ fn sample_proposal(
     }
 }
 
-fn sample_lane_block_messages() -> (
+fn sample_lane_block_messages_with_incarnation(
+    lane_incarnation: Hash,
+) -> (
     crate::sumeragi::consensus::LaneBlockProposalV1,
     crate::lane_consensus::LaneBlockVoteV1,
     crate::sumeragi::consensus::LaneBlockQcV1,
@@ -209860,6 +213501,7 @@ fn sample_lane_block_messages() -> (
     let mut descriptor = crate::sumeragi::consensus::LaneBlockDescriptorV1 {
         lane_id: LaneId::SINGLE,
         dataspace_id: DataSpaceId::UNIVERSAL,
+        lane_incarnation,
         proposal_height: 1,
         previous_lane_block_height: 12,
         previous_lane_block_descriptor_hash: Some(Hash::prehashed([0xA0; Hash::LENGTH])),
@@ -209890,6 +213532,7 @@ fn sample_lane_block_messages() -> (
         .expect("lane block fixture vote signature");
     let vote = crate::lane_consensus::LaneBlockVoteV1 {
         body: body.clone(),
+        payload_availability_vote: None,
         signer: peer_id,
         bls_signature: signature.payload().to_vec(),
     };
@@ -209900,6 +213543,30 @@ fn sample_lane_block_messages() -> (
     )
     .expect("lane block fixture QC");
     (proposal, vote, qc, signer_pop)
+}
+
+fn sample_lane_block_messages() -> (
+    crate::sumeragi::consensus::LaneBlockProposalV1,
+    crate::lane_consensus::LaneBlockVoteV1,
+    crate::sumeragi::consensus::LaneBlockQcV1,
+    Vec<u8>,
+) {
+    sample_lane_block_messages_with_incarnation(Hash::new(
+        b"main-loop-lane-block-fixture-incarnation",
+    ))
+}
+
+fn sample_active_lane_block_messages(
+    state: &State,
+) -> (
+    crate::sumeragi::consensus::LaneBlockProposalV1,
+    crate::lane_consensus::LaneBlockVoteV1,
+    crate::sumeragi::consensus::LaneBlockQcV1,
+    Vec<u8>,
+) {
+    let (proposal, prepare_vote, prepare_qc, _commit_vote, _commit_qc, signer_pop) =
+        sample_active_lane_block_commit_messages(state);
+    (proposal, prepare_vote, prepare_qc, signer_pop)
 }
 
 fn sample_lane_block_proposal_for_validators(
@@ -209919,6 +213586,7 @@ fn sample_lane_block_proposal_for_validators_with_min_quorum(
     let mut descriptor = crate::sumeragi::consensus::LaneBlockDescriptorV1 {
         lane_id: LaneId::SINGLE,
         dataspace_id: DataSpaceId::UNIVERSAL,
+        lane_incarnation: Hash::new(b"main-loop-lane-block-fixture-incarnation"),
         proposal_height: 1,
         previous_lane_block_height: 12,
         previous_lane_block_descriptor_hash: Some(Hash::prehashed([0xA0; Hash::LENGTH])),
@@ -209956,6 +213624,61 @@ fn sample_anchor_lane_block_proposal_for_validators_with_min_quorum(
     proposal.descriptor.previous_lane_block_height = 0;
     proposal.descriptor.previous_lane_block_descriptor_hash = None;
     proposal.descriptor.lane_block_height = 1;
+    proposal.descriptor.lane_block_view = 0;
+    proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+    proposal.proposal_hash = proposal.computed_proposal_hash();
+    proposal
+}
+
+fn rebind_lane_block_proposal_to_active_incarnation(
+    mut proposal: crate::sumeragi::consensus::LaneBlockProposalV1,
+    state: &State,
+) -> crate::sumeragi::consensus::LaneBlockProposalV1 {
+    proposal.descriptor.lane_incarnation = fixture_lane_incarnation_at_height(
+        state,
+        proposal.descriptor.lane_id,
+        proposal.descriptor.proposal_height,
+    );
+    proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+    proposal.proposal_hash = proposal.computed_proposal_hash();
+    proposal
+}
+
+fn sample_active_anchor_lane_block_proposal_for_validators_with_min_quorum(
+    state: &State,
+    validator_set: Vec<PeerId>,
+    min_quorum: u32,
+) -> crate::sumeragi::consensus::LaneBlockProposalV1 {
+    let mut proposal =
+        sample_anchor_lane_block_proposal_for_validators_with_min_quorum(validator_set, min_quorum);
+    proposal.descriptor.proposal_height = next_proposal_height_for_state(state);
+    proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+    proposal.proposal_hash = proposal.computed_proposal_hash();
+    rebind_lane_block_proposal_to_active_incarnation(proposal, state)
+}
+
+fn retarget_sample_lane_block_proposal(
+    mut proposal: crate::sumeragi::consensus::LaneBlockProposalV1,
+    proposal_height: u64,
+    lane_block_height: u64,
+    lane_block_view: u64,
+    tag: u64,
+) -> crate::sumeragi::consensus::LaneBlockProposalV1 {
+    proposal.descriptor.proposal_height = proposal_height;
+    proposal.descriptor.previous_lane_block_height = lane_block_height.saturating_sub(1);
+    proposal.descriptor.previous_lane_block_descriptor_hash = lane_block_height
+        .checked_sub(1)
+        .filter(|height| *height > 0)
+        .map(|height| Hash::new(format!("lane-horizon-previous:{height}:{tag}").as_bytes()));
+    proposal.descriptor.lane_block_height = lane_block_height;
+    proposal.descriptor.lane_block_view = lane_block_view;
+    proposal.descriptor.subject_hash = Hash::new(format!("lane-horizon-subject:{tag}").as_bytes());
+    proposal.descriptor.payload_ownership_hash =
+        Hash::new(format!("lane-horizon-payload:{tag}").as_bytes());
+    proposal.descriptor.rbc_instance_hash = Hash::new(format!("lane-horizon-rbc:{tag}").as_bytes());
+    proposal.descriptor.accepted_transaction_hashes = vec![Hash::new(
+        format!("lane-horizon-transaction:{tag}").as_bytes(),
+    )];
     proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
     proposal.proposal_hash = proposal.computed_proposal_hash();
     proposal
@@ -210013,6 +213736,7 @@ fn signed_lane_block_vote_with_keypair(
         .expect("lane block fixture vote signature");
     crate::lane_consensus::LaneBlockVoteV1 {
         body,
+        payload_availability_vote: None,
         signer: PeerId::new(keypair.public_key().clone()),
         bls_signature: signature.payload().to_vec(),
     }
@@ -210096,7 +213820,73 @@ fn sample_lane_block_commit_messages_for_route_at(
     crate::sumeragi::consensus::LaneBlockQcV1,
     Vec<u8>,
 ) {
+    let lane_incarnation = Hash::new(
+        format!(
+            "main-loop-lane-block-fixture-incarnation:{}:{}",
+            lane_id.as_u32(),
+            dataspace_id.as_u64()
+        )
+        .as_bytes(),
+    );
+    sample_lane_block_commit_messages_for_route_at_with_incarnation(
+        lane_id,
+        dataspace_id,
+        lane_incarnation,
+        1,
+        lane_block_height,
+        previous_lane_block_height,
+        previous_lane_block_descriptor_hash,
+    )
+}
+
+fn sample_lane_block_commit_messages_for_route_at_with_incarnation(
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+    proposal_height: u64,
+    lane_block_height: u64,
+    previous_lane_block_height: u64,
+    previous_lane_block_descriptor_hash: Option<Hash>,
+) -> (
+    crate::sumeragi::consensus::LaneBlockProposalV1,
+    crate::lane_consensus::LaneBlockVoteV1,
+    crate::sumeragi::consensus::LaneBlockQcV1,
+    crate::lane_consensus::LaneBlockVoteV1,
+    crate::sumeragi::consensus::LaneBlockQcV1,
+    Vec<u8>,
+) {
     let keypair = checked_bls_keypair();
+    sample_lane_block_commit_messages_for_route_at_with_incarnation_and_signer(
+        lane_id,
+        dataspace_id,
+        lane_incarnation,
+        proposal_height,
+        lane_block_height,
+        previous_lane_block_height,
+        previous_lane_block_descriptor_hash,
+        2,
+        &keypair,
+    )
+}
+
+fn sample_lane_block_commit_messages_for_route_at_with_incarnation_and_signer(
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+    proposal_height: u64,
+    lane_block_height: u64,
+    previous_lane_block_height: u64,
+    previous_lane_block_descriptor_hash: Option<Hash>,
+    lane_block_view: u64,
+    keypair: &KeyPair,
+) -> (
+    crate::sumeragi::consensus::LaneBlockProposalV1,
+    crate::lane_consensus::LaneBlockVoteV1,
+    crate::sumeragi::consensus::LaneBlockQcV1,
+    crate::lane_consensus::LaneBlockVoteV1,
+    crate::sumeragi::consensus::LaneBlockQcV1,
+    Vec<u8>,
+) {
     let signer_pop =
         iroha_crypto::bls_normal_pop_prove(keypair.private_key()).expect("lane block fixture PoP");
     let peer_id = PeerId::new(keypair.public_key().clone());
@@ -210104,11 +213894,12 @@ fn sample_lane_block_commit_messages_for_route_at(
     let mut descriptor = crate::sumeragi::consensus::LaneBlockDescriptorV1 {
         lane_id,
         dataspace_id,
-        proposal_height: 1,
+        lane_incarnation,
+        proposal_height,
         previous_lane_block_height,
         previous_lane_block_descriptor_hash,
         lane_block_height,
-        lane_block_view: 2,
+        lane_block_view,
         subject_hash: lane_block_commit_fixture_hash(0xA1, lane_block_height),
         payload_ownership_hash: lane_block_commit_fixture_hash(0xA2, lane_block_height),
         rbc_instance_hash: lane_block_commit_fixture_hash(0xA3, lane_block_height),
@@ -210140,6 +213931,7 @@ fn sample_lane_block_commit_messages_for_route_at(
             .expect("lane block fixture prepare vote signature");
     let prepare_vote = crate::lane_consensus::LaneBlockVoteV1 {
         body: prepare_body.clone(),
+        payload_availability_vote: None,
         signer: peer_id.clone(),
         bls_signature: prepare_signature.payload().to_vec(),
     };
@@ -210156,6 +213948,7 @@ fn sample_lane_block_commit_messages_for_route_at(
             .expect("lane block fixture commit vote signature");
     let commit_vote = crate::lane_consensus::LaneBlockVoteV1 {
         body: commit_body.clone(),
+        payload_availability_vote: None,
         signer: peer_id,
         bls_signature: commit_signature.payload().to_vec(),
     };
@@ -210176,6 +213969,94 @@ fn sample_lane_block_commit_messages_for_route_at(
     )
 }
 
+fn sample_active_lane_block_commit_messages_for_route_at(
+    state: &State,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    proposal_height: u64,
+    lane_block_height: u64,
+    previous_lane_block_height: u64,
+    previous_lane_block_descriptor_hash: Option<Hash>,
+) -> (
+    crate::sumeragi::consensus::LaneBlockProposalV1,
+    crate::lane_consensus::LaneBlockVoteV1,
+    crate::sumeragi::consensus::LaneBlockQcV1,
+    crate::lane_consensus::LaneBlockVoteV1,
+    crate::sumeragi::consensus::LaneBlockQcV1,
+    Vec<u8>,
+) {
+    let lane_incarnation = fixture_lane_incarnation_at_height(state, lane_id, proposal_height);
+    sample_lane_block_commit_messages_for_route_at_with_incarnation(
+        lane_id,
+        dataspace_id,
+        lane_incarnation,
+        proposal_height,
+        lane_block_height,
+        previous_lane_block_height,
+        previous_lane_block_descriptor_hash,
+    )
+}
+
+fn sample_active_lane_block_commit_messages(
+    state: &State,
+) -> (
+    crate::sumeragi::consensus::LaneBlockProposalV1,
+    crate::lane_consensus::LaneBlockVoteV1,
+    crate::sumeragi::consensus::LaneBlockQcV1,
+    crate::lane_consensus::LaneBlockVoteV1,
+    crate::sumeragi::consensus::LaneBlockQcV1,
+    Vec<u8>,
+) {
+    sample_active_lane_block_commit_messages_for_route_at(
+        state,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        next_proposal_height_for_state(state),
+        1,
+        0,
+        None,
+    )
+}
+
+fn sample_active_lane_block_commit_messages_for_actor(
+    actor: &Actor,
+) -> (
+    crate::sumeragi::consensus::LaneBlockProposalV1,
+    crate::lane_consensus::LaneBlockVoteV1,
+    crate::sumeragi::consensus::LaneBlockQcV1,
+    crate::lane_consensus::LaneBlockVoteV1,
+    crate::sumeragi::consensus::LaneBlockQcV1,
+    Vec<u8>,
+) {
+    let proposal_height = next_proposal_height_for_state(actor.state.as_ref());
+    let lane_incarnation =
+        fixture_lane_incarnation_at_height(actor.state.as_ref(), LaneId::SINGLE, proposal_height);
+    sample_lane_block_commit_messages_for_route_at_with_incarnation_and_signer(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        lane_incarnation,
+        proposal_height,
+        1,
+        0,
+        None,
+        0,
+        &actor.common_config.key_pair,
+    )
+}
+
+fn sample_active_lane_block_messages_for_actor(
+    actor: &Actor,
+) -> (
+    crate::sumeragi::consensus::LaneBlockProposalV1,
+    crate::lane_consensus::LaneBlockVoteV1,
+    crate::sumeragi::consensus::LaneBlockQcV1,
+    Vec<u8>,
+) {
+    let (proposal, prepare_vote, prepare_qc, _commit_vote, _commit_qc, signer_pop) =
+        sample_active_lane_block_commit_messages_for_actor(actor);
+    (proposal, prepare_vote, prepare_qc, signer_pop)
+}
+
 fn lane_block_proposal_from_lane_payload_ownership(
     ownership: &SumeragiLanePayloadOwnership,
 ) -> crate::sumeragi::consensus::LaneBlockProposalV1 {
@@ -210183,6 +214064,7 @@ fn lane_block_proposal_from_lane_payload_ownership(
     let descriptor = crate::sumeragi::consensus::LaneBlockDescriptorV1 {
         lane_id: ownership.lane_id,
         dataspace_id: ownership.dataspace_id,
+        lane_incarnation: ownership.lane_incarnation,
         proposal_height: ownership.proposal_height,
         previous_lane_block_height: ownership.previous_lane_block_height,
         previous_lane_block_descriptor_hash: ownership.previous_lane_block_descriptor_hash,
@@ -210214,6 +214096,61 @@ fn lane_block_proposal_from_lane_payload_ownership(
         payload_block_hint: None,
     };
     proposal.proposal_hash = proposal.computed_proposal_hash();
+    proposal
+}
+
+fn store_canonical_lane_block_proposal_for_actor(
+    actor: &Actor,
+    proposal_height: u64,
+    proposal_view: u64,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_block_height: u64,
+    validator_set: Vec<PeerId>,
+    min_quorum: u32,
+) -> crate::sumeragi::consensus::LaneBlockProposalV1 {
+    let proposal_height = if actor.state.nexus_snapshot().enabled
+        && actor
+            .state
+            .lane_incarnation_at_height(lane_id, proposal_height)
+            .is_none()
+    {
+        let active_height = next_proposal_height_for_state(actor.state.as_ref());
+        assert!(
+            actor
+                .state
+                .lane_incarnation_at_height(lane_id, active_height)
+                .is_some(),
+            "canonical fixture lane must be active at the next proposal height"
+        );
+        active_height
+    } else {
+        proposal_height
+    };
+    let mut block = sample_block_with_lane_payload_artifact(
+        proposal_height,
+        proposal_view,
+        lane_id,
+        dataspace_id,
+        lane_block_height,
+    );
+    rebind_lane_payload_artifact_to_active_incarnation(&mut block, actor.state.as_ref());
+    let ownership =
+        rebind_lane_payload_artifact_validator_set(&mut block, validator_set, min_quorum);
+    let proposal = lane_block_proposal_from_lane_payload_ownership(&ownership);
+    actor
+        .state
+        .kura()
+        .store_block(Arc::new(block))
+        .expect("store canonical lane payload fixture block");
+    assert!(
+        actor
+            .state
+            .kura()
+            .lane_block_payload_availability(&proposal)
+            .is_available(),
+        "stored canonical block must make its lane payload available"
+    );
     proposal
 }
 
@@ -210295,10 +214232,11 @@ async fn lane_block_ingress_caches_valid_messages_until_live_sessions_execute() 
     let _message_guard = super::status::message_handling_test_guard();
     super::status::reset_message_handling_for_tests();
     super::status::set_committed_lane_blocks(Vec::new());
-    let mut harness = test_actor_harness(4).await;
+    let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
+    install_active_single_lane_nexus(&actor.state);
+    let (proposal, vote, qc, signer_pop) = sample_active_lane_block_messages_for_actor(actor);
     disable_nexus_for_lane_block_stateless_fixture(&actor.state);
-    let (proposal, vote, qc, signer_pop) = sample_lane_block_messages();
     let signer = vote.signer.clone();
     actor
         .roster_validation_cache
@@ -210358,11 +214296,12 @@ async fn lane_block_ingress_queues_committed_session_from_inbound_qcs_once() {
     let _message_guard = super::status::message_handling_test_guard();
     super::status::reset_message_handling_for_tests();
     super::status::set_committed_lane_blocks(Vec::new());
-    let mut harness = test_actor_harness(4).await;
+    let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
-    disable_nexus_for_lane_block_stateless_fixture(&actor.state);
+    install_active_single_lane_nexus(&actor.state);
     let (proposal, prepare_vote, prepare_qc, _commit_vote, commit_qc, signer_pop) =
-        sample_lane_block_commit_messages();
+        sample_active_lane_block_commit_messages_for_actor(actor);
+    disable_nexus_for_lane_block_stateless_fixture(&actor.state);
     let signer = prepare_vote.signer.clone();
     actor
         .roster_validation_cache
@@ -210405,7 +214344,7 @@ async fn lane_block_ingress_queues_committed_session_from_inbound_qcs_once() {
     assert_eq!(status[0].proposal_hash, proposal.proposal_hash);
     assert_eq!(
         status[0].execution_status,
-        super::status::CommittedLaneBlockExecutionStatus::AwaitingPredecessorApplication
+        super::status::CommittedLaneBlockExecutionStatus::AwaitingExecutablePayload
     );
     assert!(
         !status[0].executable_payload_available(),
@@ -210620,7 +214559,7 @@ async fn queue_committed_lane_block_sessions_prunes_reset_watermark_lane_session
         .state
         .da_shard_cursors
         .write()
-        .mark_lanes_reset(&BTreeSet::from([lane_id]), reset_height);
+        .mark_lanes_canonically_reset(&BTreeSet::from([lane_id]), reset_height);
 
     let (
         stale_proposal,
@@ -210629,9 +214568,11 @@ async fn queue_committed_lane_block_sessions_prunes_reset_watermark_lane_session
         _stale_commit_vote,
         stale_commit_qc,
         _stale_signer_pop,
-    ) = sample_lane_block_commit_messages_for_route_at(
+    ) = sample_active_lane_block_commit_messages_for_route_at(
+        actor.state.as_ref(),
         lane_id,
         dataspace_id,
+        reset_height,
         reset_height,
         reset_height.saturating_sub(1),
         Some(Hash::prehashed([0xA0; Hash::LENGTH])),
@@ -210643,12 +214584,14 @@ async fn queue_committed_lane_block_sessions_prunes_reset_watermark_lane_session
         _fresh_commit_vote,
         fresh_commit_qc,
         _fresh_signer_pop,
-    ) = sample_lane_block_commit_messages_for_route_at(
+    ) = sample_active_lane_block_commit_messages_for_route_at(
+        actor.state.as_ref(),
         lane_id,
         dataspace_id,
-        reset_height + 1,
-        reset_height,
-        Some(stale_proposal.descriptor.descriptor_hash),
+        reset_height.saturating_add(1),
+        1,
+        0,
+        None,
     );
     let (
         stale_conflicting_proposal,
@@ -210657,9 +214600,11 @@ async fn queue_committed_lane_block_sessions_prunes_reset_watermark_lane_session
         _stale_conflicting_commit_vote,
         _stale_conflicting_commit_qc,
         _stale_conflicting_signer_pop,
-    ) = sample_lane_block_commit_messages_for_route_at(
+    ) = sample_active_lane_block_commit_messages_for_route_at(
+        actor.state.as_ref(),
         lane_id,
         dataspace_id,
+        reset_height,
         reset_height,
         reset_height.saturating_sub(1),
         Some(Hash::prehashed([0xC0; Hash::LENGTH])),
@@ -210743,7 +214688,7 @@ async fn queue_committed_lane_block_sessions_prunes_reset_watermark_lane_session
     );
     let status = super::status::committed_lane_blocks_snapshot();
     assert_eq!(status.len(), 1);
-    assert_eq!(status[0].lane_block_height, reset_height + 1);
+    assert_eq!(status[0].lane_block_height, 1);
 
     super::status::set_committed_lane_blocks(Vec::new());
     harness.shutdown.send();
@@ -210762,7 +214707,7 @@ async fn known_lane_block_tips_ignore_reset_watermark_committed_queue_before_pru
         .state
         .da_shard_cursors
         .write()
-        .mark_lanes_reset(&BTreeSet::from([lane_id]), reset_height);
+        .mark_lanes_canonically_reset(&BTreeSet::from([lane_id]), reset_height);
 
     let (
         stale_proposal,
@@ -210771,9 +214716,11 @@ async fn known_lane_block_tips_ignore_reset_watermark_committed_queue_before_pru
         _stale_commit_vote,
         stale_commit_qc,
         _stale_signer_pop,
-    ) = sample_lane_block_commit_messages_for_route_at(
+    ) = sample_active_lane_block_commit_messages_for_route_at(
+        actor.state.as_ref(),
         lane_id,
         dataspace_id,
+        reset_height,
         reset_height,
         reset_height.saturating_sub(1),
         Some(Hash::prehashed([0xA0; Hash::LENGTH])),
@@ -210785,12 +214732,14 @@ async fn known_lane_block_tips_ignore_reset_watermark_committed_queue_before_pru
         _fresh_commit_vote,
         fresh_commit_qc,
         _fresh_signer_pop,
-    ) = sample_lane_block_commit_messages_for_route_at(
+    ) = sample_active_lane_block_commit_messages_for_route_at(
+        actor.state.as_ref(),
         lane_id,
         dataspace_id,
-        reset_height + 1,
-        reset_height,
-        Some(stale_proposal.descriptor.descriptor_hash),
+        reset_height.saturating_add(1),
+        1,
+        0,
+        None,
     );
     assert_eq!(
         actor
@@ -210816,21 +214765,21 @@ async fn known_lane_block_tips_ignore_reset_watermark_committed_queue_before_pru
         "fixture keeps both sessions queued before the mutating prune path runs"
     );
 
-    let tips = actor
-        .known_lane_block_tips_for_proposal(next_proposal_height_for_state(actor.state.as_ref()));
+    let tips = actor.known_lane_block_tips_for_proposal(reset_height.saturating_add(1));
     assert!(
         tips.iter().all(|tip| {
-            !(tip.lane_id == lane_id
-                && tip.dataspace_id == dataspace_id
-                && tip.latest_lane_block_height <= reset_height)
+            tip.lane_id != lane_id
+                || tip.dataspace_id != dataspace_id
+                || tip.latest_lane_block_descriptor_hash
+                    != Some(stale_proposal.descriptor.descriptor_hash)
         }),
-        "proposal planning must not see old-incarnation committed queue tips before prune"
+        "proposal planning must not see reset-era committed queue tips before prune"
     );
     assert!(
         tips.iter().any(|tip| {
             tip.lane_id == lane_id
                 && tip.dataspace_id == dataspace_id
-                && tip.latest_lane_block_height == reset_height + 1
+                && tip.latest_lane_block_height == 1
                 && tip.latest_lane_block_descriptor_hash
                     == Some(fresh_proposal.descriptor.descriptor_hash)
         }),
@@ -210847,15 +214796,23 @@ async fn known_lane_block_tips_ignore_reset_watermark_committed_queue_before_pru
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn proposal_blocked_lanes_ignore_live_uncertified_lane_sessions() {
+async fn proposal_blocked_lanes_include_live_uncertified_lane_sessions() {
     super::status::set_committed_lane_blocks(Vec::new());
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     install_active_single_lane_nexus(&actor.state);
     let validators = shared_lane_block_ingress_committee_for_test(actor);
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
+    let proposal_height = next_proposal_height_for_state(actor.state.as_ref());
+    let mut proposal =
         sample_anchor_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    proposal.descriptor.proposal_height = proposal_height;
+    proposal.descriptor.lane_incarnation = actor
+        .state
+        .lane_incarnation_at_height(proposal.descriptor.lane_id, proposal_height)
+        .expect("active proposal lane must have an incarnation");
+    proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+    proposal.proposal_hash = proposal.computed_proposal_hash();
     let lane_id = proposal.descriptor.lane_id;
 
     assert_eq!(
@@ -210866,13 +214823,49 @@ async fn proposal_blocked_lanes_ignore_live_uncertified_lane_sessions() {
         Ok(crate::lane_consensus::LaneBlockSessionInsertOutcome::Inserted)
     );
 
+    let blocked =
+        actor.unapplied_lane_block_lanes_for_proposal(actor.state.as_ref(), proposal_height);
+    assert!(
+        blocked.contains(&lane_id),
+        "proposal planning should not mint competing lane payloads while lane-block consensus is in flight"
+    );
+
+    super::status::set_committed_lane_blocks(Vec::new());
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_blocked_lanes_ignore_stale_proposal_only_lane_sessions() {
+    super::status::set_committed_lane_blocks(Vec::new());
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    install_active_single_lane_nexus(&actor.state);
+    let validators = shared_lane_block_ingress_committee_for_test(actor);
+    let min_quorum = lane_block_commit_quorum_for_test(validators.len());
+    let proposal_height = next_proposal_height_for_state(actor.state.as_ref());
+    let mut proposal =
+        sample_anchor_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    proposal.descriptor.proposal_height = proposal_height;
+    proposal.descriptor.lane_incarnation = actor
+        .state
+        .lane_incarnation_at_height(proposal.descriptor.lane_id, proposal_height)
+        .expect("active proposal lane must have an incarnation");
+    proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+    proposal.proposal_hash = proposal.computed_proposal_hash();
+    let lane_id = proposal.descriptor.lane_id;
+
+    assert_eq!(
+        actor.subsystems.lane_blocks.insert_proposal(proposal),
+        Ok(crate::lane_consensus::LaneBlockSessionInsertOutcome::Inserted)
+    );
+
     let blocked = actor.unapplied_lane_block_lanes_for_proposal(
         actor.state.as_ref(),
-        next_proposal_height_for_state(actor.state.as_ref()),
+        proposal_height.saturating_add(1),
     );
     assert!(
         !blocked.contains(&lane_id),
-        "proposal planning should allow a lane with only an uncertified live lane-block session to retry"
+        "proposal-only lane-block sessions from older global heights should not pin later proposal retries"
     );
 
     super::status::set_committed_lane_blocks(Vec::new());
@@ -210902,7 +214895,16 @@ async fn lane_block_ingress_accepts_authoritative_nexus_lane_committee() {
         "fixture must expose the local peer as the live lane authority"
     );
 
-    let proposal = sample_lane_block_proposal_for_validators(vec![local_peer.clone()]);
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        vec![local_peer.clone()],
+        1,
+    );
     actor
         .handle_lane_block_proposal(proposal)
         .expect("authoritative lane-block proposal handled");
@@ -210937,6 +214939,31 @@ async fn lane_block_ingress_accepts_lane_created_at_proposal_height() {
         u64::try_from(actor.state.committed_height()).expect("committed height fits u64");
     let proposal_height = committed_height.saturating_add(1);
 
+    // Seed the lane through the lifecycle-aware configuration path so the state owns an
+    // authoritative incarnation. The direct catalog mutation below intentionally models the
+    // proposal-height lookahead that makes the managed lane visible one height later.
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("fixture state is uniquely owned");
+        let lane_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![
+                ModelLaneConfig::default(),
+                ModelLaneConfig {
+                    id: lane_id,
+                    alias: format!("elastic-lane-{}", lane_id.as_u32()),
+                    ..ModelLaneConfig::default()
+                },
+            ],
+        )
+        .expect("seed future-created lane incarnation catalog");
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = true;
+        nexus.autoscale.enabled = false;
+        nexus.lane_catalog = lane_catalog;
+        state
+            .set_nexus(nexus)
+            .expect("seed authoritative incarnation for lookahead lane");
+    }
     install_future_created_autoscale_lane(actor.state.as_ref(), lane_id, proposal_height);
     let nexus = actor.state.nexus_snapshot();
     assert_eq!(
@@ -210977,6 +215004,10 @@ async fn lane_block_ingress_accepts_lane_created_at_proposal_height() {
     proposal.descriptor.lane_id = lane_id;
     proposal.descriptor.dataspace_id = dataspace_id;
     proposal.descriptor.proposal_height = proposal_height;
+    proposal.descriptor.lane_incarnation = actor
+        .state
+        .lane_incarnation_at_height(lane_id, proposal_height)
+        .expect("future-created lane has an authoritative proposal-height incarnation");
     proposal.descriptor.qc_mode_tag = format!(
         "permissioned:lane:{}:dataspace:{}",
         lane_id.as_u32(),
@@ -210989,22 +215020,26 @@ async fn lane_block_ingress_accepts_lane_created_at_proposal_height() {
         !actor.lane_block_artifact_targets_active_route(
             lane_id,
             dataspace_id,
+            proposal.descriptor.lane_incarnation,
             committed_height,
-            proposal.descriptor.lane_block_height,
         ),
         "the old committed-height ingress check would reject the first active lane block"
     );
+    let proposal_leader = super::lane_scheduler::lane_block_redrive_leader(&proposal, 0)
+        .cloned()
+        .expect("activation-boundary proposal has a deterministic leader");
     assert!(
-        actor.lane_block_proposal_accepts_local_broadcast(&proposal),
+        actor.lane_block_proposal_sender_accepts_ingress(&proposal, Some(&proposal_leader)),
         "proposal-height ingress must accept the first lane block at the activation boundary"
     );
 
     actor
-        .handle_incoming_lane_block_proposal(proposal.clone())
+        .handle_incoming_lane_block_proposal(proposal.clone(), Some(&proposal_leader))
         .expect("proposal-height active lane-block proposal handled");
     let session_key = crate::lane_consensus::LaneBlockSessionKey {
         lane_id,
         dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
         lane_block_height: proposal.descriptor.lane_block_height,
         lane_block_view: proposal.descriptor.lane_block_view,
         proposal_hash: proposal.proposal_hash,
@@ -211043,17 +215078,21 @@ async fn lane_block_ingress_rejects_reset_watermark_artifacts_before_side_effect
         vec![local_peer.clone()],
         "fixture must expose the local peer as the live lane authority"
     );
-    let reset_height = 13_u64;
+    let proposal = sample_lane_block_proposal_for_validators(vec![local_peer.clone()]);
+    let reset_height = proposal.descriptor.proposal_height;
     actor
         .state
         .da_shard_cursors
         .write()
-        .mark_lanes_reset(&BTreeSet::from([LaneId::SINGLE]), reset_height);
+        .mark_lanes_canonically_reset(&BTreeSet::from([LaneId::SINGLE]), reset_height);
 
-    let proposal = sample_lane_block_proposal_for_validators(vec![local_peer.clone()]);
     assert_eq!(
-        proposal.descriptor.lane_block_height, reset_height,
-        "fixture proposal must sit at the reset watermark"
+        proposal.descriptor.proposal_height, reset_height,
+        "fixture proposal must originate at the global reset watermark"
+    );
+    assert!(
+        proposal.descriptor.lane_block_height > reset_height,
+        "a stale high lane-local height must not bypass the global reset watermark"
     );
     let vote = signed_lane_block_vote_with_keypair(
         &proposal,
@@ -211121,13 +215160,46 @@ async fn lane_block_ingress_rejects_reset_watermark_artifacts_before_side_effect
         super::status::ConsensusMessageKind::LaneBlockVote,
         super::status::ConsensusMessageOutcome::Dropped,
         super::status::ConsensusMessageReason::InvalidPayload,
-        0,
+        1,
     );
     assert_consensus_message_handling_total(
         super::status::ConsensusMessageKind::LaneBlockQc,
         super::status::ConsensusMessageOutcome::Dropped,
         super::status::ConsensusMessageReason::InvalidPayload,
         1,
+    );
+
+    super::status::reset_message_handling_for_tests();
+    Arc::get_mut(&mut actor.state)
+        .expect("reset ingress fixture state is uniquely owned")
+        .push_block_hash_for_testing(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0xD8; Hash::LENGTH]),
+        ));
+    let fresh_proposal_height = next_proposal_height_for_state(actor.state.as_ref());
+    assert!(fresh_proposal_height > reset_height);
+    let mut fresh = sample_anchor_lane_block_proposal_for_validators_with_min_quorum(
+        vec![local_peer.clone()],
+        1,
+    );
+    fresh.descriptor.proposal_height = fresh_proposal_height;
+    fresh.descriptor.lane_block_view = 0;
+    fresh.descriptor.lane_incarnation = actor
+        .state
+        .lane_incarnation_at_height(LaneId::SINGLE, fresh_proposal_height)
+        .expect("default lane is active after the reset watermark");
+    fresh.descriptor.descriptor_hash = fresh.descriptor.computed_descriptor_hash();
+    fresh.proposal_hash = fresh.computed_proposal_hash();
+    assert_eq!(fresh.descriptor.lane_block_height, 1);
+    assert!(
+        actor.lane_block_proposal_accepts_local_broadcast(&fresh),
+        "the lane must restart at local height one after a higher global reset watermark"
+    );
+    actor
+        .handle_lane_block_proposal(fresh.clone())
+        .expect("fresh post-reset lane-block proposal handled");
+    assert!(
+        actor.subsystems.lane_blocks.contains_proposal(&fresh),
+        "fresh post-reset lane-local height one should enter the consensus cache"
     );
 
     super::status::reset_message_handling_for_tests();
@@ -211155,8 +215227,11 @@ async fn lane_block_ingress_accepts_shared_nexus_lane_committee_without_lookahea
         "shared lane-block committee fixture should use the live four-peer roster"
     );
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
-        sample_anchor_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    let proposal = sample_active_anchor_lane_block_proposal_for_validators_with_min_quorum(
+        actor.state.as_ref(),
+        validators,
+        min_quorum,
+    );
 
     actor
         .handle_lane_block_proposal(proposal)
@@ -211180,6 +215255,814 @@ async fn lane_block_ingress_accepts_shared_nexus_lane_committee_without_lookahea
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn lane_block_commit_ingress_horizon_bounds_stale_and_far_future_slots() {
+    let mut harness = test_actor_harness(4).await;
+    let key_pairs = harness.key_pairs.clone();
+    let actor = &mut harness.actor;
+    install_active_single_lane_nexus(&actor.state);
+    let validators = shared_lane_block_ingress_committee_for_test(actor);
+    let min_quorum = lane_block_commit_quorum_for_test(validators.len());
+    let base = sample_active_anchor_lane_block_proposal_for_validators_with_min_quorum(
+        actor.state.as_ref(),
+        validators.clone(),
+        min_quorum,
+    );
+    let current_global_height = base.descriptor.proposal_height;
+    let signer = validators[0].clone();
+    let signer_key = keypair_for_peer(&key_pairs, &signer);
+
+    let stale = retarget_sample_lane_block_proposal(
+        base.clone(),
+        current_global_height.saturating_sub(1),
+        1,
+        0,
+        0x10,
+    );
+    let stale_vote = signed_lane_block_vote_with_keypair(
+        &stale,
+        crate::sumeragi::consensus::Phase::Commit,
+        signer_key,
+    );
+    actor
+        .handle_lane_block_vote(stale_vote, Some(&signer))
+        .expect("stale vote handling should fail closed");
+    assert!(
+        actor
+            .subsystems
+            .lane_blocks
+            .commit_vote_lock_slots()
+            .is_empty()
+    );
+    assert!(actor.subsystems.lane_blocks.status_snapshot().is_empty());
+
+    for lane_height in 2_u64..=100 {
+        let far = retarget_sample_lane_block_proposal(
+            base.clone(),
+            current_global_height,
+            lane_height,
+            lane_height,
+            lane_height,
+        );
+        let vote = signed_lane_block_vote_with_keypair(
+            &far,
+            crate::sumeragi::consensus::Phase::Commit,
+            signer_key,
+        );
+        actor
+            .handle_lane_block_vote(vote, Some(&signer))
+            .expect("far-future vote handling should fail closed");
+    }
+    assert!(
+        actor
+            .subsystems
+            .lane_blocks
+            .commit_vote_lock_slots()
+            .is_empty(),
+        "far-future authenticated votes must not allocate permanent locks"
+    );
+    assert!(actor.subsystems.lane_blocks.status_snapshot().is_empty());
+
+    let current =
+        retarget_sample_lane_block_proposal(base.clone(), current_global_height, 1, 0, 0x20);
+    let current_vote = signed_lane_block_vote_with_keypair(
+        &current,
+        crate::sumeragi::consensus::Phase::Commit,
+        signer_key,
+    );
+    actor
+        .handle_lane_block_vote(current_vote, Some(&signer))
+        .expect("orphan current-slot commit vote should fail closed");
+    assert!(
+        actor
+            .subsystems
+            .lane_blocks
+            .commit_vote_lock_slots()
+            .is_empty(),
+        "a current-height commit vote still needs a matching prepare QC before allocating a signer lock"
+    );
+
+    disable_nexus_for_lane_block_stateless_fixture(&actor.state);
+    let disabled_far =
+        retarget_sample_lane_block_proposal(base, current_global_height, 101, 101, 0x30);
+    let disabled_far_vote = signed_lane_block_vote_with_keypair(
+        &disabled_far,
+        crate::sumeragi::consensus::Phase::Commit,
+        signer_key,
+    );
+    actor
+        .handle_lane_block_vote(disabled_far_vote, Some(&signer))
+        .expect("disabled-Nexus far-future vote handling should fail closed");
+    for route in 1_u32..=64 {
+        let mut foreign_route = retarget_sample_lane_block_proposal(
+            current.clone(),
+            current_global_height,
+            1,
+            u64::from(route),
+            u64::from(route),
+        );
+        foreign_route.descriptor.lane_id = LaneId::new(route);
+        foreign_route.descriptor.dataspace_id = DataSpaceId::new(u64::from(route));
+        foreign_route.descriptor.qc_mode_tag = format!("disabled-route:{route}");
+        foreign_route.descriptor.descriptor_hash =
+            foreign_route.descriptor.computed_descriptor_hash();
+        foreign_route.proposal_hash = foreign_route.computed_proposal_hash();
+        let vote = signed_lane_block_vote_with_keypair(
+            &foreign_route,
+            crate::sumeragi::consensus::Phase::Commit,
+            signer_key,
+        );
+        actor
+            .handle_lane_block_vote(vote, Some(&signer))
+            .expect("disabled-Nexus foreign route should fail closed");
+    }
+    for seed in 1_u8..=64 {
+        let outsider_key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+            .expect("outsider BLS keypair");
+        let outsider = PeerId::new(outsider_key.public_key().clone());
+        let outsider_proposal = retarget_sample_lane_block_proposal(
+            sample_anchor_lane_block_proposal_for_validators_with_min_quorum(
+                vec![outsider.clone()],
+                1,
+            ),
+            current_global_height,
+            1,
+            u64::from(seed),
+            u64::from(seed).saturating_add(1000),
+        );
+        let vote = signed_lane_block_vote_with_keypair(
+            &outsider_proposal,
+            crate::sumeragi::consensus::Phase::Commit,
+            &outsider_key,
+        );
+        actor
+            .handle_lane_block_vote(vote, Some(&outsider))
+            .expect("disabled-Nexus foreign committee should fail closed");
+    }
+    assert!(
+        actor
+            .subsystems
+            .lane_blocks
+            .commit_vote_lock_slots()
+            .is_empty(),
+        "disabling Nexus must not bypass route, authority, or height bounds"
+    );
+    assert_eq!(
+        actor.subsystems.lane_blocks.commit_vote_lock_len(),
+        0,
+        "foreign disabled-Nexus signers must not allocate hidden per-signer locks"
+    );
+    assert_eq!(
+        actor.subsystems.lane_blocks.status_snapshot().len(),
+        0,
+        "foreign disabled-Nexus routes and committees must not allocate protected sessions"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lane_block_disabled_nexus_rejects_outsider_prepare_artifact_flood_without_replay_work() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    disable_nexus_for_lane_block_stateless_fixture(&actor.state);
+    let outsider_key = checked_bls_keypair();
+    let outsider = PeerId::new(outsider_key.public_key().clone());
+    assert!(
+        !shared_lane_block_ingress_committee_for_test(actor).contains(&outsider),
+        "outsider fixture must not belong to the disabled-Nexus shared topology"
+    );
+    let proposal =
+        sample_anchor_lane_block_proposal_for_validators_with_min_quorum(vec![outsider.clone()], 1);
+    let prepare_vote = signed_lane_block_vote_with_keypair(
+        &proposal,
+        crate::sumeragi::consensus::Phase::Prepare,
+        &outsider_key,
+    );
+    let prepare_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+        prepare_vote.body.clone(),
+        proposal.descriptor.validator_set.clone(),
+        std::slice::from_ref(&prepare_vote),
+    )
+    .expect("outsider prepare QC");
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+
+    assert!(
+        !actor.lane_block_proposal_accepts_local_broadcast(&proposal),
+        "disabled Nexus must not treat an outsider 1-of-1 committee as authoritative"
+    );
+    for _ in 0..64 {
+        actor
+            .handle_incoming_lane_block_proposal(proposal.clone(), Some(&outsider))
+            .expect("outsider proposal should fail closed");
+        actor
+            .handle_lane_block_vote(prepare_vote.clone(), Some(&outsider))
+            .expect("outsider prepare vote should fail closed");
+        actor
+            .handle_lane_block_qc(prepare_qc.clone())
+            .expect("outsider prepare QC should fail closed");
+    }
+    assert!(actor.subsystems.lane_blocks.status_snapshot().is_empty());
+    assert!(
+        actor
+            .subsystems
+            .lane_blocks
+            .commit_vote_lock_slots()
+            .is_empty()
+    );
+    assert!(
+        actor
+            .lane_block_rebroadcast_next_due(Instant::now())
+            .is_none(),
+        "outsider prepare flood must not arm replay work"
+    );
+    assert!(
+        take_background_log(&background_log).is_empty(),
+        "outsider prepare flood must not emit transport work"
+    );
+
+    let validators = shared_lane_block_ingress_committee_for_test(actor);
+    let min_quorum = lane_block_commit_quorum_for_test(validators.len());
+    let current = sample_active_anchor_lane_block_proposal_for_validators_with_min_quorum(
+        actor.state.as_ref(),
+        validators,
+        min_quorum,
+    );
+    let current_leader = super::lane_scheduler::lane_block_redrive_leader(&current, 0)
+        .cloned()
+        .expect("authoritative current slot has a deterministic leader");
+    assert!(
+        actor.lane_block_proposal_sender_accepts_ingress(&current, Some(&current_leader)),
+        "the authoritative shared current slot must remain admissible"
+    );
+    actor
+        .handle_incoming_lane_block_proposal(current, Some(&current_leader))
+        .expect("authoritative shared proposal handled");
+    assert_eq!(actor.subsystems.lane_blocks.status_snapshot().len(), 1);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lane_block_exact_future_kura_artifact_does_not_bypass_ingress_horizon() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 1).await;
+    let key_pairs = harness.key_pairs.clone();
+    let actor = &mut harness.actor;
+    install_active_single_lane_nexus(&actor.state);
+    let validators = shared_lane_block_ingress_committee_for_test(actor);
+    let min_quorum = lane_block_commit_quorum_for_test(validators.len());
+    let global_next_height = actor.committed_height_snapshot().saturating_add(1);
+    let future_height = global_next_height.saturating_add(1);
+    let mut future_block = sample_block_with_lane_payload_artifact(
+        future_height,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+    );
+    rebind_lane_payload_artifact_to_active_incarnation(&mut future_block, actor.state.as_ref());
+    let ownership = rebind_lane_payload_artifact_validator_set(
+        &mut future_block,
+        validators.clone(),
+        min_quorum,
+    );
+    let proposal = lane_block_proposal_from_lane_payload_ownership(&ownership);
+    store_block_with_test_ancestors(actor.kura.as_ref(), future_block);
+    let stored_future = actor
+        .kura
+        .read_lane_block_artifact(LaneId::SINGLE, 1)
+        .expect("future lane sidecar must be readable from Kura");
+    let stored_future_proposal =
+        lane_block_proposal_from_lane_payload_ownership(&stored_future.ownership);
+    assert_eq!(
+        stored_future_proposal.proposal_hash, proposal.proposal_hash,
+        "future-horizon test must exercise exact Kura corroboration"
+    );
+    assert_eq!(
+        actor.committed_height_snapshot().saturating_add(1),
+        global_next_height,
+        "storing the future sidecar must not advance committed state"
+    );
+    let signer = validators[0].clone();
+    let prepare_votes = validators
+        .iter()
+        .map(|validator| {
+            signed_lane_block_vote_with_keypair(
+                &proposal,
+                crate::sumeragi::consensus::Phase::Prepare,
+                keypair_for_peer(&key_pairs, validator),
+            )
+        })
+        .collect::<Vec<_>>();
+    let prepare_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+        prepare_votes[0].body.clone(),
+        validators,
+        &prepare_votes,
+    )
+    .expect("future prepare QC");
+
+    assert!(
+        !actor.lane_block_proposal_accepts_local_broadcast(&proposal),
+        "exact Kura corroboration above the global next height must fail closed"
+    );
+    actor
+        .handle_lane_block_proposal(proposal)
+        .expect("future proposal should fail closed");
+    actor
+        .handle_lane_block_vote(prepare_votes[0].clone(), Some(&signer))
+        .expect("future prepare vote should fail closed");
+    actor
+        .handle_lane_block_qc(prepare_qc)
+        .expect("future prepare QC should fail closed");
+    assert!(actor.subsystems.lane_blocks.status_snapshot().is_empty());
+    assert!(
+        actor
+            .lane_block_rebroadcast_next_due(Instant::now())
+            .is_none()
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lane_block_exact_historical_kura_artifact_survives_committee_rotation() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 1).await;
+    let key_pairs = harness.key_pairs.clone();
+    let actor = &mut harness.actor;
+    install_active_single_lane_nexus(&actor.state);
+    let historical_validators = shared_lane_block_ingress_committee_for_test(actor);
+    let historical_quorum = lane_block_commit_quorum_for_test(historical_validators.len());
+    let mut block =
+        sample_block_with_lane_payload_artifact(1, 0, LaneId::SINGLE, DataSpaceId::UNIVERSAL, 1);
+    rebind_lane_payload_artifact_to_active_incarnation(&mut block, actor.state.as_ref());
+    let ownership = rebind_lane_payload_artifact_validator_set(
+        &mut block,
+        historical_validators.clone(),
+        historical_quorum,
+    );
+    let proposal = lane_block_proposal_from_lane_payload_ownership(&ownership);
+    store_block_with_test_ancestors(actor.kura.as_ref(), block);
+
+    install_multilane_lookahead_nexus_with_default_lane(&actor.state);
+    let local_peer = actor.common_config.peer.id().clone();
+    install_lane_manifest_registry(
+        &actor.state,
+        &[(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+            vec![account_id_for_keypair(&actor.common_config.key_pair)],
+        )],
+    );
+    let current_validators = actor.state.authoritative_lane_peer_ids_at_height(
+        LaneId::SINGLE,
+        actor.committed_height_snapshot().saturating_add(1),
+    );
+    assert_eq!(current_validators, vec![local_peer.clone()]);
+    let historical_remote = historical_validators
+        .iter()
+        .find(|validator| *validator != &local_peer)
+        .expect("historical committee should contain a rotated-out validator")
+        .clone();
+    assert!(!current_validators.contains(&historical_remote));
+
+    for keypair in &key_pairs {
+        actor.roster_validation_cache.pops.insert(
+            keypair.public_key().clone(),
+            iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+                .expect("historical lane validator PoP"),
+        );
+    }
+    let prepare_votes = historical_validators
+        .iter()
+        .map(|validator| {
+            signed_lane_block_vote_with_keypair(
+                &proposal,
+                crate::sumeragi::consensus::Phase::Prepare,
+                keypair_for_peer(&key_pairs, validator),
+            )
+        })
+        .collect::<Vec<_>>();
+    let prepare_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+        prepare_votes[0].body.clone(),
+        historical_validators,
+        &prepare_votes,
+    )
+    .expect("historical committee prepare QC");
+
+    actor
+        .handle_lane_block_proposal(proposal.clone())
+        .expect("exact historical proposal should use its embedded committee");
+    let remote_vote = prepare_votes
+        .iter()
+        .find(|vote| vote.signer == historical_remote)
+        .expect("rotated-out historical signer vote")
+        .clone();
+    actor
+        .handle_lane_block_vote(remote_vote, Some(&historical_remote))
+        .expect("rotated-out exact historical vote should remain recoverable");
+    actor
+        .handle_lane_block_qc(prepare_qc)
+        .expect("exact historical QC should remain recoverable after rotation");
+    let session = actor
+        .subsystems
+        .lane_blocks
+        .status_snapshot()
+        .into_iter()
+        .find(|session| session.proposal_hash == proposal.proposal_hash)
+        .expect("historical recovery session should be cached");
+    assert!(session.has_proposal && session.has_prepare_qc);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lane_block_durable_gc_prunes_prepare_only_session_without_commit_vote_lock() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 1).await;
+    let key_pairs = harness.key_pairs.clone();
+    let actor = &mut harness.actor;
+    install_active_single_lane_nexus(&actor.state);
+    let validators = shared_lane_block_ingress_committee_for_test(actor);
+    let min_quorum = lane_block_commit_quorum_for_test(validators.len());
+    let mut block =
+        sample_block_with_lane_payload_artifact(1, 0, LaneId::SINGLE, DataSpaceId::UNIVERSAL, 1);
+    let entrypoint_hashes = block
+        .external_entrypoints_cloned()
+        .map(|entrypoint| entrypoint.hash())
+        .collect::<Vec<_>>();
+    let transaction_results = entrypoint_hashes
+        .iter()
+        .map(|_| TransactionResultInner::Ok(DataTriggerSequence::new()))
+        .collect();
+    block
+        .set_transaction_results(Vec::new(), &entrypoint_hashes, transaction_results)
+        .expect("attach applied lane payload fixture transaction results");
+    rebind_lane_payload_artifact_to_active_incarnation(&mut block, actor.state.as_ref());
+    let ownership =
+        rebind_lane_payload_artifact_validator_set(&mut block, validators.clone(), min_quorum);
+    let proposal = lane_block_proposal_from_lane_payload_ownership(&ownership);
+    store_block_with_test_ancestors(actor.kura.as_ref(), block);
+
+    let prepare_votes = validators
+        .iter()
+        .map(|validator| {
+            signed_lane_block_vote_with_keypair(
+                &proposal,
+                crate::sumeragi::consensus::Phase::Prepare,
+                keypair_for_peer(&key_pairs, validator),
+            )
+        })
+        .collect::<Vec<_>>();
+    let prepare_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+        prepare_votes[0].body.clone(),
+        validators.clone(),
+        &prepare_votes,
+    )
+    .expect("prepare-only cache QC");
+    let commit_votes = validators
+        .iter()
+        .map(|validator| {
+            signed_lane_block_vote_with_keypair(
+                &proposal,
+                crate::sumeragi::consensus::Phase::Commit,
+                keypair_for_peer(&key_pairs, validator),
+            )
+        })
+        .collect::<Vec<_>>();
+    let commit_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+        commit_votes[0].body.clone(),
+        validators,
+        &commit_votes,
+    )
+    .expect("external durable commit QC");
+    let signer_pops = key_pairs
+        .iter()
+        .map(|keypair| {
+            (
+                keypair.public_key().clone(),
+                iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+                    .expect("lane validator PoP"),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    actor
+        .subsystems
+        .lane_blocks
+        .insert_proposal(proposal.clone())
+        .expect("seed prepare-only proposal");
+    actor
+        .subsystems
+        .lane_blocks
+        .insert_qc_with_pops(prepare_qc.clone(), &signer_pops)
+        .expect("seed prepare-only QC");
+    let cached_sessions = actor.subsystems.lane_blocks.status_snapshot();
+    let [cached] = cached_sessions.as_slice() else {
+        panic!("prepare-only session should be cached")
+    };
+    assert!(cached.has_proposal && cached.has_prepare_qc && !cached.has_commit_qc);
+    assert!(
+        actor
+            .subsystems
+            .lane_blocks
+            .commit_vote_lock_slots()
+            .is_empty(),
+        "prepare-only fixture must not create a signer commit lock"
+    );
+
+    let durable = crate::lane_consensus::CommittedLaneBlockSession {
+        proposal: proposal.clone(),
+        prepare_qc,
+        commit_qc,
+    };
+    actor
+        .kura
+        .persist_committed_lane_block_session(&durable, &signer_pops)
+        .expect("persist external certified lane slot");
+    actor
+        .kura
+        .persist_lane_block_application_receipt(&proposal)
+        .expect("persist external applied lane-slot receipt");
+    assert!(
+        actor
+            .kura
+            .lane_block_application_receipt_available(&proposal)
+    );
+
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    assert!(
+        actor.queue_committed_lane_block_sessions(),
+        "durable GC should report prepare-only replay retirement as progress"
+    );
+    assert!(
+        actor.subsystems.lane_blocks.status_snapshot().is_empty(),
+        "durable GC must discover finalized prepare-only sessions without commit locks"
+    );
+    assert!(
+        actor
+            .subsystems
+            .lane_blocks
+            .commit_vote_lock_slots()
+            .is_empty()
+    );
+    assert!(
+        actor
+            .lane_block_rebroadcast_next_due(Instant::now())
+            .is_none()
+    );
+    assert!(take_background_log(&background_log).is_empty());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lane_block_historical_commit_requires_exact_kura_and_finalized_slot_rejects_recreation() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 1).await;
+    let key_pairs = harness.key_pairs.clone();
+    let actor = &mut harness.actor;
+    install_active_single_lane_nexus(&actor.state);
+    let validators = shared_lane_block_ingress_committee_for_test(actor);
+    let min_quorum = lane_block_commit_quorum_for_test(validators.len());
+    for keypair in &key_pairs {
+        let pop =
+            iroha_crypto::bls_normal_pop_prove(keypair.private_key()).expect("lane validator PoP");
+        actor
+            .roster_validation_cache
+            .pops
+            .insert(keypair.public_key().clone(), pop);
+    }
+
+    let mut block =
+        sample_block_with_lane_payload_artifact(1, 0, LaneId::SINGLE, DataSpaceId::UNIVERSAL, 1);
+    let entrypoint_hashes = block
+        .external_entrypoints_cloned()
+        .map(|entrypoint| entrypoint.hash())
+        .collect::<Vec<_>>();
+    let transaction_results = entrypoint_hashes
+        .iter()
+        .map(|_| TransactionResultInner::Ok(DataTriggerSequence::new()))
+        .collect();
+    block
+        .set_transaction_results(Vec::new(), &entrypoint_hashes, transaction_results)
+        .expect("attach historical applied lane payload transaction results");
+    rebind_lane_payload_artifact_to_active_incarnation(&mut block, actor.state.as_ref());
+    let ownership =
+        rebind_lane_payload_artifact_validator_set(&mut block, validators.clone(), min_quorum);
+    let proposal = lane_block_proposal_from_lane_payload_ownership(&ownership);
+    let signer = validators[0].clone();
+    let historical_vote = signed_lane_block_vote_with_keypair(
+        &proposal,
+        crate::sumeragi::consensus::Phase::Commit,
+        keypair_for_peer(&key_pairs, &signer),
+    );
+
+    actor
+        .handle_lane_block_vote(historical_vote.clone(), Some(&signer))
+        .expect("uncorroborated historical vote should fail closed");
+    assert!(actor.subsystems.lane_blocks.status_snapshot().is_empty());
+    assert!(
+        actor
+            .subsystems
+            .lane_blocks
+            .commit_vote_lock_slots()
+            .is_empty()
+    );
+
+    store_block_with_test_ancestors(actor.kura.as_ref(), block);
+    actor
+        .handle_lane_block_vote(historical_vote.clone(), Some(&signer))
+        .expect("exact Kura-corroborated orphan commit vote should fail closed");
+    assert!(
+        actor
+            .subsystems
+            .lane_blocks
+            .commit_vote_lock_slots()
+            .is_empty(),
+        "durable payload availability must not bypass the prepare-QC prerequisite for commit votes"
+    );
+
+    let prepare_body = proposal.vote_body(crate::sumeragi::consensus::Phase::Prepare);
+    let prepare_votes = validators
+        .iter()
+        .map(|validator| {
+            signed_lane_block_vote_with_keypair(
+                &proposal,
+                crate::sumeragi::consensus::Phase::Prepare,
+                keypair_for_peer(&key_pairs, validator),
+            )
+        })
+        .collect::<Vec<_>>();
+    let prepare_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+        prepare_body,
+        validators.clone(),
+        &prepare_votes,
+    )
+    .expect("historical prepare QC");
+    let commit_body = proposal.vote_body(crate::sumeragi::consensus::Phase::Commit);
+    let commit_votes = validators
+        .iter()
+        .map(|validator| {
+            signed_lane_block_vote_with_keypair(
+                &proposal,
+                crate::sumeragi::consensus::Phase::Commit,
+                keypair_for_peer(&key_pairs, validator),
+            )
+        })
+        .collect::<Vec<_>>();
+    let commit_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+        commit_body,
+        validators,
+        &commit_votes,
+    )
+    .expect("historical commit QC");
+    let delayed_prepare_vote = prepare_votes[0].clone();
+    let delayed_prepare_qc = prepare_qc.clone();
+    let delayed_commit_qc = commit_qc.clone();
+    actor
+        .handle_lane_block_proposal(proposal.clone())
+        .expect("historical canonical proposal cached");
+    actor
+        .handle_lane_block_qc(prepare_qc)
+        .expect("historical prepare QC cached");
+    actor
+        .handle_lane_block_qc(commit_qc)
+        .expect("historical commit QC cached");
+    assert!(
+        actor
+            .state
+            .kura()
+            .read_lane_block_execution_input(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+            )
+            .is_some(),
+        "historical commit QC should persist deterministic execution input"
+    );
+    assert!(
+        actor
+            .state
+            .kura()
+            .lane_block_application_receipt_available(&proposal),
+        "complete canonical Kura results should recover the exact application receipt"
+    );
+    actor.queue_committed_lane_block_sessions();
+    assert!(
+        actor.subsystems.lane_blocks.status_snapshot().is_empty(),
+        "durable retirement must remove finalized replay sessions"
+    );
+    assert!(
+        actor
+            .subsystems
+            .lane_blocks
+            .commit_vote_lock_slots()
+            .is_empty(),
+        "durable retirement must remove finalized signer locks"
+    );
+
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    for _ in 0..64 {
+        actor
+            .handle_incoming_lane_block_proposal(proposal.clone(), Some(&signer))
+            .expect("delayed finalized proposal should fail closed");
+        actor
+            .handle_lane_block_vote(delayed_prepare_vote.clone(), Some(&signer))
+            .expect("delayed finalized prepare vote should fail closed");
+        actor
+            .handle_lane_block_qc(delayed_prepare_qc.clone())
+            .expect("delayed finalized prepare QC should fail closed");
+        actor
+            .handle_lane_block_vote(historical_vote.clone(), Some(&signer))
+            .expect("delayed finalized commit vote should fail closed");
+        actor
+            .handle_lane_block_qc(delayed_commit_qc.clone())
+            .expect("delayed finalized commit QC should fail closed");
+    }
+    assert!(
+        actor.subsystems.lane_blocks.status_snapshot().is_empty(),
+        "delayed finalized artifacts must be rejected before cache mutation"
+    );
+    assert!(
+        actor
+            .subsystems
+            .lane_blocks
+            .commit_vote_lock_slots()
+            .is_empty(),
+        "delayed finalized artifacts must be rejected before lock mutation"
+    );
+    assert!(
+        !actor.broadcast_ready_local_lane_block_votes(),
+        "finalized replay flood must not create local vote or periodic replay work"
+    );
+    assert!(
+        actor
+            .lane_block_rebroadcast_next_due(Instant::now())
+            .is_none(),
+        "finalized replay flood must not arm a periodic replay deadline"
+    );
+    assert!(
+        take_background_log(&background_log).is_empty(),
+        "finalized replay flood must not emit proposal, vote, QC, or repair traffic"
+    );
+
+    let conflicting = retarget_sample_lane_block_proposal(proposal.clone(), 1, 1, 9, 0xBAD);
+    let conflicting_vote = signed_lane_block_vote_with_keypair(
+        &conflicting,
+        crate::sumeragi::consensus::Phase::Commit,
+        keypair_for_peer(&key_pairs, &signer),
+    );
+    actor
+        .handle_lane_block_vote(conflicting_vote, Some(&signer))
+        .expect("conflicting finalized vote should fail closed");
+    assert!(actor.subsystems.lane_blocks.status_snapshot().is_empty());
+    assert!(
+        actor
+            .subsystems
+            .lane_blocks
+            .commit_vote_lock_slots()
+            .is_empty()
+    );
+
+    let next_proposal_height = actor.committed_height_snapshot().saturating_add(1);
+    let finalized_descriptor_hash = proposal.descriptor.descriptor_hash;
+    let mut current_next =
+        retarget_sample_lane_block_proposal(proposal, next_proposal_height, 2, 0, 0xC0);
+    current_next.descriptor.previous_lane_block_descriptor_hash = Some(finalized_descriptor_hash);
+    current_next.descriptor.descriptor_hash = current_next.descriptor.computed_descriptor_hash();
+    current_next.proposal_hash = current_next.computed_proposal_hash();
+    let current_next_leader = super::lane_scheduler::lane_block_redrive_leader(&current_next, 0)
+        .cloned()
+        .expect("current next lane slot has a deterministic leader");
+    assert!(
+        actor
+            .lane_block_proposal_sender_accepts_ingress(&current_next, Some(&current_next_leader),),
+        "durable retirement must not reject the current next lane slot"
+    );
+    actor
+        .handle_incoming_lane_block_proposal(current_next, Some(&current_next_leader))
+        .expect("current next lane slot should remain admissible");
+    assert_eq!(
+        actor.subsystems.lane_blocks.status_snapshot().len(),
+        1,
+        "only the current next lane slot may repopulate the session cache"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn lane_block_ingress_accepts_relayed_shared_vote_signer_without_proposal() {
     let _message_guard = super::status::message_handling_test_guard();
     super::status::reset_message_handling_for_tests();
@@ -211196,8 +216079,11 @@ async fn lane_block_ingress_accepts_relayed_shared_vote_signer_without_proposal(
         "shared lane-block committee fixture should include the local peer"
     );
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
-        sample_anchor_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    let proposal = sample_active_anchor_lane_block_proposal_for_validators_with_min_quorum(
+        actor.state.as_ref(),
+        validators,
+        min_quorum,
+    );
     let vote = signed_lane_block_vote_with_keypair(
         &proposal,
         crate::sumeragi::consensus::Phase::Prepare,
@@ -211262,8 +216148,11 @@ async fn lane_block_ingress_accepts_senderless_signed_shared_vote() {
         "shared lane-block committee fixture should include the local peer"
     );
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
-        sample_anchor_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    let proposal = sample_active_anchor_lane_block_proposal_for_validators_with_min_quorum(
+        actor.state.as_ref(),
+        validators,
+        min_quorum,
+    );
     let vote = signed_lane_block_vote_with_keypair(
         &proposal,
         crate::sumeragi::consensus::Phase::Prepare,
@@ -211325,22 +216214,8 @@ async fn lane_block_ingress_rejects_quorum_downgraded_shared_committee_before_si
         "single-lane fixture must exercise shared lane-block authority"
     );
 
-    let validators = shared_lane_block_ingress_committee_for_test(actor);
-    let expected_quorum = lane_block_commit_quorum_for_test(validators.len());
-    assert!(
-        expected_quorum > 1,
-        "shared committee fixture must make quorum downgrades observable"
-    );
-    let downgraded_quorum = expected_quorum - 1;
-    let proposal = sample_lane_block_proposal_for_validators_with_min_quorum(
-        validators.clone(),
-        downgraded_quorum,
-    );
-    assert_eq!(
-        proposal.descriptor.validator_set_hash,
-        HashOf::new(&validators),
-        "fixture must keep the live shared validator-set hash while only lowering quorum"
-    );
+    let (validators, downgraded_quorum, proposal) =
+        quorum_downgraded_shared_lane_block_proposal_for_test(actor);
     let local_peer = actor.common_config.peer.id().clone();
     assert!(
         validators.contains(&local_peer),
@@ -211413,7 +216288,7 @@ async fn lane_block_ingress_rejects_quorum_downgraded_shared_committee_before_si
         super::status::ConsensusMessageKind::LaneBlockVote,
         super::status::ConsensusMessageOutcome::Dropped,
         super::status::ConsensusMessageReason::InvalidPayload,
-        0,
+        1,
     );
     assert_consensus_message_handling_total(
         super::status::ConsensusMessageKind::LaneBlockQc,
@@ -211448,7 +216323,7 @@ async fn lane_block_ingress_rejects_non_authoritative_shared_nexus_committee_bef
         forged_commit_vote,
         forged_commit_qc,
         forged_signer_pop,
-    ) = sample_lane_block_commit_messages();
+    ) = sample_active_lane_block_commit_messages(actor.state.as_ref());
     let forged_signer = forged_prepare_vote.signer.clone();
     assert!(
         !shared_lane_block_ingress_committee_for_test(actor).contains(&forged_signer),
@@ -211536,8 +216411,16 @@ async fn lane_block_ingress_rejects_shared_vote_signer_outside_spoofed_committee
 
     let validators = shared_lane_block_ingress_committee_for_test(actor);
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
-        sample_lane_block_proposal_for_validators_with_min_quorum(validators.clone(), min_quorum);
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        validators.clone(),
+        min_quorum,
+    );
     let forged_keypair = checked_bls_keypair();
     let forged_signer = PeerId::new(forged_keypair.public_key().clone());
     assert!(
@@ -211582,7 +216465,7 @@ async fn lane_block_ingress_rejects_shared_vote_signer_outside_spoofed_committee
         super::status::ConsensusMessageKind::LaneBlockVote,
         super::status::ConsensusMessageOutcome::Dropped,
         super::status::ConsensusMessageReason::InvalidPayload,
-        0,
+        1,
     );
 
     super::status::reset_message_handling_for_tests();
@@ -211620,7 +216503,7 @@ async fn lane_block_ingress_rejects_non_authoritative_nexus_committee_before_sid
         forged_commit_vote,
         forged_commit_qc,
         forged_signer_pop,
-    ) = sample_lane_block_commit_messages();
+    ) = sample_active_lane_block_commit_messages(actor.state.as_ref());
     let forged_signer = forged_prepare_vote.signer.clone();
     assert_ne!(
         forged_signer, local_peer,
@@ -211715,7 +216598,10 @@ async fn lane_block_ingress_rejects_lookahead_vote_signer_outside_spoofed_commit
         "fixture must expose the local peer as the independent lane authority"
     );
 
-    let proposal = sample_lane_block_proposal_for_validators(vec![local_peer.clone()]);
+    let proposal = rebind_lane_block_proposal_to_active_incarnation(
+        sample_lane_block_proposal_for_validators(vec![local_peer.clone()]),
+        actor.state.as_ref(),
+    );
     let forged_keypair = checked_bls_keypair();
     let forged_signer = PeerId::new(forged_keypair.public_key().clone());
     assert_ne!(
@@ -211755,7 +216641,7 @@ async fn lane_block_ingress_rejects_lookahead_vote_signer_outside_spoofed_commit
         super::status::ConsensusMessageKind::LaneBlockVote,
         super::status::ConsensusMessageOutcome::Dropped,
         super::status::ConsensusMessageReason::InvalidPayload,
-        0,
+        1,
     );
 
     super::status::reset_message_handling_for_tests();
@@ -211905,8 +216791,9 @@ async fn lane_block_ingress_rejects_inactive_nexus_lane_routes_before_side_effec
 async fn lane_block_proposal_tips_include_durable_certified_sessions() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    install_active_single_lane_nexus(&actor.state);
     let (first_proposal, _prepare_vote, first_prepare_qc, _commit_vote, first_commit_qc, first_pop) =
-        sample_lane_block_commit_messages();
+        sample_active_lane_block_commit_messages_for_actor(actor);
     let (
         second_proposal,
         _second_prepare_vote,
@@ -211914,37 +216801,15 @@ async fn lane_block_proposal_tips_include_durable_certified_sessions() {
         _second_commit_vote,
         second_commit_qc,
         second_pop,
-    ) = sample_lane_block_commit_messages_at(
+    ) = sample_active_lane_block_commit_messages_for_route_at(
+        actor.state.as_ref(),
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
         first_proposal.descriptor.lane_block_height + 1,
         first_proposal.descriptor.lane_block_height,
         Some(first_proposal.descriptor.descriptor_hash),
     );
-    let lane_catalog = LaneCatalog::new(
-        nonzero!(8_u32),
-        vec![ModelLaneConfig {
-            id: first_proposal.descriptor.lane_id,
-            dataspace_id: first_proposal.descriptor.dataspace_id,
-            alias: "certified-lane-block-fixture".to_owned(),
-            ..ModelLaneConfig::default()
-        }],
-    )
-    .expect("lane catalog with certified fixture lane");
-    let runtime_lane_config =
-        iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
-    let lane_entry = runtime_lane_config
-        .entry(first_proposal.descriptor.lane_id)
-        .expect("runtime lane entry for certified fixture");
-    actor
-        .state
-        .kura()
-        .reconcile_lane_segments(&[lane_entry], &[], &[])
-        .expect("provision certified fixture lane storage");
-    {
-        let mut nexus = actor.state.nexus.write();
-        nexus.enabled = true;
-        nexus.lane_config = runtime_lane_config;
-        nexus.lane_catalog = lane_catalog;
-    }
     actor
         .state
         .kura()
@@ -211997,7 +216862,7 @@ async fn lane_block_proposal_tips_include_durable_certified_sessions() {
         }),
         "durable certified lane-block sessions should advance proposal-planning lane tips to the latest height"
     );
-    let replay_sessions = actor.state.certified_lane_block_sessions_snapshot_cached();
+    let replay_sessions = actor.state.certified_lane_block_sessions_snapshot_cached(8);
     assert_eq!(
         replay_sessions.len(),
         2,
@@ -212012,36 +216877,8 @@ async fn lane_block_proposal_tips_include_durable_certified_sessions() {
 #[tokio::test(flavor = "current_thread")]
 async fn actor_startup_hydrates_committed_lane_blocks_from_certified_sidecars() {
     super::status::set_committed_lane_blocks(Vec::new());
-    let (first_proposal, _prepare_vote, first_prepare_qc, _commit_vote, first_commit_qc, first_pop) =
-        sample_lane_block_commit_messages();
-    let (
-        second_proposal,
-        _second_prepare_vote,
-        second_prepare_qc,
-        _second_commit_vote,
-        second_commit_qc,
-        second_pop,
-    ) = sample_lane_block_commit_messages_at(
-        first_proposal.descriptor.lane_block_height + 1,
-        first_proposal.descriptor.lane_block_height,
-        Some(first_proposal.descriptor.descriptor_hash),
-    );
-    let lane_id = first_proposal.descriptor.lane_id;
-    let dataspace_id = first_proposal.descriptor.dataspace_id;
-    let first_proposal_for_setup = first_proposal.clone();
-    let first_prepare_qc_for_setup = first_prepare_qc.clone();
-    let first_commit_qc_for_setup = first_commit_qc.clone();
-    let first_pop_for_setup = first_pop.clone();
-    let first_signer_public_key = first_proposal.descriptor.validator_set[0]
-        .public_key()
-        .clone();
-    let second_proposal_for_setup = second_proposal.clone();
-    let second_prepare_qc_for_setup = second_prepare_qc.clone();
-    let second_commit_qc_for_setup = second_commit_qc.clone();
-    let second_pop_for_setup = second_pop.clone();
-    let second_signer_public_key = second_proposal.descriptor.validator_set[0]
-        .public_key()
-        .clone();
+    let lane_id = LaneId::SINGLE;
+    let dataspace_id = DataSpaceId::UNIVERSAL;
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
@@ -212054,51 +216891,69 @@ async fn actor_startup_hydrates_committed_lane_blocks_from_certified_sidecars() 
         0,
         kura,
         move |state, _key_pairs| {
-            let lane_catalog = LaneCatalog::new(
-                nonzero!(8_u32),
-                vec![ModelLaneConfig {
-                    id: lane_id,
-                    dataspace_id,
-                    alias: "startup-certified-lane-block-fixture".to_owned(),
-                    ..ModelLaneConfig::default()
-                }],
-            )
-            .expect("lane catalog with startup certified fixture lane");
-            let runtime_lane_config =
-                iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
-            let lane_entry = runtime_lane_config
-                .entry(lane_id)
-                .expect("runtime lane entry for startup certified fixture");
+            let mut nexus = state.nexus_snapshot();
+            nexus.enabled = true;
             state
-                .kura()
-                .reconcile_lane_segments(&[lane_entry], &[], &[])
-                .expect("provision startup certified fixture lane storage");
-            {
-                let mut nexus = state.nexus.write();
-                nexus.enabled = true;
-                nexus.lane_config = runtime_lane_config;
-                nexus.lane_catalog = lane_catalog;
-            }
+                .set_nexus(nexus)
+                .expect("install lifecycle-aware startup lane catalog");
+
+            let (
+                first_proposal,
+                _first_prepare_vote,
+                first_prepare_qc,
+                _first_commit_vote,
+                first_commit_qc,
+                first_pop,
+            ) = sample_active_lane_block_commit_messages(state);
+            let (
+                second_proposal,
+                _second_prepare_vote,
+                second_prepare_qc,
+                _second_commit_vote,
+                second_commit_qc,
+                second_pop,
+            ) = sample_active_lane_block_commit_messages_for_route_at(
+                state,
+                lane_id,
+                dataspace_id,
+                first_proposal.descriptor.proposal_height,
+                first_proposal
+                    .descriptor
+                    .lane_block_height
+                    .saturating_add(1),
+                first_proposal.descriptor.lane_block_height,
+                Some(first_proposal.descriptor.descriptor_hash),
+            );
+
+            let first_signer_public_key = first_proposal.descriptor.validator_set[0]
+                .public_key()
+                .clone();
+            let first_session = crate::lane_consensus::CommittedLaneBlockSession {
+                proposal: first_proposal,
+                prepare_qc: first_prepare_qc,
+                commit_qc: first_commit_qc,
+            };
             state
                 .kura()
                 .persist_committed_lane_block_session(
-                    &crate::lane_consensus::CommittedLaneBlockSession {
-                        proposal: first_proposal_for_setup,
-                        prepare_qc: first_prepare_qc_for_setup,
-                        commit_qc: first_commit_qc_for_setup,
-                    },
-                    &BTreeMap::from([(first_signer_public_key, first_pop_for_setup)]),
+                    &first_session,
+                    &BTreeMap::from([(first_signer_public_key, first_pop)]),
                 )
                 .expect("persist first startup certified lane-block session");
+
+            let second_signer_public_key = second_proposal.descriptor.validator_set[0]
+                .public_key()
+                .clone();
+            let second_session = crate::lane_consensus::CommittedLaneBlockSession {
+                proposal: second_proposal,
+                prepare_qc: second_prepare_qc,
+                commit_qc: second_commit_qc,
+            };
             state
                 .kura()
                 .persist_committed_lane_block_session(
-                    &crate::lane_consensus::CommittedLaneBlockSession {
-                        proposal: second_proposal_for_setup,
-                        prepare_qc: second_prepare_qc_for_setup,
-                        commit_qc: second_commit_qc_for_setup,
-                    },
-                    &BTreeMap::from([(second_signer_public_key, second_pop_for_setup)]),
+                    &second_session,
+                    &BTreeMap::from([(second_signer_public_key, second_pop)]),
                 )
                 .expect("persist second startup certified lane-block session");
         },
@@ -212115,7 +216970,7 @@ async fn actor_startup_hydrates_committed_lane_blocks_from_certified_sidecars() 
         actor
             .subsystems
             .committed_lane_blocks
-            .unapplied_lane_ids_for_admissible_lanes(actor.state.kura(), |_, _, _, _| true),
+            .unapplied_lane_ids_for_admissible_lanes(actor.state.kura(), |_, _, _, _, _| true),
         BTreeSet::from([lane_id]),
         "unapplied committed lane-block sessions should block proposal planning for their lane"
     );
@@ -212124,24 +216979,28 @@ async fn actor_startup_hydrates_committed_lane_blocks_from_certified_sidecars() 
         .committed_lane_blocks
         .front()
         .expect("hydrated committed lane block");
-    assert_eq!(committed.proposal, first_proposal);
+    assert_eq!(committed.proposal.descriptor.lane_id, lane_id);
+    assert_eq!(committed.proposal.descriptor.dataspace_id, dataspace_id);
+    assert_eq!(committed.proposal.descriptor.lane_block_height, 1);
+    assert_eq!(
+        committed.proposal.descriptor.lane_incarnation,
+        actor
+            .state
+            .lane_incarnation_at_height(lane_id, committed.proposal.descriptor.proposal_height)
+            .expect("hydrated proposal uses the authoritative lane incarnation")
+    );
     let status = super::status::committed_lane_blocks_snapshot();
     assert_eq!(status.len(), 2);
+    assert_eq!(status[0].proposal, committed.proposal);
     assert_eq!(status[0].lane_id, lane_id);
     assert_eq!(status[0].dataspace_id, dataspace_id);
-    assert_eq!(
-        status[0].lane_block_height,
-        first_proposal.descriptor.lane_block_height
-    );
+    assert_eq!(status[0].lane_block_height, 1);
     assert_eq!(status[1].lane_id, lane_id);
     assert_eq!(status[1].dataspace_id, dataspace_id);
-    assert_eq!(
-        status[1].lane_block_height,
-        second_proposal.descriptor.lane_block_height
-    );
+    assert_eq!(status[1].lane_block_height, 2);
     assert_eq!(
         status[0].execution_status,
-        super::status::CommittedLaneBlockExecutionStatus::AwaitingPredecessorApplication
+        super::status::CommittedLaneBlockExecutionStatus::AwaitingExecutablePayload
     );
     assert_eq!(
         status[1].execution_status,
@@ -212440,7 +217299,7 @@ fn committed_lane_block_queue_hydrates_certified_sessions_once() {
         "duplicate durable certified sessions should hydrate once"
     );
     assert_eq!(queue.len(), 1);
-    let tips = queue.lane_block_tips_snapshot_for_admissible_lanes(|_, _, _| true);
+    let tips = queue.lane_block_tips_snapshot_for_admissible_lanes(|_, _, _, _, _| true);
     assert_eq!(tips.len(), 1);
     assert_eq!(tips[0].lane_id, proposal.descriptor.lane_id);
     assert_eq!(tips[0].dataspace_id, proposal.descriptor.dataspace_id);
@@ -212860,16 +217719,48 @@ fn committed_lane_block_queue_preflights_recovered_inputs_from_isolated_state_ba
     kura.store_block(Arc::new(block_b))
         .expect("store lane B payload block");
 
+    let before_recovery_state_hash = state.lane_execution_state_hash();
     let mut queue = super::CommittedLaneBlockQueue::new(2);
     assert_eq!(
-        queue.hydrate_from_certified_sessions(vec![session_a, session_b]),
+        queue.hydrate_from_certified_sessions(vec![session_a.clone(), session_b.clone()]),
         2,
         "both lane payload sessions should queue for preflight"
     );
     assert_eq!(
-        queue.recover_available_payloads_into_kura(kura.as_ref()),
+        queue.recover_certified_inputs_awaiting_merge(&state),
         2,
         "both lane payloads should recover into durable execution inputs"
+    );
+    assert_eq!(
+        state.lane_execution_state_hash(),
+        before_recovery_state_hash,
+        "lane QC arrival order must not mutate shared WSV before merge certification"
+    );
+    assert!(
+        state
+            .view()
+            .world()
+            .domains()
+            .get(&dependent_domain)
+            .is_none(),
+        "recovering lane A first must not execute its domain registration"
+    );
+
+    let mut reverse_arrival_queue = super::CommittedLaneBlockQueue::new(2);
+    assert_eq!(
+        reverse_arrival_queue.hydrate_from_certified_sessions(vec![session_b, session_a]),
+        2,
+        "opposite QC arrival order should queue the same two sessions"
+    );
+    assert_eq!(
+        reverse_arrival_queue.recover_certified_inputs_awaiting_merge(&state),
+        0,
+        "opposite arrival reuses the immutable recovered inputs"
+    );
+    assert_eq!(
+        state.lane_execution_state_hash(),
+        before_recovery_state_hash,
+        "opposite lane QC arrival order must also leave shared WSV untouched"
     );
     assert_eq!(
         queue.preflight_recovered_execution_inputs_into_kura(&state),
@@ -213178,6 +218069,7 @@ fn committed_lane_block_queue_refuses_direct_receipt_repair_from_mismatched_mark
     let canonical_key = marker.key();
     let mismatched_key = crate::state::DirectLaneBlockApplicationKey {
         lane_id: LaneId::new(lane_id.as_u32().saturating_add(1)),
+        lane_incarnation: marker.lane_incarnation,
         lane_block_height: marker.lane_block_height,
     };
     assert_ne!(
@@ -213257,6 +218149,7 @@ fn autoscale_direct_marker_guard_treats_mismatched_key_as_unrepaired_even_with_r
     let canonical_key = marker.key();
     let mismatched_key = crate::state::DirectLaneBlockApplicationKey {
         lane_id: LaneId::new(lane_id.as_u32().saturating_add(1)),
+        lane_incarnation: marker.lane_incarnation,
         lane_block_height: marker.lane_block_height,
     };
     assert_ne!(
@@ -214128,7 +219021,7 @@ fn committed_lane_block_queue_prunes_inactive_lane_sessions() {
 
     assert_eq!(
         queue.retain_sessions_for_admissible_lanes(
-            |lane_id, dataspace_id, lane_block_height, _proposal_height| {
+            |lane_id, dataspace_id, _lane_incarnation, lane_block_height, _proposal_height| {
                 lane_id == active_lane && dataspace_id == active_dataspace && lane_block_height > 12
             },
         ),
@@ -214546,11 +219439,12 @@ async fn lane_block_ingress_queues_committed_session_from_locally_sealed_votes_o
     let _message_guard = super::status::message_handling_test_guard();
     super::status::reset_message_handling_for_tests();
     super::status::set_committed_lane_blocks(Vec::new());
-    let mut harness = test_actor_harness(4).await;
+    let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
-    disable_nexus_for_lane_block_stateless_fixture(&actor.state);
+    install_active_single_lane_nexus(&actor.state);
     let (proposal, prepare_vote, _prepare_qc, commit_vote, _commit_qc, _signer_pop) =
-        sample_lane_block_commit_messages();
+        sample_active_lane_block_commit_messages_for_actor(actor);
+    disable_nexus_for_lane_block_stateless_fixture(&actor.state);
     let signer = prepare_vote.signer.clone();
 
     actor
@@ -214582,7 +219476,7 @@ async fn lane_block_ingress_queues_committed_session_from_locally_sealed_votes_o
     assert_eq!(status[0].proposal_hash, proposal.proposal_hash);
     assert_eq!(
         status[0].execution_status,
-        super::status::CommittedLaneBlockExecutionStatus::AwaitingPredecessorApplication
+        super::status::CommittedLaneBlockExecutionStatus::AwaitingExecutablePayload
     );
     assert!(
         !status[0].executable_payload_available(),
@@ -214614,10 +219508,12 @@ async fn lane_block_ingress_queues_committed_session_from_locally_sealed_votes_o
 async fn lane_block_ingress_records_adversarial_drop_reasons() {
     let _message_guard = super::status::message_handling_test_guard();
     super::status::reset_message_handling_for_tests();
-    let mut harness = test_actor_harness(4).await;
+    let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
+    install_active_single_lane_nexus(&actor.state);
+    let (mut bad_proposal, mut bad_vote, mut bad_qc, _) =
+        sample_active_lane_block_messages_for_actor(actor);
     disable_nexus_for_lane_block_stateless_fixture(&actor.state);
-    let (mut bad_proposal, mut bad_vote, mut bad_qc, _) = sample_lane_block_messages();
     let signer = bad_vote.signer.clone();
     bad_vote.bls_signature.clear();
 
@@ -214660,11 +219556,16 @@ async fn lane_block_ingress_records_adversarial_drop_reasons() {
 async fn lane_block_ingress_rejects_missing_pop_and_forged_aggregate_qc() {
     let _message_guard = super::status::message_handling_test_guard();
     super::status::reset_message_handling_for_tests();
-    let mut harness = test_actor_harness(4).await;
+    let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
+    install_active_single_lane_nexus(&actor.state);
+    let (_proposal, vote, qc, signer_pop) = sample_active_lane_block_messages_for_actor(actor);
     disable_nexus_for_lane_block_stateless_fixture(&actor.state);
-    let (_proposal, vote, qc, signer_pop) = sample_lane_block_messages();
     let signer = vote.signer.clone();
+    let mut trusted = actor.common_config.trusted_peers.value().clone();
+    trusted.pops.clear();
+    actor.common_config.trusted_peers = iroha_config::base::WithOrigin::inline(trusted);
+    actor.roster_validation_cache.pops.clear();
 
     actor
         .handle_lane_block_qc(qc.clone())
@@ -214700,19 +219601,20 @@ async fn lane_block_ingress_rejects_missing_pop_and_forged_aggregate_qc() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn lane_block_ingress_broadcasts_locally_sealed_qc_once() {
+async fn lane_block_ingress_seals_local_qc_once_without_self_transport() {
     let _message_guard = super::status::message_handling_test_guard();
     super::status::reset_message_handling_for_tests();
-    let mut harness = test_actor_harness(4).await;
+    let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
+    install_active_single_lane_nexus(&actor.state);
+    let (proposal, vote, _qc, _) = sample_active_lane_block_messages_for_actor(actor);
     disable_nexus_for_lane_block_stateless_fixture(&actor.state);
     let background_log = attach_background_log(actor);
     let _ = take_background_log(&background_log);
-    let (proposal, vote, _qc, _) = sample_lane_block_messages();
     let signer = vote.signer.clone();
 
     actor
-        .handle_lane_block_proposal(proposal)
+        .handle_lane_block_proposal(proposal.clone())
         .expect("valid lane-block proposal handled");
     assert!(
         take_background_log(&background_log)
@@ -214732,8 +219634,19 @@ async fn lane_block_ingress_broadcasts_locally_sealed_qc_once() {
         })
         .count();
     assert_eq!(
-        broadcasts, 1,
-        "quorum vote should broadcast the sealed prepare QC exactly once"
+        broadcasts, 0,
+        "a single-validator node must not schedule a network message to itself"
+    );
+    assert!(
+        actor
+            .subsystems
+            .lane_blocks
+            .status_snapshot()
+            .iter()
+            .any(|session| {
+                session.proposal_hash == proposal.proposal_hash && session.has_prepare_qc
+            }),
+        "the local quorum should still seal and cache the prepare QC"
     );
 
     actor
@@ -214751,7 +219664,7 @@ async fn lane_block_ingress_broadcasts_locally_sealed_qc_once() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn lane_block_broadcast_sends_proposal_and_local_prepare_vote() {
+async fn lane_block_broadcast_sends_proposal_and_local_prepare_vote_with_canonical_payload() {
     let _message_guard = super::status::message_handling_test_guard();
     super::status::reset_message_handling_for_tests();
     let mut harness = test_actor_harness(4).await;
@@ -214766,12 +219679,20 @@ async fn lane_block_broadcast_sends_proposal_and_local_prepare_vote() {
         "shared lane-block committee fixture should include the local peer"
     );
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
-        sample_anchor_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        validators,
+        min_quorum,
+    );
     let prepare_plan = sample_lane_block_prepare_vote_plan(&proposal, vec![local_peer.clone()]);
 
     let signed_vote = actor
-        .local_lane_block_prepare_vote(&prepare_plan)
+        .local_lane_block_prepare_vote(&prepare_plan, &proposal)
         .expect("local lane-block prepare vote should be signable");
     Signature::try_from_bytes(&signed_vote.bls_signature)
         .expect("local lane-block prepare vote signature should decode")
@@ -214791,6 +219712,7 @@ async fn lane_block_broadcast_sends_proposal_and_local_prepare_vote() {
     let session_key = crate::lane_consensus::LaneBlockSessionKey {
         lane_id: proposal.descriptor.lane_id,
         dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
         lane_block_height: proposal.descriptor.lane_block_height,
         lane_block_view: proposal.descriptor.lane_block_view,
         proposal_hash: proposal.proposal_hash,
@@ -214868,6 +219790,95 @@ async fn lane_block_broadcast_sends_proposal_and_local_prepare_vote() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn inbound_prepare_vote_wakes_missing_local_lane_block_prepare_vote() {
+    let _message_guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    disable_nexus_for_lane_block_stateless_fixture(&actor.state);
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    let local_peer = actor.common_config.peer.id().clone();
+    let remote_keypair = checked_bls_keypair();
+    let remote_peer = PeerId::new(remote_keypair.public_key().clone());
+    let mut validators = vec![local_peer.clone(), remote_peer.clone()];
+    validators.sort();
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        13,
+        validators.clone(),
+        2,
+    );
+    let remote_vote =
+        signed_lane_block_vote_with_keypair(&proposal, Phase::Prepare, &remote_keypair);
+
+    actor
+        .handle_lane_block_proposal(proposal.clone())
+        .expect("proposal cached");
+    let _ = take_background_log(&background_log);
+    actor
+        .handle_lane_block_vote(remote_vote.clone(), Some(&remote_peer))
+        .expect("remote prepare vote cached");
+
+    let session_key = crate::lane_consensus::LaneBlockSessionKey {
+        lane_id: proposal.descriptor.lane_id,
+        dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
+        lane_block_height: proposal.descriptor.lane_block_height,
+        lane_block_view: proposal.descriptor.lane_block_view,
+        proposal_hash: proposal.proposal_hash,
+    };
+    let session = actor
+        .subsystems
+        .lane_blocks
+        .get(&session_key)
+        .expect("proposal session should remain cached");
+    assert!(
+        session.prepare_votes.contains_key(&remote_peer),
+        "remote prepare vote should be cached"
+    );
+    assert!(
+        session.prepare_votes.contains_key(&local_peer),
+        "remote prepare vote ingress should wake local prepare signing"
+    );
+
+    let entries = take_background_log(&background_log);
+    let prepare_vote_posts = entries
+        .iter()
+        .filter(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Post
+                && entry.msg_kind == Some("LaneBlockPrepareVote")
+        })
+        .count();
+    assert_eq!(
+        prepare_vote_posts,
+        validators
+            .iter()
+            .filter(|peer| *peer != &local_peer)
+            .count(),
+        "local prepare vote should be posted to every remote lane validator"
+    );
+    let prepare_vote_broadcasts = entries
+        .iter()
+        .filter(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("LaneBlockPrepareVote")
+        })
+        .count();
+    assert_eq!(
+        prepare_vote_broadcasts, 1,
+        "local prepare vote should be broadcast for wider convergence"
+    );
+
+    super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn tick_rebroadcasts_cached_lane_block_proposal_until_commit_qc() {
     let _message_guard = super::status::message_handling_test_guard();
     super::status::reset_message_handling_for_tests();
@@ -214883,8 +219894,16 @@ async fn tick_rebroadcasts_cached_lane_block_proposal_until_commit_qc() {
         "shared lane-block committee fixture should include the local peer"
     );
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
-        sample_lane_block_proposal_for_validators_with_min_quorum(validators.clone(), min_quorum);
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        validators.clone(),
+        min_quorum,
+    );
 
     assert_eq!(
         actor
@@ -214923,8 +219942,186 @@ async fn tick_rebroadcasts_cached_lane_block_proposal_until_commit_qc() {
         "tick retry should post the cached lane-block proposal to every remote lane validator"
     );
     assert_eq!(
-        proposal_broadcasts, 0,
-        "tick proposal retry should use lane-committee posts instead of global broadcast"
+        proposal_broadcasts, 1,
+        "tick proposal retry should also broadcast once for wider convergence"
+    );
+    assert!(
+        !actor.broadcast_ready_local_lane_block_votes(),
+        "an immediate second tick must be suppressed by the lane-artifact cooldown"
+    );
+    assert!(
+        take_background_log(&background_log).is_empty(),
+        "cooldown-suppressed lane artifacts must not reach background transport"
+    );
+
+    super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn committed_lane_artifact_certifies_without_global_leader_proposal_broadcast() {
+    let _message_guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    super::status::set_committed_lane_blocks(Vec::new());
+    let mut harness = test_actor_harness(4).await;
+    let key_pairs = harness.key_pairs.clone();
+    let actor = &mut harness.actor;
+    install_active_single_lane_nexus(&actor.state);
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    let local_peer = actor.common_config.peer.id().clone();
+    let validators = shared_lane_block_ingress_committee_for_test(actor);
+    let min_quorum = lane_block_commit_quorum_for_test(validators.len());
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        validators.clone(),
+        min_quorum,
+    );
+    for keypair in &key_pairs {
+        let pop =
+            iroha_crypto::bls_normal_pop_prove(keypair.private_key()).expect("fixture PoP proves");
+        actor
+            .roster_validation_cache
+            .pops
+            .insert(keypair.public_key().clone(), pop);
+    }
+    assert!(
+        actor.subsystems.lane_blocks.is_empty(),
+        "fixture must model loss of the global leader's early lane-artifact broadcast"
+    );
+
+    assert!(
+        actor.broadcast_ready_local_lane_block_votes(),
+        "a committee member should reconstruct and fan out the committed lane artifact"
+    );
+    let session_key = crate::lane_consensus::LaneBlockSessionKey {
+        lane_id: proposal.descriptor.lane_id,
+        dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
+        lane_block_height: proposal.descriptor.lane_block_height,
+        lane_block_view: proposal.descriptor.lane_block_view,
+        proposal_hash: proposal.proposal_hash,
+    };
+    let recovered_session = actor
+        .subsystems
+        .lane_blocks
+        .get(&session_key)
+        .expect("committed artifact should reconstruct a live lane session");
+    assert_eq!(recovered_session.proposal.as_ref(), Some(&proposal));
+    assert!(recovered_session.prepare_votes.contains_key(&local_peer));
+    let recovery_messages = take_background_log(&background_log);
+    assert!(
+        recovery_messages
+            .iter()
+            .any(|entry| entry.msg_kind == Some("LaneBlockProposal")),
+        "recovery should fan the reconstructed proposal back out to the lane committee"
+    );
+    assert!(
+        recovery_messages
+            .iter()
+            .any(|entry| entry.msg_kind == Some("LaneBlockPrepareVote")),
+        "the recovering committee member should sign the canonical payload"
+    );
+
+    for validator in validators
+        .iter()
+        .filter(|validator| *validator != &local_peer)
+    {
+        let prepare_vote = signed_lane_block_vote_with_keypair(
+            &proposal,
+            Phase::Prepare,
+            keypair_for_peer(&key_pairs, validator),
+        );
+        actor
+            .handle_lane_block_vote(prepare_vote, Some(validator))
+            .expect("recovered-session prepare vote handled");
+    }
+    for validator in validators
+        .iter()
+        .filter(|validator| *validator != &local_peer)
+    {
+        let commit_vote = signed_lane_block_vote_with_keypair(
+            &proposal,
+            Phase::Commit,
+            keypair_for_peer(&key_pairs, validator),
+        );
+        actor
+            .handle_lane_block_vote(commit_vote, Some(validator))
+            .expect("recovered-session commit vote handled");
+    }
+
+    let certified = actor
+        .state
+        .kura()
+        .read_certified_lane_block_artifact(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.lane_block_height,
+        )
+        .expect("recovered lane session should persist a certified artifact");
+    assert_eq!(certified.proposal, proposal);
+    assert_eq!(certified.prepare_qc.body.phase, Phase::Prepare);
+    assert_eq!(certified.commit_qc.body.phase, Phase::Commit);
+
+    super::status::reset_message_handling_for_tests();
+    super::status::set_committed_lane_blocks(Vec::new());
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn tick_does_not_amplify_lane_block_proposal_without_canonical_payload() {
+    let _message_guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    install_active_single_lane_nexus(&actor.state);
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    let validators = shared_lane_block_ingress_committee_for_test(actor);
+    let min_quorum = lane_block_commit_quorum_for_test(validators.len());
+    let proposal = sample_active_anchor_lane_block_proposal_for_validators_with_min_quorum(
+        actor.state.as_ref(),
+        validators,
+        min_quorum,
+    );
+
+    assert_eq!(
+        actor
+            .subsystems
+            .lane_blocks
+            .insert_proposal(proposal.clone()),
+        Ok(crate::lane_consensus::LaneBlockSessionInsertOutcome::Inserted)
+    );
+    assert!(
+        !actor.lane_block_payload_available_for_vote(&proposal, "test"),
+        "fixture must not have a canonical payload"
+    );
+    assert!(
+        !actor.broadcast_ready_local_lane_block_votes(),
+        "unavailable proposals must not count as rebroadcast or vote progress"
+    );
+    assert!(
+        take_background_log(&background_log)
+            .into_iter()
+            .all(|entry| {
+                entry.msg_kind != Some("LaneBlockProposal")
+                    && entry.msg_kind != Some("LaneBlockPrepareVote")
+            }),
+        "an authenticated but unavailable proposal must not be amplified by honest peers"
+    );
+    assert_lane_rebroadcast_cooldown_skips_without_progress(actor, &background_log);
+    expire_lane_rebroadcast_cooldown(actor);
+    assert!(actor.broadcast_ready_local_lane_block_votes());
+    assert!(
+        take_background_log(&background_log).iter().any(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Post
+                && entry.msg_kind == Some("LaneBlockProposal")
+        }),
+        "the unresolved proposal should retry once the cooldown expires"
     );
 
     super::status::reset_message_handling_for_tests();
@@ -214947,11 +220144,19 @@ async fn tick_rebroadcasts_cached_local_lane_block_vote_until_qc() {
         "shared lane-block committee fixture should include the local peer"
     );
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
-        sample_anchor_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        validators,
+        min_quorum,
+    );
     let prepare_plan = sample_lane_block_prepare_vote_plan(&proposal, vec![local_peer.clone()]);
     let vote = actor
-        .local_lane_block_prepare_vote(&prepare_plan)
+        .local_lane_block_prepare_vote(&prepare_plan, &proposal)
         .expect("local prepare vote should be signable");
 
     actor
@@ -214983,7 +220188,18 @@ async fn tick_rebroadcasts_cached_local_lane_block_vote_until_qc() {
             .iter()
             .filter(|peer| *peer != &local_peer)
             .count(),
-        "tick retry should post the cached proposal before rebroadcasting the local vote"
+        "tick retry should post the cached proposal once before rebroadcasting the local vote"
+    );
+    let proposal_broadcasts = entries
+        .iter()
+        .filter(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("LaneBlockProposal")
+        })
+        .count();
+    assert_eq!(
+        proposal_broadcasts, 1,
+        "tick retry should broadcast the cached proposal once for wider convergence"
     );
     let prepare_vote_posts = entries
         .iter()
@@ -215013,6 +220229,16 @@ async fn tick_rebroadcasts_cached_local_lane_block_vote_until_qc() {
         prepare_vote_broadcasts, 1,
         "tick retry should broadcast the cached local prepare vote for wider convergence"
     );
+    assert_lane_rebroadcast_cooldown_skips_without_progress(actor, &background_log);
+    expire_lane_rebroadcast_cooldown(actor);
+    assert!(actor.broadcast_ready_local_lane_block_votes());
+    assert!(
+        take_background_log(&background_log).iter().any(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("LaneBlockPrepareVote")
+        }),
+        "the unresolved local vote should retry once the cooldown expires"
+    );
 
     super::status::reset_message_handling_for_tests();
     harness.shutdown.send();
@@ -215035,7 +220261,8 @@ async fn tick_rebroadcasts_cached_lane_block_qc_until_committed_session_drains()
         "shared lane-block committee fixture should include the local peer"
     );
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal = sample_anchor_lane_block_proposal_for_validators_with_min_quorum(
+    let proposal = sample_active_anchor_lane_block_proposal_for_validators_with_min_quorum(
+        actor.state.as_ref(),
         validators.clone(),
         min_quorum,
     );
@@ -215099,13 +220326,23 @@ async fn tick_rebroadcasts_cached_lane_block_qc_until_committed_session_drains()
         prepare_qc_broadcasts, 1,
         "tick retry should broadcast the cached prepare QC for wider convergence"
     );
+    assert_lane_rebroadcast_cooldown_skips_without_progress(actor, &background_log);
+    expire_lane_rebroadcast_cooldown(actor);
+    assert!(actor.broadcast_ready_local_lane_block_votes());
+    assert!(
+        take_background_log(&background_log).iter().any(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("LaneBlockPrepareCert")
+        }),
+        "the unresolved prepare QC should retry once the cooldown expires"
+    );
 
     super::status::reset_message_handling_for_tests();
     harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn incoming_lane_block_proposal_broadcasts_local_prepare_vote_for_committee_member() {
+async fn incoming_lane_block_proposal_defers_prepare_vote_without_canonical_payload() {
     let _message_guard = super::status::message_handling_test_guard();
     super::status::reset_message_handling_for_tests();
     let mut harness = test_actor_harness(4).await;
@@ -215120,16 +220357,20 @@ async fn incoming_lane_block_proposal_broadcasts_local_prepare_vote_for_committe
         "shared lane-block committee fixture should include the local peer"
     );
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
-        sample_anchor_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    let proposal = sample_active_anchor_lane_block_proposal_for_validators_with_min_quorum(
+        actor.state.as_ref(),
+        validators,
+        min_quorum,
+    );
 
     actor
-        .handle_incoming_lane_block_proposal(proposal.clone())
+        .handle_incoming_lane_block_proposal(proposal.clone(), Some(&local_peer))
         .expect("inbound active-route lane-block proposal handled");
 
     let session_key = crate::lane_consensus::LaneBlockSessionKey {
         lane_id: proposal.descriptor.lane_id,
         dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
         lane_block_height: proposal.descriptor.lane_block_height,
         lane_block_view: proposal.descriptor.lane_block_view,
         proposal_hash: proposal.proposal_hash,
@@ -215140,14 +220381,11 @@ async fn incoming_lane_block_proposal_broadcasts_local_prepare_vote_for_committe
         .get(&session_key)
         .expect("inbound lane-block proposal should be cached");
     assert_eq!(session.proposal.as_ref(), Some(&proposal));
-    assert!(
-        session.prepare_votes.contains_key(&local_peer),
-        "committee member must sign a local prepare vote for a valid inbound proposal"
-    );
+    assert!(session.prepare_votes.is_empty());
     assert_eq!(
         actor.subsystems.committed_lane_blocks.len(),
         0,
-        "one local prepare vote must not queue committed lane-block execution before quorum"
+        "an unverified proposal payload must not queue committed lane-block execution"
     );
 
     let entries = take_background_log(&background_log);
@@ -215158,16 +220396,7 @@ async fn incoming_lane_block_proposal_broadcasts_local_prepare_vote_for_committe
                 && entry.msg_kind == Some("LaneBlockPrepareVote")
         })
         .count();
-    assert_eq!(
-        prepare_vote_posts,
-        proposal
-            .descriptor
-            .validator_set
-            .iter()
-            .filter(|peer| *peer != &local_peer)
-            .count(),
-        "valid inbound proposal should post the local prepare vote to every remote lane validator"
-    );
+    assert_eq!(prepare_vote_posts, 0);
     let prepare_vote_broadcasts = entries
         .iter()
         .filter(|entry| {
@@ -215175,19 +220404,186 @@ async fn incoming_lane_block_proposal_broadcasts_local_prepare_vote_for_committe
                 && entry.msg_kind == Some("LaneBlockPrepareVote")
         })
         .count();
-    assert_eq!(
-        prepare_vote_broadcasts, 1,
-        "valid inbound proposal should broadcast the local prepare vote for wider convergence"
-    );
+    assert_eq!(prepare_vote_broadcasts, 0);
 
     actor
-        .handle_incoming_lane_block_proposal(proposal)
+        .handle_incoming_lane_block_proposal(proposal, Some(&local_peer))
         .expect("duplicate inbound lane-block proposal handled");
     assert!(
         take_background_log(&background_log)
             .into_iter()
             .all(|entry| entry.msg_kind != Some("LaneBlockPrepareVote")),
-        "duplicate inbound proposals must not rebroadcast local prepare votes"
+        "a duplicate proposal without canonical payload evidence must not create a local signature"
+    );
+
+    super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn incoming_lane_block_proposal_rejects_unauthenticated_or_unknown_sender() {
+    let _message_guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    install_active_single_lane_nexus(&actor.state);
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    let validators = shared_lane_block_ingress_committee_for_test(actor);
+    let min_quorum = lane_block_commit_quorum_for_test(validators.len());
+    let proposal =
+        sample_anchor_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    let unknown_sender = PeerId::from(
+        deterministic_keypair(b"unknown-lane-proposal-sender", Algorithm::Ed25519)
+            .public_key()
+            .clone(),
+    );
+
+    actor
+        .handle_incoming_lane_block_proposal(proposal.clone(), None)
+        .expect("senderless proposal handled as a drop");
+    actor
+        .handle_incoming_lane_block_proposal(proposal, Some(&unknown_sender))
+        .expect("unknown-sender proposal handled as a drop");
+
+    assert!(
+        actor.subsystems.lane_blocks.is_empty(),
+        "unauthenticated proposal transport must not consume lane-session capacity"
+    );
+    assert!(
+        take_background_log(&background_log).is_empty(),
+        "unauthenticated proposals must fail before vote or repair transport"
+    );
+    assert_consensus_message_handling_total(
+        super::status::ConsensusMessageKind::LaneBlockProposal,
+        super::status::ConsensusMessageOutcome::Dropped,
+        super::status::ConsensusMessageReason::InvalidSignature,
+        2,
+    );
+
+    super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn incoming_lane_block_proposal_rejects_future_global_height_before_cache_or_vote() {
+    let _message_guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    install_active_single_lane_nexus(&actor.state);
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    let local_peer = actor.common_config.peer.id().clone();
+    let validators = shared_lane_block_ingress_committee_for_test(actor);
+    let min_quorum = lane_block_commit_quorum_for_test(validators.len());
+    let mut proposal = sample_active_anchor_lane_block_proposal_for_validators_with_min_quorum(
+        actor.state.as_ref(),
+        validators,
+        min_quorum,
+    );
+    let future_proposal_height = u64::try_from(actor.state.committed_height())
+        .expect("committed height fits u64")
+        .saturating_add(2);
+    proposal.descriptor.proposal_height = future_proposal_height;
+    proposal.descriptor.lane_incarnation = actor
+        .state
+        .lane_incarnation_at_height(proposal.descriptor.lane_id, future_proposal_height)
+        .expect("fixture lane remains active at the rejected future proposal height");
+    proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+    proposal.proposal_hash = proposal.computed_proposal_hash();
+
+    actor
+        .handle_incoming_lane_block_proposal(proposal, Some(&local_peer))
+        .expect("future-height proposal handled as a drop");
+
+    assert!(actor.subsystems.lane_blocks.is_empty());
+    assert!(take_background_log(&background_log).is_empty());
+    assert_consensus_message_handling_total(
+        super::status::ConsensusMessageKind::LaneBlockProposal,
+        super::status::ConsensusMessageOutcome::Dropped,
+        super::status::ConsensusMessageReason::InvalidPayload,
+        1,
+    );
+
+    super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn incoming_lane_block_successor_prepares_with_canonical_payload_before_predecessor_receipt()
+{
+    let _message_guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    install_active_single_lane_nexus(&actor.state);
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    let local_peer = actor.common_config.peer.id().clone();
+    let validators = shared_lane_block_ingress_committee_for_test(actor);
+    assert!(
+        validators.contains(&local_peer),
+        "shared lane-block committee fixture should include the local peer"
+    );
+    let min_quorum = lane_block_commit_quorum_for_test(validators.len());
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        13,
+        validators,
+        min_quorum,
+    );
+    assert!(
+        !actor
+            .state
+            .kura()
+            .lane_block_predecessor_application_receipt_available(&proposal),
+        "fixture must not have the predecessor receipt locally"
+    );
+
+    actor
+        .handle_incoming_lane_block_proposal(proposal.clone(), Some(&local_peer))
+        .expect("inbound successor lane-block proposal handled");
+
+    let session_key = crate::lane_consensus::LaneBlockSessionKey {
+        lane_id: proposal.descriptor.lane_id,
+        dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
+        lane_block_height: proposal.descriptor.lane_block_height,
+        lane_block_view: proposal.descriptor.lane_block_view,
+        proposal_hash: proposal.proposal_hash,
+    };
+    let session = actor
+        .subsystems
+        .lane_blocks
+        .get(&session_key)
+        .expect("successor lane-block proposal should be cached");
+    assert!(
+        session.prepare_votes.contains_key(&local_peer),
+        "canonical current payload should permit certification before predecessor application"
+    );
+
+    let entries = take_background_log(&background_log);
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| {
+                entry.kind == super::BackgroundRequestLogKind::Broadcast
+                    && entry.msg_kind == Some("LaneBlockPrepareVote")
+            })
+            .count(),
+        1,
+        "successor proposal should broadcast a local prepare vote"
+    );
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry.msg_kind != Some("LaneBlockVote")),
+        "prepare vote handling must not broadcast a commit vote before prepare QC"
     );
 
     super::status::reset_message_handling_for_tests();
@@ -215210,8 +220606,16 @@ async fn duplicate_incoming_lane_block_proposal_retries_missing_local_prepare_vo
         "shared lane-block committee fixture should include the local peer"
     );
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
-        sample_anchor_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        validators,
+        min_quorum,
+    );
 
     actor
         .handle_lane_block_proposal(proposal.clone())
@@ -215224,12 +220628,13 @@ async fn duplicate_incoming_lane_block_proposal_retries_missing_local_prepare_vo
     );
 
     actor
-        .handle_incoming_lane_block_proposal(proposal.clone())
+        .handle_incoming_lane_block_proposal(proposal.clone(), Some(&local_peer))
         .expect("duplicate inbound proposal handled");
 
     let session_key = crate::lane_consensus::LaneBlockSessionKey {
         lane_id: proposal.descriptor.lane_id,
         dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
         lane_block_height: proposal.descriptor.lane_block_height,
         lane_block_view: proposal.descriptor.lane_block_view,
         proposal_hash: proposal.proposal_hash,
@@ -215294,15 +220699,16 @@ async fn incoming_lane_block_proposal_skips_prepare_vote_for_nonmember() {
         actor.common_config.peer.id(),
         "fixture must use a nonlocal lane-block validator"
     );
-    let proposal = sample_lane_block_proposal_for_validators(vec![other_peer]);
+    let proposal = sample_lane_block_proposal_for_validators(vec![other_peer.clone()]);
 
     actor
-        .handle_incoming_lane_block_proposal(proposal.clone())
+        .handle_incoming_lane_block_proposal(proposal.clone(), Some(&other_peer))
         .expect("nonlocal inbound lane-block proposal handled");
 
     let session_key = crate::lane_consensus::LaneBlockSessionKey {
         lane_id: proposal.descriptor.lane_id,
         dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
         lane_block_height: proposal.descriptor.lane_block_height,
         lane_block_view: proposal.descriptor.lane_block_view,
         proposal_hash: proposal.proposal_hash,
@@ -215351,7 +220757,7 @@ async fn incoming_lane_block_proposal_rejects_spoofed_active_route_before_prepar
     );
 
     actor
-        .handle_incoming_lane_block_proposal(proposal)
+        .handle_incoming_lane_block_proposal(proposal, Some(&local_peer))
         .expect("spoofed inbound lane-block proposal handled as a drop");
 
     assert_eq!(
@@ -215385,6 +220791,16 @@ async fn nexus_multivalidator_lane_block_ingress_seals_and_queues_committed_sess
             key_pairs.iter().map(account_id_for_keypair).collect(),
         )],
     );
+    let nexus_snapshot = actor.state.nexus_snapshot();
+    let lane_entry = nexus_snapshot
+        .lane_config
+        .entry(LaneId::new(1))
+        .expect("runtime storage entry for the sidecar lane");
+    actor
+        .state
+        .kura()
+        .reconcile_lane_segments(&[lane_entry], &[], &[])
+        .expect("provision sidecar lane storage");
     for keypair in &key_pairs {
         let pop =
             iroha_crypto::bls_normal_pop_prove(keypair.private_key()).expect("fixture PoP proves");
@@ -215406,27 +220822,25 @@ async fn nexus_multivalidator_lane_block_ingress_seals_and_queues_committed_sess
         "local peer should participate in the lane committee"
     );
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let mut proposal = sample_anchor_lane_block_proposal_for_validators_with_min_quorum(
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::new(1),
+        DataSpaceId::UNIVERSAL,
+        1,
         validators.clone(),
         min_quorum,
     );
-    proposal.descriptor.lane_id = LaneId::new(1);
-    proposal.descriptor.dataspace_id = DataSpaceId::UNIVERSAL;
-    proposal.descriptor.qc_mode_tag = format!(
-        "permissioned:lane:{}:dataspace:{}",
-        proposal.descriptor.lane_id.as_u32(),
-        proposal.descriptor.dataspace_id.as_u64()
-    );
-    proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
-    proposal.proposal_hash = proposal.computed_proposal_hash();
 
     actor
-        .handle_incoming_lane_block_proposal(proposal.clone())
+        .handle_incoming_lane_block_proposal(proposal.clone(), Some(&local_peer))
         .expect("active Nexus lane-block proposal handled");
 
     let session_key = crate::lane_consensus::LaneBlockSessionKey {
         lane_id: proposal.descriptor.lane_id,
         dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
         lane_block_height: proposal.descriptor.lane_block_height,
         lane_block_view: proposal.descriptor.lane_block_view,
         proposal_hash: proposal.proposal_hash,
@@ -215491,7 +220905,34 @@ async fn nexus_multivalidator_lane_block_ingress_seals_and_queues_committed_sess
     assert_eq!(
         actor.subsystems.committed_lane_blocks.len(),
         1,
-        "commit quorum should queue the committed standalone lane block"
+        "certified lane execution must remain pending until a certified merge orders it"
+    );
+    let certified = actor
+        .state
+        .kura()
+        .read_certified_lane_block_artifact(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.lane_block_height,
+        )
+        .expect("commit quorum should persist the certified standalone lane block");
+    assert_eq!(certified.proposal, proposal);
+    assert!(
+        actor
+            .state
+            .kura()
+            .read_lane_block_execution_input(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+            )
+            .is_some(),
+        "commit quorum should persist deterministic lane execution input"
+    );
+    assert!(
+        !actor
+            .state
+            .kura()
+            .lane_block_application_receipt_available(&proposal),
+        "QC arrival alone must not apply the lane before certified merge order"
     );
     let status = super::status::committed_lane_blocks_snapshot();
     assert_eq!(status.len(), 1);
@@ -215527,7 +220968,7 @@ async fn nexus_multivalidator_lane_block_ingress_seals_and_queues_committed_sess
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn lane_block_broadcast_skips_nonlocal_prepare_vote() {
+async fn lane_block_broadcast_skips_nonlocal_prepare_vote_without_touching_cached_proposal() {
     let _message_guard = super::status::message_handling_test_guard();
     super::status::reset_message_handling_for_tests();
     let mut harness = test_actor_harness(4).await;
@@ -215543,24 +220984,39 @@ async fn lane_block_broadcast_skips_nonlocal_prepare_vote() {
         .cloned()
         .expect("four-peer shared committee should include a nonlocal peer");
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
-        sample_anchor_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        validators,
+        min_quorum,
+    );
     let prepare_plan = sample_lane_block_prepare_vote_plan(&proposal, vec![other_peer]);
 
     assert!(
-        actor.local_lane_block_prepare_vote(&prepare_plan).is_none(),
+        actor
+            .local_lane_block_prepare_vote(&prepare_plan, &proposal)
+            .is_none(),
         "node must not sign a lane-block prepare vote planned for another validator"
     );
-    let scheduled = actor.broadcast_lane_block_plan_artifacts(
-        std::slice::from_ref(&proposal),
-        std::slice::from_ref(&prepare_plan),
-        None,
+    assert_eq!(
+        actor
+            .subsystems
+            .lane_blocks
+            .insert_proposal(proposal.clone()),
+        Ok(crate::lane_consensus::LaneBlockSessionInsertOutcome::Inserted)
     );
-    assert_eq!(scheduled, 1);
+    let scheduled =
+        actor.broadcast_lane_block_plan_artifacts(&[], std::slice::from_ref(&prepare_plan), None);
+    assert_eq!(scheduled, 0);
 
     let session_key = crate::lane_consensus::LaneBlockSessionKey {
         lane_id: proposal.descriptor.lane_id,
         dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
         lane_block_height: proposal.descriptor.lane_block_height,
         lane_block_view: proposal.descriptor.lane_block_view,
         proposal_hash: proposal.proposal_hash,
@@ -215577,13 +221033,6 @@ async fn lane_block_broadcast_skips_nonlocal_prepare_vote() {
     );
 
     let entries = take_background_log(&background_log);
-    assert!(
-        entries.iter().any(
-            |entry| entry.kind == super::BackgroundRequestLogKind::Broadcast
-                && entry.msg_kind == Some("LaneBlockProposal")
-        ),
-        "lane proposal should still be broadcast"
-    );
     assert!(
         entries
             .iter()
@@ -215610,13 +221059,23 @@ async fn lane_block_broadcast_skips_tampered_prepare_vote_hash() {
         "shared lane-block committee fixture should include the local peer"
     );
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
-        sample_anchor_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        validators,
+        min_quorum,
+    );
     let mut prepare_plan = sample_lane_block_prepare_vote_plan(&proposal, vec![local_peer]);
     prepare_plan.votes[0].signing_hash = Hash::prehashed([0xEF; Hash::LENGTH]);
 
     assert!(
-        actor.local_lane_block_prepare_vote(&prepare_plan).is_none(),
+        actor
+            .local_lane_block_prepare_vote(&prepare_plan, &proposal)
+            .is_none(),
         "node must not sign a lane-block prepare vote whose signing hash was tampered"
     );
     let scheduled = actor.broadcast_lane_block_plan_artifacts(
@@ -215629,6 +221088,7 @@ async fn lane_block_broadcast_skips_tampered_prepare_vote_hash() {
     let session_key = crate::lane_consensus::LaneBlockSessionKey {
         lane_id: proposal.descriptor.lane_id,
         dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
         lane_block_height: proposal.descriptor.lane_block_height,
         lane_block_view: proposal.descriptor.lane_block_view,
         proposal_hash: proposal.proposal_hash,
@@ -215677,7 +221137,16 @@ async fn lane_block_broadcast_skips_spoofed_prepare_vote_plan_before_signing() {
         shared_committee.len() > 1 && shared_committee.contains(&local_peer),
         "fixture must exercise a shared active route whose live committee is larger than the local peer"
     );
-    let proposal = sample_lane_block_proposal_for_validators(vec![local_peer.clone()]);
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        vec![local_peer.clone()],
+        1,
+    );
     assert_ne!(
         proposal.descriptor.validator_set_hash,
         HashOf::new(&shared_committee),
@@ -215686,7 +221155,9 @@ async fn lane_block_broadcast_skips_spoofed_prepare_vote_plan_before_signing() {
     let prepare_plan = sample_lane_block_prepare_vote_plan(&proposal, vec![local_peer]);
 
     assert!(
-        actor.local_lane_block_prepare_vote(&prepare_plan).is_none(),
+        actor
+            .local_lane_block_prepare_vote(&prepare_plan, &proposal)
+            .is_none(),
         "node must not sign a lane-block prepare vote planned for a spoofed active-route committee"
     );
     let scheduled =
@@ -215727,11 +221198,21 @@ async fn lane_block_broadcast_skips_quorum_downgraded_prepare_vote_plan_before_s
     let background_log = attach_background_log(actor);
     let _ = take_background_log(&background_log);
     let local_peer = actor.common_config.peer.id().clone();
-    let (validators, downgraded_quorum, proposal) =
+    let (validators, downgraded_quorum, _proposal) =
         quorum_downgraded_shared_lane_block_proposal_for_test(actor);
     assert!(
         validators.contains(&local_peer),
         "shared lane-block committee fixture should include the local peer"
+    );
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        validators,
+        downgraded_quorum,
     );
     let prepare_plan = sample_lane_block_prepare_vote_plan(&proposal, vec![local_peer]);
     assert_eq!(
@@ -215740,7 +221221,9 @@ async fn lane_block_broadcast_skips_quorum_downgraded_prepare_vote_plan_before_s
     );
 
     assert!(
-        actor.local_lane_block_prepare_vote(&prepare_plan).is_none(),
+        actor
+            .local_lane_block_prepare_vote(&prepare_plan, &proposal)
+            .is_none(),
         "node must not sign a lane-block prepare vote planned with a downgraded active-route quorum"
     );
     let scheduled =
@@ -215782,8 +221265,11 @@ async fn lane_block_broadcast_skips_conflicting_cached_proposal_before_transport
     let _ = take_background_log(&background_log);
     let validators = shared_lane_block_ingress_committee_for_test(actor);
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
-        sample_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    let proposal = sample_active_anchor_lane_block_proposal_for_validators_with_min_quorum(
+        actor.state.as_ref(),
+        validators,
+        min_quorum,
+    );
     let mut conflicting = proposal.clone();
     conflicting.descriptor.subject_hash = Hash::prehashed([0xD1; Hash::LENGTH]);
     conflicting.descriptor.payload_ownership_hash = Hash::prehashed([0xD2; Hash::LENGTH]);
@@ -215818,6 +221304,7 @@ async fn lane_block_broadcast_skips_conflicting_cached_proposal_before_transport
     let session_key = crate::lane_consensus::LaneBlockSessionKey {
         lane_id: proposal.descriptor.lane_id,
         dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
         lane_block_height: proposal.descriptor.lane_block_height,
         lane_block_view: proposal.descriptor.lane_block_view,
         proposal_hash: proposal.proposal_hash,
@@ -215840,7 +221327,7 @@ async fn lane_block_broadcast_skips_conflicting_cached_proposal_before_transport
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn lane_block_broadcast_skips_conflicting_cached_prepare_vote_before_transport() {
+async fn lane_block_broadcast_ignores_malformed_cached_prepare_vote_before_transport() {
     let _message_guard = super::status::message_handling_test_guard();
     super::status::reset_message_handling_for_tests();
     let mut harness = test_actor_harness(4).await;
@@ -215855,9 +221342,20 @@ async fn lane_block_broadcast_skips_conflicting_cached_prepare_vote_before_trans
         "shared lane-block committee fixture should include the local peer"
     );
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
-        sample_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        validators,
+        min_quorum,
+    );
     let prepare_plan = sample_lane_block_prepare_vote_plan(&proposal, vec![local_peer.clone()]);
+    let expected_vote = actor
+        .local_lane_block_prepare_vote(&prepare_plan, &proposal)
+        .expect("canonical local prepare vote should be signable");
 
     let mut drift_body = proposal.vote_body(crate::sumeragi::consensus::Phase::Prepare);
     drift_body.descriptor_hash = Hash::prehashed([0xE5; Hash::LENGTH]);
@@ -215868,31 +221366,41 @@ async fn lane_block_broadcast_skips_conflicting_cached_prepare_vote_before_trans
     .expect("drift local lane-block vote signature");
     let drift_vote = crate::lane_consensus::LaneBlockVoteV1 {
         body: drift_body,
+        payload_availability_vote: None,
         signer: local_peer.clone(),
         bls_signature: drift_signature.payload().to_vec(),
     };
+    actor
+        .handle_lane_block_proposal(proposal.clone())
+        .expect("lane-block proposal handled");
     actor
         .handle_lane_block_vote(drift_vote.clone(), Some(&local_peer))
         .expect("drift orphan lane-block vote handled");
     let _ = take_background_log(&background_log);
     super::status::reset_message_handling_for_tests();
 
-    let scheduled =
-        actor.broadcast_lane_block_plan_artifacts(&[], std::slice::from_ref(&prepare_plan), None);
-    assert_eq!(
-        scheduled, 0,
-        "same-signer conflicting local prepare vote must not be scheduled for transport"
+    let scheduled = actor.broadcast_lane_block_plan_artifacts(
+        std::slice::from_ref(&proposal),
+        std::slice::from_ref(&prepare_plan),
+        None,
     );
-    assert!(
+    assert_eq!(
+        scheduled, 1,
+        "a malformed cached vote must not poison the canonical local prepare vote"
+    );
+    assert_eq!(
         take_background_log(&background_log)
             .into_iter()
-            .all(|entry| entry.msg_kind != Some("LaneBlockPrepareVote")),
-        "conflicting local prepare vote must fail before background broadcast"
+            .filter(|entry| entry.msg_kind == Some("LaneBlockPrepareVote"))
+            .count(),
+        proposal.descriptor.validator_set.len(),
+        "the canonical local prepare vote should be sent once to each committee member"
     );
 
     let session_key = crate::lane_consensus::LaneBlockSessionKey {
         lane_id: proposal.descriptor.lane_id,
         dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
         lane_block_height: proposal.descriptor.lane_block_height,
         lane_block_view: proposal.descriptor.lane_block_view,
         proposal_hash: proposal.proposal_hash,
@@ -215904,14 +221412,8 @@ async fn lane_block_broadcast_skips_conflicting_cached_prepare_vote_before_trans
         .expect("orphan vote session remains cached");
     assert_eq!(
         session.prepare_votes.get(&local_peer),
-        Some(&drift_vote),
-        "failed local preflight must not overwrite the conflicting cached vote"
-    );
-    assert_consensus_message_handling_total(
-        super::status::ConsensusMessageKind::LaneBlockVote,
-        super::status::ConsensusMessageOutcome::Dropped,
-        super::status::ConsensusMessageReason::ConflictingVote,
-        1,
+        Some(&expected_vote),
+        "the malformed same-signer vote must not displace canonical evidence"
     );
 
     super::status::reset_message_handling_for_tests();
@@ -215929,8 +221431,11 @@ async fn lane_block_broadcast_skips_duplicate_cached_proposal_before_transport()
     let _ = take_background_log(&background_log);
     let validators = shared_lane_block_ingress_committee_for_test(actor);
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
-        sample_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    let proposal = sample_active_anchor_lane_block_proposal_for_validators_with_min_quorum(
+        actor.state.as_ref(),
+        validators,
+        min_quorum,
+    );
 
     actor
         .handle_lane_block_proposal(proposal.clone())
@@ -215977,21 +221482,35 @@ async fn lane_block_broadcast_skips_duplicate_cached_prepare_vote_before_transpo
         "shared lane-block committee fixture should include the local peer"
     );
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
-        sample_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        validators,
+        min_quorum,
+    );
     let prepare_plan = sample_lane_block_prepare_vote_plan(&proposal, vec![local_peer.clone()]);
     let vote = actor
-        .local_lane_block_prepare_vote(&prepare_plan)
+        .local_lane_block_prepare_vote(&prepare_plan, &proposal)
         .expect("local prepare vote should be signable");
 
     actor
+        .handle_lane_block_proposal(proposal.clone())
+        .expect("original proposal handled");
+    actor
         .handle_lane_block_vote(vote.clone(), Some(&local_peer))
-        .expect("original orphan prepare vote handled");
+        .expect("original prepare vote handled");
     let _ = take_background_log(&background_log);
     super::status::reset_message_handling_for_tests();
 
-    let scheduled =
-        actor.broadcast_lane_block_plan_artifacts(&[], std::slice::from_ref(&prepare_plan), None);
+    let scheduled = actor.broadcast_lane_block_plan_artifacts(
+        std::slice::from_ref(&proposal),
+        std::slice::from_ref(&prepare_plan),
+        None,
+    );
     assert_eq!(
         scheduled, 0,
         "duplicate locally produced prepare votes must not be scheduled for transport"
@@ -216014,14 +221533,20 @@ async fn lane_block_broadcast_skips_duplicate_cached_prepare_vote_before_transpo
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn lane_block_prepare_vote_seal_broadcasts_local_commit_vote_once() {
-    let mut harness = test_actor_harness(4).await;
+async fn lane_block_prepare_vote_seal_caches_local_commit_without_self_transport() {
+    let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
     disable_nexus_for_lane_block_stateless_fixture(&actor.state);
     let background_log = attach_background_log(actor);
     let _ = take_background_log(&background_log);
     let local_peer = actor.common_config.peer.id().clone();
-    let proposal = sample_anchor_lane_block_proposal_for_validators_with_min_quorum(
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
         vec![local_peer.clone()],
         1,
     );
@@ -216048,8 +221573,8 @@ async fn lane_block_prepare_vote_seal_broadcasts_local_commit_vote_once() {
                     && entry.msg_kind == Some("LaneBlockPrepareCert")
             )
             .count(),
-        1,
-        "sealed prepare QC should be broadcast once"
+        0,
+        "single-validator prepare QC must not be transported back to self"
     );
     assert_eq!(
         entries
@@ -216059,8 +221584,8 @@ async fn lane_block_prepare_vote_seal_broadcasts_local_commit_vote_once() {
                     && entry.msg_kind == Some("LaneBlockVote")
             )
             .count(),
-        1,
-        "prepare QC should unlock exactly one local commit vote broadcast"
+        0,
+        "single-validator commit vote must not be transported back to self"
     );
     assert_eq!(
         entries
@@ -216070,13 +221595,49 @@ async fn lane_block_prepare_vote_seal_broadcasts_local_commit_vote_once() {
                     && entry.msg_kind == Some("LaneBlockCert")
             )
             .count(),
-        1,
-        "locally cached single-validator commit vote should seal one commit QC"
+        0,
+        "single-validator commit QC must not be transported back to self"
     );
     assert_eq!(
         actor.subsystems.committed_lane_blocks.len(),
         1,
-        "single-validator prepare and commit QCs should queue the committed lane block"
+        "a certified lane block must remain queued until a certified merge applies it"
+    );
+    let durable = actor
+        .state
+        .kura()
+        .read_certified_lane_block_artifact(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.lane_block_height,
+        )
+        .expect("single-validator commit QC should persist the certified lane block");
+    assert_eq!(durable.proposal, proposal);
+    assert!(
+        actor
+            .state
+            .kura()
+            .read_lane_block_execution_input(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+            )
+            .is_some(),
+        "commit quorum should persist deterministic execution input"
+    );
+    assert!(
+        actor
+            .unapplied_lane_block_lanes_for_proposal(
+                actor.state.as_ref(),
+                next_proposal_height_for_state(actor.state.as_ref()),
+            )
+            .contains(&LaneId::SINGLE),
+        "the committed lane should remain visible as unapplied merge work"
+    );
+    assert!(
+        !actor
+            .state
+            .kura()
+            .lane_block_application_receipt_available(&proposal),
+        "QC arrival alone must not apply shared state before certified merge order"
     );
 
     actor
@@ -216092,16 +221653,291 @@ async fn lane_block_prepare_vote_seal_broadcasts_local_commit_vote_once() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn lane_block_inbound_prepare_qc_broadcasts_local_commit_vote_without_echoing_qc() {
-    let _message_guard = super::status::message_handling_test_guard();
-    super::status::reset_message_handling_for_tests();
+async fn pruned_prepared_lane_session_recovers_from_kura_and_reaccepts_exact_votes() {
     let mut harness = test_actor_harness(4).await;
+    let key_pairs = harness.key_pairs.clone();
+    let mut validators = key_pairs
+        .iter()
+        .map(|keypair| PeerId::new(keypair.public_key().clone()))
+        .collect::<Vec<_>>();
+    validators.sort();
     let actor = &mut harness.actor;
     disable_nexus_for_lane_block_stateless_fixture(&actor.state);
     let background_log = attach_background_log(actor);
     let _ = take_background_log(&background_log);
     let local_peer = actor.common_config.peer.id().clone();
-    let proposal = sample_lane_block_proposal_for_validators(vec![local_peer.clone()]);
+    for keypair in &key_pairs {
+        let pop =
+            iroha_crypto::bls_normal_pop_prove(keypair.private_key()).expect("lane validator PoP");
+        actor
+            .roster_validation_cache
+            .pops
+            .insert(keypair.public_key().clone(), pop);
+    }
+
+    let mut block =
+        sample_block_with_lane_payload_artifact(1, 0, LaneId::SINGLE, DataSpaceId::UNIVERSAL, 1);
+    let ownership = rebind_lane_payload_artifact_validator_set(&mut block, validators.clone(), 3);
+    let proposal = lane_block_proposal_from_lane_payload_ownership(&ownership);
+    let remote_prepare_votes = validators
+        .iter()
+        .filter(|validator| *validator != &local_peer)
+        .map(|validator| {
+            signed_lane_block_vote_with_keypair(
+                &proposal,
+                crate::sumeragi::consensus::Phase::Prepare,
+                keypair_for_peer(&key_pairs, validator),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(remote_prepare_votes.len(), 3);
+
+    actor
+        .handle_lane_block_proposal(proposal.clone())
+        .expect("proposal cached before canonical selection");
+    for vote in &remote_prepare_votes {
+        actor
+            .handle_lane_block_vote(vote.clone(), Some(&vote.signer))
+            .expect("remote prepare vote cached");
+    }
+    assert!(
+        actor
+            .subsystems
+            .lane_blocks
+            .status_snapshot()
+            .iter()
+            .any(
+                |session| session.proposal_hash == proposal.proposal_hash && session.has_prepare_qc
+            )
+    );
+    assert_eq!(
+        actor
+            .subsystems
+            .lane_blocks
+            .prune_uncommitted_sessions_below_proposal_view(1, 1, &BTreeSet::new()),
+        1,
+        "view advance should remove the prepare-only replay session"
+    );
+    assert!(!actor.subsystems.lane_blocks.contains_proposal(&proposal));
+
+    store_block_with_test_ancestors(actor.kura.as_ref(), block);
+    let _ = take_background_log(&background_log);
+    assert!(
+        actor.broadcast_ready_local_lane_block_votes(),
+        "Kura ownership should reconstruct the exact canonical proposal"
+    );
+    let recovered = actor
+        .subsystems
+        .lane_blocks
+        .status_snapshot()
+        .into_iter()
+        .find(|session| session.proposal_hash == proposal.proposal_hash)
+        .expect("canonical proposal recovered from Kura");
+    assert!(recovered.has_proposal);
+    assert!(
+        !recovered.has_prepare_qc,
+        "Kura ownership alone does not reconstruct the old prepare QC"
+    );
+
+    let _ = take_background_log(&background_log);
+    for vote in remote_prepare_votes.iter().take(2) {
+        actor
+            .handle_lane_block_vote(vote.clone(), Some(&vote.signer))
+            .expect("byte-identical prepare vote should be reaccepted after recovery");
+    }
+    let recovered = actor
+        .subsystems
+        .lane_blocks
+        .status_snapshot()
+        .into_iter()
+        .find(|session| session.proposal_hash == proposal.proposal_hash)
+        .expect("recovered session remains cached");
+    assert!(recovered.has_prepare_qc);
+    assert_eq!(
+        recovered.commit_vote_count, 1,
+        "exact vote replay should rebuild prepare QC and immediately unlock one local commit vote"
+    );
+    assert!(
+        take_background_log(&background_log).iter().any(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("LaneBlockVote")
+        }),
+        "recovered canonical preparation should emit the local commit vote"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lane_block_commit_vote_guard_handles_three_of_four_prepare_quorums() {
+    let mut harness = test_actor_harness(4).await;
+    let key_pairs = harness.key_pairs.clone();
+    let mut validators = key_pairs
+        .iter()
+        .map(|keypair| PeerId::new(keypair.public_key().clone()))
+        .collect::<Vec<_>>();
+    validators.sort();
+    let actor = &mut harness.actor;
+    disable_nexus_for_lane_block_stateless_fixture(&actor.state);
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    let local_peer = actor.common_config.peer.id().clone();
+    for keypair in &key_pairs {
+        let pop =
+            iroha_crypto::bls_normal_pop_prove(keypair.private_key()).expect("lane validator PoP");
+        actor
+            .roster_validation_cache
+            .pops
+            .insert(keypair.public_key().clone(), pop);
+    }
+
+    let proposal_height = next_proposal_height_for_state(actor.state.as_ref());
+    let mut loser_block = sample_block_with_lane_payload_artifact(
+        proposal_height,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+    );
+    rebind_lane_payload_artifact_to_active_incarnation(&mut loser_block, actor.state.as_ref());
+    let loser_ownership =
+        rebind_lane_payload_artifact_validator_set(&mut loser_block, validators.clone(), 3);
+    let loser_proposal = lane_block_proposal_from_lane_payload_ownership(&loser_ownership);
+    let mut winner_block = sample_block_with_lane_payload_artifact(
+        proposal_height,
+        1,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+    );
+    rebind_lane_payload_artifact_to_active_incarnation(&mut winner_block, actor.state.as_ref());
+    let winner_ownership =
+        rebind_lane_payload_artifact_validator_set(&mut winner_block, validators.clone(), 3);
+    let winner_proposal = lane_block_proposal_from_lane_payload_ownership(&winner_ownership);
+
+    for proposal in [&loser_proposal, &winner_proposal] {
+        actor
+            .handle_lane_block_proposal(proposal.clone())
+            .expect("multi-validator speculative proposal handled");
+        for validator in validators
+            .iter()
+            .filter(|validator| *validator != &local_peer)
+            .take(3)
+        {
+            let vote = signed_lane_block_vote_with_keypair(
+                proposal,
+                crate::sumeragi::consensus::Phase::Prepare,
+                keypair_for_peer(&key_pairs, validator),
+            );
+            actor
+                .handle_lane_block_vote(vote, Some(validator))
+                .expect("remote prepare vote handled");
+        }
+        let session = actor
+            .subsystems
+            .lane_blocks
+            .status_snapshot()
+            .into_iter()
+            .find(|session| session.proposal_hash == proposal.proposal_hash)
+            .expect("prepared multi-validator lane session");
+        assert!(session.has_prepare_qc, "three votes should seal prepare QC");
+        assert!(
+            session.commit_vote_count == 0,
+            "prepare quorum must not emit a commit vote before exact canonical payload availability"
+        );
+    }
+
+    store_block_with_test_ancestors(actor.kura.as_ref(), winner_block);
+    let _ = take_background_log(&background_log);
+    assert_eq!(
+        actor.broadcast_lane_block_commit_votes_for_prepared_sessions(),
+        1,
+        "the local validator should commit-vote only the canonical three-of-four winner"
+    );
+    let winner_session = actor
+        .subsystems
+        .lane_blocks
+        .status_snapshot()
+        .into_iter()
+        .find(|session| session.proposal_hash == winner_proposal.proposal_hash)
+        .expect("canonical winner session");
+    assert_eq!(winner_session.commit_vote_count, 1);
+    assert_eq!(
+        take_background_log(&background_log)
+            .iter()
+            .filter(|entry| entry.msg_kind == Some("LaneBlockVote"))
+            .count(),
+        validators.len().saturating_sub(1),
+        "the one canonical local commit vote should be sent once to each remote validator"
+    );
+
+    let conflicting_commit_vote = signed_lane_block_vote_with_keypair(
+        &loser_proposal,
+        crate::sumeragi::consensus::Phase::Commit,
+        &actor.common_config.key_pair,
+    );
+    assert!(matches!(
+        actor
+            .subsystems
+            .lane_blocks
+            .can_accept_vote(&conflicting_commit_vote, Some(&local_peer)),
+        Err(crate::lane_consensus::LaneBlockSessionError::ConflictingVote)
+    ));
+    assert!(
+        !actor.lane_block_vote_accepts_local_broadcast(&conflicting_commit_vote, &local_peer),
+        "the local preflight must reject commit equivocation before transport"
+    );
+    let _ = take_background_log(&background_log);
+    actor
+        .handle_lane_block_vote(conflicting_commit_vote, Some(&local_peer))
+        .expect("conflicting local commit vote should fail closed");
+    let loser_session = actor
+        .subsystems
+        .lane_blocks
+        .status_snapshot()
+        .into_iter()
+        .find(|session| session.proposal_hash == loser_proposal.proposal_hash)
+        .expect("conflicting prepared session remains cached without a commit vote");
+    assert_eq!(
+        loser_session.commit_vote_count, 0,
+        "the signer commit lock must reject a second view after voting for the winner"
+    );
+    assert!(
+        take_background_log(&background_log)
+            .iter()
+            .all(|entry| entry.msg_kind != Some("LaneBlockVote")),
+        "the conflicting commit vote must fail preflight before transport"
+    );
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lane_block_inbound_prepare_qc_caches_local_commit_without_echo_or_self_transport() {
+    let _message_guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    disable_nexus_for_lane_block_stateless_fixture(&actor.state);
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    let local_peer = actor.common_config.peer.id().clone();
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        vec![local_peer.clone()],
+        1,
+    );
+    assert!(
+        actor
+            .state
+            .kura()
+            .lane_block_predecessor_application_receipt_available(&proposal),
+        "the first lane-local slot has no predecessor dependency"
+    );
     let prepare_vote = signed_lane_block_vote_with_keypair(
         &proposal,
         crate::sumeragi::consensus::Phase::Prepare,
@@ -216121,7 +221957,7 @@ async fn lane_block_inbound_prepare_qc_broadcasts_local_commit_vote_without_echo
         .insert(local_peer.public_key().clone(), signer_pop);
 
     actor
-        .handle_lane_block_proposal(proposal)
+        .handle_lane_block_proposal(proposal.clone())
         .expect("local lane-block proposal handled");
     let _ = take_background_log(&background_log);
     actor
@@ -216143,13 +221979,40 @@ async fn lane_block_inbound_prepare_qc_broadcasts_local_commit_vote_without_echo
                     && entry.msg_kind == Some("LaneBlockVote")
             )
             .count(),
-        1,
-        "inbound prepare QC should unlock one local commit vote broadcast"
+        0,
+        "a single-validator node must cache its commit vote without self-transport"
     );
     assert_eq!(
         actor.subsystems.committed_lane_blocks.len(),
         1,
-        "local commit vote should seal commit QC and queue the lane block"
+        "certified lane execution must remain queued until its predecessor and merge order are available"
+    );
+    let durable = actor
+        .state
+        .kura()
+        .read_certified_lane_block_artifact(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.lane_block_height,
+        )
+        .expect("local commit vote should seal a durable certified lane block");
+    assert_eq!(durable.proposal, proposal);
+    assert!(
+        actor
+            .state
+            .kura()
+            .read_lane_block_execution_input(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+            )
+            .is_some(),
+        "commit QC should persist deterministic execution input"
+    );
+    assert!(
+        !actor
+            .state
+            .kura()
+            .lane_block_application_receipt_available(&durable.proposal),
+        "an inbound QC must not apply shared state before certified merge order"
     );
 
     actor
@@ -223866,6 +229729,73 @@ fn handle_kura_store_failure_aborts_after_budget() {
 }
 
 #[test]
+fn handle_kura_store_failure_retains_payload_when_abort_requeue_is_full() {
+    let _guard = super::status::kura_store_test_guard();
+    super::status::reset_kura_store_counters_for_tests();
+    let queue_cfg = QueueConfig {
+        capacity: NonZeroUsize::new(1).expect("non-zero capacity"),
+        capacity_per_user: NonZeroUsize::new(16).expect("non-zero per-user capacity"),
+        ..QueueConfig::default()
+    };
+    let queue = Queue::test(queue_cfg, &TimeSource::new_system());
+    let kura = Kura::blank_kura_for_testing();
+    let state = State::new_for_testing(
+        World::default(),
+        Arc::clone(&kura),
+        LiveQueryStore::start_test(),
+    );
+    install_active_single_lane_nexus(&state);
+    let key_pair = checked_keypair();
+    let account = AccountId::new(key_pair.public_key().clone());
+    let mut filler_builder =
+        TransactionBuilder::new(ChainId::from("kura-abort-filler"), account.clone());
+    filler_builder.set_nonce(nonzero!(1_u32));
+    queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(
+                filler_builder.sign(key_pair.private_key()),
+            )),
+            state.view(),
+        )
+        .expect("filler occupies queue capacity");
+    let mut retry_builder = TransactionBuilder::new(ChainId::from("kura-abort"), account);
+    retry_builder.set_nonce(nonzero!(2_u32));
+    let retry_tx = retry_builder.sign(key_pair.private_key());
+    let block = block_with_txs(4, 2, None, vec![retry_tx.clone()]);
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let block_hash = block.hash();
+    let pending = PendingBlock::new(block.clone(), payload_hash, 4, 2);
+
+    let failure = Actor::handle_kura_store_failure(
+        pending,
+        block,
+        block_hash,
+        4,
+        2,
+        Instant::now(),
+        Duration::from_millis(5),
+        1,
+        &queue,
+        &state,
+        None,
+    );
+
+    assert!(failure.clean_block_hash);
+    let retained = failure
+        .pending
+        .expect("transient queue saturation retains Kura abort payload custody");
+    assert!(retained.aborted);
+    assert!(retained.requeue_pending);
+    assert_eq!(retained.requeue_retry_payload.len(), 1);
+    let retained_hash = AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(
+        &retained.requeue_retry_payload[0],
+    ))
+    .hash();
+    assert_eq!(retained_hash, retry_tx.hash());
+    super::status::reset_kura_store_counters_for_tests();
+}
+
+#[test]
 fn requeue_block_transactions_preserves_payloads_on_commit_failure() {
     let queue = Queue::test(QueueConfig::default(), &TimeSource::new_system());
     let kura = Kura::blank_kura_for_testing();
@@ -223890,13 +229820,16 @@ fn requeue_block_transactions_preserves_payloads_on_commit_failure() {
         TransactionEntrypoint::External(tx_b.clone()),
     ];
 
-    let (requeued, failures, duplicate_failures, gossip_hashes) =
-        super::requeue_block_transactions(&queue, &state, txs);
+    let report = super::requeue_block_transactions(&queue, &state, txs);
 
-    assert_eq!(requeued, 2, "all transactions should be requeued");
-    assert_eq!(failures, 0, "requeue must not fail under capacity");
     assert_eq!(
-        duplicate_failures, 0,
+        report.newly_queued, 2,
+        "all transactions should be requeued"
+    );
+    assert_eq!(report.failures(), 0, "requeue must not fail under capacity");
+    assert_eq!(
+        report.duplicate_dispositions(),
+        0,
         "no duplicates expected in empty queue"
     );
     assert_eq!(
@@ -223904,9 +229837,271 @@ fn requeue_block_transactions_preserves_payloads_on_commit_failure() {
         2,
         "queue must hold requeued transactions"
     );
-    assert_eq!(gossip_hashes.len(), 2);
-    assert!(gossip_hashes.contains(&tx_a.hash()));
-    assert!(gossip_hashes.contains(&tx_b.hash()));
+    assert_eq!(report.gossip_hashes.len(), 2);
+    assert!(report.gossip_hashes.contains(&tx_a.hash()));
+    assert!(report.gossip_hashes.contains(&tx_b.hash()));
+}
+
+#[test]
+fn reschedule_treats_newly_restored_and_already_queued_transactions_as_equally_available() {
+    let kura = Kura::blank_kura_for_testing();
+    let state = State::new_for_testing(
+        World::default(),
+        Arc::clone(&kura),
+        LiveQueryStore::start_test(),
+    );
+    install_active_single_lane_nexus(&state);
+    let key_pair = checked_keypair();
+    let account = AccountId::new(key_pair.public_key().clone());
+    let mut builder = TransactionBuilder::new(ChainId::from("reschedule-available"), account);
+    builder.set_nonce(nonzero!(1_u32));
+    let tx = builder.sign(key_pair.private_key());
+    let tx_hash = tx.hash();
+
+    let absent_queue = Queue::test(QueueConfig::default(), &TimeSource::new_system());
+    let absent_report = super::requeue_block_transactions(
+        &absent_queue,
+        &state,
+        [TransactionEntrypoint::External(tx.clone())],
+    );
+    assert_eq!(
+        (
+            absent_report.newly_queued,
+            absent_report.failures(),
+            absent_report.duplicate_dispositions(),
+        ),
+        (1, 0, 0)
+    );
+
+    let resident_queue = Queue::test(QueueConfig::default(), &TimeSource::new_system());
+    resident_queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone())),
+            state.view(),
+        )
+        .expect("seed already-resident transaction");
+    let resident_report = super::requeue_block_transactions(
+        &resident_queue,
+        &state,
+        [TransactionEntrypoint::External(tx)],
+    );
+    assert_eq!(
+        (
+            resident_report.newly_queued,
+            resident_report.failures(),
+            resident_report.duplicate_dispositions(),
+        ),
+        (0, 0, 1)
+    );
+
+    assert_eq!(absent_report.available_or_owned(), 1);
+    assert_eq!(absent_report.gossip_hashes, vec![tx_hash]);
+    assert_eq!(
+        resident_report.available_or_owned(),
+        1,
+        "already-resident local proposal work must drive the same reschedule control flow as a newly restored transaction"
+    );
+    assert_eq!(
+        resident_report.gossip_hashes,
+        vec![tx_hash],
+        "already-resident work must be returned to gossip exactly once"
+    );
+}
+
+#[test]
+fn requeue_retry_payload_excludes_settled_entries_across_passes() {
+    let queue_cfg = QueueConfig {
+        capacity: NonZeroUsize::new(1).expect("non-zero capacity"),
+        capacity_per_user: NonZeroUsize::new(16).expect("non-zero per-user capacity"),
+        ..QueueConfig::default()
+    };
+    let queue = Arc::new(Queue::test(queue_cfg, &TimeSource::new_system()));
+    let kura = Kura::blank_kura_for_testing();
+    let state = State::new_for_testing(
+        World::default(),
+        Arc::clone(&kura),
+        LiveQueryStore::start_test(),
+    );
+    install_active_single_lane_nexus(&state);
+    let chain_id = ChainId::from("requeue-partial-retry");
+    let key_pair = checked_keypair();
+    let account = AccountId::new(key_pair.public_key().clone());
+
+    let mut admitted_builder = TransactionBuilder::new(chain_id.clone(), account.clone());
+    admitted_builder.set_nonce(nonzero!(1_u32));
+    let admitted = admitted_builder.sign(key_pair.private_key());
+    let mut expired_builder = TransactionBuilder::new(chain_id.clone(), account.clone());
+    expired_builder.set_nonce(nonzero!(2_u32));
+    expired_builder.set_creation_time(Duration::ZERO);
+    expired_builder.set_ttl(Duration::from_millis(1));
+    let expired = expired_builder.sign(key_pair.private_key());
+    let mut retry_builder = TransactionBuilder::new(chain_id, account);
+    retry_builder.set_nonce(nonzero!(3_u32));
+    let retry = retry_builder.sign(key_pair.private_key());
+
+    let mut first = super::requeue_block_transactions(
+        &queue,
+        &state,
+        [
+            TransactionEntrypoint::External(admitted.clone()),
+            TransactionEntrypoint::External(expired.clone()),
+            TransactionEntrypoint::External(retry.clone()),
+        ],
+    );
+    assert_eq!(first.newly_queued, 1);
+    assert_eq!(first.expired, 1);
+    assert_eq!(first.retryable.len(), 1);
+    assert_eq!(first.gossip_hashes, vec![admitted.hash()]);
+
+    let block = block_with_txs(
+        4,
+        0,
+        None,
+        vec![admitted.clone(), expired.clone(), retry.clone()],
+    );
+    let block_hash = block.hash();
+    let mut pending = PendingBlock::new(block.clone(), Hash::new(block.encode()), 4, 0);
+    let retry_payload = first.take_retryable_entrypoints();
+    pending.mark_requeue_pending(
+        Instant::now(),
+        super::PENDING_REQUEUE_BASE_BACKOFF,
+        retry_payload,
+    );
+    assert_eq!(pending.requeue_retry_payload.len(), 1);
+    let retained_hash = AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(
+        &pending.requeue_retry_payload[0],
+    ))
+    .hash();
+    assert_eq!(retained_hash, retry.hash());
+
+    let mut selected = Vec::new();
+    queue.get_transactions_for_block(&state.view(), nonzero!(1_usize), &mut selected);
+    drop(selected);
+    assert_eq!(queue.queued_len(), 0);
+
+    let retry_payload = pending.take_requeue_retry_payload();
+    let second = super::requeue_block_transactions(&queue, &state, retry_payload);
+    assert_eq!(second.newly_queued, 1);
+    assert_eq!(second.expired, 0, "settled expiry must not repeat");
+    assert!(second.terminal_rejected.is_empty());
+    assert!(!second.requires_retry());
+    assert_eq!(second.gossip_hashes, vec![retry.hash()]);
+    assert!(queue.contains_transaction_hash(retry.hash()));
+    assert!(!queue.contains_transaction_hash(expired.hash()));
+    assert_eq!(pending.block.hash(), block_hash);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn late_vnext_validation_rejection_preserves_existing_requeue_custody() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    let tx = sample_transaction();
+    let tx_hash = tx.hash();
+    let block = block_with_txs(3, 0, None, vec![tx.clone()]);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, 3, 0);
+    pending.mark_requeue_pending(
+        Instant::now(),
+        super::PENDING_REQUEUE_BASE_BACKOFF,
+        vec![TransactionEntrypoint::External(tx)],
+    );
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    let epoch = actor.epoch_for_height(3);
+
+    actor.reject_vnext_validation_slot(
+        super::vnext::SlotId {
+            height: 3,
+            view: 0,
+            epoch,
+            block_hash,
+        },
+        super::vnext::ValidationFailure {
+            reason_label: "late_invalid_result".to_owned(),
+            evidence_hash: None,
+        },
+    );
+
+    let retained = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("late validation result must not drop retry ownership");
+    assert!(retained.requeue_pending);
+    assert!(matches!(
+        retained.validation_status,
+        ValidationStatus::Invalid
+    ));
+    assert_eq!(retained.requeue_retry_payload.len(), 1);
+    assert_eq!(
+        AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(
+            &retained.requeue_retry_payload[0],
+        ))
+        .hash(),
+        tx_hash
+    );
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn late_vnext_validation_rejection_retains_new_retry_custody_when_queue_is_full() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    replace_actor_queue_with_capacity(actor, 1, None);
+
+    let blocker = unique_log_transaction(actor, 7_001, 16);
+    let blocker_hash = blocker.hash();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(blocker)),
+            actor.state.view(),
+        )
+        .expect("blocker should occupy the only queue slot");
+
+    let tx = unique_log_transaction(actor, 7_002, 16);
+    let tx_hash = tx.hash();
+    let original_entrypoint = TransactionEntrypoint::External(tx.clone());
+    let block = block_with_txs(3, 0, None, vec![tx]);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let pending = PendingBlock::new(block, payload_hash, 3, 0);
+    assert!(!pending.requeue_pending);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    let epoch = actor.epoch_for_height(3);
+
+    actor.reject_vnext_validation_slot(
+        super::vnext::SlotId {
+            height: 3,
+            view: 0,
+            epoch,
+            block_hash,
+        },
+        super::vnext::ValidationFailure {
+            reason_label: "invalid_result_queue_full".to_owned(),
+            evidence_hash: None,
+        },
+    );
+
+    let retained = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("queue saturation must retain retry ownership on the rejected block");
+    assert!(matches!(
+        retained.validation_status,
+        ValidationStatus::Invalid
+    ));
+    assert!(retained.requeue_pending);
+    assert_eq!(
+        retained.requeue_retry_payload,
+        vec![original_entrypoint],
+        "retry custody must preserve the exact original entrypoint"
+    );
+    assert_eq!(actor.queue.queued_len(), 1);
+    assert!(actor.queue.contains_transaction_hash(blocker_hash));
+    assert!(!actor.queue.contains_transaction_hash(tx_hash));
+    harness.shutdown.send();
 }
 
 #[test]
@@ -223945,7 +230140,7 @@ fn requeue_block_transactions_counts_queue_full_failures_without_gossip() {
     tx_b_builder.set_nonce(NonZeroU32::new(3).expect("nonce must be non-zero"));
     let tx_b = tx_b_builder.sign(kp.private_key());
 
-    let (requeued, failures, duplicate_failures, gossip_hashes) = super::requeue_block_transactions(
+    let report = super::requeue_block_transactions(
         &queue,
         &state,
         vec![
@@ -223954,20 +230149,236 @@ fn requeue_block_transactions_counts_queue_full_failures_without_gossip() {
         ],
     );
 
-    assert_eq!(requeued, 0, "full queue should not accept requeued txs");
     assert_eq!(
-        failures, 2,
+        report.newly_queued, 0,
+        "full queue should not accept requeued txs"
+    );
+    assert_eq!(
+        report.failures(),
+        2,
         "queue-full requeue failures should still be counted"
     );
     assert_eq!(
-        duplicate_failures, 0,
+        report.duplicate_dispositions(),
+        0,
         "queue-full failures are not duplicate work"
     );
     assert!(
-        gossip_hashes.is_empty(),
+        report.gossip_hashes.is_empty(),
         "failed requeues must not be scheduled for gossip resend"
     );
+    assert!(report.requires_retry());
+    assert_eq!(report.retryable.len(), 2);
+    assert!(report.retryable.iter().all(|retry| {
+        matches!(&retry.error, crate::queue::Error::Full) && retry.routing_plan.is_some()
+    }));
     assert_eq!(queue.queued_len(), 1, "filler tx should remain queued");
+}
+
+#[test]
+fn requeue_block_transactions_retains_per_user_saturation_payload() {
+    let queue_cfg = QueueConfig {
+        capacity: nonzero!(4_usize),
+        capacity_per_user: nonzero!(1_usize),
+        ..QueueConfig::default()
+    };
+    let queue = Queue::test(queue_cfg, &TimeSource::new_system());
+    let kura = Kura::blank_kura_for_testing();
+    let state = State::new_for_testing(
+        World::default(),
+        Arc::clone(&kura),
+        LiveQueryStore::start_test(),
+    );
+    install_active_single_lane_nexus(&state);
+    let chain_id = ChainId::from("requeue-per-user-saturation");
+    let key_pair = checked_keypair();
+    let account = AccountId::new(key_pair.public_key().clone());
+
+    let mut filler_builder = TransactionBuilder::new(chain_id.clone(), account.clone());
+    filler_builder.set_nonce(nonzero!(1_u32));
+    queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(
+                filler_builder.sign(key_pair.private_key()),
+            )),
+            state.view(),
+        )
+        .expect("first transaction should consume the user's queue allowance");
+
+    let mut retry_builder = TransactionBuilder::new(chain_id, account);
+    retry_builder.set_nonce(nonzero!(2_u32));
+    let retry = retry_builder.sign(key_pair.private_key());
+    let retry_hash = retry.hash();
+    let mut report =
+        super::requeue_block_transactions(&queue, &state, [TransactionEntrypoint::External(retry)]);
+
+    assert_eq!(report.newly_queued, 0);
+    assert_eq!(report.failures(), 1);
+    assert!(report.gossip_hashes.is_empty());
+    assert_eq!(report.retryable.len(), 1);
+    assert!(matches!(
+        &report.retryable[0].error,
+        crate::queue::Error::MaximumTransactionsPerUser
+    ));
+    let retained = report.take_retryable_entrypoints();
+    assert_eq!(retained.len(), 1);
+    assert_eq!(
+        AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(&retained[0])).hash(),
+        retry_hash,
+        "per-user saturation must retain the exact entrypoint for retry"
+    );
+    assert_eq!(queue.active_len(), 1);
+    assert_eq!(queue.queued_len(), 1);
+}
+
+#[test]
+fn requeue_block_transactions_preserves_sealed_entrypoint_identity_when_full() {
+    let queue_cfg = QueueConfig {
+        capacity: nonzero!(1_usize),
+        capacity_per_user: nonzero!(4_usize),
+        ..QueueConfig::default()
+    };
+    let queue = Queue::test(queue_cfg, &TimeSource::new_system());
+    let kura = Kura::blank_kura_for_testing();
+    let state = State::new_for_testing(
+        World::default(),
+        Arc::clone(&kura),
+        LiveQueryStore::start_test(),
+    );
+    install_active_single_lane_nexus(&state);
+    queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            state.view(),
+        )
+        .expect("filler transaction should occupy queue capacity");
+
+    let chain = ChainId::from("requeue-sealed-entrypoint");
+    let inner = TransactionBuilder::new(chain.clone(), SAMPLE_GENESIS_ACCOUNT_ID.clone())
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+    let commitment = iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
+        &chain, &inner, [0xB4; 32], 8,
+    );
+    let payload = iroha_data_model::transaction::signed::SealedTransactionCommitmentPayload::new(
+        chain,
+        SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+        commitment,
+        2,
+        8,
+        None,
+    );
+    let sealed = TransactionEntrypoint::SealedCommitment(
+        iroha_data_model::transaction::signed::SignedSealedTransactionCommitment::sign(
+            payload,
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+        ),
+    );
+    let expected_hash =
+        AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(&sealed)).hash();
+
+    let mut report = super::requeue_block_transactions(&queue, &state, [sealed.clone()]);
+    assert_eq!(report.newly_queued, 0);
+    assert_eq!(report.retryable.len(), 1);
+    assert!(matches!(
+        &report.retryable[0].error,
+        crate::queue::Error::Full
+    ));
+    let retained = report.take_retryable_entrypoints();
+    assert_eq!(retained, vec![sealed]);
+    assert_eq!(
+        AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(&retained[0])).hash(),
+        expected_hash,
+        "retry custody must preserve the canonical sealed-entrypoint identity"
+    );
+    let owner_block = sample_block(3, 0, None);
+    let owner_payload_hash = Hash::new(super::proposals::block_payload_bytes(&owner_block));
+    let mut owner = PendingBlock::new(owner_block, owner_payload_hash, 3, 0);
+    owner.mark_requeue_pending(
+        Instant::now(),
+        super::PENDING_REQUEUE_BASE_BACKOFF,
+        retained,
+    );
+    owner.mark_aborted();
+    owner.retire_same_height();
+    owner.reactivate_retired_same_height();
+    assert!(owner.requeue_pending);
+    assert!(owner.is_retired_same_height());
+    assert_eq!(owner.requeue_retry_payload.len(), 1);
+    assert_eq!(
+        AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(
+            &owner.requeue_retry_payload[0],
+        ))
+        .hash(),
+        expected_hash,
+        "late abort/retire/reactivate paths must not erase retry custody"
+    );
+}
+
+#[test]
+fn drop_pending_requeue_retains_exact_payload_until_queue_capacity_returns() {
+    let queue_cfg = QueueConfig {
+        capacity: NonZeroUsize::new(1).expect("non-zero capacity"),
+        capacity_per_user: NonZeroUsize::new(16).expect("non-zero per-user capacity"),
+        ..QueueConfig::default()
+    };
+    let queue = Arc::new(Queue::test(queue_cfg, &TimeSource::new_system()));
+    let kura = Kura::blank_kura_for_testing();
+    let state = State::new_for_testing(
+        World::default(),
+        Arc::clone(&kura),
+        LiveQueryStore::start_test(),
+    );
+    install_active_single_lane_nexus(&state);
+    let key_pair = checked_keypair();
+    let account = AccountId::new(key_pair.public_key().clone());
+    let mut filler_builder =
+        TransactionBuilder::new(ChainId::from("requeue-retained-filler"), account.clone());
+    filler_builder.set_nonce(nonzero!(1_u32));
+    let filler = filler_builder.sign(key_pair.private_key());
+    queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(filler)),
+            state.view(),
+        )
+        .expect("filler occupies queue capacity");
+
+    let mut retry_builder = TransactionBuilder::new(ChainId::from("requeue-retained"), account);
+    retry_builder.set_nonce(nonzero!(2_u32));
+    let retry_tx = retry_builder.sign(key_pair.private_key());
+    let block = block_with_txs(3, 0, None, vec![retry_tx.clone()]);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending_blocks =
+        BTreeMap::from([(block_hash, PendingBlock::new(block, payload_hash, 3, 0))]);
+
+    let (_, requeued, failures, _, retained_for_retry) =
+        super::drop_pending_block_and_requeue(&mut pending_blocks, block_hash, &queue, &state)
+            .expect("pending block exists");
+    assert_eq!(requeued, 0);
+    assert_eq!(failures, 1);
+    assert!(retained_for_retry);
+    let retained = pending_blocks
+        .get(&block_hash)
+        .expect("retryable queue failure retains pending custody");
+    assert!(retained.requeue_pending);
+    assert_eq!(retained.requeue_retry_payload.len(), 1);
+    let retained_hash = AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(
+        &retained.requeue_retry_payload[0],
+    ))
+    .hash();
+    assert_eq!(retained_hash, retry_tx.hash());
+
+    let mut selected = Vec::new();
+    queue.get_transactions_for_block(&state.view(), nonzero!(1_usize), &mut selected);
+    drop(selected);
+    let (_, requeued, failures, _, retained_for_retry) =
+        super::drop_pending_block_and_requeue(&mut pending_blocks, block_hash, &queue, &state)
+            .expect("retained pending block exists");
+    assert_eq!(requeued, 1);
+    assert_eq!(failures, 0);
+    assert!(!retained_for_retry);
+    assert!(pending_blocks.is_empty());
+    assert!(queue.contains_transaction_hash(retry_tx.hash()));
 }
 
 #[test]
@@ -223992,24 +230403,28 @@ fn requeue_block_transactions_skips_known_committed_hashes_before_push() {
     let tx_b = tx_b_builder.sign(kp.private_key());
     let known_committed = [tx_a.hash()].into_iter().collect::<BTreeSet<_>>();
 
-    let (requeued, failures, duplicate_failures, gossip_hashes) =
-        super::requeue_block_transactions_skipping_known_committed(
-            &queue,
-            &state,
-            vec![
-                iroha_data_model::transaction::TransactionEntrypoint::External(tx_a.clone()),
-                iroha_data_model::transaction::TransactionEntrypoint::External(tx_b.clone()),
-            ],
-            Some(&known_committed),
-        );
+    let report = super::requeue_block_transactions_skipping_known_committed(
+        &queue,
+        &state,
+        vec![
+            iroha_data_model::transaction::TransactionEntrypoint::External(tx_a.clone()),
+            iroha_data_model::transaction::TransactionEntrypoint::External(tx_b.clone()),
+        ],
+        Some(&known_committed),
+    );
 
-    assert_eq!(requeued, 1, "only non-committed transaction is requeued");
     assert_eq!(
-        failures, 0,
+        report.newly_queued, 1,
+        "only non-committed transaction is requeued"
+    );
+    assert_eq!(
+        report.failures(),
+        0,
         "known committed skip must not count as failure"
     );
     assert_eq!(
-        duplicate_failures, 1,
+        report.duplicate_dispositions(),
+        1,
         "known committed transaction is reported as duplicate work"
     );
     assert_eq!(
@@ -224022,7 +230437,7 @@ fn requeue_block_transactions_skips_known_committed_hashes_before_push() {
         "known committed transaction must not be reinserted"
     );
     assert!(queue.contains_transaction_hash(tx_b.hash()));
-    assert_eq!(gossip_hashes, vec![tx_b.hash()]);
+    assert_eq!(report.gossip_hashes, vec![tx_b.hash()]);
 }
 
 #[test]
@@ -224061,7 +230476,7 @@ fn drop_pending_block_and_requeue_skips_known_committed_transactions() {
     );
     let known_committed = [committed_tx.hash()].into_iter().collect::<BTreeSet<_>>();
 
-    let (tx_count, requeued, failures, duplicate_failures) =
+    let (tx_count, requeued, failures, duplicate_failures, retained_for_retry) =
         super::drop_pending_block_and_requeue_skipping_known_committed(
             &mut pending_blocks,
             pending_hash,
@@ -224076,6 +230491,7 @@ fn drop_pending_block_and_requeue_skips_known_committed_transactions() {
     assert_eq!(requeued, 1);
     assert_eq!(failures, 0);
     assert_eq!(duplicate_failures, 1);
+    assert!(!retained_for_retry);
     assert!(!queue.contains_transaction_hash(committed_tx.hash()));
     assert!(queue.contains_transaction_hash(recovered_tx.hash()));
 }
@@ -224105,7 +230521,7 @@ fn drop_pending_block_and_requeue_restores_transactions() {
         PendingBlock::new(pending_block, payload_hash, 3, 0),
     );
 
-    let (tx_count, requeued, failures, duplicate_failures) =
+    let (tx_count, requeued, failures, duplicate_failures, retained_for_retry) =
         super::drop_pending_block_and_requeue(&mut pending_blocks, pending_hash, &queue, &state)
             .expect("pending block should be dropped");
 
@@ -224114,6 +230530,7 @@ fn drop_pending_block_and_requeue_restores_transactions() {
     assert_eq!(requeued, 1);
     assert_eq!(failures, 0);
     assert_eq!(duplicate_failures, 0);
+    assert!(!retained_for_retry);
     assert_eq!(queue.queued_len(), 1);
 }
 
@@ -229859,6 +236276,97 @@ fn idle_view_repair_retries_after_skipped_due_proposal_only_when_frontier_empty(
     assert!(
         !should_retry_idle_view_after_proposal(true, 16, 0, true),
         "commit-inflight work must not be interrupted by the post-proposal retry"
+    );
+}
+
+#[test]
+fn due_queued_proposal_is_not_deferred_by_exhausted_tick_budget() {
+    let capacity = NonZeroUsize::new(2).expect("non-zero");
+    let healthy = BackpressureState::Healthy {
+        queued: 1,
+        capacity,
+    };
+    let start = Instant::now();
+    let exhausted_deadline = Some(start);
+    let after_deadline = start + Duration::from_millis(1);
+    let backpressure = ProposalBackpressure {
+        queue_state: healthy,
+        active_pending: false,
+        rbc_backlog: false,
+        relay_backpressure: false,
+        consensus_queue_backpressure: false,
+    };
+
+    assert!(
+        !super::should_defer_proposal_attempt_for_tick_budget(
+            exhausted_deadline,
+            after_deadline,
+            true,
+            backpressure,
+            false,
+        ),
+        "queued proposal work must get one liveness attempt even after housekeeping exhausts the tick budget"
+    );
+
+    assert!(
+        super::should_defer_proposal_attempt_for_tick_budget(
+            exhausted_deadline,
+            after_deadline,
+            false,
+            backpressure,
+            false,
+        ),
+        "non-queued pacemaker work should still respect the tick budget"
+    );
+
+    assert!(
+        super::should_defer_proposal_attempt_for_tick_budget(
+            exhausted_deadline,
+            after_deadline,
+            true,
+            ProposalBackpressure {
+                active_pending: true,
+                ..backpressure
+            },
+            false,
+        ),
+        "active pending work remains a hard backpressure signal"
+    );
+
+    assert!(
+        super::should_defer_proposal_attempt_for_tick_budget(
+            exhausted_deadline,
+            after_deadline,
+            true,
+            ProposalBackpressure {
+                rbc_backlog: true,
+                ..backpressure
+            },
+            false,
+        ),
+        "RBC backlog remains a hard backpressure signal"
+    );
+
+    assert!(
+        super::should_defer_proposal_attempt_for_tick_budget(
+            exhausted_deadline,
+            after_deadline,
+            true,
+            backpressure,
+            true,
+        ),
+        "commit-inflight work must not be interrupted by an over-budget proposal"
+    );
+
+    assert!(
+        !super::should_defer_proposal_attempt_for_tick_budget(
+            Some(after_deadline + Duration::from_millis(1)),
+            after_deadline,
+            false,
+            backpressure,
+            true,
+        ),
+        "before the deadline the normal proposal path remains available"
     );
 }
 

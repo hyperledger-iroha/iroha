@@ -67,7 +67,7 @@ curl -s   http://127.0.0.1:8080/v1/sumeragi/commit_qc/$HASH | jq .
 #     "height": 42,
 #     "view": 3,
 #     "epoch": 0,
-#     "mode_tag": "iroha2-consensus::permissioned-sumeragi@v1",
+#     "mode_tag": "iroha2-consensus::permissioned-sumeragi@v2",
 #     "validator_set_hash": "…",
 #     "validator_set_hash_version": 1,
 #     "validator_set": ["…"],

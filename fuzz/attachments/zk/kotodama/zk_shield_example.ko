@@ -14,7 +14,7 @@ seiyaku ZkShieldDemo {
             value: Json::parse("{\"run\":true}"),
         );
         // Example: mint a tiny amount (host syscall)
-        ledger::asset::mint(account: who, asset_definition: ad, amount: Amount::from_i64(1));
+        ledger::asset::mint(account: who, asset_definition: ad, amount: 1);
         debug::info("ZkShieldDemo: done");
     }
 }

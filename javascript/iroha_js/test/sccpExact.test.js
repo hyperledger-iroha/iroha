@@ -39,14 +39,19 @@ const PUBLIC_KEY = Uint8Array.from([
   0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
   0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
 ]);
-const AUTHORITY = AccountAddress.fromAccount({ publicKey: PUBLIC_KEY }).toI105(753);
+const ACCOUNT = AccountAddress.fromAccount({ publicKey: PUBLIC_KEY });
+const AUTHORITY = ACCOUNT.toI105(369);
 const MESSAGE_ID = HASH(0x11);
 const MESSAGE_BUNDLE_NORITO_TYPE = "iroha_sccp::TairaSccpMessageProofV1";
 const PROOF_REQUEST_NORITO_TYPE = "iroha_sccp::SccpGroth16Bn254ProofRequestV1";
+const DESTINATION_PROOF_NORITO_TYPE =
+  "iroha_sccp::SccpGroth16Bn254ProofArtifactV1";
+const NATIVE_MESSAGE_PROOF_NORITO_TYPE =
+  "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1";
 const PUBLIC_SIGNAL_SCHEMA_HASH =
   "7567439F41173D6745A3D51923CB70371ACC7D66F23CEFB4100D6D5D7A432CBB";
 const SORA_TAIRA_CHAIN_ID_HASH =
-  "3F139C4B2A31457994D17BE5CE922D87FC702939116359F0E47314AB36A7F588";
+  "CF1CFC0F57B0BFA4C21882A9870317A1F4812F86533897095E3944BE34C5BBA7";
 
 function b64(bytes) {
   return Buffer.from(bytes).toString("base64");
@@ -222,6 +227,14 @@ function sccpNoritoFrame(typeName, { payload = Buffer.from([1, 2, 3, 4]), paddin
   ]);
 }
 
+function destinationProofB64(options) {
+  return b64(sccpNoritoFrame(DESTINATION_PROOF_NORITO_TYPE, options));
+}
+
+function nativeProofB64(options) {
+  return b64(sccpNoritoFrame(NATIVE_MESSAGE_PROOF_NORITO_TYPE, options));
+}
+
 function abiWord(value) {
   let remaining = BigInt(value);
   const result = Buffer.alloc(32);
@@ -241,7 +254,7 @@ function addressWord(value, tron = false) {
 }
 
 const TEST_NETWORK_IDENTITIES = Object.freeze({
-  "sora-taira": Object.freeze({ tag: 1, domain: 0, bytes: Buffer.from("809574f5fee75e69bfcf52451e42d50f", "hex") }),
+  "sora-taira": Object.freeze({ tag: 1, domain: 0, bytes: Buffer.from("fc56984b2be7431d840e21514d1883f0", "hex") }),
   "ethereum-mainnet": Object.freeze({ tag: 2, domain: 1, bytes: littleEndian(1, 8), routeId: "taira_eth_xor", id: 1 }),
   "ethereum-sepolia": Object.freeze({ tag: 3, domain: 1, bytes: littleEndian(11_155_111, 8), routeId: "taira_eth_xor", id: 11_155_111 }),
   "bsc-mainnet": Object.freeze({ tag: 4, domain: 2, bytes: littleEndian(56, 8), routeId: "taira_bsc_xor", id: 56 }),
@@ -650,7 +663,7 @@ test("closed codecs accept exact layouts and reject retired tags and textual ali
     [1, "line\nbreak"],
     [1, "merchant\ud83d\ude42"],
     [1, `${AUTHORITY.slice(0, -1)}${AUTHORITY.endsWith("1") ? "2" : "1"}`],
-    [1, `n753${AUTHORITY.slice("sora".length)}`],
+    [1, `n369${AUTHORITY.slice("test".length)}`],
     [1, `${AUTHORITY}${"\uff72".repeat(100)}`],
   ]) assert.throws(() => normalizeSccpCodecValue(tag, value));
 });
@@ -812,15 +825,15 @@ test("registry destination hashes match the canonical Rust EVM and TRON layouts"
   const vectors = [
     {
       source: "bsc-mainnet",
-      destinationBindingHash: "738B46DB08128CAA0EAF9057D954C7A12BE2187F8BBBF66594BAF6752A4B0718",
-      deploymentConfigHash: "6F561E66F6F74E00F86C9FD54070FD5FF2D36ABA9DFDE80A741E4E7E2A8C8402",
-      routeConfigurationHash: "88BC0064A81E6C936A0F27D99B21DA445629EED8BB324C9EFF2DDEC9741D9F01",
+      destinationBindingHash: "B8C0540590C95348B5234027C70E753FB2834FC22493C67079B8C14312431239",
+      deploymentConfigHash: "5369BB48AA1BDEF7C17E3A38D8669631B93C834FD5AC4B4BD1EF08678D86F461",
+      routeConfigurationHash: "C5D13B32A8F0C7BE668F8B4423816C927CCBB3729DD9080EEC6B6061BB575016",
     },
     {
       source: "tron-mainnet",
-      destinationBindingHash: "C1231B2F1906E185D484C71BA3ADDCAC7FBCEEE54BF768A395C9220C0179CD7B",
-      deploymentConfigHash: "6ED649232195B47E8389B036933BD445BA4EC53AFCFB66700D5DD60D39DE955E",
-      routeConfigurationHash: "6CE0FEB0CBF58A75F50CEE5814055B44CAB37B6CA5ED28ABA47CF0C84ACF0DAA",
+      destinationBindingHash: "598871726A3E91CE724709F696CFD9E6C6311B5CB683FFFD7A8188F955719AC1",
+      deploymentConfigHash: "5CF69B4D4B581167A2C96E4AB35A9F3DFFA55A5C9C60AFD36FD760DF58F1C4CA",
+      routeConfigurationHash: "C8096AC49DDCC0391CC34636E302B2075A70CD6CB408A0D5EDB7249C66BE4E8F",
     },
   ];
   for (const vector of vectors) {
@@ -1276,15 +1289,22 @@ test("bundle and proof-request JSON enforce the closed transfer/Groth16 schema",
   const wrongAnchor = proofRequest();
   wrongAnchor.sora_finality_anchor_hash = PREFIX_HASH(0x99);
   assert.throws(() => normalizeSccpProofRequest(wrongAnchor), /sora_finality_anchor_hash/u);
+  const archivedIdentity = proofRequest();
+  archivedIdentity.sora_finality_anchor.chain_id_hash = Buffer.from(
+    keccak_256(Buffer.from("809574f5fee75e69bfcf52451e42d50f", "hex")),
+  ).toString("hex").toUpperCase();
+  assert.throws(() => normalizeSccpProofRequest(archivedIdentity), /Taira chain commitment/u);
 });
 
 test("submit DTOs preserve the exact prepared transaction for detached signing", () => {
   const transactionPayload = b64(Uint8Array.of(1, 2, 3, 4));
+  const destinationProof = destinationProofB64();
+  const nativeProof = nativeProofB64();
   const proof = normalizeBridgeProofSubmitPayload({
     authority: AUTHORITY,
     signature_b64: b64(new Uint8Array(64).fill(1)),
     transaction_payload_b64: transactionPayload,
-    destination_proof_b64: "Ag==",
+    destination_proof_b64: destinationProof,
     creation_time_ms: 10,
   });
   assert.deepEqual(Object.keys(proof), [
@@ -1297,20 +1317,20 @@ test("submit DTOs preserve the exact prepared transaction for detached signing",
   assert.equal(proof.transaction_payload_b64, transactionPayload);
   assert.deepEqual(Object.keys(normalizeBridgeMessageSubmitPayload({
     authority: AUTHORITY,
-    native_proof_b64: "Aw==",
+    native_proof_b64: nativeProof,
   })), ["authority", "native_proof_b64"]);
   const native = normalizeBridgeMessageSubmitPayload({
     authority: AUTHORITY,
     signature_b64: "AQ==",
     transaction_payload_b64: transactionPayload,
-    native_proof_b64: "Aw==",
+    native_proof_b64: nativeProof,
     creation_time_ms: 10,
   });
   assert.equal(native.transaction_payload_b64, transactionPayload);
 });
 
 test("submit DTOs reject mixed signing state, malformed encodings, and retired fields", () => {
-  const proof = { authority: AUTHORITY, destination_proof_b64: "AQ==" };
+  const proof = { authority: AUTHORITY, destination_proof_b64: destinationProofB64() };
   for (const [field, value] of [
     ["public_key_hex", HASH(1)],
     ["message_bundle_b64", "AQ=="],
@@ -1336,6 +1356,49 @@ test("submit DTOs reject mixed signing state, malformed encodings, and retired f
   }
   for (const creation_time_ms of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "1"]) {
     assert.throws(() => normalizeBridgeProofSubmitPayload({ ...proof, creation_time_ms }));
+  }
+});
+
+test("submit DTOs bind the exact proof schema and require zero header padding", () => {
+  assert.doesNotThrow(() => normalizeBridgeProofSubmitPayload({
+    authority: AUTHORITY,
+    destination_proof_b64: destinationProofB64(),
+  }));
+  assert.doesNotThrow(() => normalizeBridgeMessageSubmitPayload({
+    authority: AUTHORITY,
+    native_proof_b64: nativeProofB64(),
+  }));
+  assert.throws(() => normalizeBridgeProofSubmitPayload({
+    authority: AUTHORITY,
+    destination_proof_b64: nativeProofB64(),
+  }), /schema hash/u);
+  assert.throws(() => normalizeBridgeMessageSubmitPayload({
+    authority: AUTHORITY,
+    native_proof_b64: destinationProofB64(),
+  }), /schema hash/u);
+  for (const padding of [1, 8, 64]) {
+    assert.throws(() => normalizeBridgeProofSubmitPayload({
+      authority: AUTHORITY,
+      destination_proof_b64: destinationProofB64({ padding }),
+    }), /exactly 0 bytes/u);
+    assert.throws(() => normalizeBridgeMessageSubmitPayload({
+      authority: AUTHORITY,
+      native_proof_b64: nativeProofB64({ padding }),
+    }), /exactly 0 bytes/u);
+  }
+  assert.throws(() => normalizeBridgeProofSubmitPayload({
+    authority: AUTHORITY,
+    destination_proof_b64: destinationProofB64({ payload: Buffer.alloc(0) }),
+  }), /non-empty/u);
+  for (const authority of [ACCOUNT.toI105(753), ACCOUNT.toI105(0), ACCOUNT.toI105(370)]) {
+    assert.throws(() => normalizeBridgeProofSubmitPayload({
+      authority,
+      destination_proof_b64: destinationProofB64(),
+    }), /discriminant|prefix/u);
+    assert.throws(() => normalizeBridgeMessageSubmitPayload({
+      authority,
+      native_proof_b64: nativeProofB64(),
+    }), /discriminant|prefix/u);
   }
 });
 
@@ -1481,22 +1544,20 @@ test("Torii exact client constructs fixed query-free endpoints and content negot
   ]);
 });
 
-test("Torii SCCP Norito preflight accepts canonical frames with zero or 64-byte padding", async () => {
-  for (const padding of [0, 64]) {
-    const frame = sccpNoritoFrame(PROOF_REQUEST_NORITO_TYPE, { padding });
-    const streamed = response(null, {
-      contentType: "application/x-norito",
-      bytes: frame,
-    });
-    const client = new ToriiClient("https://example.invalid", {
-      fetchImpl: async () => streamed,
-    });
-    assert.deepEqual(
-      Buffer.from(await client.getSccpProofRequest(MESSAGE_ID, { format: "norito" })),
-      frame,
-    );
-    assert.equal(streamed.streamState.released, true);
-  }
+test("Torii SCCP Norito preflight accepts only the canonical zero-padding frame", async () => {
+  const frame = sccpNoritoFrame(PROOF_REQUEST_NORITO_TYPE);
+  const streamed = response(null, {
+    contentType: "application/x-norito",
+    bytes: frame,
+  });
+  const client = new ToriiClient("https://example.invalid", {
+    fetchImpl: async () => streamed,
+  });
+  assert.deepEqual(
+    Buffer.from(await client.getSccpProofRequest(MESSAGE_ID, { format: "norito" })),
+    frame,
+  );
+  assert.equal(streamed.streamState.released, true);
 });
 
 test("Torii SCCP Norito preflight rejects malformed and cross-type frames", async () => {
@@ -1525,6 +1586,9 @@ test("Torii SCCP Norito preflight rejects malformed and cross-type frames", asyn
     ["declared payload too long", declaredLong],
     ["declared payload too short", declaredShort],
     ["checksum", mutate(31, canonical[31] ^ 0x01)],
+    ["one-byte padding", sccpNoritoFrame(PROOF_REQUEST_NORITO_TYPE, { padding: 1 })],
+    ["eight-byte padding", sccpNoritoFrame(PROOF_REQUEST_NORITO_TYPE, { padding: 8 })],
+    ["64-byte padding", sccpNoritoFrame(PROOF_REQUEST_NORITO_TYPE, { padding: 64 })],
     ["65-byte padding", sccpNoritoFrame(PROOF_REQUEST_NORITO_TYPE, { padding: 65 })],
     ["trailing byte", trailing],
   ];
@@ -1654,7 +1718,7 @@ test("Torii SCCP routes apply their endpoint-specific declared response limits",
       maximumBytes: 64 * 1024 * 1024,
       invoke: (client) => client.submitBridgeProof({
         authority: AUTHORITY,
-        destination_proof_b64: "AQ==",
+        destination_proof_b64: destinationProofB64(),
       }),
       contentType: "application/json",
     },
@@ -1719,12 +1783,16 @@ test("Torii proof submit sends only the closed destination artifact DTO", async 
   });
   await client.submitBridgeProof({
     authority: AUTHORITY,
-    destination_proof_b64: "AQ==",
+    destination_proof_b64: destinationProofB64(),
     creation_time_ms: 42,
   });
   assert.deepEqual(observed, {
     url: "https://example.invalid/v1/bridge/proofs/submit",
-    body: { authority: AUTHORITY, destination_proof_b64: "AQ==", creation_time_ms: 42 },
+    body: {
+      authority: AUTHORITY,
+      destination_proof_b64: destinationProofB64(),
+      creation_time_ms: 42,
+    },
   });
 });
 
@@ -1747,14 +1815,14 @@ test("Torii prepare then submit resends the byte-identical transaction payload",
   });
   const preparation = await client.submitBridgeProof({
     authority: AUTHORITY,
-    destination_proof_b64: "AQ==",
+    destination_proof_b64: destinationProofB64(),
     creation_time_ms: 42,
   });
   const submission = await client.submitBridgeProof({
     authority: AUTHORITY,
     signature_b64: b64(new Uint8Array(64).fill(7)),
     transaction_payload_b64: preparation.transaction_payload_b64,
-    destination_proof_b64: "AQ==",
+    destination_proof_b64: destinationProofB64(),
     creation_time_ms: preparation.creation_time_ms,
   });
   assert.equal(submission.submitted, true);
@@ -1777,7 +1845,10 @@ test("Torii rejects response state that contradicts prepare or signed submit", a
     fetchImpl: async () => response(submitted),
   });
   await assert.rejects(
-    () => prepareClient.submitBridgeProof({ authority: AUTHORITY, destination_proof_b64: "AQ==" }),
+    () => prepareClient.submitBridgeProof({
+      authority: AUTHORITY,
+      destination_proof_b64: destinationProofB64(),
+    }),
     /signing state/u,
   );
   const submitClient = new ToriiClient("https://example.invalid", {
@@ -1788,7 +1859,7 @@ test("Torii rejects response state that contradicts prepare or signed submit", a
       authority: AUTHORITY,
       signature_b64: "AQ==",
       transaction_payload_b64: "Ag==",
-      destination_proof_b64: "Aw==",
+      destination_proof_b64: destinationProofB64(),
       creation_time_ms: 42,
     }),
     /signing state/u,

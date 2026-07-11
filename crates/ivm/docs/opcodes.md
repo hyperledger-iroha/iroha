@@ -15,8 +15,8 @@ Conventions and notes
 - Pointer-ABI: instructions that dereference Norito TLV pointers (e.g., signature verify opcodes) follow the pointer-ABI documented in `syscalls.md`/`tlv_examples.md`. Hosts/VM validate TLVs on first dereference and trap on invalid envelopes.
 - Memory: all loads/stores require natural alignment; region permissions (INPUT/OUTPUT/CODE/HEAP/STACK) are enforced uniformly. Misaligned accesses deterministically trap with `MisalignedAccess`.
 - Control flow: `JALR` masks the low two bits of the computed target so control transfers are 4-byte aligned. `JAL` carries `rd` plus a signed 16-bit word offset. `JMP` and `JALS` use the whole low 24 bits as a signed word offset; `JALS` writes its return address to `r1`. Deployable artifacts carrying a `CNTR` interface additionally enforce protected returns: direct calls linking `r1` push the expected return PC onto a host-protected stack, and only canonical `JALR r0, r1, 0` returns may pop it. A mismatch, noncanonical indirect transfer, or depth above 1,024 traps before the target executes. At invocation start the VM captures the aligned initial `r1`; an empty protected stack must return to that exact captured address, which must also be a `HALT` instruction or the host's end-of-code sentinel. Raw code loaded with `IVM::load_code` retains the general opcode semantics for low-level tests and tooling.
-- Indexed literals: `LDLIT` carries `rd` plus an unsigned 16-bit `LTLB` index. Program loading validates every indexed entry as an ABI-v1 typed TLV and rejects out-of-range instruction indices before execution.
-- First-release availability: `LDLIT`, `JAL`, `JMP`, and `JALS` are unconditional ABI-v1 instructions. They do not consult a feature bit or execution-mode flag and are present in every IVM build.
+- Indexed literals: `LDLIT` and `LDI64` carry `rd` plus an unsigned 16-bit `LTLB` index. The authenticated table descriptor names either an exact ABI-v1 pointer TLV or an exact eight-byte signed scalar. Program loading rejects unknown kinds, noncanonical lengths, gaps, aliases, out-of-range indices, and instruction/entry kind mismatches before execution. Scalar entries never grant pointer provenance.
+- First-release availability: `LDLIT`, `LDI64`, `JAL`, `JMP`, and `JALS` are unconditional ABI-v1 instructions. They do not consult a feature bit or execution-mode flag and are present in every IVM build.
 - Kotodama's relaxing assembler uses one-word `JAL` transfers when the signed
   16-bit word range is sufficient and one-word `JMP`/`JALS` transfers
   otherwise. Transfers beyond the signed 24-bit range route through sparse
@@ -54,6 +54,7 @@ The meaning of each operand depends on the opcode (rd/rs1/rs2, immediates, sysca
 | 0x32 | `LOAD128` | Load 128-bit vector (requires `VECTOR` mode; traps otherwise) |
 | 0x33 | `STORE128` | Store 128-bit vector (requires `VECTOR` mode; traps otherwise) |
 | 0x34 | `LDLIT` | Load a prevalidated typed-TLV pointer from `LTLB[index:u16]` into `rd` |
+| 0x35 | `LDI64` | Load a prevalidated exact little-endian signed `i64` from `LTLB[index:u16]` into `rd` |
 
 ## Arithmetic
 

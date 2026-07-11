@@ -24,8 +24,8 @@ use iroha_data_model::bridge::{
     sccp_sora_finality_anchor_hash_v1,
 };
 use iroha_sccp::{
-    SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1, SccpNativeInboundMessageProofV1,
-    SccpPayloadV1, ValidatedSccpNativeInboundMessageV1,
+    SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1, SCCP_TAIRA_FINALITY_CHAIN_ID_V1,
+    SccpNativeInboundMessageProofV1, SccpPayloadV1, ValidatedSccpNativeInboundMessageV1,
     canonical_sccp_groth16_bn254_verifying_key_bytes_v1,
     decode_canonical_sccp_groth16_bn254_proof_artifact_v1,
     decode_canonical_taira_sccp_message_bundle_v1, sccp_groth16_bn254_public_signal_words,
@@ -78,7 +78,7 @@ const SEMANTIC_ARTIFACT_ROLES: [(&str, &str, &str); 7] = [
     ("honest-witness", "honest-witness", "honest-witness.bin"),
     ("honest-proof", "honest-proof", "honest-proof.norito"),
 ];
-const FORBIDDEN_FIXTURE_PUBLIC_KEYS: [&str; 22] = [
+const FORBIDDEN_FIXTURE_PUBLIC_KEYS: [&str; 31] = [
     "3908a9df4eb45c2c3eb744f5a5fde5af87f346a59a4995378e95c3895b9e2d5d",
     "4baed4d3a15b3269ab5e710393de6f01944c3af9691dc7a8661474ced9a033f2",
     "0ffb0e0e942b1f2250eb5674aa5674334cb0e84a7374369cc9d9ec636392198e",
@@ -101,6 +101,15 @@ const FORBIDDEN_FIXTURE_PUBLIC_KEYS: [&str; 22] = [
     "3b6b6fa357dcec265b24a70ce8808a4a75e2393994be06ad3958be3c9c68749a",
     "a5b2610c54fcf817d94fb832578cc477eaeade34bd0a58de9b503213ef908e64",
     "f40674938b1a40e4670d318b42b47ba9fef3582099bcfefc92790244b0f4cb68",
+    "7b93db743c32a07ccc2c48569645a3cf2a980a1733da7f07d60161a09cef679b",
+    "1c0f6ccb3f6003808376dd4090ed76d9e1f4c830fcd4bf8df2aa8a0616ea754f",
+    "4eb6252d1332fe20b1baa620e80635f3a4cd0a131d6d3abcb93cfa925732ce12",
+    "05f80c4badfbc7015606fcb192dda45f7536f7c1191ef063260bf982ae4e52c0",
+    "07ecef22532a6859823046b92b183b90e38b6c367fc1af6ead429be7cbbdc0f5",
+    "1b60f8f63d68bb772e5cb5ff7dd98996895a5a7430d9e82f48f48d4776cd1a3b",
+    "366e703d99bdbe0a2a4db1a664acd52c43b03f9d053025eb19bda13a5e0a6066",
+    "df62654404d5e37e3ba68dd14b97117eb199803f4a10a2473e3b7b848e67a1b5",
+    "073fb6ce0ac504252d2fe848ad7cbf6afe92bc727a340667f9d2ca56e3331ad7",
 ];
 const REQUIRED_PHASES: [&str; 10] = [
     "rust-sccp",
@@ -1488,7 +1497,7 @@ fn validate_release_evidence_envelope(
 
 fn validate_release_hub(evidence: &ReleaseEvidenceSignaturesV1) -> Result<(), String> {
     if evidence.hub_profile != "sora-taira"
-        || evidence.hub_chain_id != "809574f5-fee7-5e69-bfcf-52451e42d50f"
+        || evidence.hub_chain_id != SCCP_TAIRA_FINALITY_CHAIN_ID_V1
     {
         return Err("release evidence must identify exact SORA Taira V1".to_owned());
     }
@@ -2900,7 +2909,7 @@ mod tests {
 
     #[test]
     fn validator_build_identity_matches_python_golden() {
-        let features = vec!["bls".to_owned()];
+        let features = Vec::<String>::new();
         let identity = validator_build_identity_hash(&ValidatorBuildIdentityInputs {
             protocol_version: 1,
             crate_name: "iroha_sccp",
@@ -3176,7 +3185,7 @@ mod tests {
             release_id: "release-envelope-test-v1".to_owned(),
             protocol_version: 1,
             hub_profile: "sora-taira".to_owned(),
-            hub_chain_id: "809574f5-fee7-5e69-bfcf-52451e42d50f".to_owned(),
+            hub_chain_id: SCCP_TAIRA_FINALITY_CHAIN_ID_V1.to_owned(),
             created_at_unix_ms: 1,
             trust_policy_id: "external-policy-v1".to_owned(),
             trust_policy_sha256_hex: lowercase_hex(&[99; 32]),

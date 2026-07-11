@@ -2413,7 +2413,7 @@ mod tests {
                 height: 7,
                 view: 0,
                 epoch: 0,
-                mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_owned(),
+                mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_owned(),
                 subject_block_hash: block_hash,
                 parent_state_root: [1; 32],
                 post_state_root: [2; 32],

@@ -151,7 +151,7 @@ impl ProfileDefaults {
                 genesis_template: "configs/soranexus/nexus/genesis.json",
             },
             Profile::Taira => Self {
-                chain: "809574f5-fee7-5e69-bfcf-52451e42d50f",
+                chain: "fc56984b-2be7-431d-840e-21514d1883f0",
                 p2p_port: 1337,
                 torii_port: 18080,
                 host: "taira-validator-1.sora.org",
@@ -1132,7 +1132,7 @@ mod tests {
 
     #[test]
     fn public_taira_bundle_uses_expected_network_identity() {
-        const EXPECTED_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
+        const EXPECTED_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
         const EXPECTED_TAIRA_CHAIN_DISCRIMINANT: i64 = 369;
 
         let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");

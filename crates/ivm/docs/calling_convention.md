@@ -29,8 +29,10 @@ Only the first 32 registers are currently used to keep the encoding simple. Futu
 
 Functions allocate a frame only when they spill, preserve callee-saved
 registers, save a nested-call return address, or need aggregate-state scratch
-space. The frame is aligned to 16 bytes. Offsets are measured relative to the
-value of the stack pointer after the prologue.
+space. The complete frame is aligned to 16 bytes after accounting for the
+return address, spills, saved registers, aggregate-state scratch, and final
+padding. Compile reports include that padding in `frame_bytes`. Offsets are
+measured relative to the value of the stack pointer after the prologue.
 
 ```
 | higher addresses ...           |

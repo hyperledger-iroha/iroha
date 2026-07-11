@@ -1,11 +1,11 @@
 // Tuple return and destructuring demo.
 seiyaku TupleReturnDemo {
-    fn pair(a: i64, b: i64) -> (i64, i64) {
+    fn pair(int a, int b) -> (int, int) {
         let t = (a + 1, b + 1);
         return t;
     }
 
-    kotoage fn compute() -> (i64, i64) authorize("Entry") {
+    kotoage fn compute() -> (int, int) authorize("Entry") {
         let p = pair(a: 3, b: 5);
         // Destructure using numeric field access
         return (p.0, p.1);

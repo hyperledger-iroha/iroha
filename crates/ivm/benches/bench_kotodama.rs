@@ -1,18 +1,14 @@
 //! Benchmarks for phase-separated Kotodama compilation and execution in IVM.
 use std::{collections::BTreeMap, sync::Arc};
 
-use criterion::Criterion;
+use criterion::{BatchSize, Criterion};
 use iroha_crypto::Hash;
 use iroha_data_model::prelude::Name;
 use iroha_primitives::{AmountRoundingMode, Numeric, json::Json};
 use ivm::{
     IVM, ProgramMetadata, encoding,
     host::DefaultHost,
-    kotodama::{
-        compiler::{Compiler, encode_add},
-        ir, parser,
-        semantic::SemanticContext,
-    },
+    kotodama::compiler::{Compiler, benchmark::SourcePhase, encode_add},
     pointer_abi::PointerType,
 };
 
@@ -156,24 +152,159 @@ fn literal_heavy_source(count: usize) -> String {
 
 fn bench_compiler_phases(c: &mut Criterion) {
     let source = literal_heavy_source(64);
+    let source_phase = SourcePhase::new(
+        Default::default(),
+        source.clone(),
+        Some("bench/literal_heavy.ko".to_owned()),
+    );
     c.bench_function("kotodama_phase_parse", |b| {
-        b.iter(|| std::hint::black_box(parser::parse(&source).expect("parse benchmark source")))
+        b.iter_batched(
+            || source_phase.clone(),
+            |source_phase| {
+                std::hint::black_box(
+                    source_phase
+                        .parse()
+                        .expect("parse canonical benchmark source"),
+                )
+            },
+            BatchSize::SmallInput,
+        )
     });
 
-    let parsed = parser::parse(&source).expect("parse benchmark source");
+    let parsed = source_phase
+        .parse()
+        .expect("prepare parsed benchmark source");
+    c.bench_function("kotodama_phase_resolved_hir", |b| {
+        b.iter_batched(
+            || parsed.clone(),
+            |parsed| {
+                std::hint::black_box(
+                    parsed
+                        .resolve()
+                        .expect("resolve canonical benchmark source"),
+                )
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    let resolved = parsed
+        .resolve()
+        .expect("prepare resolved-HIR benchmark source");
+    // Preserve the pre-reset benchmark identity so existing semantic-analysis
+    // performance remains directly comparable across the V1 pipeline split.
     c.bench_function("kotodama_phase_semantic", |b| {
-        b.iter(|| {
-            let context = SemanticContext::new();
-            std::hint::black_box(context.analyze(&parsed).expect("analyze benchmark source"))
-        })
+        b.iter_batched(
+            || resolved.clone(),
+            |resolved| {
+                std::hint::black_box(
+                    resolved
+                        .type_effect()
+                        .expect("type/effect-check canonical benchmark source"),
+                )
+            },
+            BatchSize::SmallInput,
+        )
+    });
+    c.bench_function("kotodama_phase_typed_effect_hir", |b| {
+        b.iter_batched(
+            || resolved.clone(),
+            |resolved| {
+                std::hint::black_box(
+                    resolved
+                        .type_effect()
+                        .expect("type/effect-check canonical benchmark source"),
+                )
+            },
+            BatchSize::SmallInput,
+        )
     });
 
-    let semantic_context = SemanticContext::new();
-    let typed = semantic_context
-        .analyze(&parsed)
-        .expect("analyze benchmark source");
+    let typed = resolved
+        .type_effect()
+        .expect("prepare typed/effect-HIR benchmark source");
     c.bench_function("kotodama_phase_ir_lower", |b| {
-        b.iter(|| std::hint::black_box(ir::lower(&typed).expect("lower benchmark source")))
+        b.iter_batched(
+            || typed.clone(),
+            |typed| {
+                std::hint::black_box(typed.lower_ir().expect("lower canonical benchmark source"))
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    c.bench_function("kotodama_phase_ssa_construct", |b| {
+        b.iter_batched(
+            || {
+                typed
+                    .clone()
+                    .lower_ir()
+                    .expect("prepare lowering IR for SSA construction")
+            },
+            |lowered| {
+                std::hint::black_box(
+                    lowered
+                        .construct_ssa()
+                        .expect("construct canonical SSA MIR"),
+                )
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    c.bench_function("kotodama_phase_ssa_optimize", |b| {
+        b.iter_batched(
+            || {
+                typed
+                    .clone()
+                    .lower_ir()
+                    .expect("prepare lowering IR for SSA optimization")
+                    .construct_ssa()
+                    .expect("prepare SSA MIR for optimization")
+            },
+            |ssa| std::hint::black_box(ssa.optimize().expect("optimize canonical SSA MIR")),
+            BatchSize::SmallInput,
+        )
+    });
+
+    c.bench_function("kotodama_phase_de_ssa", |b| {
+        b.iter_batched(
+            || {
+                typed
+                    .clone()
+                    .lower_ir()
+                    .expect("prepare lowering IR for de-SSA")
+                    .construct_ssa()
+                    .expect("prepare SSA MIR for de-SSA")
+                    .optimize()
+                    .expect("prepare optimized SSA MIR for de-SSA")
+            },
+            |optimized| {
+                std::hint::black_box(optimized.destroy_ssa().expect("destroy canonical SSA MIR"))
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    c.bench_function("kotodama_phase_codegen", |b| {
+        b.iter_batched(
+            || {
+                typed
+                    .clone()
+                    .lower_ir()
+                    .expect("prepare lowering IR for codegen")
+                    .construct_ssa()
+                    .expect("prepare SSA MIR for codegen")
+                    .optimize()
+                    .expect("prepare optimized SSA MIR for codegen")
+                    .destroy_ssa()
+                    .expect("prepare de-SSA IR for codegen")
+            },
+            |codegen| {
+                std::hint::black_box(codegen.emit().expect("emit canonical benchmark artifact"))
+            },
+            BatchSize::SmallInput,
+        )
     });
 }
 
@@ -255,23 +386,37 @@ fn bench_compiled_bounded_list_runtime(c: &mut Criterion) {
 
 fn bench_bounded_lists(c: &mut Criterion) {
     let source = bounded_list_source();
-    let parsed = parser::parse(&source).expect("parse bounded List benchmark");
+    let parsed = SourcePhase::new(
+        Default::default(),
+        source,
+        Some("bench/bounded_list.ko".to_owned()),
+    )
+    .parse()
+    .expect("parse bounded List benchmark");
+    let resolved = parsed.resolve().expect("resolve bounded List benchmark");
     c.bench_function("kotodama_list_semantic_64", |b| {
-        b.iter(|| {
-            let context = SemanticContext::new();
-            std::hint::black_box(
-                context
-                    .analyze(&parsed)
-                    .expect("analyze bounded List benchmark"),
-            )
-        })
+        b.iter_batched(
+            || resolved.clone(),
+            |resolved| {
+                std::hint::black_box(
+                    resolved
+                        .type_effect()
+                        .expect("analyze bounded List benchmark"),
+                )
+            },
+            BatchSize::SmallInput,
+        )
     });
 
-    let typed = SemanticContext::new()
-        .analyze(&parsed)
+    let typed = resolved
+        .type_effect()
         .expect("analyze bounded List benchmark");
     c.bench_function("kotodama_list_lower_64", |b| {
-        b.iter(|| std::hint::black_box(ir::lower(&typed).expect("lower bounded List benchmark")))
+        b.iter_batched(
+            || typed.clone(),
+            |typed| std::hint::black_box(typed.lower_ir().expect("lower bounded List benchmark")),
+            BatchSize::SmallInput,
+        )
     });
 
     let layout = ivm::list::ListLayoutV1::try_new(64, 1).expect("bounded List layout");

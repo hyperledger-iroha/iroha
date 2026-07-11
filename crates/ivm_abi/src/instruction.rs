@@ -64,6 +64,8 @@ pub mod wide {
         pub const STORE128: u8 = 0x33;
         /// Load a validated typed literal pointer by its `u16` literal-table index.
         pub const LDLIT: u8 = 0x34;
+        /// Load a validated signed 64-bit scalar by its `u16` literal-table index.
+        pub const LDI64: u8 = 0x35;
     }
 
     /// Control flow.
@@ -255,6 +257,7 @@ pub mod wide {
                 | memory::LOAD128
                 | memory::STORE128
                 | memory::LDLIT
+                | memory::LDI64
                 // Control flow
                 | control::BEQ
                 | control::BNE

@@ -3,8 +3,8 @@ seiyaku ContractFlowExample {
         Rejected = 1,
     }
 
-    state counter: i64;
-    state last_actor: AccountId;
+    state int counter;
+    state AccountId last_actor;
     hajimari() {
         counter = 1;
         last_actor = context::authority();

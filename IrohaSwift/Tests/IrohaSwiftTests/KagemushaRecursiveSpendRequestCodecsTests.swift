@@ -909,10 +909,10 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
 
         let noteFields = try Self.fieldPayloads(initFields[2])
         XCTAssertEqual(noteFields.count, 3)
-        XCTAssertEqual(note.noteCommitment, try Self.readFixedArrayPayload(noteFields[0], expectedSize: 32))
-        XCTAssertEqual(note.spendNullifier, try Self.readFixedArrayPayload(noteFields[1], expectedSize: 32))
-        XCTAssertEqual(noteFields[0].count, 64)
-        XCTAssertEqual(noteFields[1].count, 64)
+        XCTAssertEqual(note.noteCommitment, noteFields[0])
+        XCTAssertEqual(note.spendNullifier, noteFields[1])
+        XCTAssertEqual(noteFields[0].count, 32)
+        XCTAssertEqual(noteFields[1].count, 32)
 
         let lineageKeyFields = try Self.fieldPayloads(Self.optionSomePayload(initFields[3]))
         XCTAssertEqual(lineageKeyFields.count, 2)
@@ -940,6 +940,23 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         _ = try Self.optionSomePayload(initWithoutBlockHeightFields[3])
         _ = try Self.optionSomePayload(initWithoutBlockHeightFields[4])
         try Self.assertOptionNone(initWithoutBlockHeightFields[5])
+
+        let semanticInitArchive = try KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(
+            KagemushaRecursiveSpendInitRequest(
+                recordBundle: recordBundle,
+                pallasOpenEnvelopes: pallasOpenEnvelopes,
+                currentNote: note,
+                blockHeight: 9
+            )
+        )
+        let semanticInitFields = try Self.requestFields(
+            semanticInitArchive,
+            schema: KagemushaRecursiveSpendRequestCodecs.initRequestWireName
+        )
+        XCTAssertEqual(semanticInitFields.count, 6)
+        try Self.assertOptionNone(semanticInitFields[3])
+        try Self.assertOptionNone(semanticInitFields[4])
+        XCTAssertEqual(UInt64(9), try Self.readUInt64Payload(Self.optionSomePayload(semanticInitFields[5])))
 
         let topUpInitArchive = try KagemushaRecursiveSpendRequestCodecs.encodeTopUpInitRequest(
             KagemushaRecursiveSpendTopUpInitRequest(
@@ -989,7 +1006,10 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         let assetIdFields = try Self.fieldPayloads(topUpFields[0])
         XCTAssertEqual(assetIdFields.count, 3)
         XCTAssertFalse(assetIdFields[0].isEmpty)
-        XCTAssertEqual(assetBytes, assetIdFields[1])
+        XCTAssertEqual(
+            assetBytes,
+            try Self.readFixedArrayPayload(assetIdFields[1], expectedSize: 16)
+        )
         XCTAssertEqual(Data([0, 0, 0, 0]), assetIdFields[2])
         let numericFields = try Self.fieldPayloads(topUpFields[1])
         XCTAssertEqual(numericFields.count, 2)
@@ -1036,7 +1056,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         )
         let copiedVerifierRecordBytes = mutableVerifierRecordBytes
         let copiedVerifierRecord = try KagemushaRecursiveSpendVerifierRecordRef(
-            verifierKeyId: "halo2/ipa:copiedVerifierRecord",
+            verifierKeyId: "halo2/ipa:copied-verifier-record",
             recordBytes: mutableVerifierRecordBytes
         )
         mutableVerifierRecordBytes[mutableVerifierRecordBytes.index(before: mutableVerifierRecordBytes.endIndex)] ^= 0x7f
@@ -1493,6 +1513,32 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: pallasOpenEnvelopes,
                 currentNote: Self.sampleNote(),
+                lineageVerifierKey: lineageVerifierKey
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidField("lineageKeyArtifacts")
+            )
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendInitRequest(
+                recordBundle: recordBundle,
+                pallasOpenEnvelopes: pallasOpenEnvelopes,
+                currentNote: Self.sampleNote(),
+                lineageProvingKeyArchive: lineageProvingKeyArchive
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidField("lineageKeyArtifacts")
+            )
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendInitRequest(
+                recordBundle: recordBundle,
+                pallasOpenEnvelopes: pallasOpenEnvelopes,
+                currentNote: Self.sampleNote(),
                 lineageVerifierKey: lineageVerifierKey,
                 lineageProvingKeyArchive: Data()
             )
@@ -1776,12 +1822,6 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             (
                 "vk_commitment",
                 Self.syntheticPallasOpenEnvelopesArchive(
-                    vkCommitmentPayload: Self.fixedArrayPayload(0x70, count: 32)
-                )
-            ),
-            (
-                "vk_commitment",
-                Self.syntheticPallasOpenEnvelopesArchive(
                     vkCommitmentOptionPayload: Self.requiredOptionPayloadWithTrailingByte(Self.fixed32(0x70))
                 )
             ),
@@ -1800,12 +1840,6 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             (
                 "public_inputs_schema_hash",
                 Self.syntheticPallasOpenEnvelopesArchive(
-                    publicInputsSchemaHashPayload: Self.fixedArrayPayload(0x71, count: 32)
-                )
-            ),
-            (
-                "public_inputs_schema_hash",
-                Self.syntheticPallasOpenEnvelopesArchive(
                     publicInputsSchemaHashOptionPayload: Self.requiredOptionPayloadWithTrailingByte(Self.fixed32(0x71))
                 )
             ),
@@ -1819,12 +1853,6 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 "public_inputs_schema_hash",
                 Self.syntheticPallasOpenEnvelopesArchive(
                     publicInputsSchemaHashOptionPayload: Self.requiredOptionPayloadWithDeclaredLengthTooLong(Self.fixed32(0x71))
-                )
-            ),
-            (
-                "domain_tag",
-                Self.syntheticPallasOpenEnvelopesArchive(
-                    domainTagPayload: Self.fixedArrayPayload(0x72, count: 32)
                 )
             ),
             (
@@ -2052,6 +2080,29 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                     sequenceField
                 )
             }
+        }
+    }
+
+    func testPallasMetadataAcceptsPackedAndConstVecFixed32Options() throws {
+        let recordBundle = Self.syntheticRecordBundleArchive()
+        let (lineageVerifierKey, lineageProvingKeyArchive) = try Self.sharedInitLineageKeyMaterial()
+        let packed = Self.syntheticPallasOpenEnvelopesArchive()
+        let constVec = Self.syntheticPallasOpenEnvelopesArchive(
+            vkCommitmentPayload: Self.fixedArrayPayload(0x70, count: 32),
+            publicInputsSchemaHashPayload: Self.fixedArrayPayload(0x71, count: 32),
+            domainTagPayload: Self.fixedArrayPayload(0x72, count: 32)
+        )
+
+        for archive in [packed, constVec] {
+            XCTAssertNoThrow(
+                try KagemushaRecursiveSpendInitRequest(
+                    recordBundle: recordBundle,
+                    pallasOpenEnvelopes: archive,
+                    currentNote: Self.sampleNote(),
+                    lineageVerifierKey: lineageVerifierKey,
+                    lineageProvingKeyArchive: lineageProvingKeyArchive
+                )
+            )
         }
     }
 

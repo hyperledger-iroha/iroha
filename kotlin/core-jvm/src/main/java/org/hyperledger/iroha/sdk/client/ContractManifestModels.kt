@@ -18,10 +18,10 @@ enum class ContractEntrypointKind {
 /** Scalar and pointer leaves supported by an exact Kotodama V1 boundary schema. */
 enum class EntrypointValueKindV1 {
     INT,
-    U128,
+    DECIMAL,
+    QUANTITY,
     BOOL,
     STRING,
-    AMOUNT,
     JSON,
     NAME,
     ACCOUNT_ID,
@@ -248,11 +248,11 @@ object ContractManifestJsonParser {
     private val maxU64 = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
     private val reservedIdentifiers = setOf(
         "authorize", "break", "const", "continue", "else", "enum", "error", "false",
-        "fn", "for", "hajimari", "if", "in", "kaizen", "kotoage", "let", "match", "module",
+        "fn", "for", "hajimari", "if", "in", "int", "decimal", "quantity", "kaizen", "kotoage", "let", "match", "module",
         "return", "seiyaku", "state", "struct", "trigger", "true", "var", "view",
     )
     private val reservedDeclarationNames = setOf(
-        "i64", "u128", "bool", "string", "bytes", "Amount", "Json", "AccountId",
+        "int", "decimal", "quantity", "bool", "string", "bytes", "Json", "AccountId",
         "AssetDefinitionId", "AssetId", "DomainId", "Name", "NftId", "DataSpaceId",
         "Option", "Result", "List", "StateMap", "Secret", "AccountView", "AssetView",
         "AssetDefinitionView", "DomainView", "NftView", "QueryPage", "AxtDescriptor",
@@ -260,14 +260,14 @@ object ContractManifestJsonParser {
         "state_map_get", "__kotodama_list_len", "__kotodama_list_get",
         "__kotodama_list_try_set", "__kotodama_list_try_push", "__kotodama_list_pop",
         "__kotodama_list_contains", "__kotodama_list_take", "__kotodama_list_enumerate",
-        "__kotodama_amount_div_round",
+        "__kotodama_decimal_div_round", "__kotodama_quantity_div_round",
     )
     private val valueKindByWire = mapOf(
         "Int" to EntrypointValueKindV1.INT,
-        "U128" to EntrypointValueKindV1.U128,
+        "Decimal" to EntrypointValueKindV1.DECIMAL,
+        "Quantity" to EntrypointValueKindV1.QUANTITY,
         "Bool" to EntrypointValueKindV1.BOOL,
         "String" to EntrypointValueKindV1.STRING,
-        "Amount" to EntrypointValueKindV1.AMOUNT,
         "Json" to EntrypointValueKindV1.JSON,
         "Name" to EntrypointValueKindV1.NAME,
         "AccountId" to EntrypointValueKindV1.ACCOUNT_ID,
@@ -760,7 +760,7 @@ object ContractManifestJsonParser {
             )
             "AssetView" -> listOf(
                 "id" to EntrypointValueKindV1.ASSET_ID,
-                "amount" to EntrypointValueKindV1.AMOUNT,
+                "amount" to EntrypointValueKindV1.QUANTITY,
             )
             "DomainView" -> listOf(
                 "id" to EntrypointValueKindV1.DOMAIN_ID,
@@ -790,7 +790,7 @@ object ContractManifestJsonParser {
                 nodes.getOrNull(start + 3)?.kind != EntrypointValueTypeNodeKindV1.OPTION ||
                 !leafAt(nodes, start + 4, EntrypointValueKindV1.STRING) ||
                 !leafAt(nodes, start + 5, EntrypointValueKindV1.ACCOUNT_ID) ||
-                !leafAt(nodes, start + 6, EntrypointValueKindV1.AMOUNT) ||
+                !leafAt(nodes, start + 6, EntrypointValueKindV1.QUANTITY) ||
                 !leafAt(nodes, start + 7, EntrypointValueKindV1.JSON) ||
                 subtreeEnd(nodes, start) != start + 8
             ) {
@@ -850,11 +850,11 @@ object ContractManifestJsonParser {
     }
 
     private fun canonicalLeafName(kind: EntrypointValueKindV1): String = when (kind) {
-        EntrypointValueKindV1.INT -> "i64"
-        EntrypointValueKindV1.U128 -> "u128"
+        EntrypointValueKindV1.INT -> "int"
+        EntrypointValueKindV1.DECIMAL -> "decimal"
+        EntrypointValueKindV1.QUANTITY -> "quantity"
         EntrypointValueKindV1.BOOL -> "bool"
         EntrypointValueKindV1.STRING -> "string"
-        EntrypointValueKindV1.AMOUNT -> "Amount"
         EntrypointValueKindV1.JSON -> "Json"
         EntrypointValueKindV1.NAME -> "Name"
         EntrypointValueKindV1.ACCOUNT_ID -> "AccountId"

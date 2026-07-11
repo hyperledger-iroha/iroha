@@ -1,0 +1,205 @@
+{
+  "schema_version": 1,
+  "protocol": "sumeragi-v2",
+  "status_values": [
+    "tlaps_proved",
+    "specified_unproved",
+    "trusted_contract",
+    "out_of_scope"
+  ],
+  "machine_checked_completion": false,
+  "last_tlaps_run": {
+    "tool": "TLAPM 1.6.0-pre (commit 763bf3c)",
+    "modules": [
+      {
+        "module": "SumeragiV2QuorumProofs",
+        "obligations_proved": 218
+      },
+      {
+        "module": "SumeragiV2SafetyLemmas",
+        "obligations_proved": 144
+      },
+      {
+        "module": "SumeragiV2Proofs",
+        "obligations_proved": 8
+      }
+    ]
+  },
+  "obligations": [
+    {
+      "id": "dual-quorum-definition",
+      "requirement": "Every certificate carries both strict count and strict power quorum",
+      "module": "SumeragiV2QuorumProofs",
+      "symbol": "DualQuorumCarriesBothThresholds",
+      "status": "tlaps_proved"
+    },
+    {
+      "id": "quorum-honest-intersection",
+      "requirement": "Count, power, and dual quorums intersect in an honest validator",
+      "module": "SumeragiV2Proofs",
+      "symbol": "QuorumIntersectionObligation",
+      "status": "tlaps_proved"
+    },
+    {
+      "id": "durable-vote-append-kernel",
+      "requirement": "Appending an authorized durable vote or timeout intent preserves honest sign-once uniqueness",
+      "module": "SumeragiV2SafetyLemmas",
+      "symbol": "DurableVoteAppendPreservesUniqueness / DurableTimeoutAppendPreservesUniqueness",
+      "status": "tlaps_proved"
+    },
+    {
+      "id": "same-view-certificate-kernel",
+      "requirement": "Two intent-backed dual-quorum certificates in one slot have the same subject",
+      "module": "SumeragiV2SafetyLemmas",
+      "symbol": "SameViewCertificateUniqueness",
+      "status": "tlaps_proved"
+    },
+    {
+      "id": "validity-availability-kernel",
+      "requirement": "An intent-backed dual-quorum certificate has a valid subject and an honest durable body source",
+      "module": "SumeragiV2SafetyLemmas",
+      "symbol": "BackedCertificateIsValidAndAvailable",
+      "status": "tlaps_proved"
+    },
+    {
+      "id": "lock-transition-kernel",
+      "requirement": "Commit persistence and TC installation monotonically advance locks and monotone updates compose",
+      "module": "SumeragiV2SafetyLemmas",
+      "symbol": "CommitPersistenceAdvancesLockMonotonically / TimeoutInstallationAdvancesLockMonotonically / MonotoneLockUpdatesCompose",
+      "status": "tlaps_proved"
+    },
+    {
+      "id": "timeout-protection-kernel",
+      "requirement": "A grouped TC whose honest timeout intents protect old Commit intents preserves every dual-quorum potential commit",
+      "module": "SumeragiV2SafetyLemmas",
+      "symbol": "GroupedTimeoutProtectsCommitQuorum",
+      "status": "tlaps_proved"
+    },
+    {
+      "id": "durable-vote-uniqueness",
+      "requirement": "Honest Prepare, Commit, and Timeout intents are unique per context and view",
+      "module": "SumeragiV2Proofs",
+      "symbol": "DurableVoteUniquenessObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "lock-monotonicity",
+      "requirement": "A lock never decreases and changes subject only at a strictly higher PrepareQC",
+      "module": "SumeragiV2Proofs",
+      "symbol": "LockMonotonicityObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "external-validity",
+      "requirement": "PrepareQCs, CommitQCs, and decisions certify only deterministically valid subjects",
+      "module": "SumeragiV2Proofs",
+      "symbol": "ExternalValidityObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "certified-body-availability",
+      "requirement": "Every PrepareQC and CommitQC retains an honest durable body source",
+      "module": "SumeragiV2Proofs",
+      "symbol": "AvailabilityObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "certificate-uniqueness",
+      "requirement": "No two same-view PrepareQCs or CommitQCs certify different subjects",
+      "module": "SumeragiV2Proofs",
+      "symbol": "CertificateUniquenessObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "timeout-protection",
+      "requirement": "Every TC protects every still-formable old-view CommitQC",
+      "module": "SumeragiV2Proofs",
+      "symbol": "TimeoutProtectionObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "agreement",
+      "requirement": "Correct validators cannot decide different subjects in one height context",
+      "module": "SumeragiV2Proofs",
+      "symbol": "AgreementObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "no-conflicting-commit-qcs",
+      "requirement": "No two CommitQCs in one context certify different subjects",
+      "module": "SumeragiV2Proofs",
+      "symbol": "NoConflictingCommitCertificatesObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "chain-prefix",
+      "requirement": "Finalized chains at correct validators are prefix comparable",
+      "module": "SumeragiV2Proofs",
+      "symbol": "ChainPrefixObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "crash-restart",
+      "requirement": "Crash/restart preserves durable safety state and suppresses incomplete writes and stale completions",
+      "module": "SumeragiV2Proofs",
+      "symbol": "CrashRecoveryObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "epoch-boundary",
+      "requirement": "Reconfiguration occurs only after applied finality and old-context certificates cannot cross the boundary",
+      "module": "SumeragiV2Proofs",
+      "symbol": "EpochBoundaryObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "timeout-view-liveness",
+      "requirement": "After GST, a nondeciding responsive validator advances by TC or decides",
+      "module": "SumeragiV2Proofs",
+      "symbol": "TimeoutViewProgressObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "rotating-leader-liveness",
+      "requirement": "After GST, rotation reaches a responsive honest leader and all responsive validators decide",
+      "module": "SumeragiV2Proofs",
+      "symbol": "RotatingLeaderProgressObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "application-liveness",
+      "requirement": "A responsive decision eventually fetches, validates, and applies its certified body",
+      "module": "SumeragiV2Proofs",
+      "symbol": "ApplicationLivenessObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "height-liveness",
+      "requirement": "Every post-GST height eventually applies and advances",
+      "module": "SumeragiV2Proofs",
+      "symbol": "HeightLivenessObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "cryptography",
+      "requirement": "Signature authenticity and hash collision resistance",
+      "module": "trusted-boundary",
+      "symbol": "cryptography",
+      "status": "trusted_contract"
+    },
+    {
+      "id": "durability-system-call",
+      "requirement": "Successful fsync acknowledgements faithfully persist complete frames",
+      "module": "trusted-boundary",
+      "symbol": "os-fsync",
+      "status": "trusted_contract"
+    },
+    {
+      "id": "network-after-gst",
+      "requirement": "Authenticated retransmitted messages are eventually delivered after GST",
+      "module": "trusted-boundary",
+      "symbol": "post-gst-delivery",
+      "status": "trusted_contract"
+    }
+  ]
+}

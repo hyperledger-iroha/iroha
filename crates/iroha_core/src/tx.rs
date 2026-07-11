@@ -134,6 +134,8 @@ pub(crate) struct StatefulAdmission {
     pub(crate) allow_unregistered_authority: bool,
     /// Monotonic sequence value to store after successful execution.
     pub(crate) sequence_to_commit: Option<u64>,
+    /// Exact signed validation-fee value to credit only after complete execution succeeds.
+    pub(crate) validation_fee_credit: Option<crate::validation_fee::ValidationFeeCredit>,
 }
 
 #[derive(Debug, Clone, norito::codec::Decode, norito::codec::Encode)]
@@ -297,6 +299,8 @@ static HEARTBEAT_TX_SEQUENCE_NAME: LazyLock<iroha_data_model::name::Name> = Lazy
 pub(crate) const ED25519_SIGNATURE_LENGTH: usize = 64;
 const MULTISIG_DIRECT_SIGN_REJECTION: &str =
     "multisig accounts must use the multisig propose/approve flow; direct signatures are rejected";
+const CONTRACT_SUBJECT_DIRECT_SIGN_REJECTION: &str =
+    "deployed contract subjects cannot originate signed transactions directly";
 /// Prefix used in transaction-limit rejection reasons when the signature cap is exceeded.
 pub const SIGNATURE_LIMIT_REASON_PREFIX: &str = "Too many signatures in payload";
 
@@ -960,6 +964,8 @@ fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
     }
     any.is::<iroha_data_model::isi::offline::KagemushaTransfer>()
         || any.is::<iroha_data_model::isi::offline::TopUpKagemushaRecursive>()
+        || any.is::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV2>()
+        || any.is::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2>()
         || any.is::<iroha_data_model::isi::oracle::RecordTwitterBinding>()
         || any.is::<iroha_data_model::isi::social::ClaimTwitterFollowReward>()
         || any.is::<iroha_data_model::isi::social::SendToTwitter>()
@@ -1305,6 +1311,7 @@ pub(crate) fn is_heartbeat_transaction(tx: &SignedTransaction) -> bool {
 
 /// Returns `true` if an accepted entrypoint wraps a Sumeragi heartbeat transaction.
 #[must_use]
+#[cfg(test)]
 pub(crate) fn is_heartbeat_accepted_transaction(tx: &AcceptedTransaction<'_>) -> bool {
     tx.external().is_some_and(is_heartbeat_transaction)
 }
@@ -3568,6 +3575,16 @@ impl StateBlock<'_> {
         routing_decision: Option<crate::queue::RoutingDecision>,
     ) -> Result<StatefulAdmission, TransactionRejectionReason> {
         let authority = tx.authority().clone();
+        if code::is_historical_contract_subject(&state_transaction.world, &authority) {
+            warn!(
+                authority = %authority,
+                "deployed contract subjects cannot sign transactions directly"
+            );
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(CONTRACT_SUBJECT_DIRECT_SIGN_REJECTION.into()),
+            ));
+        }
+
         let is_heartbeat = is_heartbeat_transaction(tx);
         let authority_exists = state_transaction.world.accounts.get(&authority).is_some();
         let allow_unregistered_authority = !is_heartbeat
@@ -3736,7 +3753,8 @@ impl StateBlock<'_> {
             &state_transaction.world,
             state_transaction.block_height(),
         )?;
-        crate::validation_fee::enforce_validation_fee_admission(tx, state_transaction)?;
+        let validation_fee_credit =
+            crate::validation_fee::enforce_validation_fee_admission(tx, state_transaction)?;
 
         if !is_heartbeat {
             enforce_fraud_policy(
@@ -3752,6 +3770,7 @@ impl StateBlock<'_> {
             is_heartbeat,
             allow_unregistered_authority,
             sequence_to_commit,
+            validation_fee_credit,
         })
     }
 
@@ -3805,13 +3824,33 @@ impl StateBlock<'_> {
         let routing =
             crate::queue::RoutingDecision::new(descriptor.lane_id, descriptor.dataspace_id);
         let mut results = Vec::with_capacity(artifact.entrypoints.len());
-        for (raw_entrypoint_index, entrypoint) in descriptor
+        for (position, (raw_entrypoint_index, entrypoint)) in descriptor
             .accepted_candidate_indices
             .iter()
             .copied()
             .zip(artifact.entrypoints.iter())
+            .enumerate()
         {
             let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(entrypoint));
+            let plan = if let Some(bound) = artifact.routing_plans.get(position) {
+                // Autonomous payloads carry a producer-authenticated plan bound
+                // to the proposal-height incarnation. Recomputing against the
+                // current catalog would make valid delayed merges depend on
+                // unrelated scale-out or policy drift.
+                bound.clone()
+            } else {
+                evaluate_policy_plan_with_nexus_and_world_at_block_height(
+                    &self.nexus,
+                    &accepted,
+                    &self.world,
+                    u64::try_from(self._curr_block.creation_time().as_millis()).unwrap_or(u64::MAX),
+                    descriptor.proposal_height,
+                )
+                .map_err(|_| "execution input routing cannot be resolved")?
+            };
+            if plan.coordinator_route() != routing {
+                return Err("execution input route does not match recomputed coordinator route");
+            }
             let (entrypoint_hash, result) = self
                 .validate_transaction_at_entrypoint_index_and_routing(
                     accepted,
@@ -4059,6 +4098,11 @@ impl StateBlock<'_> {
                 trigger_sequence
             }
         };
+
+        crate::validation_fee::commit_validation_fee_credit(
+            state_transaction,
+            admission.validation_fee_credit.as_ref(),
+        )?;
 
         if let Some(seq) = admission.sequence_to_commit {
             state_transaction
@@ -5300,7 +5344,14 @@ fn enforce_lane_policies(
         };
         let evaluation = engine.evaluate(&ctx);
         match evaluation {
-            LaneComplianceEvaluation::NotConfigured => {}
+            LaneComplianceEvaluation::NotConfigured => {
+                if !engine.audit_only() {
+                    return Err(reject_lane_policy(
+                        &lane_alias,
+                        "no exact lane compliance policy is configured".to_string(),
+                    ));
+                }
+            }
             LaneComplianceEvaluation::Allowed(record) => {
                 record.log(engine.audit_only());
             }
@@ -6853,6 +6904,140 @@ pub mod tests {
             }
             other => panic!("expected multisig direct-sign reject, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn deactivated_contract_subject_remains_non_signing() {
+        use iroha_data_model::{
+            domain::DomainId, isi::smart_contract_code::DeactivateContractInstance,
+            smart_contract::ContractAddress,
+        };
+
+        let chain: ChainId = "contract-subject-direct-sign".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("contracts", "universal").unwrap();
+        let deployer_keypair = checked_random_tx_keypair();
+        let deployer = AccountId::new(deployer_keypair.public_key().clone());
+        let contract_address = ContractAddress::derive(
+            0,
+            &deployer,
+            1,
+            iroha_data_model::nexus::DataSpaceId::new(0),
+        )
+        .expect("derive contract address");
+
+        let mut seed = Vec::from(&b"iroha:contract-subject:v1:"[..]);
+        seed.extend_from_slice(contract_address.as_ref().as_bytes());
+        let legacy_contract_keypair = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+            .expect("derive legacy publicly reproducible contract subject keypair");
+        let legacy_contract_subject = code::legacy_contract_subject_id_v1(&contract_address);
+        assert_eq!(
+            legacy_contract_subject,
+            AccountId::new(legacy_contract_keypair.public_key().clone()),
+            "core migration helper must reproduce the historical v1 subject"
+        );
+        let contract_subject = contract_address.subject_id();
+        assert_ne!(
+            contract_subject, legacy_contract_subject,
+            "v2 contract subjects must not expose the legacy deterministic signing key"
+        );
+
+        let domain = Domain::new(domain_id.clone()).build(&deployer);
+        let accounts = [
+            new_account_in_domain(&deployer, &domain_id).build(&deployer),
+            new_account_in_domain(&legacy_contract_subject, &domain_id)
+                .build(&legacy_contract_subject),
+        ];
+        let mut world = World::with([domain], accounts, []);
+        world.contract_instances.insert(
+            contract_address.clone(),
+            iroha_crypto::Hash::new(b"contract-code"),
+        );
+        world.contract_subject_bindings.insert(
+            contract_address.clone(),
+            code::ContractSubjectBinding::legacy_v1(&contract_address, None),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut state_tx = block.transaction();
+        DeactivateContractInstance {
+            contract_address: contract_address.clone(),
+            reason: Some("retired for signer-history regression".to_owned()),
+        }
+        .execute(&deployer, &mut state_tx)
+        .expect("deactivate contract instance");
+        let retained_binding = state_tx
+            .world
+            .contract_subject_bindings
+            .get(&contract_address)
+            .expect("deactivation must retain typed subject history");
+        assert_eq!(retained_binding.subject, legacy_contract_subject);
+        assert_eq!(retained_binding.version, code::CONTRACT_SUBJECT_VERSION_V1);
+        assert_ne!(retained_binding.subject, contract_subject);
+        state_tx.apply();
+        block.commit().expect("commit contract deactivation");
+
+        let tx = TransactionBuilder::new(chain.clone(), legacy_contract_subject)
+            .with_instructions([Log::new(
+                Level::INFO,
+                "attempt direct contract-subject authority".into(),
+            )])
+            .sign(legacy_contract_keypair.private_key());
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut state_tx = block.transaction();
+        let result = StateBlock::validate_stateful_admission(&tx, &mut state_tx, None);
+        match result {
+            Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason))) => {
+                assert_eq!(reason, CONTRACT_SUBJECT_DIRECT_SIGN_REJECTION);
+            }
+            other => panic!("expected contract-subject direct-sign reject, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn forged_legacy_history_prefix_cannot_deny_an_unrelated_signer() {
+        use iroha_data_model::domain::DomainId;
+
+        let chain: ChainId = "contract-subject-poisoned-prefix".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("users", "universal").unwrap();
+        let keypair = checked_random_tx_keypair();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let account = new_account_in_domain(&authority, &domain_id).build(&authority);
+        let mut world = World::with([domain], [account], []);
+        world.smart_contract_state.insert(
+            code::contract_subject_history_key(&authority),
+            b"attacker-controlled-pre-upgrade-value".to_vec(),
+        );
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        assert!(
+            state
+                .view()
+                .world()
+                .smart_contract_state()
+                .get(&code::contract_subject_history_key(&authority))
+                .is_none(),
+            "trusted initialization must purge the entire formerly guest-writable namespace"
+        );
+
+        let tx = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "ordinary signed transaction".into())])
+            .sign(keypair.private_key());
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut state_tx = block.transaction();
+        let result = StateBlock::validate_stateful_admission(&tx, &mut state_tx, None);
+        assert!(
+            result.is_ok(),
+            "guest-forged legacy prefix must not affect admission: {result:?}"
+        );
     }
 
     #[test]
@@ -12103,9 +12288,11 @@ pub mod tests {
             .map(|entrypoint| Hash::from(entrypoint.hash()))
             .collect::<Vec<_>>();
         let validator_set = vec![validator];
+        let lane_incarnation = Hash::new(b"tx-test-lane-incarnation");
         let subject_hash = SumeragiLanePayloadOwnership::compute_replay_subject_hash(
             lane_id,
             dataspace_id,
+            lane_incarnation,
             1,
             0,
             &candidate_indices,
@@ -12117,6 +12304,7 @@ pub mod tests {
             SumeragiLanePayloadOwnership::compute_replay_payload_ownership_hash(
                 lane_id,
                 dataspace_id,
+                lane_incarnation,
                 1,
                 0,
                 subject_hash,
@@ -12128,6 +12316,7 @@ pub mod tests {
         let rbc_instance_hash = SumeragiLanePayloadOwnership::compute_replay_rbc_instance_hash(
             lane_id,
             dataspace_id,
+            lane_incarnation,
             1,
             0,
             subject_hash,
@@ -12138,6 +12327,7 @@ pub mod tests {
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id,
             dataspace_id,
+            lane_incarnation,
             proposal_height: 1,
             previous_lane_block_height: 0,
             previous_lane_block_descriptor_hash: None,
@@ -12163,6 +12353,7 @@ pub mod tests {
             proposal_view: 0,
             lane_id,
             dataspace_id,
+            lane_incarnation,
             lane_block_height: 1,
             lane_block_view: 0,
             subject_hash,
@@ -12192,7 +12383,13 @@ pub mod tests {
                 )),
                 ownership,
             ),
+            autonomous_chain_id_hash: None,
+            autonomous_epoch: None,
+            autonomous_payload_hash: None,
             entrypoints,
+            reservation_keys: Vec::new(),
+            routing_plans: Vec::new(),
+            native_amx_receipts: Vec::new(),
         })
     }
 

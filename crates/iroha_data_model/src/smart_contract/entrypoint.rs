@@ -93,16 +93,16 @@ pub const DECODED_ARGUMENT_WORD_BYTES: i16 = 8;
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(tag = "kind", content = "value", deny_unknown_fields)]
 pub enum EntrypointValueKindV1 {
-    /// Signed 64-bit integer carried directly in one register word.
+    /// Canonical signed 4,096-bit integer pointer.
     Int,
-    /// Unsigned 128-bit integer carried as a canonical scale-zero `Numeric` pointer.
-    U128,
+    /// Canonical exact decimal pointer.
+    Decimal,
+    /// Canonical non-negative nominal asset-quantity pointer.
+    Quantity,
     /// Boolean scalar carried as exactly zero or one.
     Bool,
     /// UTF-8 string carried as a `Blob` pointer.
     String,
-    /// Canonical non-negative `Amount` carried as an `Amount` pointer.
-    Amount,
     /// Nested JSON value carried as a `Json` pointer.
     Json,
     /// Validated [`crate::name::Name`] pointer.
@@ -127,7 +127,7 @@ impl EntrypointValueKindV1 {
     /// Return whether the value occupies a validated pointer word.
     #[must_use]
     pub const fn is_pointer(self) -> bool {
-        !matches!(self, Self::Int | Self::Bool)
+        !matches!(self, Self::Bool)
     }
 }
 
@@ -313,7 +313,7 @@ fn core_query_view_nodes_name(nodes: &[EntrypointValueTypeNodeV1]) -> Option<(&s
         [
             Node::Struct(view),
             Node::Leaf(Kind::AssetId),
-            Node::Leaf(Kind::Amount),
+            Node::Leaf(Kind::Quantity),
             ..,
         ] if view.name == "AssetView" && view.fields.as_slice() == ["id", "amount"] => {
             Some((view.name.as_str(), 3))
@@ -325,7 +325,7 @@ fn core_query_view_nodes_name(nodes: &[EntrypointValueTypeNodeV1]) -> Option<(&s
             Node::Option,
             Node::Leaf(Kind::String),
             Node::Leaf(Kind::AccountId),
-            Node::Leaf(Kind::Amount),
+            Node::Leaf(Kind::Quantity),
             Node::Leaf(Kind::Json),
             ..,
         ] if view.name == "AssetDefinitionView"
@@ -746,11 +746,11 @@ impl EntrypointValueTypeV1 {
                 }
                 EntrypointValueTypeNodeV1::Leaf(kind) => RenderedType {
                     text: match kind {
-                        EntrypointValueKindV1::Int => "i64".to_owned(),
-                        EntrypointValueKindV1::U128 => "u128".to_owned(),
+                        EntrypointValueKindV1::Int => "int".to_owned(),
+                        EntrypointValueKindV1::Decimal => "decimal".to_owned(),
+                        EntrypointValueKindV1::Quantity => "quantity".to_owned(),
                         EntrypointValueKindV1::Bool => "bool".to_owned(),
                         EntrypointValueKindV1::String => "string".to_owned(),
-                        EntrypointValueKindV1::Amount => "Amount".to_owned(),
                         EntrypointValueKindV1::Json => "Json".to_owned(),
                         EntrypointValueKindV1::Name => "Name".to_owned(),
                         EntrypointValueKindV1::AccountId => "AccountId".to_owned(),
@@ -792,8 +792,6 @@ pub enum EntrypointValueWordKindV1 {
 pub enum EntrypointValueAtomV1 {
     /// Option/Result tag.
     Tag(bool),
-    /// Signed 64-bit scalar.
-    Int(i64),
     /// Boolean scalar.
     Bool(bool),
     /// Complete pointer-ABI TLV envelope for a typed leaf.
@@ -1088,8 +1086,7 @@ fn walk_entrypoint_value_atoms(
                 cursor += 1;
                 let valid = matches!(
                     (kind, atom),
-                    (EntrypointValueKindV1::Int, EntrypointValueAtomV1::Int(_))
-                        | (EntrypointValueKindV1::Bool, EntrypointValueAtomV1::Bool(_))
+                    (EntrypointValueKindV1::Bool, EntrypointValueAtomV1::Bool(_))
                 ) || (kind.is_pointer()
                     && matches!(atom, EntrypointValueAtomV1::Pointer(_)));
                 if !valid {
@@ -1125,6 +1122,7 @@ pub fn is_canonical_kotodama_identifier(value: &str) -> bool {
                 | "break"
                 | "const"
                 | "continue"
+                | "decimal"
                 | "else"
                 | "enum"
                 | "error"
@@ -1134,11 +1132,13 @@ pub fn is_canonical_kotodama_identifier(value: &str) -> bool {
                 | "hajimari"
                 | "if"
                 | "in"
+                | "int"
                 | "kaizen"
                 | "kotoage"
                 | "let"
                 | "match"
                 | "module"
+                | "quantity"
                 | "return"
                 | "seiyaku"
                 | "state"
@@ -1158,6 +1158,10 @@ mod tests {
         EntrypointValueTypeV1 {
             nodes: vec![EntrypointValueTypeNodeV1::Leaf(kind)],
         }
+    }
+
+    fn int_atom(value: u8) -> EntrypointValueAtomV1 {
+        EntrypointValueAtomV1::Pointer(vec![value])
     }
 
     fn nested_list_schema(list_count: usize) -> EntrypointValueTypeV1 {
@@ -1241,6 +1245,22 @@ mod tests {
     }
 
     #[test]
+    fn numeric_boundary_leaves_are_distinct_pointer_types() {
+        for (kind, name) in [
+            (EntrypointValueKindV1::Int, "int"),
+            (EntrypointValueKindV1::Decimal, "decimal"),
+            (EntrypointValueKindV1::Quantity, "quantity"),
+        ] {
+            assert!(kind.is_pointer());
+            let schema = leaf(kind);
+            assert_eq!(schema.canonical_type_name().as_deref(), Some(name));
+            assert!(schema.validate_atoms(&[EntrypointValueAtomV1::Pointer(vec![1])]));
+            assert!(!schema.validate_atoms(&[EntrypointValueAtomV1::Bool(true)]));
+        }
+        assert!(!EntrypointValueKindV1::Bool.is_pointer());
+    }
+
+    #[test]
     fn inactive_sum_payloads_are_absent_from_the_wire() {
         let schema = EntrypointArgumentSchemaV1 {
             fields: vec![EntrypointArgumentFieldV1 {
@@ -1275,14 +1295,14 @@ mod tests {
             nodes: vec![
                 EntrypointValueTypeNodeV1::List(EntrypointListTypeNodeV1 { capacity: 3 }),
                 EntrypointValueTypeNodeV1::List(EntrypointListTypeNodeV1 { capacity: 2 }),
-                EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Amount),
+                EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Quantity),
             ],
         };
         assert!(nested.validate());
         assert_eq!(nested.word_count(), Some(1));
         assert_eq!(
             nested.canonical_type_name().as_deref(),
-            Some("List<List<Amount, 2>, 3>")
+            Some("List<List<quantity, 2>, 3>")
         );
         assert_eq!(
             entrypoint_value_subtree_range_v1(&nested.nodes, 0),
@@ -1393,9 +1413,9 @@ mod tests {
 
         let atoms = vec![
             EntrypointValueAtomV1::List(2),
-            EntrypointValueAtomV1::Int(1),
+            int_atom(1),
             EntrypointValueAtomV1::Bool(true),
-            EntrypointValueAtomV1::Int(2),
+            int_atom(2),
             EntrypointValueAtomV1::Bool(false),
             EntrypointValueAtomV1::Pointer(vec![0x10]),
         ];
@@ -1411,22 +1431,22 @@ mod tests {
         let invalid = [
             vec![
                 EntrypointValueAtomV1::List(3),
-                EntrypointValueAtomV1::Int(1),
+                int_atom(1),
                 EntrypointValueAtomV1::Bool(true),
-                EntrypointValueAtomV1::Int(2),
+                int_atom(2),
                 EntrypointValueAtomV1::Bool(false),
-                EntrypointValueAtomV1::Int(3),
+                int_atom(3),
                 EntrypointValueAtomV1::Bool(true),
                 EntrypointValueAtomV1::Pointer(Vec::new()),
             ],
             vec![
                 EntrypointValueAtomV1::List(1),
-                EntrypointValueAtomV1::Int(1),
+                int_atom(1),
                 EntrypointValueAtomV1::Pointer(Vec::new()),
             ],
             vec![
                 EntrypointValueAtomV1::List(1),
-                EntrypointValueAtomV1::Int(1),
+                int_atom(1),
                 EntrypointValueAtomV1::Bool(true),
                 EntrypointValueAtomV1::Bool(false),
                 EntrypointValueAtomV1::Pointer(Vec::new()),
@@ -1434,23 +1454,23 @@ mod tests {
             vec![
                 EntrypointValueAtomV1::List(1),
                 EntrypointValueAtomV1::Bool(true),
-                EntrypointValueAtomV1::Int(1),
+                int_atom(1),
                 EntrypointValueAtomV1::Pointer(Vec::new()),
             ],
             vec![
                 EntrypointValueAtomV1::List(1),
-                EntrypointValueAtomV1::Int(1),
+                int_atom(1),
                 EntrypointValueAtomV1::Bool(true),
             ],
             vec![
                 EntrypointValueAtomV1::List(2),
-                EntrypointValueAtomV1::Int(1),
+                int_atom(1),
                 EntrypointValueAtomV1::Bool(true),
                 EntrypointValueAtomV1::Pointer(Vec::new()),
             ],
             vec![
                 EntrypointValueAtomV1::List(1),
-                EntrypointValueAtomV1::Int(2),
+                int_atom(2),
                 EntrypointValueAtomV1::Bool(false),
                 EntrypointValueAtomV1::Pointer(Vec::new()),
                 EntrypointValueAtomV1::Bool(false),
@@ -1477,7 +1497,7 @@ mod tests {
         let valid = vec![
             EntrypointValueAtomV1::List(1),
             EntrypointValueAtomV1::List(1),
-            EntrypointValueAtomV1::Int(7),
+            int_atom(7),
         ];
         assert!(schema.validate_atoms(&valid));
         assert_eq!(
@@ -1493,13 +1513,10 @@ mod tests {
             vec![
                 EntrypointValueAtomV1::List(1),
                 EntrypointValueAtomV1::List(2),
-                EntrypointValueAtomV1::Int(1),
-                EntrypointValueAtomV1::Int(2),
+                int_atom(1),
+                int_atom(2),
             ],
-            vec![
-                EntrypointValueAtomV1::List(1),
-                EntrypointValueAtomV1::Int(7),
-            ],
+            vec![EntrypointValueAtomV1::List(1), int_atom(7)],
             vec![
                 EntrypointValueAtomV1::List(0),
                 EntrypointValueAtomV1::List(0),
@@ -1518,32 +1535,20 @@ mod tests {
             ],
         };
         assert!(schema.validate_atoms(&[EntrypointValueAtomV1::List(0)]));
-        assert!(schema.validate_atoms(&[
-            EntrypointValueAtomV1::List(2),
-            EntrypointValueAtomV1::Int(1),
-            EntrypointValueAtomV1::Int(2),
-        ]));
+        assert!(
+            schema.validate_atoms(&[EntrypointValueAtomV1::List(2), int_atom(1), int_atom(2),])
+        );
 
         for malformed in [
             vec![EntrypointValueAtomV1::List(1)],
-            vec![
-                EntrypointValueAtomV1::List(0),
-                EntrypointValueAtomV1::Int(1),
-            ],
-            vec![
-                EntrypointValueAtomV1::List(1),
-                EntrypointValueAtomV1::Int(1),
-                EntrypointValueAtomV1::Int(2),
-            ],
-            vec![
-                EntrypointValueAtomV1::List(2),
-                EntrypointValueAtomV1::Int(1),
-            ],
+            vec![EntrypointValueAtomV1::List(0), int_atom(1)],
+            vec![EntrypointValueAtomV1::List(1), int_atom(1), int_atom(2)],
+            vec![EntrypointValueAtomV1::List(2), int_atom(1)],
             vec![
                 EntrypointValueAtomV1::List(3),
-                EntrypointValueAtomV1::Int(1),
-                EntrypointValueAtomV1::Int(2),
-                EntrypointValueAtomV1::Int(3),
+                int_atom(1),
+                int_atom(2),
+                int_atom(3),
             ],
             vec![
                 EntrypointValueAtomV1::List(1),
@@ -1562,7 +1567,7 @@ mod tests {
         atoms.extend(
             (0..MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH - 1).map(|_| EntrypointValueAtomV1::List(1)),
         );
-        atoms.push(EntrypointValueAtomV1::Int(7));
+        atoms.push(int_atom(7));
 
         assert!(schema.validate_atoms(&atoms));
         assert_eq!(
@@ -1726,7 +1731,7 @@ mod tests {
                         fields: vec!["id".into(), "amount".into()],
                     }),
                     Node::Leaf(Kind::AssetId),
-                    Node::Leaf(Kind::Amount),
+                    Node::Leaf(Kind::Quantity),
                 ],
             },
             EntrypointValueTypeV1 {
@@ -1747,7 +1752,7 @@ mod tests {
                     Node::Option,
                     Node::Leaf(Kind::String),
                     Node::Leaf(Kind::AccountId),
-                    Node::Leaf(Kind::Amount),
+                    Node::Leaf(Kind::Quantity),
                     Node::Leaf(Kind::Json),
                 ],
             },
@@ -1909,6 +1914,7 @@ mod tests {
             "break",
             "const",
             "continue",
+            "decimal",
             "else",
             "enum",
             "error",
@@ -1919,6 +1925,7 @@ mod tests {
             "始まり",
             "if",
             "in",
+            "int",
             "kaizen",
             "改善",
             "kotoage",
@@ -1926,6 +1933,7 @@ mod tests {
             "let",
             "match",
             "module",
+            "quantity",
             "return",
             "seiyaku",
             "誓約",

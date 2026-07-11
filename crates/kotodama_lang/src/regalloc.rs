@@ -1186,9 +1186,10 @@ fn split_candidate_uses<F: FnMut(Temp)>(instruction: &Instr, mut visit: F) {
             visit(*right);
         }
         Instr::Unary { operand, .. } | Instr::WrappingNeg { operand, .. } => visit(*operand),
-        Instr::NumericFromInt { value, .. }
-        | Instr::NumericToInt { value, .. }
-        | Instr::AmountFromU128 { value, .. }
+        Instr::IntFromScalar { value, .. }
+        | Instr::IntToScalar { value, .. }
+        | Instr::NumericConvert { value, .. }
+        | Instr::NumericTryConvert { value, .. }
         | Instr::NumericNeg { value, .. } => visit(*value),
         Instr::Min { a, b, .. }
         | Instr::Max { a, b, .. }
@@ -1706,6 +1707,7 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         | ChainId { .. }
         | ContractAddress { .. }
         | Entrypoint { .. }
+        | NumericStatus { .. }
         | GetTriggerEvent { .. }
         | ProveExecution { .. }
         | TransferBatchBegin
@@ -1717,9 +1719,10 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*right);
         }
         Unary { operand, .. } | WrappingNeg { operand, .. } => f(*operand),
-        NumericFromInt { value, .. }
-        | NumericToInt { value, .. }
-        | AmountFromU128 { value, .. }
+        IntFromScalar { value, .. }
+        | IntToScalar { value, .. }
+        | NumericConvert { value, .. }
+        | NumericTryConvert { value, .. }
         | NumericNeg { value, .. } => f(*value),
         NumericBinary { left, right, .. } | NumericCompare { left, right, .. } => {
             f(*left);
@@ -2392,9 +2395,11 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::StateHas { dest, .. }
         | Instr::StateLen { dest, .. }
         | Instr::StateCount { dest, .. }
-        | Instr::NumericFromInt { dest, .. }
-        | Instr::NumericToInt { dest, .. }
-        | Instr::AmountFromU128 { dest, .. }
+        | Instr::IntFromScalar { dest, .. }
+        | Instr::IntToScalar { dest, .. }
+        | Instr::NumericConvert { dest, .. }
+        | Instr::NumericTryConvert { dest, .. }
+        | Instr::NumericStatus { dest }
         | Instr::NumericNeg { dest, .. }
         | Instr::NumericBinary { dest, .. }
         | Instr::NumericCompare { dest, .. }

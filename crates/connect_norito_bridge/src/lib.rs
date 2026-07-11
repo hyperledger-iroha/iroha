@@ -5,11 +5,17 @@
 #[cfg(test)]
 use core::ffi::c_void;
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
+    fs::{File, OpenOptions},
+    io::{Seek as _, SeekFrom, Write as _},
     num::{NonZeroU32, NonZeroU64},
     path::PathBuf,
     ptr, slice,
     str::FromStr as _,
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -62,8 +68,9 @@ use iroha_torii_shared::{connect as proto, connect_sdk};
 use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
 use ivm::{AccelerationConfig, BackendRuntimeStatus};
 use libc::{c_char, c_int, c_uchar, c_ulong, free, malloc};
-use norito::decode_from_bytes;
 use norito::json::{Map as JsonMap, Value as JsonValue};
+use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes};
+use sha2::{Digest as _, Sha256};
 use sorafs_car::{
     ChunkStore, ChunkStoreError, InMemoryPayload, PorProof, build_plan_from_da_manifest,
     local_fetch::{
@@ -78,7 +85,7 @@ use sorafs_manifest::{
     OrderbookSettlementReceiptFieldsV1, OrderbookValidationPayloadKindV1, ValidationContextFieldV1,
     ValidationOutcomeV1, build_signed_orderbook_order_cancel_bytes_ed25519_v1,
     build_signed_orderbook_order_request_bytes_ed25519_v1,
-    build_signed_orderbook_settlement_receipt_bytes_ed25519_v1,
+    build_signed_orderbook_settlement_receipt_bytes_ed25519_v1, derive_orderbook_order_id_v1,
     reference_ffi as sorafs_reference_ffi, sign_orderbook_payload_bytes_ed25519_v1,
 };
 use zeroize::Zeroizing;
@@ -86,7 +93,7 @@ use zeroize::Zeroizing;
 #[cfg(feature = "privacy-production-enabled")]
 mod privacy_production;
 
-const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 15;
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 17;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 256 * 1024 * 1024;
 const SORAFS_ORDERBOOK_SIDE_BID: u32 = 1;
 const SORAFS_ORDERBOOK_SIDE_ASK: u32 = 2;
@@ -156,6 +163,8 @@ const ERR_OFFLINE_NOTE_PROVE: c_int = -310;
 const ERR_KAGEMUSHA_PROVE: c_int = -311;
 const ERR_KAGEMUSHA_RECURSIVE_COMPACT_UNAVAILABLE: c_int = -312;
 const ERR_OFFLINE_NOTE_VERIFY: c_int = -313;
+const ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_UNAVAILABLE: c_int = -314;
+const ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_ARTIFACT: c_int = -315;
 const ERR_DA_PROOF_SUMMARY: c_int = -401;
 const ERR_MULTISIG_SPEC: c_int = -402;
 const ERR_VERIFYING_KEY_ID: c_int = -403;
@@ -190,6 +199,8 @@ enum BridgeError {
     OfflineNoteVerify,
     KagemushaProve,
     KagemushaRecursiveCompactUnavailable,
+    KagemushaRecursiveSpendV2Unavailable,
+    KagemushaRecursiveSpendV2Artifact,
     UnsupportedAlgorithm,
     MetadataTarget,
     MetadataKey,
@@ -235,6 +246,12 @@ impl BridgeError {
             BridgeError::KagemushaProve => ERR_KAGEMUSHA_PROVE,
             BridgeError::KagemushaRecursiveCompactUnavailable => {
                 ERR_KAGEMUSHA_RECURSIVE_COMPACT_UNAVAILABLE
+            }
+            BridgeError::KagemushaRecursiveSpendV2Unavailable => {
+                ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_UNAVAILABLE
+            }
+            BridgeError::KagemushaRecursiveSpendV2Artifact => {
+                ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_ARTIFACT
             }
             BridgeError::UnsupportedAlgorithm => ERR_UNSUPPORTED_ALGORITHM,
             BridgeError::MetadataTarget => ERR_METADATA_TARGET,
@@ -411,6 +428,19 @@ unsafe fn read_kagemusha_archive_bytes(ptr: *const c_uchar, len: c_ulong) -> Bri
         return Err(BridgeError::KagemushaProve);
     }
     unsafe { read_vec_bytes(ptr, len as c_ulong) }
+}
+
+fn decode_canonical_kagemusha_archive<T>(bytes: &[u8]) -> BridgeResult<T>
+where
+    T: NoritoSerialize,
+    for<'de> T: NoritoDeserialize<'de>,
+{
+    let value: T = norito::decode_from_bytes(bytes).map_err(|_| BridgeError::KagemushaProve)?;
+    let canonical = norito::to_bytes(&value).map_err(|_| BridgeError::KagemushaProve)?;
+    if canonical != bytes {
+        return Err(BridgeError::KagemushaProve);
+    }
+    Ok(value)
 }
 
 fn is_kagemusha_recursive_compact_unavailable_error(err: &str) -> bool {
@@ -9212,6 +9242,781 @@ fn kagemusha_recursive_spend_redeem_from_request_archive(
     )
 }
 
+const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_BYTES_V2: u64 = 8 * 1024 * 1024 * 1024;
+const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLE_LINEAGE_INIT_V2: u32 = 3;
+const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLE_LINEAGE_APPEND_V2: u32 = 4;
+const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLE_REDEEM_CHANGE_V2: u32 = 5;
+
+struct KagemushaRecursiveSpendArtifactIngestV2 {
+    reference: iroha_data_model::offline::KagemushaRecursiveSpendArtifactReferenceV2,
+    file: File,
+    path: PathBuf,
+    sha256: Sha256,
+    written: u64,
+    ready: bool,
+}
+
+static KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HANDLES_V2: AtomicU64 = AtomicU64::new(1);
+static KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_REGISTRY_V2: OnceLock<
+    Mutex<HashMap<u64, KagemushaRecursiveSpendArtifactIngestV2>>,
+> = OnceLock::new();
+
+fn kagemusha_recursive_spend_artifact_registry_v2()
+-> &'static Mutex<HashMap<u64, KagemushaRecursiveSpendArtifactIngestV2>> {
+    KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_REGISTRY_V2.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn kagemusha_recursive_spend_artifact_role_v2(
+    role: u32,
+) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendArtifactRoleV2> {
+    use iroha_data_model::offline::KagemushaRecursiveSpendArtifactRoleV2;
+
+    match role {
+        KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLE_LINEAGE_INIT_V2 => {
+            Ok(KagemushaRecursiveSpendArtifactRoleV2::LineageInitProver)
+        }
+        KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLE_LINEAGE_APPEND_V2 => {
+            Ok(KagemushaRecursiveSpendArtifactRoleV2::LineageAppendProver)
+        }
+        KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLE_REDEEM_CHANGE_V2 => {
+            Ok(KagemushaRecursiveSpendArtifactRoleV2::RedeemChangeProver)
+        }
+        _ => Err(BridgeError::KagemushaRecursiveSpendV2Artifact),
+    }
+}
+
+fn validate_kagemusha_recursive_spend_artifact_reference_v2(
+    reference: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactReferenceV2,
+    expected_role: u32,
+) -> BridgeResult<()> {
+    let role = kagemusha_recursive_spend_artifact_role_v2(expected_role)?;
+    reference
+        .validate_for_role(role)
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+    if reference.size_bytes > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_BYTES_V2 {
+        return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+    }
+    Ok(())
+}
+
+fn kagemusha_recursive_spend_artifact_path_v2(handle: u64) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "iroha-kagemusha-v2-artifact-{}-{handle}.bin",
+        std::process::id()
+    ))
+}
+
+fn open_kagemusha_recursive_spend_artifact_v2(path: &std::path::Path) -> BridgeResult<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    options
+        .open(path)
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)
+}
+
+fn remove_kagemusha_recursive_spend_artifact_v2(
+    registry: &mut HashMap<u64, KagemushaRecursiveSpendArtifactIngestV2>,
+    handle: u64,
+) {
+    if let Some(artifact) = registry.remove(&handle) {
+        drop(artifact.file);
+        let _ = std::fs::remove_file(artifact.path);
+    }
+}
+
+/// Return a fresh seekable reader for a finalized, content-addressed V2 prover artifact.
+///
+/// The proof path opens the already verified spool file instead of copying the
+/// complete artifact into another in-memory buffer. No network or peer input is
+/// consulted here.
+fn kagemusha_recursive_spend_artifact_reader_v2(
+    reference: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactReferenceV2,
+) -> BridgeResult<File> {
+    let registry = kagemusha_recursive_spend_artifact_registry_v2()
+        .lock()
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+    let artifact = registry
+        .values()
+        .find(|artifact| artifact.ready && artifact.reference == *reference)
+        .ok_or(BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+    OpenOptions::new()
+        .read(true)
+        .open(&artifact.path)
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)
+}
+
+fn kagemusha_recipient_payment_request_signing_bytes_v2(
+    payload_archive: &[u8],
+) -> BridgeResult<Vec<u8>> {
+    let payload = decode_canonical_kagemusha_archive::<
+        iroha_data_model::offline::KagemushaRecipientPaymentRequestSigningPayloadV2,
+    >(payload_archive)?;
+    payload
+        .signing_bytes()
+        .map_err(|_| BridgeError::KagemushaProve)
+}
+
+/// Derive the domain-separated receiver-key reference carried by request and ACK archives.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_receiver_key_reference_v2(
+    algorithm: u8,
+    public_key_ptr: *const c_uchar,
+    public_key_len: c_ulong,
+    out_reference_ptr: *mut *mut c_uchar,
+    out_reference_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_reference_ptr, out_reference_len)?;
+        let algorithm = parse_algorithm_code(algorithm)?;
+        let public_key_bytes =
+            unsafe { read_kagemusha_archive_bytes(public_key_ptr, public_key_len) }?;
+        let public_key = PublicKey::from_bytes(algorithm, &public_key_bytes)
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        let reference = iroha_data_model::offline::kagemusha_receiver_key_reference_v2(&public_key)
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe { write_kagemusha_archive_bridge(out_reference_ptr, out_reference_len, &reference) }
+    })();
+    bridge_result_to_code(result)
+}
+
+fn kagemusha_recipient_payment_request_create_v2(
+    payload_archive: &[u8],
+    signature_bytes: &[u8],
+) -> BridgeResult<iroha_data_model::offline::KagemushaRecipientPaymentRequestV2> {
+    let payload = decode_canonical_kagemusha_archive::<
+        iroha_data_model::offline::KagemushaRecipientPaymentRequestSigningPayloadV2,
+    >(payload_archive)?;
+    let signature =
+        Signature::try_from_bytes(signature_bytes).map_err(|_| BridgeError::KagemushaProve)?;
+    iroha_data_model::offline::KagemushaRecipientPaymentRequestV2::from_signed_payload(
+        payload, signature,
+    )
+    .map_err(|_| BridgeError::KagemushaProve)
+}
+
+fn kagemusha_recipient_payment_request_verify_v2(
+    request_archive: &[u8],
+    verified_at_ms: u64,
+) -> BridgeResult<[u8; 32]> {
+    let request = decode_canonical_kagemusha_archive::<
+        iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
+    >(request_archive)?;
+    request
+        .validate_at(verified_at_ms)
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    request.digest().map_err(|_| BridgeError::KagemushaProve)
+}
+
+fn kagemusha_request_authorization_template_v2(
+    template_archive: &[u8],
+) -> BridgeResult<iroha_data_model::offline::KagemushaRequestAuthorizationV2> {
+    decode_canonical_kagemusha_archive::<iroha_data_model::offline::KagemushaRequestAuthorizationV2>(
+        template_archive,
+    )
+}
+
+fn kagemusha_receiver_acknowledgement_payload_v2(
+    request: &iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
+    accepted_at_ms: u64,
+) -> BridgeResult<iroha_data_model::offline::KagemushaReceiverAcknowledgementPayloadV2> {
+    use iroha_data_model::offline::{
+        KagemushaReceiverAcknowledgementPayloadV2, KagemushaRecursiveSpendBranchV2,
+    };
+
+    request
+        .validate_at(accepted_at_ms)
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    bundle
+        .validate_public_binding()
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    let request_digest = request.digest().map_err(|_| BridgeError::KagemushaProve)?;
+    let split = bundle
+        .statement
+        .split
+        .as_ref()
+        .ok_or(BridgeError::KagemushaProve)?;
+    if bundle.statement.branch != Some(KagemushaRecursiveSpendBranchV2::Recipient)
+        || bundle.statement.current_note != request.recipient_output
+        || split.recipient_request_digest != request_digest
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+    let payload = KagemushaReceiverAcknowledgementPayloadV2 {
+        operation_id: split.operation_id,
+        recipient_request_digest: request_digest,
+        payment_bundle_digest: bundle.digest().map_err(|_| BridgeError::KagemushaProve)?,
+        recipient_commitment: bundle.statement.current_note.note_commitment,
+        accepted_at_ms,
+        receiver_device_id: request.receiver_device_id.clone(),
+        receiver_key_reference: request.recipient_key_reference,
+        receiver_public_key: request.receiver_public_key.clone(),
+    };
+    payload
+        .validate_public_binding()
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    Ok(payload)
+}
+
+/// Return the canonical domain-separated bytes a receiver device signs for a V2 request.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2(
+    payload_norito_ptr: *const c_uchar,
+    payload_norito_len: c_ulong,
+    out_signing_bytes_ptr: *mut *mut c_uchar,
+    out_signing_bytes_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_signing_bytes_ptr, out_signing_bytes_len)?;
+        let bytes =
+            unsafe { read_kagemusha_archive_bytes(payload_norito_ptr, payload_norito_len) }?;
+        let signing_bytes = kagemusha_recipient_payment_request_signing_bytes_v2(&bytes)?;
+        unsafe {
+            write_kagemusha_archive_bridge(
+                out_signing_bytes_ptr,
+                out_signing_bytes_len,
+                &signing_bytes,
+            )
+        }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Combine a canonical request payload with an externally produced device signature.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recipient_payment_request_create_v2(
+    payload_norito_ptr: *const c_uchar,
+    payload_norito_len: c_ulong,
+    signature_ptr: *const c_uchar,
+    signature_len: c_ulong,
+    out_request_ptr: *mut *mut c_uchar,
+    out_request_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_request_ptr, out_request_len)?;
+        let payload =
+            unsafe { read_kagemusha_archive_bytes(payload_norito_ptr, payload_norito_len) }?;
+        let signature = unsafe { read_kagemusha_archive_bytes(signature_ptr, signature_len) }?;
+        let request = kagemusha_recipient_payment_request_create_v2(&payload, &signature)?;
+        let archive = norito::to_bytes(&request).map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe { write_kagemusha_archive_bridge(out_request_ptr, out_request_len, &archive) }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Verify a canonical signed request at the caller-provided authoritative time.
+///
+/// Output is the exact 32-byte request digest bound by the split proof.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recipient_payment_request_verify_v2(
+    request_norito_ptr: *const c_uchar,
+    request_norito_len: c_ulong,
+    verified_at_ms: u64,
+    out_digest_ptr: *mut *mut c_uchar,
+    out_digest_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_digest_ptr, out_digest_len)?;
+        let request =
+            unsafe { read_kagemusha_archive_bytes(request_norito_ptr, request_norito_len) }?;
+        let digest = kagemusha_recipient_payment_request_verify_v2(&request, verified_at_ms)?;
+        unsafe { write_kagemusha_archive_bridge(out_digest_ptr, out_digest_len, &digest) }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Return the canonical bytes covered by a V2 top-up/redemption authorization signature.
+///
+/// The input is a canonical authorization template whose signature field is a
+/// non-empty disposable marker. The marker is never returned or validated as a
+/// real signature; creation replaces it before emitting a protocol archive.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_request_authorization_signing_bytes_v2(
+    template_norito_ptr: *const c_uchar,
+    template_norito_len: c_ulong,
+    out_signing_bytes_ptr: *mut *mut c_uchar,
+    out_signing_bytes_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_signing_bytes_ptr, out_signing_bytes_len)?;
+        let template_bytes =
+            unsafe { read_kagemusha_archive_bytes(template_norito_ptr, template_norito_len) }?;
+        let authorization = kagemusha_request_authorization_template_v2(&template_bytes)?;
+        let signing_bytes = authorization
+            .signing_bytes()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe {
+            write_kagemusha_archive_bridge(
+                out_signing_bytes_ptr,
+                out_signing_bytes_len,
+                &signing_bytes,
+            )
+        }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Replace a disposable authorization-template marker with a real signature.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_request_authorization_create_v2(
+    template_norito_ptr: *const c_uchar,
+    template_norito_len: c_ulong,
+    signature_ptr: *const c_uchar,
+    signature_len: c_ulong,
+    out_authorization_ptr: *mut *mut c_uchar,
+    out_authorization_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_authorization_ptr, out_authorization_len)?;
+        let template_bytes =
+            unsafe { read_kagemusha_archive_bytes(template_norito_ptr, template_norito_len) }?;
+        let signature_bytes =
+            unsafe { read_kagemusha_archive_bytes(signature_ptr, signature_len) }?;
+        let mut authorization = kagemusha_request_authorization_template_v2(&template_bytes)?;
+        authorization.signature =
+            Signature::try_from_bytes(&signature_bytes).map_err(|_| BridgeError::KagemushaProve)?;
+        authorization
+            .validate_for_payload(authorization.payload_digest)
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        let archive = norito::to_bytes(&authorization).map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe {
+            write_kagemusha_archive_bridge(out_authorization_ptr, out_authorization_len, &archive)
+        }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Build the canonical ACK payload after request and recipient-bundle verification.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_receiver_acknowledgement_payload_v2(
+    request_norito_ptr: *const c_uchar,
+    request_norito_len: c_ulong,
+    recipient_bundle_norito_ptr: *const c_uchar,
+    recipient_bundle_norito_len: c_ulong,
+    accepted_at_ms: u64,
+    out_payload_ptr: *mut *mut c_uchar,
+    out_payload_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_payload_ptr, out_payload_len)?;
+        let request_bytes =
+            unsafe { read_kagemusha_archive_bytes(request_norito_ptr, request_norito_len) }?;
+        let bundle_bytes = unsafe {
+            read_kagemusha_archive_bytes(recipient_bundle_norito_ptr, recipient_bundle_norito_len)
+        }?;
+        let request = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
+        >(&request_bytes)?;
+        let bundle = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
+        >(&bundle_bytes)?;
+        let payload =
+            kagemusha_receiver_acknowledgement_payload_v2(&request, &bundle, accepted_at_ms)?;
+        let archive = norito::to_bytes(&payload).map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe { write_kagemusha_archive_bridge(out_payload_ptr, out_payload_len, &archive) }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Return the canonical domain-separated bytes covered by a receiver ACK signature.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2(
+    payload_norito_ptr: *const c_uchar,
+    payload_norito_len: c_ulong,
+    out_signing_bytes_ptr: *mut *mut c_uchar,
+    out_signing_bytes_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_signing_bytes_ptr, out_signing_bytes_len)?;
+        let payload_bytes =
+            unsafe { read_kagemusha_archive_bytes(payload_norito_ptr, payload_norito_len) }?;
+        let payload = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::KagemushaReceiverAcknowledgementPayloadV2,
+        >(&payload_bytes)?;
+        let signing_bytes = payload
+            .signing_bytes()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe {
+            write_kagemusha_archive_bridge(
+                out_signing_bytes_ptr,
+                out_signing_bytes_len,
+                &signing_bytes,
+            )
+        }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Create and fully bind a signed ACK to the original request and recipient bundle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_receiver_acknowledgement_create_v2(
+    payload_norito_ptr: *const c_uchar,
+    payload_norito_len: c_ulong,
+    signature_ptr: *const c_uchar,
+    signature_len: c_ulong,
+    request_norito_ptr: *const c_uchar,
+    request_norito_len: c_ulong,
+    recipient_bundle_norito_ptr: *const c_uchar,
+    recipient_bundle_norito_len: c_ulong,
+    out_acknowledgement_ptr: *mut *mut c_uchar,
+    out_acknowledgement_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_acknowledgement_ptr, out_acknowledgement_len)?;
+        let payload_bytes =
+            unsafe { read_kagemusha_archive_bytes(payload_norito_ptr, payload_norito_len) }?;
+        let signature = unsafe { read_kagemusha_archive_bytes(signature_ptr, signature_len) }?;
+        let request_bytes =
+            unsafe { read_kagemusha_archive_bytes(request_norito_ptr, request_norito_len) }?;
+        let bundle_bytes = unsafe {
+            read_kagemusha_archive_bytes(recipient_bundle_norito_ptr, recipient_bundle_norito_len)
+        }?;
+        let payload = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::KagemushaReceiverAcknowledgementPayloadV2,
+        >(&payload_bytes)?;
+        let request = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
+        >(&request_bytes)?;
+        let bundle = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
+        >(&bundle_bytes)?;
+        let acknowledgement = iroha_data_model::offline::KagemushaReceiverAcknowledgementV2 {
+            payload,
+            signature: Signature::try_from_bytes(&signature)
+                .map_err(|_| BridgeError::KagemushaProve)?,
+        };
+        let archive = acknowledgement
+            .canonical_archive_for_payment(&request, &bundle)
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe {
+            write_kagemusha_archive_bridge(
+                out_acknowledgement_ptr,
+                out_acknowledgement_len,
+                &archive,
+            )
+        }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Verify the signed ACK, original request, and accepted recipient bundle together.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_receiver_acknowledgement_verify_v2(
+    acknowledgement_norito_ptr: *const c_uchar,
+    acknowledgement_norito_len: c_ulong,
+    request_norito_ptr: *const c_uchar,
+    request_norito_len: c_ulong,
+    recipient_bundle_norito_ptr: *const c_uchar,
+    recipient_bundle_norito_len: c_ulong,
+    out_result_ptr: *mut *mut c_uchar,
+    out_result_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_result_ptr, out_result_len)?;
+        let acknowledgement_bytes = unsafe {
+            read_kagemusha_archive_bytes(acknowledgement_norito_ptr, acknowledgement_norito_len)
+        }?;
+        let request_bytes =
+            unsafe { read_kagemusha_archive_bytes(request_norito_ptr, request_norito_len) }?;
+        let bundle_bytes = unsafe {
+            read_kagemusha_archive_bytes(recipient_bundle_norito_ptr, recipient_bundle_norito_len)
+        }?;
+        let acknowledgement = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::KagemushaReceiverAcknowledgementV2,
+        >(&acknowledgement_bytes)?;
+        let request = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
+        >(&request_bytes)?;
+        let bundle = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
+        >(&bundle_bytes)?;
+        let result = acknowledgement
+            .verified_result(&request, &bundle)
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        result
+            .validate_public_binding()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        let archive = norito::to_bytes(&result).map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe { write_kagemusha_archive_bridge(out_result_ptr, out_result_len, &archive) }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Decode and validate an opaque V2 bundle, returning its wallet-safe typed summary.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_bundle_summary_v2(
+    bundle_norito_ptr: *const c_uchar,
+    bundle_norito_len: c_ulong,
+    out_summary_ptr: *mut *mut c_uchar,
+    out_summary_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_summary_ptr, out_summary_len)?;
+        let bundle_bytes =
+            unsafe { read_kagemusha_archive_bytes(bundle_norito_ptr, bundle_norito_len) }?;
+        let bundle = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
+        >(&bundle_bytes)?;
+        bundle
+            .validate_public_binding()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        let summary = bundle.summary().map_err(|_| BridgeError::KagemushaProve)?;
+        let archive = norito::to_bytes(&summary).map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe { write_kagemusha_archive_bridge(out_summary_ptr, out_summary_len, &archive) }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Begin streaming one content-addressed Reserved-lineage proving artifact.
+///
+/// `expected_role` is one of
+/// `CONNECT_NORITO_KAGEMUSHA_ARTIFACT_ROLE_LINEAGE_{INIT,APPEND}_V2`. The
+/// canonical reference fixes the exact role, type, circuit, generation, size,
+/// and SHA-256 before any byte is accepted.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_begin_v2(
+    reference_norito_ptr: *const c_uchar,
+    reference_norito_len: c_ulong,
+    expected_role: u32,
+    out_handle: *mut u64,
+) -> c_int {
+    if !out_handle.is_null() {
+        unsafe { *out_handle = 0 };
+    }
+    let result = (|| {
+        if out_handle.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+        let bytes =
+            unsafe { read_kagemusha_archive_bytes(reference_norito_ptr, reference_norito_len) }?;
+        let reference = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::KagemushaRecursiveSpendArtifactReferenceV2,
+        >(&bytes)
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        validate_kagemusha_recursive_spend_artifact_reference_v2(&reference, expected_role)?;
+
+        let handle = KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HANDLES_V2.fetch_add(1, Ordering::Relaxed);
+        if handle == 0 {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        let path = kagemusha_recursive_spend_artifact_path_v2(handle);
+        let file = open_kagemusha_recursive_spend_artifact_v2(&path)?;
+        let artifact = KagemushaRecursiveSpendArtifactIngestV2 {
+            reference,
+            file,
+            path,
+            sha256: Sha256::new(),
+            written: 0,
+            ready: false,
+        };
+        let mut registry = kagemusha_recursive_spend_artifact_registry_v2()
+            .lock()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        if registry.insert(handle, artifact).is_some() {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        unsafe { *out_handle = handle };
+        Ok(())
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Append one chunk directly to the artifact spool while updating SHA-256.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_write_v2(
+    handle: u64,
+    chunk_ptr: *const c_uchar,
+    chunk_len: c_ulong,
+) -> c_int {
+    let result = (|| {
+        if handle == 0 || chunk_ptr.is_null() || chunk_len == 0 {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        let chunk_len: usize = chunk_len
+            .try_into()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        let chunk = unsafe { slice::from_raw_parts(chunk_ptr, chunk_len) };
+        let mut registry = kagemusha_recursive_spend_artifact_registry_v2()
+            .lock()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        let artifact = registry
+            .get_mut(&handle)
+            .ok_or(BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        if artifact.ready {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        let chunk_len_u64 =
+            u64::try_from(chunk_len).map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        let next_len = artifact
+            .written
+            .checked_add(chunk_len_u64)
+            .ok_or(BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        if next_len > artifact.reference.size_bytes {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        artifact
+            .file
+            .write_all(chunk)
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        artifact.sha256.update(chunk);
+        artifact.written = next_len;
+        Ok(())
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Finalize ingestion after exact byte-count and SHA-256 verification.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_finalize_v2(
+    handle: u64,
+) -> c_int {
+    let result = (|| {
+        if handle == 0 {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        let mut registry = kagemusha_recursive_spend_artifact_registry_v2()
+            .lock()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        let valid = {
+            let artifact = registry
+                .get_mut(&handle)
+                .ok_or(BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+            if artifact.ready {
+                return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+            }
+            let digest: [u8; 32] = artifact.sha256.clone().finalize().into();
+            artifact.written == artifact.reference.size_bytes
+                && digest == artifact.reference.sha256
+                && artifact.file.flush().is_ok()
+                && artifact.file.sync_all().is_ok()
+                && artifact.file.seek(SeekFrom::Start(0)).is_ok()
+        };
+        if !valid {
+            remove_kagemusha_recursive_spend_artifact_v2(&mut registry, handle);
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        registry
+            .get_mut(&handle)
+            .ok_or(BridgeError::KagemushaRecursiveSpendV2Artifact)?
+            .ready = true;
+        Ok(())
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Cancel an in-progress ingest or release a finalized local artifact.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_cancel_v2(
+    handle: u64,
+) -> c_int {
+    let result = (|| {
+        if handle == 0 {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        let mut registry = kagemusha_recursive_spend_artifact_registry_v2()
+            .lock()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        if !registry.contains_key(&handle) {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        remove_kagemusha_recursive_spend_artifact_v2(&mut registry, handle);
+        Ok(())
+    })();
+    bridge_result_to_code(result)
+}
+
+fn kagemusha_recursive_spend_v2_unavailable(
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_ptr, out_len);
+    BridgeError::KagemushaRecursiveSpendV2Unavailable.code()
+}
+
+/// Reserved additive V2 first-hop entrypoint.
+///
+/// The symbol is present for capability negotiation, clears output state, and
+/// fails closed until the branch-safe V2 proof backend is available.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_init_v2(
+    _request_norito_ptr: *const c_uchar,
+    _request_norito_len: c_ulong,
+    _topup_anchor_norito_ptr: *const c_uchar,
+    _topup_anchor_norito_len: c_ulong,
+    out_bundle_ptr: *mut *mut c_uchar,
+    out_bundle_len: *mut c_ulong,
+) -> c_int {
+    kagemusha_recursive_spend_v2_unavailable(out_bundle_ptr, out_bundle_len)
+}
+
+/// Reserved additive V2 online-to-offline entrypoint. Always fails closed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_v2(
+    _request_norito_ptr: *const c_uchar,
+    _request_norito_len: c_ulong,
+    out_instruction_ptr: *mut *mut c_uchar,
+    out_instruction_len: *mut c_ulong,
+) -> c_int {
+    kagemusha_recursive_spend_v2_unavailable(out_instruction_ptr, out_instruction_len)
+}
+
+/// Reserved additive V2 fractional append entrypoint.
+///
+/// Once enabled, output is a Norito archive of
+/// `KagemushaRecursiveSpendSplitResultV2`, not a single branch bundle. It
+/// always fails closed while the branch-safe backend is unavailable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_append_v2(
+    _request_norito_ptr: *const c_uchar,
+    _request_norito_len: c_ulong,
+    _recipient_request_norito_ptr: *const c_uchar,
+    _recipient_request_norito_len: c_ulong,
+    _verified_at_ms: u64,
+    out_split_result_ptr: *mut *mut c_uchar,
+    out_split_result_len: *mut c_ulong,
+) -> c_int {
+    kagemusha_recursive_spend_v2_unavailable(out_split_result_ptr, out_split_result_len)
+}
+
+/// Reserved V2 partial-redemption change builder. Always fails closed until
+/// the dedicated Reserved circuit is linked.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_change_v2(
+    _request_norito_ptr: *const c_uchar,
+    _request_norito_len: c_ulong,
+    out_result_ptr: *mut *mut c_uchar,
+    out_result_len: *mut c_ulong,
+) -> c_int {
+    kagemusha_recursive_spend_v2_unavailable(out_result_ptr, out_result_len)
+}
+
+/// Reserved additive V2 receiver-verification entrypoint. Always fails closed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_verify_v2(
+    _request_norito_ptr: *const c_uchar,
+    _request_norito_len: c_ulong,
+    out_result_ptr: *mut *mut c_uchar,
+    out_result_len: *mut c_ulong,
+) -> c_int {
+    kagemusha_recursive_spend_v2_unavailable(out_result_ptr, out_result_len)
+}
+
+/// Reserved additive V2 offline-to-online entrypoint. Always fails closed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_v2(
+    _request_norito_ptr: *const c_uchar,
+    _request_norito_len: c_ulong,
+    out_instruction_ptr: *mut *mut c_uchar,
+    out_instruction_len: *mut c_ulong,
+) -> c_int {
+    kagemusha_recursive_spend_v2_unavailable(out_instruction_ptr, out_instruction_len)
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn connect_norito_free(ptr_: *mut c_uchar) {
     if !ptr_.is_null() {
@@ -9234,7 +10039,7 @@ pub extern "C" fn iroha_privacy_free_buffer(ptr_: *mut c_uchar) {
 
 #[cfg(test)]
 mod offline_note_prover_tests {
-    use std::{ffi::CString, sync::OnceLock};
+    use std::{ffi::CString, io::Read as _, sync::OnceLock};
 
     use iroha_core::zk::{
         KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
@@ -9264,12 +10069,14 @@ mod offline_note_prover_tests {
             KAGEMUSHA_RECURSIVE_COMPACT_SUPPORTED_OPENING_LENS_V1,
             KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN,
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, KagemushaCompactPaymentToken,
             KagemushaFoldedProof, KagemushaRecursiveAggregationProof,
             KagemushaRecursiveAggregationProofBundle, KagemushaRecursiveCompactKeyArtifactEntryV1,
             KagemushaRecursiveCompactKeyArtifactsV1, KagemushaRecursiveCompactVerifierKeyEntryV1,
             KagemushaRecursiveCompactVerifierKeysV1, KagemushaRecursiveSpendAccumulatorV1,
-            KagemushaRecursiveSpendAppendRequestV1, KagemushaRecursiveSpendBundleV1,
+            KagemushaRecursiveSpendAppendRequestV1, KagemushaRecursiveSpendArtifactReferenceV2,
+            KagemushaRecursiveSpendArtifactRoleV2, KagemushaRecursiveSpendBundleV1,
             KagemushaRecursiveSpendInitRequestV1, KagemushaRecursiveSpendLineageWitnessV1,
             KagemushaRecursiveSpendRedeemRequestV1, KagemushaRecursiveSpendTopUpRequestV1,
             KagemushaRecursiveSpendVerifyRequestV1, KagemushaRecursiveSpendVerifyResultV1,
@@ -10670,8 +11477,193 @@ mod offline_note_prover_tests {
     }
 
     #[test]
-    fn bridge_abi_version_advertises_sorafs_hedging_validation() {
-        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 15);
+    fn bridge_abi_version_advertises_sorafs_order_id_derivation() {
+        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 17);
+    }
+
+    #[test]
+    fn recursive_spend_v2_entrypoints_clear_outputs_and_fail_closed() {
+        type V2Entrypoint =
+            unsafe extern "C" fn(*const c_uchar, c_ulong, *mut *mut c_uchar, *mut c_ulong) -> c_int;
+        let entrypoints: [V2Entrypoint; 4] = [
+            connect_norito_kagemusha_recursive_spend_topup_v2,
+            connect_norito_kagemusha_recursive_spend_redeem_change_v2,
+            connect_norito_kagemusha_recursive_spend_verify_v2,
+            connect_norito_kagemusha_recursive_spend_redeem_v2,
+        ];
+        for entrypoint in entrypoints {
+            let mut output = std::ptr::NonNull::<c_uchar>::dangling().as_ptr();
+            let mut output_len = 99;
+            assert_eq!(
+                unsafe { entrypoint(std::ptr::null(), 0, &mut output, &mut output_len) },
+                ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_UNAVAILABLE
+            );
+            assert!(output.is_null());
+            assert_eq!(output_len, 0);
+        }
+
+        let mut output = std::ptr::NonNull::<c_uchar>::dangling().as_ptr();
+        let mut output_len = 99;
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_recursive_spend_init_v2(
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    0,
+                    &mut output,
+                    &mut output_len,
+                )
+            },
+            ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_UNAVAILABLE
+        );
+        assert!(output.is_null());
+        assert_eq!(output_len, 0);
+
+        let mut output = std::ptr::NonNull::<c_uchar>::dangling().as_ptr();
+        let mut output_len = 99;
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_recursive_spend_append_v2(
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    0,
+                    0,
+                    &mut output,
+                    &mut output_len,
+                )
+            },
+            ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_UNAVAILABLE
+        );
+        assert!(output.is_null());
+        assert_eq!(output_len, 0);
+    }
+
+    #[test]
+    fn recursive_spend_v2_artifact_ingest_streams_and_checks_metadata() {
+        let bytes = b"reserved-lineage-init-artifact-v2";
+        let reference = KagemushaRecursiveSpendArtifactReferenceV2 {
+            role: KagemushaRecursiveSpendArtifactRoleV2::LineageInitProver,
+            generation: "generation-v2-test".to_owned(),
+            circuit_id:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2
+                    .to_owned(),
+            artifact_type: "KagemushaRecursiveSpendLineageKeyArtifactsV2".to_owned(),
+            size_bytes: u64::try_from(bytes.len()).expect("fixture length fits"),
+            sha256: Sha256::digest(bytes).into(),
+        };
+        let archive = norito::to_bytes(&reference).expect("artifact reference archive");
+        let mut handle = 0;
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_recursive_spend_artifact_begin_v2(
+                    archive.as_ptr(),
+                    archive.len() as c_ulong,
+                    KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLE_LINEAGE_INIT_V2,
+                    &mut handle,
+                )
+            },
+            0
+        );
+        assert_ne!(handle, 0);
+        for chunk in bytes.chunks(5) {
+            assert_eq!(
+                unsafe {
+                    connect_norito_kagemusha_recursive_spend_artifact_write_v2(
+                        handle,
+                        chunk.as_ptr(),
+                        chunk.len() as c_ulong,
+                    )
+                },
+                0
+            );
+        }
+        assert_eq!(
+            unsafe { connect_norito_kagemusha_recursive_spend_artifact_finalize_v2(handle) },
+            0
+        );
+        let mut reader =
+            kagemusha_recursive_spend_artifact_reader_v2(&reference).expect("ready reader");
+        let mut actual = Vec::new();
+        reader
+            .read_to_end(&mut actual)
+            .expect("read spooled artifact");
+        assert_eq!(actual, bytes);
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_recursive_spend_artifact_write_v2(
+                    handle,
+                    bytes.as_ptr(),
+                    bytes.len() as c_ulong,
+                )
+            },
+            ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_ARTIFACT
+        );
+        assert_eq!(
+            unsafe { connect_norito_kagemusha_recursive_spend_artifact_cancel_v2(handle) },
+            0
+        );
+        assert!(kagemusha_recursive_spend_artifact_reader_v2(&reference).is_err());
+    }
+
+    #[test]
+    fn recursive_spend_v2_artifact_ingest_rejects_role_size_and_hash_tampering() {
+        let bytes = b"reserved-lineage-append-artifact-v2";
+        let reference = KagemushaRecursiveSpendArtifactReferenceV2 {
+            role: KagemushaRecursiveSpendArtifactRoleV2::LineageAppendProver,
+            generation: "generation-v2-test".to_owned(),
+            circuit_id:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RESERVED_APPEND_PROOF_CIRCUIT_ID_V2
+                    .to_owned(),
+            artifact_type: "KagemushaRecursiveSpendLineageKeyArtifactsV2".to_owned(),
+            size_bytes: u64::try_from(bytes.len()).expect("fixture length fits"),
+            sha256: [0xA5; 32],
+        };
+        let archive = norito::to_bytes(&reference).expect("artifact reference archive");
+        let mut handle = 99;
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_recursive_spend_artifact_begin_v2(
+                    archive.as_ptr(),
+                    archive.len() as c_ulong,
+                    KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLE_LINEAGE_INIT_V2,
+                    &mut handle,
+                )
+            },
+            ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_ARTIFACT
+        );
+        assert_eq!(handle, 0);
+
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_recursive_spend_artifact_begin_v2(
+                    archive.as_ptr(),
+                    archive.len() as c_ulong,
+                    KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLE_LINEAGE_APPEND_V2,
+                    &mut handle,
+                )
+            },
+            0
+        );
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_recursive_spend_artifact_write_v2(
+                    handle,
+                    bytes.as_ptr(),
+                    (bytes.len() - 1) as c_ulong,
+                )
+            },
+            0
+        );
+        assert_eq!(
+            unsafe { connect_norito_kagemusha_recursive_spend_artifact_finalize_v2(handle) },
+            ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_ARTIFACT
+        );
+        assert_eq!(
+            unsafe { connect_norito_kagemusha_recursive_spend_artifact_cancel_v2(handle) },
+            ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_ARTIFACT
+        );
     }
 
     #[test]
@@ -21583,6 +22575,41 @@ fn java_sorafs_reference_sign_orderbook_payload(
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_sorafs_reference_derive_orderbook_order_id(
+    env: &mut jni::JNIEnv<'_>,
+    owner_account: jni::objects::JByteArray<'_>,
+    nonce: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let owner_account = java_sorafs_orderbook_non_empty(
+            read_java_byte_array(env, &owner_account, "ownerAccount")
+                .ok_or_else(|| "invalid ownerAccount bytes".to_owned())?,
+            "ownerAccount",
+        )?;
+        let nonce = java_sorafs_orderbook_u64(nonce, "nonce")?;
+        if nonce == 0 {
+            return Err("nonce must be positive".to_owned());
+        }
+        let order_id = derive_orderbook_order_id_v1(&owner_account, nonce);
+        env.byte_array_from_slice(&order_id)
+            .map(|array| array.into_raw())
+            .map_err(|err| err.to_string())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_sorafs_orderbook_u64(value: jni::sys::jlong, field: &str) -> Result<u64, String> {
     u64::try_from(value).map_err(|_| format!("{field} must be non-negative"))
 }
@@ -21651,12 +22678,25 @@ fn java_sorafs_reference_build_signed_orderbook_order_request(
             read_java_byte_array(env, &inputs.private_key, "privateKey")
                 .ok_or_else(|| "invalid orderbook private key bytes".to_owned())?,
         );
+        let supplied_order_id = java_sorafs_orderbook_fixed32(
+            read_java_byte_array(env, &inputs.order_id, "orderId")
+                .ok_or_else(|| "invalid orderId bytes".to_owned())?,
+            "orderId",
+        )?;
+        let owner_account = java_sorafs_orderbook_non_empty(
+            read_java_byte_array(env, &inputs.owner_account, "ownerAccount")
+                .ok_or_else(|| "invalid ownerAccount bytes".to_owned())?,
+            "ownerAccount",
+        )?;
+        let nonce = java_sorafs_orderbook_u64(inputs.nonce, "nonce")?;
+        let expected_order_id = derive_orderbook_order_id_v1(&owner_account, nonce);
+        if supplied_order_id != expected_order_id {
+            return Err(format!(
+                "orderId must equal the canonical owner-and-nonce derivation {}",
+                hex::encode(expected_order_id)
+            ));
+        }
         let fields = OrderbookOrderRequestFieldsV1 {
-            order_id: java_sorafs_orderbook_fixed32(
-                read_java_byte_array(env, &inputs.order_id, "orderId")
-                    .ok_or_else(|| "invalid orderId bytes".to_owned())?,
-                "orderId",
-            )?,
             side: sorafs_orderbook_side_from_bridge(
                 u32::try_from(inputs.side).map_err(|_| "side must be non-negative".to_owned())?,
             )
@@ -21672,13 +22712,9 @@ fn java_sorafs_reference_build_signed_orderbook_order_request(
             )?,
             quantity_gib: java_sorafs_orderbook_u64(inputs.quantity_gib, "quantityGib")?,
             remaining_gib: java_sorafs_orderbook_u64(inputs.remaining_gib, "remainingGib")?,
-            owner_account: java_sorafs_orderbook_non_empty(
-                read_java_byte_array(env, &inputs.owner_account, "ownerAccount")
-                    .ok_or_else(|| "invalid ownerAccount bytes".to_owned())?,
-                "ownerAccount",
-            )?,
+            owner_account,
             expiry_unix: java_sorafs_orderbook_u64(inputs.expiry_unix, "expiryUnix")?,
-            nonce: java_sorafs_orderbook_u64(inputs.nonce, "nonce")?,
+            nonce,
             maker_fee_bps: java_sorafs_orderbook_fee_bps(inputs.maker_fee_bps, "makerFeeBps")?,
             taker_fee_bps: java_sorafs_orderbook_fee_bps(inputs.taker_fee_bps, "takerFeeBps")?,
         };
@@ -24590,6 +25626,23 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeDeriveOrderbookOrderId(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    owner_account: jni::objects::JByteArray<'_>,
+    nonce: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_derive_orderbook_order_id(&mut env, owner_account, nonce)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeBuildSignedOrderbookOrderRequest(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -24901,6 +25954,23 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
     private_key: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
     java_sorafs_reference_sign_orderbook_payload(&mut env, kind, payload, private_key)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeDeriveOrderbookOrderId(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    owner_account: jni::objects::JByteArray<'_>,
+    nonce: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_derive_orderbook_order_id(&mut env, owner_account, nonce)
 }
 
 #[cfg(any(
@@ -27256,6 +28326,7 @@ fn map_local_fetch_error(err: LocalFetchError) -> c_int {
         LocalFetchError::ScoreboardBuild(_) => ERR_FETCH_SCOREBOARD_BUILD,
         LocalFetchError::Fetch(_) => ERR_FETCH_EXECUTION,
         LocalFetchError::UnknownChunkerHandle(_) => ERR_FETCH_UNKNOWN_CHUNKER,
+        LocalFetchError::IntegrityVerificationDisabled(_) => ERR_FETCH_OPTIONS_JSON,
     }
 }
 
@@ -27851,6 +28922,29 @@ pub unsafe extern "C" fn connect_norito_sorafs_reference_sign_orderbook_payload(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_sorafs_reference_derive_orderbook_order_id(
+    owner_account_ptr: *const c_uchar,
+    owner_account_len: c_ulong,
+    nonce: u64,
+    out_order_id_ptr: *mut c_uchar,
+    out_order_id_len: c_ulong,
+) -> c_int {
+    if out_order_id_ptr.is_null() || out_order_id_len as usize != 32 || nonce == 0 {
+        return ERR_SORAFS_REFERENCE;
+    }
+    let owner_account =
+        match unsafe { sorafs_read_non_empty_bytes(owner_account_ptr, owner_account_len) } {
+            Ok(value) => value,
+            Err(code) => return code,
+        };
+    let order_id = derive_orderbook_order_id_v1(&owner_account, nonce);
+    unsafe {
+        ptr::copy_nonoverlapping(order_id.as_ptr(), out_order_id_ptr, order_id.len());
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_sorafs_reference_build_signed_orderbook_order_request(
     order_id_ptr: *const c_uchar,
     order_id_len: c_ulong,
@@ -27879,11 +28973,22 @@ pub unsafe extern "C" fn connect_norito_sorafs_reference_build_signed_orderbook_
         Ok(private_key) => Zeroizing::new(private_key),
         Err(err) => return err.code(),
     };
-    let fields = OrderbookOrderRequestFieldsV1 {
-        order_id: match unsafe { sorafs_read_fixed32(order_id_ptr, order_id_len) } {
+    let supplied_order_id = match unsafe { sorafs_read_fixed32(order_id_ptr, order_id_len) } {
+        Ok(value) => value,
+        Err(code) => return code,
+    };
+    let owner_account =
+        match unsafe { sorafs_read_non_empty_bytes(owner_account_ptr, owner_account_len) } {
             Ok(value) => value,
             Err(code) => return code,
-        },
+        };
+    if nonce == 0 {
+        return ERR_SORAFS_REFERENCE;
+    }
+    if supplied_order_id != derive_orderbook_order_id_v1(&owner_account, nonce) {
+        return ERR_SORAFS_REFERENCE;
+    }
+    let fields = OrderbookOrderRequestFieldsV1 {
         side: match sorafs_orderbook_side_from_bridge(side) {
             Ok(value) => value,
             Err(code) => return code,
@@ -27900,12 +29005,7 @@ pub unsafe extern "C" fn connect_norito_sorafs_reference_build_signed_orderbook_
         },
         quantity_gib,
         remaining_gib,
-        owner_account: match unsafe {
-            sorafs_read_non_empty_bytes(owner_account_ptr, owner_account_len)
-        } {
-            Ok(value) => value,
-            Err(code) => return code,
-        },
+        owner_account,
         expiry_unix,
         nonce,
         maker_fee_bps: match sorafs_fee_bps_from_bridge(maker_fee_bps) {
@@ -35003,6 +36103,16 @@ mod sorafs_tests {
     use super::*;
 
     #[test]
+    fn disabled_local_fetch_integrity_checks_are_invalid_options() {
+        for field in ["verify_digests", "verify_lengths"] {
+            assert_eq!(
+                map_local_fetch_error(LocalFetchError::IntegrityVerificationDisabled(field)),
+                ERR_FETCH_OPTIONS_JSON,
+            );
+        }
+    }
+
+    #[test]
     fn sorafs_local_fetch_via_ffi() {
         let tempdir = tempdir().expect("tempdir");
         let payload: Vec<u8> = (0..(4 * 1024_usize))
@@ -35350,12 +36460,27 @@ mod sorafs_tests {
         let private_key = [0xB7; 32];
         let owner = b"merchant@paynet";
         let price = b"1000000";
+        let order_id = derive_orderbook_order_id_v1(owner, 7);
+        let mut derived_order_id = [0_u8; 32];
+        assert_eq!(
+            unsafe {
+                connect_norito_sorafs_reference_derive_orderbook_order_id(
+                    owner.as_ptr(),
+                    owner.len() as c_ulong,
+                    7,
+                    derived_order_id.as_mut_ptr(),
+                    derived_order_id.len() as c_ulong,
+                )
+            },
+            0
+        );
+        assert_eq!(derived_order_id, order_id);
         let mut order_ptr: *mut c_uchar = ptr::null_mut();
         let mut order_len: c_ulong = 0;
 
         let rc = unsafe {
             connect_norito_sorafs_reference_build_signed_orderbook_order_request(
-                [0x11; 32].as_ptr(),
+                order_id.as_ptr(),
                 32,
                 SORAFS_ORDERBOOK_SIDE_BID,
                 SORAFS_ORDERBOOK_TIER_HOT,
@@ -35395,7 +36520,7 @@ mod sorafs_tests {
         let mut cancel_len: c_ulong = 0;
         let cancel_rc = unsafe {
             connect_norito_sorafs_reference_build_signed_orderbook_order_cancel(
-                [0x11; 32].as_ptr(),
+                order_id.as_ptr(),
                 32,
                 owner.as_ptr(),
                 owner.len() as c_ulong,
@@ -35469,6 +36594,90 @@ mod sorafs_tests {
             receipt_outcome.get("status").and_then(JsonValue::as_str),
             Some("Ok")
         );
+    }
+
+    #[test]
+    fn sorafs_reference_order_id_bridge_rejects_noncanonical_inputs() {
+        let owner = b"merchant@paynet";
+        let mut output = [0_u8; 32];
+        assert_eq!(
+            unsafe {
+                connect_norito_sorafs_reference_derive_orderbook_order_id(
+                    owner.as_ptr(),
+                    0,
+                    1,
+                    output.as_mut_ptr(),
+                    output.len() as c_ulong,
+                )
+            },
+            ERR_SORAFS_REFERENCE
+        );
+        assert_eq!(
+            unsafe {
+                connect_norito_sorafs_reference_derive_orderbook_order_id(
+                    owner.as_ptr(),
+                    owner.len() as c_ulong,
+                    1,
+                    ptr::null_mut(),
+                    output.len() as c_ulong,
+                )
+            },
+            ERR_SORAFS_REFERENCE
+        );
+        assert_eq!(
+            unsafe {
+                connect_norito_sorafs_reference_derive_orderbook_order_id(
+                    owner.as_ptr(),
+                    owner.len() as c_ulong,
+                    0,
+                    output.as_mut_ptr(),
+                    output.len() as c_ulong,
+                )
+            },
+            ERR_SORAFS_REFERENCE
+        );
+        assert_eq!(
+            unsafe {
+                connect_norito_sorafs_reference_derive_orderbook_order_id(
+                    owner.as_ptr(),
+                    owner.len() as c_ulong,
+                    1,
+                    output.as_mut_ptr(),
+                    31,
+                )
+            },
+            ERR_SORAFS_REFERENCE
+        );
+
+        let price = b"1000000";
+        let private_key = [0xB7; 32];
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+        let rc = unsafe {
+            connect_norito_sorafs_reference_build_signed_orderbook_order_request(
+                [0x11; 32].as_ptr(),
+                32,
+                SORAFS_ORDERBOOK_SIDE_BID,
+                SORAFS_ORDERBOOK_TIER_HOT,
+                price.as_ptr(),
+                price.len() as c_ulong,
+                12,
+                12,
+                owner.as_ptr(),
+                owner.len() as c_ulong,
+                1_700_010_000,
+                7,
+                25,
+                30,
+                private_key.as_ptr(),
+                private_key.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(rc, ERR_SORAFS_REFERENCE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
     }
 
     #[test]

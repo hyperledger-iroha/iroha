@@ -7500,6 +7500,510 @@ class SumeragiLaneSettlementReceipt:
     timestamp_ms: int
 
 
+class SumeragiNativeAmxPhase(str, Enum):
+    """Native AMX participant phase carried by an attestation QC."""
+
+    PREPARE = "prepare"
+    COMMIT = "commit"
+
+
+def _required_field(payload: Mapping[str, Any], field_name: str, context: str) -> Any:
+    if field_name not in payload:
+        raise TypeError(f"{context} is missing required `{field_name}` field")
+    return payload[field_name]
+
+
+def _strict_uint(
+    payload: Mapping[str, Any], field_name: str, bits: int, context: str
+) -> int:
+    value = _required_field(payload, field_name, context)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{context} `{field_name}` must be an unsigned integer")
+    maximum = (1 << bits) - 1
+    if value < 0 or value > maximum:
+        raise ValueError(
+            f"{context} `{field_name}` must be between 0 and {maximum}"
+        )
+    return value
+
+
+def _strict_decimal_uint(payload: Mapping[str, Any], field_name: str, context: str) -> int:
+    value = _required_field(payload, field_name, context)
+    if not isinstance(value, str) or re.fullmatch(r"(?:0|[1-9][0-9]*)", value) is None:
+        raise TypeError(f"{context} `{field_name}` must be a canonical decimal string")
+    return int(value)
+
+
+def _strict_numeric_string(payload: Mapping[str, Any], field_name: str, context: str) -> str:
+    value = _required_field(payload, field_name, context)
+    if (
+        not isinstance(value, str)
+        or re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?", value) is None
+    ):
+        raise TypeError(f"{context} `{field_name}` must be a non-negative Numeric string")
+    return value
+
+
+def _strict_nonempty_string(
+    payload: Mapping[str, Any], field_name: str, context: str
+) -> str:
+    value = _required_field(payload, field_name, context)
+    if not isinstance(value, str) or value.strip() == "":
+        raise TypeError(f"{context} `{field_name}` must be a non-empty string")
+    return value
+
+
+def _strict_hex_string(
+    payload: Mapping[str, Any],
+    field_name: str,
+    byte_length: int,
+    context: str,
+) -> str:
+    value = _required_field(payload, field_name, context)
+    if (
+        not isinstance(value, str)
+        or len(value) != byte_length * 2
+        or re.fullmatch(r"[0-9a-fA-F]+", value) is None
+    ):
+        raise TypeError(
+            f"{context} `{field_name}` must be exactly {byte_length} bytes of hex"
+        )
+    return value
+
+
+def _crc16_ccitt_false(value: bytes) -> int:
+    crc = 0xFFFF
+    for byte in value:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc
+
+
+def _strict_hash_literal(
+    payload: Mapping[str, Any], field_name: str, context: str
+) -> str:
+    value = _required_field(payload, field_name, context)
+    if not isinstance(value, str):
+        raise TypeError(f"{context} `{field_name}` must be a canonical hash literal")
+    match = re.fullmatch(r"hash:([0-9A-F]{64})#([0-9A-F]{4})", value)
+    if match is None:
+        raise ValueError(
+            f"{context} `{field_name}` must use canonical `hash:<uppercase hex>#<CRC16>` syntax"
+        )
+    body, checksum = match.groups()
+    expected = _crc16_ccitt_false(f"hash:{body}".encode("ascii"))
+    if int(checksum, 16) != expected:
+        raise ValueError(f"{context} `{field_name}` hash checksum mismatch")
+    if int(body[-2:], 16) & 1 == 0:
+        raise ValueError(f"{context} `{field_name}` has an invalid Iroha hash marker bit")
+    return value
+
+
+@dataclass(frozen=True)
+class SumeragiNativeAmxAttestationBody:
+    """Canonical identity and route material signed by a participant committee."""
+
+    chain_id_hash: str
+    source_id: str
+    tx_entrypoint_hash: str
+    plan_digest: str
+    phase: SumeragiNativeAmxPhase
+    coordinator_lane_id: int
+    coordinator_dataspace_id: int
+    coordinator_lane_incarnation: str
+    participant_lane_id: int
+    participant_dataspace_id: int
+    participant_lane_incarnation: str
+    authority_context_height: int
+    coordinator_lane_block_height: int
+    coordinator_lane_block_view: int
+    coordinator_proposal_hash: str
+
+    @classmethod
+    def from_payload(
+        cls, payload: Mapping[str, Any]
+    ) -> "SumeragiNativeAmxAttestationBody":
+        context = "native AMX attestation body"
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"{context} must be an object")
+        phase_raw = _required_field(payload, "phase", context)
+        try:
+            phase = SumeragiNativeAmxPhase(phase_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"{context} `phase` must be exactly `prepare` or `commit`"
+            ) from exc
+        authority_context_height = _strict_uint(
+            payload, "authority_context_height", 64, context
+        )
+        coordinator_lane_block_height = _strict_uint(
+            payload, "coordinator_lane_block_height", 64, context
+        )
+        if authority_context_height == 0 or coordinator_lane_block_height == 0:
+            raise ValueError(
+                f"{context} authority and coordinator lane-block heights must be non-zero"
+            )
+        return cls(
+            chain_id_hash=_strict_hash_literal(payload, "chain_id_hash", context),
+            source_id=_strict_hex_string(payload, "source_id", 32, context),
+            tx_entrypoint_hash=_strict_hash_literal(
+                payload, "tx_entrypoint_hash", context
+            ),
+            plan_digest=_strict_hash_literal(payload, "plan_digest", context),
+            phase=phase,
+            coordinator_lane_id=_strict_uint(
+                payload, "coordinator_lane_id", 32, context
+            ),
+            coordinator_dataspace_id=_strict_uint(
+                payload, "coordinator_dataspace_id", 64, context
+            ),
+            coordinator_lane_incarnation=_strict_hash_literal(
+                payload, "coordinator_lane_incarnation", context
+            ),
+            participant_lane_id=_strict_uint(
+                payload, "participant_lane_id", 32, context
+            ),
+            participant_dataspace_id=_strict_uint(
+                payload, "participant_dataspace_id", 64, context
+            ),
+            participant_lane_incarnation=_strict_hash_literal(
+                payload, "participant_lane_incarnation", context
+            ),
+            authority_context_height=authority_context_height,
+            coordinator_lane_block_height=coordinator_lane_block_height,
+            coordinator_lane_block_view=_strict_uint(
+                payload, "coordinator_lane_block_view", 64, context
+            ),
+            coordinator_proposal_hash=_strict_hash_literal(
+                payload, "coordinator_proposal_hash", context
+            ),
+        )
+
+    def identity(self) -> Tuple[Any, ...]:
+        """Return all signed identity fields except the prepare/commit phase."""
+
+        return (
+            self.chain_id_hash,
+            self.source_id.lower(),
+            self.tx_entrypoint_hash,
+            self.plan_digest,
+            self.coordinator_lane_id,
+            self.coordinator_dataspace_id,
+            self.coordinator_lane_incarnation,
+            self.participant_lane_id,
+            self.participant_dataspace_id,
+            self.participant_lane_incarnation,
+            self.authority_context_height,
+            self.coordinator_lane_block_height,
+            self.coordinator_lane_block_view,
+            self.coordinator_proposal_hash,
+        )
+
+
+@dataclass(frozen=True)
+class SumeragiNativeAmxAttestationQc:
+    """Participant validator-set certificate for one native AMX phase."""
+
+    body: SumeragiNativeAmxAttestationBody
+    validator_set_hash_version: int
+    validator_set_hash: str
+    validator_set: Tuple[str, ...]
+    signers_bitmap: Tuple[int, ...]
+    bls_aggregate_signature: str
+
+    @classmethod
+    def from_payload(
+        cls, payload: Mapping[str, Any]
+    ) -> "SumeragiNativeAmxAttestationQc":
+        context = "native AMX attestation QC"
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"{context} must be an object")
+        body_payload = _required_field(payload, "body", context)
+        if not isinstance(body_payload, Mapping):
+            raise TypeError(f"{context} `body` must be an object")
+        version = _strict_uint(payload, "validator_set_hash_version", 16, context)
+        if version != 1:
+            raise ValueError(f"{context} uses unsupported validator-set hash version {version}")
+        validator_set_raw = _required_field(payload, "validator_set", context)
+        if not isinstance(validator_set_raw, list) or not validator_set_raw:
+            raise TypeError(f"{context} `validator_set` must be a non-empty list")
+        validator_set: List[str] = []
+        for index, validator in enumerate(validator_set_raw):
+            if not isinstance(validator, str) or validator.strip() == "":
+                raise TypeError(
+                    f"{context} validator at index {index} must be a non-empty string"
+                )
+            validator_set.append(validator)
+        if len(set(validator_set)) != len(validator_set):
+            raise ValueError(f"{context} `validator_set` contains duplicate validators")
+
+        bitmap_raw = _required_field(payload, "signers_bitmap", context)
+        expected_bitmap_len = (len(validator_set) + 7) // 8
+        if not isinstance(bitmap_raw, list) or len(bitmap_raw) != expected_bitmap_len:
+            raise TypeError(
+                f"{context} `signers_bitmap` must contain exactly {expected_bitmap_len} bytes"
+            )
+        bitmap: List[int] = []
+        for index, byte in enumerate(bitmap_raw):
+            if isinstance(byte, bool) or not isinstance(byte, int) or byte < 0 or byte > 255:
+                raise TypeError(
+                    f"{context} signer bitmap entry {index} must be an integer byte"
+                )
+            bitmap.append(byte)
+        trailing_bits = len(validator_set) % 8
+        if trailing_bits and bitmap[-1] & ~((1 << trailing_bits) - 1):
+            raise ValueError(f"{context} signer bitmap addresses an out-of-range validator")
+        signer_count = sum(bin(byte).count("1") for byte in bitmap)
+        tolerated_faults = (len(validator_set) - 1) // 3
+        required_quorum = len(validator_set) - tolerated_faults
+        if signer_count < required_quorum:
+            raise ValueError(
+                f"{context} signer bitmap has {signer_count} signers; {required_quorum} required"
+            )
+
+        signature = _strict_hex_string(
+            payload, "bls_aggregate_signature", 96, context
+        )
+        if not any(bytes.fromhex(signature)):
+            raise ValueError(f"{context} aggregate signature must not be all zeroes")
+        return cls(
+            body=SumeragiNativeAmxAttestationBody.from_payload(body_payload),
+            validator_set_hash_version=version,
+            validator_set_hash=_strict_hash_literal(
+                payload, "validator_set_hash", context
+            ),
+            validator_set=tuple(validator_set),
+            signers_bitmap=tuple(bitmap),
+            bls_aggregate_signature=signature,
+        )
+
+
+@dataclass(frozen=True)
+class SumeragiNativeAmxLeg:
+    """Prepare and commit certificates for one participant lane/dataspace."""
+
+    lane_id: int
+    dataspace_id: int
+    lane_incarnation: str
+    prepare_qc: SumeragiNativeAmxAttestationQc
+    commit_qc: SumeragiNativeAmxAttestationQc
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiNativeAmxLeg":
+        context = "native AMX leg"
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"{context} must be an object")
+        prepare_payload = _required_field(payload, "prepare_qc", context)
+        commit_payload = _required_field(payload, "commit_qc", context)
+        if not isinstance(prepare_payload, Mapping) or not isinstance(commit_payload, Mapping):
+            raise TypeError(f"{context} prepare and commit QCs must be objects")
+        prepare = SumeragiNativeAmxAttestationQc.from_payload(prepare_payload)
+        commit = SumeragiNativeAmxAttestationQc.from_payload(commit_payload)
+        if prepare.body.phase is not SumeragiNativeAmxPhase.PREPARE:
+            raise ValueError(f"{context} prepare QC carries the wrong phase")
+        if commit.body.phase is not SumeragiNativeAmxPhase.COMMIT:
+            raise ValueError(f"{context} commit QC carries the wrong phase")
+        if prepare.body.identity() != commit.body.identity():
+            raise ValueError(f"{context} prepare and commit QC identities do not match")
+        if (
+            prepare.validator_set_hash_version != commit.validator_set_hash_version
+            or prepare.validator_set_hash != commit.validator_set_hash
+            or prepare.validator_set != commit.validator_set
+        ):
+            raise ValueError(f"{context} prepare and commit validator sets do not match")
+        lane_id = _strict_uint(payload, "lane_id", 32, context)
+        dataspace_id = _strict_uint(payload, "dataspace_id", 64, context)
+        lane_incarnation = _strict_hash_literal(payload, "lane_incarnation", context)
+        if (
+            prepare.body.participant_lane_id != lane_id
+            or prepare.body.participant_dataspace_id != dataspace_id
+            or prepare.body.participant_lane_incarnation != lane_incarnation
+        ):
+            raise ValueError(f"{context} participant identity differs from its QC bodies")
+        return cls(
+            lane_id=lane_id,
+            dataspace_id=dataspace_id,
+            lane_incarnation=lane_incarnation,
+            prepare_qc=prepare,
+            commit_qc=commit,
+        )
+
+
+@dataclass(frozen=True)
+class SumeragiNativeAmxReceipt:
+    """Validated native AMX coordinator receipt with all participant legs."""
+
+    version: int
+    source_id: str
+    chain_id_hash: str
+    plan_digest: str
+    lane_id: int
+    dataspace_id: int
+    lane_incarnation: str
+    authority_context_height: int
+    lane_block_height: int
+    lane_block_view: int
+    coordinator_proposal_hash: str
+    legs: Tuple[SumeragiNativeAmxLeg, ...]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiNativeAmxReceipt":
+        context = "native AMX receipt"
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"{context} must be an object")
+        version = _strict_uint(payload, "version", 16, context)
+        if version != 1:
+            raise ValueError(f"{context} uses unsupported version {version}")
+        source_id = _strict_hex_string(payload, "source_id", 32, context)
+        chain_id_hash = _strict_hash_literal(payload, "chain_id_hash", context)
+        plan_digest = _strict_hash_literal(payload, "plan_digest", context)
+        lane_id = _strict_uint(payload, "lane_id", 32, context)
+        dataspace_id = _strict_uint(payload, "dataspace_id", 64, context)
+        lane_incarnation = _strict_hash_literal(payload, "lane_incarnation", context)
+        authority_context_height = _strict_uint(
+            payload, "authority_context_height", 64, context
+        )
+        lane_block_height = _strict_uint(payload, "lane_block_height", 64, context)
+        lane_block_view = _strict_uint(payload, "lane_block_view", 64, context)
+        coordinator_proposal_hash = _strict_hash_literal(
+            payload, "coordinator_proposal_hash", context
+        )
+        if authority_context_height == 0 or lane_block_height == 0:
+            raise ValueError(
+                f"{context} authority and coordinator lane-block heights must be non-zero"
+            )
+        legs_raw = _required_field(payload, "legs", context)
+        if not isinstance(legs_raw, list) or not legs_raw:
+            raise TypeError(f"{context} `legs` must be a non-empty list")
+        legs = tuple(SumeragiNativeAmxLeg.from_payload(leg) for leg in legs_raw)
+        identities = {(leg.lane_id, leg.dataspace_id) for leg in legs}
+        if len(identities) != len(legs):
+            raise ValueError(f"{context} contains duplicate participant legs")
+        entrypoint_hash: Optional[str] = None
+        for leg in legs:
+            body = leg.prepare_qc.body
+            if (
+                leg.lane_id == lane_id
+                and leg.dataspace_id == dataspace_id
+                and leg.lane_incarnation != lane_incarnation
+            ):
+                raise ValueError(
+                    f"{context} coordinator leg uses a different lane incarnation"
+                )
+            if body.chain_id_hash != chain_id_hash:
+                raise ValueError(f"{context} chain identity differs from a QC body")
+            if body.source_id.lower() != source_id.lower():
+                raise ValueError(f"{context} source identity differs from a QC body")
+            if body.plan_digest != plan_digest:
+                raise ValueError(f"{context} plan digest differs from a QC body")
+            if (
+                body.coordinator_lane_id != lane_id
+                or body.coordinator_dataspace_id != dataspace_id
+                or body.coordinator_lane_incarnation != lane_incarnation
+            ):
+                raise ValueError(f"{context} coordinator identity differs from a QC body")
+            if (
+                body.authority_context_height != authority_context_height
+                or body.coordinator_lane_block_height != lane_block_height
+                or body.coordinator_lane_block_view != lane_block_view
+                or body.coordinator_proposal_hash != coordinator_proposal_hash
+            ):
+                raise ValueError(f"{context} coordinator session differs from a QC body")
+            if entrypoint_hash is None:
+                entrypoint_hash = body.tx_entrypoint_hash
+            elif body.tx_entrypoint_hash != entrypoint_hash:
+                raise ValueError(f"{context} legs carry mismatched entrypoint hashes")
+        return cls(
+            version=version,
+            source_id=source_id,
+            chain_id_hash=chain_id_hash,
+            plan_digest=plan_digest,
+            lane_id=lane_id,
+            dataspace_id=dataspace_id,
+            lane_incarnation=lane_incarnation,
+            authority_context_height=authority_context_height,
+            lane_block_height=lane_block_height,
+            lane_block_view=lane_block_view,
+            coordinator_proposal_hash=coordinator_proposal_hash,
+            legs=legs,
+        )
+
+
+@dataclass(frozen=True)
+class SumeragiNexusFeeScheduleInputs:
+    """Exact fee inputs needed to recompute a Nexus fee receipt."""
+
+    tx_bytes_len: int
+    instruction_count: int
+    gas_used: int
+    base_fee: str
+    per_byte_fee: str
+    per_instruction_fee: str
+    per_gas_unit_fee: str
+
+    @classmethod
+    def from_payload(
+        cls, payload: Mapping[str, Any]
+    ) -> "SumeragiNexusFeeScheduleInputs":
+        context = "Nexus fee schedule"
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"{context} must be an object")
+        return cls(
+            tx_bytes_len=_strict_uint(payload, "tx_bytes_len", 64, context),
+            instruction_count=_strict_uint(payload, "instruction_count", 64, context),
+            gas_used=_strict_uint(payload, "gas_used", 64, context),
+            base_fee=_strict_numeric_string(payload, "base_fee", context),
+            per_byte_fee=_strict_numeric_string(payload, "per_byte_fee", context),
+            per_instruction_fee=_strict_numeric_string(
+                payload, "per_instruction_fee", context
+            ),
+            per_gas_unit_fee=_strict_numeric_string(
+                payload, "per_gas_unit_fee", context
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class SumeragiNexusFeeReceipt:
+    """Versioned public Nexus fee charge committed by a lane block."""
+
+    version: int
+    source_id: str
+    dataspace_id: int
+    lane_id: int
+    block_height: int
+    payer_account_id: str
+    fee_asset_id: str
+    fee_amount: str
+    schedule: SumeragiNexusFeeScheduleInputs
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiNexusFeeReceipt":
+        context = "Nexus fee receipt"
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"{context} must be an object")
+        version = _strict_uint(payload, "version", 16, context)
+        if version != 1:
+            raise ValueError(f"{context} uses unsupported version {version}")
+        schedule_payload = _required_field(payload, "schedule", context)
+        if not isinstance(schedule_payload, Mapping):
+            raise TypeError(f"{context} `schedule` must be an object")
+        return cls(
+            version=version,
+            source_id=_strict_hex_string(payload, "source_id", 32, context),
+            dataspace_id=_strict_uint(payload, "dataspace_id", 64, context),
+            lane_id=_strict_uint(payload, "lane_id", 32, context),
+            block_height=_strict_uint(payload, "block_height", 64, context),
+            payer_account_id=_strict_nonempty_string(
+                payload, "payer_account_id", context
+            ),
+            fee_asset_id=_strict_nonempty_string(payload, "fee_asset_id", context),
+            fee_amount=_strict_numeric_string(payload, "fee_amount", context),
+            schedule=SumeragiNexusFeeScheduleInputs.from_payload(schedule_payload),
+        )
+
+
 @dataclass(frozen=True)
 class SumeragiLaneSwapMetadata:
     """Swap metadata attached to a lane settlement commitment."""
@@ -7517,6 +8021,7 @@ class SumeragiLaneSettlementCommitment:
 
     block_height: int
     lane_id: int
+    lane_incarnation: str
     dataspace_id: int
     tx_count: int
     total_local_micro: int
@@ -7524,43 +8029,48 @@ class SumeragiLaneSettlementCommitment:
     total_xor_after_haircut_micro: int
     total_xor_variance_micro: int
     receipts: List[SumeragiLaneSettlementReceipt]
+    nexus_fee_receipts: Tuple[SumeragiNexusFeeReceipt, ...]
+    native_amx_receipts: Tuple[SumeragiNativeAmxReceipt, ...]
     swap_metadata: Optional[SumeragiLaneSwapMetadata]
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiLaneSettlementCommitment":
         if not isinstance(payload, Mapping):
             raise TypeError("lane settlement commitment must be an object")
-        try:
-            block_height = int(payload.get("block_height", 0))
-            lane_id = int(payload.get("lane_id", 0))
-            dataspace_id = int(payload.get("dataspace_id", 0))
-            tx_count = int(payload.get("tx_count", 0))
-            total_local_micro = int(payload.get("total_local_micro", 0))
-            total_xor_due_micro = int(payload.get("total_xor_due_micro", 0))
-            total_xor_after_haircut_micro = int(payload.get("total_xor_after_haircut_micro", 0))
-            total_xor_variance_micro = int(payload.get("total_xor_variance_micro", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("lane settlement numeric fields must be numeric") from exc
-        receipts_payload = payload.get("receipts", [])
+        context = "lane settlement commitment"
+        block_height = _strict_uint(payload, "block_height", 64, context)
+        lane_id = _strict_uint(payload, "lane_id", 32, context)
+        lane_incarnation = _strict_hash_literal(payload, "lane_incarnation", context)
+        dataspace_id = _strict_uint(payload, "dataspace_id", 64, context)
+        tx_count = _strict_uint(payload, "tx_count", 64, context)
+        total_local_micro = _strict_decimal_uint(payload, "total_local_micro", context)
+        total_xor_due_micro = _strict_decimal_uint(payload, "total_xor_due_micro", context)
+        total_xor_after_haircut_micro = _strict_decimal_uint(
+            payload, "total_xor_after_haircut_micro", context
+        )
+        total_xor_variance_micro = _strict_decimal_uint(
+            payload, "total_xor_variance_micro", context
+        )
+        receipts_payload = _required_field(payload, "receipts", context)
         if not isinstance(receipts_payload, list):
             raise TypeError("lane settlement `receipts` must be a list")
         receipts: List[SumeragiLaneSettlementReceipt] = []
         for index, receipt in enumerate(receipts_payload):
             if not isinstance(receipt, Mapping):
                 raise TypeError("lane settlement receipts must be objects")
-            source_id = receipt.get("source_id")
-            if not isinstance(source_id, str):
-                raise TypeError("lane settlement receipt `source_id` must be a string")
-            try:
-                receipt_local = int(receipt.get("local_amount_micro", 0))
-                receipt_due = int(receipt.get("xor_due_micro", 0))
-                receipt_after = int(receipt.get("xor_after_haircut_micro", 0))
-                receipt_variance = int(receipt.get("xor_variance_micro", 0))
-                receipt_timestamp = int(receipt.get("timestamp_ms", 0))
-            except (TypeError, ValueError) as exc:
-                raise TypeError(
-                    f"lane settlement receipt numeric fields must be numeric (index {index})"
-                ) from exc
+            receipt_context = f"lane settlement receipt at index {index}"
+            source_id = _strict_hex_string(receipt, "source_id", 32, receipt_context)
+            receipt_local = _strict_decimal_uint(
+                receipt, "local_amount_micro", receipt_context
+            )
+            receipt_due = _strict_decimal_uint(receipt, "xor_due_micro", receipt_context)
+            receipt_after = _strict_decimal_uint(
+                receipt, "xor_after_haircut_micro", receipt_context
+            )
+            receipt_variance = _strict_decimal_uint(
+                receipt, "xor_variance_micro", receipt_context
+            )
+            receipt_timestamp = _strict_uint(receipt, "timestamp_ms", 64, receipt_context)
             receipts.append(
                 SumeragiLaneSettlementReceipt(
                     source_id=source_id,
@@ -7571,26 +8081,78 @@ class SumeragiLaneSettlementCommitment:
                     timestamp_ms=receipt_timestamp,
                 )
             )
-        swap_metadata_payload = payload.get("swap_metadata")
+        nexus_fee_payload = _required_field(payload, "nexus_fee_receipts", context)
+        if not isinstance(nexus_fee_payload, list):
+            raise TypeError("lane settlement `nexus_fee_receipts` must be a list")
+        nexus_fee_receipts = tuple(
+            SumeragiNexusFeeReceipt.from_payload(receipt) for receipt in nexus_fee_payload
+        )
+        native_amx_payload = _required_field(payload, "native_amx_receipts", context)
+        if not isinstance(native_amx_payload, list):
+            raise TypeError("lane settlement `native_amx_receipts` must be a list")
+        native_amx_receipts = tuple(
+            SumeragiNativeAmxReceipt.from_payload(receipt)
+            for receipt in native_amx_payload
+        )
+        for receipt in nexus_fee_receipts:
+            if (
+                receipt.lane_id != lane_id
+                or receipt.dataspace_id != dataspace_id
+                or receipt.block_height != block_height
+            ):
+                raise ValueError(
+                    "lane settlement receipt coordinates differ from the containing commitment"
+                )
+        for receipt in native_amx_receipts:
+            if (
+                receipt.lane_id != lane_id
+                or receipt.dataspace_id != dataspace_id
+                or receipt.lane_incarnation != lane_incarnation
+                or receipt.lane_block_height != block_height
+            ):
+                raise ValueError(
+                    "lane settlement receipt coordinates differ from the containing commitment"
+                )
+        if len({receipt.source_id.lower() for receipt in nexus_fee_receipts}) != len(
+            nexus_fee_receipts
+        ):
+            raise ValueError("lane settlement contains duplicate Nexus fee receipt sources")
+        if len({receipt.source_id.lower() for receipt in native_amx_receipts}) != len(
+            native_amx_receipts
+        ):
+            raise ValueError("lane settlement contains duplicate native AMX receipt sources")
+
+        swap_metadata_payload = _required_field(payload, "swap_metadata", context)
         swap_metadata: Optional[SumeragiLaneSwapMetadata]
         if swap_metadata_payload is None:
             swap_metadata = None
         elif isinstance(swap_metadata_payload, Mapping):
-            try:
-                swap_metadata = SumeragiLaneSwapMetadata(
-                    epsilon_bps=int(swap_metadata_payload.get("epsilon_bps", 0)),
-                    twap_window_seconds=int(swap_metadata_payload.get("twap_window_seconds", 0)),
-                    liquidity_profile=str(swap_metadata_payload.get("liquidity_profile", "")),
-                    twap_local_per_xor=str(swap_metadata_payload.get("twap_local_per_xor", "")),
-                    volatility_class=str(swap_metadata_payload.get("volatility_class", "")),
-                )
-            except (TypeError, ValueError) as exc:
-                raise TypeError("lane settlement `swap_metadata` numeric fields must be numeric") from exc
+            swap_metadata = SumeragiLaneSwapMetadata(
+                epsilon_bps=_strict_uint(
+                    swap_metadata_payload, "epsilon_bps", 16, "lane swap metadata"
+                ),
+                twap_window_seconds=_strict_uint(
+                    swap_metadata_payload,
+                    "twap_window_seconds",
+                    32,
+                    "lane swap metadata",
+                ),
+                liquidity_profile=_strict_nonempty_string(
+                    swap_metadata_payload, "liquidity_profile", "lane swap metadata"
+                ),
+                twap_local_per_xor=_strict_nonempty_string(
+                    swap_metadata_payload, "twap_local_per_xor", "lane swap metadata"
+                ),
+                volatility_class=_strict_nonempty_string(
+                    swap_metadata_payload, "volatility_class", "lane swap metadata"
+                ),
+            )
         else:
             raise TypeError("lane settlement `swap_metadata` must be an object when present")
         return cls(
             block_height=block_height,
             lane_id=lane_id,
+            lane_incarnation=lane_incarnation,
             dataspace_id=dataspace_id,
             tx_count=tx_count,
             total_local_micro=total_local_micro,
@@ -7598,19 +8160,22 @@ class SumeragiLaneSettlementCommitment:
             total_xor_after_haircut_micro=total_xor_after_haircut_micro,
             total_xor_variance_micro=total_xor_variance_micro,
             receipts=receipts,
+            nexus_fee_receipts=nexus_fee_receipts,
+            native_amx_receipts=native_amx_receipts,
             swap_metadata=swap_metadata,
         )
 
 
 @dataclass(frozen=True)
 class SumeragiLaneRelayEnvelope:
-    """Relay envelope capturing block header, QC, DA hash, and settlement commitment."""
+    """Canonical relay status envelope and its exact settlement commitment."""
 
     lane_id: int
+    lane_incarnation: str
     dataspace_id: int
     block_height: int
-    block_header: Mapping[str, Any]
-    qc: Optional[Mapping[str, Any]]
+    block_hash: str
+    commit_qc: Optional[Mapping[str, Any]]
     da_commitment_hash: Optional[str]
     settlement_commitment: SumeragiLaneSettlementCommitment
     settlement_hash: str
@@ -7620,35 +8185,44 @@ class SumeragiLaneRelayEnvelope:
     def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiLaneRelayEnvelope":
         if not isinstance(payload, Mapping):
             raise TypeError("lane relay envelope must be an object")
-        try:
-            lane_id = int(payload.get("lane_id", 0))
-            dataspace_id = int(payload.get("dataspace_id", 0))
-            block_height = int(payload.get("block_height", 0))
-            rbc_bytes_total = int(payload.get("rbc_bytes_total", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("lane relay numeric fields must be numeric") from exc
-        block_header = payload.get("block_header")
-        if not isinstance(block_header, Mapping):
-            raise TypeError("lane relay `block_header` must be an object")
-        qc = payload.get("qc")
-        if qc is not None and not isinstance(qc, Mapping):
-            raise TypeError("lane relay `qc` must be an object when present")
-        da_commitment_hash = payload.get("da_commitment_hash")
-        if da_commitment_hash is not None and not isinstance(da_commitment_hash, str):
-            raise TypeError("lane relay `da_commitment_hash` must be a string when present")
-        settlement_hash = payload.get("settlement_hash")
-        if not isinstance(settlement_hash, str) or settlement_hash == "":
-            raise TypeError("lane relay `settlement_hash` must be a non-empty string")
-        settlement_payload = payload.get("settlement_commitment")
+        context = "lane relay envelope"
+        lane_id = _strict_uint(payload, "lane_id", 32, context)
+        dataspace_id = _strict_uint(payload, "dataspace_id", 64, context)
+        block_height = _strict_uint(payload, "block_height", 64, context)
+        rbc_bytes_total = _strict_uint(payload, "rbc_bytes_total", 64, context)
+        lane_incarnation = _strict_hash_literal(payload, "lane_incarnation", context)
+        block_hash = _strict_hash_literal(payload, "block_hash", context)
+        commit_qc = _required_field(payload, "commit_qc", context)
+        if commit_qc is not None and not isinstance(commit_qc, Mapping):
+            raise TypeError("lane relay `commit_qc` must be an object when present")
+        da_commitment_hash = _required_field(payload, "da_commitment_hash", context)
+        if da_commitment_hash is not None:
+            da_commitment_hash = _strict_hash_literal(
+                {"da_commitment_hash": da_commitment_hash},
+                "da_commitment_hash",
+                context,
+            )
+        settlement_hash = _strict_hash_literal(payload, "settlement_hash", context)
+        settlement_payload = _required_field(payload, "settlement_commitment", context)
         if not isinstance(settlement_payload, Mapping):
             raise TypeError("lane relay `settlement_commitment` must be an object")
         settlement_commitment = SumeragiLaneSettlementCommitment.from_payload(settlement_payload)
+        if (
+            settlement_commitment.lane_id != lane_id
+            or settlement_commitment.dataspace_id != dataspace_id
+            or settlement_commitment.block_height != block_height
+            or settlement_commitment.lane_incarnation != lane_incarnation
+        ):
+            raise ValueError(
+                "lane relay coordinates differ from the embedded settlement commitment"
+            )
         return cls(
             lane_id=lane_id,
+            lane_incarnation=lane_incarnation,
             dataspace_id=dataspace_id,
             block_height=block_height,
-            block_header=block_header,
-            qc=qc,
+            block_hash=block_hash,
+            commit_qc=commit_qc,
             da_commitment_hash=da_commitment_hash,
             settlement_commitment=settlement_commitment,
             settlement_hash=settlement_hash,
@@ -10187,6 +10761,17 @@ __all__ = [
     "SumeragiRbcStoreStatus",
     "SumeragiPrfStatus",
     "SumeragiStatusSnapshot",
+    "SumeragiLaneSettlementReceipt",
+    "SumeragiLaneSwapMetadata",
+    "SumeragiLaneSettlementCommitment",
+    "SumeragiLaneRelayEnvelope",
+    "SumeragiNexusFeeScheduleInputs",
+    "SumeragiNexusFeeReceipt",
+    "SumeragiNativeAmxPhase",
+    "SumeragiNativeAmxAttestationBody",
+    "SumeragiNativeAmxAttestationQc",
+    "SumeragiNativeAmxLeg",
+    "SumeragiNativeAmxReceipt",
     "SumeragiNewViewReceipt",
     "SumeragiNewViewSnapshot",
     "SumeragiRbcSnapshot",
@@ -12380,28 +12965,165 @@ class ToriiClient(_BaseToriiClient):
 
         return _write_dataspace_plan(plan, output_dir, force=force)
 
+    def nexus_lane_lifecycle_status(
+        self,
+        *,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Fetch the exact current lane catalog and optimistic lifecycle hash."""
+
+        response = self._request(
+            "GET",
+            "/v1/nexus/lifecycle",
+            headers={"Accept": "application/json"},
+            timeout=timeout,
+        )
+        self._expect_status(response, {200})
+        payload = self._maybe_json(response)
+        if not isinstance(payload, Mapping):
+            raise TypeError("Nexus lane lifecycle status must be a JSON object")
+        status = dict(payload)
+        if status.get("version") != 1:
+            raise ValueError("Nexus lane lifecycle status version must be 1")
+        if not isinstance(status.get("nexus_enabled"), bool):
+            raise TypeError("Nexus lane lifecycle status `nexus_enabled` must be boolean")
+        lane_count = status.get("lane_count")
+        if (
+            isinstance(lane_count, bool)
+            or not isinstance(lane_count, int)
+            or lane_count <= 0
+            or lane_count > 0xFFFFFFFF
+        ):
+            raise ValueError(
+                "Nexus lane lifecycle status `lane_count` must be in 1..=4294967295"
+            )
+        lanes = status.get("lanes")
+        if not isinstance(lanes, list) or not lanes:
+            raise TypeError("Nexus lane lifecycle status `lanes` must be a non-empty list")
+        if len(lanes) > 1024:
+            raise ValueError("Nexus lane lifecycle status contains more than 1024 lanes")
+        if any(not isinstance(lane, Mapping) for lane in lanes):
+            raise TypeError("Nexus lane lifecycle status lanes must be JSON objects")
+        lane_ids: list[int] = []
+        for index, lane in enumerate(lanes):
+            lane_id = lane.get("id")
+            if (
+                isinstance(lane_id, bool)
+                or not isinstance(lane_id, int)
+                or lane_id < 0
+                or lane_id >= lane_count
+            ):
+                raise ValueError(f"Nexus lane lifecycle status lanes[{index}].id is invalid")
+            lane_ids.append(lane_id)
+        if lane_ids != sorted(set(lane_ids)):
+            raise ValueError("Nexus lane lifecycle status lane ids must be unique and sorted")
+        catalog_hash = status.get("catalog_hash")
+        if not isinstance(catalog_hash, str) or not catalog_hash.strip():
+            raise ValueError("Nexus lane lifecycle status `catalog_hash` must be non-empty")
+        incarnation_entries = status.get("incarnations")
+        if not isinstance(incarnation_entries, list):
+            raise TypeError("Nexus lane lifecycle status `incarnations` must be a list")
+        incarnation_ids: list[int] = []
+        incarnation_values: set[str] = set()
+        for index, entry in enumerate(incarnation_entries):
+            if not isinstance(entry, Mapping):
+                raise TypeError(
+                    f"Nexus lane lifecycle status incarnations[{index}] must be an object"
+                )
+            lane_id = entry.get("lane_id")
+            if isinstance(lane_id, bool) or not isinstance(lane_id, int):
+                raise ValueError(
+                    f"Nexus lane lifecycle status incarnations[{index}].lane_id is invalid"
+                )
+            incarnation = entry.get("incarnation")
+            if not isinstance(incarnation, str) or not incarnation.strip():
+                raise ValueError(
+                    f"Nexus lane lifecycle status incarnations[{index}].incarnation is invalid"
+                )
+            if incarnation in incarnation_values:
+                raise ValueError("Nexus lane lifecycle status incarnations must be unique")
+            incarnation_ids.append(lane_id)
+            incarnation_values.add(incarnation)
+        if incarnation_ids != lane_ids:
+            raise ValueError(
+                "Nexus lane lifecycle status incarnation lane ids must exactly match the catalog"
+            )
+        incarnation_root = status.get("incarnation_root")
+        if not isinstance(incarnation_root, str) or not incarnation_root.strip():
+            raise ValueError("Nexus lane lifecycle status `incarnation_root` must be non-empty")
+        return status
+
     def nexus_lane_lifecycle(
         self,
         additions: Sequence[Mapping[str, Any]],
         *,
         retire: Optional[Sequence[int]] = None,
+        chain_id: Optional[str] = None,
+        authority: Optional[str] = None,
         key_pair: Optional[Any] = None,
         private_key: Optional[Union[str, bytes, bytearray, memoryview]] = None,
         private_key_hex: Optional[str] = None,
-        expected_status: Sequence[int] = (200, 202),
+        wait: bool = True,
+        interval: float = 1.0,
         timeout: Optional[float] = None,
-    ) -> Optional[Any]:
-        """Apply a Nexus lane lifecycle plan through the operator endpoint."""
+        max_attempts: Optional[int] = None,
+    ) -> tuple["SignedTransactionEnvelope", Optional[Any]]:
+        """Submit a signed consensus-replayed Nexus lane lifecycle transaction.
+
+        The former operator-only POST shape is deliberately unsupported. Callers
+        must provide ``chain_id``, ``authority``, and raw private-key bytes for an
+        account holding ``CanSetParameters``. The status commitment is fetched
+        once and is never silently refreshed after a stale/concurrent rejection.
+        """
+
+        if key_pair is not None or private_key_hex is not None or isinstance(private_key, str):
+            raise RuntimeError(
+                "operator-only Nexus lifecycle calls are deprecated; provide chain_id, "
+                "authority, and private_key bytes to submit SetParameter(nexus_lane_lifecycle_v1)"
+            )
+        if chain_id is None or not isinstance(chain_id, str) or not chain_id.strip():
+            raise ValueError("chain_id is required for signed Nexus lane lifecycle submission")
+        if authority is None or not isinstance(authority, str) or not authority.strip():
+            raise ValueError("authority is required for signed Nexus lane lifecycle submission")
+        if not isinstance(private_key, (bytes, bytearray, memoryview)):
+            raise ValueError(
+                "private_key bytes are required for signed Nexus lane lifecycle submission"
+            )
+        private_key_bytes = bytes(private_key)
+        if not private_key_bytes:
+            raise ValueError("private_key must not be empty")
 
         if isinstance(additions, (str, bytes, bytearray, memoryview)) or not isinstance(
             additions, Sequence
         ):
             raise TypeError("additions must be a sequence of lane config mappings")
+        if len(additions) > 1024:
+            raise ValueError("additions must contain at most 1024 lane configs")
         normalized_additions: List[Dict[str, Any]] = []
+        addition_ids: set[int] = set()
+        addition_aliases: set[str] = set()
         for index, addition in enumerate(additions):
             if not isinstance(addition, Mapping):
                 raise TypeError(f"additions[{index}] must be a mapping")
-            normalized_additions.append(dict(addition))
+            normalized = dict(addition)
+            lane_id = normalized.get("id")
+            if (
+                isinstance(lane_id, bool)
+                or not isinstance(lane_id, int)
+                or lane_id < 0
+                or lane_id > 0xFFFFFFFF
+            ):
+                raise ValueError(f"additions[{index}].id must be a u32 integer")
+            if lane_id in addition_ids:
+                raise ValueError(f"additions[{index}].id duplicates lane {lane_id}")
+            addition_ids.add(lane_id)
+            alias = normalized.get("alias")
+            if not isinstance(alias, str) or not alias.strip():
+                raise ValueError(f"additions[{index}].alias must be a non-empty string")
+            if alias in addition_aliases:
+                raise ValueError(f"additions[{index}].alias duplicates `{alias}`")
+            addition_aliases.add(alias)
+            normalized_additions.append(normalized)
 
         if retire is None:
             retire_items: Sequence[int] = ()
@@ -12411,45 +13133,47 @@ class ToriiClient(_BaseToriiClient):
             raise TypeError("retire must be a sequence of lane ids")
         else:
             retire_items = retire
+        if len(retire_items) > 1024:
+            raise ValueError("retire must contain at most 1024 lane ids")
 
         normalized_retire: List[int] = []
+        retired_ids: set[int] = set()
         for index, lane_id in enumerate(retire_items):
-            if isinstance(lane_id, bool):
-                raise ValueError(f"retire[{index}] must be an integer lane id")
-            try:
-                parsed = int(lane_id)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"retire[{index}] must be an integer lane id") from exc
-            if parsed < 0:
-                raise ValueError(f"retire[{index}] must be non-negative")
-            normalized_retire.append(parsed)
+            if (
+                isinstance(lane_id, bool)
+                or not isinstance(lane_id, int)
+                or lane_id < 0
+                or lane_id > 0xFFFFFFFF
+            ):
+                raise ValueError(f"retire[{index}] must be a u32 integer lane id")
+            if lane_id in retired_ids:
+                raise ValueError(f"retire[{index}] duplicates lane {lane_id}")
+            retired_ids.add(lane_id)
+            normalized_retire.append(lane_id)
+        if not normalized_additions and not normalized_retire:
+            raise ValueError("lane lifecycle plan must add or retire at least one lane")
 
-        path = "/v1/nexus/lifecycle"
-        body = json.dumps(
-            _json_safe_value({"additions": normalized_additions, "retire": normalized_retire}),
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            **self.build_operator_signature_headers(
-                method="POST",
-                path=path,
-                body=body,
-                key_pair=key_pair,
-                private_key=private_key,
-                private_key_hex=private_key_hex,
-            ),
-        }
-        return self.request_json(
-            "POST",
-            path,
-            headers=headers,
-            data=body,
-            expected_status=expected_status,
+        status = self.nexus_lane_lifecycle_status(timeout=timeout)
+        if not status["nexus_enabled"]:
+            raise RuntimeError("Nexus lane lifecycle is disabled on the serving node")
+        plan = _json_safe_value(
+            {"additions": normalized_additions, "retire": normalized_retire}
+        )
+        instruction = _require_crypto().Instruction.nexus_lane_lifecycle(
+            json.dumps(_json_safe_value(status), sort_keys=True, separators=(",", ":")),
+            json.dumps(plan, sort_keys=True, separators=(",", ":")),
+        )
+        return self.build_and_submit_transaction(
+            chain_id.strip(),
+            authority.strip(),
+            private_key_bytes,
+            instructions=[instruction],
+            wait=wait,
+            interval=interval,
             timeout=timeout,
-            allow_retry=False,
+            max_attempts=max_attempts,
+            success_statuses=("Applied",),
+            expect_json=True,
         )
 
     def publish_dataspace_manifest(

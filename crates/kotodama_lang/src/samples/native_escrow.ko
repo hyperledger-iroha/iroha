@@ -5,10 +5,10 @@ seiyaku NativeEscrowAitai {
         NonPositiveAmount = 1,
     }
 
-    kotoage fn open_offer(offer: Name, asset_definition: AssetDefinitionId, amount: Amount) authorize(
+    kotoage fn open_offer(Name offer, AssetDefinitionId asset_definition, quantity amount) authorize(
         "Admin"
     ) {
-        require(amount > Amount::from_i64(0), EscrowError::NonPositiveAmount);
+        require(amount > 0, EscrowError::NonPositiveAmount);
         ledger::escrow::open_offer(
             offer: offer,
             asset_definition: asset_definition,
@@ -16,27 +16,27 @@ seiyaku NativeEscrowAitai {
         );
     }
 
-    kotoage fn accept(offer: Name) authorize("Admin") {
+    kotoage fn accept(Name offer) authorize("Admin") {
         ledger::escrow::accept(offer);
     }
 
-    kotoage fn mark_payment_sent(offer: Name) authorize("Admin") {
+    kotoage fn mark_payment_sent(Name offer) authorize("Admin") {
         ledger::escrow::mark_payment_sent(offer);
     }
 
-    kotoage fn release(offer: Name) authorize("Admin") {
+    kotoage fn release(Name offer) authorize("Admin") {
         ledger::escrow::release(offer);
     }
 
-    kotoage fn cancel(offer: Name) authorize("Admin") {
+    kotoage fn cancel(Name offer) authorize("Admin") {
         ledger::escrow::cancel(offer);
     }
 
-    kotoage fn dispute(offer: Name) authorize("Admin") {
+    kotoage fn dispute(Name offer) authorize("Admin") {
         ledger::escrow::open_dispute(offer);
     }
 
-    kotoage fn resolve_dispute(offer: Name, buyer_amount: Amount, seller_amount: Amount) authorize(
+    kotoage fn resolve_dispute(Name offer, quantity buyer_amount, quantity seller_amount) authorize(
         "Admin"
     ) {
         ledger::escrow::resolve_dispute(

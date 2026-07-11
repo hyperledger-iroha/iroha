@@ -2264,6 +2264,7 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
         | ChainId { .. }
         | ContractAddress { .. }
         | Entrypoint { .. }
+        | NumericStatus { .. }
         | GetTriggerEvent { .. }
         | ProveExecution { .. }
         | TransferBatchBegin
@@ -2275,9 +2276,10 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
             f(right);
         }
         Unary { operand, .. } | WrappingNeg { operand, .. } => f(operand),
-        NumericFromInt { value, .. }
-        | NumericToInt { value, .. }
-        | AmountFromU128 { value, .. }
+        IntFromScalar { value, .. }
+        | IntToScalar { value, .. }
+        | NumericConvert { value, .. }
+        | NumericTryConvert { value, .. }
         | NumericNeg { value, .. } => f(value),
         NumericBinary { left, right, .. } | NumericCompare { left, right, .. } => {
             f(left);
@@ -2933,9 +2935,11 @@ fn dest_temp_mut(instr: &mut ir::Instr) -> Option<&mut Temp> {
         | ir::Instr::StateHas { dest, .. }
         | ir::Instr::StateLen { dest, .. }
         | ir::Instr::StateCount { dest, .. }
-        | ir::Instr::NumericFromInt { dest, .. }
-        | ir::Instr::NumericToInt { dest, .. }
-        | ir::Instr::AmountFromU128 { dest, .. }
+        | ir::Instr::IntFromScalar { dest, .. }
+        | ir::Instr::IntToScalar { dest, .. }
+        | ir::Instr::NumericConvert { dest, .. }
+        | ir::Instr::NumericTryConvert { dest, .. }
+        | ir::Instr::NumericStatus { dest }
         | ir::Instr::NumericNeg { dest, .. }
         | ir::Instr::NumericBinary { dest, .. }
         | ir::Instr::NumericCompare { dest, .. }

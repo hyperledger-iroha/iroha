@@ -121,9 +121,21 @@ pub const SYSCALL_STATE_VALUE_ENCODE: u32 = 0x01_0035;
 pub const SYSCALL_STATE_VALUE_DECODE: u32 = 0x01_0036;
 /// Maximum number of entries returned by one V1 durable-state key page.
 pub const STATE_KEYS_MAX_ITEMS: u64 = 64;
-/// Maximum canonical Norito key payload accepted by V1 `StateMap` paths.
+/// Maximum framed canonical Norito `Name` payload accepted inside a V1
+/// durable-state path TLV.
+///
+/// The 16 KiB envelope accommodates the independently bounded 4 KiB UTF-8
+/// `StateMap` base, one separator, and the lowercase-hex expansion of a 4 KiB
+/// canonical key, including deterministic Norito framing overhead.
+pub const STATE_MAX_PATH_BYTES: usize = 16 * 1024;
+/// Maximum raw `NoritoBytes` payload stored under one V1 durable-state path.
+///
+/// The bound leaves enough room beneath the one-million-cycle default for a
+/// prepare-time worst-case read escrow, the path, and VM instruction gas.
+pub const STATE_MAX_VALUE_BYTES: usize = 512 * 1024;
+/// Maximum raw canonical Norito key-payload bytes accepted by V1 `StateMap` paths.
 pub const STATE_MAP_MAX_KEY_BYTES: usize = 4 * 1024;
-/// Maximum UTF-8 byte length of a V1 `StateMap` base path.
+/// Maximum framed canonical Norito `Name` payload used as a V1 `StateMap` base.
 pub const STATE_MAP_MAX_BASE_BYTES: usize = 4 * 1024;
 /// Maximum encoded `Vec<Name>` page accepted by `STATE_MAP_KEY_AT`.
 pub const STATE_MAP_MAX_PAGE_BYTES: usize = 1024 * 1024;
@@ -133,54 +145,6 @@ pub const STATE_MAP_MAX_PAGE_BYTES: usize = 1024 * 1024;
 /// Args: r10 = &NoritoBytes (ASCII decimal)
 /// Ret:  r10 = value (as u64 bits)
 pub const SYSCALL_DECODE_INT: u32 = 0x53;
-/// Construct a Numeric (mantissa+scale) from a non-negative 64-bit integer and return
-/// a NoritoBytes TLV pointer. The Numeric is encoded with scale = 0.
-///
-/// Args: r10 = value (i64 as u64)
-/// Ret:  r10 = &NoritoBytes (Numeric payload)
-pub const SYSCALL_NUMERIC_FROM_INT: u32 = 0x69;
-/// Convert a Numeric NoritoBytes payload into a signed 64-bit integer.
-/// The payload must be unsigned and use scale = 0; otherwise the host rejects it.
-///
-/// Args: r10 = &NoritoBytes (Numeric payload)
-/// Ret:  r10 = value (i64 as u64)
-pub const SYSCALL_NUMERIC_TO_INT: u32 = 0x6A;
-/// Numeric addition: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
-/// -> r10 = &NoritoBytes(result).
-pub const SYSCALL_NUMERIC_ADD: u32 = 0x6B;
-/// Numeric subtraction: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
-/// -> r10 = &NoritoBytes(result). Rejects underflow (negative result).
-pub const SYSCALL_NUMERIC_SUB: u32 = 0x6C;
-/// Numeric multiplication: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
-/// -> r10 = &NoritoBytes(result).
-pub const SYSCALL_NUMERIC_MUL: u32 = 0x6D;
-/// Numeric division: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
-/// -> r10 = &NoritoBytes(result).
-pub const SYSCALL_NUMERIC_DIV: u32 = 0x6E;
-/// Numeric remainder: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
-/// -> r10 = &NoritoBytes(result).
-pub const SYSCALL_NUMERIC_REM: u32 = 0x6F;
-/// Numeric negation: r10 = &NoritoBytes(value) -> r10 = &NoritoBytes(result).
-/// Rejects non-zero inputs (numeric aliases are unsigned).
-pub const SYSCALL_NUMERIC_NEG: u32 = 0x70;
-/// Numeric equality: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
-/// -> r10 = 1 if equal else 0.
-pub const SYSCALL_NUMERIC_EQ: u32 = 0x71;
-/// Numeric inequality: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
-/// -> r10 = 1 if not equal else 0.
-pub const SYSCALL_NUMERIC_NE: u32 = 0x72;
-/// Numeric less-than: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
-/// -> r10 = 1 if lhs < rhs else 0.
-pub const SYSCALL_NUMERIC_LT: u32 = 0x73;
-/// Numeric less-or-equal: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
-/// -> r10 = 1 if lhs <= rhs else 0.
-pub const SYSCALL_NUMERIC_LE: u32 = 0x74;
-/// Numeric greater-than: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
-/// -> r10 = 1 if lhs > rhs else 0.
-pub const SYSCALL_NUMERIC_GT: u32 = 0x75;
-/// Numeric greater-or-equal: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
-/// -> r10 = 1 if lhs >= rhs else 0.
-pub const SYSCALL_NUMERIC_GE: u32 = 0x76;
 /// Return payload length for a pointer-ABI TLV.
 ///
 /// Args: r10 = &TLV
@@ -194,7 +158,6 @@ pub const SYSCALL_TLV_LEN: u32 = 0x77;
 ///
 /// Args: r10 = &Json, r11 = &Name key
 /// Ret:  r10 = `Option<T>` sum handle whose active payload is one ABI word.
-pub const SYSCALL_JSON_GET_I64: u32 = 0x78;
 /// Active payload: one `&Json` pointer.
 pub const SYSCALL_JSON_GET_JSON: u32 = 0x79;
 /// Active payload: one `&Name` pointer.
@@ -205,11 +168,6 @@ pub const SYSCALL_JSON_GET_ACCOUNT_ID: u32 = 0x7B;
 pub const SYSCALL_JSON_GET_NFT_ID: u32 = 0x7C;
 /// Active payload: one `&Blob` pointer containing decoded lowercase `0x` hex bytes.
 pub const SYSCALL_JSON_GET_BLOB_HEX: u32 = 0x7D;
-/// Args: r10 = &Json, r11 = &Name key -> r10 = `Option<Amount>` sum handle.
-///
-/// Accepts JSON string numerics (for example `"0.00001"`) and integer JSON numbers.
-/// Floating-point JSON numbers are rejected to keep the ABI deterministic.
-pub const SYSCALL_JSON_GET_AMOUNT: u32 = 0x7F;
 /// Active payload: one `&AssetDefinitionId` pointer.
 pub const SYSCALL_JSON_GET_ASSET_DEFINITION_ID: u32 = 0x80;
 /// Construct an empty JSON object.
@@ -227,8 +185,6 @@ pub const SYSCALL_JSON_SET_I64: u32 = 0x82;
 /// Args: r10 = &Json object, r11 = &Name key, r12 = &AccountId
 /// Ret:  r10 = &Json (INPUT pointer)
 pub const SYSCALL_JSON_SET_ACCOUNT_ID: u32 = 0x83;
-/// Direct JSON integer getter that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_JSON_GET_I64_DIRECT: u32 = 0x84;
 /// Direct JSON object getter that accepts validated TLVs from any allowed pointer region.
 pub const SYSCALL_JSON_GET_JSON_DIRECT: u32 = 0x85;
 /// Direct JSON name getter that accepts validated TLVs from any allowed pointer region.
@@ -239,8 +195,6 @@ pub const SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT: u32 = 0x87;
 pub const SYSCALL_JSON_GET_NFT_ID_DIRECT: u32 = 0x88;
 /// Direct JSON blob getter that accepts validated TLVs from any allowed pointer region.
 pub const SYSCALL_JSON_GET_BLOB_HEX_DIRECT: u32 = 0x89;
-/// Direct JSON Amount getter that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_JSON_GET_AMOUNT_DIRECT: u32 = 0x8A;
 /// Direct JSON asset-definition getter that accepts validated TLVs from any allowed pointer region.
 pub const SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT: u32 = 0x8B;
 /// Direct JSON integer setter that accepts validated TLVs from any allowed pointer region.
@@ -288,32 +242,6 @@ pub const SYSCALL_SCHEMA_INFO: u32 = 0x5B;
 pub const SYSCALL_SCHEMA_ENCODE_DIRECT: u32 = 0xD0;
 /// Direct schema decode helper that accepts validated TLVs from any allowed pointer region.
 pub const SYSCALL_SCHEMA_DECODE_DIRECT: u32 = 0xD1;
-/// Direct numeric-to-int helper that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_NUMERIC_TO_INT_DIRECT: u32 = 0xD2;
-/// Direct numeric-add helper that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_NUMERIC_ADD_DIRECT: u32 = 0xD3;
-/// Direct numeric-sub helper that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_NUMERIC_SUB_DIRECT: u32 = 0xD4;
-/// Direct numeric-mul helper that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_NUMERIC_MUL_DIRECT: u32 = 0xD5;
-/// Direct numeric-div helper that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_NUMERIC_DIV_DIRECT: u32 = 0xD6;
-/// Direct numeric-rem helper that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_NUMERIC_REM_DIRECT: u32 = 0xD7;
-/// Direct numeric-neg helper that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_NUMERIC_NEG_DIRECT: u32 = 0xD8;
-/// Direct numeric-eq helper that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_NUMERIC_EQ_DIRECT: u32 = 0xD9;
-/// Direct numeric-ne helper that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_NUMERIC_NE_DIRECT: u32 = 0xDA;
-/// Direct numeric-lt helper that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_NUMERIC_LT_DIRECT: u32 = 0xDB;
-/// Direct numeric-le helper that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_NUMERIC_LE_DIRECT: u32 = 0xDC;
-/// Direct numeric-gt helper that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_NUMERIC_GT_DIRECT: u32 = 0xDD;
-/// Direct numeric-ge helper that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_NUMERIC_GE_DIRECT: u32 = 0xDE;
 /// Decode a Name from a NoritoBytes TLV (UTF-8) and return a `&Name` TLV pointer in INPUT.
 ///
 /// Args: r10 = &NoritoBytes (UTF-8 string)
@@ -585,38 +513,136 @@ pub const SYSCALL_SYSVAR_ENTRYPOINT: u32 = 0x01_0025;
 /// scalar bits, or validated pointer-ABI addresses.
 pub const SYSCALL_DECODE_ARGUMENT_RECORD: u32 = 0x01_0026;
 
-/// Construct a canonical `Amount` from a non-negative signed 64-bit value.
-pub const SYSCALL_AMOUNT_FROM_I64: u32 = 0x01_0040;
-/// Convert a scale-zero canonical `u128` Numeric payload into an `Amount`.
-pub const SYSCALL_AMOUNT_FROM_U128: u32 = 0x01_0041;
-/// Convert a canonical scale-zero `Amount` into a signed 64-bit value.
-pub const SYSCALL_AMOUNT_TO_I64: u32 = 0x01_0042;
-/// Exact canonical `Amount` addition.
-pub const SYSCALL_AMOUNT_ADD: u32 = 0x01_0043;
-/// Exact canonical `Amount` subtraction; underflow traps.
-pub const SYSCALL_AMOUNT_SUB: u32 = 0x01_0044;
-/// Exact canonical `Amount` multiplication.
-pub const SYSCALL_AMOUNT_MUL: u32 = 0x01_0045;
-/// Exact finite-decimal `Amount` division; inexact results trap.
-pub const SYSCALL_AMOUNT_DIV_EXACT: u32 = 0x01_0046;
-/// Explicitly rounded `Amount` division.
-///
-/// Args: r10 = `&Amount` dividend, r11 = `&Amount` divisor, r12 = output
-/// scale in `0..=28`, r13 = [`AMOUNT_ROUND_FLOOR`],
-/// [`AMOUNT_ROUND_CEIL`], or [`AMOUNT_ROUND_NEAREST_EVEN`].
-pub const SYSCALL_AMOUNT_DIV_ROUND: u32 = 0x01_0047;
-/// Canonical `Amount` equality.
-pub const SYSCALL_AMOUNT_EQ: u32 = 0x01_0048;
-/// Canonical `Amount` inequality.
-pub const SYSCALL_AMOUNT_NE: u32 = 0x01_0049;
-/// Canonical `Amount` less-than comparison.
-pub const SYSCALL_AMOUNT_LT: u32 = 0x01_004A;
-/// Canonical `Amount` less-or-equal comparison.
-pub const SYSCALL_AMOUNT_LE: u32 = 0x01_004B;
-/// Canonical `Amount` greater-than comparison.
-pub const SYSCALL_AMOUNT_GT: u32 = 0x01_004C;
-/// Canonical `Amount` greater-or-equal comparison.
-pub const SYSCALL_AMOUNT_GE: u32 = 0x01_004D;
+// Kotodama V1 exact numeric families. These numbers are deliberately grouped
+// by value domain so admission, host dispatch, and generated SDK tables can
+// classify them without depending on source-language spellings.
+
+/// Construct an `int` from the two's-complement bits of an `i64` in `r10`.
+pub const SYSCALL_INT_FROM_I64: u32 = 0x01_0100;
+/// Construct an `int` from a `u64` in `r10`.
+pub const SYSCALL_INT_FROM_U64: u32 = 0x01_0101;
+/// Convert an `int` to `i64`; range failure is returned in `r11`.
+pub const SYSCALL_INT_TRY_TO_I64: u32 = 0x01_0102;
+/// Convert an `int` to `u64`; sign/range failure is returned in `r11`.
+pub const SYSCALL_INT_TRY_TO_U64: u32 = 0x01_0103;
+/// Checked integer negation.
+pub const SYSCALL_INT_NEG: u32 = 0x01_0104;
+/// Checked integer addition.
+pub const SYSCALL_INT_ADD: u32 = 0x01_0105;
+/// Checked integer subtraction.
+pub const SYSCALL_INT_SUB: u32 = 0x01_0106;
+/// Checked integer multiplication.
+pub const SYSCALL_INT_MUL: u32 = 0x01_0107;
+/// Integer division truncated toward zero.
+pub const SYSCALL_INT_DIV: u32 = 0x01_0108;
+/// Integer remainder paired with truncation-toward-zero division.
+pub const SYSCALL_INT_REM: u32 = 0x01_0109;
+/// Numeric integer equality.
+pub const SYSCALL_INT_EQ: u32 = 0x01_010A;
+/// Numeric integer inequality.
+pub const SYSCALL_INT_NE: u32 = 0x01_010B;
+/// Numeric integer less-than comparison.
+pub const SYSCALL_INT_LT: u32 = 0x01_010C;
+/// Numeric integer less-or-equal comparison.
+pub const SYSCALL_INT_LE: u32 = 0x01_010D;
+/// Numeric integer greater-than comparison.
+pub const SYSCALL_INT_GT: u32 = 0x01_010E;
+/// Numeric integer greater-or-equal comparison.
+pub const SYSCALL_INT_GE: u32 = 0x01_010F;
+/// Integer negation modulo `2^4096`, interpreted in the signed domain.
+pub const SYSCALL_INT_WRAP_NEG: u32 = 0x01_0110;
+/// Integer addition modulo `2^4096`, interpreted in the signed domain.
+pub const SYSCALL_INT_WRAP_ADD: u32 = 0x01_0111;
+/// Integer subtraction modulo `2^4096`, interpreted in the signed domain.
+pub const SYSCALL_INT_WRAP_SUB: u32 = 0x01_0112;
+/// Integer multiplication modulo `2^4096`, interpreted in the signed domain.
+pub const SYSCALL_INT_WRAP_MUL: u32 = 0x01_0113;
+
+/// Convert an `int` to an exact scale-zero `decimal`.
+pub const SYSCALL_DECIMAL_FROM_INT: u32 = 0x01_0120;
+/// Checked decimal negation.
+pub const SYSCALL_DECIMAL_NEG: u32 = 0x01_0121;
+/// Exact decimal addition.
+pub const SYSCALL_DECIMAL_ADD: u32 = 0x01_0122;
+/// Exact decimal subtraction.
+pub const SYSCALL_DECIMAL_SUB: u32 = 0x01_0123;
+/// Exact decimal multiplication; canonical results requiring scale above 28 fail.
+pub const SYSCALL_DECIMAL_MUL: u32 = 0x01_0124;
+/// Exact finite decimal division, trying canonical scales `0..=28` in order.
+pub const SYSCALL_DECIMAL_DIV_EXACT: u32 = 0x01_0125;
+/// Decimal division rounded at an explicit output scale.
+pub const SYSCALL_DECIMAL_DIV_ROUND: u32 = 0x01_0126;
+/// Numeric decimal equality.
+pub const SYSCALL_DECIMAL_EQ: u32 = 0x01_0127;
+/// Numeric decimal inequality.
+pub const SYSCALL_DECIMAL_NE: u32 = 0x01_0128;
+/// Numeric decimal less-than comparison.
+pub const SYSCALL_DECIMAL_LT: u32 = 0x01_0129;
+/// Numeric decimal less-or-equal comparison.
+pub const SYSCALL_DECIMAL_LE: u32 = 0x01_012A;
+/// Numeric decimal greater-than comparison.
+pub const SYSCALL_DECIMAL_GT: u32 = 0x01_012B;
+/// Numeric decimal greater-or-equal comparison.
+pub const SYSCALL_DECIMAL_GE: u32 = 0x01_012C;
+/// Convert a scale-zero decimal to `int`; inexact conversion returns a status.
+pub const SYSCALL_DECIMAL_TRY_TO_INT_EXACT: u32 = 0x01_012D;
+/// Convert a decimal to `int` by truncating toward zero.
+pub const SYSCALL_DECIMAL_TO_INT_TRUNC: u32 = 0x01_012E;
+/// Convert a decimal to `int` using an explicit rounding mode.
+pub const SYSCALL_DECIMAL_TO_INT_ROUND: u32 = 0x01_012F;
+
+/// Convert a non-negative `int` to nominal `quantity`.
+pub const SYSCALL_QUANTITY_TRY_FROM_INT: u32 = 0x01_0140;
+/// Convert a non-negative canonical `decimal` to nominal `quantity`.
+pub const SYSCALL_QUANTITY_TRY_FROM_DECIMAL: u32 = 0x01_0141;
+/// Convert a `quantity` to the same-valued `decimal`.
+pub const SYSCALL_QUANTITY_TO_DECIMAL: u32 = 0x01_0142;
+/// Exact quantity addition.
+pub const SYSCALL_QUANTITY_ADD: u32 = 0x01_0143;
+/// Exact quantity subtraction; negative results fail with quantity underflow.
+pub const SYSCALL_QUANTITY_SUB: u32 = 0x01_0144;
+/// Multiply a quantity by a decimal; the result must remain non-negative.
+pub const SYSCALL_QUANTITY_MUL_DECIMAL: u32 = 0x01_0145;
+/// Divide a quantity by a decimal exactly; the result must remain non-negative.
+pub const SYSCALL_QUANTITY_DIV_DECIMAL_EXACT: u32 = 0x01_0146;
+/// Divide a quantity by a decimal using explicit scale and rounding.
+pub const SYSCALL_QUANTITY_DIV_DECIMAL_ROUND: u32 = 0x01_0147;
+/// Compute an exact decimal ratio of two quantities.
+pub const SYSCALL_QUANTITY_RATIO_EXACT: u32 = 0x01_0148;
+/// Compute a rounded decimal ratio of two quantities.
+pub const SYSCALL_QUANTITY_RATIO_ROUND: u32 = 0x01_0149;
+/// Numeric quantity equality.
+pub const SYSCALL_QUANTITY_EQ: u32 = 0x01_014A;
+/// Numeric quantity inequality.
+pub const SYSCALL_QUANTITY_NE: u32 = 0x01_014B;
+/// Numeric quantity less-than comparison.
+pub const SYSCALL_QUANTITY_LT: u32 = 0x01_014C;
+/// Numeric quantity less-or-equal comparison.
+pub const SYSCALL_QUANTITY_LE: u32 = 0x01_014D;
+/// Numeric quantity greater-than comparison.
+pub const SYSCALL_QUANTITY_GT: u32 = 0x01_014E;
+/// Numeric quantity greater-or-equal comparison.
+pub const SYSCALL_QUANTITY_GE: u32 = 0x01_014F;
+
+/// Parse a canonical base-10 JSON string into an exact `int` pointer.
+pub const SYSCALL_JSON_GET_INT: u32 = 0x01_0160;
+/// Parse a canonical base-10 JSON string into an exact `decimal` pointer.
+pub const SYSCALL_JSON_GET_DECIMAL: u32 = 0x01_0161;
+/// Parse a canonical non-negative base-10 JSON string into a `quantity` pointer.
+pub const SYSCALL_JSON_GET_QUANTITY: u32 = 0x01_0162;
+/// Direct form of [`SYSCALL_JSON_GET_INT`].
+pub const SYSCALL_JSON_GET_INT_DIRECT: u32 = 0x01_0163;
+/// Direct form of [`SYSCALL_JSON_GET_DECIMAL`].
+pub const SYSCALL_JSON_GET_DECIMAL_DIRECT: u32 = 0x01_0164;
+/// Direct form of [`SYSCALL_JSON_GET_QUANTITY`].
+pub const SYSCALL_JSON_GET_QUANTITY_DIRECT: u32 = 0x01_0165;
+
+/// Return whether `number` belongs to the exact Kotodama V1 numeric surface.
+#[must_use]
+pub const fn is_numeric_v1_syscall(number: u32) -> bool {
+    matches!(number, 0x01_0100..=0x01_0113 | 0x01_0120..=0x01_012F | 0x01_0140..=0x01_014F)
+}
+
 /// Construct one native JSON value from a compiler-emitted schema and flattened words.
 ///
 /// Args: r10 = `&NoritoBytes(JsonConstructionSchemaV1)`, r11 = aligned public
@@ -624,47 +650,20 @@ pub const SYSCALL_AMOUNT_GE: u32 = 0x01_004D;
 /// Ret: r10 = `&Json`.
 pub const SYSCALL_JSON_BUILD: u32 = 0x01_004E;
 
-/// `amount.div_round` tag for rounding toward negative infinity.
-pub const AMOUNT_ROUND_FLOOR: u64 = 0;
-/// `amount.div_round` tag for rounding toward positive infinity.
-pub const AMOUNT_ROUND_CEIL: u64 = 1;
-/// `amount.div_round` tag for nearest rounding with ties to an even mantissa.
-pub const AMOUNT_ROUND_NEAREST_EVEN: u64 = 2;
-
-/// Return whether `number` belongs to the exact V1 Amount helper family.
-pub const fn is_amount_syscall(number: u32) -> bool {
-    matches!(
-        number,
-        SYSCALL_AMOUNT_FROM_I64
-            | SYSCALL_AMOUNT_FROM_U128
-            | SYSCALL_AMOUNT_TO_I64
-            | SYSCALL_AMOUNT_ADD
-            | SYSCALL_AMOUNT_SUB
-            | SYSCALL_AMOUNT_MUL
-            | SYSCALL_AMOUNT_DIV_EXACT
-            | SYSCALL_AMOUNT_DIV_ROUND
-            | SYSCALL_AMOUNT_EQ
-            | SYSCALL_AMOUNT_NE
-            | SYSCALL_AMOUNT_LT
-            | SYSCALL_AMOUNT_LE
-            | SYSCALL_AMOUNT_GT
-            | SYSCALL_AMOUNT_GE
-    )
-}
-
 /// Return whether `number` is one of the canonical typed JSON getters.
 #[must_use]
 pub const fn is_json_getter_syscall(number: u32) -> bool {
     matches!(
         number,
-        SYSCALL_JSON_GET_I64
-            | SYSCALL_JSON_GET_JSON
+        SYSCALL_JSON_GET_JSON
             | SYSCALL_JSON_GET_NAME
             | SYSCALL_JSON_GET_ACCOUNT_ID
             | SYSCALL_JSON_GET_NFT_ID
             | SYSCALL_JSON_GET_BLOB_HEX
-            | SYSCALL_JSON_GET_AMOUNT
             | SYSCALL_JSON_GET_ASSET_DEFINITION_ID
+            | SYSCALL_JSON_GET_INT
+            | SYSCALL_JSON_GET_DECIMAL
+            | SYSCALL_JSON_GET_QUANTITY
     )
 }
 
@@ -703,13 +702,14 @@ pub const fn is_koto_test_syscall(number: u32) -> bool {
 /// keep behavior identical across runtimes.
 pub const fn canonical_helper_syscall(number: u32) -> u32 {
     match number {
-        SYSCALL_JSON_GET_I64_DIRECT => SYSCALL_JSON_GET_I64,
         SYSCALL_JSON_GET_JSON_DIRECT => SYSCALL_JSON_GET_JSON,
         SYSCALL_JSON_GET_NAME_DIRECT => SYSCALL_JSON_GET_NAME,
         SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT => SYSCALL_JSON_GET_ACCOUNT_ID,
         SYSCALL_JSON_GET_NFT_ID_DIRECT => SYSCALL_JSON_GET_NFT_ID,
         SYSCALL_JSON_GET_BLOB_HEX_DIRECT => SYSCALL_JSON_GET_BLOB_HEX,
-        SYSCALL_JSON_GET_AMOUNT_DIRECT => SYSCALL_JSON_GET_AMOUNT,
+        SYSCALL_JSON_GET_INT_DIRECT => SYSCALL_JSON_GET_INT,
+        SYSCALL_JSON_GET_DECIMAL_DIRECT => SYSCALL_JSON_GET_DECIMAL,
+        SYSCALL_JSON_GET_QUANTITY_DIRECT => SYSCALL_JSON_GET_QUANTITY,
         SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT => SYSCALL_JSON_GET_ASSET_DEFINITION_ID,
         SYSCALL_JSON_SET_I64_DIRECT => SYSCALL_JSON_SET_I64,
         SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT => SYSCALL_JSON_SET_ACCOUNT_ID,
@@ -717,19 +717,6 @@ pub const fn canonical_helper_syscall(number: u32) -> u32 {
         SYSCALL_SCHEMA_INFO_DIRECT => SYSCALL_SCHEMA_INFO,
         SYSCALL_SCHEMA_ENCODE_DIRECT => SYSCALL_SCHEMA_ENCODE,
         SYSCALL_SCHEMA_DECODE_DIRECT => SYSCALL_SCHEMA_DECODE,
-        SYSCALL_NUMERIC_TO_INT_DIRECT => SYSCALL_NUMERIC_TO_INT,
-        SYSCALL_NUMERIC_ADD_DIRECT => SYSCALL_NUMERIC_ADD,
-        SYSCALL_NUMERIC_SUB_DIRECT => SYSCALL_NUMERIC_SUB,
-        SYSCALL_NUMERIC_MUL_DIRECT => SYSCALL_NUMERIC_MUL,
-        SYSCALL_NUMERIC_DIV_DIRECT => SYSCALL_NUMERIC_DIV,
-        SYSCALL_NUMERIC_REM_DIRECT => SYSCALL_NUMERIC_REM,
-        SYSCALL_NUMERIC_NEG_DIRECT => SYSCALL_NUMERIC_NEG,
-        SYSCALL_NUMERIC_EQ_DIRECT => SYSCALL_NUMERIC_EQ,
-        SYSCALL_NUMERIC_NE_DIRECT => SYSCALL_NUMERIC_NE,
-        SYSCALL_NUMERIC_LT_DIRECT => SYSCALL_NUMERIC_LT,
-        SYSCALL_NUMERIC_LE_DIRECT => SYSCALL_NUMERIC_LE,
-        SYSCALL_NUMERIC_GT_DIRECT => SYSCALL_NUMERIC_GT,
-        SYSCALL_NUMERIC_GE_DIRECT => SYSCALL_NUMERIC_GE,
         _ => number,
     }
 }
@@ -774,7 +761,7 @@ pub enum SyscallAccess {
 /// Such a syscall must fail closed during preparation.
 #[must_use]
 pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
-    if is_amount_syscall(number) || number == SYSCALL_JSON_BUILD {
+    if is_numeric_v1_syscall(number) || number == SYSCALL_JSON_BUILD {
         return Some(SyscallAccess::None);
     }
     if matches!(
@@ -934,24 +921,26 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
             | SYSCALL_JSON_ENCODE
             | SYSCALL_JSON_DECODE
             | SYSCALL_TLV_LEN
-            | SYSCALL_JSON_GET_I64
             | SYSCALL_JSON_GET_JSON
             | SYSCALL_JSON_GET_NAME
             | SYSCALL_JSON_GET_ACCOUNT_ID
             | SYSCALL_JSON_GET_NFT_ID
             | SYSCALL_JSON_GET_BLOB_HEX
-            | SYSCALL_JSON_GET_AMOUNT
             | SYSCALL_JSON_GET_ASSET_DEFINITION_ID
+            | SYSCALL_JSON_GET_INT
+            | SYSCALL_JSON_GET_DECIMAL
+            | SYSCALL_JSON_GET_QUANTITY
             | SYSCALL_JSON_OBJECT
             | SYSCALL_JSON_SET_I64
             | SYSCALL_JSON_SET_ACCOUNT_ID
-            | SYSCALL_JSON_GET_I64_DIRECT
             | SYSCALL_JSON_GET_JSON_DIRECT
             | SYSCALL_JSON_GET_NAME_DIRECT
             | SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT
             | SYSCALL_JSON_GET_NFT_ID_DIRECT
             | SYSCALL_JSON_GET_BLOB_HEX_DIRECT
-            | SYSCALL_JSON_GET_AMOUNT_DIRECT
+            | SYSCALL_JSON_GET_INT_DIRECT
+            | SYSCALL_JSON_GET_DECIMAL_DIRECT
+            | SYSCALL_JSON_GET_QUANTITY_DIRECT
             | SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT
             | SYSCALL_JSON_SET_I64_DIRECT
             | SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT
@@ -960,35 +949,8 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
             | SYSCALL_SCHEMA_ENCODE
             | SYSCALL_SCHEMA_DECODE
             | SYSCALL_SCHEMA_INFO
-            | SYSCALL_NUMERIC_FROM_INT
-            | SYSCALL_NUMERIC_TO_INT
-            | SYSCALL_NUMERIC_ADD
-            | SYSCALL_NUMERIC_SUB
-            | SYSCALL_NUMERIC_MUL
-            | SYSCALL_NUMERIC_DIV
-            | SYSCALL_NUMERIC_REM
-            | SYSCALL_NUMERIC_NEG
-            | SYSCALL_NUMERIC_EQ
-            | SYSCALL_NUMERIC_NE
-            | SYSCALL_NUMERIC_LT
-            | SYSCALL_NUMERIC_LE
-            | SYSCALL_NUMERIC_GT
-            | SYSCALL_NUMERIC_GE
             | SYSCALL_SCHEMA_ENCODE_DIRECT
             | SYSCALL_SCHEMA_DECODE_DIRECT
-            | SYSCALL_NUMERIC_TO_INT_DIRECT
-            | SYSCALL_NUMERIC_ADD_DIRECT
-            | SYSCALL_NUMERIC_SUB_DIRECT
-            | SYSCALL_NUMERIC_MUL_DIRECT
-            | SYSCALL_NUMERIC_DIV_DIRECT
-            | SYSCALL_NUMERIC_REM_DIRECT
-            | SYSCALL_NUMERIC_NEG_DIRECT
-            | SYSCALL_NUMERIC_EQ_DIRECT
-            | SYSCALL_NUMERIC_NE_DIRECT
-            | SYSCALL_NUMERIC_LT_DIRECT
-            | SYSCALL_NUMERIC_LE_DIRECT
-            | SYSCALL_NUMERIC_GT_DIRECT
-            | SYSCALL_NUMERIC_GE_DIRECT
             | SYSCALL_NAME_DECODE
             | SYSCALL_BUILD_PATH_MAP_KEY
             | SYSCALL_BUILD_PATH_KEY_NORITO
@@ -1031,7 +993,7 @@ pub const fn syscall_access(number: u32) -> SyscallAccess {
 /// Return the sorted syscall-number component of the ABI hash descriptor.
 ///
 /// The complete hash also binds pointer types and the typed V1 query,
-/// entrypoint, collection, and Amount protocol records. It binds contracts to
+/// entrypoint, collection, and exact numeric protocol records. It binds contracts to
 /// a specific host ABI. When comparing runtime ABI against a manifest-provided
 /// `abi_hash`, nodes can reject execution if a mismatch is detected.
 pub fn abi_syscall_list() -> &'static [u32] {
@@ -1080,24 +1042,26 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
         v.push(SYSCALL_JSON_DECODE);
         v.push(SYSCALL_TLV_LEN);
         v.extend_from_slice(&[
-            SYSCALL_JSON_GET_I64,
             SYSCALL_JSON_GET_JSON,
             SYSCALL_JSON_GET_NAME,
             SYSCALL_JSON_GET_ACCOUNT_ID,
             SYSCALL_JSON_GET_NFT_ID,
             SYSCALL_JSON_GET_BLOB_HEX,
-            SYSCALL_JSON_GET_AMOUNT,
             SYSCALL_JSON_GET_ASSET_DEFINITION_ID,
+            SYSCALL_JSON_GET_INT,
+            SYSCALL_JSON_GET_DECIMAL,
+            SYSCALL_JSON_GET_QUANTITY,
             SYSCALL_JSON_OBJECT,
             SYSCALL_JSON_SET_I64,
             SYSCALL_JSON_SET_ACCOUNT_ID,
-            SYSCALL_JSON_GET_I64_DIRECT,
             SYSCALL_JSON_GET_JSON_DIRECT,
             SYSCALL_JSON_GET_NAME_DIRECT,
             SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT,
             SYSCALL_JSON_GET_NFT_ID_DIRECT,
             SYSCALL_JSON_GET_BLOB_HEX_DIRECT,
-            SYSCALL_JSON_GET_AMOUNT_DIRECT,
+            SYSCALL_JSON_GET_INT_DIRECT,
+            SYSCALL_JSON_GET_DECIMAL_DIRECT,
+            SYSCALL_JSON_GET_QUANTITY_DIRECT,
             SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT,
             SYSCALL_JSON_SET_I64_DIRECT,
             SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT,
@@ -1107,37 +1071,11 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
         v.push(SYSCALL_SCHEMA_ENCODE);
         v.push(SYSCALL_SCHEMA_DECODE);
         v.push(SYSCALL_SCHEMA_INFO);
-        // Numeric helpers (mantissa+scale)
+        // Legacy numeric aliases are intentionally absent. The first-release
+        // surface exposes only the schema-bound exact numeric families below.
         v.extend_from_slice(&[
-            SYSCALL_NUMERIC_FROM_INT,
-            SYSCALL_NUMERIC_TO_INT,
-            SYSCALL_NUMERIC_ADD,
-            SYSCALL_NUMERIC_SUB,
-            SYSCALL_NUMERIC_MUL,
-            SYSCALL_NUMERIC_DIV,
-            SYSCALL_NUMERIC_REM,
-            SYSCALL_NUMERIC_NEG,
-            SYSCALL_NUMERIC_EQ,
-            SYSCALL_NUMERIC_NE,
-            SYSCALL_NUMERIC_LT,
-            SYSCALL_NUMERIC_LE,
-            SYSCALL_NUMERIC_GT,
-            SYSCALL_NUMERIC_GE,
             SYSCALL_SCHEMA_ENCODE_DIRECT,
             SYSCALL_SCHEMA_DECODE_DIRECT,
-            SYSCALL_NUMERIC_TO_INT_DIRECT,
-            SYSCALL_NUMERIC_ADD_DIRECT,
-            SYSCALL_NUMERIC_SUB_DIRECT,
-            SYSCALL_NUMERIC_MUL_DIRECT,
-            SYSCALL_NUMERIC_DIV_DIRECT,
-            SYSCALL_NUMERIC_REM_DIRECT,
-            SYSCALL_NUMERIC_NEG_DIRECT,
-            SYSCALL_NUMERIC_EQ_DIRECT,
-            SYSCALL_NUMERIC_NE_DIRECT,
-            SYSCALL_NUMERIC_LT_DIRECT,
-            SYSCALL_NUMERIC_LE_DIRECT,
-            SYSCALL_NUMERIC_GT_DIRECT,
-            SYSCALL_NUMERIC_GE_DIRECT,
         ]);
         // Name decode is part of base ABI in V1
         v.push(SYSCALL_NAME_DECODE);
@@ -1187,22 +1125,60 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
         v.push(SYSCALL_POINTER_TO_NORITO);
         v.push(SYSCALL_POINTER_FROM_NORITO);
         v.push(SYSCALL_TLV_EQ);
+        v.push(SYSCALL_JSON_BUILD);
         v.extend_from_slice(&[
-            SYSCALL_AMOUNT_FROM_I64,
-            SYSCALL_AMOUNT_FROM_U128,
-            SYSCALL_AMOUNT_TO_I64,
-            SYSCALL_AMOUNT_ADD,
-            SYSCALL_AMOUNT_SUB,
-            SYSCALL_AMOUNT_MUL,
-            SYSCALL_AMOUNT_DIV_EXACT,
-            SYSCALL_AMOUNT_DIV_ROUND,
-            SYSCALL_AMOUNT_EQ,
-            SYSCALL_AMOUNT_NE,
-            SYSCALL_AMOUNT_LT,
-            SYSCALL_AMOUNT_LE,
-            SYSCALL_AMOUNT_GT,
-            SYSCALL_AMOUNT_GE,
-            SYSCALL_JSON_BUILD,
+            SYSCALL_INT_FROM_I64,
+            SYSCALL_INT_FROM_U64,
+            SYSCALL_INT_TRY_TO_I64,
+            SYSCALL_INT_TRY_TO_U64,
+            SYSCALL_INT_NEG,
+            SYSCALL_INT_ADD,
+            SYSCALL_INT_SUB,
+            SYSCALL_INT_MUL,
+            SYSCALL_INT_DIV,
+            SYSCALL_INT_REM,
+            SYSCALL_INT_EQ,
+            SYSCALL_INT_NE,
+            SYSCALL_INT_LT,
+            SYSCALL_INT_LE,
+            SYSCALL_INT_GT,
+            SYSCALL_INT_GE,
+            SYSCALL_INT_WRAP_NEG,
+            SYSCALL_INT_WRAP_ADD,
+            SYSCALL_INT_WRAP_SUB,
+            SYSCALL_INT_WRAP_MUL,
+            SYSCALL_DECIMAL_FROM_INT,
+            SYSCALL_DECIMAL_NEG,
+            SYSCALL_DECIMAL_ADD,
+            SYSCALL_DECIMAL_SUB,
+            SYSCALL_DECIMAL_MUL,
+            SYSCALL_DECIMAL_DIV_EXACT,
+            SYSCALL_DECIMAL_DIV_ROUND,
+            SYSCALL_DECIMAL_EQ,
+            SYSCALL_DECIMAL_NE,
+            SYSCALL_DECIMAL_LT,
+            SYSCALL_DECIMAL_LE,
+            SYSCALL_DECIMAL_GT,
+            SYSCALL_DECIMAL_GE,
+            SYSCALL_DECIMAL_TRY_TO_INT_EXACT,
+            SYSCALL_DECIMAL_TO_INT_TRUNC,
+            SYSCALL_DECIMAL_TO_INT_ROUND,
+            SYSCALL_QUANTITY_TRY_FROM_INT,
+            SYSCALL_QUANTITY_TRY_FROM_DECIMAL,
+            SYSCALL_QUANTITY_TO_DECIMAL,
+            SYSCALL_QUANTITY_ADD,
+            SYSCALL_QUANTITY_SUB,
+            SYSCALL_QUANTITY_MUL_DECIMAL,
+            SYSCALL_QUANTITY_DIV_DECIMAL_EXACT,
+            SYSCALL_QUANTITY_DIV_DECIMAL_ROUND,
+            SYSCALL_QUANTITY_RATIO_EXACT,
+            SYSCALL_QUANTITY_RATIO_ROUND,
+            SYSCALL_QUANTITY_EQ,
+            SYSCALL_QUANTITY_NE,
+            SYSCALL_QUANTITY_LT,
+            SYSCALL_QUANTITY_LE,
+            SYSCALL_QUANTITY_GT,
+            SYSCALL_QUANTITY_GE,
         ]);
         // Roles/permissions
         v.extend_from_slice(&[
@@ -1395,20 +1371,6 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_BUILD_PATH_MAP_KEY => "BUILD_PATH_MAP_KEY",
         SYSCALL_ENCODE_INT => "ENCODE_INT",
         SYSCALL_BUILD_PATH_KEY_NORITO => "BUILD_PATH_KEY_NORITO",
-        SYSCALL_NUMERIC_FROM_INT => "NUMERIC_FROM_INT",
-        SYSCALL_NUMERIC_TO_INT => "NUMERIC_TO_INT",
-        SYSCALL_NUMERIC_ADD => "NUMERIC_ADD",
-        SYSCALL_NUMERIC_SUB => "NUMERIC_SUB",
-        SYSCALL_NUMERIC_MUL => "NUMERIC_MUL",
-        SYSCALL_NUMERIC_DIV => "NUMERIC_DIV",
-        SYSCALL_NUMERIC_REM => "NUMERIC_REM",
-        SYSCALL_NUMERIC_NEG => "NUMERIC_NEG",
-        SYSCALL_NUMERIC_EQ => "NUMERIC_EQ",
-        SYSCALL_NUMERIC_NE => "NUMERIC_NE",
-        SYSCALL_NUMERIC_LT => "NUMERIC_LT",
-        SYSCALL_NUMERIC_LE => "NUMERIC_LE",
-        SYSCALL_NUMERIC_GT => "NUMERIC_GT",
-        SYSCALL_NUMERIC_GE => "NUMERIC_GE",
         // Roles/permissions
         SYSCALL_CREATE_ROLE => "CREATE_ROLE",
         SYSCALL_DELETE_ROLE => "DELETE_ROLE",
@@ -1438,24 +1400,26 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_JSON_ENCODE => "JSON_ENCODE",
         SYSCALL_JSON_DECODE => "JSON_DECODE",
         SYSCALL_TLV_LEN => "TLV_LEN",
-        SYSCALL_JSON_GET_I64 => "JSON_GET_I64",
         SYSCALL_JSON_GET_JSON => "JSON_GET_JSON",
         SYSCALL_JSON_GET_NAME => "JSON_GET_NAME",
         SYSCALL_JSON_GET_ACCOUNT_ID => "JSON_GET_ACCOUNT_ID",
         SYSCALL_JSON_GET_NFT_ID => "JSON_GET_NFT_ID",
         SYSCALL_JSON_GET_BLOB_HEX => "JSON_GET_BLOB_HEX",
         SYSCALL_JSON_GET_ASSET_DEFINITION_ID => "JSON_GET_ASSET_DEFINITION_ID",
-        SYSCALL_JSON_GET_AMOUNT => "JSON_GET_AMOUNT",
+        SYSCALL_JSON_GET_INT => "JSON_GET_INT",
+        SYSCALL_JSON_GET_DECIMAL => "JSON_GET_DECIMAL",
+        SYSCALL_JSON_GET_QUANTITY => "JSON_GET_QUANTITY",
         SYSCALL_JSON_OBJECT => "JSON_OBJECT",
         SYSCALL_JSON_SET_I64 => "JSON_SET_I64",
         SYSCALL_JSON_SET_ACCOUNT_ID => "JSON_SET_ACCOUNT_ID",
-        SYSCALL_JSON_GET_I64_DIRECT => "JSON_GET_I64_DIRECT",
         SYSCALL_JSON_GET_JSON_DIRECT => "JSON_GET_JSON_DIRECT",
         SYSCALL_JSON_GET_NAME_DIRECT => "JSON_GET_NAME_DIRECT",
         SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT => "JSON_GET_ACCOUNT_ID_DIRECT",
         SYSCALL_JSON_GET_NFT_ID_DIRECT => "JSON_GET_NFT_ID_DIRECT",
         SYSCALL_JSON_GET_BLOB_HEX_DIRECT => "JSON_GET_BLOB_HEX_DIRECT",
-        SYSCALL_JSON_GET_AMOUNT_DIRECT => "JSON_GET_AMOUNT_DIRECT",
+        SYSCALL_JSON_GET_INT_DIRECT => "JSON_GET_INT_DIRECT",
+        SYSCALL_JSON_GET_DECIMAL_DIRECT => "JSON_GET_DECIMAL_DIRECT",
+        SYSCALL_JSON_GET_QUANTITY_DIRECT => "JSON_GET_QUANTITY_DIRECT",
         SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT => "JSON_GET_ASSET_DEFINITION_ID_DIRECT",
         SYSCALL_JSON_SET_I64_DIRECT => "JSON_SET_I64_DIRECT",
         SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT => "JSON_SET_ACCOUNT_ID_DIRECT",
@@ -1466,19 +1430,6 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_SCHEMA_INFO => "SCHEMA_INFO",
         SYSCALL_SCHEMA_ENCODE_DIRECT => "SCHEMA_ENCODE_DIRECT",
         SYSCALL_SCHEMA_DECODE_DIRECT => "SCHEMA_DECODE_DIRECT",
-        SYSCALL_NUMERIC_TO_INT_DIRECT => "NUMERIC_TO_INT_DIRECT",
-        SYSCALL_NUMERIC_ADD_DIRECT => "NUMERIC_ADD_DIRECT",
-        SYSCALL_NUMERIC_SUB_DIRECT => "NUMERIC_SUB_DIRECT",
-        SYSCALL_NUMERIC_MUL_DIRECT => "NUMERIC_MUL_DIRECT",
-        SYSCALL_NUMERIC_DIV_DIRECT => "NUMERIC_DIV_DIRECT",
-        SYSCALL_NUMERIC_REM_DIRECT => "NUMERIC_REM_DIRECT",
-        SYSCALL_NUMERIC_NEG_DIRECT => "NUMERIC_NEG_DIRECT",
-        SYSCALL_NUMERIC_EQ_DIRECT => "NUMERIC_EQ_DIRECT",
-        SYSCALL_NUMERIC_NE_DIRECT => "NUMERIC_NE_DIRECT",
-        SYSCALL_NUMERIC_LT_DIRECT => "NUMERIC_LT_DIRECT",
-        SYSCALL_NUMERIC_LE_DIRECT => "NUMERIC_LE_DIRECT",
-        SYSCALL_NUMERIC_GT_DIRECT => "NUMERIC_GT_DIRECT",
-        SYSCALL_NUMERIC_GE_DIRECT => "NUMERIC_GE_DIRECT",
         SYSCALL_NAME_DECODE => "NAME_DECODE",
         SYSCALL_POINTER_TO_NORITO => "POINTER_TO_NORITO",
         SYSCALL_POINTER_FROM_NORITO => "POINTER_FROM_NORITO",
@@ -1508,20 +1459,58 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_SYSVAR_CONTRACT_ADDRESS => "SYSVAR_CONTRACT_ADDRESS",
         SYSCALL_SYSVAR_ENTRYPOINT => "SYSVAR_ENTRYPOINT",
         SYSCALL_DECODE_ARGUMENT_RECORD => "DECODE_ARGUMENT_RECORD",
-        SYSCALL_AMOUNT_FROM_I64 => "AMOUNT_FROM_I64",
-        SYSCALL_AMOUNT_FROM_U128 => "AMOUNT_FROM_U128",
-        SYSCALL_AMOUNT_TO_I64 => "AMOUNT_TO_I64",
-        SYSCALL_AMOUNT_ADD => "AMOUNT_ADD",
-        SYSCALL_AMOUNT_SUB => "AMOUNT_SUB",
-        SYSCALL_AMOUNT_MUL => "AMOUNT_MUL",
-        SYSCALL_AMOUNT_DIV_EXACT => "AMOUNT_DIV_EXACT",
-        SYSCALL_AMOUNT_DIV_ROUND => "AMOUNT_DIV_ROUND",
-        SYSCALL_AMOUNT_EQ => "AMOUNT_EQ",
-        SYSCALL_AMOUNT_NE => "AMOUNT_NE",
-        SYSCALL_AMOUNT_LT => "AMOUNT_LT",
-        SYSCALL_AMOUNT_LE => "AMOUNT_LE",
-        SYSCALL_AMOUNT_GT => "AMOUNT_GT",
-        SYSCALL_AMOUNT_GE => "AMOUNT_GE",
+        SYSCALL_INT_FROM_I64 => "INT_FROM_I64",
+        SYSCALL_INT_FROM_U64 => "INT_FROM_U64",
+        SYSCALL_INT_TRY_TO_I64 => "INT_TRY_TO_I64",
+        SYSCALL_INT_TRY_TO_U64 => "INT_TRY_TO_U64",
+        SYSCALL_INT_NEG => "INT_NEG",
+        SYSCALL_INT_ADD => "INT_ADD",
+        SYSCALL_INT_SUB => "INT_SUB",
+        SYSCALL_INT_MUL => "INT_MUL",
+        SYSCALL_INT_DIV => "INT_DIV",
+        SYSCALL_INT_REM => "INT_REM",
+        SYSCALL_INT_EQ => "INT_EQ",
+        SYSCALL_INT_NE => "INT_NE",
+        SYSCALL_INT_LT => "INT_LT",
+        SYSCALL_INT_LE => "INT_LE",
+        SYSCALL_INT_GT => "INT_GT",
+        SYSCALL_INT_GE => "INT_GE",
+        SYSCALL_INT_WRAP_NEG => "INT_WRAP_NEG",
+        SYSCALL_INT_WRAP_ADD => "INT_WRAP_ADD",
+        SYSCALL_INT_WRAP_SUB => "INT_WRAP_SUB",
+        SYSCALL_INT_WRAP_MUL => "INT_WRAP_MUL",
+        SYSCALL_DECIMAL_FROM_INT => "DECIMAL_FROM_INT",
+        SYSCALL_DECIMAL_NEG => "DECIMAL_NEG",
+        SYSCALL_DECIMAL_ADD => "DECIMAL_ADD",
+        SYSCALL_DECIMAL_SUB => "DECIMAL_SUB",
+        SYSCALL_DECIMAL_MUL => "DECIMAL_MUL",
+        SYSCALL_DECIMAL_DIV_EXACT => "DECIMAL_DIV_EXACT",
+        SYSCALL_DECIMAL_DIV_ROUND => "DECIMAL_DIV_ROUND",
+        SYSCALL_DECIMAL_EQ => "DECIMAL_EQ",
+        SYSCALL_DECIMAL_NE => "DECIMAL_NE",
+        SYSCALL_DECIMAL_LT => "DECIMAL_LT",
+        SYSCALL_DECIMAL_LE => "DECIMAL_LE",
+        SYSCALL_DECIMAL_GT => "DECIMAL_GT",
+        SYSCALL_DECIMAL_GE => "DECIMAL_GE",
+        SYSCALL_DECIMAL_TRY_TO_INT_EXACT => "DECIMAL_TRY_TO_INT_EXACT",
+        SYSCALL_DECIMAL_TO_INT_TRUNC => "DECIMAL_TO_INT_TRUNC",
+        SYSCALL_DECIMAL_TO_INT_ROUND => "DECIMAL_TO_INT_ROUND",
+        SYSCALL_QUANTITY_TRY_FROM_INT => "QUANTITY_TRY_FROM_INT",
+        SYSCALL_QUANTITY_TRY_FROM_DECIMAL => "QUANTITY_TRY_FROM_DECIMAL",
+        SYSCALL_QUANTITY_TO_DECIMAL => "QUANTITY_TO_DECIMAL",
+        SYSCALL_QUANTITY_ADD => "QUANTITY_ADD",
+        SYSCALL_QUANTITY_SUB => "QUANTITY_SUB",
+        SYSCALL_QUANTITY_MUL_DECIMAL => "QUANTITY_MUL_DECIMAL",
+        SYSCALL_QUANTITY_DIV_DECIMAL_EXACT => "QUANTITY_DIV_DECIMAL_EXACT",
+        SYSCALL_QUANTITY_DIV_DECIMAL_ROUND => "QUANTITY_DIV_DECIMAL_ROUND",
+        SYSCALL_QUANTITY_RATIO_EXACT => "QUANTITY_RATIO_EXACT",
+        SYSCALL_QUANTITY_RATIO_ROUND => "QUANTITY_RATIO_ROUND",
+        SYSCALL_QUANTITY_EQ => "QUANTITY_EQ",
+        SYSCALL_QUANTITY_NE => "QUANTITY_NE",
+        SYSCALL_QUANTITY_LT => "QUANTITY_LT",
+        SYSCALL_QUANTITY_LE => "QUANTITY_LE",
+        SYSCALL_QUANTITY_GT => "QUANTITY_GT",
+        SYSCALL_QUANTITY_GE => "QUANTITY_GE",
         SYSCALL_JSON_BUILD => "JSON_BUILD",
         SYSCALL_SUBSCRIPTION_BILL => "SUBSCRIPTION_BILL",
         SYSCALL_SUBSCRIPTION_RECORD_USAGE => "SUBSCRIPTION_RECORD_USAGE",
@@ -1655,8 +1644,8 @@ pub fn render_abi_hashes_markdown_table() -> String {
 
 const ABI_V1_SURFACE_DOMAIN: &[u8] = b"IVM_ABI_V1_FULL_SURFACE\0";
 const ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION: u16 = 1;
-const AMOUNT_MANTISSA_BITS_V1: u16 = 512;
-const AMOUNT_MAX_SCALE_V1: u8 = 28;
+const NUMERIC_MANTISSA_BITS_V1: u16 = 4096;
+const DECIMAL_MAX_SCALE_V1: u8 = 28;
 
 // This is the base for invalid-surface sentinels. They cannot be emitted by
 // `iroha_crypto::Hash::new`: every valid Iroha hash has the low bit of its final
@@ -1698,8 +1687,12 @@ struct AbiQueryPageSurface {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiEntrypointSurface {
     schema_version: u8,
-    amount_kind: &'static str,
-    amount_pointer_type_id: u16,
+    int_kind: &'static str,
+    int_pointer_type_id: u16,
+    decimal_kind: &'static str,
+    decimal_pointer_type_id: u16,
+    quantity_kind: &'static str,
+    quantity_pointer_type_id: u16,
     list_kind: &'static str,
     list_layout: &'static str,
     list_child_count: u8,
@@ -1711,19 +1704,53 @@ struct AbiEntrypointSurface {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct AbiAmountRoundingSurface {
+struct AbiNumericRoundingSurface {
     name: &'static str,
     tag: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct AbiAmountSurface {
-    pointer_type_id: u16,
+struct AbiNumericSurface {
+    int_pointer_type_id: u16,
+    decimal_pointer_type_id: u16,
+    quantity_pointer_type_id: u16,
     mantissa_bits: u16,
     max_scale: u8,
-    sign_semantics: &'static str,
+    int_domain: &'static str,
+    decimal_domain: &'static str,
+    quantity_domain: &'static str,
     canonicalization: &'static str,
-    rounding_modes: Vec<AbiAmountRoundingSurface>,
+    integer_division: &'static str,
+    wrapping_modulus: &'static str,
+    rounding_modes: Vec<AbiNumericRoundingSurface>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AbiIndexedLiteralSurface {
+    opcode: u8,
+    mnemonic: &'static str,
+    table_kind: u8,
+    payload_layout: &'static str,
+    result: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AbiDurableStateSurface {
+    semantics_version: u8,
+    keys_max_items: u64,
+    max_path_bytes: u64,
+    max_value_bytes: u64,
+    map_max_key_bytes: u64,
+    map_max_base_bytes: u64,
+    map_max_page_bytes: u64,
+    path_size_unit: &'static str,
+    value_storage: &'static str,
+    ordering_version: u8,
+    key_ordering: &'static str,
+    prefix_match: &'static str,
+    map_path_derivation_version: u8,
+    map_path_derivation: &'static str,
+    page_overflow: &'static str,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1735,7 +1762,9 @@ struct AbiSurface {
     core_query_projections: Vec<AbiCoreQueryProjectionSurface>,
     query_page: AbiQueryPageSurface,
     entrypoint: AbiEntrypointSurface,
-    amount: AbiAmountSurface,
+    numeric: AbiNumericSurface,
+    indexed_literals: Vec<AbiIndexedLiteralSurface>,
+    durable_state: AbiDurableStateSurface,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1893,7 +1922,7 @@ fn core_query_projection_surface_v1() -> Vec<AbiCoreQueryProjectionSurface> {
                 },
                 AbiNamedTypeSurface {
                     name: "amount",
-                    ty: "Amount",
+                    ty: "Quantity",
                 },
             ],
         },
@@ -1919,7 +1948,7 @@ fn core_query_projection_surface_v1() -> Vec<AbiCoreQueryProjectionSurface> {
                 },
                 AbiNamedTypeSurface {
                     name: "total_quantity",
-                    ty: "Amount",
+                    ty: "Quantity",
                 },
                 AbiNamedTypeSurface {
                     name: "metadata",
@@ -1971,7 +2000,7 @@ fn semantic_abi_surface_v1() -> Result<
         Vec<AbiCoreQueryProjectionSurface>,
         AbiQueryPageSurface,
         AbiEntrypointSurface,
-        AbiAmountSurface,
+        AbiNumericSurface,
     ),
     AbiSurfaceError,
 > {
@@ -1990,7 +2019,9 @@ fn semantic_abi_surface_v1() -> Result<
         .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?;
     let max_schema_depth = u64::try_from(MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH)
         .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?;
-    let amount_pointer_type_id = PointerType::Amount as u16;
+    let int_pointer_type_id = PointerType::Int as u16;
+    let decimal_pointer_type_id = PointerType::Decimal as u16;
+    let quantity_pointer_type_id = PointerType::Quantity as u16;
 
     Ok((
         core_query_projection_surface_v1(),
@@ -2012,8 +2043,12 @@ fn semantic_abi_surface_v1() -> Result<
         },
         AbiEntrypointSurface {
             schema_version: 1,
-            amount_kind: "Amount",
-            amount_pointer_type_id,
+            int_kind: "Int",
+            int_pointer_type_id,
+            decimal_kind: "Decimal",
+            decimal_pointer_type_id,
+            quantity_kind: "Quantity",
+            quantity_pointer_type_id,
             list_kind: "List",
             list_layout: "flat-preorder;exact-element-subtree-immediately-follows",
             list_child_count: 1,
@@ -2023,24 +2058,46 @@ fn semantic_abi_surface_v1() -> Result<
             max_schema_nodes,
             max_schema_depth,
         },
-        AbiAmountSurface {
-            pointer_type_id: amount_pointer_type_id,
-            mantissa_bits: AMOUNT_MANTISSA_BITS_V1,
-            max_scale: AMOUNT_MAX_SCALE_V1,
-            sign_semantics: "nonnegative",
-            canonicalization: "strip-fractional-trailing-zeroes;zero-scale-is-zero",
+        AbiNumericSurface {
+            int_pointer_type_id,
+            decimal_pointer_type_id,
+            quantity_pointer_type_id,
+            mantissa_bits: NUMERIC_MANTISSA_BITS_V1,
+            max_scale: DECIMAL_MAX_SCALE_V1,
+            int_domain: "-2^4095..=2^4095-1",
+            decimal_domain: "signed-mantissa-times-10^-scale;scale=0..28;exact",
+            quantity_domain: "nonnegative-decimal;nominal-ledger-quantity",
+            canonicalization: "minimal-signed-little-endian;zero-empty;strip-fractional-trailing-zeroes;zero-scale-is-zero",
+            integer_division: "quotient-truncates-toward-zero;remainder-sign-is-dividend",
+            wrapping_modulus: "2^4096;reinterpret-as-signed-domain",
             rounding_modes: vec![
-                AbiAmountRoundingSurface {
+                AbiNumericRoundingSurface {
+                    name: "toward_zero",
+                    tag: crate::numeric::RoundingModeV1::TowardZero.tag(),
+                },
+                AbiNumericRoundingSurface {
+                    name: "away_from_zero",
+                    tag: crate::numeric::RoundingModeV1::AwayFromZero.tag(),
+                },
+                AbiNumericRoundingSurface {
                     name: "floor",
-                    tag: AMOUNT_ROUND_FLOOR,
+                    tag: crate::numeric::RoundingModeV1::Floor.tag(),
                 },
-                AbiAmountRoundingSurface {
+                AbiNumericRoundingSurface {
                     name: "ceil",
-                    tag: AMOUNT_ROUND_CEIL,
+                    tag: crate::numeric::RoundingModeV1::Ceil.tag(),
                 },
-                AbiAmountRoundingSurface {
+                AbiNumericRoundingSurface {
                     name: "nearest_even",
-                    tag: AMOUNT_ROUND_NEAREST_EVEN,
+                    tag: crate::numeric::RoundingModeV1::NearestEven.tag(),
+                },
+                AbiNumericRoundingSurface {
+                    name: "nearest_away",
+                    tag: crate::numeric::RoundingModeV1::NearestAway.tag(),
+                },
+                AbiNumericRoundingSurface {
+                    name: "nearest_toward_zero",
+                    tag: crate::numeric::RoundingModeV1::NearestTowardZero.tag(),
                 },
             ],
         },
@@ -2135,6 +2192,17 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
         surface.descriptor_format_version,
     )?;
     descriptor.u8("policy_tag", surface.policy_tag)?;
+    descriptor.sequence(
+        "indexed_literals",
+        &surface.indexed_literals,
+        |literal, instruction| {
+            literal.u8("opcode", instruction.opcode)?;
+            literal.text("mnemonic", instruction.mnemonic)?;
+            literal.u8("table_kind", instruction.table_kind)?;
+            literal.text("payload_layout", instruction.payload_layout)?;
+            literal.text("result", instruction.result)
+        },
+    )?;
     descriptor.sequence("syscalls", &surface.syscalls, |record, syscall| {
         record.u32("number", syscall.number)?;
         record.text("arguments", syscall.args)?;
@@ -2178,12 +2246,54 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
             page.text("item_ordering", surface.query_page.item_ordering)
         })
     })?;
+    descriptor.record("durable_state", |state| {
+        state.u8("semantics_version", surface.durable_state.semantics_version)?;
+        state.u64("keys_max_items", surface.durable_state.keys_max_items)?;
+        state.u64("max_path_bytes", surface.durable_state.max_path_bytes)?;
+        state.u64("max_value_bytes", surface.durable_state.max_value_bytes)?;
+        state.u64(
+            "map_max_key_bytes",
+            surface.durable_state.map_max_key_bytes,
+        )?;
+        state.u64(
+            "map_max_base_bytes",
+            surface.durable_state.map_max_base_bytes,
+        )?;
+        state.u64(
+            "map_max_page_bytes",
+            surface.durable_state.map_max_page_bytes,
+        )?;
+        state.text("path_size_unit", surface.durable_state.path_size_unit)?;
+        state.text("value_storage", surface.durable_state.value_storage)?;
+        state.u8("ordering_version", surface.durable_state.ordering_version)?;
+        state.text("key_ordering", surface.durable_state.key_ordering)?;
+        state.text("prefix_match", surface.durable_state.prefix_match)?;
+        state.u8(
+            "map_path_derivation_version",
+            surface.durable_state.map_path_derivation_version,
+        )?;
+        state.text(
+            "map_path_derivation",
+            surface.durable_state.map_path_derivation,
+        )?;
+        state.text("page_overflow", surface.durable_state.page_overflow)
+    })?;
     descriptor.record("entrypoint", |entrypoint| {
         entrypoint.u8("schema_version", surface.entrypoint.schema_version)?;
-        entrypoint.text("amount_kind", surface.entrypoint.amount_kind)?;
+        entrypoint.text("int_kind", surface.entrypoint.int_kind)?;
         entrypoint.u16(
-            "amount_pointer_type_id",
-            surface.entrypoint.amount_pointer_type_id,
+            "int_pointer_type_id",
+            surface.entrypoint.int_pointer_type_id,
+        )?;
+        entrypoint.text("decimal_kind", surface.entrypoint.decimal_kind)?;
+        entrypoint.u16(
+            "decimal_pointer_type_id",
+            surface.entrypoint.decimal_pointer_type_id,
+        )?;
+        entrypoint.text("quantity_kind", surface.entrypoint.quantity_kind)?;
+        entrypoint.u16(
+            "quantity_pointer_type_id",
+            surface.entrypoint.quantity_pointer_type_id,
         )?;
         entrypoint.text("list_kind", surface.entrypoint.list_kind)?;
         entrypoint.text("list_layout", surface.entrypoint.list_layout)?;
@@ -2197,15 +2307,27 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
         entrypoint.u64("max_schema_nodes", surface.entrypoint.max_schema_nodes)?;
         entrypoint.u64("max_schema_depth", surface.entrypoint.max_schema_depth)
     })?;
-    descriptor.record("amount", |amount| {
-        amount.u16("pointer_type_id", surface.amount.pointer_type_id)?;
-        amount.u16("mantissa_bits", surface.amount.mantissa_bits)?;
-        amount.u8("max_scale", surface.amount.max_scale)?;
-        amount.text("sign_semantics", surface.amount.sign_semantics)?;
-        amount.text("canonicalization", surface.amount.canonicalization)?;
-        amount.sequence(
+    descriptor.record("numeric", |numeric| {
+        numeric.u16("int_pointer_type_id", surface.numeric.int_pointer_type_id)?;
+        numeric.u16(
+            "decimal_pointer_type_id",
+            surface.numeric.decimal_pointer_type_id,
+        )?;
+        numeric.u16(
+            "quantity_pointer_type_id",
+            surface.numeric.quantity_pointer_type_id,
+        )?;
+        numeric.u16("mantissa_bits", surface.numeric.mantissa_bits)?;
+        numeric.u8("max_scale", surface.numeric.max_scale)?;
+        numeric.text("int_domain", surface.numeric.int_domain)?;
+        numeric.text("decimal_domain", surface.numeric.decimal_domain)?;
+        numeric.text("quantity_domain", surface.numeric.quantity_domain)?;
+        numeric.text("canonicalization", surface.numeric.canonicalization)?;
+        numeric.text("integer_division", surface.numeric.integer_division)?;
+        numeric.text("wrapping_modulus", surface.numeric.wrapping_modulus)?;
+        numeric.sequence(
             "rounding_modes",
-            &surface.amount.rounding_modes,
+            &surface.numeric.rounding_modes,
             |rounding, mode| {
                 rounding.text("name", mode.name)?;
                 rounding.u64("tag", mode.tag)
@@ -2224,7 +2346,45 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
         .map(|pointer_type| *pointer_type as u16)
         .collect::<Vec<_>>();
     pointer_type_ids.sort_unstable();
-    let (core_query_projections, query_page, entrypoint, amount) = semantic_abi_surface_v1()?;
+    let (core_query_projections, query_page, entrypoint, numeric) = semantic_abi_surface_v1()?;
+    let indexed_literals = vec![
+        AbiIndexedLiteralSurface {
+            opcode: crate::instruction::wide::memory::LDLIT,
+            mnemonic: "LDLIT",
+            table_kind: crate::metadata::LiteralKindV1::PointerTlv as u8,
+            payload_layout: "exact ABI-v1 pointer TLV envelope",
+            result: "validated code-memory pointer",
+        },
+        AbiIndexedLiteralSurface {
+            opcode: crate::instruction::wide::memory::LDI64,
+            mnemonic: "LDI64",
+            table_kind: crate::metadata::LiteralKindV1::I64 as u8,
+            payload_layout: "exact 8-byte little-endian signed i64",
+            result: "sign-preserving 64-bit register value",
+        },
+    ];
+    let durable_state = AbiDurableStateSurface {
+        semantics_version: 1,
+        keys_max_items: STATE_KEYS_MAX_ITEMS,
+        max_path_bytes: u64::try_from(STATE_MAX_PATH_BYTES)
+            .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+        max_value_bytes: u64::try_from(STATE_MAX_VALUE_BYTES)
+            .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+        map_max_key_bytes: u64::try_from(STATE_MAP_MAX_KEY_BYTES)
+            .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+        map_max_base_bytes: u64::try_from(STATE_MAP_MAX_BASE_BYTES)
+            .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+        map_max_page_bytes: u64::try_from(STATE_MAP_MAX_PAGE_BYTES)
+            .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+        path_size_unit: "framed canonical Norito Name payload bytes",
+        value_storage: "raw NoritoBytes payload; pointer boundary wraps exactly once",
+        ordering_version: 1,
+        key_ordering: "canonical Name order; StateMap hex paths preserve canonical Norito key byte order",
+        prefix_match: "key equals prefix or remaining suffix begins with slash",
+        map_path_derivation_version: 1,
+        map_path_derivation: "base + slash + lowercase_hex(canonical_norito_key_payload)",
+        page_overflow: "reject before selected-page materialization",
+    };
     Ok(AbiSurface {
         descriptor_format_version: ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION,
         policy_tag: 1,
@@ -2233,7 +2393,9 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
         core_query_projections,
         query_page,
         entrypoint,
-        amount,
+        numeric,
+        indexed_literals,
+        durable_state,
     })
 }
 
@@ -2255,10 +2417,12 @@ fn abi_surface_descriptor(policy: crate::SyscallPolicy) -> Result<&'static [u8],
 /// Compute the stable first-release ABI hash for the complete allowed surface.
 ///
 /// The domain-separated, versioned, length-prefixed descriptor binds the
-/// ABI-v1 policy tag; every sorted syscall signature and host-access class;
-/// every allowed pointer type; typed core-query entity tags, projections, and
-/// page semantics; recursive entrypoint `List` and `Amount` kinds; and the
-/// canonical Amount and rounding-mode rules. Gas prices remain bound
+/// ABI-v1 policy tag; indexed-literal opcodes, table kinds, and payload layouts;
+/// every sorted syscall signature and host-access class; every allowed pointer
+/// type; durable-state caps, ordering, storage, paging, and path derivation;
+/// typed core-query entity tags, projections, and page semantics; recursive
+/// entrypoint `List`, `Int`, `Decimal`, and `Quantity` kinds; and canonical
+/// numeric-domain, division, wrapping, encoding, and rounding rules. Gas prices remain bound
 /// independently by the gas-schedule hash. A malformed compiled registry
 /// returns a diagnostic sentinel with an invalid Iroha-hash marker; release
 /// tests require that path to be unreachable, and a valid Iroha hash can never
@@ -2278,6 +2442,31 @@ mod tests {
         collect_abi_surface(crate::SyscallPolicy::AbiV1).expect("canonical ABI-v1 surface")
     }
 
+    #[test]
+    fn numeric_v1_ranges_are_complete_and_legacy_numbers_fail_closed() {
+        let policy = crate::SyscallPolicy::AbiV1;
+        let expected = (0x01_0100..=0x01_0113)
+            .chain(0x01_0120..=0x01_012F)
+            .chain(0x01_0140..=0x01_014F)
+            .collect::<Vec<_>>();
+        assert_eq!(expected.len(), 52);
+        for number in expected {
+            assert!(is_numeric_v1_syscall(number));
+            assert!(is_syscall_allowed(policy, number));
+            assert_eq!(registered_syscall_access(number), Some(SyscallAccess::None));
+            assert!(syscall_name(number).is_some());
+        }
+
+        for retired in (0x69..=0x76)
+            .chain(0xD2..=0xDE)
+            .chain(0x01_0040..=0x01_004D)
+        {
+            assert!(!is_syscall_allowed(policy, retired), "retired {retired:#x}");
+            assert_eq!(registered_syscall_access(retired), None);
+            assert_eq!(syscall_name(retired), None);
+        }
+    }
+
     fn descriptor_hash(surface: &AbiSurface) -> [u8; 32] {
         let descriptor = encode_abi_surface(surface).expect("test surface is canonical");
         *iroha_crypto::Hash::new(descriptor).as_ref()
@@ -2294,7 +2483,6 @@ mod tests {
     #[test]
     fn canonical_helper_syscall_maps_direct_aliases() {
         let direct_pairs = [
-            (SYSCALL_JSON_GET_I64_DIRECT, SYSCALL_JSON_GET_I64),
             (SYSCALL_JSON_GET_JSON_DIRECT, SYSCALL_JSON_GET_JSON),
             (SYSCALL_JSON_GET_NAME_DIRECT, SYSCALL_JSON_GET_NAME),
             (
@@ -2303,7 +2491,9 @@ mod tests {
             ),
             (SYSCALL_JSON_GET_NFT_ID_DIRECT, SYSCALL_JSON_GET_NFT_ID),
             (SYSCALL_JSON_GET_BLOB_HEX_DIRECT, SYSCALL_JSON_GET_BLOB_HEX),
-            (SYSCALL_JSON_GET_AMOUNT_DIRECT, SYSCALL_JSON_GET_AMOUNT),
+            (SYSCALL_JSON_GET_INT_DIRECT, SYSCALL_JSON_GET_INT),
+            (SYSCALL_JSON_GET_DECIMAL_DIRECT, SYSCALL_JSON_GET_DECIMAL),
+            (SYSCALL_JSON_GET_QUANTITY_DIRECT, SYSCALL_JSON_GET_QUANTITY),
             (
                 SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT,
                 SYSCALL_JSON_GET_ASSET_DEFINITION_ID,
@@ -2320,19 +2510,6 @@ mod tests {
             (SYSCALL_SCHEMA_INFO_DIRECT, SYSCALL_SCHEMA_INFO),
             (SYSCALL_SCHEMA_ENCODE_DIRECT, SYSCALL_SCHEMA_ENCODE),
             (SYSCALL_SCHEMA_DECODE_DIRECT, SYSCALL_SCHEMA_DECODE),
-            (SYSCALL_NUMERIC_TO_INT_DIRECT, SYSCALL_NUMERIC_TO_INT),
-            (SYSCALL_NUMERIC_ADD_DIRECT, SYSCALL_NUMERIC_ADD),
-            (SYSCALL_NUMERIC_SUB_DIRECT, SYSCALL_NUMERIC_SUB),
-            (SYSCALL_NUMERIC_MUL_DIRECT, SYSCALL_NUMERIC_MUL),
-            (SYSCALL_NUMERIC_DIV_DIRECT, SYSCALL_NUMERIC_DIV),
-            (SYSCALL_NUMERIC_REM_DIRECT, SYSCALL_NUMERIC_REM),
-            (SYSCALL_NUMERIC_NEG_DIRECT, SYSCALL_NUMERIC_NEG),
-            (SYSCALL_NUMERIC_EQ_DIRECT, SYSCALL_NUMERIC_EQ),
-            (SYSCALL_NUMERIC_NE_DIRECT, SYSCALL_NUMERIC_NE),
-            (SYSCALL_NUMERIC_LT_DIRECT, SYSCALL_NUMERIC_LT),
-            (SYSCALL_NUMERIC_LE_DIRECT, SYSCALL_NUMERIC_LE),
-            (SYSCALL_NUMERIC_GT_DIRECT, SYSCALL_NUMERIC_GT),
-            (SYSCALL_NUMERIC_GE_DIRECT, SYSCALL_NUMERIC_GE),
         ];
 
         for (direct, canonical) in direct_pairs {
@@ -2452,6 +2629,15 @@ mod tests {
         });
         assert_surface_mutation_changes_hash(|changed| changed.policy_tag += 1);
         assert_surface_mutation_changes_hash(|changed| {
+            changed.indexed_literals[1].opcode ^= 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.indexed_literals[1].table_kind ^= 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.indexed_literals[1].payload_layout = "mutated scalar layout";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
             let last = changed.syscalls.last_mut().expect("ABI has syscalls");
             last.number = last
                 .number
@@ -2476,6 +2662,53 @@ mod tests {
         });
         assert_surface_mutation_changes_hash(|changed| {
             let _ = changed.pointer_type_ids.pop();
+        });
+    }
+
+    #[test]
+    fn abi_hash_descriptor_binds_every_durable_state_semantic() {
+        let state = canonical_surface().durable_state;
+        assert_eq!(state.keys_max_items, STATE_KEYS_MAX_ITEMS);
+        assert_eq!(state.max_path_bytes, STATE_MAX_PATH_BYTES as u64);
+        assert_eq!(state.max_value_bytes, STATE_MAX_VALUE_BYTES as u64);
+        assert_eq!(state.map_max_key_bytes, STATE_MAP_MAX_KEY_BYTES as u64);
+        assert_eq!(state.map_max_base_bytes, STATE_MAP_MAX_BASE_BYTES as u64);
+        assert_eq!(state.map_max_page_bytes, STATE_MAP_MAX_PAGE_BYTES as u64);
+
+        assert_surface_mutation_changes_hash(|changed| changed.durable_state.semantics_version += 1);
+        assert_surface_mutation_changes_hash(|changed| changed.durable_state.keys_max_items += 1);
+        assert_surface_mutation_changes_hash(|changed| changed.durable_state.max_path_bytes += 1);
+        assert_surface_mutation_changes_hash(|changed| changed.durable_state.max_value_bytes += 1);
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.map_max_key_bytes += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.map_max_base_bytes += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.map_max_page_bytes += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.path_size_unit = "decoded UTF-8 bytes";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.value_storage = "full pointer TLV envelope";
+        });
+        assert_surface_mutation_changes_hash(|changed| changed.durable_state.ordering_version += 1);
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.key_ordering = "host insertion order";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.prefix_match = "raw text prefix";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.map_path_derivation_version += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.map_path_derivation = "base + slash + debug(key)";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.page_overflow = "truncate selected page";
         });
     }
 
@@ -2518,7 +2751,7 @@ mod tests {
                     "AccountView",
                     vec![("id", "AccountId"), ("metadata", "Json")]
                 ),
-                ("AssetView", vec![("id", "AssetId"), ("amount", "Amount")]),
+                ("AssetView", vec![("id", "AssetId"), ("amount", "Quantity")]),
                 (
                     "AssetDefinitionView",
                     vec![
@@ -2526,7 +2759,7 @@ mod tests {
                         ("name", "String"),
                         ("description", "Option<String>"),
                         ("owned_by", "AccountId"),
-                        ("total_quantity", "Amount"),
+                        ("total_quantity", "Quantity"),
                         ("metadata", "Json"),
                     ]
                 ),
@@ -2615,23 +2848,30 @@ mod tests {
     }
 
     #[test]
-    fn abi_hash_descriptor_binds_entrypoint_amount_and_recursive_list_semantics() {
+    fn abi_hash_descriptor_binds_entrypoint_numeric_and_recursive_list_semantics() {
         use crate::{
             entrypoint::{
-                EntrypointValueKindV1, MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH,
-                MAX_ENTRYPOINT_ARGUMENT_TYPE_NODES, MAX_ENTRYPOINT_LIST_CAPACITY_V1,
-                MIN_ENTRYPOINT_LIST_CAPACITY_V1,
+                MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH, MAX_ENTRYPOINT_ARGUMENT_TYPE_NODES,
+                MAX_ENTRYPOINT_LIST_CAPACITY_V1, MIN_ENTRYPOINT_LIST_CAPACITY_V1,
             },
             pointer_abi::PointerType,
         };
 
         let surface = canonical_surface();
-        let amount_kind = EntrypointValueKindV1::Amount;
-        assert!(amount_kind.is_pointer());
-        assert_eq!(surface.entrypoint.amount_kind, "Amount");
+        assert_eq!(surface.entrypoint.int_kind, "Int");
+        assert_eq!(surface.entrypoint.decimal_kind, "Decimal");
+        assert_eq!(surface.entrypoint.quantity_kind, "Quantity");
         assert_eq!(
-            surface.entrypoint.amount_pointer_type_id,
-            PointerType::Amount as u16
+            surface.entrypoint.int_pointer_type_id,
+            PointerType::Int as u16
+        );
+        assert_eq!(
+            surface.entrypoint.decimal_pointer_type_id,
+            PointerType::Decimal as u16
+        );
+        assert_eq!(
+            surface.entrypoint.quantity_pointer_type_id,
+            PointerType::Quantity as u16
         );
         assert_eq!(
             surface.entrypoint.list_min_capacity,
@@ -2654,10 +2894,22 @@ mod tests {
             changed.entrypoint.schema_version += 1;
         });
         assert_surface_mutation_changes_hash(|changed| {
-            changed.entrypoint.amount_kind = "Numeric";
+            changed.entrypoint.int_kind = "MutatedInt";
         });
         assert_surface_mutation_changes_hash(|changed| {
-            changed.entrypoint.amount_pointer_type_id += 1;
+            changed.entrypoint.int_pointer_type_id += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.entrypoint.decimal_kind = "MutatedDecimal";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.entrypoint.decimal_pointer_type_id += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.entrypoint.quantity_kind = "MutatedQuantity";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.entrypoint.quantity_pointer_type_id += 1;
         });
         assert_surface_mutation_changes_hash(|changed| {
             changed.entrypoint.list_layout = "nested-recursive-record";
@@ -2677,64 +2929,99 @@ mod tests {
     }
 
     #[test]
-    fn abi_hash_descriptor_binds_amount_pointer_rules_and_rounding_tags() {
+    fn abi_hash_descriptor_binds_numeric_pointer_rules_and_rounding_tags() {
         use crate::pointer_abi::PointerType;
 
         let surface = canonical_surface();
-        assert_eq!(surface.amount.pointer_type_id, PointerType::Amount as u16);
+        for expected in [PointerType::Int, PointerType::Decimal, PointerType::Quantity] {
+            assert_eq!(
+                surface
+                    .pointer_type_ids
+                    .iter()
+                    .filter(|&&type_id| type_id == expected as u16)
+                    .count(),
+                1
+            );
+        }
+        assert!(!surface
+            .pointer_type_ids
+            .contains(&(PointerType::RetiredAmount as u16)));
+        assert_eq!(surface.numeric.int_pointer_type_id, PointerType::Int as u16);
         assert_eq!(
-            surface
-                .pointer_type_ids
-                .iter()
-                .filter(|&&type_id| type_id == PointerType::Amount as u16)
-                .count(),
-            1
+            surface.numeric.decimal_pointer_type_id,
+            PointerType::Decimal as u16
         );
-        assert_eq!(surface.amount.mantissa_bits, 512);
-        assert_eq!(surface.amount.max_scale, 28);
+        assert_eq!(
+            surface.numeric.quantity_pointer_type_id,
+            PointerType::Quantity as u16
+        );
+        assert_eq!(surface.numeric.mantissa_bits, 4096);
+        assert_eq!(surface.numeric.max_scale, 28);
         assert_eq!(
             surface
-                .amount
+                .numeric
                 .rounding_modes
                 .iter()
                 .map(|mode| (mode.name, mode.tag))
                 .collect::<Vec<_>>(),
             vec![
-                ("floor", AMOUNT_ROUND_FLOOR),
-                ("ceil", AMOUNT_ROUND_CEIL),
-                ("nearest_even", AMOUNT_ROUND_NEAREST_EVEN),
+                ("toward_zero", 0),
+                ("away_from_zero", 1),
+                ("floor", 2),
+                ("ceil", 3),
+                ("nearest_even", 4),
+                ("nearest_away", 5),
+                ("nearest_toward_zero", 6),
             ]
         );
 
         assert_surface_mutation_changes_hash(|changed| {
-            let amount_id = changed
+            let numeric_id = changed
                 .pointer_type_ids
                 .iter_mut()
-                .find(|type_id| **type_id == PointerType::Amount as u16)
-                .expect("Amount pointer type is allowed");
-            *amount_id += 1;
+                .find(|type_id| **type_id == PointerType::Decimal as u16)
+                .expect("Decimal pointer type is allowed");
+            *numeric_id += 1;
         });
         assert_surface_mutation_changes_hash(|changed| {
-            changed.amount.pointer_type_id += 1;
+            changed.numeric.int_pointer_type_id += 1;
         });
         assert_surface_mutation_changes_hash(|changed| {
-            changed.amount.mantissa_bits -= 1;
+            changed.numeric.decimal_pointer_type_id += 1;
         });
         assert_surface_mutation_changes_hash(|changed| {
-            changed.amount.max_scale -= 1;
+            changed.numeric.quantity_pointer_type_id += 1;
         });
         assert_surface_mutation_changes_hash(|changed| {
-            changed.amount.sign_semantics = "signed";
+            changed.numeric.mantissa_bits -= 1;
         });
         assert_surface_mutation_changes_hash(|changed| {
-            changed.amount.canonicalization = "preserve-source-scale";
+            changed.numeric.max_scale -= 1;
         });
-        for mode_index in 0..surface.amount.rounding_modes.len() {
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.int_domain = "unbounded";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.decimal_domain = "binary-float";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.quantity_domain = "signed";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.canonicalization = "preserve-source-scale";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.integer_division = "floor";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.wrapping_modulus = "2^64";
+        });
+        for mode_index in 0..surface.numeric.rounding_modes.len() {
             assert_surface_mutation_changes_hash(|changed| {
-                changed.amount.rounding_modes[mode_index].name = "mutated_mode";
+                changed.numeric.rounding_modes[mode_index].name = "mutated_mode";
             });
             assert_surface_mutation_changes_hash(|changed| {
-                changed.amount.rounding_modes[mode_index].tag += 10;
+                changed.numeric.rounding_modes[mode_index].tag += 10;
             });
         }
     }
@@ -2851,7 +3138,11 @@ mod tests {
         for &pointer_type in crate::pointer_abi::PointerType::all() {
             assert_eq!(
                 allowed.contains(&pointer_type),
-                pointer_type != crate::pointer_abi::PointerType::TestOnly,
+                !matches!(
+                    pointer_type,
+                    crate::pointer_abi::PointerType::RetiredAmount
+                        | crate::pointer_abi::PointerType::TestOnly
+                ),
                 "pointer policy completeness for {pointer_type:?}"
             );
         }

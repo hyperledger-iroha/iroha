@@ -1,8 +1,8 @@
 //! Native, schema-bound Kotodama JSON construction and typed getters.
 //!
-//! Signed `i64` values use JSON numbers. `Amount` and `u128` values that do not
-//! fit Norito JSON's integer-number representation use canonical decimal
-//! strings, preserving exactness without floating-point conversion.
+//! Small `int` values use JSON integer numbers. Wide integers, exact decimals,
+//! and quantities use canonical strings, preserving exactness without
+//! floating-point conversion.
 
 use core::str::FromStr;
 
@@ -11,7 +11,12 @@ use iroha_data_model::{
     account::{AccountId, ParsedAccountId},
     prelude::{AssetDefinitionId, AssetId, DataSpaceId, DomainId, Name, NftId},
 };
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{
+    bigint::BigInt,
+    json::Json,
+    numeric::{Numeric, Quantity},
+    numeric_abi::{DecimalValueV1, IntValueV1, QuantityValueV1},
+};
 use ivm_abi::{
     json::{
         JsonConstructionNodeV1, JsonConstructionSchemaV1, MAX_JSON_CONSTRUCTION_SCHEMA_BYTES_V1,
@@ -194,29 +199,37 @@ fn convert_leaf(
         eprintln!("[json] convert leaf: kind={kind:?} word=0x{word:x}");
     }
     Ok(match kind {
-        StateValueKindV1::Int => njson::Value::from(word as i64),
+        StateValueKindV1::Int => {
+            let payload = pointer_leaf(vm, word, PointerType::Int, resolver, stats)?;
+            let value = IntValueV1::decode_frame(payload)
+                .map_err(|_| VMError::DecodeError)?
+                .into_int();
+            if let Some(value) = value.try_to_i64() {
+                njson::Value::from(value)
+            } else if let Some(value) = value.try_to_u64() {
+                njson::Value::from(value)
+            } else {
+                njson::Value::from(value.to_string())
+            }
+        }
         StateValueKindV1::Bool => match word {
             0 => njson::Value::Bool(false),
             1 => njson::Value::Bool(true),
             _ => return Err(VMError::DecodeError),
         },
-        StateValueKindV1::U128 => {
-            let payload = pointer_leaf(vm, word, PointerType::NoritoBytes, resolver, stats)?;
-            let numeric: Numeric = decode_canonical(payload)?;
-            if numeric.scale() != 0 {
-                return Err(VMError::DecodeError);
-            }
-            let value = numeric.try_mantissa_u128().ok_or(VMError::DecodeError)?;
-            match u64::try_from(value) {
-                Ok(value) => njson::Value::from(value),
-                Err(_) => njson::Value::from(value.to_string()),
-            }
+        StateValueKindV1::Decimal => {
+            let payload = pointer_leaf(vm, word, PointerType::Decimal, resolver, stats)?;
+            let value = DecimalValueV1::decode_frame(payload)
+                .map_err(|_| VMError::DecodeError)?
+                .into_numeric();
+            njson::Value::from(value.to_string())
         }
-        StateValueKindV1::Amount => {
-            let payload = pointer_leaf(vm, word, PointerType::Amount, resolver, stats)?;
-            let amount: Numeric = decode_canonical(payload)?;
-            amount.validate_amount().map_err(|_| VMError::DecodeError)?;
-            njson::Value::from(amount.to_string())
+        StateValueKindV1::Quantity => {
+            let payload = pointer_leaf(vm, word, PointerType::Quantity, resolver, stats)?;
+            let quantity = QuantityValueV1::decode_frame(payload)
+                .map_err(|_| VMError::DecodeError)?
+                .into_quantity();
+            njson::Value::from(quantity.to_string())
         }
         StateValueKindV1::String => {
             let payload = pointer_leaf(vm, word, PointerType::Blob, resolver, stats)?;
@@ -551,17 +564,13 @@ fn canonical_hex_bytes(raw: &str) -> Option<Vec<u8>> {
     hex::decode(hex).ok()
 }
 
-fn amount_field(field: &njson::Value) -> Option<Numeric> {
-    let value = match field {
-        njson::Value::String(raw) => raw.parse::<Numeric>().ok()?,
-        njson::Value::Number(njson::native::Number::I64(value)) => Numeric::from(*value),
-        njson::Value::Number(njson::native::Number::U64(value)) => Numeric::from(*value),
-        _ => return None,
-    }
-    .canonicalize_amount()
-    .ok()?;
-    value.validate_amount().ok()?;
-    Some(value)
+fn canonical_numeric_string<T>(field: &njson::Value) -> Option<T>
+where
+    T: FromStr + ToString,
+{
+    let spelling = field.as_str()?;
+    let value = spelling.parse::<T>().ok()?;
+    (value.to_string() == spelling).then_some(value)
 }
 
 enum GetterValue {
@@ -571,16 +580,6 @@ enum GetterValue {
 
 fn getter_value(number: u32, field: &njson::Value) -> Option<GetterValue> {
     Some(match number {
-        syscalls::SYSCALL_JSON_GET_I64 => {
-            let value = match field {
-                njson::Value::Number(njson::native::Number::I64(value)) => *value,
-                njson::Value::Number(njson::native::Number::U64(value)) => {
-                    i64::try_from(*value).ok()?
-                }
-                _ => return None,
-            };
-            GetterValue::Word(value as u64)
-        }
         syscalls::SYSCALL_JSON_GET_JSON => {
             let json = Json::from_norito_value_ref(field).ok()?;
             GetterValue::Pointer(PointerType::Json, to_bytes(&json).ok()?)
@@ -608,8 +607,25 @@ fn getter_value(number: u32, field: &njson::Value) -> Option<GetterValue> {
             PointerType::AssetDefinitionId,
             to_bytes(&canonical_asset_definition(field.as_str()?)?).ok()?,
         ),
-        syscalls::SYSCALL_JSON_GET_AMOUNT => {
-            GetterValue::Pointer(PointerType::Amount, to_bytes(&amount_field(field)?).ok()?)
+        syscalls::SYSCALL_JSON_GET_INT => {
+            let frame = IntValueV1::new(canonical_numeric_string::<BigInt>(field)?)
+                .encode_frame()
+                .ok()?;
+            GetterValue::Pointer(PointerType::Int, frame)
+        }
+        syscalls::SYSCALL_JSON_GET_DECIMAL => {
+            let value = canonical_numeric_string::<Numeric>(field)?;
+            let frame = DecimalValueV1::from_canonical_numeric(value)
+                .ok()?
+                .encode_frame()
+                .ok()?;
+            GetterValue::Pointer(PointerType::Decimal, frame)
+        }
+        syscalls::SYSCALL_JSON_GET_QUANTITY => {
+            let frame = QuantityValueV1::new(canonical_numeric_string::<Quantity>(field)?)
+                .encode_frame()
+                .ok()?;
+            GetterValue::Pointer(PointerType::Quantity, frame)
         }
         _ => return None,
     })
@@ -731,7 +747,7 @@ mod tests {
             .alloc_input_tlv(&tlv(PointerType::AccountId, &account_payload))
             .expect("account TLV");
         let amount_ptr = vm
-            .alloc_input_tlv(&tlv(PointerType::Amount, &amount_payload))
+            .alloc_input_tlv(&tlv(PointerType::Quantity, &amount_payload))
             .expect("amount TLV");
         let bytes_ptr = vm
             .alloc_input_tlv(&tlv(PointerType::Blob, &[0xab, 0x01]))
@@ -793,7 +809,7 @@ mod tests {
             ))
             .expect("schema TLV");
         let amount_ptr = vm
-            .alloc_input_tlv(&tlv(PointerType::Amount, &amount_payload))
+            .alloc_input_tlv(&tlv(PointerType::Quantity, &amount_payload))
             .expect("amount TLV");
         let option_layout = crate::sum::SumLayoutV1::option(1).expect("option layout");
         let some = crate::sum::allocate_words(&mut vm, option_layout, 1, &[amount_ptr])
@@ -847,7 +863,7 @@ mod tests {
             .expect("u128 TLV");
         let precise_ptr = vm
             .alloc_input_tlv(&tlv(
-                PointerType::Amount,
+                PointerType::Quantity,
                 &to_bytes(&precise).expect("scale-28 amount"),
             ))
             .expect("Amount TLV");
@@ -1012,7 +1028,7 @@ mod tests {
                 Some(expected) => {
                     assert!(some, "{key} must produce Option::some");
                     let amount = vm.validate_tlv(payload[0]).expect("Amount TLV");
-                    assert_eq!(amount.type_id, PointerType::Amount);
+                    assert_eq!(amount.type_id, PointerType::Quantity);
                     let amount: Numeric =
                         decode_from_bytes(amount.payload).expect("decode canonical Amount");
                     assert_eq!(amount, expected);
@@ -1074,7 +1090,7 @@ mod tests {
             .expect("Amount schema TLV");
         let noncanonical = vm
             .alloc_input_tlv(&tlv(
-                PointerType::Amount,
+                PointerType::Quantity,
                 &to_bytes(&Numeric::new(10_u32, 1)).expect("noncanonical Amount payload"),
             ))
             .expect("noncanonical Amount TLV");

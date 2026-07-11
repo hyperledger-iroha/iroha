@@ -1,5 +1,10 @@
 # Offline Kagemusha
 
+Fractional transfers with independently redeemable sender change use the
+additive [recursive spend V2 contract](offline_kagemusha_v2_contract.md). The V2
+proof backend is intentionally fail-closed until branch lineage is proven
+in-circuit; V1 bundles must not be cloned to emulate a split.
+
 Kagemusha is the only active chain implementation for offline payments. Nodes
 expose offline-offline payments through `settlement.offline.kagemusha_enabled`,
 which defaults to `true`; runtime bearer-audit dispatch is not available.
@@ -2158,6 +2163,55 @@ verifier profiles. Multi-profile record-backed lineage
 witnesses must provide records for every Reserved-lineage previous proof. SDK
 typed builders may place all Reserved-lineage records in the plural field, while
 one-profile callers may use the single-record field.
+
+Swift can now assemble that final proof boundary without hand-encoding private
+witness or proof-attachment archives. The preferred production sequence is to
+call
+`IrohaSDK.buildKagemushaConfidentialUnshieldRedeemProofAttachment(witness:verifierKeyId:blockHeight:)`.
+It fetches the exact registry entry from Torii, consumes the authoritative
+`record_norito_base64` archive, constructs the native proof, locally verifies
+it, and returns the checked attachment. The equivalent lower-level sequence is:
+
+1. Call
+   `PrivacyConfidentialWitnessCodecs.buildConfidentialUnshieldProofRequestV1`
+   with the unshield witness. The builder requires no transfer outputs, accepts
+   zero or one private change output and any canonical `u128` public amount,
+   and binds the exact unshield-v3 verifier reference and nine-column schema.
+2. Pass the request archive to
+   `PrivacyNativeBridge.buildConfidentialUnshieldProofV3(requestArchive:)`.
+3. Fetch the verifier detail from Torii, then convert its exact archived record
+   with `asKagemushaRecursiveSpendVerifierRecordRef()`. Do not reconstruct the
+   record archive from the JSON projection.
+4. Pass the successful native proof-output archive and verifier-record snapshot
+   to `KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment`, along
+   with the current block height when the record has an activation or withdrawal
+   boundary. The builder calls the existing native `verifyProofV1` bridge and
+   requires a successful result containing the byte-identical proof and
+   `verified == true`.
+5. Put the returned canonical attachment in
+   `KagemushaRecursiveSpendRedeemRequest.redeemProof`, then call
+   `encodeRedeemRequest` and the existing native recursive redeem transaction
+   builder.
+
+The attachment builder checks the exact unshield operation and production
+verifier reference, open-verify envelope, unshield-v3 circuit/schema,
+`offline_kagemusha` namespace, Pallas backend/curve, active record, canonical
+inline key commitment and length, proof-size cap, and canonical fixed-array
+framing. A bridge-unavailable error, malformed or all-zero proof, substituted
+canonical key, or mismatched verify result fails closed. Windowless active
+records are accepted without a height. Windowed records require a resolved
+height at or after activation and strictly before withdrawal.
+
+The six-field attachment carries the full envelope, verifier id and commitment,
+the canonical Iroha `Hash` of the envelope (Blake2b-256 with the required
+low-bit marker), and no privacy lane. Recursive redeem must use this builder
+rather than Swift's generic `ProofAttachment` encoder, whose general
+variable-tail/default-hash behavior is not the compact recursive-redeem wire
+contract. The checked boundary also requires canonical zero Norito header
+padding for the native privacy result, open-verify envelope, and verifier
+record. The generic 64-byte frame-padding limit is not permission to add
+padding to these 8-byte-aligned types.
+
 Torii offline-v2 redeem ingress routes `/v1/offline/v2/notes/redeem` requests
 that carry `redeem_request_norito_base64`,
 `compact_payment_token_norito_base64`, or
@@ -2380,6 +2434,14 @@ loaded; malformed, duplicate, incomplete, or missing native evidence keeps the
 SDK capability surface fail-closed. Unshield v3 also rejects overflowing input
 amount sums before proving, so malformed witness archives return the proving
 failure status instead of wrapping the private total.
+
+Apple builds follow the same gate. The default
+`scripts/build_norito_xcframework.sh` output remains fail-closed; after the
+production evidence is approved, operators can build all Apple slices with
+`scripts/build_norito_xcframework.sh --privacy-production-enabled`, or select
+the corresponding default-off input on the manual `Mobile SDK Artifacts`
+workflow. The enabled artifact is explicitly marked, and the builder rejects
+the option with skip-build mode so an older library cannot be mislabeled.
 Public JavaScript production-evidence rows now mirror the Python privacy catalog
 by requiring exact `sdk_exports` and `review_scope` sections before a row can
 promote readiness: every SDK surface repeats the admitted entrypoint list, and
@@ -2752,10 +2814,10 @@ material and must not construct, rewrite, or mutate it; the native bridge and
 SDK append wrappers validate the metadata tuple (`vk_commitment`,
 `public_inputs_schema_hash`, `domain_tag`) against the exact previous bundle
 before proving or returning output bytes. Those Norito `Option<[u8; 32]>`
-metadata bodies are the raw 32-byte value inside the option payload, not a
-per-byte fixed-array child sequence; non-C# SDK request preflight and
-JavaScript package-dist coverage reject stale fixed-array metadata bodies before
-native dispatch. Native append
+metadata bodies use the canonical fixed-array child encoding inside the option
+payload (32 one-byte length-delimited elements); JVM decoders also accept the
+packed 32-byte compatibility form. Direct `[u8; 32]` struct fields are different:
+their canonical archive body is the packed 32 bytes. Native append
 preflight also caps the archive at
 `KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES` (8 MiB) before
 decoding and checks that each supplied previous-proof envelope is bounded Pallas
@@ -3222,8 +3284,11 @@ bytes on construction and accessor reads. Full record-backed lineage-witness
 validation remains enforced by native/core. Their request-layout regressions decode the emitted
 archives and pin
 raw embedded record/bundle/proof payloads, Norito `Option` child-length framing,
-and Rust `[u8; N]` fixed-array encoding as per-element compact
-length-prefixed bytes without an extra sequence-length header. C# exposes a
+protocol-special direct Rust `[u8; 32]` fields as packed bytes, and fixed arrays
+nested in generic `Vec`/`Option` containers as per-element compact
+length-prefixed bytes without an extra inner sequence-length header.
+`AssetDefinitionId` delegates to generic `[u8; 16]` encoding and therefore
+retains per-element framing. C# exposes a
 managed `DecodeBundleSummary(...)` for the same bundle-summary preflight before
 wallet code trusts decoded metadata. Swift exposes
 the same surface through value-typed request/result structs,
@@ -3240,6 +3305,18 @@ same surface through frozen request/result dataclasses,
 `decode_kagemusha_recursive_spend_verify_result(...)`,
 `decode_kagemusha_recursive_spend_bundle(...)`, and typed native convenience
 wrappers that delegate only after request encoding succeeds.
+Kotlin/JVM and Java Android additionally expose public canonical
+`encodeConfidentialTransferV2VerifierRecordArchive(...)` and
+`encodeConfidentialUnshieldV3VerifierRecordArchive(...)` helpers plus raw and
+typed `buildRedeemProofAttachment(...)` / `buildRedeemProofAttachmentValue(...)`
+forms. The record helpers fix the `offline_kagemusha`, Halo2/IPA/Pallas, marked
+schema-hash, gas-schedule, inline-key, proof-cap, and active-status fields. The
+attachment builders validate the record and envelope, resolve activation and
+withdrawal at the optional block height, and require an exact successful native
+unshield verification result before returning either representation; the typed
+value can be passed directly to `UnshieldInstruction.Builder.setProof`.
+Canonical attachment archives omit the absent trailing default `lane_privacy`
+field instead of serializing an explicit `None`.
 JavaScript/Node, Python, Swift, Kotlin/JVM, Java Android, and C# recursive-spend
 bundle decoders also fail closed on accumulator summaries with `hop_count == 0`
 or `hop_count > 64` before trusting the decoded chain, asset, root, or note

@@ -16,7 +16,8 @@ pub const TAIRA_XOR_ASSET_DEFINITION_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
 pub const PUBLIC_XOR_ALIAS: &str = "xor#universal";
 /// Public XOR domain registered in public-profile genesis manifests.
 pub const PUBLIC_XOR_DOMAIN: &str = "universal.universal";
-const PUBLIC_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
+const PUBLIC_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
+const ARCHIVED_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
 const PUBLIC_NEXUS_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000753";
 const PK2_NEXUS_CHAIN_ID: &str = "cbdc16";
 
@@ -39,6 +40,8 @@ pub struct ProfileDefaults {
     pub chain_id: ChainId,
     /// Optional canonical I105 chain discriminant to use when rendering account literals.
     pub chain_discriminant: Option<u16>,
+    /// Genesis-selected target block cadence in milliseconds.
+    pub block_cadence_ms: u64,
     /// Collector quorum size.
     pub collectors_k: u16,
     /// Redundant send fanout.
@@ -65,6 +68,7 @@ pub fn profile_defaults(profile: GenesisProfile) -> ProfileDefaults {
         GenesisProfile::Iroha3Dev => ProfileDefaults {
             chain_id: ChainId::from("iroha3-dev.local"),
             chain_discriminant: None,
+            block_cadence_ms: 100,
             collectors_k: 1,
             min_peers: 1,
             collectors_redundant_send_r: redundant_send_r_from_len(1),
@@ -73,6 +77,7 @@ pub fn profile_defaults(profile: GenesisProfile) -> ProfileDefaults {
         GenesisProfile::Iroha3Taira => ProfileDefaults {
             chain_id: ChainId::from("iroha3-taira"),
             chain_discriminant: Some(TAIRA_CHAIN_DISCRIMINANT),
+            block_cadence_ms: 1_000,
             collectors_k: 3,
             min_peers: 4,
             collectors_redundant_send_r: redundant_send_r_from_len(4),
@@ -81,6 +86,7 @@ pub fn profile_defaults(profile: GenesisProfile) -> ProfileDefaults {
         GenesisProfile::Iroha3Nexus => ProfileDefaults {
             chain_id: ChainId::from("iroha3-nexus"),
             chain_discriminant: Some(NEXUS_CHAIN_DISCRIMINANT),
+            block_cadence_ms: 100,
             collectors_k: 5,
             min_peers: 4,
             collectors_redundant_send_r: redundant_send_r_from_len(4),
@@ -196,7 +202,12 @@ pub fn resolve_public_xor_asset_definition_id(
 #[must_use]
 pub fn known_chain_discriminant_for_chain_id(chain_id: &str) -> Option<u16> {
     match chain_id {
-        "iroha3-taira" | PUBLIC_TAIRA_CHAIN_ID => Some(TAIRA_CHAIN_DISCRIMINANT),
+        // Keep the archived UUID readable with its historical I105 prefix. It is
+        // deliberately excluded from `public_xor_profile_for_chain_id`, so new
+        // public-profile genesis bundles cannot select the retired network.
+        "iroha3-taira" | PUBLIC_TAIRA_CHAIN_ID | ARCHIVED_TAIRA_CHAIN_ID => {
+            Some(TAIRA_CHAIN_DISCRIMINANT)
+        }
         "iroha3-nexus" | PUBLIC_NEXUS_CHAIN_ID | PK2_NEXUS_CHAIN_ID => {
             Some(NEXUS_CHAIN_DISCRIMINANT)
         }
@@ -252,6 +263,7 @@ mod tests {
         let dev = profile_defaults(GenesisProfile::Iroha3Dev);
         assert_eq!(dev.chain_id, ChainId::from("iroha3-dev.local"));
         assert_eq!(dev.chain_discriminant, None);
+        assert_eq!(dev.block_cadence_ms, 100);
         assert_eq!(dev.collectors_k, 1);
         assert_eq!(dev.collectors_redundant_send_r, 1);
         assert_eq!(dev.min_peers, 1);
@@ -259,6 +271,7 @@ mod tests {
         let taira = profile_defaults(GenesisProfile::Iroha3Taira);
         assert_eq!(taira.chain_id, ChainId::from("iroha3-taira"));
         assert_eq!(taira.chain_discriminant, Some(TAIRA_CHAIN_DISCRIMINANT));
+        assert_eq!(taira.block_cadence_ms, 1_000);
         assert_eq!(taira.collectors_k, 3);
         assert_eq!(taira.collectors_redundant_send_r, 3);
         assert_eq!(taira.min_peers, 4);
@@ -266,6 +279,7 @@ mod tests {
         let nexus = profile_defaults(GenesisProfile::Iroha3Nexus);
         assert_eq!(nexus.chain_id, ChainId::from("iroha3-nexus"));
         assert_eq!(nexus.chain_discriminant, Some(NEXUS_CHAIN_DISCRIMINANT));
+        assert_eq!(nexus.block_cadence_ms, 100);
         assert_eq!(nexus.collectors_k, 5);
         assert_eq!(nexus.collectors_redundant_send_r, 3);
         assert_eq!(nexus.min_peers, 4);
@@ -357,7 +371,11 @@ mod tests {
     #[test]
     fn known_chain_discriminant_maps_taira_and_nexus() {
         assert_eq!(
-            known_chain_discriminant_for_chain_id("809574f5-fee7-5e69-bfcf-52451e42d50f"),
+            known_chain_discriminant_for_chain_id("fc56984b-2be7-431d-840e-21514d1883f0"),
+            Some(TAIRA_CHAIN_DISCRIMINANT)
+        );
+        assert_eq!(
+            known_chain_discriminant_for_chain_id(ARCHIVED_TAIRA_CHAIN_ID),
             Some(TAIRA_CHAIN_DISCRIMINANT)
         );
         assert_eq!(

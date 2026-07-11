@@ -335,6 +335,7 @@ async fn sumeragi_status_endpoint_json_and_norito_payloads_match_semantics() {
         proposal_view: 3,
         lane_id: LaneId::new(7),
         dataspace_id: DataSpaceId::new(42),
+        lane_incarnation: Hash::new(b"torii-status-endpoint-lane-incarnation"),
         lane_block_height: 2,
         lane_block_view: 1,
         subject_hash: Hash::prehashed([0x41; Hash::LENGTH]),

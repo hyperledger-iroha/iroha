@@ -31,14 +31,14 @@ def corridor_config() -> corridor.CorridorConfig:
         "evm": corridor.CompilerSpec(
             target="evm",
             identity="test-evm-solc",
-            reported_version="0.8.24+commit.e11b9ed9.Emscripten.clang",
+            reported_version="0.7.4+commit.3f05b770.Emscripten.clang",
             url="https://example.invalid/evm-soljson.js",
             sha256=hashlib.sha256(EVM_COMPILER).hexdigest(),
         ),
         "tron": corridor.CompilerSpec(
             target="tron",
             identity="test-tron-solc",
-            reported_version="0.8.24+commit.7d902c66.Emscripten.clang",
+            reported_version="0.7.4+commit.3f05b770.Emscripten.clang",
             url="https://example.invalid/tron-soljson.js",
             sha256=hashlib.sha256(TRON_COMPILER).hexdigest(),
         ),
@@ -47,7 +47,6 @@ def corridor_config() -> corridor.CorridorConfig:
         "optimizer": {"enabled": True, "runs": 200},
         "evmVersion": "istanbul",
         "metadata": {
-            "appendCBOR": True,
             "bytecodeHash": "ipfs",
             "useLiteralContent": True,
         },
@@ -92,7 +91,7 @@ def write_test_sources(root: Path) -> None:
         path.parent.mkdir(parents=True)
         path.write_text(
             "// SPDX-License-Identifier: Apache-2.0\n"
-            "pragma solidity 0.8.24;\n"
+            "pragma solidity 0.7.4;\n"
             "contract Test { function value() external pure returns(uint256) { return 7; } }\n",
             encoding="utf-8",
         )
@@ -233,16 +232,16 @@ def test_tampered_compiler_bytes_and_digest_drift_fail_before_execution(
 @pytest.mark.parametrize(
     "directive",
     (
-        "pragma solidity 0.8.25;",
-        "pragma solidity 0.7.4;",
-        "pragma solidity ^0.8.24;",
+        "pragma solidity 0.8.24;",
+        "pragma solidity 0.7.6;",
+        "pragma solidity ^0.7.4;",
         "pragma  solidity >=0.7.4 <0.9.0;",
         "pragma solidity /* hidden range */ >=0.7.4 <0.9.0;",
         "pragma solidity >=0.7.4 <0.9.0/* hidden terminator */;",
-        "pragma solidity 0.8.24;\npragma solidity 0.8.24;",
-        "pragma solidity 0.8.24;\npragma experimental ABIEncoderV1;",
-        "pragma solidity 0.8.24;\npragma experimental ABIEncoderV2;",
-        "pragma solidity 0.8.24;\npragma experimental ABIEncoderV2;\npragma experimental ABIEncoderV2;",
+        "pragma solidity 0.7.4;\npragma solidity 0.7.4;",
+        "pragma solidity 0.7.4;\npragma experimental ABIEncoderV1;",
+        "pragma solidity 0.7.4;\npragma experimental ABIEncoderV2;",
+        "pragma solidity 0.7.4;\npragma experimental ABIEncoderV2;\npragma experimental ABIEncoderV2;",
         "pragma solidity\n>=0.7.4 <0.9.0;",
         "pragma solidity >=0.7.4 <0.9.0",
     ),
@@ -258,7 +257,7 @@ def test_source_policy_rejects_noncanonical_duplicate_and_obfuscated_pragmas(
         "contract Test {}\n",
         encoding="utf-8",
     )
-    with pytest.raises(corridor.CorridorError, match="pragma|0.8.24"):
+    with pytest.raises(corridor.CorridorError, match="pragma|0.7.4"):
         corridor.standard_json_input(tmp_path, corridor_config(), "evm")
 
 
@@ -267,7 +266,7 @@ def test_source_policy_accepts_only_exact_first_release_pragma(tmp_path: Path) -
     source = tmp_path / "contracts" / "evm" / "Test.sol"
     source.write_text(
         "// SPDX-License-Identifier: Apache-2.0\n"
-        "pragma solidity 0.8.24;\n"
+        "pragma solidity 0.7.4;\n"
         "contract Test {}\n",
         encoding="utf-8",
     )
@@ -280,7 +279,7 @@ def test_source_policy_ignores_fake_pragmas_in_comments_and_strings(tmp_path: Pa
     source.write_text(
         "// pragma solidity 0.7.4;\n"
         "/* pragma experimental ABIEncoderV2; */\n"
-        "pragma solidity 0.8.24;\n"
+        "pragma solidity 0.7.4;\n"
         'contract Test { string constant TEXT = "pragma solidity ^0.7.0;"; }\n',
         encoding="utf-8",
     )
@@ -292,16 +291,22 @@ def test_source_policy_ignores_fake_pragmas_in_comments_and_strings(tmp_path: Pa
     )
 
 
-def test_source_policy_rejects_obsolete_abi_encoder_v2_pragma() -> None:
+def test_source_policy_requires_abi_encoder_v2_only_for_typed_deployments() -> None:
     typed_source = (
         "// SPDX-License-Identifier: Apache-2.0\n"
-        "pragma solidity 0.8.24;\n"
+        "pragma solidity 0.7.4;\n"
+        "pragma experimental ABIEncoderV2;\n"
         "contract TypedBridge {}\n"
     )
     typed_path = "contracts/evm/sccp/TairaXorExactEvmSccpBridge.sol"
     corridor.validate_solidity_source_policy(typed_source, typed_path)
 
-    with pytest.raises(corridor.CorridorError, match="experimental|additional"):
+    with pytest.raises(corridor.CorridorError, match="pragma sequence"):
+        corridor.validate_solidity_source_policy(
+            typed_source.replace("pragma experimental ABIEncoderV2;\n", ""),
+            typed_path,
+        )
+    with pytest.raises(corridor.CorridorError, match="pragma sequence"):
         corridor.validate_solidity_source_policy(
             typed_source.replace(
                 "contract TypedBridge {}",
@@ -314,12 +319,12 @@ def test_source_policy_rejects_obsolete_abi_encoder_v2_pragma() -> None:
 @pytest.mark.parametrize(
     ("target", "field", "replacement"),
     (
-        ("evm", "identity", "solc-evm-0.7.4+commit.3f05b770"),
-        ("evm", "reported_version", "0.7.4+commit.3f05b770.Emscripten.clang"),
+        ("evm", "identity", "solc-evm-0.8.24+commit.e11b9ed9"),
+        ("evm", "reported_version", "0.8.24+commit.e11b9ed9.Emscripten.clang"),
         ("evm", "sha256", "00" * 32),
-        ("evm", "url", "https://binaries.soliditylang.org/wasm/soljson-v0.7.4.js"),
-        ("tron", "identity", "tron-solc-tvm-0.7.4+commit.3f05b770"),
-        ("tron", "reported_version", "0.8.24+commit.e11b9ed9.Emscripten.clang"),
+        ("evm", "url", "https://binaries.soliditylang.org/wasm/soljson-v0.8.24.js"),
+        ("tron", "identity", "tron-solc-tvm-0.8.24+commit.7d902c66"),
+        ("tron", "reported_version", "0.7.6+commit.7338295f.Emscripten.clang"),
         ("tron", "sha256", "11" * 32),
         ("tron", "url", "https://example.invalid/soljson.js"),
     ),
@@ -331,7 +336,7 @@ def test_compiler_lock_rejects_every_identity_or_digest_downgrade(
     lock["compilers"][target][field] = replacement
     lock_path = tmp_path / "compiler-lock.json"
     lock_path.write_text(json.dumps(lock), encoding="utf-8")
-    with pytest.raises(corridor.CorridorError, match="exact Solidity 0.8.24"):
+    with pytest.raises(corridor.CorridorError, match="exact Solidity 0.7.4"):
         corridor.load_corridor_config(lock_path)
 
 
@@ -719,10 +724,10 @@ def test_evm_tooling_is_locked_audited_hardhat_without_ganache() -> None:
         encoding="utf-8"
     )
     assert "audit --omit=dev --audit-level=low" in smoke
-    assert "0.8.24+commit.e11b9ed9.Emscripten.clang" in smoke
+    assert "0.7.4+commit.3f05b770.Emscripten.clang" in smoke
     assert "SCCP_CONTRACT_ARTIFACT_MANIFEST" in smoke
-    assert "soljson-v0.8.24+commit.e11b9ed9.js" in smoke
-    assert "11b054b55273ec55f6ab3f445eb0eb2c83a23fed43d10079d34ac3eabe6ed8b1" in smoke
+    assert "soljson-v0.7.4+commit.3f05b770.js" in smoke
+    assert "2b55ed5fec4d9625b6c7b3ab1abd2b7fb7dd2a9c68543bf0323db2c7e2d55af2" in smoke
     assert "ganache" not in smoke.casefold()
 
 
@@ -798,5 +803,5 @@ def test_evm_runtime_is_locked_and_mines_reverting_transactions() -> None:
     assert '"$NPM_BIN" ci --ignore-scripts --no-audit --no-fund' in runner
     assert '"$NPM_BIN" audit --omit=dev --audit-level=low' in runner
     assert "SCCP_EXPECTED_SOLC_BUILD" in runner
-    assert "0.8.24+commit.e11b9ed9.Emscripten.clang" in runner
+    assert "0.7.4+commit.3f05b770.Emscripten.clang" in runner
     assert "--check-source-inputs" in runner

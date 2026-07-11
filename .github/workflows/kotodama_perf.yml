@@ -8,6 +8,11 @@ on:
       - "crates/ivm/Cargo.toml"
       - "crates/ivm/src/**"
       - "crates/ivm_abi/src/**"
+      - "crates/iroha_primitives/**"
+      - "crates/iroha_data_model/**"
+      - "crates/iroha_data_model_derive/**"
+      - "crates/norito/**"
+      - "crates/norito_derive/**"
       - "crates/kotodama_lang/Cargo.toml"
       - "crates/kotodama_lang/src/**"
       - "crates/iroha_core/src/**"
@@ -130,7 +135,7 @@ jobs:
         run: |
           cargo bench -p ivm --bench bench_kotodama -- --save-baseline candidate
           cargo bench -p iroha_core --bench kotodama_runtime_cache -- --save-baseline candidate
-          cargo bench -p iroha_core --bench queries -- typed_core_query_accounts_page_64 --save-baseline candidate
+          cargo bench -p iroha_core --bench queries -- typed_core_query_ --save-baseline candidate
 
       - name: Enforce five-percent ceiling
         working-directory: candidate

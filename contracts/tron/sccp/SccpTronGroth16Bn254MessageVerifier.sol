@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-pragma solidity 0.8.24;
+pragma solidity 0.7.4;
 
 import "../../evm/sccp/SccpGroth16Bn254MessageVerifier.sol";
 
@@ -109,7 +109,7 @@ contract SccpTronGroth16Bn254MessageVerifier is SccpGroth16Bn254MessageVerifier 
         }
     }
 
-    function _chainId() private view returns (uint256 value) {
+    function _chainId() private pure returns (uint256 value) {
         assembly { value := chainid() }
     }
 

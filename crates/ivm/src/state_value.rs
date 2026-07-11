@@ -6,7 +6,10 @@ use iroha_data_model::{
     prelude::{AssetDefinitionId, AssetId, DataSpaceId, DomainId, Name, NftId},
     soracloud::{SoracloudHostRequestEnvelopeV1, SoracloudHostResponseEnvelopeV1},
 };
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{
+    json::Json,
+    numeric_abi::{DecimalValueV1, IntValueV1, QuantityValueV1},
+};
 use ivm_abi::list::ListLayoutV1;
 use ivm_abi::state_value::{
     MAX_STATE_VALUE_RECORD_BYTES, MAX_STATE_VALUE_SCHEMA_BYTES, MAX_STATE_VALUE_WORDS,
@@ -88,9 +91,10 @@ fn decode_schema(
 
 fn pointer_type(kind: StateValueKindV1) -> Option<PointerType> {
     Some(match kind {
-        StateValueKindV1::Int | StateValueKindV1::Bool => return None,
-        StateValueKindV1::U128 => PointerType::NoritoBytes,
-        StateValueKindV1::Amount => PointerType::Amount,
+        StateValueKindV1::Bool => return None,
+        StateValueKindV1::Int => PointerType::Int,
+        StateValueKindV1::Decimal => PointerType::Decimal,
+        StateValueKindV1::Quantity => PointerType::Quantity,
         StateValueKindV1::String | StateValueKindV1::Bytes => PointerType::Blob,
         StateValueKindV1::Json => PointerType::Json,
         StateValueKindV1::AccountId => PointerType::AccountId,
@@ -121,16 +125,15 @@ where
 
 fn validate_pointer_payload(kind: StateValueKindV1, payload: &[u8]) -> Result<(), VMError> {
     match kind {
-        StateValueKindV1::Int | StateValueKindV1::Bool => return Err(VMError::DecodeError),
-        StateValueKindV1::U128 => {
-            let value: Numeric = decode_canonical_norito(payload)?;
-            if value.scale() != 0 || value.try_mantissa_u128().is_none() {
-                return Err(VMError::DecodeError);
-            }
+        StateValueKindV1::Bool => return Err(VMError::DecodeError),
+        StateValueKindV1::Int => {
+            IntValueV1::decode_frame(payload).map_err(|_| VMError::DecodeError)?;
         }
-        StateValueKindV1::Amount => {
-            let value: Numeric = decode_canonical_norito(payload)?;
-            value.validate_amount().map_err(|_| VMError::DecodeError)?;
+        StateValueKindV1::Decimal => {
+            DecimalValueV1::decode_frame(payload).map_err(|_| VMError::DecodeError)?;
+        }
+        StateValueKindV1::Quantity => {
+            QuantityValueV1::decode_frame(payload).map_err(|_| VMError::DecodeError)?;
         }
         StateValueKindV1::String => {
             std::str::from_utf8(payload).map_err(|_| VMError::DecodeError)?;
@@ -364,12 +367,6 @@ fn validate_state_atoms_recursive(
                 }
             }
         }
-        StateValueNodeV1::Leaf(StateValueKindV1::Int) => {
-            if !matches!(atoms.get(*atom_index), Some(StateValueAtomV1::Int(_))) {
-                return Err(VMError::DecodeError);
-            }
-            *atom_index = atom_index.saturating_add(1);
-        }
         StateValueNodeV1::Leaf(StateValueKindV1::Bool) => {
             if !matches!(atoms.get(*atom_index), Some(StateValueAtomV1::Bool(_))) {
                 return Err(VMError::DecodeError);
@@ -599,11 +596,6 @@ fn encode_state_node(
             );
             atoms.push(StateValueAtomV1::List(items));
         }
-        StateValueNodeV1::Leaf(StateValueKindV1::Int) => {
-            let word = *words.get(*word_index).ok_or(VMError::DecodeError)?;
-            *word_index = word_index.saturating_add(1);
-            atoms.push(StateValueAtomV1::Int(word as i64));
-        }
         StateValueNodeV1::Leaf(StateValueKindV1::Bool) => {
             let word = *words.get(*word_index).ok_or(VMError::DecodeError)?;
             *word_index = word_index.saturating_add(1);
@@ -808,15 +800,6 @@ fn plan_state_atoms(
                 elements.push(values);
             }
             planned.push(PlannedStateWord::List { layout, elements });
-        }
-        StateValueNodeV1::Leaf(StateValueKindV1::Int) => {
-            let StateValueAtomV1::Int(value) =
-                atoms.get(*atom_index).ok_or(VMError::DecodeError)?
-            else {
-                return Err(VMError::DecodeError);
-            };
-            *atom_index = atom_index.saturating_add(1);
-            planned.push(PlannedStateWord::Scalar(*value as u64));
         }
         StateValueNodeV1::Leaf(StateValueKindV1::Bool) => {
             let StateValueAtomV1::Bool(value) =
@@ -1267,7 +1250,7 @@ mod tests {
             }],
         };
         let amount_payload = to_bytes(&Numeric::new(125, 2)).expect("Amount payload");
-        let amount = encode_tlv(PointerType::Amount, &amount_payload).expect("Amount TLV");
+        let amount = encode_tlv(PointerType::Quantity, &amount_payload).expect("Amount TLV");
 
         let mut vm = IVM::new(u64::MAX);
         let schema_pointer = install_schema(&mut vm, &schema);
@@ -1300,7 +1283,7 @@ mod tests {
         for item in &decoded {
             assert_eq!(item.len(), 1);
             let amount = vm.validate_tlv(item[0]).expect("decoded Amount TLV");
-            assert_eq!(amount.type_id, PointerType::Amount);
+            assert_eq!(amount.type_id, PointerType::Quantity);
             let value: Numeric = decode_from_bytes(amount.payload).expect("decode Amount");
             assert_eq!(value, Numeric::new(125, 2));
         }
@@ -1344,7 +1327,7 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         let schema_pointer = install_schema(&mut vm, &schema);
         let amount_payload = to_bytes(&Numeric::new(125, 2)).expect("Amount payload");
-        let amount = encode_tlv(PointerType::Amount, &amount_payload).expect("Amount TLV");
+        let amount = encode_tlv(PointerType::Quantity, &amount_payload).expect("Amount TLV");
         let amount = vm.alloc_host_tlv(&amount).expect("install Amount");
         let result_layout = SumLayoutV1::try_new(1, 1).expect("Result layout");
         let option_layout = SumLayoutV1::option(1).expect("Option layout");

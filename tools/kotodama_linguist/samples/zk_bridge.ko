@@ -4,7 +4,7 @@ seiyaku ZkBridge {
         InvalidFlags = 1,
     }
 
-    kotoage fn verify(proof_env: bytes, instruction: bytes) authorize("Admin") {
+    kotoage fn verify(bytes proof_env, bytes instruction) authorize("Admin") {
         let payload = b"ENV-BALLOT";
         let label = br#"proof-bytes"#;
         let vk = b"vk-bytes";

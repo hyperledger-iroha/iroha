@@ -70,7 +70,7 @@ cargo test -p sorafs_car --features cli fetch_command_respects_direct_transports
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
-  --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
+  --provider name=gw-regulated,provider-id=001122...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64
 ```- اسکرپٹ سی ایل آئی کے جھنڈوں اور کلیدی = ویلیو کنفیگریشن فائلوں کا احترام کرتا ہے (`docs/examples/sorafs_direct_mode_smoke.conf` دیکھیں)۔ چلانے سے پہلے پیداواری اقدار کے ساتھ ظاہر ہضم اور فراہم کنندہ کے اشتہاری اندراجات کو آباد کریں۔
 - `--policy` `docs/examples/sorafs_direct_mode_policy.json` پر پہلے سے طے شدہ ہے ، لیکن `sorafs_orchestrator::bindings::config_to_json` کے ذریعہ تیار کردہ کوئی بھی آرکسٹریٹر JSON فراہم کیا جاسکتا ہے۔ سی ایل آئی پالیسی کو `--orchestrator-config=PATH` کے ذریعے قبول کرتا ہے ، جو دستی طور پر جھنڈوں کو ترتیب دیئے بغیر تولیدی رنز کو قابل بناتا ہے۔
 - جب `sorafs_cli` `PATH` میں نہیں ہے تو ، مددگار کریٹ `sorafs_orchestrator` (ریلیز پروفائل) سے مرتب کرتا ہے تاکہ تمباکو نوشی براہ راست بھیجے گئے پلمبنگ کا استعمال کریں۔

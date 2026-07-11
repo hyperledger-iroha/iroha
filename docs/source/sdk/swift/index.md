@@ -270,6 +270,7 @@ let providers = [
     try SorafsGatewayProvider(
         name: "gw-usw2",
         providerIdHex: "<provider hex>",
+        gatewayPublicKeyHex: "<gateway Ed25519 public key hex>",
         baseURL: URL(string: "https://gateway-usw2.example")!,
         streamTokenB64: creds.streamTokenB64
     )

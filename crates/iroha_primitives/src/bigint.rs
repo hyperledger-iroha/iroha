@@ -1,6 +1,6 @@
 //! Bounded variable-length signed integer with two's-complement encoding.
 //!
-//! The type wraps `num_bigint::BigInt`, enforces a 512-bit magnitude cap, and provides
+//! The type wraps `num_bigint::BigInt`, enforces a signed 4,096-bit domain, and provides
 //! Norito and JSON codecs that use a length-prefixed two's-complement byte
 //! representation. Small values stay compact; larger values are allowed until
 //! the hard limit is reached.
@@ -22,11 +22,13 @@ use norito::{
 use num_bigint::BigInt as InnerBigInt;
 use num_traits::{One, Signed, Zero};
 
-/// Maximum number of bits representable by [`BigInt`].
-pub const MAX_BITS: usize = 512;
-// A positive 512-bit magnitude whose top bit is set needs one extra zero sign
-// byte in a minimal two's-complement encoding. The magnitude remains 512 bits.
-const MAX_ENCODED_BYTES: usize = MAX_BITS / 8 + 1;
+/// Width of the signed two's-complement domain represented by [`BigInt`].
+///
+/// Values are in `-2^4095..=2^4095-1`. This is deliberately a signed-width
+/// bound, not a magnitude-bit bound.
+pub const MAX_BITS: usize = 4_096;
+/// Maximum canonical two's-complement payload length.
+pub const MAX_ENCODED_BYTES: usize = MAX_BITS / 8;
 
 /// Errors returned by [`BigInt`] operations.
 #[derive(Debug, Clone, Copy, displaydoc::Display, thiserror::Error, PartialEq, Eq)]
@@ -39,7 +41,7 @@ pub enum BigIntError {
     DivisionByZero,
 }
 
-/// Bounded signed integer with adaptive width (up to 512 bits).
+/// Bounded signed integer with adaptive width in `-2^4095..=2^4095-1`.
 ///
 /// This is a raw integer. [`crate::numeric::Numeric`] uses it as a mantissa
 /// alongside a separate scale value.
@@ -84,7 +86,7 @@ impl BigInt {
         usize::try_from(self.inner.bits()).unwrap_or(usize::MAX)
     }
 
-    /// Compute 10^exp with bound checking.
+    /// Compute `10^exp` with signed-domain checking.
     pub fn pow10(exp: u32) -> Option<Self> {
         let val = InnerBigInt::from(10u8).pow(exp);
         BigInt::from_inner(val).ok()
@@ -99,7 +101,7 @@ impl BigInt {
     ///
     /// # Errors
     /// Returns [`BigIntError::Overflow`] if the decoded value exceeds
-    /// [`MAX_BITS`]. This low-level constructor accepts fixed-width sign
+    /// the signed [`MAX_BITS`]-bit domain. This low-level constructor accepts fixed-width sign
     /// extension; the Norito decoder separately enforces minimal encoding.
     pub fn from_twos_bytes(bytes: &[u8]) -> Result<Self, BigIntError> {
         if bytes.len() > MAX_ENCODED_BYTES {
@@ -111,13 +113,17 @@ impl BigInt {
 
     /// Emit minimal little-endian two's-complement byte representation.
     pub fn to_twos_bytes(&self) -> Vec<u8> {
-        self.inner.to_signed_bytes_le()
+        if self.inner.is_zero() {
+            Vec::new()
+        } else {
+            self.inner.to_signed_bytes_le()
+        }
     }
 
     /// Checked addition.
     ///
     /// # Errors
-    /// Returns [`BigIntError::Overflow`] if the sum exceeds [`MAX_BITS`].
+    /// Returns [`BigIntError::Overflow`] if the sum leaves the signed domain.
     pub fn checked_add(&self, rhs: &Self) -> Result<Self, BigIntError> {
         Self::from_inner(&self.inner + &rhs.inner)
     }
@@ -125,8 +131,7 @@ impl BigInt {
     /// Checked subtraction.
     ///
     /// # Errors
-    /// Returns [`BigIntError::Overflow`] if the difference exceeds
-    /// [`MAX_BITS`].
+    /// Returns [`BigIntError::Overflow`] if the difference leaves the signed domain.
     pub fn checked_sub(&self, rhs: &Self) -> Result<Self, BigIntError> {
         Self::from_inner(&self.inner - &rhs.inner)
     }
@@ -134,7 +139,7 @@ impl BigInt {
     /// Checked multiplication.
     ///
     /// # Errors
-    /// Returns [`BigIntError::Overflow`] if the product exceeds [`MAX_BITS`].
+    /// Returns [`BigIntError::Overflow`] if the product leaves the signed domain.
     pub fn checked_mul(&self, rhs: &Self) -> Result<Self, BigIntError> {
         Self::from_inner(&self.inner * &rhs.inner)
     }
@@ -153,27 +158,82 @@ impl BigInt {
         Ok((Self::from_inner(q)?, Self::from_inner(r)?))
     }
 
-    /// Absolute value.
-    #[must_use]
-    pub fn abs(&self) -> Self {
-        Self {
-            inner: self.inner.abs(),
-        }
+    /// Checked absolute value.
+    ///
+    /// # Errors
+    /// Returns [`BigIntError::Overflow`] for the minimum value, whose positive
+    /// counterpart is outside the signed domain.
+    pub fn checked_abs(&self) -> Result<Self, BigIntError> {
+        Self::from_inner(self.inner.abs())
     }
 
-    /// Negation.
+    /// Checked negation.
+    ///
+    /// # Errors
+    /// Returns [`BigIntError::Overflow`] for the minimum value.
+    pub fn checked_neg(&self) -> Result<Self, BigIntError> {
+        Self::from_inner(-&self.inner)
+    }
+
+    /// Negation modulo `2^4096`, interpreted back in the signed domain.
     #[must_use]
-    pub fn neg(&self) -> Self {
-        Self {
-            inner: -&self.inner,
-        }
+    pub fn wrapping_neg(&self) -> Self {
+        Self::from_wrapped_inner(-&self.inner)
+    }
+
+    /// Addition modulo `2^4096`, interpreted back in the signed domain.
+    #[must_use]
+    pub fn wrapping_add(&self, rhs: &Self) -> Self {
+        Self::from_wrapped_inner(&self.inner + &rhs.inner)
+    }
+
+    /// Subtraction modulo `2^4096`, interpreted back in the signed domain.
+    #[must_use]
+    pub fn wrapping_sub(&self, rhs: &Self) -> Self {
+        Self::from_wrapped_inner(&self.inner - &rhs.inner)
+    }
+
+    /// Multiplication modulo `2^4096`, interpreted back in the signed domain.
+    #[must_use]
+    pub fn wrapping_mul(&self, rhs: &Self) -> Self {
+        Self::from_wrapped_inner(&self.inner * &rhs.inner)
+    }
+
+    /// Convert to `i64` if the value is representable.
+    #[must_use]
+    pub fn try_to_i64(&self) -> Option<i64> {
+        num_traits::ToPrimitive::to_i64(&self.inner)
+    }
+
+    /// Convert to `u64` if the value is non-negative and representable.
+    #[must_use]
+    pub fn try_to_u64(&self) -> Option<u64> {
+        num_traits::ToPrimitive::to_u64(&self.inner)
     }
 
     pub(crate) fn from_inner(inner: InnerBigInt) -> Result<Self, BigIntError> {
-        if inner.bits() > MAX_BITS as u64 {
+        let encoded_len = if inner.is_zero() {
+            0
+        } else {
+            inner.to_signed_bytes_le().len()
+        };
+        if encoded_len > MAX_ENCODED_BYTES {
             return Err(BigIntError::Overflow);
         }
         Ok(Self { inner })
+    }
+
+    fn from_wrapped_inner(inner: InnerBigInt) -> Self {
+        let modulus = InnerBigInt::one() << MAX_BITS;
+        let sign_bit = InnerBigInt::one() << (MAX_BITS - 1);
+        let mut residue = inner % &modulus;
+        if residue.is_negative() {
+            residue += &modulus;
+        }
+        if residue >= sign_bit {
+            residue -= modulus;
+        }
+        Self::from_inner(residue).expect("modulo reduction produces a signed 4096-bit value")
     }
 
     pub(crate) fn inner(&self) -> &InnerBigInt {
@@ -237,12 +297,19 @@ impl FastJsonWrite for BigInt {
 impl JsonDeserialize for BigInt {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = parser.parse_string()?;
-        value
+        let parsed = value
             .parse::<BigInt>()
             .map_err(|err| json::Error::InvalidField {
                 field: "bigint".into(),
                 message: format!("invalid bigint `{value}`: {err}"),
-            })
+            })?;
+        if parsed.to_string() != value {
+            return Err(json::Error::InvalidField {
+                field: "bigint".into(),
+                message: format!("noncanonical bigint `{value}`"),
+            });
+        }
+        Ok(parsed)
     }
 }
 
@@ -366,6 +433,21 @@ mod tests {
     }
 
     #[test]
+    fn minimal_twos_complement_transition_vectors_are_pinned() {
+        for (value, expected) in [
+            (0_i128, &[][..]),
+            (127, &[0x7f][..]),
+            (128, &[0x80, 0x00][..]),
+            (-128, &[0x80][..]),
+            (-129, &[0x7f, 0xff][..]),
+        ] {
+            let integer = BigInt::from_i128(value);
+            assert_eq!(integer.to_twos_bytes(), expected, "value={value}");
+            assert_eq!(BigInt::from_twos_bytes(expected), Ok(integer));
+        }
+    }
+
+    #[test]
     fn checked_add_basic() {
         let a = BigInt::from_i128(10);
         let b = BigInt::from_i128(-3);
@@ -388,7 +470,7 @@ mod tests {
     }
 
     #[test]
-    fn zero_one_sign_abs_neg_and_bit_len() {
+    fn zero_one_sign_checked_abs_neg_and_bit_len() {
         let zero = BigInt::zero();
         assert!(zero.is_zero());
         assert!(!zero.is_negative());
@@ -401,8 +483,8 @@ mod tests {
 
         let negative = BigInt::from_i128(-42);
         assert!(negative.is_negative());
-        assert_eq!(negative.abs(), BigInt::from_i128(42));
-        assert_eq!(negative.neg(), BigInt::from_i128(42));
+        assert_eq!(negative.checked_abs(), Ok(BigInt::from_i128(42)));
+        assert_eq!(negative.checked_neg(), Ok(BigInt::from_i128(42)));
     }
 
     #[test]
@@ -431,29 +513,92 @@ mod tests {
     fn pow10_obeys_bit_limit() {
         assert_eq!(BigInt::pow10(0).unwrap(), BigInt::one());
         assert_eq!(BigInt::pow10(2).unwrap(), BigInt::from_i128(100));
-        assert!(BigInt::pow10(200).is_none());
+        assert!(BigInt::pow10(1_232).is_some());
+        assert!(BigInt::pow10(1_233).is_none());
     }
 
     #[test]
     fn from_twos_bytes_rejects_overflow() {
-        let mut bytes = vec![0_u8; MAX_ENCODED_BYTES];
-        bytes[MAX_ENCODED_BYTES - 1] = 0x01;
+        let mut bytes = vec![0_u8; MAX_ENCODED_BYTES + 1];
+        bytes[MAX_ENCODED_BYTES] = 0x01;
 
-        let err = BigInt::from_twos_bytes(&bytes).expect_err("513-bit value must overflow");
+        let err = BigInt::from_twos_bytes(&bytes).expect_err("4097-bit value must overflow");
         assert_eq!(err, BigIntError::Overflow);
     }
 
     #[test]
-    fn positive_unsigned_512_bit_magnitude_roundtrips() {
-        let mut bytes = vec![0xff_u8; MAX_BITS / 8];
-        bytes.push(0);
-        let value = BigInt::from_twos_bytes(&bytes).expect("unsigned 512-bit maximum must fit");
-        assert_eq!(value.bit_len(), MAX_BITS);
-        assert_eq!(value.to_twos_bytes(), bytes);
+    fn signed_4096_bit_endpoints_roundtrip_and_neighbors_overflow() {
+        let positive_bytes = vec![0xff_u8; MAX_ENCODED_BYTES - 1]
+            .into_iter()
+            .chain([0x7f])
+            .collect::<Vec<_>>();
+        let positive = BigInt::from_twos_bytes(&positive_bytes).expect("signed maximum must fit");
+        assert_eq!(positive.bit_len(), MAX_BITS - 1);
+        assert_eq!(positive.to_twos_bytes(), positive_bytes);
         assert_eq!(
-            value.checked_add(&BigInt::one()),
+            positive.checked_add(&BigInt::one()),
             Err(BigIntError::Overflow)
         );
+
+        let negative_bytes = vec![0_u8; MAX_ENCODED_BYTES - 1]
+            .into_iter()
+            .chain([0x80])
+            .collect::<Vec<_>>();
+        let negative = BigInt::from_twos_bytes(&negative_bytes).expect("signed minimum must fit");
+        assert_eq!(negative.bit_len(), MAX_BITS);
+        assert_eq!(negative.to_twos_bytes(), negative_bytes);
+        assert_eq!(
+            negative.checked_sub(&BigInt::one()),
+            Err(BigIntError::Overflow)
+        );
+        assert_eq!(negative.checked_abs(), Err(BigIntError::Overflow));
+        assert_eq!(negative.checked_neg(), Err(BigIntError::Overflow));
+    }
+
+    #[test]
+    fn wrapping_arithmetic_is_modulo_two_to_4096() {
+        let max: BigInt = ((InnerBigInt::one() << (MAX_BITS - 1)) - 1_u8)
+            .to_string()
+            .parse()
+            .expect("maximum");
+        let min: BigInt = (-(InnerBigInt::one() << (MAX_BITS - 1)))
+            .to_string()
+            .parse()
+            .expect("minimum");
+
+        assert_eq!(max.wrapping_add(&BigInt::one()), min);
+        assert_eq!(min.wrapping_sub(&BigInt::one()), max);
+        assert_eq!(min.wrapping_neg(), min);
+        assert_eq!(
+            max.wrapping_mul(&BigInt::from_i128(2)),
+            BigInt::from_i128(-2)
+        );
+
+        for seed in 0_i128..=256 {
+            let lhs = BigInt::from_i128(seed * seed - 12_345);
+            let rhs = BigInt::from_i128(seed * 97 - 4_321);
+            assert_eq!(
+                lhs.wrapping_add(&rhs),
+                lhs.checked_add(&rhs).expect("small sum")
+            );
+            assert_eq!(
+                lhs.wrapping_sub(&rhs),
+                lhs.checked_sub(&rhs).expect("small difference")
+            );
+            assert_eq!(
+                lhs.wrapping_mul(&rhs),
+                lhs.checked_mul(&rhs).expect("small product")
+            );
+        }
+    }
+
+    #[test]
+    fn signed_conversion_boundaries_are_exact() {
+        assert_eq!(BigInt::from(i64::MIN).try_to_i64(), Some(i64::MIN));
+        assert_eq!(BigInt::from(i64::MAX).try_to_i64(), Some(i64::MAX));
+        assert_eq!(BigInt::from(-1_i64).try_to_u64(), None);
+        assert_eq!(BigInt::from(u64::MAX).try_to_u64(), Some(u64::MAX));
+        assert_eq!(BigInt::from(u64::MAX).try_to_i64(), None);
     }
 
     #[test]
@@ -512,6 +657,16 @@ mod tests {
                 assert!(message.contains("invalid bigint `not-a-number`"));
             }
             other => panic!("unexpected JSON error: {other:?}"),
+        }
+
+        for noncanonical in ["+1", "01", "-0", " 1"] {
+            let source = format!("\"{noncanonical}\"");
+            let error = norito::json::from_str::<BigInt>(&source)
+                .expect_err("alternate bigint spelling must be rejected");
+            assert!(
+                matches!(error, json::Error::InvalidField { ref field, .. } if field == "bigint"),
+                "source={source} error={error:?}"
+            );
         }
     }
 }

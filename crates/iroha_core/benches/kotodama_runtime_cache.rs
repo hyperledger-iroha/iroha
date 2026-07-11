@@ -11,7 +11,9 @@ use ivm::{
     ProgramMetadata, host::DefaultHost, kotodama::compiler::Compiler, pointer_abi::PointerType,
 };
 
-const GAS_LIMIT: u64 = 1_000_000;
+// Timing the cache path must not be coupled to the evolving deterministic
+// instruction/syscall schedule; gas behavior has separate golden tests.
+const GAS_LIMIT: u64 = u64::MAX;
 
 fn benchmark_program() -> Vec<u8> {
     Compiler::new()

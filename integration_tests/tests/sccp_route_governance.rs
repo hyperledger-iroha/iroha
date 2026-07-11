@@ -37,7 +37,7 @@ use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
 use tokio::time::sleep;
 
 const REGISTRY_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(120);
-const TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
+const TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 
 fn word_u64(value: u64) -> [u8; 32] {
     let mut word = [0; 32];

@@ -90,6 +90,7 @@ and HTM retries are applied on top of these base values as noted above.
 | memory | 0x32 | `LOAD128` | 5 |
 | memory | 0x33 | `STORE128` | 5 |
 | memory | 0x34 | `LDLIT` | 1 |
+| memory | 0x35 | `LDI64` | 1 |
 | control | 0x40 | `BEQ` | 1 |
 | control | 0x41 | `BNE` | 1 |
 | control | 0x42 | `BLT` | 1 |

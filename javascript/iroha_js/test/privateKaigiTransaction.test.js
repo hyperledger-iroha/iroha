@@ -129,7 +129,7 @@ test("buildPrivateKaigiFeeSpend delegates to native binding with registry vk byt
       assetDefinitionId: "xor#universal",
       actionHash: Buffer.from("33".repeat(32), "hex"),
       anchorRootHex: "44".repeat(32),
-      feeAmount: "0.1",
+      feeAmount: "1",
       verifyingKey: {
         id: {
           backend: "halo2/ipa",
@@ -150,7 +150,7 @@ test("buildPrivateKaigiFeeSpend delegates to native binding with registry vk byt
     assert.equal(calls[0][1], "xor#universal");
     assert.equal(Buffer.from(calls[0][2]).toString("hex"), "33".repeat(32));
     assert.equal(calls[0][3], "44".repeat(32));
-    assert.equal(calls[0][4], "0.1");
+    assert.equal(calls[0][4], "1");
     assert.equal(calls[0][5], "halo2/ipa");
     assert.equal(calls[0][6], "halo2/ipa:tiny-add");
     assert.equal(Buffer.from(calls[0][7]).toString("utf8"), "fixture-vk");

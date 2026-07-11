@@ -1,9 +1,9 @@
 // Representative liquidity-pool seiyaku for Kotodama grammar validation.
 seiyaku PoolManager {
-    state PoolAccount: StateMap<Name, AccountId>;
-    state ReserveA: StateMap<Name, Amount>;
-    state ReserveB: StateMap<Name, Amount>;
-    fn min_value(a: Amount, b: Amount) -> Amount {
+    state StateMap<Name, AccountId> PoolAccount;
+    state StateMap<Name, quantity> ReserveA;
+    state StateMap<Name, quantity> ReserveB;
+    fn min_value(quantity a, quantity b) -> quantity {
         if (a < b) {
             return a;
         } else {
@@ -11,10 +11,10 @@ seiyaku PoolManager {
         }
     }
 
-    kotoage fn quote_or_deposit(trader: AccountId, pool: Name, amount_a: Amount, amount_b: Amount) -> Amount authorize(
+    kotoage fn quote_or_deposit(AccountId trader, Name pool, quantity amount_a, quantity amount_b) -> quantity authorize(
         "Admin"
     ) {
-        let zero = Amount::from_i64(0);
+        let zero = 0;
         let reserve_a = ReserveA.ensure(pool, zero);
         let reserve_b = ReserveB.ensure(pool, zero);
         let pool_account = PoolAccount.get(pool).unwrap_or(trader);

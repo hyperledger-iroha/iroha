@@ -1,9 +1,10 @@
 {
-  "bls_domain": "bls-iroha2:npos-sumeragi:v1",
-  "chain": "809574f5-fee7-5e69-bfcf-52451e42d50f",
+  "bls_domain": "bls-iroha2:npos-sumeragi:v2",
+  "chain": "fc56984b-2be7-431d-840e-21514d1883f0",
   "chain_discriminant": 369,
-  "consensus_fingerprint": "0xc731aafd4ac091f98b789331c6a16bcb3afb3349651d33213745435e15a85dce",
+  "consensus_fingerprint": "0xde1e3f96aab9a7b9bb812f6e4b05f24ab1ff9bb3696abf23f3e116dd5cd67789",
   "consensus_mode": "Npos",
+  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"ReedSolomon16"},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024},"nexus_amx_context_hash":"57049A6B7513F0CF202A734ECFA20CDF9685F78AF3C8FE9F67C93D6B3BC0E67D"},
   "crypto": {
     "allowed_curve_ids": [
       1,
@@ -222,13 +223,13 @@
           "memory": 55000000
         },
         "sumeragi": {
-          "block_time_ms": 100,
+          "block_time_ms": 1000,
           "collectors_k": 3,
           "collectors_redundant_send_r": 2,
-          "commit_time_ms": 100,
+          "commit_time_ms": 1000,
           "da_enabled": true,
           "max_clock_drift_ms": 1000,
-          "min_finality_ms": 100
+          "min_finality_ms": 1000
         },
         "transaction": {
           "ivm_bytecode_size": 4194304,
@@ -320,15 +321,15 @@
           }
         },
         "sumeragi": {
-          "block_time_ms": 100,
-          "commit_time_ms": 100,
-          "min_finality_ms": 100
+          "block_time_ms": 1000,
+          "commit_time_ms": 1000,
+          "min_finality_ms": 1000
         }
       },
       "topology": []
     }
   ],
   "wire_proto_versions": [
-    1
+    2
   ]
 }

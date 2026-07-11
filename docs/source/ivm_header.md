@@ -51,16 +51,18 @@ Validation
   zero bytes, exactly the alignment length implied by the literal header,
   entries, and data.
 - `LTLB` contains a 16-byte header (`"LTLB"`, `count: u32`, `post_pad: u32`,
-  `data_len: u32`), followed by `count` little-endian `u64` offsets relative to
-  the `LTLB` marker, then the typed-TLV data and canonical zero padding. ABI v1
-  permits at most 65,536 entries. The loader requires every offset to point
-  at an exact envelope boundary in the packed typed-data range and requires
-  offsets to be strictly increasing (duplicates and reordered aliases are
-  rejected). It validates that stream and its checksums in linear time and
-  rejects any `LDLIT` whose unsigned 16-bit index is out of range. Pointer-ABI
-  code provenance accepts only these exact loader-validated literal starts;
-  instruction bytes, section headers, and interior literal addresses are not
-  pointer objects.
+  `data_len: u32`), followed by `count` little-endian `u64` descriptors, the
+  packed literal data, and canonical zero padding. A descriptor's high byte is
+  its kind (`0` = pointer TLV, `1` = signed `i64`) and its low 56 bits are an
+  offset relative to the `LTLB` marker. ABI v1 permits at most 65,536 entries.
+  Descriptor targets must begin at the first data byte, be strictly increasing,
+  and partition the complete data range without gaps or aliases. Pointer entries
+  must be one exact, checksum-valid ABI-v1 TLV; scalar entries must be exactly
+  eight little-endian bytes. The loader rejects unknown kinds, malformed
+  payloads, out-of-range indices, and `LDLIT`/`LDI64` kind confusion before
+  execution. Pointer provenance accepts only exact validated pointer-entry
+  starts; scalar values, instruction bytes, headers, and interior addresses are
+  never pointer objects.
 - Generic `mode` parsing permits only known bits: `ZK`, `VECTOR`, `HTM`
   (unknown bits are rejected). Deployable contracts permit only `ZK` and
   `VECTOR`; `HTM` is rejected.
@@ -83,9 +85,10 @@ The following policy summary is generated from the implementation and should not
 ### ABI Hashes (generated)
 The following table is generated from the implementation and lists canonical `abi_hash` values for supported policies.
 
-The hash binds the sorted allowed syscall numbers, their canonical argument
-and return signatures, each syscall's conservative host-access class, and the
-sorted allowed pointer-ABI type IDs. Gas prices are deliberately excluded;
+The hash binds indexed-literal opcode/kind/layout semantics, the sorted allowed
+syscall numbers, their canonical argument and return signatures, each syscall's
+conservative host-access class, and the sorted allowed pointer-ABI type IDs.
+Gas prices are deliberately excluded;
 `ivm::gas::schedule_hash()` commits to the canonical gas schedule separately.
 
 <!-- BEGIN GENERATED ABI HASHES -->
@@ -94,7 +97,7 @@ sorted allowed pointer-ABI type IDs. Gas prices are deliberately excluded;
 | ABI v1 | b23c852dd485262beb79efd35cc9dfd69bd548a84239c77053b98a565839b7d3 |
 <!-- END GENERATED ABI HASHES -->
 
-- ABI v1 is the sole first-release policy. Its `LDLIT`, `JAL`, `JMP`, and
+- ABI v1 is the sole first-release policy. Its `LDLIT`, `LDI64`, `JAL`, `JMP`, and
   `JALS` extensions are unconditional rather than feature-gated. A future
   post-release encoding break requires an explicit protocol/ABI upgrade; it
   must not silently reinterpret ABI-v1 opcode space.

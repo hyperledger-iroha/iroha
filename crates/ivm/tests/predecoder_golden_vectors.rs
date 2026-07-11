@@ -60,6 +60,7 @@ fn decode_stream_matches_expected_words_and_lengths() {
 fn decode_stream_preserves_indexed_literal_and_compact_transfer_words() {
     let expected = [
         encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 12, 0x3456),
+        encoding::wide::encode_literal(instruction::wide::memory::LDI64, 13, 0xabcd),
         encoding::wide::encode_offset24(instruction::wide::control::JALS, -2),
     ];
     let mut code = Vec::new();

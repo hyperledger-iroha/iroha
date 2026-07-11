@@ -98,7 +98,11 @@ Gas enforcement (CoreHost)
   the parent VM; child execution gas is consumed by the child VM.
 - Native and anonymous escrow bridge syscalls charge `G_escrow + bytes`.
 - Soracloud runtime syscalls charge `G_soracloud + request bytes + response bytes`.
-- ZK_VERIFY syscalls reuse the confidential verification gas schedule (base + proof size).
+- ZK verification charges `250_000` gas for every proof plus `5` gas for
+  every encoded request byte. Batch requests additionally charge the bounded
+  per-proof archive/status overhead. A request may contain at most 1 MiB of
+  encoded payload, and `ZK_VERIFY_BATCH` accepts at most 16 proofs. These
+  constants and caps are part of the hashed ABI-v1 gas schedule.
 - GET_PUBLIC_INPUT charges a base plus a per-byte cost based on the returned TLV length.
 - `JSON_OBJECT` helper — Gas: `G_json + bytes`.
 - `JSON_GET_*` helpers and their direct variants return compiler-owned
@@ -529,7 +533,7 @@ node enforces that policy unconditionally.
 | 0x65 | ZK_VOTE_GET_TALLY | r10=&NoritoBytes(VoteGetTallyRequest) | ptr (NoritoBytes in INPUT) | asset:gas/G_vote_get@ivm.core/v2 + bytes |
 | 0x66 | VRF_VERIFY | r10=&NoritoBytes(VrfVerifyRequest) | r10=ptr (&Blob(32-byte output)), r11=status:u64 | asset:gas/G_verify@ivm.core/v2 + bytes |
 | 0x67 | VRF_VERIFY_BATCH | r10=&NoritoBytes(VrfVerifyBatchRequest) | r10=ptr (&NoritoBytes(Vec<[u8;32]>)), r11=status:u64, r12=fail_index?:u64 | asset:gas/G_verify@ivm.core/v2 + bytes |
-| 0x68 | ZK_VERIFY_BATCH | r10=&NoritoBytes(Vec<OpenVerifyEnvelope>) | r10=ptr (&NoritoBytes(Vec<u8> statuses)), r11=status:u64 | asset:gas/G_verify@ivm.core/v2 + bytes |
+| 0x68 | ZK_VERIFY_BATCH | r10=&NoritoBytes(Vec<OpenVerifyEnvelope>) | r10=ptr (&NoritoBytes(Vec<u8> statuses)), r11=status:u64 | 250,000 per proof + 5 per encoded byte + bounded per-proof archive/status bytes |
 | 0x69 | NUMERIC_FROM_INT | r10=value:i64 | r10=ptr (&NoritoBytes(Numeric)) | asset:gas/G_numeric@ivm.core/v2 |
 | 0x6A | NUMERIC_TO_INT | r10=&NoritoBytes(Numeric) | r10=value:i64 | asset:gas/G_numeric@ivm.core/v2 |
 | 0x6B | NUMERIC_ADD | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | asset:gas/G_numeric@ivm.core/v2 |
@@ -747,7 +751,7 @@ Codec helpers
 - Null inputs: DECODE_INT, JSON_DECODE, NAME_DECODE, and POINTER_FROM_NORITO accept `r10=0` and return `r10=0` without error.
 - All other pointer-typed syscalls require explicit non-zero pointers; there is no implicit last-input fallback.
 ZK (Halo2 OpenVerify)
-- 0x68 ZK_VERIFY_BATCH — Args: `r10=&NoritoBytes(Vec<iroha_data_model::zk::OpenVerifyEnvelope>)` → Return: `r10=ptr (&NoritoBytes(Vec<u8> statuses))`, `r11=status:u64`, `r12=first_fail_index|u64::MAX` — Gas: G_verify + bytes
+- 0x68 ZK_VERIFY_BATCH — Args: `r10=&NoritoBytes(Vec<iroha_data_model::zk::OpenVerifyEnvelope>)` → Return: `r10=ptr (&NoritoBytes(Vec<u8> statuses))`, `r11=status:u64`, `r12=first_fail_index|u64::MAX` — Gas: 250,000 per proof + 5 per encoded byte + bounded per-proof archive/status bytes; 1 MiB encoded-payload and 16-proof hard caps
   - `DefaultHost` returns per-item statuses (`1 = verified`, `0 = not verified`) after standalone Halo2 IPA/Pasta verification with the batch transcript label.
   - `CoreHost` returns the same status-vector shape and runs the same outer-envelope binding plus full backend verification path as the single-item ZK verify syscalls.
   - Top-level request failures (decode, disabled backend, oversized batch) return `r10=0` and set `r11` (`ERR_DECODE`, `ERR_DISABLED`, `ERR_BACKEND`, `ERR_BATCH`).

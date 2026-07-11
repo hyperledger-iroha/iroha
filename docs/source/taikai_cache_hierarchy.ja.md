@@ -191,7 +191,7 @@ orchestrator JSON を使用できる。例:
 sorafs_cli fetch \
   --plan=fixtures/taikai_plan.json \
   --manifest-id=deadbeef... \
-  --provider name=edge-a,provider-id=...,base-url=...,stream-token=... \
+  --provider name=edge-a,provider-id=...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://edge-a.example/,stream-token=... \
   --taikai-cache-config=configs/taikai-cache/hot-warm-warmup.json \
   --output=/tmp/payload.car
 ```

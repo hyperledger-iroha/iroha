@@ -15,7 +15,7 @@ seiyaku DetailAndTransfer {
             source: from,
             destination: to,
             asset_definition: asset,
-            amount: Amount::from_i64(10),
+            amount: 10,
             dataspace: DataSpaceId::parse("0"),
         );
     }

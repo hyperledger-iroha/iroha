@@ -2,6 +2,7 @@ import { keccak_256 } from "@noble/hashes/sha3";
 
 import { AccountAddress } from "./address.js";
 import { blake2b256 } from "./blake2b.js";
+import { validateNoritoFrame } from "./norito.js";
 
 /** First-release SCCP protocol domains. Tags 3 and 4 are retired and reserved. */
 export const SCCP_DOMAIN_SORA = 0;
@@ -45,10 +46,15 @@ const SORA_FINALITY_ANCHOR_PREFIX = new TextEncoder().encode(
 const PUBLIC_SIGNAL_SCHEMA_HASH =
   "7567439F41173D6745A3D51923CB70371ACC7D66F23CEFB4100D6D5D7A432CBB";
 const SORA_TAIRA_CHAIN_ID_HASH =
-  "3F139C4B2A31457994D17BE5CE922D87FC702939116359F0E47314AB36A7F588";
+  "CF1CFC0F57B0BFA4C21882A9870317A1F4812F86533897095E3944BE34C5BBA7";
 const TAIRA_XOR_ASSET_DEFINITION_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
+const TAIRA_I105_DISCRIMINANT = 369;
 const MAX_WIRE_BYTES = 16 * 1024 * 1024;
 const MAX_DESTINATION_ARTIFACT_BYTES = MAX_WIRE_BYTES + 64 * 1024;
+const DESTINATION_PROOF_NORITO_TYPE =
+  "iroha_sccp::SccpGroth16Bn254ProofArtifactV1";
+const NATIVE_MESSAGE_PROOF_NORITO_TYPE =
+  "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1";
 const MAX_U64 = 0xffff_ffff_ffff_ffffn;
 const MAX_U128 = 0xffff_ffff_ffff_ffff_ffff_ffff_ffff_ffffn;
 const CLOSED_DOMAINS = new Set([
@@ -316,6 +322,17 @@ function canonicalBase64(value, label, { maximumBytes = MAX_WIRE_BYTES } = {}) {
   if (decoded.length === 0 || decoded.length > maximumBytes) {
     throw new TypeError(`${label} is outside its byte-size bound`);
   }
+  return decoded;
+}
+
+function canonicalNoritoBase64(value, label, typeName, maximumBytes) {
+  const decoded = canonicalBase64(value, label, { maximumBytes });
+  validateNoritoFrame(decoded, {
+    context: label,
+    expectedTypeName: typeName,
+    expectedPaddingLength: 0,
+    requireNonEmptyPayload: true,
+  });
   return decoded;
 }
 
@@ -712,7 +729,7 @@ function canonicalNetworkBytes(network) {
   let identity;
   switch (network.profile) {
     case "sora-taira":
-      identity = Uint8Array.from(Buffer.from("809574f5fee75e69bfcf52451e42d50f", "hex"));
+      identity = Uint8Array.from(Buffer.from("fc56984b2be7431d840e21514d1883f0", "hex"));
       break;
     case "ethereum-mainnet":
       identity = unsignedLittleEndian(1, 8, `${network.profile}.chain_id`);
@@ -2080,7 +2097,7 @@ export function normalizeSccpProofRequest(value) {
 
 function validateAuthority(value, label) {
   const authority = canonicalText(value, label, 512);
-  AccountAddress.fromAccountId(authority);
+  AccountAddress.fromAccountId(authority, TAIRA_I105_DISCRIMINANT);
   return authority;
 }
 
@@ -2120,9 +2137,12 @@ export function normalizeBridgeProofSubmitPayload(value) {
     "bridge proof submit",
     new Set(["authority", "destination_proof_b64"]),
   );
-  canonicalBase64(record.destination_proof_b64, "bridge proof submit.destination_proof_b64", {
-    maximumBytes: MAX_DESTINATION_ARTIFACT_BYTES,
-  });
+  canonicalNoritoBase64(
+    record.destination_proof_b64,
+    "bridge proof submit.destination_proof_b64",
+    DESTINATION_PROOF_NORITO_TYPE,
+    MAX_DESTINATION_ARTIFACT_BYTES,
+  );
   const creationTime =
     record.creation_time_ms === undefined
       ? undefined
@@ -2154,7 +2174,12 @@ export function normalizeBridgeMessageSubmitPayload(value) {
     "bridge message submit",
     new Set(["authority", "native_proof_b64"]),
   );
-  canonicalBase64(record.native_proof_b64, "bridge message submit.native_proof_b64");
+  canonicalNoritoBase64(
+    record.native_proof_b64,
+    "bridge message submit.native_proof_b64",
+    NATIVE_MESSAGE_PROOF_NORITO_TYPE,
+    MAX_WIRE_BYTES,
+  );
   const creationTime =
     record.creation_time_ms === undefined
       ? undefined

@@ -8,7 +8,6 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use iroha_primitives::numeric::Numeric;
 
 use super::{
     abi_schema::{json_construction_schema, state_value_kind_for_type, state_value_schema},
@@ -102,8 +101,9 @@ fn runtime_value_word_types(ty: &Type) -> Vec<Type> {
 fn runtime_word_is_pointer(ty: &Type) -> bool {
     matches!(
         semantic::resolve_struct_type(ty),
-        Type::FixedU128
-            | Type::Amount
+        Type::Int
+            | Type::Decimal
+            | Type::Quantity
             | Type::String
             | Type::Bytes
             | Type::Json
@@ -180,10 +180,12 @@ pub struct BasicBlock {
 /// Nominal wide-numeric ABI family selected by semantic typing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WideNumericKind {
-    /// Scale-zero unsigned `u128`, encoded as `NoritoBytes`.
-    U128,
-    /// Canonical non-negative decimal `Amount`.
-    Amount,
+    /// Signed adaptive-width integer.
+    Int,
+    /// Exact bounded decimal.
+    Decimal,
+    /// Nominal non-negative quantity.
+    Quantity,
 }
 
 /// Non-control-flow instructions.
@@ -226,27 +228,39 @@ pub enum Instr {
         dest: Temp,
         operand: Temp,
     },
-    /// Convert a non-negative int (i64) to a Numeric NoritoBytes payload pointer (scale = 0).
-    NumericFromInt {
-        dest: Temp,
-        value: Temp,
-        kind: WideNumericKind,
-    },
-    /// Convert a Numeric NoritoBytes payload pointer (scale = 0, unsigned) to an int (i64).
-    NumericToInt {
-        dest: Temp,
-        value: Temp,
-        kind: WideNumericKind,
-    },
-    /// Convert a scale-zero `u128` pointer into a nominal `Amount` pointer.
-    AmountFromU128 {
+    /// Convert an internal signed IVM scalar into a source `int` pointer.
+    IntFromScalar {
         dest: Temp,
         value: Temp,
     },
-    /// Numeric unary negation using a NoritoBytes payload.
+    /// Convert a source `int` pointer to an internal signed IVM scalar.
+    IntToScalar {
+        dest: Temp,
+        value: Temp,
+    },
+    /// Convert between source numeric pointer domains.
+    NumericConvert {
+        dest: Temp,
+        value: Temp,
+        source: WideNumericKind,
+        destination: WideNumericKind,
+    },
+    /// Recoverable conversion that preserves the ABI numeric-fault status.
+    NumericTryConvert {
+        dest: Temp,
+        value: Temp,
+        source: WideNumericKind,
+        destination: WideNumericKind,
+    },
+    /// Capture the status register immediately after a recoverable numeric syscall.
+    NumericStatus {
+        dest: Temp,
+    },
+    /// Checked source numeric negation.
     NumericNeg {
         dest: Temp,
         value: Temp,
+        kind: WideNumericKind,
     },
     /// Numeric arithmetic using NoritoBytes payloads.
     NumericBinary {
@@ -254,7 +268,9 @@ pub enum Instr {
         op: BinaryOp,
         left: Temp,
         right: Temp,
-        kind: WideNumericKind,
+        left_kind: WideNumericKind,
+        right_kind: WideNumericKind,
+        result_kind: WideNumericKind,
     },
     /// Numeric comparison using NoritoBytes payloads (result is 0/1).
     NumericCompare {
@@ -1266,8 +1282,12 @@ pub enum DataRefKind {
     ProofBlob,
     SoracloudRequest,
     SoracloudResponse,
-    /// Canonical non-negative decimal amount.
-    Amount,
+    /// Canonical signed adaptive-width integer.
+    Int,
+    /// Canonical exact decimal.
+    Decimal,
+    /// Canonical non-negative quantity.
+    Quantity,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1291,7 +1311,9 @@ fn pointer_kind_for_type(ty: &Type) -> Option<DataRefKind> {
         Type::ProofBlob => Some(DataRefKind::ProofBlob),
         Type::SoracloudRequest => Some(DataRefKind::SoracloudRequest),
         Type::SoracloudResponse => Some(DataRefKind::SoracloudResponse),
-        Type::Amount => Some(DataRefKind::Amount),
+        Type::Int => Some(DataRefKind::Int),
+        Type::Decimal => Some(DataRefKind::Decimal),
+        Type::Quantity => Some(DataRefKind::Quantity),
         Type::String | Type::Bytes => Some(DataRefKind::Blob),
         _ => None,
     }
@@ -1306,8 +1328,9 @@ fn is_pointer_eq_type(ty: &Type) -> bool {
 
 fn wide_numeric_kind_for_type(ty: &Type) -> Option<WideNumericKind> {
     match semantic::resolve_struct_type(ty) {
-        Type::FixedU128 => Some(WideNumericKind::U128),
-        Type::Amount => Some(WideNumericKind::Amount),
+        Type::Int => Some(WideNumericKind::Int),
+        Type::Decimal => Some(WideNumericKind::Decimal),
+        Type::Quantity => Some(WideNumericKind::Quantity),
         _ => None,
     }
 }
@@ -3741,8 +3764,8 @@ fn entrypoint_value_kind(
     let resolved = semantic::resolve_struct_type(ty);
     Ok(match resolved {
         Type::Int => Kind::Int,
-        Type::FixedU128 => Kind::U128,
-        Type::Amount => Kind::Amount,
+        Type::Decimal => Kind::Decimal,
+        Type::Quantity => Kind::Quantity,
         Type::Bool => Kind::Bool,
         Type::String => Kind::String,
         Type::Json => Kind::Json,
@@ -3943,7 +3966,9 @@ fn collect_expr_reads(expr: &TypedExpr, reads: &mut BTreeSet<String>) {
             collect_expr_reads(left, reads);
             collect_expr_reads(right, reads);
         }
-        semantic::ExprKind::Unary { expr, .. } | semantic::ExprKind::NumericCast { expr } => {
+        semantic::ExprKind::Unary { expr, .. }
+        | semantic::ExprKind::NumericCast { expr }
+        | semantic::ExprKind::NumericTryCast { expr } => {
             collect_expr_reads(expr, reads);
         }
         semantic::ExprKind::Conditional {
@@ -4027,9 +4052,8 @@ fn collect_expr_reads(expr: &TypedExpr, reads: &mut BTreeSet<String>) {
         semantic::ExprKind::Ident(name) => {
             reads.insert(name.clone());
         }
-        semantic::ExprKind::Number(_)
-        | semantic::ExprKind::Decimal(_)
-        | semantic::ExprKind::AmountLiteral { .. }
+        semantic::ExprKind::IntLiteral(_)
+        | semantic::ExprKind::DecimalLiteral { .. }
         | semantic::ExprKind::Bool(_)
         | semantic::ExprKind::String(_)
         | semantic::ExprKind::Bytes(_)
@@ -4928,14 +4952,9 @@ fn lower_expr_as_int(
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
     let value = lower_expr(ctx, expr, vars);
-    if semantic::is_wide_numeric_type(&expr.ty) {
+    if matches!(semantic::resolve_struct_type(&expr.ty), Type::Int) {
         let out = ctx.new_temp();
-        ctx.current_instr(Instr::NumericToInt {
-            dest: out,
-            value,
-            kind: wide_numeric_kind_for_type(&expr.ty)
-                .expect("wide numeric expression has a nominal ABI kind"),
-        });
+        ctx.current_instr(Instr::IntToScalar { dest: out, value });
         out
     } else {
         value
@@ -4948,23 +4967,13 @@ fn lower_expr_as_numeric(
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
     let value = lower_expr(ctx, expr, vars);
-    match wide_numeric_kind_for_type(&expr.ty) {
-        Some(WideNumericKind::Amount) => value,
-        Some(WideNumericKind::U128) => {
-            let out = ctx.new_temp();
-            ctx.current_instr(Instr::AmountFromU128 { dest: out, value });
-            out
-        }
-        None => {
-            let out = ctx.new_temp();
-            ctx.current_instr(Instr::NumericFromInt {
-                dest: out,
-                value,
-                kind: WideNumericKind::Amount,
-            });
-            out
-        }
+    if !matches!(semantic::resolve_struct_type(&expr.ty), Type::Quantity) {
+        ctx.record_error(format!(
+            "ledger quantity boundary received {}; use quantity::try_from_decimal and handle its status first",
+            semantic::type_name(&expr.ty)
+        ));
     }
+    value
 }
 
 /// Select a source builtin's direct host operation exclusively through its
@@ -5285,36 +5294,7 @@ fn lower_transfer_batch_call(
             tuple,
             index: 3,
         });
-        let amount = if let Type::Tuple(items) = semantic::resolve_struct_type(&entry.ty) {
-            match items.get(3).and_then(wide_numeric_kind_for_type) {
-                Some(WideNumericKind::Amount) => amount_raw,
-                Some(WideNumericKind::U128) => {
-                    let out = ctx.new_temp();
-                    ctx.current_instr(Instr::AmountFromU128 {
-                        dest: out,
-                        value: amount_raw,
-                    });
-                    out
-                }
-                None => {
-                    let out = ctx.new_temp();
-                    ctx.current_instr(Instr::NumericFromInt {
-                        dest: out,
-                        value: amount_raw,
-                        kind: WideNumericKind::Amount,
-                    });
-                    out
-                }
-            }
-        } else {
-            let out = ctx.new_temp();
-            ctx.current_instr(Instr::NumericFromInt {
-                dest: out,
-                value: amount_raw,
-                kind: WideNumericKind::Amount,
-            });
-            out
-        };
+        let amount = amount_raw;
         ctx.current_instr(Instr::TransferBatchAsset {
             from,
             to,
@@ -5389,15 +5369,20 @@ fn lower_surface_builtin_call(
             let value = lower_expr(ctx, &args[0], vars);
             if matches!(
                 wide_numeric_kind_for_type(&args[0].ty),
-                Some(WideNumericKind::Amount)
+                Some(WideNumericKind::Quantity)
             ) {
-                ctx.record_error("Amount is non-negative and cannot be negated".into());
+                ctx.record_error("quantity is non-negative and cannot be negated".into());
                 let dest = ctx.new_temp();
                 ctx.current_instr(Instr::Const { dest, value: 0 });
                 return dest;
             }
             let dest = ctx.new_temp();
-            ctx.current_instr(Instr::NumericNeg { dest, value });
+            ctx.current_instr(Instr::NumericNeg {
+                dest,
+                value,
+                kind: wide_numeric_kind_for_type(&args[0].ty)
+                    .expect("numeric negation operand has an ABI kind"),
+            });
             dest
         }
         Builtin::JsonObject => {
@@ -5634,11 +5619,12 @@ fn lower_surface_builtin_call(
         Builtin::NumericToInt => {
             let value = lower_expr(ctx, &args[0], vars);
             let dest = ctx.new_temp();
-            ctx.current_instr(Instr::NumericToInt {
+            ctx.current_instr(Instr::NumericConvert {
                 dest,
                 value,
-                kind: wide_numeric_kind_for_type(&args[0].ty)
-                    .expect("numeric_to_int operand has a nominal ABI kind"),
+                source: wide_numeric_kind_for_type(&args[0].ty)
+                    .expect("numeric conversion operand has an ABI kind"),
+                destination: WideNumericKind::Int,
             });
             dest
         }
@@ -5655,8 +5641,12 @@ fn lower_surface_builtin_call(
                 op: numeric_binary_builtin_op(builtin).expect("numeric binary builtin op"),
                 left,
                 right,
-                kind: wide_numeric_kind_for_type(&args[0].ty)
-                    .expect("numeric binary operand has a nominal ABI kind"),
+                left_kind: wide_numeric_kind_for_type(&args[0].ty)
+                    .expect("numeric binary left operand has an ABI kind"),
+                right_kind: wide_numeric_kind_for_type(&args[1].ty)
+                    .expect("numeric binary right operand has an ABI kind"),
+                result_kind: wide_numeric_kind_for_type(&args[0].ty)
+                    .expect("numeric binary result has an ABI kind"),
             });
             dest
         }
@@ -5680,14 +5670,14 @@ fn lower_surface_builtin_call(
             dest
         }
         Builtin::WrappingNeg => {
-            let operand = lower_expr_as_int(ctx, &args[0], vars);
+            let operand = lower_expr(ctx, &args[0], vars);
             let dest = ctx.new_temp();
             ctx.current_instr(Instr::WrappingNeg { dest, operand });
             dest
         }
         builtin @ (Builtin::WrappingAdd | Builtin::WrappingSub | Builtin::WrappingMul) => {
-            let left = lower_expr_as_int(ctx, &args[0], vars);
-            let right = lower_expr_as_int(ctx, &args[1], vars);
+            let left = lower_expr(ctx, &args[0], vars);
+            let right = lower_expr(ctx, &args[1], vars);
             let op = match builtin {
                 Builtin::WrappingAdd => BinaryOp::Add,
                 Builtin::WrappingSub => BinaryOp::Sub,
@@ -6106,7 +6096,8 @@ fn lower_surface_builtin_call(
             let acc = lower_expr(ctx, &args[0], vars);
             let asset = lower_expr(ctx, &args[1], vars);
             let amt = match args[2].kind() {
-                semantic::ExprKind::Number(0) if !semantic::is_wide_numeric_type(&args[2].ty) => {
+                semantic::ExprKind::IntLiteral(value)
+                    if value.is_zero() && !semantic::is_wide_numeric_type(&args[2].ty) => {
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Const { dest: t, value: 0 });
                     t
@@ -7230,9 +7221,8 @@ fn named_argument_requires_capture(argument: &TypedExpr) -> bool {
     }
     !matches!(
         argument.kind(),
-        semantic::ExprKind::Number(_)
-            | semantic::ExprKind::Decimal(_)
-            | semantic::ExprKind::AmountLiteral { .. }
+        semantic::ExprKind::IntLiteral(_)
+            | semantic::ExprKind::DecimalLiteral { .. }
             | semantic::ExprKind::Bool(_)
             | semantic::ExprKind::String(_)
             | semantic::ExprKind::Bytes(_)
@@ -7381,34 +7371,20 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             &expr.ty,
             vars,
         ),
-        semantic::ExprKind::Number(n) => {
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: *n });
-            t
-        }
-        semantic::ExprKind::Decimal(raw) => {
-            let t = ctx.new_temp();
-            match raw.parse::<u128>() {
-                Ok(value) => {
-                    let hex = hex::encode(Numeric::new(value, 0).encode());
-                    ctx.current_instr(Instr::DataRef {
-                        dest: t,
-                        kind: DataRefKind::NoritoBytes,
-                        value: format!("0x{hex}"),
-                    });
-                }
-                Err(_) => {
-                    ctx.record_error(format!("u128 literal `{raw}` is outside 0..={}", u128::MAX));
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                }
-            }
-            t
-        }
-        semantic::ExprKind::AmountLiteral { value, .. } => {
+        semantic::ExprKind::IntLiteral(n) => {
             let t = ctx.new_temp();
             ctx.current_instr(Instr::DataRef {
                 dest: t,
-                kind: DataRefKind::Amount,
+                kind: DataRefKind::Int,
+                value: n.to_string(),
+            });
+            t
+        }
+        semantic::ExprKind::DecimalLiteral { value, .. } => {
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::DataRef {
+                dest: t,
+                kind: DataRefKind::Decimal,
                 value: value.to_string(),
             });
             t
@@ -7458,51 +7434,20 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             }
         }
         semantic::ExprKind::Unary { op, expr: inner } => {
-            if matches!(op, UnaryOp::Neg)
-                && matches!(semantic::resolve_struct_type(&expr.ty), Type::Int)
-            {
-                match crate::checked_arithmetic::evaluate_checked_i64(expr) {
-                    Ok(Some(value)) => {
-                        let dest = ctx.new_temp();
-                        ctx.current_instr(Instr::Const { dest, value });
-                        return dest;
-                    }
-                    Err(error) => {
-                        ctx.record_error(error.to_string());
-                        let dest = ctx.new_temp();
-                        ctx.current_instr(Instr::Const { dest, value: 0 });
-                        return dest;
-                    }
-                    Ok(None) => {}
-                }
-            }
             let v = lower_expr(ctx, inner, vars);
             if matches!(op, UnaryOp::Neg) && semantic::is_wide_numeric_type(&inner.ty) {
                 let kind = wide_numeric_kind_for_type(&inner.ty)
                     .expect("wide numeric unary operand has a nominal ABI kind");
-                if kind == WideNumericKind::Amount {
-                    ctx.record_error("Amount is non-negative and cannot be negated".into());
+                if kind == WideNumericKind::Quantity {
+                    ctx.record_error("quantity is non-negative and cannot be negated".into());
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Const { dest: t, value: 0 });
                     return t;
                 }
-                let zero_int = ctx.new_temp();
-                ctx.current_instr(Instr::Const {
-                    dest: zero_int,
-                    value: 0,
-                });
-                let zero_numeric = ctx.new_temp();
-                ctx.current_instr(Instr::NumericFromInt {
-                    dest: zero_numeric,
-                    value: zero_int,
-                    kind,
-                });
                 let t = ctx.new_temp();
-                ctx.current_instr(Instr::NumericBinary {
+                ctx.current_instr(Instr::NumericNeg {
                     dest: t,
-                    op: BinaryOp::Sub,
-                    left: zero_numeric,
-                    right: v,
+                    value: v,
                     kind,
                 });
                 t
@@ -7520,78 +7465,90 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             let v = lower_expr(ctx, inner, vars);
             let src_ty = semantic::resolve_struct_type(&inner.ty);
             let dst_ty = semantic::resolve_struct_type(&expr.ty);
-            if semantic::is_wide_numeric_type(&dst_ty) && matches!(src_ty, Type::Int) {
+            if src_ty != dst_ty
+                && semantic::is_wide_numeric_type(&src_ty)
+                && semantic::is_wide_numeric_type(&dst_ty)
+            {
                 let t = ctx.new_temp();
-                ctx.current_instr(Instr::NumericFromInt {
+                ctx.current_instr(Instr::NumericConvert {
                     dest: t,
                     value: v,
-                    kind: wide_numeric_kind_for_type(&dst_ty)
-                        .expect("wide numeric cast target has a nominal ABI kind"),
-                });
-                return t;
-            }
-            if matches!(dst_ty, Type::Amount) && matches!(src_ty, Type::FixedU128) {
-                let t = ctx.new_temp();
-                ctx.current_instr(Instr::AmountFromU128 { dest: t, value: v });
-                return t;
-            }
-            if matches!(dst_ty, Type::Int) && semantic::is_wide_numeric_type(&src_ty) {
-                let t = ctx.new_temp();
-                ctx.current_instr(Instr::NumericToInt {
-                    dest: t,
-                    value: v,
-                    kind: wide_numeric_kind_for_type(&src_ty)
-                        .expect("wide numeric cast source has a nominal ABI kind"),
+                    source: wide_numeric_kind_for_type(&src_ty)
+                        .expect("numeric cast source has an ABI kind"),
+                    destination: wide_numeric_kind_for_type(&dst_ty)
+                        .expect("numeric cast destination has an ABI kind"),
                 });
                 return t;
             }
             v
         }
+        semantic::ExprKind::NumericTryCast { expr: inner } => {
+            let value = lower_expr(ctx, inner, vars);
+            let source = wide_numeric_kind_for_type(&inner.ty)
+                .expect("recoverable numeric cast source has an ABI kind");
+            let Type::Result(ok_type, error_type) = semantic::resolve_struct_type(&expr.ty) else {
+                ctx.record_error("internal error: recoverable numeric cast has non-Result type".into());
+                return emit_i64_const(ctx, 0);
+            };
+            if semantic::resolve_struct_type(&error_type) != Type::Int {
+                ctx.record_error("internal error: numeric fault payload must be int".into());
+                return emit_i64_const(ctx, 0);
+            }
+            let destination = wide_numeric_kind_for_type(&ok_type)
+                .expect("recoverable numeric cast destination has an ABI kind");
+            let converted = ctx.new_temp();
+            let status = ctx.new_temp();
+            ctx.current_instr(Instr::NumericTryConvert {
+                dest: converted,
+                value,
+                source,
+                destination,
+            });
+            ctx.current_instr(Instr::NumericStatus { dest: status });
+            let zero = emit_i64_const(ctx, 0);
+            let succeeded = ctx.new_temp();
+            ctx.current_instr(Instr::Binary {
+                dest: succeeded,
+                op: BinaryOp::Eq,
+                left: status,
+                right: zero,
+            });
+            let success = ctx.new_block();
+            let failure = ctx.new_block();
+            let end = ctx.new_block();
+            let result = ctx.new_temp();
+            ctx.finish_current(Terminator::Branch {
+                cond: succeeded,
+                then_bb: success,
+                else_bb: failure,
+            });
+
+            ctx.start_block(success);
+            let ok = emit_sum_value(ctx, &expr.ty, 1, Some(converted));
+            ctx.current_instr(Instr::Copy {
+                dest: result,
+                src: ok,
+            });
+            ctx.finish_current(Terminator::Jump(end));
+
+            ctx.start_block(failure);
+            let fault = ctx.new_temp();
+            ctx.current_instr(Instr::IntFromScalar {
+                dest: fault,
+                value: status,
+            });
+            let error = emit_sum_value(ctx, &expr.ty, 0, Some(fault));
+            ctx.current_instr(Instr::Copy {
+                dest: result,
+                src: error,
+            });
+            ctx.finish_current(Terminator::Jump(end));
+            ctx.start_block(end);
+            result
+        }
         semantic::ExprKind::Binary { op, left, right } => {
             if matches!(op, BinaryOp::And | BinaryOp::Or) {
                 return lower_short_circuit_bool(ctx, *op, left, right, vars);
-            }
-            if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
-                && matches!(semantic::resolve_struct_type(&expr.ty), Type::Int)
-            {
-                match crate::checked_arithmetic::evaluate_checked_i64(expr) {
-                    Ok(Some(value)) => {
-                        let dest = ctx.new_temp();
-                        ctx.current_instr(Instr::Const { dest, value });
-                        return dest;
-                    }
-                    Err(error) => {
-                        ctx.record_error(error.to_string());
-                        let dest = ctx.new_temp();
-                        ctx.current_instr(Instr::Const { dest, value: 0 });
-                        return dest;
-                    }
-                    Ok(None) => {}
-                }
-            }
-            if matches!(
-                op,
-                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
-            ) && matches!(semantic::resolve_struct_type(&expr.ty), Type::Amount)
-            {
-                match crate::checked_arithmetic::evaluate_checked_amount(expr) {
-                    Ok(Some(value)) => {
-                        let dest = ctx.new_temp();
-                        ctx.current_instr(Instr::DataRef {
-                            dest,
-                            kind: DataRefKind::Amount,
-                            value: value.to_string(),
-                        });
-                        return dest;
-                    }
-                    Err(error) => {
-                        ctx.record_error(error.to_string());
-                        let dest = ctx.new_temp();
-                        ctx.current_instr(Instr::Const { dest, value: 0 });
-                        return dest;
-                    }
-                    Ok(None) => {}
-                }
             }
             let l = lower_expr(ctx, left, vars);
             let r = lower_expr(ctx, right, vars);
@@ -7608,9 +7565,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     op: *op,
                     left: l,
                     right: r,
-                    kind: wide_numeric_kind_for_type(&left.ty)
-                        .or_else(|| wide_numeric_kind_for_type(&right.ty))
-                        .expect("wide numeric binary expression has a nominal ABI kind"),
+                    left_kind: wide_numeric_kind_for_type(&left.ty)
+                        .expect("numeric binary left operand has an ABI kind"),
+                    right_kind: wide_numeric_kind_for_type(&right.ty)
+                        .expect("numeric binary right operand has an ABI kind"),
+                    result_kind: wide_numeric_kind_for_type(&expr.ty)
+                        .expect("numeric binary result has an ABI kind"),
                 });
                 return t;
             }
@@ -9688,7 +9648,7 @@ mod tests {
     fn list_layout_flattens_nested_sum_handles_to_one_word() {
         let nested = Type::List(
             Box::new(Type::Option(Box::new(Type::Result(
-                Box::new(Type::Amount),
+                Box::new(Type::Quantity),
                 Box::new(Type::Bool),
             )))),
             64,
@@ -9699,7 +9659,7 @@ mod tests {
         assert_eq!(layout.element_words(), 1);
         assert_eq!(layout.allocation_bytes(), Ok((2 + 64) * 8));
 
-        let enumerated = Type::List(Box::new(Type::Tuple(vec![Type::Int, Type::Amount])), 4);
+        let enumerated = Type::List(Box::new(Type::Tuple(vec![Type::Int, Type::Quantity])), 4);
         let (_, layout) = list_layout_for_type(&enumerated).expect("pair List layout");
         assert_eq!(layout.element_words(), 2);
     }
@@ -9944,7 +9904,7 @@ mod tests {
     fn entrypoint_list_schema_is_recursive_and_capacity_bound() {
         use ivm_abi::entrypoint::EntrypointValueTypeNodeV1 as Node;
 
-        let ty = Type::List(Box::new(Type::Option(Box::new(Type::Amount))), 64);
+        let ty = Type::List(Box::new(Type::Option(Box::new(Type::Quantity))), 64);
         let schema = entrypoint_return_schema("items", Some(&ty))
             .expect("build List return schema")
             .expect("non-unit return schema");
@@ -11903,7 +11863,7 @@ fn either(value: bool) -> bool { return value || rhs(); }
                 matches!(
                     instruction,
                     Instr::DataRef {
-                        kind: DataRefKind::Amount,
+                        kind: DataRefKind::Quantity,
                         value,
                         ..
                     } if value == "0.125"
@@ -11981,7 +11941,7 @@ fn either(value: bool) -> bool { return value || rhs(); }
                 matches!(
                     instruction,
                     Instr::DataRef {
-                        kind: DataRefKind::Amount,
+                        kind: DataRefKind::Quantity,
                         value,
                         ..
                     } if value == "0.12"

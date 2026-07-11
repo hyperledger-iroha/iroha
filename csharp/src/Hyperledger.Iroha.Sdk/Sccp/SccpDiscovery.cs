@@ -204,7 +204,7 @@ internal static class SccpExactParser
     private const ulong JsonSafeIntegerMaximum = (1UL << 53) - 1;
     private static readonly byte[] Bn254BaseField = Convert.FromHexString(
         "30644E72E131A029B85045B68181585D97816A916871CA8D3C208C16D87CFD47");
-    private static readonly byte[] TairaChainId = Convert.FromHexString("809574F5FEE75E69BFCF52451E42D50F");
+    private static readonly byte[] TairaChainId = Convert.FromHexString("FC56984B2BE7431D840E21514D1883F0");
     private static readonly string[] PublicSignalLabels =
     [
         "sccp:groth16-bn254:signal:message-id:v1",

@@ -2,7 +2,7 @@
 // Loops from `a` up to `b` and
 // uses different builtins depending on the condition.
 seiyaku Example {
-    kotoage fn control(a: i64, b: i64) authorize("Entry") {
+    kotoage fn control(int a, int b) authorize("Entry") {
         for offset in range(64) {
             let i = a + offset;
             if i > b {

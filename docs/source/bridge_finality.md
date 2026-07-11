@@ -41,9 +41,11 @@ commitment and justification:
   payload (reuses the commit-certificate signatures).
 - `block_header`, `commit_certificate`: same as the basic proof.
 
-Current placeholder: `mmr_root`/`mmr_peaks` are derived by recomputing a
-block-hash MMR in memory; inclusion proofs are not yet returned. Clients can
-still verify the same hash via the commitment payload today.
+The generic bundle is a root-checkpoint API: `mmr_root`/`mmr_peaks` are
+derived by recomputing the block-hash MMR in memory, and the endpoint does not
+claim to return an MMR membership path. SCCP does not consume this optional
+generic MMR surface; its typed Taira proof carries the exact governed message
+Merkle branch and Sumeragi-v2 finality anchor.
 
 MMR peaks are ordered left to right. Recompute `mmr_root` by bagging peaks
 from right to left: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
@@ -80,11 +82,10 @@ or invalid PoPs, duplicate/out-of-range signers, invalid signatures, and
 unexpected epochs before counting quorum so light clients can reuse a single
 verifier.
 
-Cryptographic verification requires BLS support. SCCP builds without BLS do
-not downgrade to structural-only acceptance: proof-controlled SORA aggregate
-verification returns no success and BSC native finality reports
-`BlsUnavailable`. A structurally well-formed certificate is never a substitute
-for PoP and aggregate-signature verification.
+BLS PoP, quorum, and aggregate-signature verification is unconditional in
+every SCCP build. There is no feature-selected structural-only mode and no
+`BlsUnavailable` runtime outcome. A structurally well-formed certificate is
+never a substitute for cryptographic verification.
 
 ## Reference verifier
 

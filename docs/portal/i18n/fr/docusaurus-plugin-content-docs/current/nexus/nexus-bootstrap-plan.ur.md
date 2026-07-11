@@ -31,7 +31,7 @@ description : Nexus pour un cluster de validateurs et un cluster de validation S
 - Une configuration d'amorçage (`configs/nexus/bootstrap/*.toml`) et des paramètres de consensus définis## نیٹ ورک ماحول
 - Pour les environnements Nexus, les préfixes et les préfixes suivants :
 - **Sora Nexus (réseau principal)** - Le préfixe `nexus` et la gouvernance canonique ainsi que les services de ferroutage SoraFS/SoraNet sont disponibles (ID de chaîne `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - mise en scène du préfixe `testus` et configuration du réseau principal, tests d'intégration et validation préalable à la version miroir (chaîne UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - mise en scène du préfixe `testus` et configuration du réseau principal, tests d'intégration et validation préalable à la version miroir (chaîne UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - L'environnement, les fichiers Genesis, les clés de gouvernance et les empreintes d'infrastructure. Testus a déployé les déploiements SoraFS/SoraNet pour un terrain d'essai et Nexus pour promouvoir l'environnement.
 - Pipelines CI/CD pour Testus pour déployer des tests de fumée automatisés et des contrôles pour Nexus pour une promotion manuelle
 - Bundles de configuration de référence `configs/soranexus/nexus/` (réseau principal) et `configs/soranexus/testus/` (testnet) et `config.toml`, `genesis.json` et Torii Répertoires d'admission شامل ہیں۔## مرحلہ 1 - Révision de la configuration

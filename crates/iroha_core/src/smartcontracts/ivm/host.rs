@@ -24,7 +24,10 @@ use crate::telemetry::StateTelemetry;
 use crate::{
     executor::{ContractEntrypointAuthorizationSnapshot, ContractRuntimeExecutionContext},
     smartcontracts::isi::{
-        query::{IvmQueryValidator, QueryCountMode, QueryLimits, ValidQueryRequest},
+        query::{
+            IvmQueryValidator, QueryCountMode, QueryExecutionBudget, QueryExecutionStats,
+            QueryLimits, ValidQueryRequest,
+        },
         triggers::{TRIGGER_ENABLED_METADATA_KEY, set::SetReadOnly},
     },
     state::{
@@ -159,14 +162,14 @@ struct CachedProofEntry {
     status: &'static str,
 }
 
-const PUBLIC_INPUT_GAS_BASE_DEFAULT: u64 = 16;
-const PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT: u64 = 1;
-const CREATE_NFTS_ALL_GAS: u64 = 16;
-const SMARTCONTRACT_DEPTH_GAS: u64 = 16;
-const AXT_GAS_BASE: u64 = 16;
-const AXT_GAS_PER_BYTE: u64 = 1;
-const AXT_VERIFY_GAS_BASE: u64 = 64;
-const AXT_VERIFY_GAS_PER_BYTE: u64 = 1;
+const PUBLIC_INPUT_GAS_BASE_DEFAULT: u64 = ivm::gas::HOST_BYTE_GAS_BASE;
+const PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT: u64 = ivm::gas::SYSCALL_GAS_PER_BYTE;
+const CREATE_NFTS_ALL_GAS: u64 = ivm::gas::HOST_BYTE_GAS_BASE;
+const SMARTCONTRACT_DEPTH_GAS: u64 = ivm::gas::HOST_BYTE_GAS_BASE;
+const AXT_GAS_BASE: u64 = ivm::gas::HOST_BYTE_GAS_BASE;
+const AXT_GAS_PER_BYTE: u64 = ivm::gas::SYSCALL_GAS_PER_BYTE;
+const AXT_VERIFY_GAS_BASE: u64 = ivm::gas::HOST_VERIFY_GAS_BASE;
+const AXT_VERIFY_GAS_PER_BYTE: u64 = ivm::gas::SYSCALL_GAS_PER_BYTE;
 const TRIGGER_EVENT_PUBLIC_INPUT_KEY: &str = "trigger_event_json";
 
 #[derive(Debug, Clone, crate::json_macros::JsonDeserialize)]
@@ -422,6 +425,9 @@ pub struct CoreHostImpl<QS> {
     fastpq_batch_entries: Option<Vec<TransferAssetBatchEntry>>,
     // Snapshot of accounts available for simple iteration helpers used by samples.
     accounts_snapshot: Arc<Vec<AccountId>>,
+    // Optional owned contract registry snapshot for nested resolution without a live query view.
+    bound_contract_records_by_subject:
+        BTreeMap<AccountId, crate::smartcontracts::code::BoundContractRecord>,
     // Bounded immutable artifact cache shared with the outer runtime pool.
     prepared_contract_cache: PreparedContractCache,
     // Live read-only state view used to execute queries during IVM runs.
@@ -451,18 +457,21 @@ pub struct CoreHostImpl<QS> {
     durable_state_authorizations: BTreeMap<Name, Option<ContractEntrypointAuthorizationSnapshot>>,
     // Access log for durable-state reads/writes (prepass).
     state_access_log: ivm::host::AccessLog,
+    // Per-call undo records. Each journal stores only keys first touched while
+    // it is active, so nesting does not clone the complete durable overlay.
+    nested_contract_call_journals: Vec<NestedContractCallJournal>,
     // Active atomic cross-transaction (AXT) envelope state.
-    axt_state: Option<axt::HostAxtState>,
+    axt_state: Option<Arc<axt::HostAxtState>>,
     // Completed AXT envelopes awaiting export into WSV/block artifacts.
     completed_axt: Vec<axt::HostAxtState>,
     // Snapshots of streaming session capabilities advertised by the VM.
     transport_caps_snapshot: Option<TransportCapabilityResolutionSnapshot>,
     negotiated_caps_snapshot: Option<CapabilityFlags>,
     // ZK-proof verification state (gates ISI mutations)
-    zk_verified_transfer: VecDeque<[u8; 32]>,
-    zk_verified_unshield: VecDeque<[u8; 32]>,
-    zk_verified_ballot: VecDeque<[u8; 32]>,
-    zk_verified_tally: VecDeque<[u8; 32]>,
+    zk_verified_transfer: Arc<VecDeque<[u8; 32]>>,
+    zk_verified_unshield: Arc<VecDeque<[u8; 32]>>,
+    zk_verified_ballot: Arc<VecDeque<[u8; 32]>>,
+    zk_verified_tally: Arc<VecDeque<[u8; 32]>>,
     // Snapshots for state-read syscalls
     zk_roots: BTreeMap<AssetDefinitionId, Vec<[u8; 32]>>,
     zk_elections: BTreeMap<String, (bool, Vec<u64>)>,
@@ -486,18 +495,18 @@ pub struct CoreHostImpl<QS> {
     // Depth used to compute the explicit empty-tree root when the above is enabled
     zk_empty_root_depth: u8,
     // Last seen verify envelope hashes per ZK op type (from pointer‑ABI TLVs)
-    zk_last_env_hash_transfer: VecDeque<[u8; 32]>,
-    zk_last_env_hash_unshield: VecDeque<[u8; 32]>,
-    zk_last_env_hash_ballot: VecDeque<[u8; 32]>,
-    zk_last_env_hash_tally: VecDeque<[u8; 32]>,
+    zk_last_env_hash_transfer: Arc<VecDeque<[u8; 32]>>,
+    zk_last_env_hash_unshield: Arc<VecDeque<[u8; 32]>>,
+    zk_last_env_hash_ballot: Arc<VecDeque<[u8; 32]>>,
+    zk_last_env_hash_tally: Arc<VecDeque<[u8; 32]>>,
     // Cached AXT policy snapshot (if available) for telemetry and richer errors.
     axt_policy_snapshot: Option<AxtPolicySnapshot>,
     // Bounded replay ledger hydrated from WSV.
-    axt_replay_ledger: BTreeMap<AxtHandleReplayKey, AxtReplayRecord>,
+    axt_replay_ledger: Arc<BTreeMap<AxtHandleReplayKey, AxtReplayRecord>>,
     // Slot for which cached AXT proofs were verified.
     axt_proof_cache_slot: Option<u64>,
     // Cache of per-dataspace proofs validated in the current slot.
-    axt_proof_cache: BTreeMap<DataSpaceId, CachedProofEntry>,
+    axt_proof_cache: Arc<BTreeMap<DataSpaceId, CachedProofEntry>>,
     // Last observed AXT rejection for structured error reporting.
     last_axt_reject: Option<AxtRejectContext>,
     // Static analysis of the currently executing program for AMX budgeting.
@@ -636,9 +645,8 @@ pub trait QueryStateExecute {
     where
         Self: Sized;
 
-    /// Execute a query request with a budget for post-offset items.
+    /// Execute a query request with a deterministic item-and-byte budget.
     ///
-    /// Implementations may ignore the budget if they do not support early aborts.
     /// Returns the query response and processed item count or a VM error.
     ///
     /// # Errors
@@ -648,14 +656,10 @@ pub trait QueryStateExecute {
         self,
         authority: &AccountId,
         request: QueryRequest,
-        budget_items: Option<u64>,
+        budget: Option<QueryExecutionBudget>,
     ) -> Result<QueryExecutionResult, ivm::VMError>
     where
-        Self: Sized,
-    {
-        let _ = budget_items;
-        self.execute_query(authority, request)
-    }
+        Self: Sized;
 
     /// Execute one singular query while representing a missing entity as
     /// `None` instead of a VM failure.
@@ -668,7 +672,8 @@ pub trait QueryStateExecute {
         self,
         authority: &AccountId,
         request: QueryRequest,
-    ) -> Result<(Option<SingularQueryOutputBox>, u64), ivm::VMError>
+        budget: Option<QueryExecutionBudget>,
+    ) -> Result<(Option<SingularQueryOutputBox>, QueryExecutionStats), ivm::VMError>
     where
         Self: Sized;
 
@@ -682,7 +687,7 @@ pub trait QueryStateExecute {
         self,
         authority: &AccountId,
         request: QueryRequest,
-        budget_items: Option<u64>,
+        budget: Option<QueryExecutionBudget>,
     ) -> Result<QueryExecutionResult, ivm::VMError>
     where
         Self: Sized;
@@ -701,26 +706,27 @@ impl QueryStateExecute for QueryStateRef<'_, '_, '_> {
         self,
         authority: &AccountId,
         request: QueryRequest,
-        budget_items: Option<u64>,
+        budget: Option<QueryExecutionBudget>,
     ) -> Result<QueryExecutionResult, ivm::VMError> {
-        QueryStateRef::execute_query_with_budget(self, authority, request, budget_items)
+        QueryStateRef::execute_query_with_budget(self, authority, request, budget)
     }
 
     fn execute_optional_singular_query(
         self,
         authority: &AccountId,
         request: QueryRequest,
-    ) -> Result<(Option<SingularQueryOutputBox>, u64), ivm::VMError> {
-        QueryStateRef::execute_optional_singular_query(self, authority, request)
+        budget: Option<QueryExecutionBudget>,
+    ) -> Result<(Option<SingularQueryOutputBox>, QueryExecutionStats), ivm::VMError> {
+        QueryStateRef::execute_optional_singular_query(self, authority, request, budget)
     }
 
     fn execute_bounded_query_with_budget(
         self,
         authority: &AccountId,
         request: QueryRequest,
-        budget_items: Option<u64>,
+        budget: Option<QueryExecutionBudget>,
     ) -> Result<QueryExecutionResult, ivm::VMError> {
-        QueryStateRef::execute_bounded_query_with_budget(self, authority, request, budget_items)
+        QueryStateRef::execute_bounded_query_with_budget(self, authority, request, budget)
     }
 }
 
@@ -788,6 +794,8 @@ pub struct QueryExecutionResult {
     pub response: QueryResponse,
     /// Number of items processed during query execution.
     pub processed_items: u64,
+    /// Encoded bytes traversed or returned during query execution.
+    pub processed_bytes: u64,
 }
 
 struct HostQueryValidator<'a, R: StateReadOnly> {
@@ -823,7 +831,7 @@ fn execute_query_on_state_with_count_mode<R: StateReadOnly>(
     state: &R,
     authority: &AccountId,
     request: QueryRequest,
-    budget_items: Option<u64>,
+    budget: Option<QueryExecutionBudget>,
     count_mode: QueryCountMode,
 ) -> Result<QueryExecutionResult, ivm::VMError> {
     let mut validator = HostQueryValidator { authority, state };
@@ -834,12 +842,13 @@ fn execute_query_on_state_with_count_mode<R: StateReadOnly>(
     .with_count_mode(count_mode);
     let validated = ValidQueryRequest::validate_for_ivm(request, &mut validator, limits)
         .map_err(|err| map_query_validation_error(&err))?;
-    let (response, processed_items) = validated
-        .execute_ephemeral_with_stats(state.query_handle(), state, authority, budget_items)
+    let (response, stats) = validated
+        .execute_ephemeral_with_stats(state.query_handle(), state, authority, budget)
         .map_err(|err| map_query_execution_error(&err))?;
     Ok(QueryExecutionResult {
         response,
-        processed_items,
+        processed_items: stats.processed_items(),
+        processed_bytes: stats.processed_bytes(),
     })
 }
 
@@ -847,28 +856,22 @@ fn execute_query_on_state_with_budget<R: StateReadOnly>(
     state: &R,
     authority: &AccountId,
     request: QueryRequest,
-    budget_items: Option<u64>,
+    budget: Option<QueryExecutionBudget>,
 ) -> Result<QueryExecutionResult, ivm::VMError> {
-    execute_query_on_state_with_count_mode(
-        state,
-        authority,
-        request,
-        budget_items,
-        QueryCountMode::Exact,
-    )
+    execute_query_on_state_with_count_mode(state, authority, request, budget, QueryCountMode::Exact)
 }
 
 fn execute_bounded_query_on_state_with_budget<R: StateReadOnly>(
     state: &R,
     authority: &AccountId,
     request: QueryRequest,
-    budget_items: Option<u64>,
+    budget: Option<QueryExecutionBudget>,
 ) -> Result<QueryExecutionResult, ivm::VMError> {
     execute_query_on_state_with_count_mode(
         state,
         authority,
         request,
-        budget_items,
+        budget,
         QueryCountMode::Bounded,
     )
 }
@@ -877,7 +880,8 @@ fn execute_optional_singular_query_on_state<R: StateReadOnly>(
     state: &R,
     authority: &AccountId,
     request: QueryRequest,
-) -> Result<(Option<SingularQueryOutputBox>, u64), ivm::VMError> {
+    budget: Option<QueryExecutionBudget>,
+) -> Result<(Option<SingularQueryOutputBox>, QueryExecutionStats), ivm::VMError> {
     if !matches!(request, QueryRequest::Singular(_)) {
         return Err(ivm::VMError::DecodeError);
     }
@@ -886,16 +890,14 @@ fn execute_optional_singular_query_on_state<R: StateReadOnly>(
     let validated = match ValidQueryRequest::validate_for_ivm(request, &mut validator, limits) {
         Ok(validated) => validated,
         Err(ValidationFail::QueryFailed(error)) if is_missing_query_error(&error) => {
-            return Ok((None, 0));
+            return Ok((None, QueryExecutionStats::default()));
         }
         Err(error) => return Err(map_query_validation_error(&error)),
     };
-    match validated.execute_ephemeral_with_stats(state.query_handle(), state, authority, Some(1)) {
-        Ok((QueryResponse::Singular(output), processed_items)) => {
-            Ok((Some(output), processed_items))
-        }
+    match validated.execute_ephemeral_with_stats(state.query_handle(), state, authority, budget) {
+        Ok((QueryResponse::Singular(output), stats)) => Ok((Some(output), stats)),
         Ok((QueryResponse::Iterable(_), _)) => Err(ivm::VMError::DecodeError),
-        Err(error) if is_missing_query_error(&error) => Ok((None, 0)),
+        Err(error) if is_missing_query_error(&error) => Ok((None, QueryExecutionStats::default())),
         Err(error) => Err(map_query_execution_error(&error)),
     }
 }
@@ -964,20 +966,20 @@ where
         self,
         authority: &AccountId,
         request: QueryRequest,
-        budget_items: Option<u64>,
+        budget: Option<QueryExecutionBudget>,
     ) -> Result<QueryExecutionResult, ivm::VMError> {
         match self {
             QueryStateRef::View(view) => {
-                execute_query_on_state_with_budget(view, authority, request, budget_items)
+                execute_query_on_state_with_budget(view, authority, request, budget)
             }
             QueryStateRef::QueryView(view) => {
-                execute_query_on_state_with_budget(view, authority, request, budget_items)
+                execute_query_on_state_with_budget(view, authority, request, budget)
             }
             QueryStateRef::Block(block) => {
-                execute_query_on_state_with_budget(block, authority, request, budget_items)
+                execute_query_on_state_with_budget(block, authority, request, budget)
             }
             QueryStateRef::Transaction(tx) => {
-                execute_query_on_state_with_budget(tx, authority, request, budget_items)
+                execute_query_on_state_with_budget(tx, authority, request, budget)
             }
         }
     }
@@ -986,19 +988,20 @@ where
         self,
         authority: &AccountId,
         request: QueryRequest,
-    ) -> Result<(Option<SingularQueryOutputBox>, u64), ivm::VMError> {
+        budget: Option<QueryExecutionBudget>,
+    ) -> Result<(Option<SingularQueryOutputBox>, QueryExecutionStats), ivm::VMError> {
         match self {
             QueryStateRef::View(view) => {
-                execute_optional_singular_query_on_state(view, authority, request)
+                execute_optional_singular_query_on_state(view, authority, request, budget)
             }
             QueryStateRef::QueryView(view) => {
-                execute_optional_singular_query_on_state(view, authority, request)
+                execute_optional_singular_query_on_state(view, authority, request, budget)
             }
             QueryStateRef::Block(block) => {
-                execute_optional_singular_query_on_state(block, authority, request)
+                execute_optional_singular_query_on_state(block, authority, request, budget)
             }
             QueryStateRef::Transaction(tx) => {
-                execute_optional_singular_query_on_state(tx, authority, request)
+                execute_optional_singular_query_on_state(tx, authority, request, budget)
             }
         }
     }
@@ -1007,20 +1010,20 @@ where
         self,
         authority: &AccountId,
         request: QueryRequest,
-        budget_items: Option<u64>,
+        budget: Option<QueryExecutionBudget>,
     ) -> Result<QueryExecutionResult, ivm::VMError> {
         match self {
             QueryStateRef::View(view) => {
-                execute_bounded_query_on_state_with_budget(view, authority, request, budget_items)
+                execute_bounded_query_on_state_with_budget(view, authority, request, budget)
             }
             QueryStateRef::QueryView(view) => {
-                execute_bounded_query_on_state_with_budget(view, authority, request, budget_items)
+                execute_bounded_query_on_state_with_budget(view, authority, request, budget)
             }
             QueryStateRef::Block(block) => {
-                execute_bounded_query_on_state_with_budget(block, authority, request, budget_items)
+                execute_bounded_query_on_state_with_budget(block, authority, request, budget)
             }
             QueryStateRef::Transaction(tx) => {
-                execute_bounded_query_on_state_with_budget(tx, authority, request, budget_items)
+                execute_bounded_query_on_state_with_budget(tx, authority, request, budget)
             }
         }
     }
@@ -1112,6 +1115,22 @@ pub trait QueryStateRefOps {
         &self,
         alias: &ContractAlias,
     ) -> Result<ContractInstance, ivm::VMError>;
+    /// Resolve an authenticated contract identity, runtime subject, and artifact length without
+    /// copying its manifest or bytecode.
+    fn bound_contract_dispatch_identity_by_address(
+        &self,
+        contract_address: &ContractAddress,
+    ) -> Option<(
+        crate::smartcontracts::code::BoundContractIdentity,
+        AccountId,
+        usize,
+    )>;
+    /// Prepare a content-addressed cache miss while borrowing deployed bytecode in place.
+    fn prepare_contract_cache_miss(
+        &self,
+        cache: &PreparedContractCache,
+        code_hash: Hash,
+    ) -> Result<Arc<ivm::PreparedContract>, ivm::VMError>;
     /// Resolve subscription context for a trigger identifier.
     ///
     /// # Errors
@@ -1204,10 +1223,238 @@ pub trait QueryStateRefOps {
 }
 
 fn durable_state_payload_len(stored: &[u8]) -> Result<usize, ivm::VMError> {
-    match ivm::pointer_abi::validate_tlv_bytes(stored) {
-        Ok(tlv) if tlv.type_id == PointerType::NoritoBytes => Ok(tlv.payload.len()),
-        Ok(_) => Err(ivm::VMError::NoritoInvalid),
-        Err(_) => Ok(stored.len()),
+    ivm::host::validate_state_value_payload_len(stored.len())?;
+    Ok(stored.len())
+}
+
+struct LocalDurableStateMerge<'a> {
+    base: std::iter::Peekable<std::collections::btree_map::Range<'a, Name, Vec<u8>>>,
+    overlay: std::iter::Peekable<std::collections::btree_map::Range<'a, Name, Option<Vec<u8>>>>,
+}
+
+impl<'a> LocalDurableStateMerge<'a> {
+    fn new(
+        base: &'a BTreeMap<Name, Vec<u8>>,
+        overlay: &'a BTreeMap<Name, Option<Vec<u8>>>,
+        prefix: &str,
+    ) -> Self {
+        Self {
+            base: base
+                .range::<str, _>((Bound::Included(prefix), Bound::Unbounded))
+                .peekable(),
+            overlay: overlay
+                .range::<str, _>((Bound::Included(prefix), Bound::Unbounded))
+                .peekable(),
+        }
+    }
+
+    fn peek_key(&mut self) -> Option<&'a Name> {
+        match (self.base.peek(), self.overlay.peek()) {
+            (Some((base, _)), Some((overlay, _))) => {
+                Some(if *base <= *overlay { *base } else { *overlay })
+            }
+            (Some((base, _)), None) => Some(*base),
+            (None, Some((overlay, _))) => Some(*overlay),
+            (None, None) => None,
+        }
+    }
+
+    fn next(&mut self) -> Option<(&'a Name, bool)> {
+        let ordering = match (self.base.peek(), self.overlay.peek()) {
+            (Some((base, _)), Some((overlay, _))) => base.cmp(overlay),
+            (Some(_), None) => core::cmp::Ordering::Less,
+            (None, Some(_)) => core::cmp::Ordering::Greater,
+            (None, None) => return None,
+        };
+        match ordering {
+            core::cmp::Ordering::Less => {
+                let (key, _) = self.base.next().expect("peeked base entry");
+                Some((key, true))
+            }
+            core::cmp::Ordering::Greater => {
+                let (key, value) = self.overlay.next().expect("peeked overlay entry");
+                Some((key, value.is_some()))
+            }
+            core::cmp::Ordering::Equal => {
+                let (key, _) = self.base.next().expect("peeked base entry");
+                let (_, value) = self.overlay.next().expect("peeked overlay entry");
+                Some((key, value.is_some()))
+            }
+        }
+    }
+
+    fn next_before(&mut self, upper: &Name) -> Option<(&'a Name, bool)> {
+        (self.peek_key()? < upper).then(|| self.next()).flatten()
+    }
+
+    fn take_equal(&mut self, key: &Name) -> Option<bool> {
+        (self.peek_key()? == key)
+            .then(|| self.next().map(|(_, present)| present))
+            .flatten()
+    }
+}
+
+fn visit_merged_durable_state_keys(
+    base: &BTreeMap<Name, Vec<u8>>,
+    overlay: &BTreeMap<Name, Option<Vec<u8>>>,
+    physical_prefix: &str,
+    visit_live: impl FnOnce(
+        &mut dyn FnMut(&Name) -> Result<(), ivm::VMError>,
+    ) -> Result<(), ivm::VMError>,
+    emit: &mut dyn FnMut(&Name, bool) -> Result<(), ivm::VMError>,
+) -> Result<(), ivm::VMError> {
+    let mut local = LocalDurableStateMerge::new(base, overlay, physical_prefix);
+    let mut previous_live = String::new();
+    let mut saw_live = false;
+    let mut merge_live = |live_key: &Name| -> Result<(), ivm::VMError> {
+        if !live_key.as_ref().starts_with(physical_prefix) {
+            return Err(ivm::VMError::NoritoInvalid);
+        }
+        if saw_live && previous_live.as_str() >= live_key.as_ref() {
+            return Err(ivm::VMError::NoritoInvalid);
+        }
+        while let Some((key, present)) = local.next_before(live_key) {
+            if !key.as_ref().starts_with(physical_prefix) {
+                return Err(ivm::VMError::NoritoInvalid);
+            }
+            emit(key, present)?;
+        }
+        let present = local.take_equal(live_key).unwrap_or(true);
+        emit(live_key, present)?;
+        previous_live.clear();
+        previous_live.push_str(live_key.as_ref());
+        saw_live = true;
+        Ok(())
+    };
+    visit_live(&mut merge_live)?;
+    drop(merge_live);
+    while let Some((key, present)) = local.next() {
+        if !key.as_ref().starts_with(physical_prefix) {
+            break;
+        }
+        emit(key, present)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod durable_state_merge_tests {
+    use iroha_test_samples::ALICE_ID;
+
+    use super::*;
+
+    fn name(value: &str) -> Name {
+        value.parse().expect("durable-state test name")
+    }
+
+    #[test]
+    fn streaming_merge_applies_overlay_precedence_and_canonical_interleaving() {
+        let base = BTreeMap::from([
+            (name("state/b"), vec![1]),
+            (name("state/d"), vec![1]),
+            (name("state/f"), vec![1]),
+        ]);
+        let overlay = BTreeMap::from([
+            (name("state/b"), Some(vec![2])),
+            (name("state/c"), Some(vec![2])),
+            (name("state/d"), None),
+            (name("state/e"), Some(vec![2])),
+        ]);
+        let live = [
+            name("state/a"),
+            name("state/b"),
+            name("state/d"),
+            name("state/g"),
+        ];
+        let mut emitted = Vec::new();
+
+        visit_merged_durable_state_keys(
+            &base,
+            &overlay,
+            "state/",
+            |visitor| live.iter().try_for_each(visitor),
+            &mut |key, present| {
+                emitted.push((key.to_string(), present));
+                Ok(())
+            },
+        )
+        .expect("merge ordered sources");
+
+        assert_eq!(
+            emitted,
+            [
+                ("state/a".to_owned(), true),
+                ("state/b".to_owned(), true),
+                ("state/c".to_owned(), true),
+                ("state/d".to_owned(), false),
+                ("state/e".to_owned(), true),
+                ("state/f".to_owned(), true),
+                ("state/g".to_owned(), true),
+            ]
+        );
+    }
+
+    #[test]
+    fn streaming_merge_rejects_nonmonotonic_or_out_of_prefix_live_visitors() {
+        let base = BTreeMap::new();
+        let overlay = BTreeMap::new();
+        for live in [
+            vec![name("state/b"), name("state/a")],
+            vec![name("state/a"), name("other/a")],
+        ] {
+            assert_eq!(
+                visit_merged_durable_state_keys(
+                    &base,
+                    &overlay,
+                    "state/",
+                    |visitor| live.iter().try_for_each(visitor),
+                    &mut |_, _| Ok(()),
+                ),
+                Err(ivm::VMError::NoritoInvalid)
+            );
+        }
+    }
+
+    #[test]
+    fn production_collection_honors_offset_zero_limit_and_tombstones() {
+        let mut host = CoreHost::new(ALICE_ID.clone());
+        host.durable_state_base =
+            BTreeMap::from([(name("state/a"), vec![1]), (name("state/b"), vec![1])]);
+        host.durable_state_overlay =
+            BTreeMap::from([(name("state/b"), None), (name("state/c"), Some(vec![3]))]);
+        let prefix = name("state");
+        let path_len = norito::to_bytes(&prefix).expect("encode prefix").len();
+        let vm = IVM::new(u64::MAX);
+
+        let (selected, total, _) = host
+            .collect_durable_state_keys(&vm, &prefix, path_len, 1, 1)
+            .expect("collect offset window");
+        assert_eq!(selected, [name("state/c")]);
+        assert_eq!(total, 2);
+
+        let (selected, total, _) = host
+            .collect_durable_state_keys(&vm, &prefix, path_len, u64::MAX, 0)
+            .expect("count without materializing a page");
+        assert!(selected.is_empty());
+        assert_eq!(total, 2);
+    }
+
+    #[test]
+    fn production_collection_validates_oversized_keys_even_when_skipped() {
+        let mut host = CoreHost::new(ALICE_ID.clone());
+        let oversized = name(&format!(
+            "state/{}",
+            "x".repeat(ivm::syscalls::STATE_MAX_PATH_BYTES)
+        ));
+        host.durable_state_base.insert(oversized, vec![1]);
+        let prefix = name("state");
+        let path_len = norito::to_bytes(&prefix).expect("encode prefix").len();
+        let vm = IVM::new(u64::MAX);
+
+        assert_eq!(
+            host.collect_durable_state_keys(&vm, &prefix, path_len, u64::MAX, 0),
+            Err(ivm::VMError::NoritoInvalid)
+        );
     }
 }
 
@@ -1375,6 +1622,69 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
                 CoreHostImpl::<NoQueryState>::contract_instance_by_alias(tx, alias)
             }
         }
+    }
+
+    fn bound_contract_dispatch_identity_by_address(
+        &self,
+        contract_address: &ContractAddress,
+    ) -> Option<(
+        crate::smartcontracts::code::BoundContractIdentity,
+        AccountId,
+        usize,
+    )> {
+        match *self {
+            QueryStateRef::View(view) => {
+                CoreHostImpl::<NoQueryState>::bound_contract_dispatch_identity(
+                    view,
+                    contract_address,
+                )
+            }
+            QueryStateRef::QueryView(view) => {
+                CoreHostImpl::<NoQueryState>::bound_contract_dispatch_identity(
+                    view,
+                    contract_address,
+                )
+            }
+            QueryStateRef::Block(block) => {
+                CoreHostImpl::<NoQueryState>::bound_contract_dispatch_identity(
+                    block,
+                    contract_address,
+                )
+            }
+            QueryStateRef::Transaction(tx) => {
+                CoreHostImpl::<NoQueryState>::bound_contract_dispatch_identity(tx, contract_address)
+            }
+        }
+    }
+
+    fn prepare_contract_cache_miss(
+        &self,
+        cache: &PreparedContractCache,
+        code_hash: Hash,
+    ) -> Result<Arc<ivm::PreparedContract>, ivm::VMError> {
+        let prepared = match *self {
+            QueryStateRef::View(view) => {
+                crate::smartcontracts::code::with_code_bytes(view, &code_hash, |bytes| {
+                    cache.get_or_prepare(code_hash, bytes)
+                })
+            }
+            QueryStateRef::QueryView(view) => {
+                crate::smartcontracts::code::with_code_bytes(view, &code_hash, |bytes| {
+                    cache.get_or_prepare(code_hash, bytes)
+                })
+            }
+            QueryStateRef::Block(block) => {
+                crate::smartcontracts::code::with_code_bytes(block, &code_hash, |bytes| {
+                    cache.get_or_prepare(code_hash, bytes)
+                })
+            }
+            QueryStateRef::Transaction(tx) => {
+                crate::smartcontracts::code::with_code_bytes(tx, &code_hash, |bytes| {
+                    cache.get_or_prepare(code_hash, bytes)
+                })
+            }
+        };
+        prepared.ok_or(ivm::VMError::PermissionDenied)?
     }
 
     fn subscription_context_for_trigger(
@@ -1710,6 +2020,27 @@ impl PartialEq<InstructionBox> for QueuedInstruction {
 }
 
 #[derive(Clone)]
+struct DurableStateOriginal {
+    overlay: Option<Option<Vec<u8>>>,
+    authorization: Option<Option<ContractEntrypointAuthorizationSnapshot>>,
+}
+
+#[derive(Default)]
+struct NestedContractCallJournal {
+    durable_state_originals: BTreeMap<Name, DurableStateOriginal>,
+    new_read_keys: BTreeSet<String>,
+    new_write_keys: BTreeSet<String>,
+    new_durable_read_paths: BTreeSet<String>,
+    state_writes_len: usize,
+}
+
+#[derive(Clone, Copy)]
+enum NestedContractCallOutcome {
+    Commit,
+    Rollback,
+    RollbackViewPreservingReads,
+}
+
 struct NestedContractCallHostSnapshot {
     authority: AccountId,
     current_contract_runtime_context: Option<ContractRuntimeExecutionContext>,
@@ -1718,24 +2049,24 @@ struct NestedContractCallHostSnapshot {
     entrypoint_argument_record: Option<ivm::PreparedArgumentRecord>,
     prepared_argument_record_pointer: Option<u64>,
     fastpq_batch_entries: Option<Vec<TransferAssetBatchEntry>>,
+    default: ivm::host::DefaultHostForwardedCallCheckpoint,
     nft_seq: u64,
-    queued: Vec<QueuedInstruction>,
-    durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
-    durable_state_authorizations: BTreeMap<Name, Option<ContractEntrypointAuthorizationSnapshot>>,
-    state_access_log: ivm::host::AccessLog,
-    axt_state: Option<axt::HostAxtState>,
-    completed_axt: Vec<axt::HostAxtState>,
-    zk_verified_transfer: VecDeque<[u8; 32]>,
-    zk_verified_unshield: VecDeque<[u8; 32]>,
-    zk_verified_ballot: VecDeque<[u8; 32]>,
-    zk_verified_tally: VecDeque<[u8; 32]>,
-    zk_last_env_hash_transfer: VecDeque<[u8; 32]>,
-    zk_last_env_hash_unshield: VecDeque<[u8; 32]>,
-    zk_last_env_hash_ballot: VecDeque<[u8; 32]>,
-    zk_last_env_hash_tally: VecDeque<[u8; 32]>,
-    axt_replay_ledger: BTreeMap<AxtHandleReplayKey, AxtReplayRecord>,
+    queued_len: usize,
+    journal_depth: usize,
+    durable_read_paths_complete: bool,
+    axt_state: Option<Arc<axt::HostAxtState>>,
+    completed_axt_len: usize,
+    zk_verified_transfer: Arc<VecDeque<[u8; 32]>>,
+    zk_verified_unshield: Arc<VecDeque<[u8; 32]>>,
+    zk_verified_ballot: Arc<VecDeque<[u8; 32]>>,
+    zk_verified_tally: Arc<VecDeque<[u8; 32]>>,
+    zk_last_env_hash_transfer: Arc<VecDeque<[u8; 32]>>,
+    zk_last_env_hash_unshield: Arc<VecDeque<[u8; 32]>>,
+    zk_last_env_hash_ballot: Arc<VecDeque<[u8; 32]>>,
+    zk_last_env_hash_tally: Arc<VecDeque<[u8; 32]>>,
+    axt_replay_ledger: Arc<BTreeMap<AxtHandleReplayKey, AxtReplayRecord>>,
     axt_proof_cache_slot: Option<u64>,
-    axt_proof_cache: BTreeMap<DataSpaceId, CachedProofEntry>,
+    axt_proof_cache: Arc<BTreeMap<DataSpaceId, CachedProofEntry>>,
     last_axt_reject: Option<AxtRejectContext>,
     amx_budget_violation: Option<AmxBudgetViolation>,
 }
@@ -1750,7 +2081,17 @@ impl HostExecutionArtifacts {
             queued.entrypoint_authorization.as_ref(),
         ) {
             (Some(context), Some(authorization)) => {
-                if context.contract_subject != context.contract_address.subject_id()
+                let live_subject = crate::smartcontracts::code::bound_contract_subject_from_world(
+                    world,
+                    &context.contract_address,
+                )
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted(format!(
+                        "contract instance `{}` has no valid subject binding",
+                        context.contract_address
+                    ))
+                })?;
+                if context.contract_subject != live_subject
                     || context.contract_address != authorization.contract_address
                     || context.contract_alias != authorization.contract_alias
                     || context.entrypoint != authorization.entrypoint
@@ -1820,6 +2161,19 @@ impl HostExecutionArtifacts {
             .collect()
     }
 
+    pub(crate) fn queued_instructions_by_authority(
+        &self,
+    ) -> BTreeMap<AccountId, Vec<InstructionBox>> {
+        let mut grouped = BTreeMap::new();
+        for queued in &self.queued {
+            grouped
+                .entry(queued.authority.clone())
+                .or_insert_with(Vec::new)
+                .push(queued.instruction.clone());
+        }
+        grouped
+    }
+
     fn seed_queued_call_hash_if_missing(
         tx: &mut StateTransaction<'_, '_>,
         queued: &[QueuedInstruction],
@@ -1860,6 +2214,28 @@ impl HostExecutionArtifacts {
         }
         tx.tx_call_hash = Some(iroha_crypto::Hash::new(bytes));
         Ok(())
+    }
+
+    /// Materialize deterministically replayed AXT completions at the transaction's lane/height.
+    ///
+    /// Raw and proof-carrying IVM execution must use this same path so a verified replay cannot
+    /// silently discard an AXT envelope or derive different persistence metadata.
+    pub(crate) fn record_completed_axt_states(
+        tx: &mut StateTransaction<'_, '_>,
+        completed_axt: Vec<axt::HostAxtState>,
+    ) {
+        if completed_axt.is_empty() {
+            return;
+        }
+        let lane = tx.current_lane_id.unwrap_or_else(|| LaneId::new(0));
+        let commit_height = tx.block_height();
+        for state in completed_axt {
+            tx.record_axt_envelope(CoreHostImpl::<NoQueryState>::materialize_axt_record(
+                &state,
+                lane,
+                commit_height,
+            ));
+        }
     }
 
     pub(crate) fn apply_to_transaction(
@@ -1973,24 +2349,7 @@ impl HostExecutionArtifacts {
         if self.confidential_gas_delta > 0 {
             tx.record_confidential_gas_delta(self.confidential_gas_delta);
         }
-        if !self.completed_axt.is_empty() {
-            let lane = tx.current_lane_id.unwrap_or_else(|| LaneId::new(0));
-            let commit_height = tx.block_height();
-            let envelopes: Vec<_> = self
-                .completed_axt
-                .into_iter()
-                .map(|state| {
-                    CoreHostImpl::<NoQueryState>::materialize_axt_record(
-                        &state,
-                        lane,
-                        commit_height,
-                    )
-                })
-                .collect();
-            for envelope in envelopes {
-                tx.record_axt_envelope(envelope);
-            }
-        }
+        Self::record_completed_axt_states(tx, self.completed_axt);
         if !self.durable_state_overlay.is_empty() {
             for (path, value) in self.durable_state_overlay {
                 if let Some(authorization) = self
@@ -2161,6 +2520,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             queued: Vec::new(),
             fastpq_batch_entries: None,
             accounts_snapshot: Arc::new(Vec::new()),
+            bound_contract_records_by_subject: BTreeMap::new(),
             prepared_contract_cache: PreparedContractCache::default(),
             query_state: QS::default(),
             core_query_page_metrics: None,
@@ -2175,14 +2535,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             durable_state_overlay: BTreeMap::new(),
             durable_state_authorizations: BTreeMap::new(),
             state_access_log: ivm::host::AccessLog::default(),
+            nested_contract_call_journals: Vec::new(),
             axt_state: None,
             completed_axt: Vec::new(),
             transport_caps_snapshot: None,
             negotiated_caps_snapshot: None,
-            zk_verified_transfer: VecDeque::new(),
-            zk_verified_unshield: VecDeque::new(),
-            zk_verified_ballot: VecDeque::new(),
-            zk_verified_tally: VecDeque::new(),
+            zk_verified_transfer: Arc::new(VecDeque::new()),
+            zk_verified_unshield: Arc::new(VecDeque::new()),
+            zk_verified_ballot: Arc::new(VecDeque::new()),
+            zk_verified_tally: Arc::new(VecDeque::new()),
             zk_roots: BTreeMap::new(),
             zk_elections: BTreeMap::new(),
             vrf_epoch_seeds: BTreeMap::new(),
@@ -2195,14 +2556,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             zk_root_history_cap: iroha_config::parameters::defaults::zk::ledger::ROOT_HISTORY_CAP,
             zk_include_empty_root_when_empty: false,
             zk_empty_root_depth: 0,
-            zk_last_env_hash_transfer: VecDeque::new(),
-            zk_last_env_hash_unshield: VecDeque::new(),
-            zk_last_env_hash_ballot: VecDeque::new(),
-            zk_last_env_hash_tally: VecDeque::new(),
+            zk_last_env_hash_transfer: Arc::new(VecDeque::new()),
+            zk_last_env_hash_unshield: Arc::new(VecDeque::new()),
+            zk_last_env_hash_ballot: Arc::new(VecDeque::new()),
+            zk_last_env_hash_tally: Arc::new(VecDeque::new()),
             axt_policy_snapshot: None,
-            axt_replay_ledger: BTreeMap::new(),
+            axt_replay_ledger: Arc::new(BTreeMap::new()),
             axt_proof_cache_slot: None,
-            axt_proof_cache: BTreeMap::new(),
+            axt_proof_cache: Arc::new(BTreeMap::new()),
             last_axt_reject: None,
             amx_analysis: None,
             amx_limits: AmxLimits::default(),
@@ -2246,6 +2607,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         host.set_durable_state_snapshot_from_world(view.world());
         host.set_public_inputs_from_parameters(view.world().parameters());
         host.set_vrf_epoch_seeds_from_world(view.world());
+        host.set_bound_contract_records_by_subject_snapshot(
+            crate::smartcontracts::code::snapshot_bound_contract_records_by_subject(&view),
+        );
         host.set_zk_snapshots_from_world(view.world(), &view.zk)
             .expect("valid ZK snapshot state");
         host = host.with_axt_policy_snapshot(&snapshot);
@@ -2273,6 +2637,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             queued: Vec::new(),
             fastpq_batch_entries: None,
             accounts_snapshot: accounts,
+            bound_contract_records_by_subject: BTreeMap::new(),
             prepared_contract_cache: PreparedContractCache::default(),
             query_state: QS::default(),
             core_query_page_metrics: None,
@@ -2287,14 +2652,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             durable_state_overlay: BTreeMap::new(),
             durable_state_authorizations: BTreeMap::new(),
             state_access_log: ivm::host::AccessLog::default(),
+            nested_contract_call_journals: Vec::new(),
             axt_state: None,
             completed_axt: Vec::new(),
             transport_caps_snapshot: None,
             negotiated_caps_snapshot: None,
-            zk_verified_transfer: VecDeque::new(),
-            zk_verified_unshield: VecDeque::new(),
-            zk_verified_ballot: VecDeque::new(),
-            zk_verified_tally: VecDeque::new(),
+            zk_verified_transfer: Arc::new(VecDeque::new()),
+            zk_verified_unshield: Arc::new(VecDeque::new()),
+            zk_verified_ballot: Arc::new(VecDeque::new()),
+            zk_verified_tally: Arc::new(VecDeque::new()),
             zk_roots: BTreeMap::new(),
             zk_elections: BTreeMap::new(),
             vrf_epoch_seeds: BTreeMap::new(),
@@ -2307,14 +2673,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             zk_root_history_cap: iroha_config::parameters::defaults::zk::ledger::ROOT_HISTORY_CAP,
             zk_include_empty_root_when_empty: false,
             zk_empty_root_depth: 0,
-            zk_last_env_hash_transfer: VecDeque::new(),
-            zk_last_env_hash_unshield: VecDeque::new(),
-            zk_last_env_hash_ballot: VecDeque::new(),
-            zk_last_env_hash_tally: VecDeque::new(),
+            zk_last_env_hash_transfer: Arc::new(VecDeque::new()),
+            zk_last_env_hash_unshield: Arc::new(VecDeque::new()),
+            zk_last_env_hash_ballot: Arc::new(VecDeque::new()),
+            zk_last_env_hash_tally: Arc::new(VecDeque::new()),
             axt_policy_snapshot: None,
-            axt_replay_ledger: BTreeMap::new(),
+            axt_replay_ledger: Arc::new(BTreeMap::new()),
             axt_proof_cache_slot: None,
-            axt_proof_cache: BTreeMap::new(),
+            axt_proof_cache: Arc::new(BTreeMap::new()),
             last_axt_reject: None,
             amx_analysis: None,
             amx_limits: AmxLimits::default(),
@@ -2348,6 +2714,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             queued: Vec::new(),
             fastpq_batch_entries: None,
             accounts_snapshot: accounts,
+            bound_contract_records_by_subject: BTreeMap::new(),
             prepared_contract_cache: PreparedContractCache::default(),
             query_state: QS::default(),
             core_query_page_metrics: None,
@@ -2362,14 +2729,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             durable_state_overlay: BTreeMap::new(),
             durable_state_authorizations: BTreeMap::new(),
             state_access_log: ivm::host::AccessLog::default(),
+            nested_contract_call_journals: Vec::new(),
             axt_state: None,
             completed_axt: Vec::new(),
             transport_caps_snapshot: None,
             negotiated_caps_snapshot: None,
-            zk_verified_transfer: VecDeque::new(),
-            zk_verified_unshield: VecDeque::new(),
-            zk_verified_ballot: VecDeque::new(),
-            zk_verified_tally: VecDeque::new(),
+            zk_verified_transfer: Arc::new(VecDeque::new()),
+            zk_verified_unshield: Arc::new(VecDeque::new()),
+            zk_verified_ballot: Arc::new(VecDeque::new()),
+            zk_verified_tally: Arc::new(VecDeque::new()),
             zk_roots: BTreeMap::new(),
             zk_elections: BTreeMap::new(),
             vrf_epoch_seeds: BTreeMap::new(),
@@ -2382,14 +2750,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             zk_root_history_cap: iroha_config::parameters::defaults::zk::ledger::ROOT_HISTORY_CAP,
             zk_include_empty_root_when_empty: false,
             zk_empty_root_depth: 0,
-            zk_last_env_hash_transfer: VecDeque::new(),
-            zk_last_env_hash_unshield: VecDeque::new(),
-            zk_last_env_hash_ballot: VecDeque::new(),
-            zk_last_env_hash_tally: VecDeque::new(),
-            axt_replay_ledger: BTreeMap::new(),
+            zk_last_env_hash_transfer: Arc::new(VecDeque::new()),
+            zk_last_env_hash_unshield: Arc::new(VecDeque::new()),
+            zk_last_env_hash_ballot: Arc::new(VecDeque::new()),
+            zk_last_env_hash_tally: Arc::new(VecDeque::new()),
+            axt_replay_ledger: Arc::new(BTreeMap::new()),
             axt_policy_snapshot: None,
             axt_proof_cache_slot: None,
-            axt_proof_cache: BTreeMap::new(),
+            axt_proof_cache: Arc::new(BTreeMap::new()),
             last_axt_reject: None,
             amx_analysis: None,
             amx_limits: AmxLimits::default(),
@@ -2448,6 +2816,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.current_entrypoint_authorization = authorization;
     }
 
+    /// Seed deployed contract records for nested resolution when no live query view is available.
+    pub(crate) fn set_bound_contract_records_by_subject_snapshot(
+        &mut self,
+        snapshot: BTreeMap<AccountId, crate::smartcontracts::code::BoundContractRecord>,
+    ) {
+        self.bound_contract_records_by_subject = snapshot;
+    }
+
     /// Stage successful consumption of a consensus-validated lifecycle transition.
     ///
     /// The caller validates the exact pending record before VM execution and again before live
@@ -2468,47 +2844,26 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         );
         let marker = crate::smartcontracts::code::contract_lifecycle_state_key(contract_address);
         if self.access_log_enabled {
-            self.state_access_log
-                .read_keys
-                .insert(format!("lifecycle:{contract_address}"));
-            self.state_access_log
-                .write_keys
-                .insert(format!("lifecycle:{contract_address}"));
-            self.state_access_log
-                .durable_read_paths
-                .insert(marker.to_string());
+            self.insert_access_read_key(format!("lifecycle:{contract_address}"));
+            self.insert_access_write_key(format!("lifecycle:{contract_address}"));
+            self.insert_access_durable_read_path(marker.to_string());
         }
-        self.durable_state_overlay.insert(marker.clone(), None);
-        self.durable_state_authorizations
-            .insert(marker, self.current_entrypoint_authorization.clone());
+        self.stage_durable_state_update(marker, None);
     }
 
-    /// Bind a deployed runtime identity and its compiler-selected entrypoint authorization.
-    pub fn bind_contract_runtime_context(
+    /// Bind an authenticated deployed runtime subject and its selected authorization snapshot.
+    pub(crate) fn bind_contract_runtime_context(
         &mut self,
-        contract_address: iroha_data_model::smart_contract::ContractAddress,
-        contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
-        code_hash: Hash,
-        entrypoint: String,
-        permission: Option<String>,
+        contract_subject: AccountId,
+        authorization: ContractEntrypointAuthorizationSnapshot,
     ) {
-        let identity = crate::smartcontracts::code::BoundContractIdentity {
-            contract_address: contract_address.clone(),
-            contract_alias: contract_alias.clone(),
-            code_hash,
-        };
         self.current_contract_runtime_context = Some(ContractRuntimeExecutionContext {
-            contract_subject: contract_address.subject_id(),
-            contract_address,
-            contract_alias,
-            entrypoint: entrypoint.clone(),
+            contract_address: authorization.contract_address.clone(),
+            contract_subject,
+            contract_alias: authorization.contract_alias.clone(),
+            entrypoint: authorization.entrypoint.clone(),
         });
-        self.current_entrypoint_authorization = Some(ContractEntrypointAuthorizationSnapshot::new(
-            self.authority.clone(),
-            entrypoint,
-            permission,
-            &identity,
-        ));
+        self.current_entrypoint_authorization = Some(authorization);
     }
 
     /// Share the outer runtime's bounded immutable contract-artifact cache.
@@ -2599,10 +2954,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     pub fn with_axt_policy(mut self, policy: Arc<dyn ivm::axt::AxtPolicy>) -> Self {
         self.axt_policy = policy;
         self.axt_policy_snapshot = None;
-        for (dsid, entry) in core::mem::take(&mut self.axt_proof_cache) {
+        for (dsid, entry) in core::mem::take(Arc::make_mut(&mut self.axt_proof_cache)) {
             self.clear_axt_proof_cache_state(dsid, &entry);
         }
-        self.axt_proof_cache.clear();
         self.axt_proof_cache_slot = None;
         self
     }
@@ -2616,10 +2970,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             self.axt_timing.max_clock_skew_ms,
         ));
         self.axt_policy_snapshot = Some(snapshot.clone());
-        for (dsid, entry) in core::mem::take(&mut self.axt_proof_cache) {
+        for (dsid, entry) in core::mem::take(Arc::make_mut(&mut self.axt_proof_cache)) {
             self.clear_axt_proof_cache_state(dsid, &entry);
         }
-        self.axt_proof_cache.clear();
         self.axt_proof_cache_slot = Self::policy_current_slot(snapshot);
         self
     }
@@ -2635,10 +2988,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             self.axt_timing.max_clock_skew_ms,
         ));
         self.axt_policy_snapshot = Some(snapshot.clone());
-        for (dsid, entry) in core::mem::take(&mut self.axt_proof_cache) {
+        for (dsid, entry) in core::mem::take(Arc::make_mut(&mut self.axt_proof_cache)) {
             self.clear_axt_proof_cache_state(dsid, &entry);
         }
-        self.axt_proof_cache.clear();
         self.axt_proof_cache_slot = Self::policy_current_slot(snapshot);
         self.note_axt_proof_cache_event(AXT_PROOF_CACHE_CLEARED);
     }
@@ -3853,56 +4205,58 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         )
     }
 
+    /// Drain completed AXT states so deterministic proof replay can persist them after
+    /// verification using the same lane/height materialization as raw execution.
+    pub(crate) fn drain_completed_axt_states(&mut self) -> Vec<axt::HostAxtState> {
+        mem::take(&mut self.completed_axt)
+    }
+
     /// Test helper: seed the transfer verification latch with a known envelope hash.
     #[cfg(test)]
     pub fn __test_seed_transfer_latch(&mut self, hash: [u8; 32]) {
-        self.zk_verified_transfer.push_back(hash);
-        self.zk_last_env_hash_transfer.push_back(hash);
+        Arc::make_mut(&mut self.zk_verified_transfer).push_back(hash);
+        Arc::make_mut(&mut self.zk_last_env_hash_transfer).push_back(hash);
     }
 
     /// Test helper: seed the unshield verification latch with a known envelope hash.
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn __test_seed_unshield_latch(&mut self, hash: [u8; 32]) {
-        self.zk_verified_unshield.push_back(hash);
-        self.zk_last_env_hash_unshield.push_back(hash);
+        Arc::make_mut(&mut self.zk_verified_unshield).push_back(hash);
+        Arc::make_mut(&mut self.zk_last_env_hash_unshield).push_back(hash);
     }
 
     /// Test helper: seed the ballot verification latch with a known envelope hash.
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn __test_seed_ballot_latch(&mut self, hash: [u8; 32]) {
-        self.zk_verified_ballot.push_back(hash);
-        self.zk_last_env_hash_ballot.push_back(hash);
+        Arc::make_mut(&mut self.zk_verified_ballot).push_back(hash);
+        Arc::make_mut(&mut self.zk_last_env_hash_ballot).push_back(hash);
     }
 
     /// Test helper: seed the tally verification latch with a known envelope hash.
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn __test_seed_tally_latch(&mut self, hash: [u8; 32]) {
-        self.zk_verified_tally.push_back(hash);
-        self.zk_last_env_hash_tally.push_back(hash);
+        Arc::make_mut(&mut self.zk_verified_tally).push_back(hash);
+        Arc::make_mut(&mut self.zk_last_env_hash_tally).push_back(hash);
     }
 
     /// Test-only: replace the pending transfer envelope hash queue with a single entry.
     #[cfg(test)]
     pub fn __test_set_last_env_hash_transfer(&mut self, h: [u8; 32]) {
-        self.zk_last_env_hash_transfer.clear();
-        self.zk_last_env_hash_transfer.push_back(h);
+        *Arc::make_mut(&mut self.zk_last_env_hash_transfer) = VecDeque::from([h]);
     }
     /// Test helper: replace the pending unshield envelope hash queue with a single entry.
     pub fn __test_set_last_env_hash_unshield(&mut self, h: [u8; 32]) {
-        self.zk_last_env_hash_unshield.clear();
-        self.zk_last_env_hash_unshield.push_back(h);
+        *Arc::make_mut(&mut self.zk_last_env_hash_unshield) = VecDeque::from([h]);
     }
     /// Test-only: replace the pending ballot envelope hash queue with a single entry.
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn __test_set_last_env_hash_ballot(&mut self, h: [u8; 32]) {
-        self.zk_last_env_hash_ballot.clear();
-        self.zk_last_env_hash_ballot.push_back(h);
+        *Arc::make_mut(&mut self.zk_last_env_hash_ballot) = VecDeque::from([h]);
     }
     /// Test-only: replace the pending tally envelope hash queue with a single entry.
     #[cfg(test)]
     pub fn __test_set_last_env_hash_tally(&mut self, h: [u8; 32]) {
-        self.zk_last_env_hash_tally.clear();
-        self.zk_last_env_hash_tally.push_back(h);
+        *Arc::make_mut(&mut self.zk_last_env_hash_tally) = VecDeque::from([h]);
     }
 
     fn validate_queued_for_zk(&mut self, queued: &[InstructionBox]) -> Result<(), ValidationFail> {
@@ -3910,7 +4264,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             let any: &dyn iroha_data_model::isi::Instruction = &**instr;
             let any_ref = any.as_any();
             if let Some(z) = any_ref.downcast_ref::<DMZk::ZkTransfer>() {
-                let Some(expected_hash) = self.zk_verified_transfer.pop_front() else {
+                let Some(expected_hash) = Arc::make_mut(&mut self.zk_verified_transfer).pop_front()
+                else {
                     return Err(ValidationFail::NotPermitted(
                         "missing ZK_VERIFY_TRANSFER prior to ZkTransfer".to_owned(),
                     ));
@@ -3927,7 +4282,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 }
             }
             if let Some(u) = any_ref.downcast_ref::<DMZk::Unshield>() {
-                let Some(expected_hash) = self.zk_verified_unshield.pop_front() else {
+                let Some(expected_hash) = Arc::make_mut(&mut self.zk_verified_unshield).pop_front()
+                else {
                     return Err(ValidationFail::NotPermitted(
                         "missing ZK_VERIFY_UNSHIELD prior to Unshield".to_owned(),
                     ));
@@ -3944,7 +4300,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 }
             }
             if let Some(sb) = any_ref.downcast_ref::<DMZk::SubmitBallot>() {
-                let Some(expected_hash) = self.zk_verified_ballot.pop_front() else {
+                let Some(expected_hash) = Arc::make_mut(&mut self.zk_verified_ballot).pop_front()
+                else {
                     return Err(ValidationFail::NotPermitted(
                         "missing ZK_VOTE_VERIFY_BALLOT prior to SubmitBallot".to_owned(),
                     ));
@@ -3962,7 +4319,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 }
             }
             if let Some(ft) = any_ref.downcast_ref::<DMZk::FinalizeElection>() {
-                let Some(expected_hash) = self.zk_verified_tally.pop_front() else {
+                let Some(expected_hash) = Arc::make_mut(&mut self.zk_verified_tally).pop_front()
+                else {
                     return Err(ValidationFail::NotPermitted(
                         "missing ZK_VOTE_VERIFY_TALLY prior to FinalizeElection".to_owned(),
                     ));
@@ -4122,27 +4480,75 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .collect())
     }
 
+    fn journal_durable_state_before_write(&mut self, key: &Name) {
+        if self.nested_contract_call_journals.is_empty() {
+            return;
+        }
+        let original = DurableStateOriginal {
+            overlay: self.durable_state_overlay.get(key).cloned(),
+            authorization: self.durable_state_authorizations.get(key).cloned(),
+        };
+        for journal in &mut self.nested_contract_call_journals {
+            journal
+                .durable_state_originals
+                .entry(key.clone())
+                .or_insert_with(|| original.clone());
+        }
+    }
+
+    fn stage_durable_state_update(&mut self, key: Name, value: Option<Vec<u8>>) {
+        self.journal_durable_state_before_write(&key);
+        self.durable_state_overlay.insert(key.clone(), value);
+        self.durable_state_authorizations
+            .insert(key, self.current_entrypoint_authorization.clone());
+    }
+
+    fn insert_access_read_key(&mut self, key: String) {
+        if self.state_access_log.read_keys.insert(key.clone()) {
+            for journal in &mut self.nested_contract_call_journals {
+                journal.new_read_keys.insert(key.clone());
+            }
+        }
+    }
+
+    fn insert_access_write_key(&mut self, key: String) {
+        if self.state_access_log.write_keys.insert(key.clone()) {
+            for journal in &mut self.nested_contract_call_journals {
+                journal.new_write_keys.insert(key.clone());
+            }
+        }
+    }
+
+    fn insert_access_durable_read_path(&mut self, path: String) {
+        if self
+            .state_access_log
+            .durable_read_paths
+            .insert(path.clone())
+        {
+            for journal in &mut self.nested_contract_call_journals {
+                journal.new_durable_read_paths.insert(path.clone());
+            }
+        }
+    }
+
     fn log_state_read_key(&mut self, key: &str) {
         if !self.access_log_enabled {
             return;
         }
-        self.state_access_log.read_keys.insert(key.to_string());
-        if let Some(scope_prefix) = self.durable_state_scope_prefix() {
-            self.state_access_log
-                .durable_read_paths
-                .insert(format!("{scope_prefix}{key}"));
+        self.insert_access_read_key(key.to_string());
+        let physical_path = if let Some(scope_prefix) = self.durable_state_scope_prefix() {
+            format!("{scope_prefix}{key}")
         } else {
-            self.state_access_log
-                .durable_read_paths
-                .insert(key.to_string());
-        }
+            key.to_string()
+        };
+        self.insert_access_durable_read_path(physical_path);
     }
 
     fn log_state_write_key(&mut self, key: &str) {
         if !self.access_log_enabled {
             return;
         }
-        self.state_access_log.write_keys.insert(key.to_string());
+        self.insert_access_write_key(key.to_string());
         self.state_access_log
             .state_writes
             .push(ivm::parallel::StateUpdate {
@@ -4466,8 +4872,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
     fn collect_durable_state_keys(
         &self,
+        vm: &IVM,
         prefix: &Name,
-    ) -> Result<(Vec<Name>, usize), ivm::VMError> {
+        path_len: usize,
+        offset: u64,
+        limit: u64,
+    ) -> Result<(Vec<Name>, u64, u64), ivm::VMError> {
+        let take = ivm::host::checked_state_keys_limit(limit)?;
         let prefix_str = prefix.as_ref();
         let scope_prefix = self.durable_state_scope_prefix();
         if scope_prefix.is_none() {
@@ -4477,153 +4888,73 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             || prefix_str.to_owned(),
             |scope| format!("{scope}{prefix_str}"),
         );
-        let mut candidates = BTreeSet::new();
-        let mut examined_count = 0_usize;
+        let mut selected = Vec::new();
+        let mut selected_element_bytes = 0_usize;
+        let mut response_tail_gas = ivm::host::state_keys_prepare_minimum(path_len, limit)?
+            .saturating_sub(ivm::host::state_path_gas(path_len));
+        let mut total = 0_u64;
+        let mut scan_work_gas = u64::try_from(path_len).unwrap_or(u64::MAX);
 
-        let mut consider_persisted_key = |key: &Name| -> Result<(), ivm::VMError> {
-            examined_count = examined_count.saturating_add(1);
-            let relative = Self::relative_durable_state_key(key, scope_prefix.as_deref())?;
-            if Self::state_key_matches_prefix(relative, prefix_str) {
-                let relative = relative
-                    .parse::<Name>()
-                    .map_err(|_| ivm::VMError::NoritoInvalid)?;
-                candidates.insert(relative);
+        let mut emit = |key: &Name, present: bool| -> Result<(), ivm::VMError> {
+            ivm::host::preflight_reserved_state_scan_work_with_tail(
+                vm,
+                scan_work_gas,
+                key.as_ref().len(),
+                response_tail_gas,
+            )?;
+            scan_work_gas = scan_work_gas
+                .saturating_add(ivm::gas::STATE_SCAN_ITEM_GAS)
+                .saturating_add(u64::try_from(key.as_ref().len()).unwrap_or(u64::MAX));
+            if !present {
+                return Ok(());
             }
+            let relative = Self::relative_durable_state_key(key, scope_prefix.as_deref())?;
+            ivm::host::validate_state_path_text(relative)?;
+            if !Self::state_key_matches_prefix(relative, prefix_str) {
+                return Ok(());
+            }
+            let index = total;
+            total = total.saturating_add(1);
+            if index < offset || selected.len() >= take {
+                return Ok(());
+            }
+            let (next_elements, next_response_tail) =
+                ivm::host::state_keys_response_tail_after_item(
+                    selected.len(),
+                    selected_element_bytes,
+                    relative,
+                )?;
+            ivm::host::preflight_reserved_syscall_gas(
+                vm,
+                ivm::host::STATE_QUERY_GAS_BASE
+                    .saturating_add(scan_work_gas)
+                    .saturating_add(u64::try_from(next_response_tail).unwrap_or(u64::MAX)),
+            )?;
+            let relative = relative
+                .parse::<Name>()
+                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            ivm::host::validate_state_path_name(&relative)?;
+            selected_element_bytes = next_elements;
+            response_tail_gas = u64::try_from(next_response_tail).unwrap_or(u64::MAX);
+            selected.push(relative);
             Ok(())
         };
 
-        {
-            let mut visit_base = |key: &Name, _: &Vec<u8>| consider_persisted_key(key);
-            Self::visit_local_durable_state_keys_with_text_prefix(
-                &self.durable_state_base,
-                &physical_prefix,
-                &mut visit_base,
-            )?;
-        }
-        if let Some(state) = self.query_state.get() {
-            state.visit_durable_state_keys_with_text_prefix(
-                &physical_prefix,
-                &mut consider_persisted_key,
-            )?;
-        }
-        drop(consider_persisted_key);
-
-        let mut apply_overlay_key =
-            |key: &Name, entry: &Option<Vec<u8>>| -> Result<(), ivm::VMError> {
-                examined_count = examined_count.saturating_add(1);
-                let relative = Self::relative_durable_state_key(key, scope_prefix.as_deref())?;
-                if !Self::state_key_matches_prefix(relative, prefix_str) {
-                    return Ok(());
-                }
-
-                let relative = relative
-                    .parse::<Name>()
-                    .map_err(|_| ivm::VMError::NoritoInvalid)?;
-                if entry.is_some() {
-                    candidates.insert(relative);
-                } else {
-                    candidates.remove(&relative);
-                }
-                Ok(())
-            };
-        Self::visit_local_durable_state_keys_with_text_prefix(
+        visit_merged_durable_state_keys(
+            &self.durable_state_base,
             &self.durable_state_overlay,
             &physical_prefix,
-            &mut apply_overlay_key,
-        )?;
-
-        Ok((candidates.into_iter().collect(), examined_count))
-    }
-
-    fn count_durable_state_keys(&self, prefix: &Name) -> Result<(usize, usize), ivm::VMError> {
-        let prefix_str = prefix.as_ref();
-        let scope_prefix = self.durable_state_scope_prefix();
-        if scope_prefix.is_none() {
-            self.ensure_raw_durable_state_path_allowed(prefix)?;
-        }
-        let physical_prefix = scope_prefix.as_ref().map_or_else(
-            || prefix_str.to_owned(),
-            |scope| format!("{scope}{prefix_str}"),
-        );
-        let mut total = 0_usize;
-        let mut examined_count = 0_usize;
-
-        {
-            let mut visit_base = |key: &Name, _: &Vec<u8>| -> Result<(), ivm::VMError> {
-                examined_count = examined_count.saturating_add(1);
-                let relative = Self::relative_durable_state_key(key, scope_prefix.as_deref())?;
-                if Self::state_key_matches_prefix(relative, prefix_str)
-                    && self
-                        .durable_state_overlay
-                        .get(key)
-                        .is_none_or(Option::is_some)
-                {
-                    total = total.saturating_add(1);
-                }
-                Ok(())
-            };
-            Self::visit_local_durable_state_keys_with_text_prefix(
-                &self.durable_state_base,
-                &physical_prefix,
-                &mut visit_base,
-            )?;
-        }
-
-        if let Some(state) = self.query_state.get() {
-            let mut visit_live = |key: &Name| -> Result<(), ivm::VMError> {
-                examined_count = examined_count.saturating_add(1);
-                let relative = Self::relative_durable_state_key(key, scope_prefix.as_deref())?;
-                if Self::state_key_matches_prefix(relative, prefix_str)
-                    && !self.durable_state_base.contains_key(key)
-                    && self
-                        .durable_state_overlay
-                        .get(key)
-                        .is_none_or(Option::is_some)
-                {
-                    total = total.saturating_add(1);
-                }
-                Ok(())
-            };
-            state.visit_durable_state_keys_with_text_prefix(&physical_prefix, &mut visit_live)?;
-        }
-
-        {
-            let mut visit_overlay =
-                |key: &Name, entry: &Option<Vec<u8>>| -> Result<(), ivm::VMError> {
-                    examined_count = examined_count.saturating_add(1);
-                    let relative = Self::relative_durable_state_key(key, scope_prefix.as_deref())?;
-                    if entry.is_some()
-                        && Self::state_key_matches_prefix(relative, prefix_str)
-                        && !self.durable_state_base.contains_key(key)
-                        && self
-                            .query_state
-                            .get()
-                            .is_none_or(|state| !state.durable_state_contains(key))
-                    {
-                        total = total.saturating_add(1);
-                    }
+            |visitor| {
+                if let Some(state) = self.query_state.get() {
+                    state.visit_durable_state_keys_with_text_prefix(&physical_prefix, visitor)
+                } else {
                     Ok(())
-                };
-            Self::visit_local_durable_state_keys_with_text_prefix(
-                &self.durable_state_overlay,
-                &physical_prefix,
-                &mut visit_overlay,
-            )?;
-        }
-
-        Ok((total, examined_count))
-    }
-
-    fn paged_state_keys(keys: &[Name], offset: u64, limit: u64) -> Result<Vec<Name>, ivm::VMError> {
-        if limit > ivm::syscalls::STATE_KEYS_MAX_ITEMS {
-            return Err(ivm::VMError::NoritoInvalid);
-        }
-        let take = usize::try_from(limit).map_err(|_| ivm::VMError::NoritoInvalid)?;
-        let offset = usize::try_from(offset).unwrap_or(usize::MAX);
-        if offset >= keys.len() {
-            return Ok(Vec::new());
-        }
-        Ok(keys.iter().skip(offset).take(take).cloned().collect())
+                }
+            },
+            &mut emit,
+        )?;
+        drop(emit);
+        Ok((selected, total, scan_work_gas))
     }
 
     fn decode_name_payload(payload: &[u8]) -> Result<Name, ivm::VMError> {
@@ -4637,23 +4968,27 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
     }
 
-    fn load_state_value(vm: &mut IVM, stored: &[u8]) -> Result<(), ivm::VMError> {
-        let mut env = stored.to_vec();
-        if let Ok(inner) = ivm::pointer_abi::validate_tlv_bytes(&env) {
-            if inner.type_id != PointerType::NoritoBytes {
-                return Err(ivm::VMError::NoritoInvalid);
-            }
-        } else {
-            let mut out = Vec::with_capacity(7 + env.len() + Hash::LENGTH);
-            out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
-            out.push(1);
-            let env_len = u32::try_from(env.len()).map_err(|_| ivm::VMError::NoritoInvalid)?;
-            out.extend_from_slice(&env_len.to_be_bytes());
-            out.extend_from_slice(&env);
-            let h: [u8; Hash::LENGTH] = Hash::new(&env).into();
-            out.extend_from_slice(&h);
-            env = out;
+    fn decode_durable_state_path(vm: &IVM, pointer: u64) -> Result<(Name, usize), ivm::VMError> {
+        let tlv = Self::expect_tlv(vm, pointer, PointerType::Name)?;
+        let path_len = tlv.payload.len();
+        if path_len > ivm::syscalls::STATE_MAX_PATH_BYTES {
+            return Err(ivm::VMError::NoritoInvalid);
         }
+        let path = Self::decode_name_payload(tlv.payload)?;
+        ivm::host::validate_state_path_name(&path)?;
+        Ok((path, path_len))
+    }
+
+    fn load_state_value(vm: &mut IVM, stored: &[u8]) -> Result<(), ivm::VMError> {
+        ivm::host::validate_state_value_payload_len(stored.len())?;
+        let mut env = Vec::with_capacity(7 + stored.len() + Hash::LENGTH);
+        env.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
+        env.push(1);
+        let env_len = u32::try_from(stored.len()).map_err(|_| ivm::VMError::NoritoInvalid)?;
+        env.extend_from_slice(&env_len.to_be_bytes());
+        env.extend_from_slice(stored);
+        let h: [u8; Hash::LENGTH] = Hash::new(stored).into();
+        env.extend_from_slice(&h);
         let p = vm.alloc_host_tlv(&env)?;
         vm.set_register(10, p);
         Ok(())
@@ -4757,7 +5092,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn decode_amount(vm: &IVM, ptr: u64) -> Result<Numeric, ivm::VMError> {
-        let amount = Self::decode_tlv_typed(vm, ptr, PointerType::Amount)?;
+        let amount = Self::decode_tlv_typed(vm, ptr, PointerType::Quantity)?;
         Self::validate_amount(&amount)?;
         Ok(amount)
     }
@@ -5151,7 +5486,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 .saturating_sub(1);
             let min_valid_slot = current_slot.saturating_sub(ttl_window);
             let mut expired = Vec::new();
-            for (dsid, entry) in &self.axt_proof_cache {
+            for (dsid, entry) in self.axt_proof_cache.iter() {
                 let expired_for_slot =
                     entry.verified_slot > 0 && entry.verified_slot < min_valid_slot;
                 let expired_for_expiry = entry
@@ -5163,7 +5498,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             }
             if !expired.is_empty() {
                 for dsid in expired {
-                    if let Some(entry) = self.axt_proof_cache.remove(&dsid) {
+                    if let Some(entry) = Arc::make_mut(&mut self.axt_proof_cache).remove(&dsid) {
                         self.clear_axt_proof_cache_state(dsid, &entry);
                     }
                 }
@@ -5201,7 +5536,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .map(|(key, _)| *key)
             .collect();
         for key in stale {
-            self.axt_replay_ledger.remove(&key);
+            Arc::make_mut(&mut self.axt_replay_ledger).remove(&key);
         }
     }
 
@@ -5216,10 +5551,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     pub(crate) fn hydrate_axt_replay_ledger(&mut self, state: &impl StateReadOnly) {
         let current_slot = current_axt_slot_for_state(state);
         let retention_slots = self.axt_timing.replay_retention_slots.get();
-        self.axt_replay_ledger.clear();
+        Arc::make_mut(&mut self.axt_replay_ledger).clear();
         for (key, entry) in state.world().axt_replay_ledger().iter() {
             if !entry.is_expired(current_slot, retention_slots) {
-                self.axt_replay_ledger.insert(*key, *entry);
+                Arc::make_mut(&mut self.axt_replay_ledger).insert(*key, *entry);
             }
         }
         self.prune_axt_replay_ledger(current_slot);
@@ -5314,7 +5649,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let mut cache_event: Option<&'static str> = None;
         let mut cache_hit_valid = false;
         let mut cache_hit_invalid = false;
-        if let Some(entry) = self.axt_proof_cache.get_mut(&dsid) {
+        if let Some(entry) = Arc::make_mut(&mut self.axt_proof_cache).get_mut(&dsid) {
             if entry.digest == digest
                 && entry.is_applicable_for_slot(
                     current_slot,
@@ -5349,7 +5684,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             self.note_axt_proof_cache_event(event);
         }
         if cache_hit_valid {
-            let state = self.axt_state.as_mut().expect("axt_state checked above");
+            let state = Arc::make_mut(self.axt_state.as_mut().expect("axt_state checked above"));
             state.record_proof(dsid, Some(proof_for_state.clone()), None)?;
             return Ok(());
         }
@@ -5393,7 +5728,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
         if let Some(expiry_slot) = expiry_with_skew {
             if policy.current_slot > 0 && policy.current_slot > expiry_slot {
-                if let Some(entry) = self.axt_proof_cache.remove(&dsid) {
+                if let Some(entry) = Arc::make_mut(&mut self.axt_proof_cache).remove(&dsid) {
                     self.clear_axt_proof_cache_state(dsid, &entry);
                 }
                 self.note_axt_proof_cache_event(AXT_PROOF_CACHE_EXPIRED);
@@ -5412,7 +5747,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
         self.verify_fastpq_envelope_binding(dsid, &envelope, policy)?;
 
-        let state = self.axt_state.as_mut().expect("axt_state checked above");
+        let state = Arc::make_mut(self.axt_state.as_mut().expect("axt_state checked above"));
         state.record_proof(dsid, Some(proof_for_state), None)?;
         self.cache_proof_entry(
             dsid,
@@ -5441,7 +5776,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         if let Some(existing) = self.axt_proof_cache.get(&dsid) {
             self.clear_axt_proof_cache_state(dsid, existing);
         }
-        self.axt_proof_cache.insert(
+        Arc::make_mut(&mut self.axt_proof_cache).insert(
             dsid,
             CachedProofEntry {
                 digest,
@@ -5507,22 +5842,28 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Self::alloc_tlv_payload(vm, PointerType::NoritoBytes, payload)
     }
 
-    fn snapshot_nested_contract_call(&self) -> NestedContractCallHostSnapshot {
+    fn snapshot_nested_contract_call(&mut self) -> NestedContractCallHostSnapshot {
+        let journal_depth = self.nested_contract_call_journals.len();
+        self.nested_contract_call_journals
+            .push(NestedContractCallJournal {
+                state_writes_len: self.state_access_log.state_writes.len(),
+                ..NestedContractCallJournal::default()
+            });
         NestedContractCallHostSnapshot {
             authority: self.authority.clone(),
             current_contract_runtime_context: self.current_contract_runtime_context.clone(),
             current_entrypoint_authorization: self.current_entrypoint_authorization.clone(),
-            args: self.args.clone(),
-            entrypoint_argument_record: self.entrypoint_argument_record.clone(),
+            args: self.args.take(),
+            entrypoint_argument_record: self.entrypoint_argument_record.take(),
             prepared_argument_record_pointer: self.prepared_argument_record_pointer,
-            fastpq_batch_entries: self.fastpq_batch_entries.clone(),
+            fastpq_batch_entries: self.fastpq_batch_entries.take(),
+            default: self.default.begin_forwarded_call(),
             nft_seq: self.nft_seq,
-            queued: self.queued.clone(),
-            durable_state_overlay: self.durable_state_overlay.clone(),
-            durable_state_authorizations: self.durable_state_authorizations.clone(),
-            state_access_log: self.state_access_log.clone(),
+            queued_len: self.queued.len(),
+            journal_depth,
+            durable_read_paths_complete: self.state_access_log.durable_read_paths_complete,
             axt_state: self.axt_state.clone(),
-            completed_axt: self.completed_axt.clone(),
+            completed_axt_len: self.completed_axt.len(),
             zk_verified_transfer: self.zk_verified_transfer.clone(),
             zk_verified_unshield: self.zk_verified_unshield.clone(),
             zk_verified_ballot: self.zk_verified_ballot.clone(),
@@ -5539,57 +5880,146 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
     }
 
-    fn restore_nested_contract_call_frame(&mut self, snapshot: &NestedContractCallHostSnapshot) {
-        self.authority = snapshot.authority.clone();
-        self.current_contract_runtime_context = snapshot.current_contract_runtime_context.clone();
-        self.current_entrypoint_authorization = snapshot.current_entrypoint_authorization.clone();
-        self.args = snapshot.args.clone();
-        self.entrypoint_argument_record = snapshot.entrypoint_argument_record.clone();
-        self.prepared_argument_record_pointer = snapshot.prepared_argument_record_pointer;
-        self.fastpq_batch_entries = snapshot.fastpq_batch_entries.clone();
-    }
+    fn finish_nested_contract_call(
+        &mut self,
+        snapshot: NestedContractCallHostSnapshot,
+        outcome: NestedContractCallOutcome,
+    ) -> Result<(), ivm::VMError> {
+        let NestedContractCallHostSnapshot {
+            authority,
+            current_contract_runtime_context,
+            current_entrypoint_authorization,
+            args,
+            entrypoint_argument_record,
+            prepared_argument_record_pointer,
+            fastpq_batch_entries,
+            default,
+            nft_seq,
+            queued_len,
+            journal_depth,
+            durable_read_paths_complete,
+            axt_state,
+            completed_axt_len,
+            zk_verified_transfer,
+            zk_verified_unshield,
+            zk_verified_ballot,
+            zk_verified_tally,
+            zk_last_env_hash_transfer,
+            zk_last_env_hash_unshield,
+            zk_last_env_hash_ballot,
+            zk_last_env_hash_tally,
+            axt_replay_ledger,
+            axt_proof_cache_slot,
+            axt_proof_cache,
+            last_axt_reject,
+            amx_budget_violation,
+        } = snapshot;
+        if self.nested_contract_call_journals.len() != journal_depth.saturating_add(1) {
+            return Err(ivm::VMError::DecodeError);
+        }
+        let journal = self
+            .nested_contract_call_journals
+            .pop()
+            .ok_or(ivm::VMError::DecodeError)?;
 
-    fn rollback_nested_contract_call(&mut self, snapshot: &NestedContractCallHostSnapshot) {
-        self.restore_nested_contract_call_frame(snapshot);
-        self.nft_seq = snapshot.nft_seq;
-        self.queued = snapshot.queued.clone();
-        self.durable_state_overlay = snapshot.durable_state_overlay.clone();
-        self.durable_state_authorizations = snapshot.durable_state_authorizations.clone();
-        self.state_access_log = snapshot.state_access_log.clone();
-        self.axt_state = snapshot.axt_state.clone();
-        self.completed_axt = snapshot.completed_axt.clone();
-        self.zk_verified_transfer = snapshot.zk_verified_transfer.clone();
-        self.zk_verified_unshield = snapshot.zk_verified_unshield.clone();
-        self.zk_verified_ballot = snapshot.zk_verified_ballot.clone();
-        self.zk_verified_tally = snapshot.zk_verified_tally.clone();
-        self.zk_last_env_hash_transfer = snapshot.zk_last_env_hash_transfer.clone();
-        self.zk_last_env_hash_unshield = snapshot.zk_last_env_hash_unshield.clone();
-        self.zk_last_env_hash_ballot = snapshot.zk_last_env_hash_ballot.clone();
-        self.zk_last_env_hash_tally = snapshot.zk_last_env_hash_tally.clone();
-        self.axt_replay_ledger = snapshot.axt_replay_ledger.clone();
-        self.axt_proof_cache_slot = snapshot.axt_proof_cache_slot;
-        self.axt_proof_cache = snapshot.axt_proof_cache.clone();
-        self.last_axt_reject = snapshot.last_axt_reject.clone();
-        self.amx_budget_violation = snapshot.amx_budget_violation;
+        self.authority = authority;
+        self.current_contract_runtime_context = current_contract_runtime_context;
+        self.current_entrypoint_authorization = current_entrypoint_authorization;
+        self.args = args;
+        self.entrypoint_argument_record = entrypoint_argument_record;
+        self.prepared_argument_record_pointer = prepared_argument_record_pointer;
+        self.fastpq_batch_entries = fastpq_batch_entries;
+
+        if matches!(outcome, NestedContractCallOutcome::Commit) {
+            if !self.default.commit_forwarded_call(default) {
+                return Err(ivm::VMError::DecodeError);
+            }
+            return Ok(());
+        }
+
+        if !self.default.rollback_forwarded_call(default) {
+            return Err(ivm::VMError::DecodeError);
+        }
+        self.nft_seq = nft_seq;
+        self.queued.truncate(queued_len);
+        for (key, original) in journal.durable_state_originals {
+            match original.overlay {
+                Some(value) => {
+                    self.durable_state_overlay.insert(key.clone(), value);
+                }
+                None => {
+                    self.durable_state_overlay.remove(&key);
+                }
+            }
+            match original.authorization {
+                Some(authorization) => {
+                    self.durable_state_authorizations.insert(key, authorization);
+                }
+                None => {
+                    self.durable_state_authorizations.remove(&key);
+                }
+            }
+        }
+        for key in journal.new_write_keys {
+            self.state_access_log.write_keys.remove(&key);
+        }
+        self.state_access_log
+            .state_writes
+            .truncate(journal.state_writes_len);
+        if matches!(outcome, NestedContractCallOutcome::Rollback) {
+            for key in journal.new_read_keys {
+                self.state_access_log.read_keys.remove(&key);
+            }
+            for path in journal.new_durable_read_paths {
+                self.state_access_log.durable_read_paths.remove(&path);
+            }
+            self.state_access_log.durable_read_paths_complete = durable_read_paths_complete;
+        }
+        self.axt_state = axt_state;
+        self.completed_axt.truncate(completed_axt_len);
+        self.zk_verified_transfer = zk_verified_transfer;
+        self.zk_verified_unshield = zk_verified_unshield;
+        self.zk_verified_ballot = zk_verified_ballot;
+        self.zk_verified_tally = zk_verified_tally;
+        self.zk_last_env_hash_transfer = zk_last_env_hash_transfer;
+        self.zk_last_env_hash_unshield = zk_last_env_hash_unshield;
+        self.zk_last_env_hash_ballot = zk_last_env_hash_ballot;
+        self.zk_last_env_hash_tally = zk_last_env_hash_tally;
+        self.axt_replay_ledger = axt_replay_ledger;
+        self.axt_proof_cache_slot = axt_proof_cache_slot;
+        self.axt_proof_cache = axt_proof_cache;
+        self.last_axt_reject = last_axt_reject;
+        self.amx_budget_violation = amx_budget_violation;
+        Ok(())
     }
 
     fn encode_nested_contract_return(
         vm: &IVM,
         schema: Option<&iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1>,
+        max_record_bytes: usize,
     ) -> Result<Option<Vec<u8>>, ivm::VMError> {
         let Some(schema) = schema else {
             return Ok(None);
         };
-        let record =
-            crate::smartcontracts::ivm::return_value::encode_entrypoint_return_record_bytes(
-                vm, schema,
-            )
-            .map_err(|error| {
+        let record = crate::smartcontracts::ivm::return_value::encode_entrypoint_return_record_bytes_bounded(
+            vm,
+            schema,
+            max_record_bytes,
+        )
+        .map_err(|error| {
                 match error {
                     crate::smartcontracts::ivm::return_value::EntrypointReturnDecodeError::Privacy {
                         reason,
                         ..
                     } => reason,
+                    crate::smartcontracts::ivm::return_value::EntrypointReturnDecodeError::RecordTooLarge {
+                        max_bytes,
+                        ..
+                    } if max_bytes
+                        < iroha_data_model::smart_contract::entrypoint::MAX_ENTRYPOINT_RETURN_RECORD_BYTES =>
+                    {
+                        ivm::VMError::OutOfGas
+                    }
                     _ => ivm::VMError::DecodeError,
                 }
             })?;
@@ -5606,21 +6036,93 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         Ok(Some(record))
     }
-    fn resolve_contract_instance_by_address(
-        &self,
-        contract_address: &iroha_data_model::smart_contract::ContractAddress,
-    ) -> Option<ContractInstance> {
-        self.query_state.get().and_then(|state_ref| {
-            state_ref
-                .contract_instance_by_address(contract_address)
-                .ok()
-        })
+
+    fn affordable_nested_return_record_bytes(
+        vm: &IVM,
+        reserved_gas: u64,
+        child_gas_consumed: u64,
+        request_gas: u64,
+    ) -> usize {
+        let available_host_gas = if reserved_gas == 0 {
+            vm.remaining_gas()
+        } else {
+            reserved_gas.saturating_sub(child_gas_consumed)
+        };
+        let response_gas = available_host_gas.saturating_sub(request_gas);
+        let envelope_gas = ivm::gas::SYSCALL_GAS_PER_BYTE.saturating_mul(
+            u64::try_from(
+                iroha_data_model::smart_contract::entrypoint::ENTRYPOINT_RETURN_TLV_ENVELOPE_BYTES_V1,
+            )
+            .unwrap_or(u64::MAX),
+        );
+        let record_gas = response_gas.saturating_sub(envelope_gas);
+        let per_byte = ivm::gas::SYSCALL_GAS_PER_BYTE.max(1);
+        usize::try_from(record_gas / per_byte)
+            .unwrap_or(usize::MAX)
+            .min(iroha_data_model::smart_contract::entrypoint::MAX_ENTRYPOINT_RETURN_RECORD_BYTES)
     }
 
-    fn resolve_contract_code_bytes(&self, code_hash: Hash) -> Option<Vec<u8>> {
-        self.query_state
-            .get()
-            .and_then(|state_ref| state_ref.contract_code_bytes(&code_hash))
+    fn resolve_bound_contract_dispatch_identity_by_address(
+        &self,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    ) -> Option<(
+        crate::smartcontracts::code::BoundContractIdentity,
+        AccountId,
+        usize,
+    )> {
+        if let Some(state_ref) = self.query_state.get() {
+            // A live query view is authoritative. Never fall back to a stale
+            // construction-time snapshot when an instance has been removed.
+            return state_ref.bound_contract_dispatch_identity_by_address(contract_address);
+        }
+        let record = self
+            .bound_contract_records_by_subject
+            .values()
+            .find(|record| record.contract_address == *contract_address)?;
+        Some((
+            crate::smartcontracts::code::BoundContractIdentity {
+                contract_address: record.contract_address.clone(),
+                contract_alias: record.contract_alias.clone(),
+                code_hash: record.code_hash,
+            },
+            record.contract_subject.clone(),
+            record.code_bytes.len(),
+        ))
+    }
+
+    fn prepare_nested_contract(
+        &self,
+        identity: &crate::smartcontracts::code::BoundContractIdentity,
+    ) -> Result<Arc<ivm::PreparedContract>, ivm::VMError> {
+        if let Some(prepared) = self.prepared_contract_cache.get(identity.code_hash) {
+            return Ok(prepared);
+        }
+        if let Some(state_ref) = self.query_state.get() {
+            return state_ref
+                .prepare_contract_cache_miss(&self.prepared_contract_cache, identity.code_hash);
+        }
+        let record = self
+            .bound_contract_records_by_subject
+            .values()
+            .find(|record| {
+                record.contract_address == identity.contract_address
+                    && record.code_hash == identity.code_hash
+            })
+            .ok_or(ivm::VMError::PermissionDenied)?;
+        self.prepared_contract_cache
+            .get_or_prepare(identity.code_hash, &record.code_bytes)
+    }
+
+    fn nested_contract_host_gas(
+        request_bytes: usize,
+        artifact_bytes: usize,
+        return_bytes: usize,
+    ) -> u64 {
+        ivm::gas::syscall_byte_gas(ivm::gas::G_CALL_CONTRACT, request_bytes, return_bytes)
+            .saturating_add(
+                ivm::gas::CONSERVATIVE_SYSCALL_INPUT_MULTIPLIER
+                    .saturating_mul(u64::try_from(artifact_bytes).unwrap_or(u64::MAX)),
+            )
     }
 
     fn handle_call_contract(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
@@ -5717,6 +6219,17 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             ));
         }
         let reserved_gas = vm.syscall_reserved_gas();
+        let (identity, contract_subject, artifact_bytes) = self
+            .resolve_bound_contract_dispatch_identity_by_address(&contract_address)
+            .ok_or_else(|| ivm::VMError::metered(request_gas, ivm::VMError::PermissionDenied))?;
+        let request_gas = Self::nested_contract_host_gas(request_bytes, artifact_bytes, 0);
+        // Cache warmth is local process state and cannot affect consensus gas.
+        // Charge the same content-sized preparation work before either a hit
+        // or a miss can load/prepare the artifact or build a runtime template.
+        ivm::host::preflight_reserved_syscall_gas(vm, request_gas)?;
+        if vm.remaining_gas() < request_gas {
+            return Err(ivm::VMError::OutOfGas);
+        }
         // The dispatcher escrows this state-dependent syscall's entire budget.
         // Nested preparation and execution both spend from that same escrow.
         let child_gas_limit = if reserved_gas == 0 {
@@ -5724,22 +6237,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         } else {
             reserved_gas.saturating_sub(request_gas)
         };
-        let instance = self
-            .resolve_contract_instance_by_address(&contract_address)
-            .ok_or_else(|| ivm::VMError::metered(request_gas, ivm::VMError::PermissionDenied))?;
-        let prepared_contract =
-            if let Some(prepared) = self.prepared_contract_cache.get(instance.code_hash) {
-                prepared
-            } else {
-                let code_bytes = self
-                    .resolve_contract_code_bytes(instance.code_hash)
-                    .ok_or_else(|| {
-                        ivm::VMError::metered(request_gas, ivm::VMError::PermissionDenied)
-                    })?;
-                self.prepared_contract_cache
-                    .get_or_prepare(instance.code_hash, code_bytes.as_ref())
-                    .map_err(|_| ivm::VMError::metered(request_gas, ivm::VMError::DecodeError))?
-            };
+        let prepared_contract = self
+            .prepare_nested_contract(&identity)
+            .map_err(|error| ivm::VMError::metered(request_gas, error))?;
+        if prepared_contract.artifact().len() != artifact_bytes {
+            return Err(ivm::VMError::metered(
+                request_gas,
+                ivm::VMError::InvalidMetadata,
+            ));
+        }
         let descriptor = prepared_contract
             .entrypoint_descriptor(&entrypoint)
             .ok_or_else(|| ivm::VMError::metered(request_gas, ivm::VMError::PermissionDenied))?;
@@ -5752,8 +6258,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             })?;
             state_ref
                 .ensure_contract_entrypoint_lifecycle(
-                    &instance.contract_address,
-                    instance.code_hash,
+                    &identity.contract_address,
+                    identity.code_hash,
                     descriptor.kind,
                 )
                 .map_err(|error| ivm::VMError::metered(request_gas, map_validation_fail(&error)))?;
@@ -5792,7 +6298,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             }
         };
         let invocation = iroha_data_model::transaction::executable::ContractInvocation {
-            contract_address: instance.contract_address.clone(),
+            contract_address: identity.contract_address.clone(),
             entrypoint,
             arguments,
         };
@@ -5800,7 +6306,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let call_context = crate::executor::parse_prepared_contract_invocation_execution_context(
             &invocation,
             prepared_contract.as_ref(),
-            instance.contract_alias.clone(),
+            identity.contract_alias.clone(),
+            contract_subject,
             child_gas_limit,
         )
         .map_err(|err| ivm::VMError::metered(request_gas, map_validation_fail(&err)))?;
@@ -5811,13 +6318,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             caller_context.contract_subject.clone(),
             entrypoint_name.clone(),
             permission,
-            &crate::smartcontracts::code::BoundContractIdentity {
-                contract_address: instance.contract_address.clone(),
-                contract_alias: instance.contract_alias.clone(),
-                code_hash: instance.code_hash,
-            },
+            &identity,
         )
         .with_parent(self.current_entrypoint_authorization.clone());
+        let entrypoint_is_view = matches!(
+            descriptor.kind,
+            iroha_data_model::smart_contract::manifest::EntryPointKind::View
+        );
         let return_schema = prepared_contract
             .entrypoint_descriptor(&entrypoint_name)
             .and_then(|descriptor| descriptor.return_schema.clone());
@@ -5839,7 +6346,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 .map_err(|error| ivm::VMError::metered(request_gas, error))?;
         }
 
-        let snapshot = self.snapshot_nested_contract_call();
+        let mut snapshot = Some(self.snapshot_nested_contract_call());
         self.authority = caller_context.contract_subject.clone();
         self.current_contract_runtime_context = Some(callee_context);
         self.current_entrypoint_authorization = Some(callee_authorization);
@@ -5862,54 +6369,110 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         match run_result {
             Ok(()) => {
-                let encoded_return =
-                    match Self::encode_nested_contract_return(&child_vm, return_schema.as_ref()) {
-                        Ok(encoded_return) => encoded_return,
-                        Err(err) => {
-                            self.rollback_nested_contract_call(&snapshot);
-                            return Err(ivm::VMError::metered(actual_gas(request_gas), err));
-                        }
-                    };
+                let max_return_record_bytes = Self::affordable_nested_return_record_bytes(
+                    vm,
+                    reserved_gas,
+                    child_gas_consumed,
+                    request_gas,
+                );
+                let encoded_return = match Self::encode_nested_contract_return(
+                    &child_vm,
+                    return_schema.as_ref(),
+                    max_return_record_bytes,
+                ) {
+                    Ok(encoded_return) => encoded_return,
+                    Err(err) => {
+                        self.finish_nested_contract_call(
+                            snapshot.take().ok_or(ivm::VMError::DecodeError)?,
+                            NestedContractCallOutcome::Rollback,
+                        )
+                        .map_err(|error| ivm::VMError::metered(actual_gas(request_gas), error))?;
+                        return Err(ivm::VMError::metered(actual_gas(request_gas), err));
+                    }
+                };
                 match encoded_return {
                     Some(encoded_return) => {
                         let return_bytes = encoded_return.len();
-                        let return_gas = ivm::gas::syscall_byte_gas(
-                            ivm::gas::G_CALL_CONTRACT,
+                        let return_boundary_bytes = return_bytes.saturating_add(
+                            iroha_data_model::smart_contract::entrypoint::ENTRYPOINT_RETURN_TLV_ENVELOPE_BYTES_V1,
+                        );
+                        let return_gas = Self::nested_contract_host_gas(
                             request_bytes,
-                            return_bytes,
+                            artifact_bytes,
+                            return_boundary_bytes,
                         );
                         let total_gas = actual_gas(return_gas);
                         if let Err(error) = ivm::host::preflight_reserved_syscall_gas(vm, total_gas)
                         {
-                            self.rollback_nested_contract_call(&snapshot);
+                            self.finish_nested_contract_call(
+                                snapshot.take().ok_or(ivm::VMError::DecodeError)?,
+                                NestedContractCallOutcome::Rollback,
+                            )
+                            .map_err(|rollback_error| {
+                                ivm::VMError::metered(total_gas, rollback_error)
+                            })?;
                             return Err(error);
                         }
                         let ptr = match Self::alloc_norito_bytes(vm, &encoded_return) {
                             Ok(ptr) => ptr,
                             Err(err) => {
-                                self.rollback_nested_contract_call(&snapshot);
+                                self.finish_nested_contract_call(
+                                    snapshot.take().ok_or(ivm::VMError::DecodeError)?,
+                                    NestedContractCallOutcome::Rollback,
+                                )
+                                .map_err(|rollback_error| {
+                                    ivm::VMError::metered(total_gas, rollback_error)
+                                })?;
                                 return Err(ivm::VMError::metered(total_gas, err));
                             }
                         };
                         vm.set_register(10, ptr);
-                        self.restore_nested_contract_call_frame(&snapshot);
+                        let outcome = if entrypoint_is_view {
+                            NestedContractCallOutcome::RollbackViewPreservingReads
+                        } else {
+                            NestedContractCallOutcome::Commit
+                        };
+                        self.finish_nested_contract_call(
+                            snapshot.take().ok_or(ivm::VMError::DecodeError)?,
+                            outcome,
+                        )
+                        .map_err(|error| ivm::VMError::metered(total_gas, error))?;
                         Ok(total_gas)
                     }
                     None => {
                         let total_gas = actual_gas(request_gas);
                         if let Err(error) = ivm::host::preflight_reserved_syscall_gas(vm, total_gas)
                         {
-                            self.rollback_nested_contract_call(&snapshot);
+                            self.finish_nested_contract_call(
+                                snapshot.take().ok_or(ivm::VMError::DecodeError)?,
+                                NestedContractCallOutcome::Rollback,
+                            )
+                            .map_err(|rollback_error| {
+                                ivm::VMError::metered(total_gas, rollback_error)
+                            })?;
                             return Err(error);
                         }
                         vm.set_register(10, 0);
-                        self.restore_nested_contract_call_frame(&snapshot);
+                        let outcome = if entrypoint_is_view {
+                            NestedContractCallOutcome::RollbackViewPreservingReads
+                        } else {
+                            NestedContractCallOutcome::Commit
+                        };
+                        self.finish_nested_contract_call(
+                            snapshot.take().ok_or(ivm::VMError::DecodeError)?,
+                            outcome,
+                        )
+                        .map_err(|error| ivm::VMError::metered(total_gas, error))?;
                         Ok(total_gas)
                     }
                 }
             }
             Err(err) => {
-                self.rollback_nested_contract_call(&snapshot);
+                self.finish_nested_contract_call(
+                    snapshot.take().ok_or(ivm::VMError::DecodeError)?,
+                    NestedContractCallOutcome::Rollback,
+                )
+                .map_err(|error| ivm::VMError::metered(actual_gas(request_gas), error))?;
                 Err(ivm::VMError::metered(actual_gas(request_gas), err))
             }
         }
@@ -5955,11 +6518,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
     }
 
-    fn query_gas_cost(ctx: &QueryGasContext, processed_items: u64, response_bytes: u64) -> u64 {
+    fn query_gas_cost(ctx: &QueryGasContext, processed_items: u64, processed_bytes: u64) -> u64 {
         ctx.base
             .saturating_add(ctx.per_item.saturating_mul(processed_items))
             .saturating_add(ctx.per_item.saturating_mul(ctx.offset_items))
-            .saturating_add(Self::QUERY_GAS_PER_BYTE.saturating_mul(response_bytes))
+            .saturating_add(Self::QUERY_GAS_PER_BYTE.saturating_mul(processed_bytes))
     }
 
     fn subscription_bill_account_alias(
@@ -6912,7 +7475,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         u64::try_from(total_len).ok()
     }
 
-    fn query_items_budget(ctx: &QueryGasContext, gas_remaining: u64) -> Result<u64, ivm::VMError> {
+    fn query_execution_budget(
+        ctx: &QueryGasContext,
+        gas_remaining: u64,
+    ) -> Result<QueryExecutionBudget, ivm::VMError> {
         let base_cost = ctx
             .base
             .saturating_add(ctx.per_item.saturating_mul(ctx.offset_items));
@@ -6920,10 +7486,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             return Err(ivm::VMError::OutOfGas);
         }
         let remaining = gas_remaining.saturating_sub(base_cost);
-        if ctx.per_item == 0 {
-            return Ok(u64::MAX);
-        }
-        Ok(remaining / ctx.per_item)
+        Ok(QueryExecutionBudget::from_weighted_limit(
+            remaining,
+            ctx.per_item,
+            Self::QUERY_GAS_PER_BYTE,
+        ))
     }
 
     fn encode_norito_payload<T: NoritoSerialize>(value: &T) -> Result<Vec<u8>, ivm::VMError> {
@@ -7017,7 +7584,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn prepare_asset_view(view: AssetView) -> Result<Vec<PreparedCoreQueryWord>, ivm::VMError> {
         Ok(vec![
             Self::prepare_typed_query_leaf(PointerType::AssetId, &view.id)?,
-            Self::prepare_typed_query_leaf(PointerType::Amount, &view.amount)?,
+            Self::prepare_typed_query_leaf(PointerType::Quantity, &view.amount)?,
         ])
     }
 
@@ -7029,7 +7596,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             Self::prepare_query_blob(view.name.as_bytes())?,
             Self::prepare_optional_query_blob(view.description)?,
             Self::prepare_typed_query_leaf(PointerType::AccountId, &view.owned_by)?,
-            Self::prepare_typed_query_leaf(PointerType::Amount, &view.total_quantity)?,
+            Self::prepare_typed_query_leaf(PointerType::Quantity, &view.total_quantity)?,
             Self::prepare_typed_query_leaf(PointerType::Json, &view.metadata)?,
         ])
     }
@@ -7068,6 +7635,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         gas_remaining: u64,
         gas_ctx: &QueryGasContext,
         processed_items: u64,
+        processed_bytes: u64,
         payload: &[u8],
         payload_words: u64,
         prepare: fn(T) -> Result<Vec<PreparedCoreQueryWord>, ivm::VMError>,
@@ -7095,6 +7663,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             gas_remaining,
             gas_ctx,
             processed_items,
+            processed_bytes,
             encoded_bytes,
         )?;
         let layout =
@@ -7116,6 +7685,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         gas_remaining: u64,
         gas_ctx: &QueryGasContext,
         processed_items: u64,
+        processed_bytes: u64,
         payload: &[u8],
         element_words: u64,
         prepare: fn(T) -> Result<Vec<PreparedCoreQueryWord>, ivm::VMError>,
@@ -7149,6 +7719,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             gas_remaining,
             gas_ctx,
             processed_items,
+            processed_bytes,
             encoded_bytes,
         )?;
         if let Some(metrics) = &mut self.core_query_page_metrics {
@@ -7238,9 +7809,18 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         gas_remaining: u64,
         gas_ctx: &QueryGasContext,
         processed_items: u64,
+        processed_bytes: u64,
         encoded_bytes: u64,
     ) -> Result<u64, ivm::VMError> {
-        let gas = Self::query_gas_cost(gas_ctx, processed_items, encoded_bytes);
+        // `processed_bytes` covers source traversal and the generic query
+        // response. `encoded_bytes` is the separate typed core-query projection
+        // (including leaf TLVs), so adding them is intentional rather than
+        // charging one serialization twice.
+        let gas = Self::query_gas_cost(
+            gas_ctx,
+            processed_items,
+            processed_bytes.saturating_add(encoded_bytes),
+        );
         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
         if gas > gas_remaining {
             return Err(ivm::VMError::OutOfGas);
@@ -7262,21 +7842,23 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     {
         let gas_remaining = vm.remaining_gas();
         let gas_ctx = QueryGasContext::singular();
-        if Self::query_items_budget(&gas_ctx, gas_remaining)? == 0 {
+        let budget = Self::query_execution_budget(&gas_ctx, gas_remaining)?;
+        if budget.max_items() == 0 {
             return Err(ivm::VMError::OutOfGas);
         }
         let Some(state_ref) = self.query_state.get() else {
             return Err(ivm::VMError::NotImplemented { syscall });
         };
-        let (output, processed_items) =
-            state_ref.execute_optional_singular_query(&self.authority, request)?;
+        let (output, stats) =
+            state_ref.execute_optional_singular_query(&self.authority, request, Some(budget))?;
         let projected = output.map(project).transpose()?;
         let payload = Self::encode_norito_payload(&projected)?;
         Self::finish_and_materialize_core_query_option(
             vm,
             gas_remaining,
             &gas_ctx,
-            processed_items,
+            stats.processed_items(),
+            stats.processed_bytes(),
             &payload,
             payload_words,
             prepare,
@@ -7401,8 +7983,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let request = Self::core_query_page_request(tag, offset_u64, limit)?;
         let gas_remaining = vm.remaining_gas();
         let gas_ctx = QueryGasContext::from_request(&request);
-        let budget_items = Self::query_items_budget(&gas_ctx, gas_remaining)?;
-        if budget_items == 0 {
+        let budget = Self::query_execution_budget(&gas_ctx, gas_remaining)?;
+        if budget.max_items() == 0 {
             return Err(ivm::VMError::OutOfGas);
         }
         let Some(state_ref) = self.query_state.get() else {
@@ -7411,11 +7993,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         if let Some(metrics) = &mut self.core_query_page_metrics {
             metrics.host_queries = metrics.host_queries.saturating_add(1);
         }
-        let query_result = state_ref.execute_bounded_query_with_budget(
-            &self.authority,
-            request,
-            Some(budget_items),
-        )?;
+        let query_result =
+            state_ref.execute_bounded_query_with_budget(&self.authority, request, Some(budget))?;
         let QueryResponse::Iterable(output) = query_result.response else {
             return Err(ivm::VMError::DecodeError);
         };
@@ -7436,6 +8015,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     gas_remaining,
                     &gas_ctx,
                     query_result.processed_items,
+                    query_result.processed_bytes,
                     &payload,
                     Self::ACCOUNT_VIEW_WORDS,
                     Self::prepare_account_view,
@@ -7454,6 +8034,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     gas_remaining,
                     &gas_ctx,
                     query_result.processed_items,
+                    query_result.processed_bytes,
                     &payload,
                     Self::ASSET_VIEW_WORDS,
                     Self::prepare_asset_view,
@@ -7475,6 +8056,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     gas_remaining,
                     &gas_ctx,
                     query_result.processed_items,
+                    query_result.processed_bytes,
                     &payload,
                     Self::ASSET_DEFINITION_VIEW_WORDS,
                     Self::prepare_asset_definition_view,
@@ -7490,6 +8072,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     gas_remaining,
                     &gas_ctx,
                     query_result.processed_items,
+                    query_result.processed_bytes,
                     &payload,
                     Self::DOMAIN_VIEW_WORDS,
                     Self::prepare_domain_view,
@@ -7505,6 +8088,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     gas_remaining,
                     &gas_ctx,
                     query_result.processed_items,
+                    query_result.processed_bytes,
                     &payload,
                     Self::NFT_VIEW_WORDS,
                     Self::prepare_nft_view,
@@ -7543,19 +8127,23 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let Some(state_ref) = self.query_state.get() else {
             return Err(ivm::VMError::NotImplemented { syscall });
         };
-        let budget_items = Self::query_items_budget(&gas_ctx, gas_remaining)?;
-        if budget_items == 0 {
+        let budget = Self::query_execution_budget(&gas_ctx, gas_remaining)?;
+        if budget.max_items() == 0 {
             return Err(ivm::VMError::OutOfGas);
         }
         let query_result =
-            state_ref.execute_query_with_budget(&self.authority, request, Some(budget_items))?;
+            state_ref.execute_query_with_budget(&self.authority, request, Some(budget))?;
         let output = match query_result.response {
             QueryResponse::Singular(output) => output,
             QueryResponse::Iterable(_) => return Err(ivm::VMError::DecodeError),
         };
         let payload = payload_from_output(output)?;
         let payload_len_u64 = u64::try_from(payload.len()).unwrap_or(u64::MAX);
-        let gas = Self::query_gas_cost(&gas_ctx, query_result.processed_items, payload_len_u64);
+        let gas = Self::query_gas_cost(
+            &gas_ctx,
+            query_result.processed_items,
+            query_result.processed_bytes.saturating_add(payload_len_u64),
+        );
         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
         if gas > gas_remaining {
             return Err(ivm::VMError::OutOfGas);
@@ -7583,17 +8171,16 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn gas_for_zk_verify_payload(payload: &[u8]) -> u64 {
-        // Reuse the confidential gas schedule by wrapping the envelope payload
-        // in a VerifyProof instruction; this keeps ZK verify costs aligned with ISI gas.
-        let backend: iroha_schema::Ident = "halo2/ipa".into();
-        let proof = ProofBox::new(backend.clone(), payload.to_vec());
-        let attachment = ProofAttachment::new_ref(
-            backend.clone(),
-            proof,
-            VerifyingKeyId::new(backend.as_str(), "ivm_gas_meter"),
-        );
-        let instr = InstructionBox::from(DMZk::VerifyProof::new(attachment));
-        crate::gas::meter_instruction(&instr)
+        ivm::gas::zk_verify_gas(payload.len())
+    }
+
+    fn preflight_zk_verify_payload(vm: &IVM, payload: &[u8]) -> Result<u64, ivm::VMError> {
+        if payload.len() > ivm::gas::HOST_ZK_VERIFY_MAX_PAYLOAD_BYTES {
+            return Err(ivm::VMError::NoritoInvalid);
+        }
+        let gas = Self::gas_for_zk_verify_payload(payload);
+        ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+        Ok(gas)
     }
 
     fn lifecycle_hook_is_running(&self) -> bool {
@@ -7840,7 +8427,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .as_ref()
             .and_then(Self::policy_current_slot);
         self.reset_axt_proof_cache_for_slot(policy_slot);
-        self.axt_state = Some(axt::HostAxtState::new(descriptor, binding));
+        self.axt_state = Some(Arc::new(axt::HostAxtState::new(descriptor, binding)));
         Ok(gas)
     }
 
@@ -7887,7 +8474,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             return Err(err);
         }
         let record_result = {
-            let state = self.axt_state.as_mut().expect("axt_state checked above");
+            let state = Arc::make_mut(self.axt_state.as_mut().expect("axt_state checked above"));
             state.record_touch(dsid, manifest)
         };
         if let Err(err) = record_result {
@@ -7951,9 +8538,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         if proof_ptr == 0 {
             let gas = Self::axt_verify_gas(0);
             ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-            let state = self.axt_state.as_mut().expect("axt_state checked above");
+            let state = Arc::make_mut(self.axt_state.as_mut().expect("axt_state checked above"));
             state.record_proof(dsid, None, Some(policy.current_slot))?;
-            if let Some(entry) = self.axt_proof_cache.remove(&dsid) {
+            if let Some(entry) = Arc::make_mut(&mut self.axt_proof_cache).remove(&dsid) {
                 self.clear_axt_proof_cache_state(dsid, &entry);
             }
             self.note_axt_proof_cache_event(AXT_PROOF_CACHE_CLEARED);
@@ -8155,7 +8742,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         if result.is_ok() {
             let retain_until_slot = self.replay_retain_until_slot(&usage.handle, record_slot);
-            self.axt_replay_ledger.insert(
+            Arc::make_mut(&mut self.axt_replay_ledger).insert(
                 key,
                 AxtReplayRecord {
                     dataspace: dsid,
@@ -8391,7 +8978,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             amount_commitment: resolved_amount.amount_commitment,
         };
         self.enforce_axt_policy(&usage)?;
-        let state = self.axt_state.as_mut().expect("axt_state checked above");
+        let state = Arc::make_mut(self.axt_state.as_mut().expect("axt_state checked above"));
         let usage_for_logging = usage.clone();
         if let Err(err) = state.record_handle(usage) {
             self.record_axt_reject(
@@ -8487,6 +9074,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         match state.validate_commit() {
             Ok(()) => {
+                let state = Arc::try_unwrap(state).unwrap_or_else(|state| (*state).clone());
                 self.completed_axt.push(state);
                 Ok(gas)
             }
@@ -8646,6 +9234,26 @@ where
 }
 
 impl<QS> CoreHostImpl<QS> {
+    fn bound_contract_dispatch_identity<R: StateReadOnly>(
+        state: &R,
+        contract_address: &ContractAddress,
+    ) -> Option<(
+        crate::smartcontracts::code::BoundContractIdentity,
+        AccountId,
+        usize,
+    )> {
+        let identity =
+            crate::smartcontracts::code::fetch_bound_contract_identity(state, contract_address)?;
+        let subject =
+            crate::smartcontracts::code::fetch_bound_contract_subject(state, contract_address)?;
+        let artifact_len = state
+            .world()
+            .contract_code()
+            .get(&identity.code_hash)?
+            .len();
+        Some((identity, subject, artifact_len))
+    }
+
     fn resolve_account_alias<R: StateReadOnly>(
         state: &R,
         authority: &AccountId,
@@ -8749,7 +9357,7 @@ impl<QS> CoreHostImpl<QS> {
     }
 
     fn is_codec_forwarded_syscall(number: u32) -> bool {
-        if ivm::syscalls::is_amount_syscall(number) {
+        if ivm::syscalls::is_numeric_v1_syscall(number) {
             return true;
         }
         matches!(
@@ -8859,9 +9467,7 @@ impl<QS> CoreHostImpl<QS> {
 
 impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
     fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, ivm::VMError> {
-        if !ivm::syscalls::is_syscall_allowed(vm.syscall_policy(), number) {
-            return Err(ivm::VMError::UnknownSyscall(number));
-        }
+        let metering = ivm::host::require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
         if self.lifecycle_hook_is_running()
             && matches!(
                 number,
@@ -8872,19 +9478,39 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             return Err(ivm::VMError::PermissionDenied);
         }
         let state_quote = match number {
-            ivm::syscalls::SYSCALL_STATE_GET
-            | ivm::syscalls::SYSCALL_STATE_LEN
-            | ivm::syscalls::SYSCALL_STATE_KEYS
-            | ivm::syscalls::SYSCALL_STATE_COUNT => {
-                Some(ivm::host::reserve_available_syscall_gas(vm)?)
+            ivm::syscalls::SYSCALL_STATE_GET => {
+                let path_len = ivm::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
+                Some(ivm::host::state_get_gas_quote(path_len))
+            }
+            ivm::syscalls::SYSCALL_STATE_LEN => {
+                let path_len = ivm::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
+                Some(ivm::host::state_path_gas(path_len))
+            }
+            ivm::syscalls::SYSCALL_STATE_COUNT => {
+                let path_len = ivm::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
+                Some(ivm::host::reserve_available_syscall_gas_at_least(
+                    vm,
+                    ivm::host::state_path_gas(path_len),
+                )?)
+            }
+            ivm::syscalls::SYSCALL_STATE_KEYS => {
+                let path_len = ivm::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
+                let minimum = ivm::host::state_keys_prepare_minimum(path_len, vm.register(12))?;
+                Some(ivm::host::reserve_available_syscall_gas_at_least(
+                    vm, minimum,
+                )?)
             }
             ivm::syscalls::SYSCALL_STATE_SET => {
-                quote_tlv_payload_len_at(vm, vm.register(10), PointerType::Name)?;
+                let path_len = ivm::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
                 let value_len =
                     quote_tlv_payload_len_at(vm, vm.register(11), PointerType::NoritoBytes)?;
-                Some(Self::state_query_gas(value_len))
+                ivm::host::validate_state_value_payload_len(value_len)?;
+                Some(ivm::host::state_value_gas(path_len, value_len))
             }
-            ivm::syscalls::SYSCALL_STATE_DEL | ivm::syscalls::SYSCALL_STATE_HAS => Some(16),
+            ivm::syscalls::SYSCALL_STATE_DEL | ivm::syscalls::SYSCALL_STATE_HAS => {
+                let path_len = ivm::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
+                Some(ivm::host::state_path_gas(path_len))
+            }
             _ => None,
         };
         if let Some(quote) = state_quote {
@@ -8981,10 +9607,30 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             | ivm::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
             | ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
             | ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY
-            | ivm::syscalls::SYSCALL_VERIFY_PROOF
-            | ivm::syscalls::SYSCALL_ZK_VERIFY_BATCH => {
-                quote_tlv_payload_len_at(vm, vm.register(10), PointerType::NoritoBytes)?;
-                Some(ivm::host::reserve_available_syscall_gas(vm)?)
+            | ivm::syscalls::SYSCALL_VERIFY_PROOF => {
+                let payload_len =
+                    quote_tlv_payload_len_at(vm, vm.register(10), PointerType::NoritoBytes)?;
+                if payload_len > ivm::gas::HOST_ZK_VERIFY_MAX_PAYLOAD_BYTES {
+                    return Err(ivm::VMError::NoritoInvalid);
+                }
+                Some(ivm::gas::zk_verify_gas(payload_len))
+            }
+            ivm::syscalls::SYSCALL_ZK_VERIFY_BATCH => {
+                type Batch = Vec<iroha_data_model::zk::OpenVerifyEnvelope>;
+                let max_items = usize::try_from(self.halo2_config.verifier_max_batch)
+                    .unwrap_or(usize::MAX)
+                    .min(ivm::gas::HOST_ZK_VERIFY_MAX_BATCH_PROOFS);
+                let (payload_len, count) = ivm::host::quote_norito_sequence_count_at(
+                    vm,
+                    vm.register(10),
+                    <Batch as NoritoDeserialize<'static>>::schema_hash(),
+                    ivm::gas::HOST_ZK_VERIFY_MAX_PAYLOAD_BYTES,
+                    max_items,
+                )?;
+                if count == 0 {
+                    return Err(ivm::VMError::NoritoInvalid);
+                }
+                Some(ivm::gas::zk_verify_batch_gas(count, payload_len))
             }
             ivm::syscalls::SYSCALL_ZK_ROOTS_GET
             | ivm::syscalls::SYSCALL_ZK_VOTE_GET_TALLY
@@ -9060,21 +9706,28 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             // checks the encoded response cost before returning. Reserving that
             // entire budget is therefore a tight upper bound even when the
             // world-state cardinality is not available without running a query.
-            return ivm::host::reserve_available_syscall_gas(vm);
+            return ivm::host::reserve_available_syscall_gas_at_least(vm, metering.minimum_gas);
         }
 
-        // Instruction-producing syscalls have no host-cardinality-dependent
-        // response. Their cost is bounded by the validated pointer payloads;
-        // dynamic query and nested-contract families are handled above.
-        Ok(ivm::host::conservative_syscall_gas_quote(number, vm))
+        match metering.quote_strategy {
+            ivm::host::HostSyscallQuoteStrategy::ReserveAvailable => {
+                ivm::host::reserve_available_syscall_gas_at_least(vm, metering.minimum_gas)
+            }
+            ivm::host::HostSyscallQuoteStrategy::InputOutputBounded
+            | ivm::host::HostSyscallQuoteStrategy::AllocationExtent => {
+                // Forwarded exact/allocation paths returned above. Remaining
+                // instruction-producing calls use the deterministic envelope
+                // bound and cannot silently inherit a reserve strategy.
+                Ok(ivm::host::conservative_syscall_gas_quote(number, vm))
+            }
+        }
     }
 
     #[allow(clippy::too_many_lines)]
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, ivm::VMError> {
-        // Enforce central syscall policy (ABI-versioned) uniformly across hosts.
-        if !ivm::syscalls::is_syscall_allowed(vm.syscall_policy(), number) {
-            return Err(ivm::VMError::UnknownSyscall(number));
-        }
+        // Enforce both ABI policy and exhaustive metering classification for
+        // direct host calls as well as VM-dispatched execution.
+        ivm::host::require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
         if self.lifecycle_hook_is_running()
             && matches!(
                 number,
@@ -9179,7 +9832,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let instr = InstructionBox::from(isi);
                 Ok(self.queue_instruction(instr))
             }
-            // ----------------- Asset Amount ISIs via pointer-ABI -----------------
+            // ----------------- Asset quantity ISIs via pointer-ABI -----------------
             ivm::syscalls::SYSCALL_REGISTER_ASSET => {
                 let ptr = vm.register(10);
                 let id: AssetDefinitionId =
@@ -9667,7 +10320,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
                         if pending_hash.is_some() {
                             debug_assert_eq!(
-                                self.zk_last_env_hash_ballot.pop_front(),
+                                Arc::make_mut(&mut self.zk_last_env_hash_ballot).pop_front(),
                                 pending_hash
                             );
                         }
@@ -9701,7 +10354,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
                         if pending_hash.is_some() {
                             debug_assert_eq!(
-                                self.zk_last_env_hash_unshield.pop_front(),
+                                Arc::make_mut(&mut self.zk_last_env_hash_unshield).pop_front(),
                                 pending_hash
                             );
                         }
@@ -9730,32 +10383,22 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let Some(state_ref) = self.query_state.get() else {
                     return Err(ivm::VMError::NotImplemented { syscall: number });
                 };
-                let budget_items = Self::query_items_budget(&gas_ctx, gas_remaining)?;
-                if matches!(request, QueryRequest::Singular(_)) && budget_items == 0 {
+                let budget = Self::query_execution_budget(&gas_ctx, gas_remaining)?;
+                if matches!(request, QueryRequest::Singular(_)) && budget.max_items() == 0 {
                     return Err(ivm::VMError::OutOfGas);
                 }
-                let query_result = state_ref.execute_query_with_budget(
-                    &self.authority,
-                    request,
-                    Some(budget_items),
-                )?;
+                let query_result =
+                    state_ref.execute_query_with_budget(&self.authority, request, Some(budget))?;
                 let response = query_result.response;
                 let processed_items = query_result.processed_items;
-                if let Some(encoded_len) = Self::norito_encoded_len_exact(&response) {
-                    let gas = Self::query_gas_cost(&gas_ctx, processed_items, encoded_len);
-                    ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                    if gas > gas_remaining {
-                        return Err(ivm::VMError::OutOfGas);
-                    }
-                }
-                let response_bytes =
-                    norito::to_bytes(&response).map_err(|_| ivm::VMError::DecodeError)?;
-                let response_len_u64 = u64::try_from(response_bytes.len()).unwrap_or(u64::MAX);
-                let gas = Self::query_gas_cost(&gas_ctx, processed_items, response_len_u64);
+                let gas =
+                    Self::query_gas_cost(&gas_ctx, processed_items, query_result.processed_bytes);
                 ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
                 if gas > gas_remaining {
                     return Err(ivm::VMError::OutOfGas);
                 }
+                let response_bytes =
+                    norito::to_bytes(&response).map_err(|_| ivm::VMError::DecodeError)?;
                 let payload_len = Self::len_to_u32(response_bytes.len())?;
                 let mut out = Vec::with_capacity(7 + response_bytes.len() + Hash::LENGTH);
                 out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
@@ -9784,7 +10427,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let Some(state_ref) = self.query_state.get() else {
                     return Err(ivm::VMError::NotImplemented { syscall: number });
                 };
-                if Self::query_items_budget(&gas_ctx, gas_remaining)? == 0 {
+                if Self::query_execution_budget(&gas_ctx, gas_remaining)?.max_items() == 0 {
                     return Err(ivm::VMError::OutOfGas);
                 }
                 let account_id =
@@ -9824,7 +10467,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 self.execute_singular_query_payload_as(
                     vm,
                     number,
-                    PointerType::Amount,
+                    PointerType::Quantity,
                     request,
                     |output| match output {
                         SingularQueryOutputBox::Asset(asset) => {
@@ -9912,8 +10555,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(ivm::VMError::NoritoInvalid);
                 }
-                let gas = Self::gas_for_zk_verify_payload(tlv.payload);
-                ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                let gas = Self::preflight_zk_verify_payload(vm, tlv.payload)?;
                 let env_hash: [u8; 32] = Hash::new(tlv.payload).into();
                 let ok = match self.verify_bound_envelope(tlv.payload, "transfer") {
                     Ok(ok) => ok,
@@ -9926,8 +10568,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 vm.set_register(10, u64::from(ok));
                 vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
                 if ok {
-                    self.zk_verified_transfer.push_back(env_hash);
-                    self.zk_last_env_hash_transfer.push_back(env_hash);
+                    Arc::make_mut(&mut self.zk_verified_transfer).push_back(env_hash);
+                    Arc::make_mut(&mut self.zk_last_env_hash_transfer).push_back(env_hash);
                 }
                 Ok(gas)
             }
@@ -9937,8 +10579,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(ivm::VMError::NoritoInvalid);
                 }
-                let gas = Self::gas_for_zk_verify_payload(tlv.payload);
-                ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                let gas = Self::preflight_zk_verify_payload(vm, tlv.payload)?;
                 let env_hash: [u8; 32] = Hash::new(tlv.payload).into();
                 let ok = match self.verify_bound_envelope(tlv.payload, "unshield") {
                     Ok(ok) => ok,
@@ -9951,8 +10592,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 vm.set_register(10, u64::from(ok));
                 vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
                 if ok {
-                    self.zk_verified_unshield.push_back(env_hash);
-                    self.zk_last_env_hash_unshield.push_back(env_hash);
+                    Arc::make_mut(&mut self.zk_verified_unshield).push_back(env_hash);
+                    Arc::make_mut(&mut self.zk_last_env_hash_unshield).push_back(env_hash);
                 }
                 Ok(gas)
             }
@@ -9962,8 +10603,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(ivm::VMError::NoritoInvalid);
                 }
-                let gas = Self::gas_for_zk_verify_payload(tlv.payload);
-                ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                let gas = Self::preflight_zk_verify_payload(vm, tlv.payload)?;
                 let env_hash: [u8; 32] = Hash::new(tlv.payload).into();
                 let ok = match self.verify_bound_envelope(tlv.payload, "ballot") {
                     Ok(ok) => ok,
@@ -9976,8 +10616,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 vm.set_register(10, u64::from(ok));
                 vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
                 if ok {
-                    self.zk_verified_ballot.push_back(env_hash);
-                    self.zk_last_env_hash_ballot.push_back(env_hash);
+                    Arc::make_mut(&mut self.zk_verified_ballot).push_back(env_hash);
+                    Arc::make_mut(&mut self.zk_last_env_hash_ballot).push_back(env_hash);
                 }
                 Ok(gas)
             }
@@ -9987,8 +10627,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(ivm::VMError::NoritoInvalid);
                 }
-                let gas = Self::gas_for_zk_verify_payload(tlv.payload);
-                ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                let gas = Self::preflight_zk_verify_payload(vm, tlv.payload)?;
                 let env_hash: [u8; 32] = Hash::new(tlv.payload).into();
                 let ok = match self.verify_bound_envelope(tlv.payload, "tally") {
                     Ok(ok) => ok,
@@ -10001,8 +10640,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 vm.set_register(10, u64::from(ok));
                 vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
                 if ok {
-                    self.zk_verified_tally.push_back(env_hash);
-                    self.zk_last_env_hash_tally.push_back(env_hash);
+                    Arc::make_mut(&mut self.zk_verified_tally).push_back(env_hash);
+                    Arc::make_mut(&mut self.zk_last_env_hash_tally).push_back(env_hash);
                 }
                 Ok(gas)
             }
@@ -10012,8 +10651,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(ivm::VMError::NoritoInvalid);
                 }
-                let gas = Self::gas_for_zk_verify_payload(tlv.payload);
-                ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                let gas = Self::preflight_zk_verify_payload(vm, tlv.payload)?;
                 let ok = match self.verify_any_namespace_envelope(tlv.payload) {
                     Ok(ok) => ok,
                     Err(code) => {
@@ -10027,28 +10665,56 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 Ok(gas)
             }
             ivm::syscalls::SYSCALL_ZK_VERIFY_BATCH => {
+                type Batch = Vec<iroha_data_model::zk::OpenVerifyEnvelope>;
                 let ptr = vm.register(10);
                 let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(ivm::VMError::NoritoInvalid);
                 }
-                let gas = Self::gas_for_zk_verify_payload(tlv.payload);
+                if tlv.payload.len() > ivm::gas::HOST_ZK_VERIFY_MAX_PAYLOAD_BYTES {
+                    return Err(ivm::VMError::NoritoInvalid);
+                }
+                let fallback_gas = Self::gas_for_zk_verify_payload(tlv.payload);
+                ivm::host::preflight_reserved_syscall_gas(vm, fallback_gas)?;
+                let view = match norito::core::from_bytes_view(tlv.payload) {
+                    Ok(view)
+                        if view.schema()
+                            == <Batch as NoritoDeserialize<'static>>::schema_hash() =>
+                    {
+                        view
+                    }
+                    _ => {
+                        vm.set_register(10, 0);
+                        vm.set_register(11, ivm::host::ERR_DECODE);
+                        return Ok(fallback_gas);
+                    }
+                };
+                let count = match norito::core::read_seq_len_slice(view.as_bytes()) {
+                    Ok((count, _)) if count != 0 => count,
+                    _ => {
+                        vm.set_register(10, 0);
+                        vm.set_register(11, ivm::host::ERR_DECODE);
+                        return Ok(fallback_gas);
+                    }
+                };
+                let max_items = usize::try_from(self.halo2_config.verifier_max_batch)
+                    .unwrap_or(usize::MAX)
+                    .min(ivm::gas::HOST_ZK_VERIFY_MAX_BATCH_PROOFS);
+                if count > max_items {
+                    vm.set_register(10, 0);
+                    vm.set_register(11, ivm::host::ERR_BATCH);
+                    return Ok(fallback_gas);
+                }
+                let gas = ivm::gas::zk_verify_batch_gas(count, tlv.payload.len());
                 ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                let envs: Vec<iroha_data_model::zk::OpenVerifyEnvelope> =
-                    if let Ok(v) = norito::decode_from_bytes(tlv.payload) {
-                        v
-                    } else {
+                let envs: Batch = match view.decode() {
+                    Ok(envs) => envs,
+                    Err(_) => {
                         vm.set_register(10, 0);
                         vm.set_register(11, ivm::host::ERR_DECODE);
                         return Ok(gas);
-                    };
-                if u32::try_from(envs.len()).unwrap_or(u32::MAX)
-                    > self.halo2_config.verifier_max_batch
-                {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, ivm::host::ERR_BATCH);
-                    return Ok(gas);
-                }
+                    }
+                };
                 let guardrails = self.zk_verify_guardrails();
 
                 let mut statuses: Vec<u8> = Vec::with_capacity(envs.len());
@@ -10244,102 +10910,80 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             }
             // Durable state syscalls backed by WSV.
             ivm::syscalls::SYSCALL_STATE_GET => {
-                let path_ptr = vm.register(10);
-                let path_tlv = Self::expect_tlv(vm, path_ptr, PointerType::Name)?;
-                let path = Self::decode_name_payload(path_tlv.payload)?;
-                self.log_state_read_key(path.as_ref());
-                if let Some(scoped_path) = self.scoped_durable_state_path(&path)? {
-                    if let Some(entry) = self.durable_state_overlay.get(&scoped_path) {
-                        match entry {
-                            Some(stored) => {
-                                let len = Self::durable_state_value_payload_len(stored)?;
-                                let gas = Self::state_query_gas(len);
-                                ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                                Self::load_state_value(vm, stored)?;
-                                return Ok(gas);
-                            }
-                            None => {
-                                ivm::host::preflight_reserved_syscall_gas(vm, 16)?;
-                                vm.set_register(10, 0);
-                                return Ok(16);
-                            }
-                        }
-                    }
-                    if let Some(stored) = self.durable_state_base_or_live_get(&scoped_path) {
-                        let len = Self::durable_state_value_payload_len(stored.as_ref())?;
-                        let gas = Self::state_query_gas(len);
-                        ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                        Self::load_state_value(vm, stored.as_ref())?;
-                        return Ok(gas);
-                    }
-                    ivm::host::preflight_reserved_syscall_gas(vm, 16)?;
-                    vm.set_register(10, 0);
-                    return Ok(16);
-                }
-                if let Some(entry) = self.durable_state_overlay.get(&path) {
+                let (path, path_len) = Self::decode_durable_state_path(vm, vm.register(10))?;
+                let key = self
+                    .scoped_durable_state_path(&path)?
+                    .unwrap_or_else(|| path.clone());
+                if let Some(entry) = self.durable_state_overlay.get(&key) {
                     match entry {
                         Some(stored) => {
                             let len = Self::durable_state_value_payload_len(stored)?;
-                            let gas = Self::state_query_gas(len);
+                            let gas = ivm::host::state_value_gas(path_len, len);
                             ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                            Self::load_state_value(vm, stored)?;
+                            let stored = stored.clone();
+                            self.log_state_read_key(path.as_ref());
+                            Self::load_state_value(vm, &stored)?;
                             return Ok(gas);
                         }
                         None => {
-                            ivm::host::preflight_reserved_syscall_gas(vm, 16)?;
+                            let gas = ivm::host::state_path_gas(path_len);
+                            ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                            self.log_state_read_key(path.as_ref());
                             vm.set_register(10, 0);
-                            return Ok(16);
+                            return Ok(gas);
                         }
                     }
                 }
-                if let Some(stored) = self.durable_state_base_or_live_get(&path) {
-                    let len = Self::durable_state_value_payload_len(stored.as_ref())?;
-                    let gas = Self::state_query_gas(len);
+                if let Some(len) = self.durable_state_base_or_live_value_len(&key)? {
+                    let gas = ivm::host::state_value_gas(path_len, len);
                     ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                    self.log_state_read_key(path.as_ref());
+                    let stored = self
+                        .durable_state_base_or_live_get(&key)
+                        .ok_or(ivm::VMError::DecodeError)?;
                     Self::load_state_value(vm, stored.as_ref())?;
                     Ok(gas)
                 } else {
-                    ivm::host::preflight_reserved_syscall_gas(vm, 16)?;
+                    let gas = ivm::host::state_path_gas(path_len);
+                    ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                    self.log_state_read_key(path.as_ref());
                     vm.set_register(10, 0);
-                    Ok(16)
+                    Ok(gas)
                 }
             }
             ivm::syscalls::SYSCALL_STATE_SET => {
                 let path_ptr = vm.register(10);
                 let val_ptr = vm.register(11);
-                let path_tlv = Self::expect_tlv(vm, path_ptr, PointerType::Name)?;
+                let (path, path_len) = Self::decode_durable_state_path(vm, path_ptr)?;
                 let val_tlv = Self::expect_tlv(vm, val_ptr, PointerType::NoritoBytes)?;
-                let path = Self::decode_name_payload(path_tlv.payload)?;
-                self.log_state_write_key(path.as_ref());
-                let mut stored = Vec::with_capacity(7 + val_tlv.payload.len() + Hash::LENGTH);
-                stored.extend_from_slice(&(val_tlv.type_id as u16).to_be_bytes());
-                stored.push(val_tlv.version);
-                let payload_len = u32::try_from(val_tlv.payload.len())
-                    .map_err(|_| ivm::VMError::NoritoInvalid)?;
-                stored.extend_from_slice(&payload_len.to_be_bytes());
-                stored.extend_from_slice(val_tlv.payload);
-                let h: [u8; Hash::LENGTH] = Hash::new(val_tlv.payload).into();
-                stored.extend_from_slice(&h);
+                ivm::host::validate_state_value_payload_len(val_tlv.payload.len())?;
                 let key = self
                     .scoped_durable_state_path(&path)?
                     .unwrap_or_else(|| path.clone());
-                self.durable_state_overlay.insert(key.clone(), Some(stored));
-                self.durable_state_authorizations
-                    .insert(key, self.current_entrypoint_authorization.clone());
-                Ok(Self::state_query_gas(val_tlv.payload.len()))
+                if crate::smartcontracts::code::is_contract_subject_history_key(&path)
+                    || crate::validation_fee::is_validation_fee_credit_state_key(&key)
+                {
+                    return Err(ivm::VMError::PermissionDenied);
+                }
+                let gas = ivm::host::state_value_gas(path_len, val_tlv.payload.len());
+                let stored = val_tlv.payload.to_vec();
+                self.stage_durable_state_update(key, Some(stored));
+                self.log_state_write_key(path.as_ref());
+                Ok(gas)
             }
             ivm::syscalls::SYSCALL_STATE_DEL => {
-                let path_ptr = vm.register(10);
-                let path_tlv = Self::expect_tlv(vm, path_ptr, PointerType::Name)?;
-                let path = Self::decode_name_payload(path_tlv.payload)?;
+                let (path, path_len) = Self::decode_durable_state_path(vm, vm.register(10))?;
+                let scoped_path = self.scoped_durable_state_path(&path)?;
+                let effective_path = scoped_path.as_ref().unwrap_or(&path);
+                if crate::smartcontracts::code::is_contract_subject_history_key(&path)
+                    || crate::validation_fee::is_validation_fee_credit_state_key(effective_path)
+                {
+                    return Err(ivm::VMError::PermissionDenied);
+                }
+                let key = effective_path.clone();
+                self.stage_durable_state_update(key, None);
                 self.log_state_write_key(path.as_ref());
-                let key = self
-                    .scoped_durable_state_path(&path)?
-                    .unwrap_or_else(|| path.clone());
-                self.durable_state_overlay.insert(key.clone(), None);
-                self.durable_state_authorizations
-                    .insert(key, self.current_entrypoint_authorization.clone());
-                Ok(16)
+                Ok(ivm::host::state_path_gas(path_len))
             }
             ivm::syscalls::SYSCALL_STATE_KEYS => {
                 let offset = vm.register(11);
@@ -10347,56 +10991,60 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 if limit > ivm::syscalls::STATE_KEYS_MAX_ITEMS {
                     return Err(ivm::VMError::NoritoInvalid);
                 }
-                let prefix_ptr = vm.register(10);
-                let prefix_tlv = Self::expect_tlv(vm, prefix_ptr, PointerType::Name)?;
-                let prefix = Self::decode_name_payload(prefix_tlv.payload)?;
+                let (prefix, path_len) = Self::decode_durable_state_path(vm, vm.register(10))?;
+                let (selected, total, scan_work_gas) =
+                    self.collect_durable_state_keys(vm, &prefix, path_len, offset, limit)?;
+                ivm::host::preflight_reserved_state_keys_page(
+                    vm,
+                    &selected,
+                    scan_work_gas,
+                    0,
+                    u64::try_from(selected.len()).unwrap_or(u64::MAX),
+                )?;
                 self.log_state_read_key(prefix.as_ref());
-                let (keys, examined_count) = self.collect_durable_state_keys(&prefix)?;
-                let selected = Self::paged_state_keys(&keys, offset, limit)?;
                 let payload = Self::encode_norito_payload(&selected)?;
-                let gas = Self::state_keys_gas(examined_count, payload.len());
+                let gas = ivm::host::STATE_QUERY_GAS_BASE
+                    .saturating_add(scan_work_gas)
+                    .saturating_add(u64::try_from(payload.len()).unwrap_or(u64::MAX));
                 ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
                 let ptr = Self::alloc_norito_bytes(vm, &payload)?;
                 vm.set_register(10, ptr);
-                vm.set_register(11, u64::try_from(keys.len()).unwrap_or(u64::MAX));
+                vm.set_register(11, total);
                 vm.set_register(12, u64::try_from(selected.len()).unwrap_or(u64::MAX));
                 Ok(gas)
             }
             ivm::syscalls::SYSCALL_STATE_HAS => {
-                let path_ptr = vm.register(10);
-                let path_tlv = Self::expect_tlv(vm, path_ptr, PointerType::Name)?;
-                let path = Self::decode_name_payload(path_tlv.payload)?;
+                let (path, path_len) = Self::decode_durable_state_path(vm, vm.register(10))?;
+                let present = self.durable_state_key_present(&path)?;
                 self.log_state_read_key(path.as_ref());
-                vm.set_register(10, u64::from(self.durable_state_key_present(&path)?));
-                Ok(16)
+                vm.set_register(10, u64::from(present));
+                Ok(ivm::host::state_path_gas(path_len))
             }
             ivm::syscalls::SYSCALL_STATE_LEN => {
-                let path_ptr = vm.register(10);
-                let path_tlv = Self::expect_tlv(vm, path_ptr, PointerType::Name)?;
-                let path = Self::decode_name_payload(path_tlv.payload)?;
-                self.log_state_read_key(path.as_ref());
+                let (path, path_len) = Self::decode_durable_state_path(vm, vm.register(10))?;
+                let gas = ivm::host::state_path_gas(path_len);
                 if let Some(len) = self.durable_state_value_len(&path)? {
-                    let gas = Self::state_query_gas(len);
                     ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                    self.log_state_read_key(path.as_ref());
                     vm.set_register(10, u64::try_from(len).unwrap_or(u64::MAX));
                     vm.set_register(11, 1);
                     Ok(gas)
                 } else {
-                    ivm::host::preflight_reserved_syscall_gas(vm, 16)?;
+                    ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                    self.log_state_read_key(path.as_ref());
                     vm.set_register(10, 0);
                     vm.set_register(11, 0);
-                    Ok(16)
+                    Ok(gas)
                 }
             }
             ivm::syscalls::SYSCALL_STATE_COUNT => {
-                let prefix_ptr = vm.register(10);
-                let prefix_tlv = Self::expect_tlv(vm, prefix_ptr, PointerType::Name)?;
-                let prefix = Self::decode_name_payload(prefix_tlv.payload)?;
-                self.log_state_read_key(prefix.as_ref());
-                let (total, examined_count) = self.count_durable_state_keys(&prefix)?;
-                let gas = Self::state_count_gas(examined_count);
+                let (prefix, path_len) = Self::decode_durable_state_path(vm, vm.register(10))?;
+                let (_, total, scan_work_gas) =
+                    self.collect_durable_state_keys(vm, &prefix, path_len, u64::MAX, 0)?;
+                let gas = ivm::host::STATE_QUERY_GAS_BASE.saturating_add(scan_work_gas);
                 ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                vm.set_register(10, u64::try_from(total).unwrap_or(u64::MAX));
+                self.log_state_read_key(prefix.as_ref());
+                vm.set_register(10, total);
                 Ok(gas)
             }
             ivm::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD
@@ -10522,7 +11170,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let Some(state_ref) = self.query_state.get() else {
                     return Err(ivm::VMError::NotImplemented { syscall: number });
                 };
-                if Self::query_items_budget(&gas_ctx, gas_remaining)? == 0 {
+                if Self::query_execution_budget(&gas_ctx, gas_remaining)?.max_items() == 0 {
                     return Err(ivm::VMError::OutOfGas);
                 }
                 let parameter = state_ref.parameter_by_name(&name)?;
@@ -10536,7 +11184,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let Some(state_ref) = self.query_state.get() else {
                     return Err(ivm::VMError::NotImplemented { syscall: number });
                 };
-                if Self::query_items_budget(&gas_ctx, gas_remaining)? == 0 {
+                if Self::query_execution_budget(&gas_ctx, gas_remaining)?.max_items() == 0 {
                     return Err(ivm::VMError::OutOfGas);
                 }
                 let instance = match lookup {
@@ -10576,6 +11224,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
     }
 
     fn begin_tx(&mut self, declared: &ivm::parallel::StateAccessSet) -> Result<(), ivm::VMError> {
+        if !self.nested_contract_call_journals.is_empty() {
+            return Err(ivm::VMError::DecodeError);
+        }
         self.durable_state_overlay.clear();
         self.durable_state_authorizations.clear();
         self.state_access_log = ivm::host::AccessLog {
@@ -10808,9 +11459,7 @@ mod pointer_abi_tests {
             PointerType::AccountId as u16,
             &norito::to_bytes(&account).expect("encode account"),
         );
-        let stored = make_tlv(PointerType::NoritoBytes as u16, &inner);
-
-        CoreHost::load_state_value(&mut vm, &stored).expect("load wrapped state value");
+        CoreHost::load_state_value(&mut vm, &inner).expect("load raw state value");
         vm.set_register(11, u64::from(PointerType::AccountId as u16));
         host.syscall(ivm::syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm)
             .expect("pointer_from_norito");
@@ -10834,9 +11483,7 @@ mod pointer_abi_tests {
             PointerType::AssetDefinitionId as u16,
             &norito::to_bytes(&asset).expect("encode asset definition"),
         );
-        let stored = make_tlv(PointerType::NoritoBytes as u16, &inner);
-
-        CoreHost::load_state_value(&mut vm, &stored).expect("load wrapped state value");
+        CoreHost::load_state_value(&mut vm, &inner).expect("load raw state value");
         vm.set_register(11, u64::from(PointerType::AssetDefinitionId as u16));
         host.syscall(ivm::syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm)
             .expect("pointer_from_norito");
@@ -10848,16 +11495,13 @@ mod pointer_abi_tests {
     }
 
     #[test]
-    fn load_state_value_rejects_wrapped_non_norito_bytes() {
+    fn load_state_value_rejects_oversized_raw_payload() {
         crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(10_000);
-        let stored = make_tlv(
-            PointerType::Name as u16,
-            &norito_blob(&Name::from_str("wrong").expect("valid name")),
-        );
+        let stored = vec![0u8; ivm::syscalls::STATE_MAX_VALUE_BYTES + 1];
 
         let err =
-            CoreHost::load_state_value(&mut vm, &stored).expect_err("wrapped non-NoritoBytes TLV");
+            CoreHost::load_state_value(&mut vm, &stored).expect_err("oversized raw state payload");
         assert!(matches!(err, ivm::VMError::NoritoInvalid));
     }
 
@@ -11789,7 +12433,7 @@ mod pointer_abi_tests {
             touches: Vec::new(),
         };
         let binding = axt::compute_binding(&descriptor).expect("axt binding");
-        host.axt_state = Some(axt::HostAxtState::new(descriptor, binding));
+        host.axt_state = Some(Arc::new(axt::HostAxtState::new(descriptor, binding)));
 
         let proof = proof_blob_for(dsid, manifest_root, b"cache-snapshot", 30);
         let policy = host.policy_entry_for(dsid).expect("policy entry");
@@ -12076,7 +12720,7 @@ mod pointer_abi_tests {
             sub_nonce: 1,
             target_lane: lane,
         };
-        host.axt_replay_ledger.insert(
+        Arc::make_mut(&mut host.axt_replay_ledger).insert(
             replay_key,
             AxtReplayRecord {
                 dataspace: dsid,
@@ -12670,10 +13314,11 @@ mod pointer_abi_tests {
             PointerType::AssetDefinitionId,
             &norito_blob(&asset_definition),
         );
-        let amount_ptr = store_tlv(&mut vm, PointerType::Amount, &norito_blob(&amount));
-        let buyer_amount_ptr = store_tlv(&mut vm, PointerType::Amount, &norito_blob(&buyer_amount));
+        let amount_ptr = store_tlv(&mut vm, PointerType::Quantity, &norito_blob(&amount));
+        let buyer_amount_ptr =
+            store_tlv(&mut vm, PointerType::Quantity, &norito_blob(&buyer_amount));
         let seller_amount_ptr =
-            store_tlv(&mut vm, PointerType::Amount, &norito_blob(&seller_amount));
+            store_tlv(&mut vm, PointerType::Quantity, &norito_blob(&seller_amount));
         let evidence_ptr = store_tlv(
             &mut vm,
             PointerType::NoritoBytes,
@@ -13510,14 +14155,24 @@ mod pointer_abi_tests {
     }
 
     #[test]
-    fn amount_decoder_requires_nominal_canonical_payloads() {
+    fn amount_decoder_requires_quantity_pointer_and_nominal_canonical_payloads() {
         let mut vm = IVM::new(10_000);
         let canonical = Numeric::new(125_u32, 2);
-        let canonical_ptr = store_tlv(&mut vm, PointerType::Amount, &norito_blob(&canonical));
+        let canonical_ptr = store_tlv(&mut vm, PointerType::Quantity, &norito_blob(&canonical));
         assert_eq!(
             CoreHost::decode_amount(&vm, canonical_ptr).expect("decode canonical amount"),
             canonical
         );
+
+        let retired_ptr = store_tlv(
+            &mut vm,
+            PointerType::RetiredAmount,
+            &norito_blob(&canonical),
+        );
+        assert!(matches!(
+            CoreHost::decode_amount(&vm, retired_ptr),
+            Err(ivm::VMError::NoritoInvalid)
+        ));
 
         let wrong_type_ptr = store_tlv(
             &mut vm,
@@ -13530,7 +14185,7 @@ mod pointer_abi_tests {
         ));
 
         for invalid in [Numeric::new(10_u32, 1), Numeric::new(-1_i32, 0)] {
-            let ptr = store_tlv(&mut vm, PointerType::Amount, &norito_blob(&invalid));
+            let ptr = store_tlv(&mut vm, PointerType::Quantity, &norito_blob(&invalid));
             assert!(matches!(
                 CoreHost::decode_amount(&vm, ptr),
                 Err(ivm::VMError::DecodeError)
@@ -13557,7 +14212,7 @@ mod pointer_abi_tests {
         let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_payload);
         let amount = Numeric::from(5u64);
         let amount_payload = norito::to_bytes(&amount).expect("encode amount");
-        let amount_tlv = make_tlv(PointerType::Amount as u16, &amount_payload);
+        let amount_tlv = make_tlv(PointerType::Quantity as u16, &amount_payload);
 
         vm.memory
             .preload_input(0, &account_tlv)
@@ -14566,6 +15221,161 @@ seiyaku AliasPayout {{
         (result, vm, durable_state_overlay, target_ptr)
     }
 
+    fn install_typed_view_binding_fixture(
+        state: &State,
+        authority: &AccountId,
+        actual_asset: &AssetDefinitionId,
+        actual_account: &AccountId,
+        expected_asset: &AssetDefinitionId,
+        expected_account: &AccountId,
+    ) -> (ContractAddress, ContractAddress) {
+        let pool_contract = install_contract(
+            state,
+            authority,
+            r#"
+seiyaku TypedPoolViews {
+  state AssetDefinitionId QuoteAsset;
+  state AccountId PoolAccount;
+
+  kotoage fn bind(quote_asset: AssetDefinitionId, pool_account: AccountId) {
+    QuoteAsset = quote_asset;
+    PoolAccount = pool_account;
+  }
+
+  view fn quote_asset() -> AssetDefinitionId {
+    return QuoteAsset;
+  }
+
+  view fn pool_account() -> AccountId {
+    return PoolAccount;
+  }
+}
+"#,
+            0,
+        );
+        let binding_caller = install_contract(
+            state,
+            authority,
+            r#"
+seiyaku TypedPoolBindingCaller {
+  state bytes PoolContract;
+  state AssetDefinitionId ExpectedQuoteAsset;
+  state AccountId ExpectedPoolAccount;
+  state int Checked;
+
+  kotoage fn bind(pool_contract: bytes,
+                  expected_quote_asset: AssetDefinitionId,
+                  expected_pool_account: AccountId) {
+    PoolContract = pool_contract;
+    ExpectedQuoteAsset = expected_quote_asset;
+    ExpectedPoolAccount = expected_pool_account;
+  }
+
+  kotoage fn asset_matches() -> int permission(AssetOps) {
+    let returned_asset = call_contract(PoolContract, "quote_asset", json_object());
+    if tlv_eq(returned_asset, pointer_to_norito(ExpectedQuoteAsset)) {
+      return 1;
+    }
+    return 0;
+  }
+
+  kotoage fn account_matches() -> int permission(AssetOps) {
+    let returned_account = call_contract(PoolContract, "pool_account", json_object());
+    if tlv_eq(returned_account, pointer_to_norito(ExpectedPoolAccount)) {
+      return 1;
+    }
+    return 0;
+  }
+
+  kotoage fn verify() -> int permission(AssetOps) {
+    let payload = json_object();
+    let returned_asset = call_contract(PoolContract, "quote_asset", payload);
+    assert(tlv_eq(returned_asset, pointer_to_norito(ExpectedQuoteAsset)),
+           "quote asset mismatch");
+    Checked = 1;
+    let returned_account = call_contract(PoolContract, "pool_account", payload);
+    assert(tlv_eq(returned_account, pointer_to_norito(ExpectedPoolAccount)),
+           "pool account mismatch");
+    Checked = 2;
+    return Checked;
+  }
+}
+"#,
+            1,
+        );
+        let outer_caller = install_contract(
+            state,
+            authority,
+            r#"
+seiyaku OuterCaller {
+  kotoage fn main() -> int { return 0; }
+}
+"#,
+            2,
+        );
+        grant_asset_ops_to_account(state, authority, outer_caller.subject_id());
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let pool_bind_payload = Json::from_str_norito(&format!(
+            r#"{{"quote_asset":"{}","pool_account":"{}"}}"#,
+            actual_asset, actual_account
+        ))
+        .expect("pool bind payload");
+        execute_contract_call_transaction(
+            state,
+            authority,
+            &fixture_signing_keypair(authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: pool_contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(pool_bind_payload),
+            },
+            &mut ivm_cache,
+        );
+        let binding_caller_payload = Json::from_str_norito(&format!(
+            r#"{{"pool_contract":"0x{}","expected_quote_asset":"{}","expected_pool_account":"{}"}}"#,
+            hex::encode(pool_contract.as_ref()),
+            expected_asset,
+            expected_account
+        ))
+        .expect("binding caller payload");
+        execute_contract_call_transaction(
+            state,
+            authority,
+            &fixture_signing_keypair(authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: binding_caller.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(binding_caller_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let view = state.view();
+        let persisted = |suffix: &str| {
+            view.world()
+                .smart_contract_state()
+                .iter()
+                .find(|(key, _)| key.as_ref().ends_with(suffix))
+                .map(|(_, value)| value.clone())
+                .unwrap_or_else(|| panic!("missing persisted typed binding state {suffix}"))
+        };
+        assert_eq!(
+            persisted("/QuoteAsset"),
+            persisted("/ExpectedQuoteAsset"),
+            "fixture must persist byte-identical AssetDefinitionId values",
+        );
+        if actual_account == expected_account {
+            assert_eq!(
+                persisted("/PoolAccount"),
+                persisted("/ExpectedPoolAccount"),
+                "fixture must persist byte-identical AccountId values",
+            );
+        }
+
+        (outer_caller, binding_caller)
+    }
+
     #[test]
     fn execute_query_syscall_returns_norito_response_and_gas() {
         crate::test_alias::ensure();
@@ -14575,11 +15385,22 @@ seiyaku AliasPayout {{
         let state = State::new_for_testing(world, kura, query);
         let authority: AccountId = fixture_account("alice");
         let view = state.view();
-        let mut host = CoreHostImpl::new(authority);
+        let mut host = CoreHostImpl::new(authority.clone());
         host.set_query_state(&view);
         let mut vm = IVM::new(1_000_000);
 
         let request = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
+        let gas_ctx = QueryGasContext::from_request(&request);
+        let expected_execution = execute_query_on_state_with_budget(
+            &view,
+            &authority,
+            request.clone(),
+            Some(
+                CoreHost::query_execution_budget(&gas_ctx, 1_000_000)
+                    .expect("query execution budget"),
+            ),
+        )
+        .expect("measure query execution");
         let request_bytes = norito::to_bytes(&request).expect("encode query request");
         let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &request_bytes);
         vm.set_register(10, ptr);
@@ -14594,15 +15415,56 @@ seiyaku AliasPayout {{
             norito::decode_from_bytes(tlv.payload).expect("decode response");
         assert!(matches!(response, QueryResponse::Singular(_)));
 
-        let response_len = u64::try_from(tlv.payload.len()).unwrap_or(u64::MAX);
-        let gas_ctx = QueryGasContext::from_request(&request);
-        let processed_items = CoreHost::query_total_items(&response);
-        let expected = CoreHost::query_gas_cost(&gas_ctx, processed_items, response_len);
+        let expected = CoreHost::query_gas_cost(
+            &gas_ctx,
+            expected_execution.processed_items,
+            expected_execution.processed_bytes,
+        );
         assert_eq!(gas, expected);
     }
 
     #[test]
-    fn get_account_balance_syscall_returns_canonical_amount() {
+    fn execute_query_rejects_oversized_singular_response_before_output_allocation() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("oversized-query-authority");
+        let mut account = build_fixture_account(&authority, &authority);
+        account.metadata_mut().insert(
+            "oversized".parse().expect("metadata key"),
+            Json::new("x".repeat(128 * 1024)),
+        );
+        let state = State::new_for_testing(
+            World::with([], [account], []),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority.clone());
+        host.set_query_state(&view);
+        let mut vm = IVM::new(
+            CoreHost::QUERY_GAS_BASE_SINGULAR
+                .saturating_add(CoreHost::QUERY_GAS_PER_ITEM)
+                .saturating_add(512),
+        );
+        let request = QueryRequest::Singular(SingularQueryBox::FindAccountById(FindAccountById {
+            id: authority.clone(),
+        }));
+        let request_bytes = norito::to_bytes(&request).expect("encode query request");
+        let request_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &request_bytes);
+        vm.set_register(10, request_ptr);
+
+        let error = host
+            .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY, &mut vm)
+            .expect_err("oversized singular query must exhaust its byte budget");
+        assert_eq!(error, ivm::VMError::OutOfGas);
+        assert_eq!(
+            vm.register(10),
+            request_ptr,
+            "the host must not publish an output pointer after admission fails"
+        );
+    }
+
+    #[test]
+    fn get_account_balance_syscall_returns_canonical_quantity_pointer() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let domain =
@@ -14651,7 +15513,7 @@ seiyaku AliasPayout {{
             .memory
             .validate_tlv(vm.register(10))
             .expect("balance tlv");
-        assert_eq!(tlv.type_id, PointerType::Amount);
+        assert_eq!(tlv.type_id, PointerType::Quantity);
         let value: Numeric =
             norito::decode_from_bytes(tlv.payload).expect("decode numeric balance");
         value.validate_amount().expect("canonical amount balance");
@@ -14739,7 +15601,7 @@ seiyaku AliasPayout {{
         assert!(is_some);
         let asset_out: AssetId = decode_typed_leaf(&vm, asset_words[0], PointerType::AssetId);
         assert_eq!(asset_out, asset_id);
-        let asset_amount: AmountV1 = decode_typed_leaf(&vm, asset_words[1], PointerType::Amount);
+        let asset_amount: AmountV1 = decode_typed_leaf(&vm, asset_words[1], PointerType::Quantity);
         assert_eq!(asset_amount.as_numeric(), &Numeric::new(7_u32, 0));
 
         let asset_def_ptr = store_tlv(
@@ -14770,7 +15632,7 @@ seiyaku AliasPayout {{
             (false, vec![])
         );
         let _: AccountId = decode_typed_leaf(&vm, definition_words[3], PointerType::AccountId);
-        let _: AmountV1 = decode_typed_leaf(&vm, definition_words[4], PointerType::Amount);
+        let _: AmountV1 = decode_typed_leaf(&vm, definition_words[4], PointerType::Quantity);
         let _: Json = decode_typed_leaf(&vm, definition_words[5], PointerType::Json);
 
         let domain_ptr = store_tlv(&mut vm, PointerType::DomainId, &norito_blob(&domain_id));
@@ -14992,7 +15854,7 @@ seiyaku AliasPayout {{
             LiveQueryStore::start_test(),
         );
         let view = state.view();
-        let mut host = CoreHostImpl::new(authority);
+        let mut host = CoreHostImpl::new(authority.clone());
         host.set_query_state(&view);
 
         for tag in [
@@ -15052,7 +15914,7 @@ seiyaku AliasPayout {{
             LiveQueryStore::start_test(),
         );
         let view = state.view();
-        let mut host = CoreHostImpl::new(authority);
+        let mut host = CoreHostImpl::new(authority.clone());
         host.set_query_state(&view);
         let mut vm = IVM::new(1_000_000);
 
@@ -15075,6 +15937,17 @@ seiyaku AliasPayout {{
         assert_eq!(read_option_words(&vm, vm.register(11), 1), (true, vec![1]));
         let request = CoreHost::core_query_page_request(CoreQueryEntityTagV1::Account, 0, 1)
             .expect("page request");
+        let gas_ctx = QueryGasContext::from_request(&request);
+        let expected_execution = execute_bounded_query_on_state_with_budget(
+            &view,
+            &authority,
+            request.clone(),
+            Some(
+                CoreHost::query_execution_budget(&gas_ctx, 1_000_000)
+                    .expect("query execution budget"),
+            ),
+        )
+        .expect("measure bounded query execution");
         let projected_account = AccountView {
             id: expected_ids[0].clone(),
             metadata: Json::default(),
@@ -15091,11 +15964,13 @@ seiyaku AliasPayout {{
         assert_eq!(
             gas,
             CoreHost::query_gas_cost(
-                &QueryGasContext::from_request(&request),
-                2,
-                u64::try_from(encoded_page.len())
-                    .expect("payload length")
-                    .saturating_add(leaf_tlv_bytes),
+                &gas_ctx,
+                expected_execution.processed_items,
+                expected_execution.processed_bytes.saturating_add(
+                    u64::try_from(encoded_page.len())
+                        .expect("payload length")
+                        .saturating_add(leaf_tlv_bytes),
+                ),
             ),
             "one-item pages must charge the returned item, one lookahead, and every encoded leaf"
         );
@@ -15407,6 +16282,17 @@ seiyaku AliasPayout {{
                 QueryWithParams::new(query_box, params)
             }
         });
+        let gas_ctx = QueryGasContext::from_request(&request);
+        let expected_execution = execute_query_on_state_with_budget(
+            &view,
+            &authority,
+            request.clone(),
+            Some(
+                CoreHost::query_execution_budget(&gas_ctx, 1_000_000)
+                    .expect("query execution budget"),
+            ),
+        )
+        .expect("measure sorted query execution");
         let request_bytes = norito::to_bytes(&request).expect("encode query request");
         let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &request_bytes);
         vm.set_register(10, ptr);
@@ -15424,9 +16310,11 @@ seiyaku AliasPayout {{
         assert_eq!(output.batch.len(), 1);
         assert_eq!(output.remaining_items, Some(0));
 
-        let response_len = u64::try_from(tlv.payload.len()).unwrap_or(u64::MAX);
-        let gas_ctx = QueryGasContext::from_request(&request);
-        let expected = CoreHost::query_gas_cost(&gas_ctx, 3, response_len);
+        let expected = CoreHost::query_gas_cost(
+            &gas_ctx,
+            expected_execution.processed_items,
+            expected_execution.processed_bytes,
+        );
         assert_eq!(gas, expected);
     }
 
@@ -15486,6 +16374,17 @@ seiyaku AliasPayout {{
                 QueryWithParams::new(query_box, params)
             }
         });
+        let gas_ctx = QueryGasContext::from_request(&request);
+        let expected_execution = execute_query_on_state_with_budget(
+            &view,
+            &authority,
+            request.clone(),
+            Some(
+                CoreHost::query_execution_budget(&gas_ctx, 1_000_000)
+                    .expect("query execution budget"),
+            ),
+        )
+        .expect("measure sorted-offset query execution");
         let request_bytes = norito::to_bytes(&request).expect("encode query request");
         let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &request_bytes);
         vm.set_register(10, ptr);
@@ -15496,12 +16395,11 @@ seiyaku AliasPayout {{
         let out_ptr = vm.register(10);
         let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
 
-        let response_len = u64::try_from(tlv.payload.len()).unwrap_or(u64::MAX);
-        let gas_ctx = QueryGasContext::from_request(&request);
-        let expected = gas_ctx
-            .base
-            .saturating_add(gas_ctx.per_item.saturating_mul(3))
-            .saturating_add(CoreHost::QUERY_GAS_PER_BYTE.saturating_mul(response_len));
+        let expected = CoreHost::query_gas_cost(
+            &gas_ctx,
+            expected_execution.processed_items,
+            expected_execution.processed_bytes,
+        );
         assert_eq!(gas, expected);
     }
 
@@ -16893,7 +17791,7 @@ seiyaku AliasPayout {{
         vm.set_register(11, ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT);
         let pending_hash = [0x42; 32];
         let mut host = CoreHost::new((*ALICE_ID).clone());
-        host.zk_last_env_hash_ballot.push_back(pending_hash);
+        Arc::make_mut(&mut host.zk_last_env_hash_ballot).push_back(pending_hash);
 
         let error = vm
             .run_with_host(&mut host)
@@ -17289,7 +18187,7 @@ seiyaku OpaqueInstructionSubmission {
         let to_tlv = make_tlv(PointerType::AccountId as u16, &to_payload);
         let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_payload);
         let amount_payload = norito::to_bytes(&Numeric::from(amount)).expect("encode amount");
-        let amount_tlv = make_tlv(PointerType::Amount as u16, &amount_payload);
+        let amount_tlv = make_tlv(PointerType::Quantity as u16, &amount_payload);
         let amount_offset = 768u64;
         vm.memory.preload_input(0, &from_tlv).expect("preload from");
         vm.memory.preload_input(256, &to_tlv).expect("preload to");
@@ -17350,7 +18248,7 @@ seiyaku OpaqueInstructionSubmission {
         let asset_ptr = store_tlv(vm, PointerType::AssetDefinitionId, &norito_blob(asset_def));
         let amount_ptr = store_tlv(
             vm,
-            PointerType::Amount,
+            PointerType::Quantity,
             &norito::to_bytes(amount).expect("encode amount"),
         );
         let dataspace_ptr = store_tlv(
@@ -18462,7 +19360,11 @@ seiyaku Callee {
             iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Int,
         );
         assert!(matches!(
-            CoreHost::encode_nested_contract_return(&scalar_vm, Some(&int_schema)),
+            CoreHost::encode_nested_contract_return(
+                &scalar_vm,
+                Some(&int_schema),
+                iroha_data_model::smart_contract::entrypoint::MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
+            ),
             Err(ivm::VMError::PrivacyViolation)
         ));
 
@@ -18495,7 +19397,11 @@ seiyaku Callee {
             iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Blob,
         );
         assert!(matches!(
-            CoreHost::encode_nested_contract_return(&pointer_vm, Some(&blob_schema)),
+            CoreHost::encode_nested_contract_return(
+                &pointer_vm,
+                Some(&blob_schema),
+                iroha_data_model::smart_contract::entrypoint::MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
+            ),
             Err(ivm::VMError::PrivacyViolation)
         ));
     }
@@ -18527,8 +19433,37 @@ seiyaku Callee {
         };
 
         assert_eq!(
-            CoreHost::encode_nested_contract_return(&vm, Some(&schema)),
+            CoreHost::encode_nested_contract_return(
+                &vm,
+                Some(&schema),
+                MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
+            ),
             Err(ivm::VMError::DecodeError)
+        );
+    }
+
+    #[test]
+    fn nested_contract_return_rejects_unaffordable_payload_before_clone() {
+        use iroha_data_model::smart_contract::entrypoint::{
+            EntrypointValueKindV1, EntrypointValueTypeNodeV1, EntrypointValueTypeV1,
+        };
+
+        let payload = vec![0xA5; 64 * 1024];
+        let envelope = make_tlv(PointerType::Blob as u16, &payload);
+        let mut vm = IVM::new(10_000);
+        let pointer = vm
+            .alloc_heap(u64::try_from(envelope.len()).expect("TLV length fits u64"))
+            .expect("allocate child return TLV");
+        vm.store_bytes(pointer, &envelope)
+            .expect("store child return TLV");
+        vm.set_register(10, pointer);
+        let schema = EntrypointValueTypeV1 {
+            nodes: vec![EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Blob)],
+        };
+
+        assert_eq!(
+            CoreHost::encode_nested_contract_return(&vm, Some(&schema), 1024),
+            Err(ivm::VMError::OutOfGas)
         );
     }
 
@@ -18600,7 +19535,7 @@ seiyaku Callee {
             Json::new(()),
             prepared_cache.clone(),
         );
-        first.expect("first nested call");
+        let first_gas = first.expect("first nested call");
         let after_first = prepared_cache.stats();
         assert_eq!(after_first.misses, 1);
         assert_eq!(after_first.preparations, 1);
@@ -18623,7 +19558,11 @@ seiyaku Callee {
             Json::new(()),
             prepared_cache.clone(),
         );
-        second.expect("second nested call");
+        let second_gas = second.expect("second nested call");
+        assert_eq!(
+            second_gas, first_gas,
+            "prepared-cache warmth must not change consensus gas"
+        );
         let after_second = prepared_cache.stats();
         assert_eq!(after_second.hits, after_first.hits + 1);
         assert_eq!(after_second.misses, after_first.misses);
@@ -18641,6 +19580,42 @@ seiyaku Callee {
         assert_eq!(
             after_second.runtime_dirty_resets,
             after_first.runtime_dirty_resets + 1
+        );
+    }
+
+    #[test]
+    fn live_contract_view_never_falls_back_to_a_stale_binding_snapshot() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let populated_state = contract_test_state(&authority);
+        let contract = install_contract(
+            &populated_state,
+            &authority,
+            r#"
+seiyaku Callee {
+  view fn value() -> i64 { return 42; }
+}
+"#,
+            7,
+        );
+        let stale_record = {
+            let view = populated_state.view();
+            crate::smartcontracts::code::fetch_bound_contract_record(&view, &contract)
+                .expect("installed contract record")
+        };
+        let empty_state = contract_test_state(&authority);
+        let empty_view = empty_state.view();
+        let mut host = CoreHostImpl::new(authority);
+        host.set_bound_contract_records_by_subject_snapshot(BTreeMap::from([(
+            stale_record.contract_subject.clone(),
+            stale_record,
+        )]));
+        host.set_query_state(&empty_view);
+
+        assert!(
+            host.resolve_bound_contract_dispatch_identity_by_address(&contract)
+                .is_none(),
+            "an authoritative live view must fail closed instead of reviving a stale snapshot"
         );
     }
 
@@ -18705,6 +19680,98 @@ seiyaku Callee {
                 .contains(&format!("sc/{caller_digest}/{logical_path}")),
             "nested reads must not be mislabeled as root-contract state"
         );
+    }
+
+    #[test]
+    fn nested_view_rollback_preserves_reads_but_discards_writes() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::new(authority).with_access_logging();
+        host.state_access_log.durable_read_paths_complete = true;
+        let key: Name = "counter".parse().expect("state key");
+        host.durable_state_overlay
+            .insert(key.clone(), Some(vec![1]));
+
+        let snapshot = host.snapshot_nested_contract_call();
+        host.stage_durable_state_update(key.clone(), Some(vec![9]));
+        host.log_state_read_key(key.as_ref());
+        host.log_state_write_key(key.as_ref());
+        host.finish_nested_contract_call(
+            snapshot,
+            NestedContractCallOutcome::RollbackViewPreservingReads,
+        )
+        .expect("roll back view effects");
+
+        assert_eq!(
+            host.durable_state_overlay.get(&key),
+            Some(&Some(vec![1])),
+            "view state writes must not escape"
+        );
+        assert!(host.state_access_log.read_keys.contains(key.as_ref()));
+        assert!(
+            host.state_access_log
+                .durable_read_paths
+                .contains(key.as_ref())
+        );
+        assert!(!host.state_access_log.write_keys.contains(key.as_ref()));
+        assert!(host.state_access_log.state_writes.is_empty());
+    }
+
+    #[test]
+    fn failed_nested_call_discards_reads_and_composed_state_changes() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::new(authority).with_access_logging();
+        host.state_access_log.durable_read_paths_complete = true;
+        let key: Name = "counter".parse().expect("state key");
+        host.durable_state_overlay
+            .insert(key.clone(), Some(vec![1]));
+
+        let outer = host.snapshot_nested_contract_call();
+        host.stage_durable_state_update(key.clone(), Some(vec![2]));
+        let inner = host.snapshot_nested_contract_call();
+        host.stage_durable_state_update(key.clone(), Some(vec![3]));
+        host.log_state_read_key(key.as_ref());
+        host.finish_nested_contract_call(inner, NestedContractCallOutcome::Commit)
+            .expect("commit inner call into outer frame");
+        assert_eq!(host.durable_state_overlay.get(&key), Some(&Some(vec![3])));
+
+        host.finish_nested_contract_call(outer, NestedContractCallOutcome::Rollback)
+            .expect("roll back outer call");
+        assert_eq!(host.durable_state_overlay.get(&key), Some(&Some(vec![1])));
+        assert!(!host.state_access_log.read_keys.contains(key.as_ref()));
+        assert!(host.state_access_log.durable_read_paths.is_empty());
+    }
+
+    #[test]
+    fn nested_snapshot_shares_large_rollback_state_until_mutated() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::new(authority);
+        let verified_transfer = Arc::clone(&host.zk_verified_transfer);
+        let replay_ledger = Arc::clone(&host.axt_replay_ledger);
+        let proof_cache = Arc::clone(&host.axt_proof_cache);
+        host.fastpq_batch_entries = Some(Vec::new());
+
+        let snapshot = host.snapshot_nested_contract_call();
+        assert!(Arc::ptr_eq(
+            &snapshot.zk_verified_transfer,
+            &verified_transfer
+        ));
+        assert!(Arc::ptr_eq(&snapshot.axt_replay_ledger, &replay_ledger));
+        assert!(Arc::ptr_eq(&snapshot.axt_proof_cache, &proof_cache));
+        assert!(
+            host.fastpq_batch_entries.is_none(),
+            "frame-local batch storage must be moved, not cloned"
+        );
+        Arc::make_mut(&mut host.zk_verified_transfer).push_back([7; 32]);
+        assert!(!Arc::ptr_eq(&host.zk_verified_transfer, &verified_transfer));
+
+        host.finish_nested_contract_call(snapshot, NestedContractCallOutcome::Rollback)
+            .expect("restore shared rollback state");
+        assert!(Arc::ptr_eq(&host.zk_verified_transfer, &verified_transfer));
+        assert!(host.zk_verified_transfer.is_empty());
+        assert!(host.fastpq_batch_entries.is_some());
     }
 
     #[test]
@@ -19123,6 +20190,228 @@ seiyaku Callee {
             returned,
             norito::json::Value::from(caller_contract.subject_id().to_string())
         );
+    }
+
+    #[test]
+    fn call_contract_typed_views_accept_exact_norito_binding() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let state = contract_test_state(&authority);
+        let asset_definition =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let (outer_caller, binding_caller) = install_typed_view_binding_fixture(
+            &state,
+            &authority,
+            &asset_definition,
+            &authority,
+            &asset_definition,
+            &authority,
+        );
+
+        for entrypoint in ["asset_matches", "account_matches"] {
+            let (probe_result, probe_vm, probe_overlay) = call_contract_syscall(
+                &state,
+                &authority,
+                &outer_caller,
+                &binding_caller,
+                entrypoint,
+                Json::new(()),
+            );
+            probe_result.expect("matching typed view probe should execute");
+            let probe_return = probe_vm
+                .memory
+                .validate_tlv(probe_vm.register(10))
+                .expect("typed view probe NoritoBytes");
+            let matches: i64 =
+                norito::decode_from_bytes(probe_return.payload).expect("decode match probe");
+            assert_eq!(matches, 1, "{entrypoint} must compare byte-exactly");
+            assert!(probe_overlay.is_empty(), "match probes are read-only");
+        }
+
+        let (result, vm, durable_state_overlay) = call_contract_syscall(
+            &state,
+            &authority,
+            &outer_caller,
+            &binding_caller,
+            "verify",
+            Json::new(()),
+        );
+
+        result.expect("matching typed pool views should satisfy the binding caller");
+        let returned = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("binding result NoritoBytes");
+        assert_eq!(returned.type_id, PointerType::NoritoBytes);
+        let checked: i64 =
+            norito::decode_from_bytes(returned.payload).expect("decode binding result");
+        assert_eq!(checked, 2, "both typed views must match");
+        assert!(
+            durable_state_overlay
+                .keys()
+                .any(|key| key.as_ref().ends_with("/Checked")),
+            "successful nested binding must retain the caller's final state write",
+        );
+    }
+
+    #[test]
+    fn call_contract_typed_view_mismatch_rolls_back_nested_caller_state() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let mismatched_account: AccountId = fixture_account("bob");
+        let state = contract_test_state(&authority);
+        let asset_definition =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let (outer_caller, binding_caller) = install_typed_view_binding_fixture(
+            &state,
+            &authority,
+            &asset_definition,
+            &authority,
+            &asset_definition,
+            &mismatched_account,
+        );
+
+        let (probe_result, probe_vm, probe_overlay) = call_contract_syscall(
+            &state,
+            &authority,
+            &outer_caller,
+            &binding_caller,
+            "account_matches",
+            Json::new(()),
+        );
+        probe_result.expect("mismatched typed view probe should execute");
+        let probe_return = probe_vm
+            .memory
+            .validate_tlv(probe_vm.register(10))
+            .expect("typed view probe NoritoBytes");
+        let matches: i64 =
+            norito::decode_from_bytes(probe_return.payload).expect("decode mismatch probe");
+        assert_eq!(matches, 0, "the mismatched AccountId must compare unequal");
+        assert!(probe_overlay.is_empty(), "mismatch probe is read-only");
+
+        let (result, _vm, durable_state_overlay) = call_contract_syscall(
+            &state,
+            &authority,
+            &outer_caller,
+            &binding_caller,
+            "verify",
+            Json::new(()),
+        );
+
+        assert!(
+            result.is_err(),
+            "mismatched AccountId view must reject the pool binding",
+        );
+        assert!(
+            durable_state_overlay.is_empty(),
+            "the failed nested binding must roll back Checked = 1 after the asset view matched",
+        );
+    }
+
+    #[test]
+    fn nested_view_returns_value_but_discards_attempted_state_mutation() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let state = contract_test_state(&authority);
+        let caller = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku ViewCaller {
+  kotoage fn main() -> int { return 0; }
+}
+"#,
+            0,
+        );
+        let callee = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku EffectfulView {
+  state int Counter;
+
+  kotoage fn seed(value: int) {
+    Counter = value;
+  }
+
+  kotoage fn increment_then_return() -> int {
+    Counter = Counter + 1;
+    return Counter;
+  }
+}
+"#,
+            1,
+        );
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: callee.clone(),
+                entrypoint: "seed".to_owned(),
+                payload: Some(Json::from_str_norito(r#"{"value":5}"#).expect("seed payload")),
+            },
+            &mut ivm_cache,
+        );
+
+        // The compiler rejects durable mutation in a declared view. Bypass that
+        // first-line guarantee here by corrupting the registered manifest after
+        // deployment, so this test exercises the host's independent rollback
+        // boundary for an entrypoint whose bytecode can still mutate state.
+        let record =
+            crate::smartcontracts::code::fetch_bound_contract_record(&state.view(), &callee)
+                .expect("installed effectful contract record");
+        let mut malicious_manifest = record.manifest;
+        let descriptor = malicious_manifest
+            .entrypoints
+            .as_mut()
+            .and_then(|entrypoints| {
+                entrypoints
+                    .iter_mut()
+                    .find(|descriptor| descriptor.name == "increment_then_return")
+            })
+            .expect("effectful entrypoint descriptor");
+        descriptor.kind = iroha_data_model::smart_contract::manifest::EntryPointKind::View;
+        malicious_manifest.provenance = None;
+        malicious_manifest = malicious_manifest.signed(&fixture_signing_keypair(&authority));
+
+        let next_height = u64::try_from(state.view().height() + 1)
+            .ok()
+            .and_then(core::num::NonZeroU64::new)
+            .expect("next block height must fit in u64 and be non-zero");
+        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut tx = block.transaction();
+        tx.world
+            .contract_manifests
+            .insert(record.code_hash, malicious_manifest);
+        tx.apply();
+        block
+            .commit()
+            .expect("commit adversarial registered-manifest mutation");
+
+        for _ in 0..2 {
+            let (result, vm, durable_state_overlay) = call_contract_syscall(
+                &state,
+                &authority,
+                &caller,
+                &callee,
+                "increment_then_return",
+                Json::new(()),
+            );
+            result.expect("nested view should return its computed value");
+            let returned = vm
+                .memory
+                .validate_tlv(vm.register(10))
+                .expect("view result NoritoBytes");
+            let value: i64 =
+                norito::decode_from_bytes(returned.payload).expect("decode view result");
+            assert_eq!(value, 6, "each view must begin from the persisted value");
+            assert!(
+                durable_state_overlay.is_empty(),
+                "a nested view must discard attempted durable-state mutation",
+            );
+        }
     }
 
     #[test]
@@ -19750,7 +21039,7 @@ seiyaku Callee {
         );
         let amount_ptr = store_tlv(
             &mut vm,
-            PointerType::Amount,
+            PointerType::Quantity,
             &norito::to_bytes(&amount).expect("encode amount"),
         );
         let dataspace_ptr = store_tlv(
@@ -22398,6 +23687,11 @@ seiyaku Vault {
             durable_state_authorizations: BTreeMap::new(),
         };
 
+        let grouped = artifacts.queued_instructions_by_authority();
+        assert_eq!(grouped.len(), 1);
+        assert_eq!(grouped.get(&nested_authority).map(Vec::len), Some(1));
+        assert!(!grouped.contains_key(&outer_authority));
+
         artifacts
             .apply_to_transaction(&mut stx, &outer_authority)
             .expect("queued instruction should execute under queued authority");
@@ -23116,6 +24410,120 @@ seiyaku Vault {
     }
 
     #[test]
+    fn guest_state_syscalls_cannot_mutate_contract_subject_history() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            7,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let history_key = crate::smartcontracts::code::contract_subject_history_key(
+            &contract_address.subject_id(),
+        );
+        let mut host = CoreHost::new(authority);
+        let mut vm = IVM::new(10_000);
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&history_key));
+        let value_bytes = norito::to_bytes(&1_u64).expect("encode state value");
+        let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &value_bytes);
+
+        vm.set_register(10, path_ptr);
+        vm.set_register(11, value_ptr);
+        assert!(matches!(
+            host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
+            Err(ivm::VMError::PermissionDenied)
+        ));
+        vm.set_register(10, path_ptr);
+        assert!(matches!(
+            host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
+            Err(ivm::VMError::PermissionDenied)
+        ));
+        assert!(host.drain_durable_state_overlay().is_empty());
+    }
+
+    #[test]
+    fn contract_reads_but_cannot_mutate_consensus_validation_fee_credit() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            91,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let context = ContractRuntimeExecutionContext {
+            contract_subject: contract_address.subject_id(),
+            contract_address: contract_address.clone(),
+            contract_alias: Some("validation_fee::credit_reader".parse().expect("alias")),
+            entrypoint: "main".to_owned(),
+        };
+        let credit_key =
+            crate::validation_fee::validation_fee_credit_state_key_for_address(&contract_address);
+        let mut world = World::new();
+        world.smart_contract_state.insert(
+            credit_key,
+            norito::to_bytes(&100_i64).expect("encode native consensus credit"),
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+
+        let source = r#"
+            state int AvailableValidationFeeMinorUnits;
+            fn main() -> int {
+                return AvailableValidationFeeMinorUnits;
+            }
+        "#;
+        let code = ivm::kotodama::compiler::Compiler::new()
+            .compile_source(source)
+            .expect("compile validation-fee credit reader");
+        let mut contract_host = CoreHost::from_state(authority.clone(), &state);
+        contract_host.set_contract_runtime_context(Some(context.clone()));
+        let mut contract_vm = IVM::new(u64::MAX);
+        contract_vm.set_host(contract_host);
+        contract_vm.load_program(&code).expect("load credit reader");
+        contract_vm.run().expect("read native consensus credit");
+        assert_eq!(
+            contract_vm.register(10),
+            100,
+            "Kotodama state int must decode the exact native consensus value"
+        );
+
+        let mut host = CoreHost::from_state(authority, &state);
+        host.set_contract_runtime_context(Some(context));
+        let mut vm = IVM::new(10_000);
+        let value_ptr = store_tlv(
+            &mut vm,
+            PointerType::NoritoBytes,
+            &norito::to_bytes(&999_i64).expect("encode forged credit"),
+        );
+        for leaf in [
+            crate::validation_fee::VALIDATION_FEE_CREDIT_STATE_LEAF,
+            crate::validation_fee::VALIDATION_FEE_CREDIT_ASSET_STATE_LEAF,
+        ] {
+            let leaf: Name = leaf.parse().expect("reserved validation-fee credit leaf");
+            let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&leaf));
+            vm.set_register(10, path_ptr);
+            vm.set_register(11, value_ptr);
+            assert!(matches!(
+                host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
+                Err(ivm::VMError::PermissionDenied)
+            ));
+            vm.set_register(10, path_ptr);
+            assert!(matches!(
+                host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
+                Err(ivm::VMError::PermissionDenied)
+            ));
+        }
+        assert!(host.drain_durable_state_overlay().is_empty());
+    }
+
+    #[test]
     fn encode_decode_int_syscalls_roundtrip() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
@@ -23169,7 +24577,7 @@ seiyaku Vault {
     }
 
     #[test]
-    fn json_amount_getter_roundtrips_through_codec_host() {
+    fn json_amount_getter_returns_quantity_pointer() {
         let mut host = CoreHost::new(fixture_account("alice"));
         let mut vm = IVM::new(10_000);
         let key: Name = "amount".parse().expect("amount key");
@@ -23189,7 +24597,7 @@ seiyaku Vault {
         .expect("Amount option");
         assert!(some);
         let tlv = vm.memory.validate_tlv(words[0]).expect("Amount TLV");
-        assert_eq!(tlv.type_id, PointerType::Amount);
+        assert_eq!(tlv.type_id, PointerType::Quantity);
         let amount: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode Amount");
         amount.validate_amount().expect("canonical Amount");
         assert_eq!(amount, Numeric::new(125_u32, 2));
@@ -25230,6 +26638,105 @@ seiyaku Vault {
     }
 
     #[test]
+    fn zk_verify_batch_quote_and_actual_scale_with_every_proof() {
+        crate::test_alias::ensure();
+        let envelope: iroha_data_model::zk::OpenVerifyEnvelope =
+            norito::decode_from_bytes(&dummy_env(
+                "halo2/ipa:metering",
+                [1u8; 32],
+                vec![1, 2, 3, 4],
+                vec![0xAA; 16],
+            ))
+            .expect("decode metering envelope");
+
+        for count in [1_usize, 3] {
+            let payload =
+                norito::to_bytes(&vec![envelope.clone(); count]).expect("encode metered ZK batch");
+            let mut vm = IVM::new(u64::MAX);
+            let pointer = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
+            vm.set_register(10, pointer);
+            let mut host = CoreHost::new(fixture_account("alice"));
+            let expected = ivm::gas::zk_verify_batch_gas(count, payload.len());
+
+            assert_eq!(
+                host.prepare_syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &vm),
+                Ok(expected)
+            );
+            assert_eq!(
+                host.syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &mut vm),
+                Ok(expected)
+            );
+            assert_eq!(vm.register(11), ivm::host::ERR_VK_MISSING);
+        }
+    }
+
+    #[test]
+    fn unaffordable_zk_batch_stops_before_decode_allocation_or_backend_work() {
+        crate::test_alias::ensure();
+        let envelope: iroha_data_model::zk::OpenVerifyEnvelope =
+            norito::decode_from_bytes(&dummy_env(
+                "halo2/ipa:metering",
+                [1u8; 32],
+                vec![1, 2, 3, 4],
+                vec![0xAA; 16],
+            ))
+            .expect("decode metering envelope");
+        let payload = norito::to_bytes(&vec![envelope.clone(), envelope]).expect("encode ZK batch");
+        let code = [
+            ivm::encoding::wide::encode_sys(
+                ivm::instruction::wide::system::SCALL,
+                u8::try_from(ivm_sys::SYSCALL_ZK_VERIFY_BATCH).expect("syscall fits"),
+            )
+            .to_le_bytes(),
+            ivm::encoding::wide::encode_halt().to_le_bytes(),
+        ]
+        .concat();
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_program(&build_program(&code, 0))
+            .expect("load batch verifier program");
+        let pointer = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
+        vm.set_register(10, pointer);
+        vm.set_register(11, 0xfeed);
+        vm.set_register(12, 0xbeef);
+        let mut host = CoreHost::new(fixture_account("alice"));
+        let quote = host
+            .prepare_syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &vm)
+            .expect("quote bounded ZK batch");
+        vm.set_gas_limit(quote);
+
+        assert_eq!(vm.run_with_host(&mut host), Err(ivm::VMError::OutOfGas));
+        assert_eq!(vm.register(10), pointer);
+        assert_eq!(vm.register(11), 0xfeed);
+        assert_eq!(vm.register(12), 0xbeef);
+    }
+
+    #[test]
+    fn zk_verify_batch_rejects_configured_count_cap_during_prepare() {
+        crate::test_alias::ensure();
+        let envelope: iroha_data_model::zk::OpenVerifyEnvelope =
+            norito::decode_from_bytes(&dummy_env(
+                "halo2/ipa:metering",
+                [1u8; 32],
+                vec![1, 2, 3, 4],
+                vec![0xAA; 16],
+            ))
+            .expect("decode metering envelope");
+        let payload = norito::to_bytes(&vec![envelope.clone(), envelope])
+            .expect("encode over-limit ZK batch");
+        let mut vm = IVM::new(u64::MAX);
+        let pointer = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
+        vm.set_register(10, pointer);
+        let mut host = CoreHost::new(fixture_account("alice"));
+        host.halo2_config.verifier_max_batch = 1;
+
+        assert_eq!(
+            host.prepare_syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &vm),
+            Err(ivm::VMError::NoritoInvalid)
+        );
+        assert_eq!(vm.register(10), pointer);
+    }
+
+    #[test]
     fn generic_verify_proof_syscall_rejects_injected_non_production_vk_snapshot() {
         crate::test_alias::ensure();
         for backend in [
@@ -25754,6 +27261,188 @@ seiyaku PreparedArguments {
     }
 
     #[test]
+    #[cfg(debug_assertions)]
+    fn compiled_wrapper_accepts_exact_argument_record_cap_and_preflights_heap() {
+        use iroha_data_model::smart_contract::entrypoint::{
+            EntrypointArgumentRecordV1, EntrypointValueAtomV1,
+            MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES, entrypoint_argument_schema_hash_v1,
+        };
+
+        crate::test_alias::ensure();
+        let (program, _) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(
+                r#"
+seiyaku PreparedBoundaryArguments {
+  view fn invoke(small: bytes, payload: bytes) -> bytes {
+    let _small = small;
+    return payload;
+  }
+}
+"#,
+            )
+            .expect("compile bytes-parameter contract");
+        let metadata = ivm::ProgramMetadata::parse(&program).expect("parse contract metadata");
+        let descriptor = metadata
+            .contract_interface
+            .as_ref()
+            .expect("contract interface")
+            .entrypoints
+            .iter()
+            .find(|entrypoint| entrypoint.name == "invoke")
+            .expect("invoke entrypoint");
+        let schema = descriptor
+            .argument_schema
+            .as_ref()
+            .expect("argument schema");
+        let schema_bytes = norito::to_bytes(schema).expect("encode argument schema");
+        let schema_hash = entrypoint_argument_schema_hash_v1(&schema_bytes);
+        let small_payload = b"fits-input";
+        let small_envelope = make_tlv(PointerType::Blob as u16, small_payload);
+        let mut large_payload_len = MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES.saturating_sub(512);
+        let mut large_payload = Vec::new();
+        let mut large_envelope_len = 0;
+        let mut canonical = Vec::new();
+        for _ in 0..8 {
+            large_payload = vec![0x5a; large_payload_len];
+            let large_envelope = make_tlv(PointerType::Blob as u16, &large_payload);
+            large_envelope_len = large_envelope.len();
+            canonical = norito::to_bytes(&EntrypointArgumentRecordV1 {
+                schema_hash,
+                atoms: vec![
+                    EntrypointValueAtomV1::Pointer(small_envelope.clone()),
+                    EntrypointValueAtomV1::Pointer(large_envelope),
+                ],
+            })
+            .expect("encode exact-bound argument record");
+            match canonical.len().cmp(&MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES) {
+                core::cmp::Ordering::Equal => break,
+                core::cmp::Ordering::Less => {
+                    large_payload_len = large_payload_len
+                        .saturating_add(MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES - canonical.len());
+                }
+                core::cmp::Ordering::Greater => {
+                    large_payload_len = large_payload_len
+                        .saturating_sub(canonical.len() - MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES);
+                }
+            }
+        }
+        assert_eq!(
+            canonical.len(),
+            MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES,
+            "the CoreHost fixture must exercise the inclusive signed wire boundary"
+        );
+
+        ivm::reset_argument_record_decode_count();
+        let prepared =
+            ivm::prepare_argument_record_with_gas_limit(schema, Arc::from(canonical), u64::MAX)
+                .expect("prepare the exact-cap record with the gas-aware boundary");
+        assert_eq!(
+            prepared.canonical_bytes().len(),
+            MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES
+        );
+
+        let entrypoint_pc =
+            u64::try_from(metadata.prefix_len()).expect("prefix fits u64") + descriptor.entry_pc;
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::with_accounts_and_argument_record(
+            authority.clone(),
+            Arc::new(vec![authority.clone()]),
+            Some(prepared.clone()),
+        );
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_program(&program).expect("load compiled contract");
+        vm.set_register(1, vm.memory.code_len());
+        vm.set_program_counter(entrypoint_pc)
+            .expect("select compiled invoke wrapper");
+        prepared
+            .precharge_vm(&mut vm)
+            .expect("precharge exact-cap prepared arguments");
+        vm.run_with_host(&mut host)
+            .expect("compiled wrapper must admit the inclusive record cap");
+
+        assert_eq!(ivm::argument_record_decode_count(), 1);
+        let payload_pointer = vm.register(10);
+        assert!(
+            (ivm::Memory::HEAP_START..ivm::Memory::INPUT_START).contains(&payload_pointer),
+            "the decoded bytes pointer must be owned HEAP"
+        );
+        let payload = vm
+            .validate_tlv(payload_pointer)
+            .expect("owned decoded bytes TLV");
+        assert_eq!(payload.type_id, PointerType::Blob);
+        assert_eq!(payload.payload.len(), large_payload.len());
+        assert!(payload.payload.iter().all(|byte| *byte == 0x5a));
+
+        let exact_heap_bytes = u64::try_from(large_envelope_len)
+            .expect("bounded Blob envelope length")
+            .checked_add(7)
+            .expect("bounded aligned Blob envelope length")
+            & !7;
+        let mut constrained_host = CoreHost::with_accounts_and_argument_record(
+            authority.clone(),
+            Arc::new(vec![authority]),
+            Some(prepared.clone()),
+        );
+        let mut constrained_vm = IVM::new(u64::MAX);
+        constrained_vm
+            .load_program(&program)
+            .expect("load constrained compiled contract");
+        constrained_vm.set_register(1, constrained_vm.memory.code_len());
+        constrained_vm
+            .set_program_counter(entrypoint_pc)
+            .expect("select constrained invoke wrapper");
+        constrained_vm
+            .memory
+            .set_heap_limit(exact_heap_bytes - 1)
+            .expect("constrain HEAP by one byte");
+        prepared
+            .precharge_vm(&mut constrained_vm)
+            .expect("precharge constrained prepared arguments");
+
+        assert_eq!(
+            constrained_vm.run_with_host(&mut constrained_host),
+            Err(VMError::OutOfMemory)
+        );
+        assert_eq!(ivm::argument_record_decode_count(), 1);
+        let binding_pointer = constrained_vm.register(10);
+        assert_eq!(binding_pointer, ivm::Memory::INPUT_START);
+        assert_eq!(
+            constrained_vm
+                .memory
+                .validate_tlv(binding_pointer)
+                .expect("host-issued argument binding")
+                .payload,
+            prepared.binding_bytes()
+        );
+        assert!(
+            constrained_vm.register(11) < constrained_vm.memory.code_len(),
+            "the compiled wrapper must supply its schema from validated program data"
+        );
+        assert_eq!(
+            constrained_vm
+                .alloc_heap(1)
+                .expect("failed preflight must leave HEAP untouched"),
+            ivm::Memory::HEAP_START
+        );
+        let binding_envelope_len =
+            make_tlv(PointerType::NoritoBytes as u16, prepared.binding_bytes()).len();
+        let expected_input_cursor = u64::try_from(binding_envelope_len)
+            .expect("bounded binding envelope length")
+            .checked_add(7)
+            .expect("bounded aligned binding envelope length")
+            & !7;
+        assert_eq!(
+            store_tlv(
+                &mut constrained_vm,
+                PointerType::Blob,
+                b"after-materialization-preflight",
+            ),
+            ivm::Memory::INPUT_START + expected_input_cursor,
+            "failed materialization preflight must not consume INPUT for the small bytes value"
+        );
+    }
+
+    #[test]
     fn get_public_input_missing_name_is_error() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
@@ -25971,7 +27660,7 @@ seiyaku PreparedArguments {
             pointer_abi_tests::make_tlv(ivm::PointerType::DataSpaceId as u16, &dataspace_bytes);
         let amount_payload = norito::to_bytes(&amount).expect("encode amount");
         let amount_tlv =
-            pointer_abi_tests::make_tlv(ivm::PointerType::Amount as u16, &amount_payload);
+            pointer_abi_tests::make_tlv(ivm::PointerType::Quantity as u16, &amount_payload);
 
         // Offsets in INPUT region
         let off_from = 0u64;

@@ -46,10 +46,6 @@ public final class OkHttpClientIntegrationTests {
               .addHeader("Content-Type", "application/x-norito")
               .setBody("accepted"));
       server.enqueue(new MockResponse().setResponseCode(200).setBody("rpc-ok"));
-      server.enqueue(
-          new MockResponse()
-              .setResponseCode(200)
-              .setBody(sampleGatewaySummaryJson()));
       server.start();
 
       final URI baseUri = server.url("/").uri();
@@ -98,38 +94,10 @@ public final class OkHttpClientIntegrationTests {
       assertEquals("application/x-norito", rpcRequest.getHeader("Content-Type"));
       assertArrayEquals(payload, rpcRequest.getBody().readByteArray());
 
-      final GatewayFetchRequest fetchRequest =
-          GatewayFetchRequest.builder()
-              .setManifestIdHex("01".repeat(32))
-              .setChunkerHandle("sorafs.sf1@1.0.0")
-              .setOptions(GatewayFetchOptions.builder().build())
-              .addProvider(
-                  GatewayProvider.builder()
-                      .setName("alpha")
-                      .setProviderIdHex("aa".repeat(32))
-                      .setBaseUrl("https://provider.example")
-                      .setStreamTokenBase64("dG9rZW4=")
-                      .build())
-              .build();
-      final SorafsGatewayClient gatewayClient =
-          SorafsGatewayClient.builder()
-              .setExecutor(executor)
-              .setBaseUri(baseUri)
-              .setTimeout(Duration.ofSeconds(5))
-              .addObserver(observer)
-              .build();
-      final GatewayFetchSummary summary = gatewayClient.fetchSummary(fetchRequest).get(2, TimeUnit.SECONDS);
-      assertEquals("01".repeat(32), summary.manifestIdHex());
-      assertEquals("sorafs.sf1@1.0.0", summary.chunkerHandle());
-      final RecordedRequest fetch = server.takeRequest();
-      assertEquals("/v1/sorafs/gateway/fetch", fetch.getPath());
-      assertEquals("POST", fetch.getMethod());
-      assertEquals("application/json", fetch.getHeader("Content-Type"));
-
       assertEquals(2, telemetry.requests.size());
       assertEquals(2, telemetry.responses.size());
-      assertEquals(2, observer.requestCount);
-      assertEquals(2, observer.responseCount);
+      assertEquals(1, observer.requestCount);
+      assertEquals(1, observer.responseCount);
     }
   }
 

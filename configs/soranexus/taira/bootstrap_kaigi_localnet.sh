@@ -10,6 +10,7 @@ GENESIS_PRIVATE_KEY="${IROHA_TAIRA_GENESIS_PRIVATE_KEY:-}"
 LOCALNET_BASE_SEED_OVERRIDE="${IROHA_TAIRA_LOCALNET_SEED:-}"
 TAIRA_PROFILE_CONFIG="${IROHA_TAIRA_PROFILE_CONFIG:-$ROOT_DIR/configs/soranexus/taira/config.toml}"
 TAIRA_SECRETS_FILE="${IROHA_TAIRA_SECRETS_FILE:-$ROOT_DIR/configs/soranexus/taira/validator_secrets.local.toml}"
+SITE_BINDINGS_FILE="${IROHA_TAIRA_SITE_BINDINGS_FILE:-$ROOT_DIR/configs/soranexus/taira/sorafs_sites.json}"
 CALL_DOMAIN="${IROHA_TAIRA_KAIGI_CALL_DOMAIN:-wonderland.universal}"
 CALL_NAME="${IROHA_TAIRA_KAIGI_CALL_NAME:-taira-relay-bootstrap}"
 REPORTED_AT_MS="${IROHA_TAIRA_KAIGI_REPORTED_AT_MS:-1890864000000}"
@@ -200,9 +201,11 @@ patch_peer_configs_for_taira_authority() {
   TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER="${TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER:-}" \
   TAIRA_FEE_ASSET_ID="$fee_asset_id" \
   TAIRA_ONBOARDING_FEE_SPONSOR_ACCOUNT="${DPN_SPONSOR_ACCOUNT_ID:-$TAIRA_AUTHORITY}" \
+  SITE_BINDINGS_FILE="$SITE_BINDINGS_FILE" \
   LOCALNET_DIR="$LOCALNET_DIR" \
   python3 <<'PY'
 from pathlib import Path
+import json
 import os
 import re
 
@@ -228,6 +231,7 @@ block_budget_values = {
 }
 fee_asset_id = os.environ["TAIRA_FEE_ASSET_ID"]
 fee_sponsor_account = os.environ["TAIRA_ONBOARDING_FEE_SPONSOR_ACCOUNT"]
+site_bindings_file = str(Path(os.environ["SITE_BINDINGS_FILE"]).resolve())
 
 onboarding_block = f"""[torii.onboarding]
 enabled = true
@@ -258,6 +262,12 @@ pow_vrf_seed_enabled = false
 quota_block = f"""[sorafs.quota]
 storage_pin_max_events = {storage_pin_max_events}
 storage_pin_window_secs = {storage_pin_window_secs}
+"""
+
+site_bindings_block = f"""[sorafs.gateway.site_bindings]
+path = {json.dumps(site_bindings_file)}
+max_bytes = 1048576
+max_sites = 1024
 """
 
 def replace_or_insert(text: str, section: str, block: str) -> str:
@@ -327,6 +337,7 @@ for path in sorted(localnet_dir.glob("peer*.toml")):
     text = ensure_torii_max_content_len(text)
     text = ensure_sumeragi_block_budget(text)
     text = replace_or_insert(text, "sorafs.quota", quota_block)
+    text = replace_or_insert(text, "sorafs.gateway.site_bindings", site_bindings_block)
     text = replace_or_insert(text, "torii.onboarding", onboarding_block)
     text = replace_or_insert(text, "torii.faucet", faucet_block)
     path.write_text(text)
@@ -596,7 +607,6 @@ setopt null_glob
 
 DIR=\$(cd "\$(dirname "\$0")" && pwd)
 IROHAD_BIN="\${IROHAD_BIN:-$ROOT_DIR/target/release/irohad}"
-SITE_BINDINGS_FILE="\${IROHA_SORAFS_SITE_BINDINGS_FILE:-$ROOT_DIR/configs/soranexus/taira/sorafs_sites.json}"
 
 if [[ ! -x "\$IROHAD_BIN" ]]; then
   echo "irohad binary not executable: \$IROHAD_BIN" >&2
@@ -629,9 +639,6 @@ for i in 0 1 2 3; do
     RUST_LOG="\${RUST_LOG:-info}"
     ZK_HALO2_ENABLED="\${ZK_HALO2_ENABLED:-true}"
   )
-  if [[ -f "\$SITE_BINDINGS_FILE" ]]; then
-    launch_env+=(IROHA_SORAFS_SITE_BINDINGS_FILE="\$SITE_BINDINGS_FILE")
-  fi
   env "\${launch_env[@]}" \\
     "\$IROHAD_BIN" --sora --config "\$DIR/peer\${i}.toml" >> "\$DIR/peer\${i}.log" 2>&1 &
   pid=\$!
@@ -706,6 +713,7 @@ need_cmd screen
 need_file "$GENESIS_JSON"
 need_file "$LOCALNET_DIR/client.toml"
 need_file "$TAIRA_PROFILE_CONFIG"
+need_file "$SITE_BINDINGS_FILE"
 ensure_launchd_runner
 discover_peer_configs
 load_taira_authority

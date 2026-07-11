@@ -9,13 +9,17 @@ import org.hyperledger.iroha.sdk.address.AccountAddressException
 import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
 import org.hyperledger.iroha.sdk.address.MultisigMemberPayload
 import org.hyperledger.iroha.sdk.address.MultisigPolicyPayload
-import org.hyperledger.iroha.sdk.crypto.Blake2b
+import org.hyperledger.iroha.sdk.core.model.instructions.ProofAttachment
+import org.hyperledger.iroha.sdk.core.model.instructions.ProofVerifierKeyRef
+import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
+import org.hyperledger.iroha.sdk.privacy.PrivacyConfidentialWitnessCodecs
+import org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridge
 
 private const val KAGEMUSHA_FOLD_STEP_MAX_INPUTS = 2
 
@@ -630,6 +634,7 @@ object KagemushaRecursiveSpendRequestCodecs {
     private const val PRIVACY_FFI_VERSION_V1 = 1
     private const val PRIVACY_FFI_STATUS_OK = 0
     private const val PRIVACY_SCHEMA_BUILD_PROOF_RESULT = 0x42
+    private const val PRIVACY_SCHEMA_VERIFY_PROOF_RESULT = 0x56
     private const val BACKEND_TAG_HALO2_IPA_PASTA = 0L
     private const val CONFIDENTIAL_STATUS_ACTIVE = 1
     private const val CONFIDENTIAL_V2_MAX_PROOF_BYTES = 192 * 1024
@@ -640,6 +645,9 @@ object KagemushaRecursiveSpendRequestCodecs {
     private const val CONFIDENTIAL_UNSHIELD_ALGORITHM_ID = "unshield"
     private const val CONFIDENTIAL_UNSHIELD_ENTRYPOINT = "buildConfidentialUnshieldProofV3"
     private const val CONFIDENTIAL_RECORD_CURVE = "pallas"
+    private const val CONFIDENTIAL_TRANSFER_V2_VK_RECORD_VERSION = 3
+    private const val CONFIDENTIAL_UNSHIELD_V3_VK_RECORD_VERSION = 1
+    private const val CONFIDENTIAL_VK_RECORD_GAS_SCHEDULE_ID = "halo2_default"
     private const val ZK1_MAX_TLV_BYTES = 8 * 1024 * 1024
     private const val ZK1_MAX_INSTANCE_COLUMNS = 64
     private const val ZK1_MAX_INSTANCE_ROWS = 8192
@@ -679,6 +687,179 @@ object KagemushaRecursiveSpendRequestCodecs {
     @JvmStatic
     fun encodeRedeemRequest(request: RedeemSpendRequest): ByteArray =
         NoritoCodec.encode(request, SCHEMA_REDEEM_REQUEST, RedeemRequestAdapter, REQUEST_FLAGS)
+
+    /**
+     * Builds the `iroha_data_model::proof::VerifyingKeyRecord` Norito archive for the
+     * confidential-transfer-v2 circuit from its verifying-key bytes.
+     *
+     * Every field other than the verifying key is a fixed protocol constant, so callers only
+     * supply the circuit key. The commitment is derived as `hash_vk(halo2/ipa, verifierKeyBytes)`,
+     * keeping the produced record's `commitment` equal to the on-chain registered key's commitment
+     * whenever the same key bytes are used. The result is accepted by [buildVerifiedFoldRecordBundle].
+     */
+    @JvmStatic
+    fun encodeConfidentialTransferV2VerifierRecordArchive(verifierKeyBytes: ByteArray): ByteArray {
+        require(verifierKeyBytes.isNotEmpty()) { "verifierKeyBytes must not be empty" }
+        val vkBytes = verifierKeyBytes.copyOf()
+        val commitment = verifyingKeyCommitment(ZK_BACKEND_HALO2_IPA, vkBytes)
+        val schemaHash = irohaHash(CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA)
+        return NoritoCodec.encode(
+            Unit,
+            SCHEMA_VERIFYING_KEY_RECORD,
+            object : TypeAdapter<Unit> {
+                override fun encode(encoder: NoritoEncoder, value: Unit) {
+                    writeField(encoder) { it.writeUInt(CONFIDENTIAL_TRANSFER_V2_VK_RECORD_VERSION.toLong(), 32) }
+                    writeField(encoder) { writeString(it, CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID) }
+                    writeField(encoder) { writeOptionRaw(it, null) }
+                    writeField(encoder) { writeString(it, KAGEMUSHA_VERIFIER_NAMESPACE) }
+                    writeField(encoder) { it.writeUInt(BACKEND_TAG_HALO2_IPA_PASTA, 32) }
+                    writeField(encoder) { writeString(it, CONFIDENTIAL_RECORD_CURVE) }
+                    writeField(encoder) { it.writeBytes(schemaHash) }
+                    writeField(encoder) { it.writeBytes(commitment) }
+                    writeField(encoder) { it.writeUInt(vkBytes.size.toLong(), 32) }
+                    writeField(encoder) { it.writeUInt(CONFIDENTIAL_V2_MAX_PROOF_BYTES.toLong(), 32) }
+                    writeField(encoder) { writeOptionRaw(it, optionStringPayload(CONFIDENTIAL_VK_RECORD_GAS_SCHEDULE_ID)) }
+                    writeField(encoder) { writeOptionRaw(it, null) }
+                    writeField(encoder) { writeOptionRaw(it, null) }
+                    writeField(encoder) { writeOptionRaw(it, null) }
+                    writeField(encoder) { writeOptionRaw(it, null) }
+                    writeField(encoder) { writeOptionRaw(it, verifyingKeyBoxPayload(ZK_BACKEND_HALO2_IPA, vkBytes)) }
+                    writeField(encoder) { it.writeUInt(CONFIDENTIAL_STATUS_ACTIVE.toLong(), 32) }
+                }
+
+                override fun decode(decoder: NoritoDecoder): Unit =
+                    throw UnsupportedOperationException("VerifyingKeyRecord archives are encode-only")
+            },
+            REQUEST_FLAGS,
+        )
+    }
+
+    /**
+     * Builds the `iroha_data_model::proof::VerifyingKeyRecord` Norito archive for the
+     * confidential-unshield-v3 circuit from its verifying-key bytes.
+     *
+     * Literal mirror of [encodeConfidentialTransferV2VerifierRecordArchive] for the redeem
+     * (unshield) circuit: every field other than the verifying key is a fixed protocol constant,
+     * the commitment is derived as `hash_vk(halo2/ipa, verifierKeyBytes)`, and the produced record
+     * is accepted by [buildRedeemProofAttachment] / [buildRedeemProofAttachmentValue] whenever the
+     * same key bytes back the on-chain registered key.
+     */
+    @JvmStatic
+    fun encodeConfidentialUnshieldV3VerifierRecordArchive(verifierKeyBytes: ByteArray): ByteArray {
+        require(verifierKeyBytes.isNotEmpty()) { "verifierKeyBytes must not be empty" }
+        val vkBytes = verifierKeyBytes.copyOf()
+        val commitment = verifyingKeyCommitment(ZK_BACKEND_HALO2_IPA, vkBytes)
+        val schemaHash = irohaHash(CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA)
+        return NoritoCodec.encode(
+            Unit,
+            SCHEMA_VERIFYING_KEY_RECORD,
+            object : TypeAdapter<Unit> {
+                override fun encode(encoder: NoritoEncoder, value: Unit) {
+                    writeField(encoder) { it.writeUInt(CONFIDENTIAL_UNSHIELD_V3_VK_RECORD_VERSION.toLong(), 32) }
+                    writeField(encoder) { writeString(it, CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID) }
+                    writeField(encoder) { writeOptionRaw(it, null) }
+                    writeField(encoder) { writeString(it, KAGEMUSHA_VERIFIER_NAMESPACE) }
+                    writeField(encoder) { it.writeUInt(BACKEND_TAG_HALO2_IPA_PASTA, 32) }
+                    writeField(encoder) { writeString(it, CONFIDENTIAL_RECORD_CURVE) }
+                    writeField(encoder) { it.writeBytes(schemaHash) }
+                    writeField(encoder) { it.writeBytes(commitment) }
+                    writeField(encoder) { it.writeUInt(vkBytes.size.toLong(), 32) }
+                    writeField(encoder) { it.writeUInt(CONFIDENTIAL_V2_MAX_PROOF_BYTES.toLong(), 32) }
+                    writeField(encoder) { writeOptionRaw(it, optionStringPayload(CONFIDENTIAL_VK_RECORD_GAS_SCHEDULE_ID)) }
+                    writeField(encoder) { writeOptionRaw(it, null) }
+                    writeField(encoder) { writeOptionRaw(it, null) }
+                    writeField(encoder) { writeOptionRaw(it, null) }
+                    writeField(encoder) { writeOptionRaw(it, null) }
+                    writeField(encoder) { writeOptionRaw(it, verifyingKeyBoxPayload(ZK_BACKEND_HALO2_IPA, vkBytes)) }
+                    writeField(encoder) { it.writeUInt(CONFIDENTIAL_STATUS_ACTIVE.toLong(), 32) }
+                }
+
+                override fun decode(decoder: NoritoDecoder): Unit =
+                    throw UnsupportedOperationException("VerifyingKeyRecord archives are encode-only")
+            },
+            REQUEST_FLAGS,
+        )
+    }
+
+    /**
+     * Builds a verified typed redeem attachment for `UnshieldInstruction.Builder.setProof`.
+     *
+     * The proof output and verifier record are decoded and cross-checked, lifecycle bounds are
+     * resolved at [blockHeight], and the native verifier must return an exact successful result
+     * for the same unshield proof before this method returns.
+     */
+    @JvmStatic
+    @JvmOverloads
+    fun buildRedeemProofAttachmentValue(
+        unshieldProofOutputArchive: ByteArray?,
+        unshieldVerifierRecord: VerifierRecordRef?,
+        blockHeight: Long? = null,
+    ): ProofAttachment = buildRedeemProofAttachmentValueChecked(
+        unshieldProofOutputArchive,
+        unshieldVerifierRecord,
+        blockHeight,
+        PrivacyNativeBridge::verifyProof,
+    )
+
+    internal fun buildRedeemProofAttachmentValueChecked(
+        unshieldProofOutputArchive: ByteArray?,
+        unshieldVerifierRecord: VerifierRecordRef?,
+        blockHeight: Long?,
+        verifyProof: (ByteArray) -> ByteArray,
+    ): ProofAttachment {
+        val inputs = decodeRedeemProofAttachmentInputsChecked(
+            unshieldProofOutputArchive,
+            unshieldVerifierRecord,
+            blockHeight,
+            verifyProof,
+        )
+        return ProofAttachment(
+            ZK_BACKEND_HALO2_IPA,
+            inputs.envelope.archive,
+            ProofVerifierKeyRef(inputs.verifierRecord.id.backend, inputs.verifierRecord.id.name),
+            inputs.verifierRecord.commitment,
+            irohaHash(inputs.envelope.archive),
+        )
+    }
+
+    private fun decodeRedeemProofAttachmentInputsChecked(
+        unshieldProofOutputArchive: ByteArray?,
+        unshieldVerifierRecord: VerifierRecordRef?,
+        blockHeight: Long?,
+        verifyProof: (ByteArray) -> ByteArray,
+    ): RedeemProofAttachmentInputs {
+        require(unshieldProofOutputArchive != null) { "unshieldProofOutputArchive is required" }
+        require(unshieldVerifierRecord != null) { "unshieldVerifierRecord is required" }
+        val proof = parsePrivacyBuildResult(
+            unshieldProofOutputArchive,
+            CONFIDENTIAL_UNSHIELD_ALGORITHM_ID,
+            CONFIDENTIAL_UNSHIELD_ENTRYPOINT,
+            PrivacyConfidentialWitnessCodecs.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF,
+            "unshieldProofOutputArchive",
+        )
+        val envelope = decodeOpenVerifyEnvelope(proof.proof, "unshield proof")
+        val verifierRecord = decodeAndValidateVerifierRecord(
+            unshieldVerifierRecord,
+            envelope,
+            expectedCircuitId = CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+            expectedSchema = CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA,
+            proofArchiveSize = proof.proof.size,
+            label = "unshieldVerifierRecord",
+            blockHeight = blockHeight,
+            requireResolvedLifecycle = true,
+        )
+        val verifyRequest = PrivacyConfidentialWitnessCodecs.buildConfidentialUnshieldVerifyRequestV1(proof.proof)
+        val verifyResult = verifyProof(verifyRequest)
+        parsePrivacyVerifyResult(
+            verifyResult,
+            CONFIDENTIAL_UNSHIELD_ALGORITHM_ID,
+            CONFIDENTIAL_UNSHIELD_ENTRYPOINT,
+            PrivacyConfidentialWitnessCodecs.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF,
+            proof.proof,
+            "unshieldVerifyResult",
+        )
+        return RedeemProofAttachmentInputs(envelope, verifierRecord)
+    }
 
     @JvmStatic
     fun buildPallasOpenEnvelopesArchive(hops: List<VerifiedFoldHopEvidence>?): ByteArray {
@@ -726,30 +907,37 @@ object KagemushaRecursiveSpendRequestCodecs {
         return NoritoCodec.encode(prepared, SCHEMA_RECORD_BUNDLE, VerifiedFoldRecordBundleAdapter, REQUEST_FLAGS)
     }
 
+    /**
+     * Builds the canonical redeem attachment archive after the same native and lifecycle checks as
+     * [buildRedeemProofAttachmentValue].
+     */
     @JvmStatic
+    @JvmOverloads
     fun buildRedeemProofAttachment(
         unshieldProofOutputArchive: ByteArray?,
         unshieldVerifierRecord: VerifierRecordRef?,
+        blockHeight: Long? = null,
+    ): ByteArray = buildRedeemProofAttachmentChecked(
+        unshieldProofOutputArchive,
+        unshieldVerifierRecord,
+        blockHeight,
+        PrivacyNativeBridge::verifyProof,
+    )
+
+    internal fun buildRedeemProofAttachmentChecked(
+        unshieldProofOutputArchive: ByteArray?,
+        unshieldVerifierRecord: VerifierRecordRef?,
+        blockHeight: Long?,
+        verifyProof: (ByteArray) -> ByteArray,
     ): ByteArray {
-        require(unshieldProofOutputArchive != null) { "unshieldProofOutputArchive is required" }
-        require(unshieldVerifierRecord != null) { "unshieldVerifierRecord is required" }
-        val proof = parsePrivacyBuildResult(
+        val inputs = decodeRedeemProofAttachmentInputsChecked(
             unshieldProofOutputArchive,
-            CONFIDENTIAL_UNSHIELD_ALGORITHM_ID,
-            CONFIDENTIAL_UNSHIELD_ENTRYPOINT,
-            "unshieldProofOutputArchive",
-        )
-        val envelope = decodeOpenVerifyEnvelope(proof.proof, "unshield proof")
-        val verifierRecord = decodeAndValidateVerifierRecord(
             unshieldVerifierRecord,
-            envelope,
-            expectedCircuitId = CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
-            expectedSchema = CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA,
-            proofArchiveSize = proof.proof.size,
-            label = "unshieldVerifierRecord",
+            blockHeight,
+            verifyProof,
         )
         return NoritoCodec.encode(
-            proofAttachmentPayload(envelope, verifierRecord),
+            proofAttachmentPayload(inputs.envelope, inputs.verifierRecord),
             SCHEMA_PROOF_ATTACHMENT,
             RawPayloadAdapter,
             REQUEST_FLAGS,
@@ -1727,6 +1915,7 @@ object KagemushaRecursiveSpendRequestCodecs {
             hop.proofOutputArchive,
             CONFIDENTIAL_TRANSFER_ALGORITHM_ID,
             CONFIDENTIAL_TRANSFER_ENTRYPOINT,
+            PrivacyConfidentialWitnessCodecs.CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF,
             "hop $index proofOutputArchive",
         )
         val envelope = decodeOpenVerifyEnvelope(proof.proof, "hop $index proof")
@@ -1754,6 +1943,7 @@ object KagemushaRecursiveSpendRequestCodecs {
         archive: ByteArray,
         expectedAlgorithmId: String,
         expectedEntrypoint: String,
+        expectedVkRef: String,
         label: String,
     ): PrivacyBuildResult {
         val payload = requirePrivacyBuildResultPayload(archive, label)
@@ -1777,14 +1967,68 @@ object KagemushaRecursiveSpendRequestCodecs {
         require(message.isEmpty()) { "$label success message must be empty" }
         require(algorithmId == expectedAlgorithmId) { "$label algorithm_id must be $expectedAlgorithmId" }
         require(entrypoint == expectedEntrypoint) { "$label entrypoint must be $expectedEntrypoint" }
-        requirePortableId(vkRef, "$label.vk_ref")
+        require(vkRef == expectedVkRef) { "$label vk_ref must be $expectedVkRef" }
         require(publicInputs.isEmpty()) { "$label public_inputs must be empty; envelope carries authoritative inputs" }
         require(proof.isNotEmpty()) { "$label proof must not be empty" }
         require(!verified) { "$label build results must not claim online verification" }
         return PrivacyBuildResult(proof)
     }
 
+    private fun parsePrivacyVerifyResult(
+        archive: ByteArray,
+        expectedAlgorithmId: String,
+        expectedEntrypoint: String,
+        expectedVkRef: String,
+        expectedProof: ByteArray,
+        label: String,
+    ) {
+        val payload = requirePrivacyResultPayload(
+            archive,
+            label,
+            PRIVACY_SCHEMA_VERIFY_PROOF_RESULT,
+            "verify-result",
+        )
+        require(payload.flags == REQUEST_FLAGS) { "$label must use compact Norito layout" }
+        val decoder = NoritoDecoder(payload.payload, payload.flags)
+        val version = readField(decoder) { checkedInt(it.readUInt(32), "$label.version") }
+        val status = readField(decoder) { checkedInt(it.readUInt(32), "$label.status") }
+        val errorCode = readField(decoder) { checkedInt(it.readUInt(32), "$label.error_code") }
+        val message = readField(decoder) { readString(it) }
+        val algorithmId = readField(decoder) { readString(it) }
+        val entrypoint = readField(decoder) { readString(it) }
+        val vkRef = readField(decoder) { readString(it) }
+        val publicInputs = readField(decoder) { readBytesVec(it) }
+        val proof = readField(decoder) { readBytesVec(it) }
+        val verified = readField(decoder) { it.readBool() }
+        require(decoder.remaining() == 0) { "Trailing bytes after $label" }
+        require(version == PRIVACY_FFI_VERSION_V1) { "$label version must be $PRIVACY_FFI_VERSION_V1" }
+        require(status == PRIVACY_FFI_STATUS_OK && errorCode == 0) {
+            "$label must be a successful privacy proof result: status=$status error_code=$errorCode"
+        }
+        require(message.isEmpty()) { "$label success message must be empty" }
+        require(algorithmId == expectedAlgorithmId) { "$label algorithm_id must be $expectedAlgorithmId" }
+        require(entrypoint == expectedEntrypoint) { "$label entrypoint must be $expectedEntrypoint" }
+        require(vkRef == expectedVkRef) { "$label vk_ref must be $expectedVkRef" }
+        require(publicInputs.isEmpty()) { "$label public_inputs must be empty; envelope carries authoritative inputs" }
+        require(proof.contentEquals(expectedProof)) { "$label proof must match the unshield build result" }
+        require(verified) { "$label must confirm proof verification" }
+    }
+
     private fun requirePrivacyBuildResultPayload(archive: ByteArray, label: String): ArchivePayload {
+        return requirePrivacyResultPayload(
+            archive,
+            label,
+            PRIVACY_SCHEMA_BUILD_PROOF_RESULT,
+            "build-result",
+        )
+    }
+
+    private fun requirePrivacyResultPayload(
+        archive: ByteArray,
+        label: String,
+        expectedSchemaMarker: Int,
+        resultKind: String,
+    ): ArchivePayload {
         require(archive.isNotEmpty()) { "$label must not be empty" }
         require(archive.size <= KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES) {
             "$label must not exceed ${KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES} bytes"
@@ -1792,10 +2036,10 @@ object KagemushaRecursiveSpendRequestCodecs {
         val decoded = try {
             NoritoHeader.decode(archive, null)
         } catch (ex: IllegalArgumentException) {
-            throw IllegalArgumentException("$label must be a valid privacy build-result Norito archive", ex)
+            throw IllegalArgumentException("$label must be a valid privacy $resultKind Norito archive", ex)
         }
-        require(decoded.header.schemaHash.all { (it.toInt() and 0xff) == PRIVACY_SCHEMA_BUILD_PROOF_RESULT }) {
-            "$label must use privacy build-result schema marker"
+        require(decoded.header.schemaHash.all { (it.toInt() and 0xff) == expectedSchemaMarker }) {
+            "$label must use privacy $resultKind schema marker"
         }
         require(decoded.header.compression == NoritoHeader.COMPRESSION_NONE) { "$label must not be compressed" }
         require(decoded.header.payloadLength > 0) { "$label must contain a non-empty Norito payload" }
@@ -1835,12 +2079,17 @@ object KagemushaRecursiveSpendRequestCodecs {
         expectedSchema: ByteArray,
         proofArchiveSize: Int,
         label: String,
+        blockHeight: Long? = null,
+        requireResolvedLifecycle: Boolean = false,
     ): VerifierRecordValue {
         val recordPayload = compactPayloadForRequest(ref.recordBytes, SCHEMA_VERIFYING_KEY_RECORD, label)
         val record = decodeVerifierRecordPayload(recordPayload, label)
         val id = parseVerifierKeyId(ref.verifierKeyId, "$label.verifierKeyId")
         require(id.backend == ZK_BACKEND_HALO2_IPA) { "$label verifierKeyId backend must be $ZK_BACKEND_HALO2_IPA" }
         require(record.status == CONFIDENTIAL_STATUS_ACTIVE) { "$label status must be Active" }
+        if (requireResolvedLifecycle) {
+            validateVerifierRecordLifecycle(record, blockHeight, label)
+        }
         require(record.namespace == KAGEMUSHA_VERIFIER_NAMESPACE) {
             "$label namespace must be $KAGEMUSHA_VERIFIER_NAMESPACE"
         }
@@ -1849,7 +2098,7 @@ object KagemushaRecursiveSpendRequestCodecs {
         require(record.circuitId == expectedCircuitId) { "$label circuit_id must be $expectedCircuitId" }
         require(envelope.circuitId == expectedCircuitId) { "$label envelope circuit_id must be $expectedCircuitId" }
         require(envelope.publicInputs.contentEquals(expectedSchema)) { "$label public-input schema mismatch" }
-        require(record.publicInputsSchemaHash.contentEquals(Blake2b.digest256(expectedSchema))) {
+        require(record.publicInputsSchemaHash.contentEquals(irohaHash(expectedSchema))) {
             "$label public_inputs_schema_hash mismatch"
         }
         require(record.commitment.contentEquals(envelope.vkHash)) { "$label commitment must match envelope vk_hash" }
@@ -1888,12 +2137,12 @@ object KagemushaRecursiveSpendRequestCodecs {
         readField(decoder) { readOptionString(it) }
         readField(decoder) { readOptionString(it) }
         readField(decoder) { readOptionString(it) }
-        readField(decoder) { readOptionU64Value(it) }
-        readField(decoder) { readOptionU64Value(it) }
+        val activationHeight = readField(decoder) { readOptionU64Value(it) }
+        val withdrawHeight = readField(decoder) { readOptionU64Value(it) }
         val key = readField(decoder) {
             readOptionRawPayload(it)?.let { keyPayload -> readVerifyingKeyBoxPayload(keyPayload, "$label.key") }
         }
-        val status = readField(decoder) { checkedInt(it.readUInt(8), "$label.status") }
+        val status = readField(decoder) { checkedInt(it.readUInt(32), "$label.status") }
         require(decoder.remaining() == 0) { "Trailing bytes after $label" }
         return DecodedVerifierRecord(
             circuitId = circuitId,
@@ -1904,9 +2153,37 @@ object KagemushaRecursiveSpendRequestCodecs {
             commitment = commitment,
             vkLen = vkLen,
             maxProofBytes = maxProofBytes,
+            activationHeight = activationHeight,
+            withdrawHeight = withdrawHeight,
             key = key,
             status = status,
         )
+    }
+
+    private fun validateVerifierRecordLifecycle(
+        record: DecodedVerifierRecord,
+        blockHeight: Long?,
+        label: String,
+    ) {
+        requireNonNegativeHeight(blockHeight)
+        require(record.activationHeight == null || record.activationHeight >= 0L) {
+            "$label activation_height exceeds supported JVM height range"
+        }
+        require(record.withdrawHeight == null || record.withdrawHeight >= 0L) {
+            "$label withdraw_height exceeds supported JVM height range"
+        }
+        if (blockHeight == null) {
+            require(record.activationHeight == null && record.withdrawHeight == null) {
+                "$label has a lifecycle window; blockHeight is required"
+            }
+            return
+        }
+        record.activationHeight?.let { activationHeight ->
+            require(blockHeight >= activationHeight) { "$label is not active at blockHeight" }
+        }
+        record.withdrawHeight?.let { withdrawHeight ->
+            require(blockHeight < withdrawHeight) { "$label is not active at blockHeight" }
+        }
     }
 
     private fun readVerifyingKeyBoxPayload(payload: ByteArray, label: String): VerifyingKeyBoxValue {
@@ -2002,8 +2279,11 @@ object KagemushaRecursiveSpendRequestCodecs {
         writeField(encoder) { writeProofBox(it, envelope.archive) }
         writeField(encoder) { writeVerifierKeyId(it, verifierRecord.id) }
         writeField(encoder) { writeOptionFixed32(it, verifierRecord.commitment) }
-        writeField(encoder) { writeOptionFixed32(it, Blake2b.digest256(envelope.archive)) }
-        writeField(encoder) { writeOptionRaw(it, null) }
+        // envelope_hash must equal iroha_crypto::Hash::new(proof.bytes): Blake2b-256 with the LSB
+        // marker set (see irohaHash), not the bare digest, or the Rust attachment check rejects it.
+        writeField(encoder) { writeOptionFixed32(it, irohaHash(envelope.archive)) }
+        // `lane_privacy` is a trailing `#[norito(default)]` field. Rust canonical encoding omits
+        // an absent trailing default instead of emitting an explicit `None` field.
         return encoder.toByteArray()
     }
 
@@ -2011,10 +2291,10 @@ object KagemushaRecursiveSpendRequestCodecs {
         encoder.writeUInt(hops.size.toLong(), 64)
         for (hop in hops) {
             writeField(encoder) { step ->
-                writeField(step) { writeConstVec(it, hop.publicInputs.rootBefore) }
+                writeField(step) { writePackedFixed32(it, hop.publicInputs.rootBefore) }
                 writeField(step) { writeFixed32Vec(it, hop.publicInputs.inputNullifiers) }
                 writeField(step) { writeFixed32Vec(it, hop.publicInputs.outputCommitments) }
-                writeField(step) { writeConstVec(it, hop.rootAfter) }
+                writeField(step) { writePackedFixed32(it, hop.rootAfter) }
                 writeRawField(step, proofAttachmentPayload(hop.envelope, hop.verifierRecord))
                 writeRawField(step, verifyingKeyBoxPayload(hop.verifierRecord.key.backend, hop.verifierRecord.key.bytes))
             }
@@ -2042,6 +2322,11 @@ object KagemushaRecursiveSpendRequestCodecs {
 }
 
 private data class PrivacyBuildResult(val proof: ByteArray)
+
+private data class RedeemProofAttachmentInputs(
+    val envelope: OpenVerifyEnvelopeValue,
+    val verifierRecord: VerifierRecordValue,
+)
 
 private data class OpenVerifyEnvelopeValue(
     val archive: ByteArray,
@@ -2076,6 +2361,8 @@ private data class DecodedVerifierRecord(
     val commitment: ByteArray,
     val vkLen: Int,
     val maxProofBytes: Int,
+    val activationHeight: Long?,
+    val withdrawHeight: Long?,
     val key: VerifyingKeyBoxValue?,
     val status: Int,
 )
@@ -2115,6 +2402,12 @@ private fun verifyingKeyBoxPayload(backend: String, bytes: ByteArray): ByteArray
     val encoder = NoritoEncoder(NoritoHeader.COMPACT_LEN)
     writeField(encoder) { writeString(it, backend) }
     writeField(encoder) { writeBytesVec(it, bytes) }
+    return encoder.toByteArray()
+}
+
+private fun optionStringPayload(value: String): ByteArray {
+    val encoder = NoritoEncoder(NoritoHeader.COMPACT_LEN)
+    writeString(encoder, value)
     return encoder.toByteArray()
 }
 
@@ -2441,8 +2734,12 @@ private fun readFixed32Sequence(
 private fun readRequiredMetadataOption(decoder: NoritoDecoder, field: String): ByteArray {
     val payload = readOptionRawPayload(decoder, field)
         ?: throw IllegalArgumentException("$field is required")
-    require(payload.size == 32) { "$field must be exactly 32 bytes" }
-    val value = payload.copyOf()
+    // Norito serializes Option<[u8; 32]> length-delimited per element (see writeConstVec /
+    // writeOptionFixed32), so the inner payload is 64 bytes, not raw 32. readFixed32 accepts
+    // both that form and the packed 32-byte form some writers still emit.
+    val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+    val value = child.readFixed32(field)
+    require(child.remaining() == 0) { "Trailing bytes after $field" }
     require(!isZero32(value)) { "$field must be non-zero" }
     return value
 }
@@ -2479,11 +2776,7 @@ private fun fixed32(value: ByteArray, field: String): ByteArray {
 
 private fun isZero32(value: ByteArray): Boolean = value.all { it.toInt() == 0 }
 
-private fun irohaHash(value: ByteArray): ByteArray {
-    val digest = Blake2b.digest256(value)
-    digest[digest.lastIndex] = (digest.last().toInt() or 0x01).toByte()
-    return digest
-}
+private fun irohaHash(value: ByteArray): ByteArray = IrohaHash.prehash(value)
 
 private fun requireNonNegativeHeight(blockHeight: Long?) {
     require(blockHeight == null || blockHeight >= 0L) { "blockHeight must be non-negative" }
@@ -2696,6 +2989,14 @@ private fun writeConstVec(encoder: NoritoEncoder, value: ByteArray) {
     }
 }
 
+// Norito's derive serializes a direct `[u8; 32]` struct field as raw 32 bytes (packed), whereas
+// `[u8; 32]` reached through a generic context (Vec element, Option inner) is length-delimited per
+// byte (see writeConstVec). Struct fields such as KagemushaVerifiedFoldStep.root_before/root_after
+// must therefore be written packed, or the Rust derive rejects them with LengthMismatch.
+private fun writePackedFixed32(encoder: NoritoEncoder, value: ByteArray) {
+    encoder.writeBytes(fixed32(value, "packed fixed32"))
+}
+
 private fun fixed32Payload(value: ByteArray): ByteArray {
     val encoder = NoritoEncoder(NoritoHeader.COMPACT_LEN)
     writeConstVec(encoder, fixed32(value, "fixed32"))
@@ -2735,8 +3036,8 @@ private fun writeOptionFixed32(encoder: NoritoEncoder, value: ByteArray?) {
 }
 
 private fun writeSpendableNote(encoder: NoritoEncoder, value: SpendableNoteDescriptor) {
-    writeField(encoder) { writeConstVec(it, value.noteCommitment) }
-    writeField(encoder) { writeConstVec(it, value.spendNullifier) }
+    writeField(encoder) { writePackedFixed32(it, value.noteCommitment) }
+    writeField(encoder) { writePackedFixed32(it, value.spendNullifier) }
     writeField(encoder) { writeNumeric(it, value.amount) }
 }
 
@@ -2758,7 +3059,9 @@ private fun writeAssetDefinitionId(encoder: NoritoEncoder, value: String) {
     } catch (ex: IllegalArgumentException) {
         throw IllegalArgumentException("asset must be a canonical asset definition id", ex)
     }
-    encoder.writeBytes(bytes)
+    // `AssetDefinitionId` delegates to `[u8; 16]`'s Norito implementation. Unlike the
+    // protocol-special direct `[u8; 32]` fields, that fixed array retains per-element framing.
+    writeConstVec(encoder, bytes)
 }
 
 private fun writeAssetBalanceScope(encoder: NoritoEncoder, dataspaceId: Long?) {
@@ -2937,7 +3240,13 @@ private fun compareUnsigned(left: ByteArray, right: ByteArray): Int {
 }
 
 private fun writePublicKey(encoder: NoritoEncoder, curveId: Int, publicKey: ByteArray) {
-    writeConstVec(encoder, publicKeyCompactPayload(curveId, publicKey))
+    // Rust encodes PublicKey as ConstVec<u8> of the algorithm+payload bytes, which prefixes the
+    // length-delimited elements with a u64 element count (write_seq_len). writeConstVec emits only
+    // the elements — correct for fixed [u8; N] arrays but not for a variable ConstVec — so the count
+    // must be written here.
+    val payload = publicKeyCompactPayload(curveId, publicKey)
+    encoder.writeUInt(payload.size.toLong(), 64)
+    writeConstVec(encoder, payload)
 }
 
 private fun publicKeyCompactPayload(curveId: Int, publicKey: ByteArray): ByteArray {
@@ -3195,17 +3504,44 @@ private fun compact(decoder: NoritoDecoder): Boolean =
     decoder.flags and NoritoHeader.COMPACT_LEN != 0
 
 private fun parseVerifierKeyId(value: String, field: String): VerifierKeyIdValue {
-    requirePortableId(value, field)
     val separator = value.indexOf(':')
     require(separator > 0 && separator < value.lastIndex) {
         "$field must use backend:name syntax"
     }
     val backend = value.substring(0, separator)
     val name = value.substring(separator + 1)
-    requirePortableId(backend, "$field.backend")
-    requirePortableId(name, "$field.name")
+    requireVerifierKeyIdComponent(backend, "$field.backend")
+    requireVerifierKeyIdComponent(name, "$field.name")
     return VerifierKeyIdValue(backend, name)
 }
+
+private fun requireVerifierKeyIdComponent(value: String, field: String) {
+    fun isLowercaseAsciiAlphanumeric(character: Char): Boolean =
+        character in 'a'..'z' || character in '0'..'9'
+
+    require(value.isNotEmpty() && value.length <= 256) {
+        "$field must use portable registry syntax"
+    }
+    require(isLowercaseAsciiAlphanumeric(value.first()) && isLowercaseAsciiAlphanumeric(value.last())) {
+        "$field must use portable registry syntax"
+    }
+    require(value.all { character ->
+        isLowercaseAsciiAlphanumeric(character) ||
+            character == '-' ||
+            character == '_' ||
+            character == '/' ||
+            character == ':' ||
+            character == '.'
+    }) {
+        "$field must use portable registry syntax"
+    }
+    require(VERIFIER_KEY_ID_FORBIDDEN_SEPARATORS.none(value::contains)) {
+        "$field must use portable registry syntax"
+    }
+}
+
+private val VERIFIER_KEY_ID_FORBIDDEN_SEPARATORS =
+    listOf("..", "//", ":::", "/:", ":/", "/.", "./", ":.", ".:")
 
 private fun verifyingKeyCommitment(backend: String, bytes: ByteArray): ByteArray {
     requireNonBlankUnpadded(backend, "verifierKeyBackend")

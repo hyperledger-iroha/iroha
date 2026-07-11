@@ -61,7 +61,7 @@ fn print_usage() {
 fn print_por_usage() {
     eprintln!(
         "Usage: sorafs-node ingest por --data-dir=<dir> --challenge=<path> --proof=<path> [--verdict=<path>] [--manifest-id=<hex>] [--json-out=<path>]\n\n\
-         Replay a PoR challenge/proof/verdict locally before submitting it to Torii."
+         Offline replay helper: verifies embedded signatures and lifecycle binding, but does not establish provider admission, trusted-auditor membership, or beacon/VRF provenance. Production mutation must use Torii's authenticated lifecycle."
     );
 }
 
@@ -244,6 +244,9 @@ fn ingest_por_command(args: Vec<String>) -> Result<(), String> {
     proof
         .validate()
         .map_err(|err| format!("invalid proof: {err}"))?;
+    proof
+        .verify_signature()
+        .map_err(|err| format!("invalid proof signature: {err}"))?;
 
     if challenge.challenge_id != proof.challenge_id {
         return Err("challenge/proof mismatch: challenge ids differ".to_string());
@@ -276,12 +279,17 @@ fn ingest_por_command(args: Vec<String>) -> Result<(), String> {
         }
     }
 
-    let handle = NodeHandle::new(storage_config);
+    let handle = NodeHandle::try_new(storage_config).map_err(|err| {
+        format!(
+            "failed to initialise SoraFS runtime from {}: {err}",
+            data_dir.display()
+        )
+    })?;
     handle
         .record_por_challenge(&challenge)
         .map_err(|err| format!("failed to record challenge: {err}"))?;
     handle
-        .record_por_proof(&proof)
+        .record_por_proof(&proof, &proof.signature.public_key)
         .map_err(|err| format!("failed to record proof: {err}"))?;
 
     let verdict_snapshot = if let Some(verdict_path) = opts.verdict_path {
@@ -289,14 +297,25 @@ fn ingest_por_command(args: Vec<String>) -> Result<(), String> {
             .map_err(|err| format!("failed to read verdict {}: {err}", verdict_path.display()))?;
         let verdict: AuditVerdictV1 = norito::decode_from_bytes(&verdict_bytes)
             .map_err(|err| format!("failed to decode verdict: {err}"))?;
+        verdict
+            .validate()
+            .map_err(|err| format!("invalid verdict: {err}"))?;
+        verdict
+            .verify_signatures()
+            .map_err(|err| format!("invalid verdict signature: {err}"))?;
         if verdict.challenge_id != proof.challenge_id {
             return Err("verdict challenge id mismatches proof".to_string());
         }
         if verdict.manifest_digest != proof.manifest_digest {
             return Err("verdict manifest digest mismatches proof".to_string());
         }
+        let embedded_auditor_keys = verdict
+            .auditor_signatures
+            .iter()
+            .map(|signature| signature.public_key.clone())
+            .collect::<Vec<_>>();
         let outcome = handle
-            .record_por_verdict(&verdict)
+            .record_por_verdict(&verdict, &embedded_auditor_keys, 1)
             .map_err(|err| format!("failed to record verdict: {err}"))?;
         Some((verdict, outcome))
     } else {

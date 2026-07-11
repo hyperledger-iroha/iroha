@@ -2,9 +2,9 @@
 seiyaku PerpFunding {
     // Compute an unsigned funding-payment magnitude. Direction is selected by
     // comparing mark and index prices before any checked subtraction.
-    fn funding_payment(position_size_magnitude: Amount, price_delta: Amount, funding_bps: Amount) -> Amount {
+    fn funding_payment(quantity position_size_magnitude, quantity price_delta, quantity funding_bps) -> quantity {
         let num = position_size_magnitude * price_delta * funding_bps;
-        let pay = num / Amount::from_i64(10_000);
+        let pay = num / 10_000;
         return pay;
     }
 
@@ -12,13 +12,13 @@ seiyaku PerpFunding {
     // insurance fund. A mark premium makes the trader pay; a discount reverses
     // the transfer direction.
     kotoage fn settle_funding(
-        trader: AccountId,
-        insurance_fund: AccountId,
-        stable_asset: AssetDefinitionId,
-        position_size_magnitude: Amount,
-        mark_price: Amount,
-        index_price: Amount,
-        funding_bps: Amount,
+        AccountId trader,
+        AccountId insurance_fund,
+        AssetDefinitionId stable_asset,
+        quantity position_size_magnitude,
+        quantity mark_price,
+        quantity index_price,
+        quantity funding_bps,
     ) authorize("Admin") {
         if mark_price >= index_price {
             let premium_delta = mark_price - index_price;
@@ -52,12 +52,12 @@ seiyaku PerpFunding {
     }
 
     // Basic liquidation check: equity_bps = (equity * 10_000) / notional
-    view fn is_liquidatable(equity: Amount, notional: Amount, maintenance_bps: Amount) -> bool {
-        if notional == Amount::from_i64(0) {
+    view fn is_liquidatable(quantity equity, quantity notional, quantity maintenance_bps) -> bool {
+        if notional == 0 {
             return false;
         }
         // not liquidatable if no position
-        let equity_bps = (equity * Amount::from_i64(10_000)) / notional;
+        let equity_bps = (equity * 10_000) / notional;
         let liq = (equity_bps < maintenance_bps);
         return liq;
     }

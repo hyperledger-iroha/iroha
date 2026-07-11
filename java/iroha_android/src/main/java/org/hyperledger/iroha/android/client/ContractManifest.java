@@ -20,10 +20,10 @@ public final class ContractManifest {
   /** Scalar and pointer leaves supported by the V1 boundary ABI. */
   public enum ValueKindV1 {
     INT,
-    U128,
+    DECIMAL,
+    QUANTITY,
     BOOL,
     STRING,
-    AMOUNT,
     JSON,
     NAME,
     ACCOUNT_ID,

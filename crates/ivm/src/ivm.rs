@@ -13,7 +13,7 @@
 use std::time::Duration;
 use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     panic::AssertUnwindSafe,
     sync::{
         Arc, Mutex, OnceLock,
@@ -34,10 +34,13 @@ use crate::{
     },
     execution_proof::{EXECUTION_PROOF_VERSION_V1, ExecutionProof},
     gas,
-    host::{AccessLog, DefaultHost, IVMHost},
+    host::{AccessLog, DefaultHost, IVMHost, host_syscall_metering_spec},
     instruction,
     memory::Memory,
-    metadata::{EmbeddedContractDebugInfoV1, ParsedLiteralSection, ProgramMetadata},
+    metadata::{
+        EmbeddedContractDebugInfoV1, LiteralKindV1, ParsedLiteralSection, ProgramMetadata,
+        decode_literal_descriptor,
+    },
     parallel::{
         self, Block, BlockResult, ExecutionContext, Scheduler, State, Transaction, TxResult,
     },
@@ -45,6 +48,10 @@ use crate::{
     prepared::PreparedContract,
     registers::Registers,
     simple_instruction::Instruction as SimpleInstruction,
+    syscall_metering::{
+        STAGED_SYSCALL_ENTRY_GAS, StagedSyscallContext, SyscallCompletion, SyscallMetering,
+        SyscallMeteringPhase,
+    },
     vector,
     vector::SimdChoice,
     zk::{self, Constraint, DeltaTraceLog, MemEvent, MemLog, RegisterState},
@@ -66,12 +73,125 @@ const ILP_MIN_PARALLEL_BLOCK_LEN: usize = 16;
 const PREPARED_PROGRAM_CACHE_CAPACITY: usize = 128;
 /// Approximate byte budget for cached prepared instruction streams.
 const PREPARED_PROGRAM_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+fn require_registered_syscall_metering(
+    number: u32,
+    metering: Option<SyscallMetering>,
+) -> Result<SyscallMetering, VMError> {
+    metering.ok_or(VMError::UnknownSyscall(number))
+}
 /// Maximum protected direct-call depth for deployable contract artifacts.
 ///
 /// Kotodama V1 rejects recursion, so legitimate programs remain well below
 /// this bound. The cap makes malicious cyclic call graphs fail deterministically
 /// without allowing an unbounded host-side shadow stack.
 const MAX_CONTRACT_CALL_DEPTH: usize = 1024;
+
+/// Canonical disjoint half-open ranges containing private guest-memory bytes.
+///
+/// Range lookup and updates depend only on address ordering. They never scan a
+/// public payload byte-by-byte, so privacy preflight remains logarithmic in the
+/// number of private ranges rather than linear in attacker-controlled length.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct PrivateMemoryRanges {
+    ranges: BTreeMap<u64, u64>,
+}
+
+impl PrivateMemoryRanges {
+    fn is_empty(&self) -> bool {
+        self.ranges.is_empty()
+    }
+
+    fn clear(&mut self) {
+        self.ranges.clear();
+    }
+
+    fn insert(&mut self, range: std::ops::Range<u64>) {
+        if range.start >= range.end {
+            return;
+        }
+        let mut start = range.start;
+        let mut end = range.end;
+        if let Some((&previous_start, &previous_end)) = self.ranges.range(..=start).next_back()
+            && previous_end >= start
+        {
+            start = previous_start;
+            end = end.max(previous_end);
+            self.ranges.remove(&previous_start);
+        }
+        loop {
+            let next = self
+                .ranges
+                .range(start..=end)
+                .next()
+                .map(|(&next_start, &next_end)| (next_start, next_end));
+            let Some((next_start, next_end)) = next else {
+                break;
+            };
+            end = end.max(next_end);
+            self.ranges.remove(&next_start);
+        }
+        self.ranges.insert(start, end);
+    }
+
+    fn remove(&mut self, range: std::ops::Range<u64>) {
+        if range.start >= range.end || self.ranges.is_empty() {
+            return;
+        }
+        let scan_start = self
+            .ranges
+            .range(..=range.start)
+            .next_back()
+            .map_or(range.start, |(&start, _)| start);
+        let overlaps: Vec<_> = self
+            .ranges
+            .range(scan_start..range.end)
+            .filter_map(|(&start, &end)| (end > range.start).then_some((start, end)))
+            .collect();
+        for (start, end) in overlaps {
+            self.ranges.remove(&start);
+            if start < range.start {
+                self.ranges.insert(start, range.start);
+            }
+            if end > range.end {
+                self.ranges.insert(range.end, end);
+            }
+        }
+    }
+
+    fn intersection_len(&self, range: std::ops::Range<u64>) -> u64 {
+        if range.start >= range.end || self.ranges.is_empty() {
+            return 0;
+        }
+        let scan_start = self
+            .ranges
+            .range(..=range.start)
+            .next_back()
+            .map_or(range.start, |(&start, _)| start);
+        self.ranges
+            .range(scan_start..range.end)
+            .map(|(&start, &end)| end.min(range.end).saturating_sub(start.max(range.start)))
+            .fold(0_u64, u64::saturating_add)
+    }
+
+    fn intersects(&self, range: std::ops::Range<u64>) -> bool {
+        if range.start >= range.end || self.ranges.is_empty() {
+            return false;
+        }
+        let scan_start = self
+            .ranges
+            .range(..=range.start)
+            .next_back()
+            .map_or(range.start, |(&start, _)| start);
+        self.ranges
+            .range(scan_start..range.end)
+            .any(|(&start, &end)| end > range.start && start < range.end)
+    }
+
+    fn take(&mut self) -> BTreeMap<u64, u64> {
+        std::mem::take(&mut self.ranges)
+    }
+}
 
 const SYSCALL_ARGS_0: &[usize] = &[];
 const SYSCALL_ARGS_1: &[usize] = &[10];
@@ -86,64 +206,55 @@ fn default_vector_length() -> usize {
     DEFAULT_VECTOR_LENGTH.clamp(1, LOGICAL_VECTOR_MAX)
 }
 
-pub(crate) fn decode_literal_pointers(
+/// One admission-validated value in an indexed literal table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DecodedLiteral {
+    /// Exact start address of a validated pointer-ABI TLV.
+    Pointer(u64),
+    /// Public signed scalar, retained in its exact two's-complement bit pattern.
+    I64(u64),
+}
+
+/// Immutable indexed literal values and the pointer-only provenance index.
+#[derive(Clone, Debug)]
+pub(crate) struct DecodedLiteralTable {
+    entries: Arc<[DecodedLiteral]>,
+    pointer_starts: Arc<[u64]>,
+}
+
+impl DecodedLiteralTable {
+    fn empty() -> Self {
+        Self {
+            entries: Arc::from(Vec::<DecodedLiteral>::new().into_boxed_slice()),
+            pointer_starts: Arc::from(Vec::<u64>::new().into_boxed_slice()),
+        }
+    }
+
+    /// Return values in their authenticated table-index order.
+    pub(crate) fn entries(&self) -> &[DecodedLiteral] {
+        &self.entries
+    }
+
+    fn pointer_starts(&self) -> &[u64] {
+        &self.pointer_starts
+    }
+}
+
+/// Decode and fully validate an ABI-v1 indexed literal table.
+pub(crate) fn decode_literal_table(
     program: &[u8],
     header_len: usize,
     section: Option<ParsedLiteralSection>,
     policy: SyscallPolicy,
-) -> Result<Arc<[u64]>, VMError> {
+) -> Result<DecodedLiteralTable, VMError> {
     let Some(section) = section else {
-        return Ok(Arc::from(Vec::<u64>::new().into_boxed_slice()));
+        return Ok(DecodedLiteralTable::empty());
     };
     if section.count > usize::from(u16::MAX) + 1 {
         return Err(VMError::InvalidMetadata);
     }
 
-    // Validate the packed typed-data stream once, then require every table
-    // entry to name an exact envelope boundary.
-    let mut validated_targets = HashMap::new();
-    let mut target = section.data_start;
-    while target < section.data_end {
-        let tlv_header_end = target.checked_add(7).ok_or(VMError::InvalidMetadata)?;
-        let header = program
-            .get(target..tlv_header_end)
-            .ok_or(VMError::InvalidMetadata)?;
-        let payload_len = u32::from_be_bytes(
-            header[3..7]
-                .try_into()
-                .map_err(|_| VMError::InvalidMetadata)?,
-        ) as usize;
-        let envelope_len = 7usize
-            .checked_add(payload_len)
-            .and_then(|len| len.checked_add(iroha_crypto::Hash::LENGTH))
-            .ok_or(VMError::InvalidMetadata)?;
-        let envelope_end = target
-            .checked_add(envelope_len)
-            .ok_or(VMError::InvalidMetadata)?;
-        if envelope_end > section.data_end {
-            return Err(VMError::InvalidMetadata);
-        }
-        let tlv = crate::pointer_abi::validate_tlv_bytes(
-            program
-                .get(target..envelope_end)
-                .ok_or(VMError::InvalidMetadata)?,
-        )
-        .map_err(|_| VMError::InvalidMetadata)?;
-        if !crate::pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-            return Err(VMError::AbiTypeNotAllowed {
-                abi: 1,
-                type_id: tlv.type_id as u16,
-            });
-        }
-        let memory_pointer = target
-            .checked_sub(header_len)
-            .and_then(|pointer| u64::try_from(pointer).ok())
-            .ok_or(VMError::InvalidMetadata)?;
-        validated_targets.insert(target, memory_pointer);
-        target = envelope_end;
-    }
-
-    let mut pointers = Vec::with_capacity(section.count);
+    let mut descriptors = Vec::with_capacity(section.count);
     let mut previous_target = None;
     for index in 0..section.count {
         let entry_start = section
@@ -151,28 +262,83 @@ pub(crate) fn decode_literal_pointers(
             .checked_add(index.checked_mul(8).ok_or(VMError::InvalidMetadata)?)
             .ok_or(VMError::InvalidMetadata)?;
         let entry_end = entry_start.checked_add(8).ok_or(VMError::InvalidMetadata)?;
-        let relative = u64::from_le_bytes(
+        let raw = u64::from_le_bytes(
             program
                 .get(entry_start..entry_end)
                 .ok_or(VMError::InvalidMetadata)?
                 .try_into()
                 .map_err(|_| VMError::InvalidMetadata)?,
         );
+        let (kind, relative) = decode_literal_descriptor(raw)?;
         let target = section
             .start
             .checked_add(usize::try_from(relative).map_err(|_| VMError::InvalidMetadata)?)
             .ok_or(VMError::InvalidMetadata)?;
+        if target < section.data_start || target >= section.data_end {
+            return Err(VMError::InvalidMetadata);
+        }
         if previous_target.is_some_and(|previous| target <= previous) {
             return Err(VMError::InvalidMetadata);
         }
         previous_target = Some(target);
-        pointers.push(
-            *validated_targets
-                .get(&target)
-                .ok_or(VMError::InvalidMetadata)?,
-        );
+        descriptors.push((kind, target));
     }
-    Ok(Arc::from(pointers.into_boxed_slice()))
+
+    if descriptors.is_empty() {
+        if section.data_start != section.data_end {
+            return Err(VMError::InvalidMetadata);
+        }
+        return Ok(DecodedLiteralTable::empty());
+    }
+    if descriptors.first().map(|(_, target)| *target) != Some(section.data_start) {
+        return Err(VMError::InvalidMetadata);
+    }
+
+    // Descriptor order defines exact payload ranges. This makes every byte in
+    // the authenticated literal data have exactly one interpretation and lets
+    // admission reject pointer/scalar type confusion before execution.
+    let mut entries = Vec::with_capacity(descriptors.len());
+    let mut pointer_starts = Vec::new();
+    for (index, (kind, target)) in descriptors.iter().copied().enumerate() {
+        let end = descriptors
+            .get(index + 1)
+            .map_or(section.data_end, |(_, target)| *target);
+        let bytes = program.get(target..end).ok_or(VMError::InvalidMetadata)?;
+        match kind {
+            LiteralKindV1::PointerTlv => {
+                let tlv = crate::pointer_abi::validate_tlv_bytes(bytes)
+                    .map_err(|_| VMError::InvalidMetadata)?;
+                let exact_len = 7usize
+                    .checked_add(tlv.payload.len())
+                    .and_then(|len| len.checked_add(iroha_crypto::Hash::LENGTH))
+                    .ok_or(VMError::InvalidMetadata)?;
+                if bytes.len() != exact_len {
+                    return Err(VMError::InvalidMetadata);
+                }
+                if !crate::pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: 1,
+                        type_id: tlv.type_id as u16,
+                    });
+                }
+                let pointer = target
+                    .checked_sub(header_len)
+                    .and_then(|pointer| u64::try_from(pointer).ok())
+                    .ok_or(VMError::InvalidMetadata)?;
+                pointer_starts.push(pointer);
+                entries.push(DecodedLiteral::Pointer(pointer));
+            }
+            LiteralKindV1::I64 => {
+                let value =
+                    u64::from_le_bytes(bytes.try_into().map_err(|_| VMError::InvalidMetadata)?);
+                entries.push(DecodedLiteral::I64(value));
+            }
+        }
+    }
+    Ok(DecodedLiteralTable {
+        entries: Arc::from(entries.into_boxed_slice()),
+        pointer_starts: Arc::from(pointer_starts.into_boxed_slice()),
+    })
 }
 
 fn setvl_length(raw: usize) -> Result<usize, VMError> {
@@ -299,7 +465,7 @@ struct WorkerResources {
     vm: IVM,
     ctx: ExecutionContext,
     template_memory: Memory,
-    template_private_memory_bytes: HashSet<u64>,
+    template_private_memory_bytes: PrivateMemoryRanges,
     template_input_bump: u64,
 }
 
@@ -1262,19 +1428,37 @@ fn prepared_program_cache() -> &'static Mutex<PreparedProgramCache> {
     CACHE.get_or_init(|| Mutex::new(PreparedProgramCache::new()))
 }
 
+/// Validate that indexed literal instructions reference an entry of the exact required kind.
+pub(crate) fn validate_indexed_literal_instructions(
+    decoded: &[crate::ivm_cache::DecodedOp],
+    literals: &[DecodedLiteral],
+) -> Result<(), VMError> {
+    for op in decoded {
+        let expected = match instruction::wide::opcode(op.inst) {
+            instruction::wide::memory::LDLIT => Some(false),
+            instruction::wide::memory::LDI64 => Some(true),
+            _ => None,
+        };
+        if let Some(expects_i64) = expected {
+            let literal = literals
+                .get(instruction::wide::literal_index(op.inst))
+                .ok_or(VMError::InvalidMetadata)?;
+            if matches!(literal, DecodedLiteral::I64(_)) != expects_i64 {
+                return Err(VMError::InvalidMetadata);
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn prepare_instruction_stream(
     code: &[u8],
     metadata: &ProgramMetadata,
     decoded: &[crate::ivm_cache::DecodedOp],
     first_pc: u64,
-    literal_count: usize,
+    literals: &[DecodedLiteral],
 ) -> Result<PreparedProgram, VMError> {
-    if decoded.iter().any(|op| {
-        instruction::wide::opcode(op.inst) == instruction::wide::memory::LDLIT
-            && instruction::wide::literal_index(op.inst) >= literal_count
-    }) {
-        return Err(VMError::InvalidMetadata);
-    }
+    validate_indexed_literal_instructions(decoded, literals)?;
     let prepared_ops = {
         let mut guard = prepared_program_cache()
             .lock()
@@ -1288,7 +1472,7 @@ struct ProgramLoadImage<'a> {
     code_region: &'a [u8],
     metadata: ProgramMetadata,
     contract_debug: Option<EmbeddedContractDebugInfoV1>,
-    literal_pointers: Arc<[u64]>,
+    literal_table: DecodedLiteralTable,
     predecoded: Option<Arc<[crate::ivm_cache::DecodedOp]>>,
     prepared: Option<PreparedProgram>,
     code_hash: [u8; 32],
@@ -1321,7 +1505,7 @@ pub enum TraceMode {
 pub struct RuntimeTemplate {
     memory: Memory,
     registers: Registers,
-    private_memory_bytes: HashSet<u64>,
+    private_memory_bytes: PrivateMemoryRanges,
     pc: u64,
     gas_limit: u64,
     max_cycles: u64,
@@ -1337,12 +1521,12 @@ pub struct IVM {
     // operations access groups of general registers rather than a separate
     // structure.
     pub memory: Memory,
-    /// Byte addresses in the guest stack that currently contain private data.
+    /// Canonical byte ranges in the guest stack that currently contain private data.
     ///
     /// ZK register tags must survive compiler-generated spills without allowing
     /// bytecode to launder a secret through an untagged load. Private stores are
     /// confined to the stack; every other guest-visible memory region is public.
-    private_memory_bytes: HashSet<u64>,
+    private_memory_bytes: PrivateMemoryRanges,
     pub pc: u64,
     host: Option<Box<dyn IVMHost + Send + Sync>>,
     gas_limit: u64,
@@ -1353,6 +1537,11 @@ pub struct IVM {
     /// their existing gas-budget view, but it is not available to nested VM
     /// execution until the syscall reports its actual cost.
     syscall_gas_reserve: u64,
+    /// Active per-phase accounting for a staged syscall.
+    staged_syscall: Option<StagedSyscallContext>,
+    /// Most recently completed staged syscall, retained for diagnostics and
+    /// deterministic metering assertions.
+    last_staged_syscall: Option<StagedSyscallContext>,
     /// Exact canonical entrypoint-argument gas escrowed before guest execution.
     argument_decode_prepaid_gas: Option<u64>,
     cycles: u64,
@@ -1375,7 +1564,7 @@ pub struct IVM {
     metadata: ProgramMetadata,
     code_hash: [u8; 32],
     contract_debug: Option<EmbeddedContractDebugInfoV1>,
-    literal_pointers: Arc<[u64]>,
+    literal_table: DecodedLiteralTable,
     predecoded: Option<Arc<[crate::ivm_cache::DecodedOp]>>,
     prepared: Option<PreparedProgram>,
     prepared_required: bool,
@@ -1448,6 +1637,8 @@ impl Clone for IVM {
             // A clone is an independent VM, not a continuation of an active
             // host call, so fold any transient reserve into ordinary gas.
             syscall_gas_reserve: 0,
+            staged_syscall: None,
+            last_staged_syscall: None,
             argument_decode_prepaid_gas: None,
             cycles: self.cycles,
             halted: self.halted,
@@ -1467,7 +1658,7 @@ impl Clone for IVM {
             metadata: self.metadata.clone(),
             code_hash: self.code_hash,
             contract_debug: self.contract_debug.clone(),
-            literal_pointers: Arc::clone(&self.literal_pointers),
+            literal_table: self.literal_table.clone(),
             predecoded: self.predecoded.clone(),
             prepared: self.prepared.clone(),
             prepared_required: self.prepared_required,
@@ -1767,7 +1958,7 @@ impl IVM {
         let mut vm = IVM {
             registers: Registers::new(),
             memory: mem,
-            private_memory_bytes: HashSet::new(),
+            private_memory_bytes: PrivateMemoryRanges::default(),
             pc: 0,
             host: Some(Box::new(crate::runtime::SyscallDispatcher::new(
                 DefaultHost::new(),
@@ -1775,6 +1966,8 @@ impl IVM {
             gas_limit,
             gas_remaining: gas_limit,
             syscall_gas_reserve: 0,
+            staged_syscall: None,
+            last_staged_syscall: None,
             argument_decode_prepaid_gas: None,
             cycles: 0,
             halted: false,
@@ -1794,7 +1987,7 @@ impl IVM {
             metadata: ProgramMetadata::default(),
             code_hash: [0u8; 32],
             contract_debug: None,
-            literal_pointers: Arc::from(Vec::<u64>::new().into_boxed_slice()),
+            literal_table: DecodedLiteralTable::empty(),
             predecoded: None,
             prepared: None,
             prepared_required: false,
@@ -2544,7 +2737,7 @@ impl IVM {
         self.entrypoint_pc = Some(0);
         self.program_prefix_len = 0;
         self.contract_debug = None;
-        self.literal_pointers = Arc::from(Vec::<u64>::new().into_boxed_slice());
+        self.literal_table = DecodedLiteralTable::empty();
         self.last_diagnostic = None;
         self.predecoded = None;
         self.prepared = None;
@@ -2571,7 +2764,7 @@ impl IVM {
         let strict_return_integrity = parsed.contract_interface.is_some();
         let header_len = parsed.header_len;
         let literal_prefix = parsed.prefix_len();
-        let literal_pointers = decode_literal_pointers(
+        let literal_table = decode_literal_table(
             program,
             header_len,
             parsed.literal_section,
@@ -2597,7 +2790,7 @@ impl IVM {
                 &meta,
                 decoded.as_ref(),
                 entry_pc,
-                literal_pointers.len(),
+                literal_table.entries(),
             )?;
             (Some(decoded), Some(prepared))
         };
@@ -2605,7 +2798,7 @@ impl IVM {
             code_region,
             metadata: meta,
             contract_debug: parsed.contract_debug,
-            literal_pointers,
+            literal_table,
             predecoded,
             prepared,
             code_hash: crate::metadata::contract_code_hash(program).into(),
@@ -2628,7 +2821,7 @@ impl IVM {
             code_region: contract.code_region(),
             metadata: contract.metadata().clone(),
             contract_debug: None,
-            literal_pointers: Arc::clone(contract.literal_pointers()),
+            literal_table: contract.literal_table().clone(),
             predecoded: Some(Arc::clone(contract.decoded())),
             prepared: Some(contract.prepared_program().clone()),
             code_hash: contract.code_hash().into(),
@@ -2648,7 +2841,7 @@ impl IVM {
         }
         self.metadata = image.metadata.clone();
         self.contract_debug = image.contract_debug;
-        self.literal_pointers = image.literal_pointers;
+        self.literal_table = image.literal_table;
         self.vector_enabled = image.metadata.mode & crate::metadata::mode::VECTOR != 0;
         self.max_cycles = image.metadata.max_cycles;
         self.zk_mode = image.metadata.mode & crate::metadata::mode::ZK != 0;
@@ -2706,6 +2899,8 @@ impl IVM {
         self.gas_limit = limit;
         self.gas_remaining = limit;
         self.syscall_gas_reserve = 0;
+        self.staged_syscall = None;
+        self.last_staged_syscall = None;
         self.argument_decode_prepaid_gas = None;
     }
 
@@ -2816,7 +3011,7 @@ impl IVM {
 
     fn classify_trap(err: &VMError) -> VmTrapKind {
         match err.as_unmetered() {
-            VMError::OutOfGas => VmTrapKind::OutOfGas,
+            VMError::OutOfGas | VMError::SyscallOutOfGas { .. } => VmTrapKind::OutOfGas,
             VMError::OutOfMemory => VmTrapKind::OutOfMemory,
             VMError::MemoryAccessViolation { .. }
             | VMError::MisalignedAccess { .. }
@@ -2828,6 +3023,10 @@ impl IVM {
             VMError::UnknownSyscall(_) => VmTrapKind::UnknownSyscall,
             VMError::HostUnavailable | VMError::NotImplemented { .. } => VmTrapKind::NotImplemented,
             VMError::SyscallGasQuoteExceeded { .. } => VmTrapKind::SyscallGasQuoteExceeded,
+            VMError::SyscallMeteringModeMismatch { .. } => VmTrapKind::SyscallMeteringModeMismatch,
+            VMError::GasCostOverflow => VmTrapKind::GasCostOverflow,
+            VMError::NumericFault(_) => VmTrapKind::NumericFault,
+            VMError::PointerAbiFault(_) => VmTrapKind::PointerAbiFault,
             VMError::AssertionFailed => VmTrapKind::AssertionFailed,
             VMError::ExceededMaxCycles => VmTrapKind::ExceededMaxCycles,
             VMError::InvalidMetadata => VmTrapKind::InvalidMetadata,
@@ -2966,9 +3165,7 @@ impl IVM {
             return Ok(false);
         }
         let range = Self::memory_privacy_range(addr, len)?;
-        let private_count = range
-            .filter(|byte| self.private_memory_bytes.contains(byte))
-            .count() as u64;
+        let private_count = self.private_memory_bytes.intersection_len(range);
         match private_count {
             0 => Ok(false),
             count if count == len => Ok(true),
@@ -2981,8 +3178,9 @@ impl IVM {
         if !self.zk_mode || self.private_memory_bytes.is_empty() {
             return Ok(());
         }
-        if Self::memory_privacy_range(addr, len)?
-            .any(|byte| self.private_memory_bytes.contains(&byte))
+        if self
+            .private_memory_bytes
+            .intersects(Self::memory_privacy_range(addr, len)?)
         {
             return Err(VMError::PrivacyViolation);
         }
@@ -3012,23 +3210,22 @@ impl IVM {
             return;
         };
         if self.zk_mode && private {
-            self.private_memory_bytes.extend(range);
+            self.private_memory_bytes.insert(range);
         } else {
-            for byte in range {
-                self.private_memory_bytes.remove(&byte);
-            }
+            self.private_memory_bytes.remove(range);
         }
     }
 
     /// Zero private stack bytes before a reset or program replacement.
     fn scrub_private_memory(&mut self) -> bool {
-        let mut addresses: Vec<_> = self.private_memory_bytes.drain().collect();
-        addresses.sort_unstable();
-        for addr in addresses {
-            if self.memory.store_u8(addr, 0).is_err() {
-                // Fail closed if an invariant is violated: retaining the tag is
-                // safer than making an uncleared byte publicly readable.
-                self.private_memory_bytes.insert(addr);
+        for (start, end) in self.private_memory_bytes.take() {
+            for addr in start..end {
+                if self.memory.store_u8(addr, 0).is_err() {
+                    // Fail closed if an invariant is violated: retaining the tag is
+                    // safer than making an uncleared byte publicly readable.
+                    self.private_memory_bytes
+                        .insert(addr..addr.saturating_add(1));
+                }
             }
         }
         self.private_memory_bytes.is_empty()
@@ -3324,7 +3521,10 @@ impl IVM {
 
     /// Return whether `address` is an exact loader-validated literal envelope start.
     pub(crate) fn is_validated_literal_pointer(&self, address: u64) -> bool {
-        self.literal_pointers.binary_search(&address).is_ok()
+        self.literal_table
+            .pointer_starts()
+            .binary_search(&address)
+            .is_ok()
     }
 
     /// Validate a pointer-ABI TLV in any owned public region and return its decoded view.
@@ -3761,6 +3961,8 @@ impl IVM {
         // Gas remaining is not reset here; set_gas_limit should be called if needed.
         self.gas_remaining = self.remaining_gas();
         self.syscall_gas_reserve = 0;
+        self.staged_syscall = None;
+        self.last_staged_syscall = None;
         self.argument_decode_prepaid_gas = None;
         self.vector_length = if self.metadata.vector_length == 0 {
             default_vector_length()
@@ -3934,6 +4136,77 @@ impl IVM {
     #[must_use]
     pub fn syscall_reserved_gas(&self) -> u64 {
         self.syscall_gas_reserve
+    }
+
+    /// Return the active staged-syscall accounting context, if any.
+    #[must_use]
+    pub const fn staged_syscall_context(&self) -> Option<&StagedSyscallContext> {
+        self.staged_syscall.as_ref()
+    }
+
+    /// Return the most recently completed staged-syscall accounting context.
+    #[must_use]
+    pub const fn last_staged_syscall_context(&self) -> Option<&StagedSyscallContext> {
+        self.last_staged_syscall.as_ref()
+    }
+
+    /// Debit one staged syscall phase immediately before the corresponding
+    /// work begins.
+    ///
+    /// If the phase is unaffordable, no gas is deducted for it and the method
+    /// returns [`VMError::SyscallOutOfGas`]. Gas charged by earlier completed
+    /// phases remains consumed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::SyscallMeteringModeMismatch`] outside an active
+    /// staged syscall, [`VMError::GasCostOverflow`] on accounting overflow, or
+    /// [`VMError::SyscallOutOfGas`] when the next phase cannot be afforded.
+    pub fn charge_syscall_stage(
+        &mut self,
+        phase: SyscallMeteringPhase,
+        gas: u64,
+    ) -> Result<(), VMError> {
+        let syscall = self
+            .staged_syscall
+            .as_ref()
+            .map(StagedSyscallContext::syscall)
+            .ok_or(VMError::SyscallMeteringModeMismatch { syscall: 0 })?;
+        if self.gas_remaining < gas {
+            return Err(VMError::SyscallOutOfGas {
+                syscall,
+                phase: phase.tag(),
+            });
+        }
+        self.staged_syscall
+            .as_mut()
+            .expect("staged syscall presence checked above")
+            .record_charge(phase, gas)?;
+        self.gas_remaining -= gas;
+        Ok(())
+    }
+
+    /// Mark the active staged call as a recoverable failure.
+    ///
+    /// Handlers call this before returning `Ok(0)` with a stable failure code in
+    /// `r11`. The executor otherwise records successful completion.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::SyscallMeteringModeMismatch`] outside an active
+    /// staged syscall.
+    pub fn mark_staged_syscall_recoverable_failure(&mut self) -> Result<(), VMError> {
+        let context = self
+            .staged_syscall
+            .as_mut()
+            .ok_or(VMError::SyscallMeteringModeMismatch { syscall: 0 })?;
+        if context.completion().is_some() {
+            return Err(VMError::SyscallMeteringModeMismatch {
+                syscall: context.syscall(),
+            });
+        }
+        context.finish(SyscallCompletion::RecoverableFailure);
+        Ok(())
     }
 
     /// Replace the gas available to nested execution without releasing the
@@ -4305,7 +4578,24 @@ impl IVM {
 
     #[inline]
     fn execute_syscall(&mut self, host: &mut dyn IVMHost, number: u32) -> Result<(), VMError> {
+        let metering = require_registered_syscall_metering(
+            number,
+            host_syscall_metering_spec(self.syscall_policy(), number).map(|spec| spec.metering),
+        )?;
+        match metering {
+            SyscallMetering::Reserved => self.execute_reserved_syscall(host, number),
+            SyscallMetering::Staged => self.execute_staged_syscall(host, number),
+        }
+    }
+
+    #[inline]
+    fn execute_reserved_syscall(
+        &mut self,
+        host: &mut dyn IVMHost,
+        number: u32,
+    ) -> Result<(), VMError> {
         debug_assert_eq!(self.syscall_gas_reserve, 0);
+        debug_assert!(self.staged_syscall.is_none());
         self.validate_syscall_privacy(number)?;
         let quoted = match host.prepare_syscall(number, self) {
             Ok(quoted) => quoted,
@@ -4345,6 +4635,67 @@ impl IVM {
             self.apply_syscall_output_privacy(number);
         }
         outcome
+    }
+
+    #[inline]
+    fn execute_staged_syscall(
+        &mut self,
+        host: &mut dyn IVMHost,
+        number: u32,
+    ) -> Result<(), VMError> {
+        debug_assert_eq!(self.syscall_gas_reserve, 0);
+        if self.staged_syscall.is_some() {
+            return Err(VMError::SyscallMeteringModeMismatch { syscall: number });
+        }
+        self.validate_syscall_privacy(number)?;
+        self.staged_syscall = Some(StagedSyscallContext::new(number));
+
+        if let Err(error) =
+            self.charge_syscall_stage(SyscallMeteringPhase::Entry, STAGED_SYSCALL_ENTRY_GAS)
+        {
+            self.finish_staged_syscall(SyscallCompletion::Trap);
+            return Err(error);
+        }
+
+        let host_result = host.syscall(number, self);
+        match host_result {
+            Ok(0) => {
+                let completion = self
+                    .staged_syscall
+                    .as_ref()
+                    .and_then(StagedSyscallContext::completion)
+                    .unwrap_or(SyscallCompletion::Success);
+                if completion == SyscallCompletion::Trap {
+                    self.finish_staged_syscall(SyscallCompletion::Trap);
+                    return Err(VMError::SyscallMeteringModeMismatch { syscall: number });
+                }
+                self.finish_staged_syscall(completion);
+                self.apply_syscall_output_privacy(number);
+                Ok(())
+            }
+            Ok(_actual) => {
+                self.finish_staged_syscall(SyscallCompletion::Trap);
+                Err(VMError::SyscallMeteringModeMismatch { syscall: number })
+            }
+            Err(error) => {
+                let (metered_gas, source) = error.split_metered();
+                self.finish_staged_syscall(SyscallCompletion::Trap);
+                if metered_gas.is_some() {
+                    Err(VMError::SyscallMeteringModeMismatch { syscall: number })
+                } else {
+                    Err(source)
+                }
+            }
+        }
+    }
+
+    fn finish_staged_syscall(&mut self, completion: SyscallCompletion) {
+        if let Some(mut context) = self.staged_syscall.take() {
+            if context.completion().is_none() || completion == SyscallCompletion::Trap {
+                context.finish(completion);
+            }
+            self.last_staged_syscall = Some(context);
+        }
     }
 
     pub(crate) fn execute_metered_syscall_with_host(
@@ -5077,11 +5428,36 @@ impl IVM {
                     instruction::wide::memory::LDLIT => {
                         let rd = instruction::wide::rd(instr);
                         let index = instruction::wide::literal_index(instr);
-                        let pointer = *self
-                            .literal_pointers
+                        let DecodedLiteral::Pointer(pointer) = self
+                            .literal_table
+                            .entries()
                             .get(index)
-                            .ok_or(VMError::InvalidMetadata)?;
+                            .copied()
+                            .ok_or(VMError::InvalidMetadata)?
+                        else {
+                            return Err(VMError::InvalidMetadata);
+                        };
                         self.registers.set(rd, pointer);
+                        if self.zk_mode {
+                            self.registers.set_tag(rd, false);
+                        }
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::memory::LDI64 => {
+                        let rd = instruction::wide::rd(instr);
+                        let index = instruction::wide::literal_index(instr);
+                        let DecodedLiteral::I64(value) = self
+                            .literal_table
+                            .entries()
+                            .get(index)
+                            .copied()
+                            .ok_or(VMError::InvalidMetadata)?
+                        else {
+                            return Err(VMError::InvalidMetadata);
+                        };
+                        self.registers.set(rd, value);
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
                         }
@@ -6650,6 +7026,18 @@ impl IVM {
         self.memory.read_output()
     }
 
+    /// Return the length of the append-only output prefix written by the guest.
+    #[inline]
+    pub fn output_used_len(&self) -> u64 {
+        self.memory.output_used_len()
+    }
+
+    /// Borrow only the append-only output prefix written by the guest.
+    #[inline]
+    pub fn read_output_used(&self) -> &[u8] {
+        self.memory.read_output_used()
+    }
+
     /// Produce a CompactProofBundle for the memory chunk containing `addr` by
     /// invoking the metered GET_MERKLE_COMPACT host path. This helper writes
     /// temporary data into the OUTPUT region.
@@ -7587,6 +7975,49 @@ mod tests {
     use crate::{instruction, ivm_cache, metadata::LITERAL_SECTION_MAGIC};
 
     #[test]
+    fn private_memory_ranges_merge_split_and_respect_half_open_boundaries() {
+        let mut ranges = PrivateMemoryRanges::default();
+        ranges.insert(10..20);
+        ranges.insert(20..24);
+        ranges.insert(4..10);
+        assert_eq!(ranges.ranges, BTreeMap::from([(4, 24)]));
+
+        assert!(!ranges.intersects(0..4));
+        assert!(!ranges.intersects(24..40));
+        assert!(!ranges.intersects(12..12));
+        assert!(ranges.intersects(3..5));
+        assert!(ranges.intersects(23..24));
+        assert_eq!(ranges.intersection_len(0..40), 20);
+
+        ranges.remove(8..20);
+        assert_eq!(ranges.ranges, BTreeMap::from([(4, 8), (20, 24)]));
+        assert_eq!(ranges.intersection_len(4..24), 8);
+        assert!(!ranges.intersects(8..20));
+    }
+
+    #[test]
+    fn private_memory_range_lookup_ignores_large_unrelated_public_span() {
+        let mut ranges = PrivateMemoryRanges::default();
+        ranges.insert(2_000_000..2_000_001);
+        assert!(!ranges.intersects(0..1_048_576));
+        assert_eq!(ranges.intersection_len(0..1_048_576), 0);
+        assert!(ranges.intersects(1_999_999..2_000_001));
+    }
+
+    #[test]
+    fn missing_allowed_syscall_metering_entry_fails_closed() {
+        let number = crate::syscalls::SYSCALL_EXIT;
+        assert!(crate::syscalls::is_syscall_allowed(
+            SyscallPolicy::AbiV1,
+            number
+        ));
+        assert_eq!(
+            require_registered_syscall_metering(number, None),
+            Err(VMError::UnknownSyscall(number))
+        );
+    }
+
+    #[test]
     fn public_syscall_privacy_boundaries_match_the_normative_abi_signatures() {
         fn count(declaration: &str, implicit_r10: bool) -> usize {
             let explicit = (10usize..=14)
@@ -7931,6 +8362,24 @@ mod tests {
         (bytes, 24)
     }
 
+    fn program_with_indexed_i64(value: i64, index: u16) -> Vec<u8> {
+        let mut bytes = ProgramMetadata::default().encode();
+        bytes.extend_from_slice(&LITERAL_SECTION_MAGIC);
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&8u32.to_le_bytes());
+        let descriptor =
+            crate::metadata::encode_literal_descriptor(crate::metadata::LiteralKindV1::I64, 24)
+                .expect("small i64 literal offset");
+        bytes.extend_from_slice(&descriptor.to_le_bytes());
+        bytes.extend_from_slice(&value.to_le_bytes());
+        let load =
+            crate::encoding::wide::encode_literal(instruction::wide::memory::LDI64, 5, index);
+        bytes.extend_from_slice(&load.to_le_bytes());
+        bytes.extend_from_slice(&crate::encoding::encode_halt().to_le_bytes());
+        bytes
+    }
+
     fn program_with_two_indexed_literals() -> (Vec<u8>, usize, [u64; 2]) {
         let mut bytes = ProgramMetadata::default().encode();
         let metadata_len = bytes.len();
@@ -8030,6 +8479,115 @@ mod tests {
     }
 
     #[test]
+    fn indexed_i64_load_executes_signed_boundaries() {
+        set_banner_enabled(false);
+        for value in [i64::MIN, -1, 0, 1, i64::MAX] {
+            let program = program_with_indexed_i64(value, 0);
+            let mut vm = IVM::new(1);
+            vm.load_program(&program)
+                .expect("indexed i64 program loads");
+            vm.run().expect("indexed i64 program runs");
+            assert_eq!(vm.register(5) as i64, value);
+            assert_eq!(vm.remaining_gas(), 0, "LDI64 has one-gas base cost");
+        }
+    }
+
+    #[test]
+    fn indexed_i64_never_grants_pointer_provenance() {
+        set_banner_enabled(false);
+        let program = program_with_indexed_i64(24, 0);
+        let mut vm = IVM::new(1);
+        vm.load_program(&program)
+            .expect("indexed i64 program loads");
+        assert!(!vm.is_validated_literal_pointer(24));
+        assert!(matches!(vm.validate_tlv(24), Err(VMError::NoritoInvalid)));
+        vm.run().expect("indexed i64 program runs");
+        assert_eq!(vm.register(5), 24);
+    }
+
+    #[test]
+    fn code_hash_binds_indexed_i64_kind_and_payload() {
+        let original = program_with_indexed_i64(7, 0);
+        let metadata_len = ProgramMetadata::default().encode().len();
+        let mut kind_mutation = original.clone();
+        kind_mutation[metadata_len + 16 + 7] = 0;
+        let mut payload_mutation = original.clone();
+        payload_mutation[metadata_len + 16 + 8] ^= 1;
+
+        let original_hash = crate::metadata::contract_code_hash(&original);
+        assert_ne!(
+            crate::metadata::contract_code_hash(&kind_mutation),
+            original_hash
+        );
+        assert_ne!(
+            crate::metadata::contract_code_hash(&payload_mutation),
+            original_hash
+        );
+    }
+
+    #[test]
+    fn indexed_i64_out_of_range_is_rejected_at_load() {
+        set_banner_enabled(false);
+        let program = program_with_indexed_i64(7, 1);
+        let mut vm = IVM::new(u64::MAX);
+        assert!(matches!(
+            vm.load_program(&program),
+            Err(VMError::InvalidMetadata)
+        ));
+    }
+
+    #[test]
+    fn indexed_literal_opcode_kind_mismatch_is_rejected_at_load() {
+        set_banner_enabled(false);
+
+        let (mut pointer_program, _) = program_with_indexed_literal(0);
+        let pointer_code = pointer_program.len() - 8;
+        let ldi64 = crate::encoding::wide::encode_literal(instruction::wide::memory::LDI64, 5, 0);
+        pointer_program[pointer_code..pointer_code + 4].copy_from_slice(&ldi64.to_le_bytes());
+
+        let mut scalar_program = program_with_indexed_i64(7, 0);
+        let scalar_code = scalar_program.len() - 8;
+        let ldlit = crate::encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 5, 0);
+        scalar_program[scalar_code..scalar_code + 4].copy_from_slice(&ldlit.to_le_bytes());
+
+        for program in [pointer_program, scalar_program] {
+            let mut vm = IVM::new(u64::MAX);
+            assert!(matches!(
+                vm.load_program(&program),
+                Err(VMError::InvalidMetadata)
+            ));
+        }
+    }
+
+    #[test]
+    fn indexed_i64_rejects_unknown_kind_and_wrong_length() {
+        set_banner_enabled(false);
+        let metadata_len = ProgramMetadata::default().encode().len();
+
+        let mut unknown_kind = program_with_indexed_i64(7, 0);
+        let descriptor = metadata_len + 16;
+        unknown_kind[descriptor + 7] = 0xff;
+
+        let canonical = program_with_indexed_i64(7, 0);
+        let mut short = canonical.clone();
+        short[metadata_len + 8..metadata_len + 12].copy_from_slice(&1u32.to_le_bytes());
+        short[metadata_len + 12..metadata_len + 16].copy_from_slice(&7u32.to_le_bytes());
+        let mut long = canonical;
+        long[metadata_len + 12..metadata_len + 16].copy_from_slice(&9u32.to_le_bytes());
+        long[metadata_len + 8..metadata_len + 12].copy_from_slice(&3u32.to_le_bytes());
+        let data_end = metadata_len + 16 + 8 + 8;
+        long.splice(data_end..data_end, [0; 4]);
+
+        for program in [unknown_kind, short, long] {
+            let mut vm = IVM::new(u64::MAX);
+            assert!(matches!(
+                vm.load_program(&program),
+                Err(VMError::InvalidMetadata)
+            ));
+        }
+    }
+
+    #[test]
     fn indexed_literal_out_of_range_is_rejected_at_load() {
         set_banner_enabled(false);
         let (program, _) = program_with_indexed_literal(1);
@@ -8062,6 +8620,32 @@ mod tests {
             program[entries_start..entries_start + 8].copy_from_slice(&entries[0].to_le_bytes());
             program[entries_start + 8..entries_start + 16]
                 .copy_from_slice(&entries[1].to_le_bytes());
+            let mut vm = IVM::new(u64::MAX);
+            assert!(matches!(
+                vm.load_program(&program),
+                Err(VMError::InvalidMetadata)
+            ));
+        }
+    }
+
+    #[test]
+    fn indexed_literal_table_rejects_gaps_interior_targets_and_bad_pointer_hashes() {
+        set_banner_enabled(false);
+        let (canonical, entries_start, offsets) = program_with_two_indexed_literals();
+
+        let mut leading_gap = canonical.clone();
+        leading_gap[entries_start..entries_start + 8]
+            .copy_from_slice(&(offsets[0] + 1).to_le_bytes());
+
+        let mut interior_target = canonical.clone();
+        interior_target[entries_start + 8..entries_start + 16]
+            .copy_from_slice(&(offsets[0] + 1).to_le_bytes());
+
+        let (mut bad_hash, _) = program_with_indexed_literal(0);
+        let hash_byte = ProgramMetadata::default().encode().len() + 16 + 8 + 7;
+        bad_hash[hash_byte] ^= 1;
+
+        for program in [leading_gap, interior_target, bad_hash] {
             let mut vm = IVM::new(u64::MAX);
             assert!(matches!(
                 vm.load_program(&program),

@@ -1,5 +1,6 @@
 //! CLI helper that regenerates Norito fixtures and manifests for tests and docs.
 use std::{
+    collections::HashSet,
     fs,
     num::{NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
@@ -87,6 +88,7 @@ fn run(args: Args) -> Result<()> {
                 .into_fixture(&keypair, args.check_encoded, check_hints)?,
         );
     }
+    ensure_unique_generated_fixtures(&fixtures)?;
 
     fs::create_dir_all(&args.out_dir)
         .with_context(|| format!("failed to create {}", args.out_dir.display()))?;
@@ -286,7 +288,7 @@ impl RawFixture {
             .with_context(|| format!("failed to re-encode signed fixture '{}'", self.name))?;
         let signed_base64 = BASE64.encode(&signed_bytes);
         let payload_hash_hex = format!("{}", Hash::new(&encoded));
-        let signed_hash_hex = format!("{}", Hash::new(&signed_bytes));
+        let signed_hash_hex = signed_transaction_entrypoint_hash_hex(&signed_bytes);
         if let Some(hash_hint) = &self.payload_hash_hint
             && hash_hint != &payload_hash_hex
         {
@@ -341,6 +343,20 @@ impl RawFixture {
             summary,
         })
     }
+}
+
+fn signed_transaction_entrypoint_hash_hex(canonical_bare_signed_transaction: &[u8]) -> String {
+    let mut entrypoint = Vec::with_capacity(
+        4 + norito::core::len_prefix_len(canonical_bare_signed_transaction.len())
+            + canonical_bare_signed_transaction.len(),
+    );
+    entrypoint.extend_from_slice(&0_u32.to_le_bytes());
+    norito::core::write_len_to_vec(
+        &mut entrypoint,
+        canonical_bare_signed_transaction.len() as u64,
+    );
+    entrypoint.extend_from_slice(canonical_bare_signed_transaction);
+    Hash::new(entrypoint).to_string()
 }
 
 fn decode_signed_envelope_fields(bytes: &[u8]) -> Result<SignedEnvelopeFields> {
@@ -462,7 +478,51 @@ fn parse_fixtures(value: &Value) -> Result<Vec<RawFixture>> {
     let arr = value
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("fixture root must be an array"))?;
-    arr.iter().map(parse_fixture).collect()
+    let fixtures = arr.iter().map(parse_fixture).collect::<Result<Vec<_>>>()?;
+    ensure_unique_fixture_names(&fixtures)?;
+    Ok(fixtures)
+}
+
+fn ensure_unique_fixture_names(fixtures: &[RawFixture]) -> Result<()> {
+    let mut names = HashSet::with_capacity(fixtures.len());
+    for fixture in fixtures {
+        if !names.insert(fixture.name.as_str()) {
+            bail!("duplicate fixture name '{}'", fixture.name);
+        }
+    }
+    Ok(())
+}
+
+fn ensure_unique_generated_fixtures(fixtures: &[Fixture]) -> Result<()> {
+    let mut names = HashSet::with_capacity(fixtures.len());
+    let mut payload_bytes = HashSet::with_capacity(fixtures.len());
+    let mut payload_hashes = HashSet::with_capacity(fixtures.len());
+    let mut signed_bytes = HashSet::with_capacity(fixtures.len());
+    let mut signed_hashes = HashSet::with_capacity(fixtures.len());
+    for fixture in fixtures {
+        if !names.insert(fixture.name.as_str()) {
+            bail!("duplicate fixture name '{}'", fixture.name);
+        }
+        if !payload_bytes.insert(fixture.encoded.as_slice()) {
+            bail!("duplicate fixture payload bytes for '{}'", fixture.name);
+        }
+        if !payload_hashes.insert(fixture.summary.payload_hash_hex.as_str()) {
+            bail!(
+                "duplicate fixture payload hash '{}'",
+                fixture.summary.payload_hash_hex
+            );
+        }
+        if !signed_bytes.insert(fixture.signed_bytes.as_slice()) {
+            bail!("duplicate fixture signed bytes for '{}'", fixture.name);
+        }
+        if !signed_hashes.insert(fixture.summary.signed_hash_hex.as_str()) {
+            bail!(
+                "duplicate fixture signed hash '{}'",
+                fixture.summary.signed_hash_hex
+            );
+        }
+    }
+    Ok(())
 }
 
 fn parse_fixture(value: &Value) -> Result<RawFixture> {
@@ -1063,6 +1123,23 @@ mod tests {
     }
 
     #[test]
+    fn signed_hash_uses_compact_external_entrypoint_domain() {
+        let signed = vec![0x5a; 128];
+        let mut entrypoint = 0_u32.to_le_bytes().to_vec();
+        norito::core::write_len_to_vec(&mut entrypoint, signed.len() as u64);
+        entrypoint.extend_from_slice(&signed);
+        assert_eq!(&entrypoint[..6], &[0, 0, 0, 0, 0x80, 0x01]);
+        assert_eq!(
+            signed_transaction_entrypoint_hash_hex(&signed),
+            Hash::new(&entrypoint).to_string()
+        );
+        assert_ne!(
+            signed_transaction_entrypoint_hash_hex(&signed),
+            Hash::new(&signed).to_string()
+        );
+    }
+
+    #[test]
     fn encoded_check_can_be_toggled() {
         let keypair = signing_keypair().expect("test keypair");
         let base = sample_fixture(None);
@@ -1410,6 +1487,40 @@ mod tests {
         };
         let built = build_instruction(&raw).expect("wire payload decodes");
         assert_eq!(Instruction::id(&*built), type_name);
+    }
+
+    #[test]
+    fn duplicate_fixture_names_are_rejected() {
+        let fixture = sample_fixture(None);
+        let fixtures = vec![fixture.clone(), fixture];
+        let err = ensure_unique_fixture_names(&fixtures)
+            .expect_err("duplicate fixture names must fail closed");
+        assert!(
+            err.to_string().contains("duplicate fixture name 'sample'"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn renamed_cloned_fixture_payloads_are_rejected() {
+        let keypair = signing_keypair().expect("test keypair");
+        let first_raw = sample_fixture(None);
+        let mut second_raw = first_raw.clone();
+        second_raw.name = "renamed-clone".to_string();
+        let first = first_raw
+            .into_fixture(&keypair, true, true)
+            .expect("first fixture");
+        let second = second_raw
+            .into_fixture(&keypair, true, true)
+            .expect("renamed fixture");
+
+        let err = ensure_unique_generated_fixtures(&[first, second])
+            .expect_err("renamed cloned fixture payloads must fail closed");
+        assert!(
+            err.to_string()
+                .contains("duplicate fixture payload bytes for 'renamed-clone'"),
+            "unexpected error: {err}"
+        );
     }
 
     fn sample_fixture(encoded: Option<String>) -> RawFixture {

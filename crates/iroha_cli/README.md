@@ -30,7 +30,7 @@ Known public chains infer their canonical prefix from `chain`, so Taira and Nexu
 need a second manual knob:
 
 ```toml
-chain = "809574f5-fee7-5e69-bfcf-52451e42d50f"
+chain = "fc56984b-2be7-431d-840e-21514d1883f0"
 torii_url = "https://taira.sora.org/"
 
 [account]
@@ -251,6 +251,10 @@ The CLI wraps Torii VK registry endpoints to submit signed transactions.
 
 Register a verifying key (provide either `vk_bytes` as base64 or `commitment_hex`):
 
+The optional `namespace` field defaults to `core` when omitted or `null`. Set it
+to `offline_kagemusha` for Kagemusha verifier records. Explicit namespace values
+must be non-empty and must not contain leading or trailing whitespace.
+
 ```bash
 cat >vk_register.json <<'JSON'
 {
@@ -260,6 +264,7 @@ cat >vk_register.json <<'JSON'
   "name": "vk_add",
   "version": 1,
   "circuit_id": "circuit_alpha",
+  "namespace": "core",
   "public_inputs_schema_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "vk_bytes": "BASE64..."
 }

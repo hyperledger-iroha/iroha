@@ -180,6 +180,78 @@ def tracked_sources(root: Path) -> list[Path]:
     return sorted(sources)
 
 
+def tracked_outputs(root: Path) -> list[Path]:
+    """Return every present versioned ``.to`` file, including staged additions."""
+
+    result = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "ls-files",
+            "-z",
+            "--cached",
+            "--",
+            "*.to",
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        message = result.stderr.decode("utf-8", errors="replace").strip()
+        raise GoldenError(f"failed to inventory tracked .to outputs: {message}")
+    candidates = [
+        _safe_relative(raw.decode("utf-8"), ".to", "output inventory")
+        for raw in result.stdout.split(b"\0")
+        if raw
+    ]
+    return sorted(output for output in candidates if (root / output).is_file())
+
+
+def compiler_owned_outputs(
+    sources: Sequence[Path], outputs: Sequence[Path]
+) -> list[Path]:
+    """Select tracked ``.to`` files owned by the Kotodama compiler.
+
+    Kotodama's primary outputs and copied aliases preserve the source filename
+    stem. Therefore a tracked ``.to`` belongs to this workflow exactly when its
+    stem matches a present ``.ko`` source stem. Other uses of the ``.to`` suffix
+    (notably canonical Norito payloads and hand-authored IVM data fixtures) have
+    no corresponding ``.ko`` stem and are deliberately outside this inventory.
+    """
+
+    source_stems = {source.stem for source in sources}
+    return sorted(output for output in outputs if output.stem in source_stems)
+
+
+def validate_output_inventory(
+    rows: Sequence[Golden], sources: Sequence[Path], outputs: Sequence[Path]
+) -> None:
+    """Require every compiler-owned tracked artifact to have an explicit row."""
+
+    mapped = {row.destination: row for row in rows}
+    source_set = set(sources)
+    owned = compiler_owned_outputs(sources, outputs)
+    unmapped = [output for output in owned if output not in mapped]
+    if unmapped:
+        raise GoldenError(
+            "compiler-owned tracked .to artifacts are missing explicit golden "
+            "map rows: " + ", ".join(path.as_posix() for path in unmapped)
+        )
+    invalid = [
+        output
+        for output in owned
+        if mapped[output].source not in source_set
+        or mapped[output].source.stem != output.stem
+    ]
+    if invalid:
+        raise GoldenError(
+            "compiler-owned tracked .to artifacts have invalid source mappings: "
+            + ", ".join(path.as_posix() for path in invalid)
+        )
+
+
 def unique_builds(rows: Sequence[Golden]) -> list[Golden]:
     """Deduplicate alias outputs and reject ambiguous staged file stems."""
 
@@ -784,6 +856,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         rows = read_map(root / MAP_PATH)
         sources = tracked_sources(root)
+        validate_output_inventory(rows, sources, tracked_outputs(root))
         koto = _resolve_tool(root, args.koto, "koto")
         iroha = (
             None

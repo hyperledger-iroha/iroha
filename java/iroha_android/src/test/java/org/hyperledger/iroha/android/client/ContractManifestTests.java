@@ -55,7 +55,7 @@ public final class ContractManifestTests {
     require("List<Name, 64>".equals(tagsType.canonicalTypeName()), "flat list type identity");
     require(entrypoint.returnSchema().wordCount() == 1, "result handle word");
     require(
-        "Result<(bool, u128), string>".equals(entrypoint.returnSchema().canonicalTypeName()),
+        "Result<(bool, decimal), string>".equals(entrypoint.returnSchema().canonicalTypeName()),
         "return type identity");
     require(
         entrypoint.triggers().get(0).repeats().kind()
@@ -65,7 +65,7 @@ public final class ContractManifestTests {
         "transfer".equals(entrypoint.triggers().get(0).callback().entrypoint()),
         "trigger callback");
     require(
-        "StateMap<AccountId, Amount>".equals(manifest.states().get(0).typeName()),
+        "StateMap<AccountId, quantity>".equals(manifest.states().get(0).typeName()),
         "state type");
     require(manifest.errorCodes().get(0).code() == 1001, "error code");
     require(
@@ -159,7 +159,7 @@ public final class ContractManifestTests {
       validName.append("List<");
     }
     validNodes.add(leaf);
-    validName.append("i64");
+    validName.append("int");
     for (int index = 0; index < 255; index++) {
       validName.append(", 1>");
     }
@@ -190,7 +190,7 @@ public final class ContractManifestTests {
     tooDeep.add(leaf);
     malformed.add(tooDeep);
     for (final List<String> nodes : malformed) {
-      expectFailure(() -> parseBoundarySchema(nodes, "i64"));
+      expectFailure(() -> parseBoundarySchema(nodes, "int"));
     }
   }
 
@@ -225,7 +225,7 @@ public final class ContractManifestTests {
         Arrays.asList(
             structNode("AssetView", "id", "amount"),
             leafNode("AssetId"),
-            leafNode("U128")));
+            leafNode("Decimal")));
     assertCanonicalSchemaFailure(
         "AssetDefinitionView",
         Arrays.asList(
@@ -242,7 +242,7 @@ public final class ContractManifestTests {
             optionNode(),
             leafNode("Bool"),
             leafNode("AccountId"),
-            leafNode("Amount"),
+            leafNode("Quantity"),
             leafNode("Json")));
     assertCanonicalSchemaFailure(
         "DomainView",
@@ -345,7 +345,7 @@ public final class ContractManifestTests {
     }
     if ("AssetView".equals(name)) {
       return Arrays.asList(
-          structNode(name, "id", "amount"), leafNode("AssetId"), leafNode("Amount"));
+          structNode(name, "id", "amount"), leafNode("AssetId"), leafNode("Quantity"));
     }
     if ("AssetDefinitionView".equals(name)) {
       return Arrays.asList(
@@ -356,7 +356,7 @@ public final class ContractManifestTests {
           optionNode(),
           leafNode("String"),
           leafNode("AccountId"),
-          leafNode("Amount"),
+          leafNode("Quantity"),
           leafNode("Json"));
     }
     if ("DomainView".equals(name)) {
@@ -428,17 +428,17 @@ public final class ContractManifestTests {
         + "\"argument_schema\":{\"fields\":["
         + "{\"name\":\"request\",\"ty\":{\"nodes\":["
         + "{\"kind\":\"Struct\",\"value\":{\"name\":\"Transfer\",\"fields\":[\"amount\",\"memo\"]}},"
-        + "{\"kind\":\"Leaf\",\"value\":{\"kind\":\"Amount\",\"value\":null}},"
+        + "{\"kind\":\"Leaf\",\"value\":{\"kind\":\"Quantity\",\"value\":null}},"
         + "{\"kind\":\"Option\",\"value\":null},"
         + "{\"kind\":\"Leaf\",\"value\":{\"kind\":\"String\",\"value\":null}}]}},"
         + "{\"name\":\"tags\",\"ty\":{\"nodes\":["
         + "{\"kind\":\"List\",\"value\":{\"capacity\":64}},"
         + "{\"kind\":\"Leaf\",\"value\":{\"kind\":\"Name\",\"value\":null}}]}}]},"
-        + "\"return_type\":\"Result<(bool, u128), string>\","
+        + "\"return_type\":\"Result<(bool, decimal), string>\","
         + "\"return_schema\":{\"nodes\":[{\"kind\":\"Result\",\"value\":null},"
         + "{\"kind\":\"Tuple\",\"value\":2},"
         + "{\"kind\":\"Leaf\",\"value\":{\"kind\":\"Bool\",\"value\":null}},"
-        + "{\"kind\":\"Leaf\",\"value\":{\"kind\":\"U128\",\"value\":null}},"
+        + "{\"kind\":\"Leaf\",\"value\":{\"kind\":\"Decimal\",\"value\":null}},"
         + "{\"kind\":\"Leaf\",\"value\":{\"kind\":\"String\",\"value\":null}}]},"
         + "\"permission\":\"TransferAsset\",\"read_keys\":[\"state:Balances\"],"
         + "\"write_keys\":[\"state:Balances\"],\"access_hints_complete\":true,"
@@ -447,7 +447,7 @@ public final class ContractManifestTests {
         + FILTER
         + "\",\"authority\":null,\"metadata\":{\"purpose\":\"daily-settlement\",\"round\":7},"
         + "\"callback\":{\"namespace\":null,\"entrypoint\":\"transfer\"}}]}],"
-        + "\"states\":[{\"name\":\"Balances\",\"type_name\":\"StateMap<AccountId, Amount>\"}],"
+        + "\"states\":[{\"name\":\"Balances\",\"type_name\":\"StateMap<AccountId, quantity>\"}],"
         + "\"error_codes\":[{\"namespace\":\"TransferError\",\"name\":\"InsufficientFunds\",\"code\":1001}],"
         + "\"kotoba\":[{\"msg_id\":\"transfer.denied\",\"translations\":["
         + "{\"lang\":\"en\",\"text\":\"Transfer denied\"},{\"lang\":\"ja\",\"text\":\"送金は拒否されました\"}]}],"

@@ -1728,8 +1728,8 @@ object SccpJsonParser {
     private val MAX_U128 = BigInteger.ONE.shiftLeft(128).subtract(BigInteger.ONE)
     private val TAIRA_CHAIN_ID_HASH = keccak(
         byteArrayOf(
-            0x80.toByte(), 0x95.toByte(), 0x74, 0xf5.toByte(), 0xfe.toByte(), 0xe7.toByte(), 0x5e,
-            0x69, 0xbf.toByte(), 0xcf.toByte(), 0x52, 0x45, 0x1e, 0x42, 0xd5.toByte(), 0x0f,
+            0xfc.toByte(), 0x56, 0x98.toByte(), 0x4b, 0x2b, 0xe7.toByte(), 0x43, 0x1d,
+            0x84.toByte(), 0x0e, 0x21, 0x51, 0x4d, 0x18, 0x83.toByte(), 0xf0.toByte(),
         ),
     ).toUpperHex()
     private val PUBLIC_SIGNAL_LABELS = listOf(

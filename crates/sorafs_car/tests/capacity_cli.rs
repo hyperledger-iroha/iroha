@@ -1,6 +1,9 @@
 #![cfg(feature = "cli")]
 
-use std::{env, fs};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
@@ -24,6 +27,36 @@ fn tempdir() -> Result<TempDir, std::io::Error> {
     Builder::new()
         .prefix("sorafs-capacity-cli-")
         .tempdir_in(canonical_temp_base())
+}
+
+fn write_spec(temp: &TempDir, name: &str, contents: &str) -> PathBuf {
+    let path = temp.path().join(name);
+    fs::write(&path, contents.trim_start().as_bytes()).expect("write spec");
+    path
+}
+
+fn run_capacity_command(args: impl IntoIterator<Item = String>) -> std::process::Output {
+    let mut cmd = cargo_bin_cmd!("sorafs_manifest_stub");
+    cmd.arg("capacity");
+    cmd.args(args);
+    cmd.output().expect("run capacity command")
+}
+
+fn assert_capacity_failure(output: std::process::Output, expected: &str, output_path: &Path) {
+    assert!(
+        !output.status.success(),
+        "capacity command unexpectedly succeeded"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(expected),
+        "stderr should contain {expected:?}, got: {stderr}"
+    );
+    assert!(
+        !output_path.exists(),
+        "capacity command must fail before writing {}",
+        output_path.display()
+    );
 }
 
 #[test]
@@ -229,6 +262,104 @@ fn capacity_declaration_cli_rejects_empty_private_key_file() {
         stderr.contains("must not be empty"),
         "unexpected stderr: {stderr}"
     );
+}
+
+#[test]
+fn capacity_declaration_cli_rejects_noncanonical_epoch_overrides() {
+    let temp = tempdir().expect("tempdir");
+    let spec_path = write_spec(&temp, "declaration_spec.json", SPEC_JSON);
+
+    for (flag, value, expected) in [
+        ("--registered-epoch", "01700000000", "leading zeros"),
+        ("--valid-from-epoch", "+1700000000", "canonical unsigned"),
+        ("--valid-until-epoch", "1700086400 ", "whitespace"),
+    ] {
+        let json_out = temp.path().join(format!(
+            "{}.json",
+            flag.trim_start_matches("--").replace('-', "_")
+        ));
+        let output = run_capacity_command([
+            "declaration".to_owned(),
+            format!("--spec={}", spec_path.display()),
+            format!("{flag}={value}"),
+            format!("--json-out={}", json_out.display()),
+            "--quiet".to_owned(),
+        ]);
+        assert_capacity_failure(output, expected, &json_out);
+    }
+}
+
+#[test]
+fn capacity_specs_reject_noncanonical_public_fields() {
+    let cases = [
+        (
+            "declaration",
+            "declaration_upper_hex.json",
+            SPEC_JSON.replace(
+                "1111111111111111111111111111111111111111111111111111111111111111",
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            ),
+            "lowercase hex",
+        ),
+        (
+            "declaration",
+            "declaration_padded_stake.json",
+            SPEC_JSON.replace("\"stake_amount\": \"5000\"", "\"stake_amount\": \"05000\""),
+            "leading zeros",
+        ),
+        (
+            "telemetry",
+            "telemetry_padded_effective.json",
+            TELEMETRY_JSON.replace(
+                "\"effective_capacity_gib\": 380",
+                "\"effective_capacity_gib\": \"0380\"",
+            ),
+            "leading zeros",
+        ),
+        (
+            "replication-order",
+            "replication_upper_cid.json",
+            REPLICATION_JSON.replace(
+                "\"manifest_cid_hex\": \"aabbccdd\"",
+                "\"manifest_cid_hex\": \"AABBCCDD\"",
+            ),
+            "lowercase hex",
+        ),
+        (
+            "replication-order",
+            "replication_padded_target.json",
+            REPLICATION_JSON.replace("\"target_replicas\": 2", "\"target_replicas\": \"02\""),
+            "leading zeros",
+        ),
+        (
+            "dispute",
+            "dispute_upper_kind.json",
+            DISPUTE_JSON.replace(
+                "\"kind\": \"replication_shortfall\"",
+                "\"kind\": \"Replication_Shortfall\"",
+            ),
+            "canonical lowercase",
+        ),
+        (
+            "dispute",
+            "dispute_padded_evidence_size.json",
+            DISPUTE_JSON.replace("\"size_bytes\": 1024", "\"size_bytes\": \"01024\""),
+            "leading zeros",
+        ),
+    ];
+
+    for (subcommand, filename, spec, expected) in cases {
+        let temp = tempdir().expect("tempdir");
+        let spec_path = write_spec(&temp, filename, &spec);
+        let json_out = temp.path().join("summary.json");
+        let output = run_capacity_command([
+            subcommand.to_owned(),
+            format!("--spec={}", spec_path.display()),
+            format!("--json-out={}", json_out.display()),
+            "--quiet".to_owned(),
+        ]);
+        assert_capacity_failure(output, expected, &json_out);
+    }
 }
 
 const SPEC_JSON: &str = r#"
@@ -525,6 +656,38 @@ fn capacity_complete_cli_writes_request_payload() {
         request_obj.get("order_id_hex").and_then(Value::as_str),
         Some("4444444444444444444444444444444444444444444444444444444444444444")
     );
+}
+
+#[test]
+fn capacity_complete_cli_rejects_noncanonical_order_id() {
+    for (value, expected) in [
+        (
+            "0x4444444444444444444444444444444444444444444444444444444444444444",
+            "prefix",
+        ),
+        (
+            "444444444444444444444444444444444444444444444444444444444444444A",
+            "lowercase hex",
+        ),
+        (
+            "4444444444444444444444444444444444444444444444444444444444444444 ",
+            "whitespace",
+        ),
+        (
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "all zero",
+        ),
+    ] {
+        let temp = tempdir().expect("tempdir");
+        let request_out = temp.path().join("complete_request.json");
+        let output = run_capacity_command([
+            "complete".to_owned(),
+            format!("--order-id={value}"),
+            format!("--request-out={}", request_out.display()),
+            "--quiet".to_owned(),
+        ]);
+        assert_capacity_failure(output, expected, &request_out);
+    }
 }
 
 #[test]
