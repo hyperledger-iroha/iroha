@@ -193,11 +193,23 @@ impl V2ApplyService {
                     decision_height: height.get(),
                 });
             }
-            self.validate_and_apply(context, body, durable_hash.is_none())?;
         } else if durable_hash.is_none() {
             // WSV cannot be ahead of its canonical block log. Continuing here
             // would manufacture a sidecar for state that Kura cannot identify.
             return Err(V2ApplyError::StateAheadOfKura);
+        }
+
+        // The durable CommitQC and exact validated body now identify the only
+        // carrier that can ever apply at this height. Keep its immutable
+        // compact reference (including an earlier lock origin view) and
+        // release every losing pending sidecar before validation can defer on
+        // a missing exact entry. A failure after this point remains safe: the
+        // decided reference survives, while no losing carrier can become
+        // canonical.
+        self.retain_decided_merge_sidecar(context, &body)?;
+
+        if state_height < height.get() {
+            self.validate_and_apply(context, body, durable_hash.is_none())?;
         }
 
         // This is deliberately outside `validate_and_apply`: WSV commit and
@@ -216,6 +228,19 @@ impl V2ApplyService {
         artifact.validate()?;
         let receipt = self.kura.store_v2_finality_artifact(&artifact)?;
         Ok(DurableApplyCompletion::new(task.id(), receipt, artifact))
+    }
+
+    fn retain_decided_merge_sidecar(
+        &self,
+        context: &wire::HeightContext,
+        body: &SignedBlock,
+    ) -> Result<(), V2ApplyError> {
+        let reference = body
+            .execution_context()
+            .and_then(|bundle| bundle.merge_entry.as_ref());
+        self.kura
+            .retain_pending_certified_merge_entry_for_locked_carrier(context.height, reference)?;
+        Ok(())
     }
 
     /// Run the exact production proposal validator without applying its state
@@ -486,7 +511,7 @@ mod tests {
     };
 
     use iroha_config::parameters::actual::Queue as QueueConfig;
-    use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
         Registrable,
         account::Account,
@@ -494,9 +519,13 @@ mod tests {
             BlockExecutionContextBundle, BlockHeader, BlockSignature, SignedBlock,
             consensus_v2 as wire,
         },
+        consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        isi::Log,
+        merge::{MergeLedgerEntry, MergeQuorumCertificate},
         peer::PeerId,
         transaction::TransactionBuilder,
     };
+    use iroha_logger::Level;
     use iroha_sumeragi_core::{EventTag, Generation};
 
     use super::*;
@@ -604,8 +633,16 @@ mod tests {
             };
             let leader_index = context.leader(0);
             let leader = &keys[usize::try_from(leader_index).expect("leader index")];
+            let proof_policy_bundle = crate::da::active_proof_policy_bundle_at_height(
+                &state.nexus_snapshot(),
+                context.height,
+            );
             let body = if include_lane_payload {
                 let transaction = TransactionBuilder::new(chain_id.clone(), transaction_authority)
+                    .with_instructions([Log::new(
+                        Level::INFO,
+                        "v2 lane apply recovery fixture".to_owned(),
+                    )])
                     .sign(transaction_key.private_key());
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction.clone()));
                 let routing_plan = queue
@@ -635,27 +672,21 @@ mod tests {
                 let block =
                     BlockBuilder::new_with_time_source(vec![accepted], TimeSource::new_system())
                         .chain(0, None)
+                        .with_da_proof_policies(Some(proof_policy_bundle.clone()))
                         .with_execution_context(Some(execution_context))
                         .try_sign_with_index(leader.private_key(), u64::from(leader_index))
                         .expect("sign fixture lane body")
                         .unpack(|_| {});
                 SignedBlock::from(block)
             } else {
-                let header = BlockHeader::new(
-                    NonZeroU64::new(context.height).expect("non-zero height"),
-                    None,
-                    None,
-                    None,
-                    1_000,
-                    0,
-                );
-                let signature = SignatureOf::try_from_hash(leader.private_key(), header.hash())
-                    .expect("sign fixture block");
-                SignedBlock::presigned(
-                    BlockSignature::new(u64::from(leader_index), signature),
-                    header,
-                    Vec::new(),
-                )
+                let block =
+                    BlockBuilder::new_with_time_source(Vec::new(), TimeSource::new_system())
+                        .chain(0, None)
+                        .with_da_proof_policies(Some(proof_policy_bundle))
+                        .try_sign_with_index(leader.private_key(), u64::from(leader_index))
+                        .expect("sign fixture block")
+                        .unpack(|_| {});
+                SignedBlock::from(block)
             };
             let canonical_wire = body.encode_wire().expect("canonical block wire");
             let subject = wire::BlockSubject {
@@ -780,6 +811,110 @@ mod tests {
             assert_eq!(artifact.subject, self.manifest.subject);
             assert_eq!(artifact.commit_qc, self.task.certificate().clone());
         }
+    }
+
+    fn pending_merge_entry(
+        context: &wire::HeightContext,
+        view: wire::View,
+        label: &[u8],
+    ) -> MergeLedgerEntry {
+        let validator_set = context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        let mut bitmap = vec![0_u8; validator_set.len().div_ceil(8)];
+        for index in 0..validator_set.len() {
+            bitmap[index / 8] |= 1 << (index % 8);
+        }
+        MergeLedgerEntry {
+            epoch_id: context.epoch,
+            lane_catalog_hash: Hash::new(b"v2 apply decided-sidecar catalog"),
+            active_lanes: Vec::new(),
+            incarnation_root: Hash::new(b"v2 apply decided-sidecar incarnations"),
+            activation_root: Hash::new(b"v2 apply decided-sidecar activations"),
+            lane_snapshots: Vec::new(),
+            execution_batch: None,
+            global_state_root: Hash::new(label),
+            merge_qc: MergeQuorumCertificate::new(
+                context.height,
+                context.epoch,
+                view,
+                HashOf::from_untyped_unchecked(Hash::new(b"v2 apply decided-sidecar parent")),
+                Hash::new(b"v2 apply decided-sidecar chain"),
+                VALIDATOR_SET_HASH_VERSION_V1,
+                HashOf::new(&validator_set),
+                validator_set,
+                bitmap,
+                Vec::new(),
+                vec![0x5A; 96],
+                Hash::new(label),
+            ),
+        }
+    }
+
+    fn body_with_merge_reference(reference: CertifiedMergeLedgerReference) -> SignedBlock {
+        let key = KeyPair::try_from_seed(vec![0xC9; 32], Algorithm::BlsNormal)
+            .expect("derive decided-body signer");
+        let execution_context =
+            BlockExecutionContextBundle::new(Vec::new()).with_merge_entry(reference);
+        let block = BlockBuilder::new_with_time_source(Vec::new(), TimeSource::new_system())
+            .chain(0, None)
+            .with_execution_context(Some(execution_context))
+            .try_sign_with_index(key.private_key(), 0)
+            .expect("sign decided body")
+            .unpack(|_| {});
+        SignedBlock::from(block)
+    }
+
+    #[test]
+    fn durable_decision_retains_exact_earlier_view_sidecar_and_prunes_losers() {
+        let fixture = ApplyFixture::new();
+        let exact = pending_merge_entry(&fixture.context, 1, b"exact earlier-view sidecar");
+        let losing = pending_merge_entry(&fixture.context, 2, b"losing later-view sidecar");
+        let exact_hash = fixture
+            .kura
+            .persist_pending_certified_merge_entry(&exact)
+            .expect("persist exact decided sidecar");
+        let losing_hash = fixture
+            .kura
+            .persist_pending_certified_merge_entry(&losing)
+            .expect("persist losing sidecar");
+        assert_ne!(exact_hash, losing_hash);
+
+        let body = body_with_merge_reference(CertifiedMergeLedgerReference::new(&exact));
+        fixture
+            .service
+            .retain_decided_merge_sidecar(&fixture.context, &body)
+            .expect("bind exact sidecar from durable decided body");
+        assert_eq!(
+            fixture
+                .kura
+                .merge_entry_by_hash(exact_hash)
+                .expect("read exact sidecar after decision binding"),
+            Some(exact),
+            "the exact earlier-view reference remains protected until finalization"
+        );
+        assert!(
+            fixture
+                .kura
+                .merge_entry_by_hash(losing_hash)
+                .expect("read losing sidecar after decision binding")
+                .is_none(),
+            "a durable decision must release every non-referenced sidecar at its height"
+        );
+
+        fixture
+            .kura
+            .prune_finalized_pending_certified_merge_entries(fixture.context.height)
+            .expect("finalized height retires the exact protected sidecar");
+        assert!(
+            fixture
+                .kura
+                .merge_entry_by_hash(exact_hash)
+                .expect("read exact sidecar after finalization")
+                .is_none()
+        );
     }
 
     #[test]

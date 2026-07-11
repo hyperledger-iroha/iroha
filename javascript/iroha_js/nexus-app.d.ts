@@ -1,4 +1,4 @@
-/// <reference types="node" />
+import type { Buffer } from "buffer";
 
 export interface NexusAppConfig {
   chainId?: string;
@@ -86,21 +86,54 @@ export interface NexusTransferDraft {
 }
 
 export interface NexusWalletSignature {
-  algorithm?: "ed25519" | "Ed25519" | 0;
+  algorithm?: "ed25519" | "0" | 0;
   signature?: Buffer | Uint8Array | ArrayBuffer | string;
   bytes?: Buffer | Uint8Array | ArrayBuffer | string;
   payload?: Buffer | Uint8Array | ArrayBuffer | string;
 }
 
+export type NexusBytes = Buffer | Uint8Array | ArrayBuffer | string;
+
+export interface NexusTransactionPayloadResult {
+  payloadBytes?: NexusBytes;
+  payload_bytes?: NexusBytes;
+  bytes?: NexusBytes;
+  payloadHashHex?: string;
+  payload_hash_hex?: string;
+  hashHex?: string;
+  hash_hex?: string;
+  hash?: string | Buffer | Uint8Array | ArrayBuffer;
+}
+
+export interface NexusFinalizedTransactionResult {
+  signedTransaction?: NexusBytes;
+  signed_transaction?: NexusBytes;
+  bytes?: NexusBytes;
+  hashHex?: string;
+  hash_hex?: string;
+  transactionHashHex?: string;
+  transaction_hash_hex?: string;
+  signedTransactionHashHex?: string;
+  signed_transaction_hash_hex?: string;
+  signedTransactionHash?: string | Buffer | Uint8Array | ArrayBuffer;
+  signed_transaction_hash?: string | Buffer | Uint8Array | ArrayBuffer;
+  hash?: string | Buffer | Uint8Array | ArrayBuffer;
+}
+
 export interface NexusFinalizeOptions {
   wait?: boolean;
   intervalMs?: number;
-  timeoutMs?: number;
-  maxAttempts?: number;
+  timeoutMs?: number | null;
+  maxAttempts?: number | null;
   scope?: "local" | "auto" | "global";
   successStatuses?: readonly string[];
   failureStatuses?: readonly string[];
-  onStatus?: (status: unknown) => void;
+  onStatus?: (
+    status: string | null,
+    payload: unknown,
+    attempt: number,
+  ) => void | Promise<void>;
+  signal?: AbortSignal;
   signingPublicKey?: Buffer | Uint8Array | ArrayBuffer | string;
   toriiClient?: NexusToriiClient;
 }
@@ -129,13 +162,16 @@ export interface NexusConnectTransport {
 }
 
 export interface NexusTransactionCodec {
-  buildTransferPayload(input: Record<string, unknown>): Buffer | Uint8Array | ArrayBuffer | string;
+  /** Returned hash aliases, when present, must exactly match the canonical payload prehash. */
+  buildTransferPayload(input: Record<string, unknown>): NexusBytes | NexusTransactionPayloadResult;
+  /** Must return exactly 64 lowercase hex characters matching the supplied payload bytes. */
   payloadHashHex?(payloadBytes: Buffer): string;
+  /** Must return canonical version-1 single-signature Transfer::Asset bytes and their exact hash. */
   finalizeSignedTransaction(
     signable: NexusSignableTransaction,
     signature: { algorithm: "ed25519"; signature: Buffer },
     signingPublicKey: Buffer,
-  ): Buffer | { signedTransaction?: Buffer | Uint8Array | string; signed_transaction?: Buffer | Uint8Array | string; bytes?: Buffer | Uint8Array | string; hash?: Buffer | Uint8Array | string; hashHex?: string; hash_hex?: string };
+  ): NexusFinalizedTransactionResult;
 }
 
 export interface NexusToriiClient {

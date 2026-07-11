@@ -184,6 +184,43 @@ function hex32(byte) {
   return `0x${Buffer.alloc(32, byte).toString("hex")}`;
 }
 
+function mutateFirstSignedTransactionSignatureByte(signedTransaction) {
+  const bytes = Buffer.from(signedTransaction);
+  const bareOffset = bytes[0] === 1 ? 1 : 0;
+
+  const readCompactLength = (offset) => {
+    let value = 0;
+    let shift = 0;
+    for (let index = 0; index < 10; index += 1) {
+      const byte = bytes[offset + index];
+      assert.notEqual(byte, undefined, "compact length must not be truncated");
+      value += (byte & 0x7f) * 2 ** shift;
+      if ((byte & 0x80) === 0) {
+        assert.ok(Number.isSafeInteger(value), "compact length must be safe");
+        return { next: offset + index + 1, value };
+      }
+      shift += 7;
+    }
+    throw new Error("compact length must terminate within 10 bytes");
+  };
+
+  const signatureField = readCompactLength(bareOffset);
+  const signaturePayload = readCompactLength(signatureField.next);
+  assert.ok(
+    signaturePayload.next + signaturePayload.value <= bytes.length,
+    "signature payload must fit in the transaction",
+  );
+  assert.equal(
+    bytes.readBigUInt64LE(signaturePayload.next),
+    64n,
+    "fixture must contain one 64-byte Ed25519 signature",
+  );
+  const firstSignatureByte = readCompactLength(signaturePayload.next + 8);
+  assert.equal(firstSignatureByte.value, 1, "signature byte field must contain one byte");
+  bytes[firstSignatureByte.next] ^= 0x80;
+  return bytes;
+}
+
 function buildSampleSccpRouteManifest() {
   const destinationBindingHash = hex32(0x47);
   const proofArtifactHash = hex32(0x4c);
@@ -316,23 +353,22 @@ test("buildRegisterDomainTransaction returns canonical hash", () => {
 
 test("hashSignedTransactionPayload returns the detached scaffold preimage", () => {
   const first = buildSampleRegisterDomain();
+  const signatureMutated = mutateFirstSignedTransactionSignatureByte(
+    first.signedTransaction,
+  );
   const firstPayloadHash = hashSignedTransactionPayload(
     first.signedTransaction,
     { encoding: "buffer" },
   );
-  const signatureMutated = Buffer.from(first.signedTransaction);
-  // This byte is inside the canonical fixture's signature payload. The archive
-  // remains structurally decodable, but its full signed-transaction hash changes.
-  signatureMutated[13] ^= 0x01;
-  const mutatedPayloadHash = hashSignedTransactionPayload(
+  const secondPayloadHash = hashSignedTransactionPayload(
     signatureMutated,
     { encoding: "buffer" },
   );
 
   assert.equal(firstPayloadHash.length, 32);
-  assert.deepEqual(firstPayloadHash, mutatedPayloadHash);
+  assert.deepEqual(firstPayloadHash, secondPayloadHash);
   assert.notDeepEqual(
-    first.hash,
+    hashSignedTransaction(first.signedTransaction, { encoding: "buffer" }),
     hashSignedTransaction(signatureMutated, { encoding: "buffer" }),
   );
 });

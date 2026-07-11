@@ -236,8 +236,7 @@
         "sumeragi": {
           "block_time_ms": 100,
           "commit_time_ms": 100,
-          "min_finality_ms": 100,
-          "next_mode": "Npos"
+          "min_finality_ms": 100
         }
       },
       "topology": []

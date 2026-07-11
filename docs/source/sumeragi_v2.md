@@ -185,12 +185,38 @@ rollback and restart reconciliation coupled to block persistence. Old-view sidec
 cannot be rebound to a later-view proposal; an earlier-view global block that already reaches a
 CommitQC remains decisive only with its exact earlier-view carrier.
 
-If that exact sidecar has not arrived when deterministic body validation runs, the validation work
-is retained rather than converted into a permanent rejection. The node requests fixed-boundary,
-hash-addressed chunks only from the merge QC's authenticated signer set, validates the canonical
-full entry against the compact reference and current global order, persists it in Kura, and retries
-the same durable validation work identifier. Capacity pressure and holder outages remain retryable;
-only an exact malformed or globally invalid entry rejects the referencing body.
+If that exact sidecar is absent during deterministic body validation or later decided application,
+the exact work identifier is retained rather than converted into a permanent rejection. The node
+requests fixed-boundary, hash-addressed chunks only from the merge QC's authenticated signer set,
+validates the canonical full entry against the compact reference and current global order, persists
+it in Kura, and retries the same durable work. Before allocating a fetch, compact-QC preflight
+requires the exact frozen roster, chain digest, hard count/byte caps, dual quorum, canonical signer
+PoPs, and a valid aggregate signature. Inbound sessions are keyed by both entry hash and the full
+reference digest, so attacker-first conflicting length or execution metadata cannot poison an
+honest decided body with the same claimed hash. Ordinary validation traffic leaves global and
+per-holder session/byte headroom for the uniquely decided Apply dependency, and idle requests resume
+strictly after a fairness cursor. A full outbound queue is detected before cryptographic preflight;
+successful authentication is cached by the canonical QC identity for this height, while every
+unsigned reference variant still reruns cheap shape and carrier checks. Returning an unsent request
+to the idle set restores its holder cursor and timeout attempt count because no network attempt
+occurred. Sidecar traffic otherwise has reserved, fairly drained capacity; active bounded responses
+do not expire merely because a protocol-sized transfer spans many ticks. Capacity pressure,
+transient Kura publication failure, and holder outages remain retryable. Registration failures
+reject only their exact body/work tuple, while hash-wide rejection requires a fully decoded
+reference-matching entry.
+
+On a certified view transition, deferred work not protected by the exact round and subject of the
+TC's selected high PrepareQC is released from the executor and transport. Kura cleanup is cached by
+certified carrier-state transition rather than rescanning its bounded store on every actor loop.
+With neither a lock nor a durable decision, Kura retains only entries eligible for the new exact
+carrier round; the initial directive installs that retention before ingress opens. With a lock or
+durable decision, cleanup waits for the durable body and retains only its exact compact reference,
+including an immutable earlier origin view. A durable decision also stops new merge-candidate
+production. Locked-body insertion validates the complete next lane-session cache before deleting
+losing durable sidecars, and already-quorate merge candidates retry Kura publication on the normal
+retransmission cadence. Finalized height rollover removes all remaining losing sidecars. This keeps
+the in-memory and durable caps live without deleting an entry that a delayed decisive CommitQC can
+still require.
 
 ## Safety WAL
 

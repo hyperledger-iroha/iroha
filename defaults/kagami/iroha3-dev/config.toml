@@ -11,11 +11,11 @@ trusted_peers_pop = [
 ]
 
 [network]
-address = "0.0.0.0:1337"
-public_address = "127.0.0.1:1337"
+address = "addr:0.0.0.0:1337#BF18"
+public_address = "addr:127.0.0.1:1337#8F78"
 
 [torii]
-address = "0.0.0.0:8080"
+address = "addr:0.0.0.0:8080#B922"
 max_content_len = 64_000_000
 
 

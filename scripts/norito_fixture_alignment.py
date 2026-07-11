@@ -10,6 +10,8 @@ JSON and Markdown summaries for governance evidence.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import datetime as dt
 import hashlib
 import json
@@ -30,9 +32,12 @@ DEFAULT_TARGETS: Mapping[str, Path] = {
 @dataclass(frozen=True)
 class FixtureDigest:
     name: str
+    encoded_file: str
     chain: str
     authority: str
+    payload_base64: str
     payload_hash: str
+    signed_base64: str
     signed_hash: str
     encoded_len: int
     signed_len: int
@@ -74,28 +79,51 @@ def _fingerprint_manifest(payload: MutableMapping[str, object]) -> str:
 
 
 def _fixture_digest(entry: Mapping[str, object]) -> FixtureDigest:
-    try:
-        name = str(entry["name"])
-        chain = str(entry["chain"])
-        authority = str(entry["authority"])
-        payload_hash = str(entry["payload_hash"])
-        signed_hash = str(entry["signed_hash"])
-        encoded_len = int(entry["encoded_len"])
-        signed_len = int(entry["signed_len"])
-        creation_time_ms = int(entry["creation_time_ms"])
-        time_to_live_ms = entry.get("time_to_live_ms")
-        nonce = entry.get("nonce")
-    except (KeyError, TypeError, ValueError) as exc:  # pragma: no cover - defensive guard
-        raise SystemExit(f"[error] malformed fixture entry: {entry}") from exc
-    if not isinstance(time_to_live_ms, (int, type(None))) or isinstance(time_to_live_ms, bool):
+    def required_string(field: str) -> str:
+        value = entry.get(field)
+        if not isinstance(value, str) or not value:
+            raise SystemExit(f"[error] malformed fixture entry field {field!r}: {entry}")
+        return value
+
+    def required_nonnegative_int(field: str) -> int:
+        value = entry.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise SystemExit(f"[error] malformed fixture entry field {field!r}: {entry}")
+        return value
+
+    name = required_string("name")
+    encoded_file = required_string("encoded_file")
+    chain = required_string("chain")
+    authority = required_string("authority")
+    payload_base64 = required_string("payload_base64")
+    payload_hash = required_string("payload_hash")
+    signed_base64 = required_string("signed_base64")
+    signed_hash = required_string("signed_hash")
+    encoded_len = required_nonnegative_int("encoded_len")
+    signed_len = required_nonnegative_int("signed_len")
+    creation_time_ms = required_nonnegative_int("creation_time_ms")
+    time_to_live_ms = entry.get("time_to_live_ms")
+    nonce = entry.get("nonce")
+    if (
+        not isinstance(time_to_live_ms, (int, type(None)))
+        or isinstance(time_to_live_ms, bool)
+        or (isinstance(time_to_live_ms, int) and time_to_live_ms < 0)
+    ):
         raise SystemExit(f"[error] malformed fixture entry: {entry}")
-    if not isinstance(nonce, (int, type(None))) or isinstance(nonce, bool):
+    if (
+        not isinstance(nonce, (int, type(None)))
+        or isinstance(nonce, bool)
+        or (isinstance(nonce, int) and nonce < 0)
+    ):
         raise SystemExit(f"[error] malformed fixture entry: {entry}")
     return FixtureDigest(
         name=name,
+        encoded_file=encoded_file,
         chain=chain,
         authority=authority,
+        payload_base64=payload_base64,
         payload_hash=payload_hash,
+        signed_base64=signed_base64,
         signed_hash=signed_hash,
         encoded_len=encoded_len,
         signed_len=signed_len,
@@ -105,6 +133,39 @@ def _fixture_digest(entry: Mapping[str, object]) -> FixtureDigest:
     )
 
 
+def _decode_canonical_base64(value: str, context: str) -> bytes:
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise SystemExit(f"[error] invalid base64 for {context}: {exc}") from exc
+    if base64.b64encode(decoded).decode("ascii") != value:
+        raise SystemExit(f"[error] non-canonical base64 for {context}")
+    return decoded
+
+
+def _iroha_hash(data: bytes) -> str:
+    digest = bytearray(hashlib.blake2b(data, digest_size=32).digest())
+    digest[-1] |= 1
+    return digest.hex()
+
+
+def _compact_length(value: int) -> bytes:
+    output = bytearray()
+    remaining = value
+    while True:
+        byte = remaining & 0x7F
+        remaining >>= 7
+        if remaining:
+            byte |= 0x80
+        output.append(byte)
+        if not remaining:
+            return bytes(output)
+
+
+def _signed_transaction_hash(data: bytes) -> str:
+    return _iroha_hash(b"\x00\x00\x00\x00" + _compact_length(len(data)) + data)
+
+
 def load_manifest(path: Path) -> ManifestSnapshot:
     if not path.exists():
         raise SystemExit(f"[error] manifest not found: {path}")
@@ -112,15 +173,82 @@ def load_manifest(path: Path) -> ManifestSnapshot:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:  # pragma: no cover - defensive guard
         raise SystemExit(f"[error] failed to parse JSON from {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise SystemExit(f"[error] manifest {path} must contain a JSON object")
     fixtures_raw = payload.get("fixtures")
     if not isinstance(fixtures_raw, list):
         raise SystemExit(f"[error] manifest {path} missing fixtures array")
     fixtures: Dict[str, FixtureDigest] = {}
+    encoded_files: Dict[str, str] = {}
+    payload_hashes: Dict[str, str] = {}
+    signed_hashes: Dict[str, str] = {}
+    payload_bytes: Dict[bytes, str] = {}
+    signed_bytes: Dict[bytes, str] = {}
     for entry in fixtures_raw:
         if not isinstance(entry, dict):
             raise SystemExit(f"[error] fixture entry in {path} was not an object: {entry!r}")
         digest = _fixture_digest(entry)
+        if digest.name in fixtures:
+            raise SystemExit(f"[error] duplicate fixture name {digest.name!r} in {path}")
+        if digest.encoded_file in encoded_files:
+            raise SystemExit(
+                f"[error] duplicate encoded_file {digest.encoded_file!r} in {path}: "
+                f"{encoded_files[digest.encoded_file]!r} and {digest.name!r}"
+            )
+        if digest.payload_hash in payload_hashes:
+            raise SystemExit(
+                f"[error] duplicate payload_hash {digest.payload_hash!r} in {path}: "
+                f"{payload_hashes[digest.payload_hash]!r} and {digest.name!r}"
+            )
+        if digest.signed_hash in signed_hashes:
+            raise SystemExit(
+                f"[error] duplicate signed_hash {digest.signed_hash!r} in {path}: "
+                f"{signed_hashes[digest.signed_hash]!r} and {digest.name!r}"
+            )
+        decoded_payload = _decode_canonical_base64(
+            digest.payload_base64, f"{path}:{digest.name}.payload_base64"
+        )
+        decoded_signed = _decode_canonical_base64(
+            digest.signed_base64, f"{path}:{digest.name}.signed_base64"
+        )
+        if len(decoded_payload) != digest.encoded_len:
+            raise SystemExit(
+                f"[error] {path}:{digest.name} encoded_len mismatch: "
+                f"manifest={digest.encoded_len} decoded={len(decoded_payload)}"
+            )
+        if len(decoded_signed) != digest.signed_len:
+            raise SystemExit(
+                f"[error] {path}:{digest.name} signed_len mismatch: "
+                f"manifest={digest.signed_len} decoded={len(decoded_signed)}"
+            )
+        computed_payload_hash = _iroha_hash(decoded_payload)
+        if computed_payload_hash != digest.payload_hash:
+            raise SystemExit(
+                f"[error] {path}:{digest.name} payload_hash mismatch: "
+                f"manifest={digest.payload_hash} computed={computed_payload_hash}"
+            )
+        computed_signed_hash = _signed_transaction_hash(decoded_signed)
+        if computed_signed_hash != digest.signed_hash:
+            raise SystemExit(
+                f"[error] {path}:{digest.name} signed_hash mismatch: "
+                f"manifest={digest.signed_hash} computed={computed_signed_hash}"
+            )
+        if decoded_payload in payload_bytes:
+            raise SystemExit(
+                f"[error] duplicate payload bytes in {path}: "
+                f"{payload_bytes[decoded_payload]!r} and {digest.name!r}"
+            )
+        if decoded_signed in signed_bytes:
+            raise SystemExit(
+                f"[error] duplicate signed bytes in {path}: "
+                f"{signed_bytes[decoded_signed]!r} and {digest.name!r}"
+            )
         fixtures[digest.name] = digest
+        encoded_files[digest.encoded_file] = digest.name
+        payload_hashes[digest.payload_hash] = digest.name
+        signed_hashes[digest.signed_hash] = digest.name
+        payload_bytes[decoded_payload] = digest.name
+        signed_bytes[decoded_signed] = digest.name
     fingerprint = _fingerprint_manifest(payload)
     age_hours = (dt.datetime.now(dt.timezone.utc) - _stat_mtime(path)).total_seconds() / 3600.0
     return ManifestSnapshot(path=path, fingerprint=fingerprint, fixtures=fixtures, age_hours=age_hours)
@@ -142,10 +270,16 @@ def compare_manifests(
             continue
         found = target.fixtures[name]
         differences: Dict[str, str] = {}
+        if expected.encoded_file != found.encoded_file:
+            differences["encoded_file"] = f"{found.encoded_file} != {expected.encoded_file}"
+        if expected.payload_base64 != found.payload_base64:
+            differences["payload_base64"] = "decoded payload bytes differ"
         if expected.payload_hash != found.payload_hash:
             differences["payload_hash"] = f"{found.payload_hash} != {expected.payload_hash}"
         if expected.signed_hash != found.signed_hash:
             differences["signed_hash"] = f"{found.signed_hash} != {expected.signed_hash}"
+        if expected.signed_base64 != found.signed_base64:
+            differences["signed_base64"] = "decoded signed bytes differ"
         if expected.encoded_len != found.encoded_len:
             differences["encoded_len"] = f"{found.encoded_len} != {expected.encoded_len}"
         if expected.signed_len != found.signed_len:

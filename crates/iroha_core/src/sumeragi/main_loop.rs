@@ -27960,6 +27960,7 @@ impl Actor {
         let MergeSidecarChunkIngestOutcome::Complete(completed) = outcome else {
             return;
         };
+        let reference_digest = certified_merge_reference_digest(&completed.reference);
         let entry = match decode_certified_merge_sidecar(&completed.reference, &completed.bytes) {
             Ok(entry) => entry,
             Err(error) => {
@@ -27969,7 +27970,7 @@ impl Actor {
                     ?error,
                     "reassembled certified merge sidecar is corrupt; rotating holder"
                 );
-                self.retry_completed_merge_sidecar(entry_hash, now);
+                self.retry_completed_merge_sidecar(entry_hash, reference_digest, now);
                 return;
             }
         };
@@ -27991,11 +27992,13 @@ impl Actor {
         match self.kura.persist_pending_certified_merge_entry(&entry) {
             Ok(persisted_hash) if persisted_hash == entry_hash => {
                 let requester = self.common_config.peer.id().clone();
-                let (deferred, _) = self
-                    .subsystems
-                    .merge
-                    .sidecars
-                    .finish_completed(entry_hash, true, &requester, now);
+                let (deferred, _) = self.subsystems.merge.sidecars.finish_completed(
+                    entry_hash,
+                    reference_digest,
+                    true,
+                    &requester,
+                    now,
+                );
                 info!(
                     %sender,
                     %entry_hash,
@@ -28022,7 +28025,7 @@ impl Actor {
                     ?error,
                     "failed to persist validated certified merge sidecar; rotating holder"
                 );
-                self.retry_completed_merge_sidecar(entry_hash, now);
+                self.retry_completed_merge_sidecar(entry_hash, reference_digest, now);
             }
         }
     }
@@ -28030,14 +28033,17 @@ impl Actor {
     fn retry_completed_merge_sidecar(
         &mut self,
         entry_hash: HashOf<MergeLedgerEntry>,
+        reference_digest: Hash,
         now: Instant,
     ) {
         let requester = self.common_config.peer.id().clone();
-        let (_, retry) = self
-            .subsystems
-            .merge
-            .sidecars
-            .finish_completed(entry_hash, false, &requester, now);
+        let (_, retry) = self.subsystems.merge.sidecars.finish_completed(
+            entry_hash,
+            reference_digest,
+            false,
+            &requester,
+            now,
+        );
         if let Some(post) = retry {
             self.post_certified_merge_sidecar(post);
         }

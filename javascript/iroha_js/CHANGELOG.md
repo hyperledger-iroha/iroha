@@ -9,6 +9,28 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   replace `dist` only when its content changed. Consuming `file:` installs no
   longer run a mutating `prepare` hook; release and packaged-layout workflows
   continue to build the distribution explicitly.
+
+## [0.0.3] - 2026-07-11
+
+- Hardened Nexus custom-codec boundaries with descriptor snapshots, exact and
+  recomputed payload hashes, independently finalized canonical signed bytes,
+  conflict-checked local/Torii aliases, and pre-copy byte limits. Release
+  checks now pin `esbuild`, fail closed when it is unavailable, and enforce
+  measured Torii, browser transaction-codec, and browser Nexus-app bundle
+  ceilings. The `./nexus-app` graph no longer imports Node/native modules in a
+  browser build; its default codec and bounded Torii submit/status transport
+  are browser-safe and covered by runtime and adversarial tests. Its packed
+  declarations also compile for strict DOM consumers without ambient Node
+  types, using the runtime `buffer` package's self-contained type export.
+- Added the browser-safe `@iroha/iroha-js/transaction-codec` subpath for
+  canonical transparent Ed25519 transfer payloads, external-signing prehashes,
+  verified signed-transaction finalization, and compact pipeline hashes. The
+  codec rejects contradictory signer state, non-canonical Norito, and bounded
+  metadata violations before producing submission bytes. Canonical metadata
+  strings, pre-decode field limits, and the Rust 64-byte signed-numeric range
+  are enforced before parsing or large-integer conversion. Browser and Node
+  Ed25519 verification now match Rust strict verification, including exact
+  uncofactored equations and mixed-torsion rejection.
 - Added signed Torii alias-resolution ergonomics: `resolveAlias`,
   `resolveAliasByIndex`, and `lookupAliasesByAccount` now accept
   `canonicalAuth`, and `buildCanonicalJsonRequest` builds a signed JSON request

@@ -59,6 +59,10 @@ enum V2IoCompletion {
     Stored(BodyStoreCompletion),
     Validated(BodyValidationCompletion),
     Applied(DurableApplyCompletion),
+    ApplyDeferred {
+        work_id: EffectWorkId,
+        reference: CertifiedMergeLedgerReference,
+    },
     CertifiedResponse {
         recipient: PeerId,
         response: wire::CertifiedBodyResponse,
@@ -102,10 +106,20 @@ impl V2IoHandle {
                             })
                             .map(V2IoCompletion::Validated)
                             .map_err(|error| error.to_string()),
-                        V2IoCommand::Apply(task) => apply_service
-                            .execute(&context, &mut body_store, &task)
-                            .map(V2IoCompletion::Applied)
-                            .map_err(|error| error.to_string()),
+                        V2IoCommand::Apply(task) => {
+                            match apply_service.execute(&context, &mut body_store, &task) {
+                                Ok(completion) => Ok(V2IoCompletion::Applied(completion)),
+                                Err(
+                                    super::v2_apply::V2ApplyError::MissingCertifiedMergeSidecar {
+                                        reference,
+                                    },
+                                ) => Ok(V2IoCompletion::ApplyDeferred {
+                                    work_id: task.id(),
+                                    reference,
+                                }),
+                                Err(error) => Err(error.to_string()),
+                            }
+                        }
                         V2IoCommand::Serve(request) => {
                             serve_certified_body(&body_store, &key_pair, local_validator, request)
                         }
@@ -302,17 +316,23 @@ pub(crate) struct RejectedCandidateBody {
     reason: String,
 }
 
-/// Exact body/reference tuple retained after deterministic validation reports
-/// that only its certified merge sidecar is unavailable.
+/// Exact body/reference tuple retained when validation or decided application
+/// reports that only its certified merge sidecar is unavailable.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct DeferredMergeSidecarValidation {
+pub(crate) struct DeferredMergeSidecarWork {
+    work_id: EffectWorkId,
     round: wire::ConsensusRound,
     subject: wire::BlockSubject,
     reference: CertifiedMergeLedgerReference,
 }
 
-impl DeferredMergeSidecarValidation {
-    /// Wire proposal round retaining the exact durable validation task.
+impl DeferredMergeSidecarWork {
+    /// Exact executor work identifier owning this deferral.
+    pub(crate) const fn work_id(&self) -> EffectWorkId {
+        self.work_id
+    }
+
+    /// Wire proposal round retaining the exact durable work item.
     pub(crate) const fn round(&self) -> wire::ConsensusRound {
         self.round
     }
@@ -409,7 +429,7 @@ pub(crate) struct ProductionV2Services {
     loaded_candidates: VecDeque<LoadedCandidateBody>,
     prepared_candidates: VecDeque<PreparedCandidateBody>,
     validation_rejections: VecDeque<RejectedCandidateBody>,
-    merge_sidecar_deferrals: VecDeque<DeferredMergeSidecarValidation>,
+    merge_sidecar_deferrals: VecDeque<DeferredMergeSidecarWork>,
     outbound_chunks: BTreeMap<HashOf<wire::PayloadManifest>, Vec<wire::ConsensusMessageV2>>,
     entered_view: Option<EventTag>,
     last_status: Option<EffectExecutorStatus>,
@@ -582,7 +602,7 @@ impl ProductionV2Services {
     }
 
     /// Take the next exact validation deferral for bounded sidecar recovery.
-    pub(crate) fn take_merge_sidecar_deferral(&mut self) -> Option<DeferredMergeSidecarValidation> {
+    pub(crate) fn take_merge_sidecar_deferral(&mut self) -> Option<DeferredMergeSidecarWork> {
         self.merge_sidecar_deferrals.pop_front()
     }
 
@@ -590,14 +610,21 @@ impl ProductionV2Services {
     /// exact durable validation intent.
     pub(crate) fn requeue_merge_sidecar_deferral(
         &mut self,
-        deferred: DeferredMergeSidecarValidation,
+        deferred: DeferredMergeSidecarWork,
     ) -> Result<(), String> {
-        if self.merge_sidecar_deferrals.iter().any(|existing| {
-            existing.round == deferred.round
+        if let Some(existing) = self
+            .merge_sidecar_deferrals
+            .iter()
+            .find(|existing| existing.work_id == deferred.work_id)
+        {
+            return if existing.round == deferred.round
                 && existing.subject == deferred.subject
                 && existing.reference == deferred.reference
-        }) {
-            return Ok(());
+            {
+                Ok(())
+            } else {
+                Err("Sumeragi v2 work ID claimed conflicting merge-sidecar deferrals".to_owned())
+            };
         }
         if self.merge_sidecar_deferrals.len() >= self.max_merge_sidecar_deferrals {
             return Err("Sumeragi v2 merge-sidecar deferral queue is full".to_owned());
@@ -743,6 +770,10 @@ impl ProductionV2Services {
                 }
                 V2IoCompletion::Applied(completion) => {
                     let _ = executor.complete_application(completion, self)?;
+                }
+                V2IoCompletion::ApplyDeferred { work_id, reference } => {
+                    let _ =
+                        executor.defer_application_for_merge_sidecar(work_id, &reference, self)?;
                 }
                 V2IoCompletion::CertifiedResponse {
                     recipient,
@@ -1114,13 +1145,15 @@ impl V2EffectServices for ProductionV2Services {
         self.io()?.enqueue(V2IoCommand::Validate(task))
     }
 
-    fn validation_deferred_for_merge_sidecar(
+    fn work_deferred_for_merge_sidecar(
         &mut self,
+        work_id: EffectWorkId,
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
         reference: &CertifiedMergeLedgerReference,
     ) -> Result<(), Self::Error> {
-        self.requeue_merge_sidecar_deferral(DeferredMergeSidecarValidation {
+        self.requeue_merge_sidecar_deferral(DeferredMergeSidecarWork {
+            work_id,
             round,
             subject,
             reference: reference.clone(),
@@ -1412,19 +1445,29 @@ mod tests {
             payload_hash: Hash::new(b"merge carrier payload"),
         };
         let reference = merge_sidecar_reference(b"merge sidecar");
+        let work_id = EffectWorkId::for_test(7);
 
         service
-            .validation_deferred_for_merge_sidecar(round, subject, &reference)
+            .work_deferred_for_merge_sidecar(work_id, round, subject, &reference)
             .expect("retain exact merge-sidecar deferral");
         service
-            .validation_deferred_for_merge_sidecar(round, subject, &reference)
+            .work_deferred_for_merge_sidecar(work_id, round, subject, &reference)
             .expect("exact retransmission is idempotent");
+        let mut conflicting = reference.clone();
+        conflicting.encoded_len += 1;
+        assert!(
+            service
+                .work_deferred_for_merge_sidecar(work_id, round, subject, &conflicting)
+                .is_err(),
+            "one work ID cannot claim conflicting reference metadata"
+        );
 
         assert_eq!(service.merge_sidecar_deferrals.len(), 1);
         let deferred = service
             .take_merge_sidecar_deferral()
             .expect("retained merge-sidecar deferral");
         assert_eq!(deferred.round(), round);
+        assert_eq!(deferred.work_id(), work_id);
         assert_eq!(deferred.subject(), subject);
         assert_eq!(deferred.reference(), &reference);
         assert!(service.take_merge_sidecar_deferral().is_none());
@@ -1452,12 +1495,22 @@ mod tests {
         let second_reference = merge_sidecar_reference(b"second merge sidecar");
 
         service
-            .validation_deferred_for_merge_sidecar(round, first_subject, &first_reference)
+            .work_deferred_for_merge_sidecar(
+                EffectWorkId::for_test(1),
+                round,
+                first_subject,
+                &first_reference,
+            )
             .expect("fill bounded deferral queue");
         assert_eq!(service.merge_sidecar_deferrals.len(), 1);
         assert!(
             service
-                .validation_deferred_for_merge_sidecar(round, second_subject, &second_reference,)
+                .work_deferred_for_merge_sidecar(
+                    EffectWorkId::for_test(2),
+                    round,
+                    second_subject,
+                    &second_reference,
+                )
                 .is_err(),
             "a different validation cannot displace the retained exact request"
         );

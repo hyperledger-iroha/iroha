@@ -25617,17 +25617,22 @@ mod tests {
         let manifest: Value = json::from_slice(&manifest_bytes)
             .unwrap_or_else(|err| panic!("failed to parse {}: {err}", manifest_path.display()));
         let names = ["ivm_transfer"];
+        let fixtures = manifest
+            .get("fixtures")
+            .and_then(Value::as_array)
+            .expect("norito fixture manifest fixtures array");
 
         for name in names {
-            let fixture = manifest
-                .get("fixtures")
-                .and_then(Value::as_array)
-                .and_then(|fixtures| {
-                    fixtures
-                        .iter()
-                        .find(|fixture| fixture.get("name").and_then(Value::as_str) == Some(name))
-                })
-                .unwrap_or_else(|| panic!("fixture {name} missing from norito fixture manifest"));
+            let matches: Vec<_> = fixtures
+                .iter()
+                .filter(|fixture| fixture.get("name").and_then(Value::as_str) == Some(name))
+                .collect();
+            assert_eq!(
+                matches.len(),
+                1,
+                "fixture {name} must occur exactly once in norito fixture manifest"
+            );
+            let fixture = matches[0];
             let signed_base64 = fixture
                 .get("signed_base64")
                 .and_then(Value::as_str)
@@ -25635,9 +25640,217 @@ mod tests {
             let signed_bytes = BASE64
                 .decode(signed_base64)
                 .unwrap_or_else(|err| panic!("failed to decode {name} signed payload: {err}"));
+            assert_eq!(
+                BASE64.encode(&signed_bytes),
+                signed_base64,
+                "fixture {name} signed_base64 must be canonical"
+            );
             decode_signed_transaction(&signed_bytes)
                 .unwrap_or_else(|err| panic!("failed to decode fixture {name}: {err}"));
         }
+    }
+
+    #[test]
+    fn external_transfer_payload_builder_and_finalizer_match_native_transaction_model() {
+        let authority_key =
+            KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Ed25519).expect("authority key");
+        let destination_key =
+            KeyPair::try_from_seed(vec![0x42; 32], Algorithm::Ed25519).expect("destination key");
+        let authority = AccountId::new(authority_key.public_key().clone());
+        let destination = AccountId::new(destination_key.public_key().clone());
+        let authority_i105 = AccountAddress::from_account_id(&authority)
+            .expect("authority address")
+            .to_i105_for_discriminant(0x02F1)
+            .expect("authority I105");
+        let destination_i105 = AccountAddress::from_account_id(&destination)
+            .expect("destination address")
+            .to_i105_for_discriminant(0x02F1)
+            .expect("destination I105");
+        let definition: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("asset definition address");
+        let source = AssetId::new(definition, authority.clone()).canonical_literal();
+
+        let built = build_transfer_asset_payload(
+            "browser-native-parity".to_owned(),
+            authority_i105.clone(),
+            source,
+            "1.25".to_owned(),
+            destination_i105,
+            Some(r#"{"memo":"native","order":2}"#.to_owned()),
+            Some(1_700_000_000_000),
+            Some(5_000),
+            Some(42),
+        )
+        .expect("build external transfer payload");
+        assert!(!built.payload_bytes.is_empty());
+        assert_eq!(built.payload_hash.len(), Hash::LENGTH);
+
+        let builder = TransactionBuilder::decode_payload(built.payload_bytes.as_ref())
+            .expect("native payload builder must emit canonical bytes");
+        assert_eq!(builder.encode_payload(), built.payload_bytes.as_ref());
+        assert_eq!(
+            builder.payload_hash_bytes().as_slice(),
+            built.payload_hash.as_ref()
+        );
+
+        let signature =
+            Signature::try_new(authority_key.private_key(), built.payload_hash.as_ref())
+                .expect("external payload signature");
+        let (_, public_key_bytes) = authority_key
+            .public_key()
+            .try_to_bytes()
+            .expect("raw Ed25519 public key");
+        let finalized = finalize_signed_transaction(JsExternalTransactionSignature {
+            payload_bytes: Buffer::from(built.payload_bytes.as_ref().to_vec()),
+            payload_hash_hex: Some(hex::encode(built.payload_hash.as_ref())),
+            signature: Buffer::from(signature.payload().to_vec()),
+            public_key: Buffer::from(public_key_bytes.to_vec()),
+            authority: Some(authority_i105),
+        })
+        .expect("finalize externally signed transaction");
+
+        let transaction = decode_signed_transaction(finalized.signed_transaction.as_ref())
+            .expect("finalized versioned transaction must decode");
+        transaction
+            .verify_signature()
+            .expect("finalized transaction signature must verify");
+        assert_eq!(transaction.authority(), &authority);
+        assert_eq!(
+            finalized.signed_transaction.as_ref(),
+            <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(
+                &transaction
+            )
+        );
+        assert_eq!(finalized.hash.as_ref(), transaction.hash().as_ref());
+    }
+
+    #[test]
+    fn external_transfer_builder_and_finalizer_reject_adversarial_inputs() {
+        let authority_key =
+            KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519).expect("authority key");
+        let other_key =
+            KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519).expect("other key");
+        let authority = AccountId::new(authority_key.public_key().clone());
+        let other = AccountId::new(other_key.public_key().clone());
+        let authority_i105 = AccountAddress::from_account_id(&authority)
+            .expect("authority address")
+            .to_i105_for_discriminant(0x02F1)
+            .expect("authority I105");
+        let other_i105 = AccountAddress::from_account_id(&other)
+            .expect("other address")
+            .to_i105_for_discriminant(0x02F1)
+            .expect("other I105");
+        let wrong_network_i105 = AccountAddress::from_account_id(&other)
+            .expect("other address")
+            .to_i105_for_discriminant(42)
+            .expect("other-network I105");
+        let definition: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("asset definition address");
+        let source = AssetId::new(definition.clone(), authority.clone()).canonical_literal();
+        let other_source = AssetId::new(definition, other.clone()).canonical_literal();
+
+        assert!(
+            build_transfer_asset_payload(
+                "browser-native-adversarial".to_owned(),
+                authority_i105.clone(),
+                source.clone(),
+                "1".to_owned(),
+                wrong_network_i105,
+                None,
+                Some(1),
+                None,
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            build_transfer_asset_payload(
+                "browser-native-adversarial".to_owned(),
+                authority_i105.clone(),
+                other_source,
+                "1".to_owned(),
+                other_i105.clone(),
+                None,
+                Some(1),
+                None,
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            build_transfer_asset_payload(
+                "browser-native-adversarial".to_owned(),
+                authority_i105.clone(),
+                source.clone(),
+                "0".to_owned(),
+                other_i105.clone(),
+                None,
+                Some(1),
+                None,
+                None,
+            )
+            .is_err()
+        );
+
+        let built = build_transfer_asset_payload(
+            "browser-native-adversarial".to_owned(),
+            authority_i105.clone(),
+            source,
+            "1".to_owned(),
+            other_i105,
+            None,
+            Some(1),
+            None,
+            None,
+        )
+        .expect("valid adversarial baseline payload");
+        let signature =
+            Signature::try_new(authority_key.private_key(), built.payload_hash.as_ref())
+                .expect("baseline signature");
+        let (_, public_key_bytes) = authority_key
+            .public_key()
+            .try_to_bytes()
+            .expect("authority public key bytes");
+        let (_, other_public_key_bytes) = other_key
+            .public_key()
+            .try_to_bytes()
+            .expect("other public key bytes");
+        let valid_input = || JsExternalTransactionSignature {
+            payload_bytes: Buffer::from(built.payload_bytes.as_ref().to_vec()),
+            payload_hash_hex: Some(hex::encode(built.payload_hash.as_ref())),
+            signature: Buffer::from(signature.payload().to_vec()),
+            public_key: Buffer::from(public_key_bytes.to_vec()),
+            authority: Some(authority_i105.clone()),
+        };
+
+        let mut mismatched_hash = valid_input();
+        mismatched_hash.payload_hash_hex = Some("00".repeat(Hash::LENGTH));
+        assert!(finalize_signed_transaction(mismatched_hash).is_err());
+
+        let mut wrong_public_key = valid_input();
+        wrong_public_key.public_key = Buffer::from(other_public_key_bytes.to_vec());
+        assert!(finalize_signed_transaction(wrong_public_key).is_err());
+
+        let mut bad_signature = valid_input();
+        bad_signature.signature[0] ^= 0x80;
+        assert!(finalize_signed_transaction(bad_signature).is_err());
+
+        let mut overlong_payload = valid_input();
+        let canonical = overlong_payload.payload_bytes.as_ref();
+        assert!(
+            canonical[0] < 0x80,
+            "fixture begins with a one-byte field length"
+        );
+        let mut overlong = Vec::with_capacity(canonical.len() + 1);
+        overlong.extend_from_slice(&[canonical[0] | 0x80, 0]);
+        overlong.extend_from_slice(&canonical[1..]);
+        overlong_payload.payload_bytes = Buffer::from(overlong);
+        overlong_payload.payload_hash_hex = None;
+        assert!(finalize_signed_transaction(overlong_payload).is_err());
+
+        assert!(finalize_signed_transaction(valid_input()).is_ok());
     }
 
     #[test]

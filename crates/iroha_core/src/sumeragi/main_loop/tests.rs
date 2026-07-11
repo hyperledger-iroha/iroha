@@ -8208,6 +8208,7 @@ async fn merge_committee_signatures_persist_pending_globally_ordered_entry() {
     let proposed_block = proposed.block.clone();
     let proposed_block_hash = proposed_block.hash();
     let missing_hash = reference.entry_hash;
+    let reference_digest = crate::merge_sidecar::certified_merge_reference_digest(reference);
     actor
         .kura
         .remove_pending_certified_merge_entry(missing_hash)
@@ -8245,6 +8246,7 @@ async fn merge_committee_signatures_persist_pending_globally_ordered_entry() {
     let requester = actor.common_config.peer.id().clone();
     let (deferred, retry) = actor.subsystems.merge.sidecars.finish_completed(
         missing_hash,
+        reference_digest,
         true,
         &requester,
         Instant::now(),

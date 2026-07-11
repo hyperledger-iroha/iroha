@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.tx;
 
+import java.util.Arrays;
 import java.util.Objects;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.norito.NoritoException;
@@ -22,15 +23,42 @@ public final class SignedTransactionHasher {
     return toHex(hash(transaction));
   }
 
-  /** Computes the canonical hash for pre-encoded signed transaction bytes. */
-  public static byte[] hashCanonicalBytes(final byte[] canonicalSignedTransaction) {
-    Objects.requireNonNull(canonicalSignedTransaction, "canonicalSignedTransaction");
-    return IrohaHash.prehash(canonicalSignedTransaction);
+  /**
+   * Computes the canonical hash for exact canonical bare {@code SignedTransaction} bytes.
+   *
+   * <p>The input must not include the version byte or an entrypoint wrapper. It is decoded and
+   * re-encoded before hashing so truncated, non-canonical, versioned, and double-wrapped inputs
+   * fail closed.
+   */
+  public static byte[] hashCanonicalBytes(final byte[] canonicalBareSignedTransaction) {
+    return IrohaHash.prehash(canonicalBytesFromBare(canonicalBareSignedTransaction));
   }
 
-  /** Computes the canonical hash hex for pre-encoded signed transaction bytes. */
-  public static String hashCanonicalHex(final byte[] canonicalSignedTransaction) {
-    return toHex(hashCanonicalBytes(canonicalSignedTransaction));
+  /** Computes the canonical hash hex for exact canonical bare signed transaction bytes. */
+  public static String hashCanonicalHex(final byte[] canonicalBareSignedTransaction) {
+    return toHex(hashCanonicalBytes(canonicalBareSignedTransaction));
+  }
+
+  /**
+   * Validates and wraps exact canonical bare {@code SignedTransaction} bytes as
+   * {@code TransactionEntrypoint::External}.
+   */
+  public static byte[] canonicalBytesFromBare(final byte[] canonicalBareSignedTransaction) {
+    Objects.requireNonNull(canonicalBareSignedTransaction, "canonicalBareSignedTransaction");
+    final byte[] snapshot = Arrays.copyOf(
+        canonicalBareSignedTransaction, canonicalBareSignedTransaction.length);
+    try {
+      final SignedTransaction decoded = SignedTransactionEncoder.decode(snapshot);
+      final byte[] reencoded = SignedTransactionEncoder.encode(decoded);
+      if (!Arrays.equals(snapshot, reencoded)) {
+        throw new IllegalArgumentException(
+            "signed transaction bytes are not the exact canonical bare encoding");
+      }
+      return wrapExternalEntrypoint(snapshot);
+    } catch (NoritoException ex) {
+      throw new IllegalArgumentException(
+          "signed transaction bytes are not a valid canonical bare encoding", ex);
+    }
   }
 
   /**
@@ -38,22 +66,49 @@ public final class SignedTransactionHasher {
    *
    * <p>Iroha hashes the {@code TransactionEntrypoint::External} enum wrapper around the signed
    * transaction, not the signed transaction directly. The encoding is:
-   * {@code u32_LE(0) + u64_LE(payload.length) + payload}.
+   * {@code u32_LE(0) + COMPACT_LEN(payload.length) + payload}.
    */
   public static byte[] canonicalBytes(final SignedTransaction transaction) {
     try {
       final byte[] encoded = SignedTransactionEncoder.encode(transaction);
-      final byte[] result = new byte[12 + encoded.length];
-      // u32 LE discriminant = 0 (External variant) — result[0..3] already zeroed
-      final long length = encoded.length;
-      for (int i = 0; i < 8; i++) {
-        result[4 + i] = (byte) (length >>> (i * 8));
-      }
-      System.arraycopy(encoded, 0, result, 12, encoded.length);
-      return result;
-    } catch (NoritoException ex) {
+      return canonicalBytesFromBare(encoded);
+    } catch (NoritoException | IllegalArgumentException ex) {
       throw new IllegalStateException("Failed to encode signed transaction", ex);
     }
+  }
+
+  private static byte[] wrapExternalEntrypoint(final byte[] canonicalBareSignedTransaction) {
+    final byte[] lengthPrefix = encodeCompactLength(canonicalBareSignedTransaction.length);
+    final byte[] result =
+        new byte[4 + lengthPrefix.length + canonicalBareSignedTransaction.length];
+    // u32 LE discriminant = 0 (External variant) — result[0..3] already zeroed
+    System.arraycopy(lengthPrefix, 0, result, 4, lengthPrefix.length);
+    System.arraycopy(
+        canonicalBareSignedTransaction,
+        0,
+        result,
+        4 + lengthPrefix.length,
+        canonicalBareSignedTransaction.length);
+    return result;
+  }
+
+  /** Encodes a canonical Norito {@code COMPACT_LEN} value using minimal unsigned LEB128. */
+  static byte[] encodeCompactLength(final long value) {
+    if (value < 0) {
+      throw new IllegalArgumentException("compact length must be non-negative");
+    }
+    final byte[] output = new byte[10];
+    long remaining = value;
+    int count = 0;
+    do {
+      int next = (int) (remaining & 0x7F);
+      remaining >>>= 7;
+      if (remaining != 0) {
+        next |= 0x80;
+      }
+      output[count++] = (byte) next;
+    } while (remaining != 0);
+    return java.util.Arrays.copyOf(output, count);
   }
 
   private static String toHex(final byte[] data) {

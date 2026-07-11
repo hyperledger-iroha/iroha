@@ -438,6 +438,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertEqual(Data(registerAttestation.norito.dropFirst()), registerAttestation.signedTransaction)
         XCTAssertEqual(registerAttestation.transactionHash.count, 32)
         XCTAssertNil(registerAttestation.payload)
+        XCTAssertCanonicalExternalEntrypointHash(registerAttestation)
 
         let registerInstruction = try Self.parseSingleOfflineNoteV2Instruction(registerAttestation)
         XCTAssertEqual(registerInstruction.wireName, OfflineNoteV2TypeNames.registerDeviceAttestationInstruction)

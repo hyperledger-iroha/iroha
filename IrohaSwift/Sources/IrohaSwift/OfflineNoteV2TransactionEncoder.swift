@@ -195,7 +195,7 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
     }
 
     private static func encodeTransactionEntrypoint(_ signedTransaction: Data) -> Data {
-        var entrypoint = OfflineNoritoWriter()
+        var entrypoint = OfflineCompactNoritoWriter()
         entrypoint.writeUInt32LE(0)
         entrypoint.writeField(signedTransaction)
         return entrypoint.data

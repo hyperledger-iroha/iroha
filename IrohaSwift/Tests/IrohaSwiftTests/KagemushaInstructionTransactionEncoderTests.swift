@@ -29,6 +29,7 @@ final class KagemushaInstructionTransactionEncoderTests: XCTestCase {
         XCTAssertEqual(envelope.norito.first, 1)
         XCTAssertFalse(envelope.signedTransaction.isEmpty)
         XCTAssertFalse(envelope.transactionHash.isEmpty)
+        XCTAssertCanonicalExternalEntrypointHash(envelope)
 
         let parsed = try Self.parseSingleInstructionEnvelope(envelope)
         XCTAssertEqual(parsed.chainId, "00000000-0000-0000-0000-000000000000")

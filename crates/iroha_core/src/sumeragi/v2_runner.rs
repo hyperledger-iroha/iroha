@@ -251,6 +251,12 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             recovered_applied_height,
         )?;
         executor.consume_effects(startup_effects, &mut services)?;
+        let startup_directive = executor.local_proposal_directive()?;
+        lane_work.retain_merge_sidecars_for_global_view(
+            startup_directive.tag().view(),
+            startup_directive.locked_subject(),
+            startup_directive.decided_subject(),
+        )?;
         dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
         ingress_ready.store(true, Ordering::Release);
 
@@ -365,7 +371,13 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
 
             advance_executor(&mut executor, &mut services, control_queue_capacity)?;
-            if let Some(locked) = executor.local_proposal_directive()?.locked_subject() {
+            let directive = executor.local_proposal_directive()?;
+            lane_work.retain_merge_sidecars_for_global_view(
+                directive.tag().view(),
+                directive.locked_subject(),
+                directive.decided_subject(),
+            )?;
+            if let Some(locked) = directive.locked_subject() {
                 let newly_locked = lane_work.mark_global_body_locked(locked.block_hash);
                 if newly_locked && local_validator.is_some() {
                     services
@@ -400,6 +412,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             if executor.ready_to_finish() {
                 close_ingress_for_rollover(&ingress_ready);
                 lane_work.persist_anchored_sessions()?;
+                lane_work.prune_finalized_merge_sidecars()?;
                 dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
                 let (runtime, receipt, artifact) = executor.into_finalized_parts()?;
                 let finalized = runtime.into_driver().finish_height(&receipt, &artifact)?;
@@ -557,7 +570,6 @@ fn schedule_local_proposal(
         let attachments = candidate_attachments(
             context,
             state,
-            kura,
             npos_config,
             parent.as_ref(),
             directive.tag().view(),
@@ -1015,14 +1027,11 @@ fn candidate_limits(
 fn candidate_attachments(
     context: &wire::HeightContext,
     state: &State,
-    kura: &Kura,
     npos_config: &SumeragiNpos,
     parent: &SignedBlock,
     view: wire::View,
     time_source: iroha_primitives::time::TimeSource,
 ) -> Result<CandidateAttachments, V2RunnerError> {
-    kura.prune_pending_certified_merge_entries_not_bound_to(context.height, parent.hash(), view)
-        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
     let round_header = BlockBuilder::new_with_time_source(Vec::new(), time_source)
         .chain(view, Some(parent))
         .carrier_context_header();
@@ -1127,13 +1136,30 @@ fn drive_merge_sidecar_recovery(
     services: &mut ProductionV2Services,
     lane_work: &mut V2LaneWorkAdapter,
 ) -> Result<(), V2RunnerError> {
+    lane_work.retain_deferred_merge_sidecars(&executor.deferred_merge_sidecar_blocks())?;
     while let Some(deferred) = services.take_merge_sidecar_deferral() {
         let entry_hash = deferred.reference().entry_hash;
-        let disposition = lane_work.defer_missing_merge_sidecar(
+        if !executor.retains_deferred_merge_sidecar(
+            deferred.work_id(),
             deferred.round(),
             deferred.subject(),
-            deferred.reference().clone(),
-        )?;
+            entry_hash,
+        ) {
+            continue;
+        }
+        let disposition = if executor.deferred_merge_sidecar_is_decided(deferred.work_id()) {
+            lane_work.defer_missing_decided_merge_sidecar(
+                deferred.round(),
+                deferred.subject(),
+                deferred.reference().clone(),
+            )?
+        } else {
+            lane_work.defer_missing_merge_sidecar(
+                deferred.round(),
+                deferred.subject(),
+                deferred.reference().clone(),
+            )?
+        };
         match disposition {
             MergeSidecarDeferralDisposition::Fetching
             | MergeSidecarDeferralDisposition::Available => {}
@@ -1144,7 +1170,11 @@ fn drive_merge_sidecar_recovery(
                 break;
             }
             MergeSidecarDeferralDisposition::Rejected(reason) => {
-                let _ = executor.reject_deferred_merge_sidecar(entry_hash, reason, services)?;
+                let _ = executor.reject_deferred_merge_sidecar_work(
+                    deferred.work_id(),
+                    reason,
+                    services,
+                )?;
             }
         }
     }
@@ -1158,6 +1188,7 @@ fn drive_merge_sidecar_recovery(
             services,
         )?;
     }
+    lane_work.retain_deferred_merge_sidecars(&executor.deferred_merge_sidecar_blocks())?;
     Ok(())
 }
 

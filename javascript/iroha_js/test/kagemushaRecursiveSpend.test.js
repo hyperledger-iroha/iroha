@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { ed25519 } from "@noble/curves/ed25519";
 
 import { AccountAddress } from "../src/address.js";
 import {
@@ -1403,7 +1404,8 @@ function recursiveSpendVerifierRecord() {
 }
 
 function recursiveSpendRecipient() {
-  return AccountAddress.fromAccount({ publicKey: Buffer.alloc(32, 0x44) }).toI105();
+  const publicKey = Buffer.from(ed25519.getPublicKey(Buffer.alloc(32, 0x44)));
+  return AccountAddress.fromAccount({ publicKey }).toI105();
 }
 
 test("Kagemusha recursive spend helpers reject empty request archives before native calls", () => {

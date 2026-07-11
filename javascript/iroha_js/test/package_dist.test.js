@@ -4,6 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { ed25519 } from "@noble/curves/ed25519";
 
 import {
   AccountAddress,
@@ -465,6 +466,9 @@ import {
 import { compileKotodamaProgram as compileDistKotodamaProgram } from "../dist/kotodamaCompiler/index.js";
 import { renderCanonicalAccountIdLiteralFromPublicKeyLiteral } from "../src/kotodamaCompiler/accountLiteral.js";
 import { compileKotodamaProgram as compileSrcKotodamaProgram } from "../src/kotodamaCompiler/index.js";
+
+const deterministicEd25519PublicKey = (seedByte) =>
+  Buffer.from(ed25519.getPublicKey(Buffer.alloc(32, seedByte)));
 
 const GENERIC_LINEAGE_FAMILY_ID = "kagemusha-recursive-spend-lineage-v1";
 const UNSUPPORTED_RECURSIVE_SPEND_PROOF_CIRCUIT_ID =
@@ -2504,10 +2508,7 @@ test("package dist entrypoint imports and emits halfwidth i105 literals", () => 
   assert.equal(typeof submitValidationFeeIvmProvedContractCall, "function");
   assert.equal(typeof validationFeePolicyHash, "function");
   assert.equal(typeof verifySignedValidationFeePolicy, "function");
-  const publicKey = Buffer.from(
-    "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
-    "hex",
-  );
+  const publicKey = deterministicEd25519PublicKey(0x20);
   const address = AccountAddress.fromAccount({ publicKey });
   const literal = address.toI105(0x02f1);
 
@@ -9100,7 +9101,7 @@ test("package dist SIS-with-hints production helpers reject dev fixture bytes", 
 
 test("package dist Vega production helpers reject dev fixture bytes", () => {
   const accountId = AccountAddress.fromAccount({
-    publicKey: Buffer.alloc(32, 0x10),
+    publicKey: deterministicEd25519PublicKey(0x10),
   }).toI105(0x02f1);
   const base = {
     issuerJson: { did: "did:example:issuer:boi", key: "issuer-key-1" },
@@ -9195,7 +9196,7 @@ test("package dist silent-threshold production helpers reject dev fixture bytes"
 
 test("package dist ZK-X.509 production helpers reject dev fixture bytes", () => {
   const accountId = AccountAddress.fromAccount({
-    publicKey: Buffer.alloc(32, 0x10),
+    publicKey: deterministicEd25519PublicKey(0x10),
   }).toI105(0x02f1);
   const base = {
     caRootJson: { root: "boi-root-ca", version: 1 },
@@ -9243,7 +9244,7 @@ test("package dist ZK-X.509 production helpers reject dev fixture bytes", () => 
 
 test("package dist zkAt production helpers reject dev fixture bytes", () => {
   const accountId = AccountAddress.fromAccount({
-    publicKey: Buffer.alloc(32, 0x10),
+    publicKey: deterministicEd25519PublicKey(0x10),
   }).toI105(0x02f1);
   const base = {
     policyJson: { threshold: 2, roles: ["ops", "risk", "treasury"] },
@@ -9348,7 +9349,7 @@ test("package dist privacy proof envelopes reject production metadata claims", (
 
 test("package dist privacy dev proof fixtures reject production metadata claims", () => {
   const accountId = AccountAddress.fromAccount({
-    publicKey: Buffer.alloc(32, 0x10),
+    publicKey: deterministicEd25519PublicKey(0x10),
   }).toI105(0x02f1);
   const anonymousPgcReceiverSet = buildAnonymousPgcReceiverSet({
     threshold: 1,
@@ -10832,6 +10833,36 @@ test("package declarations expose recursive compact key-package signatures", () 
     /recursiveCompact(?:KeyArtifactsArchive|VerifierKeysArchive)\?:\s*BinaryLike/u,
     "recursive compact key packages must not be optional",
   );
+});
+
+test("package Nexus browser export has an enforced browser-only dependency graph", () => {
+  const source = readFileSync(
+    new URL("../src/nexusApp.js", import.meta.url),
+    "utf8",
+  );
+  const dist = readFileSync(
+    new URL("../dist/nexusApp.js", import.meta.url),
+    "utf8",
+  );
+  const bundleGate = readFileSync(
+    new URL("../scripts/bundle-size-check.mjs", import.meta.url),
+    "utf8",
+  );
+  const browserRegression = readFileSync(
+    new URL("./nexusApp.browser.test.js", import.meta.url),
+    "utf8",
+  );
+
+  assert.equal(dist, source, "Nexus browser source and dist must remain exact");
+  assert.match(source, /import \{ Buffer \} from "buffer";/u);
+  assert.match(source, /from "\.\/crypto\.browser\.js";/u);
+  assert.match(source, /browserTransactionCodec/u);
+  assert.match(source, /class BrowserToriiPipelineClient/u);
+  assert.doesNotMatch(source, /from "(?:node:|\.\/(?:crypto|native|toriiClient)\.js)/u);
+  assert.match(bundleGate, /label: "nexusApp\.js \(browser\)"/u);
+  assert.match(bundleGate, /limitKb: 205/u);
+  assert.match(browserRegression, /globalThis\.Buffer = undefined/u);
+  assert.match(browserRegression, /defaults build, finalize, and submit/u);
 });
 
 test("package declarations expose Torii iterable string select projections", () => {

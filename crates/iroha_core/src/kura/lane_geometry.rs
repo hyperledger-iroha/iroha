@@ -42,11 +42,12 @@ use super::{
     create_dir_all_with_context, sync_dir,
 };
 
-const JOURNAL_VERSION: u8 = 3;
+const JOURNAL_VERSION: u8 = 4;
 const MARKER_VERSION: u8 = 1;
 const CHECKPOINT_VERSION: u8 = 2;
 const JOURNAL_FILE_NAME: &str = "lane_geometry_journal.norito";
 const JOURNAL_TEMP_FILE_NAME: &str = "lane_geometry_journal.norito.tmp";
+const JOURNAL_RESTORE_TEMP_FILE_NAME: &str = "lane_geometry_journal.norito.restore.tmp";
 const MARKER_FILE_NAME: &str = ".lane-incarnation.norito";
 const TRANSITION_DOMAIN: &[u8] = b"iroha:kura:lane-geometry-transition:v1\0";
 const CATALOG_DOMAIN: &[u8] = b"iroha:kura:lane-geometry-catalog:v1\0";
@@ -188,6 +189,7 @@ struct GeometryFileIdentity {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct LaneGeometryJournal {
     version: u8,
+    configured_catalog_hash: Option<Hash>,
     checkpoint: Option<LaneGeometrySnapshotCheckpoint>,
     pending_archive_gc: Vec<LaneGeometryPendingArchiveGc>,
     records: Vec<LaneGeometryIntent>,
@@ -197,6 +199,7 @@ impl Default for LaneGeometryJournal {
     fn default() -> Self {
         Self {
             version: JOURNAL_VERSION,
+            configured_catalog_hash: None,
             checkpoint: None,
             pending_archive_gc: Vec::new(),
             records: Vec::new(),
@@ -224,6 +227,156 @@ struct LaneIncarnationMarker {
 }
 
 impl Kura {
+    /// Authenticate the stable configured-catalog journal before Kura opens any
+    /// lane-derived storage path.
+    pub(super) fn preflight_configured_lane_catalog_baseline(
+        store_root: &Path,
+        attempted: Hash,
+    ) -> Result<()> {
+        let journal_path = store_root.join(JOURNAL_FILE_NAME);
+        let root_metadata = match fs::symlink_metadata(store_root) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(Error::IO(error, store_root.to_path_buf())),
+        };
+        if root_metadata.file_type().is_symlink() || !root_metadata.file_type().is_dir() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "Kura configured-catalog store root must be a non-symlink directory",
+                ),
+                store_root.to_path_buf(),
+            ));
+        }
+
+        let journal_metadata = match fs::symlink_metadata(&journal_path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(Error::IO(error, journal_path)),
+        };
+        if journal_metadata.file_type().is_symlink() || !journal_metadata.file_type().is_file() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "configured-catalog journal is a symlink or has the wrong file type",
+                ),
+                journal_path,
+            ));
+        }
+        if journal_metadata.len() > MAX_GEOMETRY_JOURNAL_BYTES {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "lane geometry journal exceeds the encoded byte limit",
+                ),
+                journal_path,
+            ));
+        }
+
+        let expected_identity = geometry_file_identity(&journal_metadata);
+        let mut file =
+            File::open(&journal_path).map_err(|error| Error::IO(error, journal_path.clone()))?;
+        let opened_metadata = file
+            .metadata()
+            .map_err(|error| Error::IO(error, journal_path.clone()))?;
+        if !opened_metadata.is_file()
+            || geometry_file_identity(&opened_metadata) != expected_identity
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "opened configured-catalog journal does not match its directory entry",
+                ),
+                journal_path,
+            ));
+        }
+        let capacity = usize::try_from(journal_metadata.len())?;
+        let mut bytes = Vec::with_capacity(capacity);
+        file.read_to_end(&mut bytes)
+            .map_err(|error| Error::IO(error, journal_path.clone()))?;
+        let final_metadata = fs::symlink_metadata(&journal_path)
+            .map_err(|error| Error::IO(error, journal_path.clone()))?;
+        if final_metadata.file_type().is_symlink()
+            || !final_metadata.file_type().is_file()
+            || geometry_file_identity(&final_metadata) != expected_identity
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "configured-catalog journal changed during startup preflight",
+                ),
+                journal_path,
+            ));
+        }
+
+        let journal = decode_exact::<LaneGeometryJournal>(&bytes).map_err(Error::NoritoFrame)?;
+        if journal.version != JOURNAL_VERSION {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "unsupported lane geometry journal version {}",
+                        journal.version
+                    ),
+                ),
+                journal_path,
+            ));
+        }
+        match journal.configured_catalog_hash {
+            Some(expected) if expected == attempted => Ok(()),
+            Some(expected) => Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "configured lane catalog baseline mismatch: expected {expected}, attempted {attempted}"
+                    ),
+                ),
+                journal_path,
+            )),
+            None => Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "existing lane geometry journal has no configured lane catalog baseline",
+                ),
+                journal_path,
+            )),
+        }
+    }
+
+    /// Verify the exact process-configured lane-catalog baseline.
+    ///
+    /// This commitment is independent of physical geometry because display-only
+    /// catalog fields may not change any path or incarnation commitment.
+    pub(crate) fn verify_configured_lane_catalog_baseline(&self, attempted: Hash) -> Result<()> {
+        if self.store_root.as_os_str().is_empty() {
+            return Ok(());
+        }
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let journal = self.read_lane_geometry_journal()?;
+        match journal.configured_catalog_hash {
+            Some(expected) if expected == attempted => Ok(()),
+            Some(expected) => Err(self.geometry_error_owned(
+                ErrorKind::InvalidData,
+                format!(
+                    "configured lane catalog baseline mismatch: expected {expected}, attempted {attempted}"
+                ),
+            )),
+            None => Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "durable chain has no configured lane catalog baseline",
+            )),
+        }
+    }
+
+    /// Read the exact configured-catalog baseline, if it has been initialized.
+    pub(crate) fn configured_lane_catalog_baseline(&self) -> Result<Option<Hash>> {
+        if self.store_root.as_os_str().is_empty() {
+            return Ok(None);
+        }
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        Ok(self.read_lane_geometry_journal()?.configured_catalog_hash)
+    }
+
     /// Apply one lane geometry transition under a durable, replayable intent.
     ///
     /// The intent remains in the journal after publication so a snapshot that
@@ -334,6 +487,7 @@ impl Kura {
         authoritative: &LaneConfig,
         incarnations: &BTreeMap<LaneId, Hash>,
         activation_heights: &BTreeMap<LaneId, u64>,
+        configured_baseline: Option<Hash>,
     ) -> Result<()> {
         if self.store_root.as_os_str().is_empty() {
             return Ok(());
@@ -353,22 +507,98 @@ impl Kura {
         let fingerprint = geometry_catalog_fingerprint(&bindings);
         let mut journal = self.read_lane_geometry_journal()?;
         let _ = self.finish_pending_lane_geometry_gc_locked(&mut journal)?;
-        let Some(record) = journal
+        let journal_path = self.lane_geometry_journal_path();
+        let publication_temp = self.store_root.join(JOURNAL_TEMP_FILE_NAME);
+        let prior_journal_bytes = self.read_geometry_file_bytes(&journal_path)?;
+        let publication_temp_preexisted = self.validate_path_kind(&publication_temp, false)?;
+        if let Some(record) = journal
             .records
             .iter_mut()
             .rev()
             .find(|record| record.updated_catalog == fingerprint)
-        else {
-            return Ok(());
-        };
-        record.phase = LaneGeometryPhase::CatalogPublished;
-        self.write_lane_geometry_journal(&journal)
+        {
+            record.phase = LaneGeometryPhase::CatalogPublished;
+        }
+        if let Some(attempted) = configured_baseline {
+            match journal.configured_catalog_hash {
+                Some(expected) if expected == attempted => {}
+                None => {
+                    journal.configured_catalog_hash = Some(attempted);
+                }
+                Some(expected) => {
+                    return Err(self.geometry_error_owned(
+                        ErrorKind::InvalidData,
+                        format!(
+                            "configured lane catalog baseline mismatch: expected {expected}, attempted {attempted}"
+                        ),
+                    ));
+                }
+            }
+        }
+        let published_journal_bytes = journal.encode();
+        let publication_result = self.write_lane_geometry_journal(&journal);
+        #[cfg(test)]
+        let publication_result = publication_result.and_then(|()| {
+            if self
+                .fail_next_lane_geometry_publication_after_write
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(self.geometry_error(
+                    ErrorKind::Other,
+                    "lane geometry publication failed after journal replacement for test injection",
+                ));
+            }
+            Ok(())
+        });
+        if let Err(publication_error) = publication_result {
+            if let Err(restore_error) = self.restore_lane_geometry_journal_file(
+                prior_journal_bytes.as_deref(),
+                &published_journal_bytes,
+                publication_temp_preexisted,
+            ) {
+                return Err(Error::LaneGeometryPublicationRestoreFailed {
+                    publication: publication_error.to_string(),
+                    restoration: restore_error.to_string(),
+                });
+            }
+            return Err(publication_error);
+        }
+        Ok(())
     }
 
     #[cfg(test)]
     pub(crate) fn fail_next_lane_geometry_publication_for_test(&self) {
         self.fail_next_lane_geometry_publication
             .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_lane_geometry_publication_after_write_for_test(&self) {
+        self.fail_next_lane_geometry_publication_after_write
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn lane_geometry_journal_state_for_test(
+        &self,
+    ) -> Result<(Option<Hash>, Vec<&'static str>, bool)> {
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let journal = self.read_lane_geometry_journal()?;
+        let phases = journal
+            .records
+            .iter()
+            .map(|record| match record.phase {
+                LaneGeometryPhase::Intent => "intent",
+                LaneGeometryPhase::FilesApplied => "files_applied",
+                LaneGeometryPhase::CatalogPublished => "catalog_published",
+                LaneGeometryPhase::RolledBack => "rolled_back",
+            })
+            .collect();
+        let has_temp = self
+            .validate_path_kind(&self.store_root.join(JOURNAL_TEMP_FILE_NAME), false)?
+            || self
+                .validate_path_kind(&self.store_root.join(JOURNAL_RESTORE_TEMP_FILE_NAME), false)?;
+        Ok((journal.configured_catalog_hash, phases, has_temp))
     }
 
     /// Recover every retained geometry intent against a restored authoritative catalog.
@@ -3439,16 +3669,15 @@ impl Kura {
         Ok(())
     }
 
-    fn read_lane_geometry_journal(&self) -> Result<LaneGeometryJournal> {
-        let path = self.lane_geometry_journal_path();
-        if !self.validate_path_kind(&path, false)? {
-            return Ok(LaneGeometryJournal::default());
+    fn read_geometry_file_bytes(&self, path: &Path) -> Result<Option<Vec<u8>>> {
+        if !self.validate_path_kind(path, false)? {
+            return Ok(None);
         }
-        let mut file = File::open(&path).map_err(|error| Error::IO(error, path.clone()))?;
-        self.verify_open_geometry_file(&path, &file)?;
+        let mut file = File::open(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        self.verify_open_geometry_file(path, &file)?;
         let file_len = file
             .metadata()
-            .map_err(|error| Error::IO(error, path.clone()))?
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?
             .len();
         if file_len > MAX_GEOMETRY_JOURNAL_BYTES {
             return Err(Error::IO(
@@ -3456,14 +3685,22 @@ impl Kura {
                     ErrorKind::InvalidData,
                     "lane geometry journal exceeds the encoded byte limit",
                 ),
-                path,
+                path.to_path_buf(),
             ));
         }
         let capacity = usize::try_from(file_len)?;
         let mut bytes = Vec::with_capacity(capacity);
         file.read_to_end(&mut bytes)
-            .map_err(|error| Error::IO(error, path.clone()))?;
-        self.verify_open_geometry_file(&path, &file)?;
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        self.verify_open_geometry_file(path, &file)?;
+        Ok(Some(bytes))
+    }
+
+    fn read_lane_geometry_journal(&self) -> Result<LaneGeometryJournal> {
+        let path = self.lane_geometry_journal_path();
+        let Some(bytes) = self.read_geometry_file_bytes(&path)? else {
+            return Ok(LaneGeometryJournal::default());
+        };
         let journal = decode_exact::<LaneGeometryJournal>(&bytes).map_err(Error::NoritoFrame)?;
         if journal.version != JOURNAL_VERSION {
             return Err(Error::IO(
@@ -3479,6 +3716,63 @@ impl Kura {
         }
         self.validate_lane_geometry_journal(&journal)?;
         Ok(journal)
+    }
+
+    fn restore_lane_geometry_journal_file(
+        &self,
+        prior_bytes: Option<&[u8]>,
+        published_bytes: &[u8],
+        publication_temp_preexisted: bool,
+    ) -> Result<()> {
+        let path = self.lane_geometry_journal_path();
+        let current_bytes = self.read_geometry_file_bytes(&path)?;
+        match (prior_bytes, current_bytes.as_deref()) {
+            (None, None) => {}
+            (None, Some(current)) if current == published_bytes => {
+                fs::remove_file(&path).map_err(|error| Error::IO(error, path.clone()))?;
+                self.sync_geometry_parent(path.parent())?;
+            }
+            (None, Some(_)) => {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "refusing to remove an unexpected lane geometry journal while restoring prior absence",
+                ));
+            }
+            (Some(prior), Some(current)) if current == prior => {}
+            (Some(prior), Some(current)) if current == published_bytes => {
+                let restore_temp = self.store_root.join(JOURNAL_RESTORE_TEMP_FILE_NAME);
+                self.atomic_write_geometry_file(&path, &restore_temp, prior)?;
+            }
+            (Some(prior), None) => {
+                let restore_temp = self.store_root.join(JOURNAL_RESTORE_TEMP_FILE_NAME);
+                self.atomic_write_geometry_file(&path, &restore_temp, prior)?;
+            }
+            (Some(_), Some(_)) => {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "refusing to overwrite an unexpected lane geometry journal while restoring the exact prior value",
+                ));
+            }
+        }
+
+        if !publication_temp_preexisted {
+            let publication_temp = self.store_root.join(JOURNAL_TEMP_FILE_NAME);
+            if let Some(temp_bytes) = self.read_geometry_file_bytes(&publication_temp)? {
+                if temp_bytes != published_bytes {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "refusing to remove an unexpected lane geometry publication temp file",
+                        ),
+                        publication_temp,
+                    ));
+                }
+                fs::remove_file(&publication_temp)
+                    .map_err(|error| Error::IO(error, publication_temp.clone()))?;
+                self.sync_geometry_parent(publication_temp.parent())?;
+            }
+        }
+        Ok(())
     }
 
     fn validate_lane_geometry_journal(&self, journal: &LaneGeometryJournal) -> Result<()> {
@@ -3759,6 +4053,7 @@ impl Kura {
             let intent = &pending.intent;
             let standalone = LaneGeometryJournal {
                 version: JOURNAL_VERSION,
+                configured_catalog_hash: None,
                 checkpoint: None,
                 pending_archive_gc: Vec::new(),
                 records: vec![intent.clone()],
@@ -4254,6 +4549,7 @@ mod tests {
     use super::*;
     use crate::{
         block::BlockBuilder,
+        kura::BlockCount,
         lane_consensus::{
             CommittedLaneBlockSession, LaneBlockVoteV1, aggregate_lane_block_votes_to_qc,
         },
@@ -4370,6 +4666,7 @@ mod tests {
             &extended,
             &extended_incarnations,
             &extended_activations,
+            None,
         )
         .expect("publish elastic lane catalog");
         let lane_one_blocks = extended
@@ -4393,6 +4690,7 @@ mod tests {
             &initial,
             &initial_incarnations,
             &initial_activations,
+            None,
         )
         .expect("publish retired catalog");
         let journal = kura.read_lane_geometry_journal().expect("geometry journal");
@@ -5596,6 +5894,7 @@ mod tests {
             &fixture.extended,
             &recreated_incarnations,
             &recreated_activations,
+            None,
         )
         .expect("publish recreated lane");
 
@@ -6038,6 +6337,7 @@ mod tests {
             &fixture.extended,
             &recreated_incarnations,
             &recreated_activations,
+            None,
         )
         .expect("publish recreated lane");
         let recreated_blocks = fixture
@@ -6064,6 +6364,7 @@ mod tests {
             &fixture.initial,
             &fixture.initial_incarnations,
             &fixture.initial_activations,
+            None,
         )
         .expect("publish second retirement");
 

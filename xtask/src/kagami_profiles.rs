@@ -20,6 +20,7 @@ use iroha_data_model::{
     transaction::Executable,
 };
 use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
+use iroha_primitives::addr::{SocketAddr, SocketAddrV4};
 use norito::{derive::JsonDeserialize, json};
 
 use crate::workspace_root;
@@ -534,6 +535,16 @@ allow_tool_prefixes = ["iroha."]
     };
     let max_payload_bytes =
         iroha_config::parameters::defaults::sumeragi::V2_BLOCK_MAX_PAYLOAD_BYTES.get();
+    let p2p_port = node
+        .address
+        .rsplit_once(':')
+        .and_then(|(_, port)| port.parse::<u16>().ok())
+        .expect("generated peer material must contain a valid IPv4 port");
+    let network_address =
+        SocketAddr::Ipv4(SocketAddrV4::from(([0, 0, 0, 0], p2p_port))).to_literal();
+    let network_public_address =
+        SocketAddr::Ipv4(SocketAddrV4::from(([127, 0, 0, 1], p2p_port))).to_literal();
+    let torii_address = SocketAddr::Ipv4(SocketAddrV4::from(([0, 0, 0, 0], 8080))).to_literal();
     format!(
         r#"# Sample config for {slug} (generated via cargo xtask kagami-profiles)
 chain = "{chain}"
@@ -564,11 +575,11 @@ enabled = true
 use_stake_snapshot_roster = true
 
 [network]
-address = "0.0.0.0:{p2p}"
-public_address = "127.0.0.1:{p2p}"
+address = "{network_address}"
+public_address = "{network_public_address}"
 
 [torii]
-address = "0.0.0.0:8080"
+address = "{torii_address}"
 max_content_len = {torii_max_content_len}
 {taira_mcp_overrides}
 
@@ -595,7 +606,9 @@ public_key = "{genesis_pk}"
         trusted_peers_pop = trusted_peers_pop,
         max_transactions = max_transactions,
         max_payload_bytes = max_payload_bytes,
-        p2p = node.address.split(':').next_back().unwrap_or("1337"),
+        network_address = network_address,
+        network_public_address = network_public_address,
+        torii_address = torii_address,
         torii_max_content_len = torii_max_content_len,
         sorafs_quota_overrides = sorafs_quota_overrides,
         sorafs_site_bindings = sorafs_site_bindings,
@@ -969,6 +982,38 @@ mod tests {
             assert!(
                 rendered.contains(&expected),
                 "profile {} should pin the Torii body-cap default explicitly",
+                profile.slug
+            );
+        }
+    }
+
+    #[test]
+    fn all_profile_configs_use_canonical_socket_literals() {
+        let expected_listen =
+            SocketAddr::Ipv4(SocketAddrV4::from(([0, 0, 0, 0], 1337))).to_literal();
+        let expected_public =
+            SocketAddr::Ipv4(SocketAddrV4::from(([127, 0, 0, 1], 1337))).to_literal();
+        let expected_torii =
+            SocketAddr::Ipv4(SocketAddrV4::from(([0, 0, 0, 0], 8080))).to_literal();
+        for profile in PROFILES {
+            let peers = build_peers(profile).expect("build deterministic peers");
+            let seed = format!("config-{}-address-genesis", profile.slug);
+            let genesis_key = deterministic_keypair(&seed, Algorithm::Ed25519)
+                .expect("derive deterministic genesis key");
+            let rendered = render_config(profile, &peers, genesis_key.public_key());
+            assert!(
+                rendered.contains(&format!("address = \"{expected_listen}\"")),
+                "profile {} must render the canonical network listen literal",
+                profile.slug
+            );
+            assert!(
+                rendered.contains(&format!("public_address = \"{expected_public}\"")),
+                "profile {} must render the canonical advertised network literal",
+                profile.slug
+            );
+            assert!(
+                rendered.contains(&format!("address = \"{expected_torii}\"")),
+                "profile {} must render the canonical Torii listen literal",
                 profile.slug
             );
         }

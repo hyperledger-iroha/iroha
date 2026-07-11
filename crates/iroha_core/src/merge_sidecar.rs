@@ -7,7 +7,7 @@
 //! entry may be handed to Kura's atomic pending-sidecar store.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fs::{self, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -44,7 +44,10 @@ const MAX_INBOUND_SESSIONS: usize = 32;
 const MAX_INBOUND_SESSIONS_PER_PEER: usize = 4;
 const MAX_INBOUND_ASSEMBLY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_INBOUND_ASSEMBLY_BYTES_PER_PEER: usize = 32 * 1024 * 1024;
+const RESERVED_DECIDED_INBOUND_SESSIONS: usize = 1;
+const RESERVED_DECIDED_INBOUND_BYTES: usize = MAX_MERGE_LEDGER_ENTRY_BYTES;
 const MAX_DEFERRED_BLOCKS: usize = 128;
+const RESERVED_DECIDED_DEFERRED_BLOCKS: usize = 1;
 const MAX_FUTURE_BLOCK_DISTANCE: u64 = 64;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -52,7 +55,6 @@ const MAX_OUTBOUND_SESSIONS: usize = 8;
 const MAX_OUTBOUND_SESSIONS_PER_PEER: usize = 2;
 const MAX_OUTBOUND_BYTES: usize = 32 * 1024 * 1024;
 const MAX_OUTBOUND_BYTES_PER_PEER: usize = 16 * 1024 * 1024;
-const OUTBOUND_SESSION_TTL: Duration = Duration::from_secs(30);
 const MAX_SERVER_REQUEST_GATES: usize = 64;
 const MAX_SERVER_REQUEST_GATES_PER_PEER: usize = 4;
 const SERVER_REQUEST_GATE_TTL: Duration = Duration::from_secs(10);
@@ -493,9 +495,6 @@ pub enum MergeSidecarError {
     /// Deferred block is stale or implausibly far ahead of local state.
     #[error("certified merge-sidecar deferred carrier height is stale or too far ahead")]
     InvalidCarrierHeight,
-    /// Two references claimed the same entry hash with different metadata.
-    #[error("conflicting compact references for one certified merge-sidecar hash")]
-    ConflictingReference,
     /// Candidate announcement did not come from the exact current round leader.
     #[error("merge candidate announcement/request is not bound to the exact round leader")]
     UnexpectedLeader,
@@ -545,12 +544,21 @@ struct RequestAttempt {
     id: Hash,
     holder: PeerId,
     last_progress_at: Instant,
+    previous_holder_cursor: usize,
+    previous_attempts: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InboundPriority {
+    Ordinary,
+    Decided,
 }
 
 #[derive(Debug)]
 struct InboundAssembly {
     reference: CertifiedMergeLedgerReference,
     requester: PeerId,
+    priority: InboundPriority,
     holders: Vec<PeerId>,
     holder_cursor: usize,
     current: Option<RequestAttempt>,
@@ -561,12 +569,13 @@ struct InboundAssembly {
     complete_pending_validation: bool,
 }
 
+type InboundSidecarKey = (HashOf<MergeLedgerEntry>, Hash);
+
 #[derive(Debug)]
 struct OutboundTransfer {
     request: CertifiedMergeSidecarRequestV1,
     bytes: Vec<u8>,
     next_chunk: usize,
-    last_progress_at: Instant,
 }
 
 /// Network action emitted by the bounded transfer manager.
@@ -583,7 +592,7 @@ pub(crate) struct MergeSidecarPost {
 pub(crate) struct CompletedMergeSidecar {
     /// Exact compact reference from the deferred block.
     pub(crate) reference: CertifiedMergeLedgerReference,
-    /// Reassembled canonical candidate bytes.
+    /// Reassembled canonical full-entry bytes.
     pub(crate) bytes: Vec<u8>,
 }
 
@@ -599,8 +608,11 @@ pub(crate) enum ChunkIngestOutcome {
 /// In-memory bounded transport state. Incomplete bytes are never durable.
 #[derive(Debug)]
 pub(crate) struct MergeSidecarTransport {
-    inbound: BTreeMap<HashOf<MergeLedgerEntry>, InboundAssembly>,
+    inbound: BTreeMap<InboundSidecarKey, InboundAssembly>,
+    inbound_cursor: Option<InboundSidecarKey>,
     outbound: BTreeMap<(PeerId, Hash), OutboundTransfer>,
+    outbound_cursor: usize,
+    tick_response_next: bool,
     server_request_gates: BTreeMap<(PeerId, Hash), Instant>,
     next_request_nonce: u64,
     boot_nonce: Hash,
@@ -618,7 +630,10 @@ impl MergeSidecarTransport {
         let process_id = std::process::id().to_le_bytes();
         Self {
             inbound: BTreeMap::new(),
+            inbound_cursor: None,
             outbound: BTreeMap::new(),
+            outbound_cursor: 0,
+            tick_response_next: true,
             server_request_gates: BTreeMap::new(),
             next_request_nonce: 0,
             boot_nonce: Hash::new_from_chunks(&[
@@ -642,17 +657,14 @@ impl MergeSidecarTransport {
         Ok(len)
     }
 
-    fn request_id(
-        &self,
-        requester: &PeerId,
-        entry_hash: HashOf<MergeLedgerEntry>,
-        nonce: u64,
-    ) -> Hash {
+    fn request_id(&self, requester: &PeerId, key: InboundSidecarKey, nonce: u64) -> Hash {
+        let (entry_hash, reference_digest) = key;
         Hash::new_from_chunks(&[
             REQUEST_ID_DOMAIN,
             self.boot_nonce.as_ref(),
             requester.to_string().as_bytes(),
             entry_hash.as_ref().as_ref(),
+            reference_digest.as_ref(),
             &nonce.to_le_bytes(),
         ])
     }
@@ -665,6 +677,26 @@ impl MergeSidecarTransport {
                     .current
                     .as_ref()
                     .is_some_and(|attempt| &attempt.holder == peer)
+            })
+            .count()
+    }
+
+    fn ordinary_inbound_session_count(&self) -> usize {
+        self.inbound
+            .values()
+            .filter(|assembly| assembly.priority == InboundPriority::Ordinary)
+            .count()
+    }
+
+    fn ordinary_inbound_peer_session_count(&self, peer: &PeerId) -> usize {
+        self.inbound
+            .values()
+            .filter(|assembly| {
+                assembly.priority == InboundPriority::Ordinary
+                    && assembly
+                        .current
+                        .as_ref()
+                        .is_some_and(|attempt| &attempt.holder == peer)
             })
             .count()
     }
@@ -683,6 +715,14 @@ impl MergeSidecarTransport {
             .sum()
     }
 
+    fn ordinary_inbound_reserved_bytes(&self) -> usize {
+        self.inbound
+            .values()
+            .filter(|assembly| assembly.priority == InboundPriority::Ordinary)
+            .map(|assembly| usize::try_from(assembly.reference.encoded_len).unwrap_or(usize::MAX))
+            .sum()
+    }
+
     fn inbound_peer_reserved_bytes(&self, peer: &PeerId) -> usize {
         self.inbound
             .values()
@@ -691,6 +731,20 @@ impl MergeSidecarTransport {
                     .current
                     .as_ref()
                     .is_some_and(|attempt| &attempt.holder == peer)
+            })
+            .map(|assembly| usize::try_from(assembly.reference.encoded_len).unwrap_or(usize::MAX))
+            .sum()
+    }
+
+    fn ordinary_inbound_peer_reserved_bytes(&self, peer: &PeerId) -> usize {
+        self.inbound
+            .values()
+            .filter(|assembly| {
+                assembly.priority == InboundPriority::Ordinary
+                    && assembly
+                        .current
+                        .as_ref()
+                        .is_some_and(|attempt| &attempt.holder == peer)
             })
             .map(|assembly| usize::try_from(assembly.reference.encoded_len).unwrap_or(usize::MAX))
             .sum()
@@ -716,36 +770,55 @@ impl MergeSidecarTransport {
             .sum()
     }
 
+    fn ordinary_deferred_count(&self) -> usize {
+        self.inbound
+            .values()
+            .filter(|assembly| assembly.priority == InboundPriority::Ordinary)
+            .map(|assembly| assembly.deferred.len())
+            .sum()
+    }
+
     fn begin_request(
         &mut self,
-        entry_hash: HashOf<MergeLedgerEntry>,
+        key: InboundSidecarKey,
         requester: &PeerId,
         now: Instant,
     ) -> Result<Option<MergeSidecarPost>, MergeSidecarError> {
-        let (holders, start_cursor) = {
-            let Some(assembly) = self.inbound.get(&entry_hash) else {
+        let (holders, start_cursor, priority) = {
+            let Some(assembly) = self.inbound.get(&key) else {
                 return Ok(None);
             };
             if assembly.current.is_some() || assembly.complete_pending_validation {
                 return Ok(None);
             }
-            (assembly.holders.clone(), assembly.holder_cursor)
+            (
+                assembly.holders.clone(),
+                assembly.holder_cursor,
+                assembly.priority,
+            )
         };
         let selected = (0..holders.len()).find_map(|offset| {
             let index = (start_cursor + offset) % holders.len();
             let holder = &holders[index];
             let requested_len = self
                 .inbound
-                .get(&entry_hash)
+                .get(&key)
                 .and_then(|assembly| usize::try_from(assembly.reference.encoded_len).ok())
                 .unwrap_or(usize::MAX);
-            if holder == requester
-                || self.inbound_peer_session_count(holder) >= MAX_INBOUND_SESSIONS_PER_PEER
-                || self
+            let full_peer_capacity = self.inbound_peer_session_count(holder)
+                < MAX_INBOUND_SESSIONS_PER_PEER
+                && self
                     .inbound_peer_reserved_bytes(holder)
                     .saturating_add(requested_len)
-                    > MAX_INBOUND_ASSEMBLY_BYTES_PER_PEER
-            {
+                    <= MAX_INBOUND_ASSEMBLY_BYTES_PER_PEER;
+            let priority_capacity = priority == InboundPriority::Decided
+                || (self.ordinary_inbound_peer_session_count(holder)
+                    < MAX_INBOUND_SESSIONS_PER_PEER - RESERVED_DECIDED_INBOUND_SESSIONS
+                    && self
+                        .ordinary_inbound_peer_reserved_bytes(holder)
+                        .saturating_add(requested_len)
+                        <= MAX_INBOUND_ASSEMBLY_BYTES_PER_PEER - RESERVED_DECIDED_INBOUND_BYTES);
+            if holder == requester || !full_peer_capacity || !priority_capacity {
                 None
             } else {
                 Some((index, holder.clone()))
@@ -755,17 +828,20 @@ impl MergeSidecarTransport {
             return Ok(None);
         };
         self.next_request_nonce = self.next_request_nonce.wrapping_add(1);
-        let request_id = self.request_id(requester, entry_hash, self.next_request_nonce);
+        let request_id = self.request_id(requester, key, self.next_request_nonce);
         let assembly = self
             .inbound
-            .get_mut(&entry_hash)
+            .get_mut(&key)
             .expect("assembly exists while beginning request");
+        let previous_attempts = assembly.attempts;
         assembly.attempts = assembly.attempts.saturating_add(1);
         assembly.holder_cursor = (holder_index + 1) % holders.len();
         assembly.current = Some(RequestAttempt {
             id: request_id,
             holder: holder.clone(),
             last_progress_at: now,
+            previous_holder_cursor: start_cursor,
+            previous_attempts,
         });
         assembly.chunks.clear();
         assembly.received_bytes = 0;
@@ -773,17 +849,43 @@ impl MergeSidecarTransport {
         let request = CertifiedMergeSidecarRequestV1 {
             version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
             request_id,
-            entry_hash,
+            entry_hash: key.0,
             encoded_len: reference.encoded_len,
             epoch_id: reference.epoch_id,
-            reference_digest: certified_merge_reference_digest(reference),
+            reference_digest: key.1,
             requester: requester.clone(),
             responder: holder.clone(),
         };
+        self.inbound_cursor = Some(key);
         Ok(Some(MergeSidecarPost {
             peer: holder,
             message: CertifiedMergeSidecarMessage::Request(request),
         }))
+    }
+
+    /// Return a request to the idle state when the caller's bounded outbound
+    /// queue could not retain the post. No network attempt occurred, so a
+    /// later bounded tick may select a holder immediately without waiting for
+    /// the ordinary response timeout.
+    pub(crate) fn release_unsent_request(&mut self, request: &CertifiedMergeSidecarRequestV1) {
+        let key = (request.entry_hash, request.reference_digest);
+        let Some(assembly) = self.inbound.get_mut(&key) else {
+            return;
+        };
+        if !assembly.current.as_ref().is_some_and(|attempt| {
+            attempt.id == request.request_id && attempt.holder == request.responder
+        }) {
+            return;
+        }
+        let attempt = assembly
+            .current
+            .take()
+            .expect("matching request attempt was checked above");
+        assembly.holder_cursor = attempt.previous_holder_cursor;
+        assembly.attempts = attempt.previous_attempts;
+        assembly.chunks.clear();
+        assembly.received_bytes = 0;
+        assembly.complete_pending_validation = false;
     }
 
     /// Register a block whose exact sidecar is missing and begin a bounded
@@ -798,6 +900,55 @@ impl MergeSidecarTransport {
         committed_height: u64,
         now: Instant,
     ) -> Result<Option<MergeSidecarPost>, MergeSidecarError> {
+        self.defer_block_with_priority(
+            block_hash,
+            height,
+            view,
+            reference,
+            requester,
+            committed_height,
+            now,
+            InboundPriority::Ordinary,
+        )
+    }
+
+    /// Register a decided carrier using capacity reserved from ordinary
+    /// validation work, so unsigned same-hash reference variants cannot crowd
+    /// the exact finality dependency out of global or per-holder limits.
+    pub(crate) fn defer_decided_block(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        reference: CertifiedMergeLedgerReference,
+        requester: &PeerId,
+        committed_height: u64,
+        now: Instant,
+    ) -> Result<Option<MergeSidecarPost>, MergeSidecarError> {
+        self.defer_block_with_priority(
+            block_hash,
+            height,
+            view,
+            reference,
+            requester,
+            committed_height,
+            now,
+            InboundPriority::Decided,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn defer_block_with_priority(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        reference: CertifiedMergeLedgerReference,
+        requester: &PeerId,
+        committed_height: u64,
+        now: Instant,
+        priority: InboundPriority,
+    ) -> Result<Option<MergeSidecarPost>, MergeSidecarError> {
         Self::validate_reference_len(&reference)?;
         if height <= committed_height
             || height > committed_height.saturating_add(MAX_FUTURE_BLOCK_DISTANCE)
@@ -806,34 +957,44 @@ impl MergeSidecarTransport {
         }
         let holders = certified_merge_sidecar_holders(&reference)?;
         let entry_hash = reference.entry_hash;
-        if let Some(existing) = self.inbound.get(&entry_hash)
-            && existing.reference != reference
-        {
-            return Err(MergeSidecarError::ConflictingReference);
-        }
+        let key = (entry_hash, certified_merge_reference_digest(&reference));
         let already_deferred = self
             .inbound
-            .get(&entry_hash)
+            .get(&key)
             .is_some_and(|assembly| assembly.deferred.contains_key(&block_hash));
-        if !already_deferred && self.deferred_count() >= MAX_DEFERRED_BLOCKS {
+        if !already_deferred
+            && (self.deferred_count() >= MAX_DEFERRED_BLOCKS
+                || (priority == InboundPriority::Ordinary
+                    && self.ordinary_deferred_count()
+                        >= MAX_DEFERRED_BLOCKS - RESERVED_DECIDED_DEFERRED_BLOCKS))
+        {
             return Err(MergeSidecarError::Capacity("deferred block count"));
         }
-        if !self.inbound.contains_key(&entry_hash) {
-            if self.inbound.len() >= MAX_INBOUND_SESSIONS {
+        if !self.inbound.contains_key(&key) {
+            if self.inbound.len() >= MAX_INBOUND_SESSIONS
+                || (priority == InboundPriority::Ordinary
+                    && self.ordinary_inbound_session_count()
+                        >= MAX_INBOUND_SESSIONS - RESERVED_DECIDED_INBOUND_SESSIONS)
+            {
                 return Err(MergeSidecarError::Capacity("inbound session count"));
             }
-            if self
-                .inbound_reserved_bytes()
-                .saturating_add(usize::try_from(reference.encoded_len).unwrap_or(usize::MAX))
+            let requested_len = usize::try_from(reference.encoded_len).unwrap_or(usize::MAX);
+            if self.inbound_reserved_bytes().saturating_add(requested_len)
                 > MAX_INBOUND_ASSEMBLY_BYTES
+                || (priority == InboundPriority::Ordinary
+                    && self
+                        .ordinary_inbound_reserved_bytes()
+                        .saturating_add(requested_len)
+                        > MAX_INBOUND_ASSEMBLY_BYTES - RESERVED_DECIDED_INBOUND_BYTES)
             {
                 return Err(MergeSidecarError::Capacity("global inbound reservation"));
             }
             self.inbound.insert(
-                entry_hash,
+                key,
                 InboundAssembly {
                     reference,
                     requester: requester.clone(),
+                    priority,
                     holders,
                     holder_cursor: 0,
                     current: None,
@@ -844,9 +1005,14 @@ impl MergeSidecarTransport {
                     complete_pending_validation: false,
                 },
             );
+        } else if priority == InboundPriority::Decided {
+            self.inbound
+                .get_mut(&key)
+                .expect("existing exact inbound assembly")
+                .priority = InboundPriority::Decided;
         }
         self.inbound
-            .get_mut(&entry_hash)
+            .get_mut(&key)
             .expect("inserted inbound assembly")
             .deferred
             .entry(block_hash)
@@ -855,7 +1021,7 @@ impl MergeSidecarTransport {
                 height,
                 view,
             });
-        self.begin_request(entry_hash, requester, now)
+        self.begin_request(key, requester, now)
     }
 
     fn validate_chunk_shape(
@@ -909,7 +1075,8 @@ impl MergeSidecarTransport {
         if &chunk.responder != sender {
             return Err(MergeSidecarError::PeerIdentityMismatch);
         }
-        let Some(snapshot) = self.inbound.get(&chunk.entry_hash) else {
+        let key = (chunk.entry_hash, chunk.reference_digest);
+        let Some(snapshot) = self.inbound.get(&key) else {
             return Err(MergeSidecarError::UnsolicitedResponse);
         };
         let Some(attempt) = snapshot.current.as_ref() else {
@@ -924,7 +1091,6 @@ impl MergeSidecarTransport {
         let reference = &snapshot.reference;
         if chunk.encoded_len != reference.encoded_len
             || chunk.epoch_id != reference.epoch_id
-            || chunk.reference_digest != certified_merge_reference_digest(reference)
             || chunk.requester != snapshot.requester
         {
             return Err(MergeSidecarError::MetadataMismatch);
@@ -953,7 +1119,7 @@ impl MergeSidecarTransport {
         }
         let assembly = self
             .inbound
-            .get_mut(&chunk.entry_hash)
+            .get_mut(&key)
             .expect("assembly was checked above");
         if assembly.chunks.is_empty() {
             assembly.chunks.resize_with(chunk_count, || None);
@@ -1001,6 +1167,7 @@ impl MergeSidecarTransport {
     pub(crate) fn finish_completed(
         &mut self,
         entry_hash: HashOf<MergeLedgerEntry>,
+        reference_digest: Hash,
         success: bool,
         requester: &PeerId,
         now: Instant,
@@ -1008,10 +1175,11 @@ impl MergeSidecarTransport {
         Vec<(HashOf<BlockHeader>, u64, u64)>,
         Option<MergeSidecarPost>,
     ) {
+        let key = (entry_hash, reference_digest);
         if success {
             let deferred = self
                 .inbound
-                .remove(&entry_hash)
+                .remove(&key)
                 .map(|assembly| {
                     assembly
                         .deferred
@@ -1022,16 +1190,13 @@ impl MergeSidecarTransport {
                 .unwrap_or_default();
             return (deferred, None);
         }
-        if let Some(assembly) = self.inbound.get_mut(&entry_hash) {
+        if let Some(assembly) = self.inbound.get_mut(&key) {
             assembly.current = None;
             assembly.chunks.clear();
             assembly.received_bytes = 0;
             assembly.complete_pending_validation = false;
         }
-        let request = self
-            .begin_request(entry_hash, requester, now)
-            .ok()
-            .flatten();
+        let request = self.begin_request(key, requester, now).ok().flatten();
         (Vec::new(), request)
     }
 
@@ -1040,16 +1205,21 @@ impl MergeSidecarTransport {
         &mut self,
         entry_hash: HashOf<MergeLedgerEntry>,
     ) -> Vec<(HashOf<BlockHeader>, u64, u64)> {
-        self.inbound
-            .remove(&entry_hash)
-            .map(|assembly| {
+        let keys = self
+            .inbound
+            .keys()
+            .filter(|key| key.0 == entry_hash)
+            .copied()
+            .collect::<Vec<_>>();
+        keys.into_iter()
+            .filter_map(|key| self.inbound.remove(&key))
+            .flat_map(|assembly| {
                 assembly
                     .deferred
                     .into_values()
                     .map(|carrier| (carrier.hash, carrier.height, carrier.view))
-                    .collect()
             })
-            .unwrap_or_default()
+            .collect()
     }
 
     fn prune_server_gates(&mut self, now: Instant) {
@@ -1101,7 +1271,7 @@ impl MergeSidecarTransport {
         &mut self,
         request: CertifiedMergeSidecarRequestV1,
         bytes: Vec<u8>,
-        now: Instant,
+        _now: Instant,
     ) -> Result<(), MergeSidecarError> {
         let len = usize::try_from(request.encoded_len)
             .map_err(|_| MergeSidecarError::InvalidEncodedLength(request.encoded_len))?;
@@ -1144,7 +1314,6 @@ impl MergeSidecarTransport {
                 request,
                 bytes,
                 next_chunk: 0,
-                last_progress_at: now,
             },
         );
         Ok(())
@@ -1154,16 +1323,13 @@ impl MergeSidecarTransport {
     pub(crate) fn drain_outbound_chunks(
         &mut self,
         limit: usize,
-        now: Instant,
+        _now: Instant,
     ) -> Vec<MergeSidecarPost> {
-        self.outbound.retain(|_, transfer| {
-            now.saturating_duration_since(transfer.last_progress_at) <= OUTBOUND_SESSION_TTL
-        });
         let mut posts = Vec::new();
-        while posts.len() < limit {
-            let Some(key) = self.outbound.keys().next().cloned() else {
-                break;
-            };
+        let mut keys = self.outbound.keys().cloned().collect::<Vec<_>>();
+        while posts.len() < limit && !keys.is_empty() {
+            self.outbound_cursor %= keys.len();
+            let key = keys[self.outbound_cursor].clone();
             let mut completed = false;
             if let Some(transfer) = self.outbound.get_mut(&key) {
                 let count = transfer
@@ -1198,12 +1364,19 @@ impl MergeSidecarTransport {
                         message: CertifiedMergeSidecarMessage::Chunk(chunk),
                     });
                     transfer.next_chunk += 1;
-                    transfer.last_progress_at = now;
                     completed = transfer.next_chunk == count;
                 }
             }
             if completed {
                 self.outbound.remove(&key);
+                keys.remove(self.outbound_cursor);
+                if !keys.is_empty() {
+                    self.outbound_cursor %= keys.len();
+                } else {
+                    self.outbound_cursor = 0;
+                }
+            } else {
+                self.outbound_cursor = (self.outbound_cursor + 1) % keys.len();
             }
         }
         posts
@@ -1230,7 +1403,12 @@ impl MergeSidecarTransport {
     }
 
     /// Rotate stalled holders and emit bounded, indefinitely retried requests.
-    pub(crate) fn tick(&mut self, requester: &PeerId, now: Instant) -> Vec<MergeSidecarPost> {
+    pub(crate) fn tick_bounded(
+        &mut self,
+        requester: &PeerId,
+        now: Instant,
+        limit: usize,
+    ) -> Vec<MergeSidecarPost> {
         self.prune_server_gates(now);
         let timed_out: Vec<_> = self
             .inbound
@@ -1251,22 +1429,80 @@ impl MergeSidecarTransport {
                 assembly.complete_pending_validation = false;
             }
         }
-        let idle: Vec<_> = self
+        let idle_keys = self
             .inbound
             .iter()
             .filter(|(_, assembly)| {
                 assembly.current.is_none() && !assembly.complete_pending_validation
             })
             .map(|(hash, _)| *hash)
-            .collect();
+            .collect::<Vec<_>>();
+        let start = self.inbound_cursor.map_or(0, |cursor| {
+            idle_keys.partition_point(|candidate| *candidate <= cursor)
+        });
+        let mut idle = idle_keys[start..]
+            .iter()
+            .chain(&idle_keys[..start])
+            .copied()
+            .collect::<VecDeque<_>>();
         let mut posts = Vec::new();
-        for hash in idle {
-            if let Ok(Some(post)) = self.begin_request(hash, requester, now) {
+        while posts.len() < limit {
+            let request_ready = !idle.is_empty();
+            let response_ready = !self.outbound.is_empty();
+            if !request_ready && !response_ready {
+                break;
+            }
+            let contended = request_ready && response_ready;
+            let response_first = response_ready && (!request_ready || self.tick_response_next);
+            let mut emitted = false;
+
+            if response_first {
+                if let Some(post) = self.drain_outbound_chunks(1, now).pop() {
+                    posts.push(post);
+                    emitted = true;
+                    if contended {
+                        self.tick_response_next = false;
+                    }
+                }
+            } else {
+                while let Some(hash) = idle.pop_front() {
+                    if let Ok(Some(post)) = self.begin_request(hash, requester, now) {
+                        posts.push(post);
+                        emitted = true;
+                        if contended {
+                            self.tick_response_next = true;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // A nominally ready class can become ineligible while bounded
+            // per-peer reservations are inspected. Preserve useful capacity
+            // by trying the other class without advancing its fairness turn.
+            if !emitted && response_first {
+                while let Some(hash) = idle.pop_front() {
+                    if let Ok(Some(post)) = self.begin_request(hash, requester, now) {
+                        posts.push(post);
+                        emitted = true;
+                        break;
+                    }
+                }
+            } else if !emitted && let Some(post) = self.drain_outbound_chunks(1, now).pop() {
                 posts.push(post);
+                emitted = true;
+            }
+
+            if !emitted {
+                break;
             }
         }
-        posts.extend(self.drain_outbound_chunks(8, now));
         posts
+    }
+
+    /// Rotate stalled holders and emit the legacy actor's bounded batch.
+    pub(crate) fn tick(&mut self, requester: &PeerId, now: Instant) -> Vec<MergeSidecarPost> {
+        self.tick_bounded(requester, now, MAX_INBOUND_SESSIONS + 8)
     }
 
     #[cfg(test)]
@@ -2743,8 +2979,13 @@ mod tests {
         };
         assert_eq!(complete.reference, reference);
         assert_eq!(complete.bytes, bytes);
-        let (deferred, retry) =
-            transport.finish_completed(reference.entry_hash, true, &requester, now);
+        let (deferred, retry) = transport.finish_completed(
+            reference.entry_hash,
+            certified_merge_reference_digest(&reference),
+            true,
+            &requester,
+            now,
+        );
         assert_eq!(deferred.len(), 1);
         assert!(retry.is_none());
         assert_eq!(transport.inbound_len(), 0);
@@ -2796,8 +3037,13 @@ mod tests {
             .ingest_chunk(&responder, chunks(&request, &[1]).remove(0), now)
             .expect("eventually available holder response");
         assert!(matches!(complete, ChunkIngestOutcome::Complete(_)));
-        let (deferred, retry) =
-            transport.finish_completed(reference.entry_hash, true, &requester, now);
+        let (deferred, retry) = transport.finish_completed(
+            reference.entry_hash,
+            certified_merge_reference_digest(&reference),
+            true,
+            &requester,
+            now,
+        );
         assert_eq!(deferred, vec![(block_hash, 2, 0)]);
         assert!(retry.is_none());
         assert_eq!(transport.inbound_len(), 0);
@@ -2820,7 +3066,13 @@ mod tests {
                 .expect("complete retained fetch"),
             ChunkIngestOutcome::Complete(_)
         ));
-        let (deferred, _) = transport.finish_completed(reference.entry_hash, true, &requester, now);
+        let (deferred, _) = transport.finish_completed(
+            reference.entry_hash,
+            certified_merge_reference_digest(&reference),
+            true,
+            &requester,
+            now,
+        );
         assert_eq!(deferred, vec![(replacement, 2, 1)]);
         assert!(!deferred.iter().any(|(hash, _, _)| *hash == original));
 
@@ -2854,7 +3106,7 @@ mod tests {
                 seen += 1;
             }
             if seen == expected_chunks {
-                assert!(now.duration_since(started_at) > OUTBOUND_SESSION_TTL);
+                assert!(now.duration_since(started_at) > Duration::from_secs(30));
                 break;
             }
         }
@@ -2862,11 +3114,87 @@ mod tests {
     }
 
     #[test]
+    fn outbound_chunk_drain_is_fair_across_bounded_sessions() {
+        let (_, _, _, first, now) = start_session(MAX_CERTIFIED_MERGE_CHUNK_BYTES * 3, 3);
+        let (_, _, _, mut second, _) = start_session(1, 3);
+        second.request_id = Hash::new(b"second fair outbound request");
+        let mut server = MergeSidecarTransport::new();
+        server
+            .enqueue_response(
+                first.clone(),
+                vec![0x11; MAX_CERTIFIED_MERGE_CHUNK_BYTES * 3],
+                now,
+            )
+            .expect("queue first response");
+        server
+            .enqueue_response(second.clone(), vec![0x22], now)
+            .expect("queue second response");
+
+        let posts = server.drain_outbound_chunks(2, now);
+        assert_eq!(posts.len(), 2);
+        let request_ids = posts
+            .into_iter()
+            .map(|post| match post.message {
+                CertifiedMergeSidecarMessage::Chunk(chunk) => chunk.request_id,
+                CertifiedMergeSidecarMessage::Request(_) => panic!("response emitted a request"),
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            request_ids,
+            BTreeSet::from([first.request_id, second.request_id])
+        );
+    }
+
+    #[test]
+    fn tick_bounded_limit_one_alternates_saturated_requests_and_responses() {
+        let now = Instant::now();
+        let requester = peer(b"fair tick requester");
+        let mut transport = MergeSidecarTransport::new();
+
+        // Fill the per-peer inbound reservation so that, after one timeout,
+        // every bounded tick has another fetch request ready to emit.
+        for index in 0..MAX_INBOUND_SESSIONS_PER_PEER {
+            let mut pending = reference(1, 3);
+            pending.entry_hash = HashOf::from_untyped_unchecked(Hash::new([0xA5, index as u8]));
+            let block_hash = HashOf::from_untyped_unchecked(Hash::new([0x5A, index as u8]));
+            assert!(
+                transport
+                    .defer_block(block_hash, 2, 0, pending, &requester, 1, now)
+                    .expect("register bounded inbound fetch")
+                    .is_some()
+            );
+        }
+
+        let (_, _, _, response_request, _) = start_session(MAX_CERTIFIED_MERGE_CHUNK_BYTES * 3, 3);
+        transport
+            .enqueue_response(
+                response_request,
+                vec![0xC3; MAX_CERTIFIED_MERGE_CHUNK_BYTES * 3],
+                now,
+            )
+            .expect("queue a multi-chunk response behind saturated fetches");
+
+        let timed_out_at = now + REQUEST_TIMEOUT;
+        let kinds = (0..6)
+            .map(|_| {
+                let posts = transport.tick_bounded(&requester, timed_out_at, 1);
+                assert_eq!(posts.len(), 1, "bounded tick must use its one slot");
+                matches!(posts[0].message, CertifiedMergeSidecarMessage::Chunk(_))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            vec![true, false, true, false, true, false],
+            "continuous inbound fetch pressure must neither starve response chunks nor be starved by them"
+        );
+    }
+
+    #[test]
     fn session_and_deferred_caps_fail_closed_without_unbounded_growth() {
         let now = Instant::now();
         let requester = peer(b"requester");
         let mut transport = MergeSidecarTransport::new();
-        for index in 0..MAX_INBOUND_SESSIONS {
+        for index in 0..MAX_INBOUND_SESSIONS - RESERVED_DECIDED_INBOUND_SESSIONS {
             let mut reference = reference(1, 2);
             reference.entry_hash = HashOf::from_untyped_unchecked(Hash::new(index.to_le_bytes()));
             let block_hash = HashOf::from_untyped_unchecked(Hash::new([index as u8, 1]));
@@ -2888,7 +3216,192 @@ mod tests {
             ),
             Err(MergeSidecarError::Capacity("inbound session count"))
         );
+        let mut decided = reference(1, 2);
+        decided.entry_hash = HashOf::from_untyped_unchecked(Hash::new(b"decided entry"));
+        assert!(
+            transport
+                .defer_decided_block(
+                    HashOf::from_untyped_unchecked(Hash::new(b"decided block")),
+                    2,
+                    0,
+                    decided,
+                    &requester,
+                    1,
+                    now,
+                )
+                .expect("decided fetch owns reserved capacity")
+                .is_some(),
+            "ordinary requests must leave one global and per-holder slot for finality"
+        );
         assert_eq!(transport.inbound_len(), MAX_INBOUND_SESSIONS);
+    }
+
+    #[test]
+    fn attacker_first_conflicting_reference_isolated_from_honest_session() {
+        let (_, requester, honest, _, now) = start_session(64, 3);
+        let attacker_block = HashOf::from_untyped_unchecked(Hash::new(b"attacker block"));
+        let honest_block = HashOf::from_untyped_unchecked(Hash::new(b"honest decided block"));
+        let mut attacker = honest.clone();
+        attacker.encoded_len += 1;
+        let mut transport = MergeSidecarTransport::new();
+        transport
+            .defer_block(attacker_block, 2, 0, attacker, &requester, 1, now)
+            .expect("retain attacker-first exact reference independently");
+        let honest_post = transport
+            .defer_block(honest_block, 2, 0, honest.clone(), &requester, 1, now)
+            .expect("conflicting metadata cannot poison honest registration")
+            .expect("honest registration emits a request");
+        let CertifiedMergeSidecarMessage::Request(honest_request) = honest_post.message else {
+            panic!("honest registration emitted a response chunk")
+        };
+        assert_eq!(transport.inbound_len(), 2);
+
+        let responder = honest_request.responder.clone();
+        assert!(matches!(
+            transport
+                .ingest_chunk(
+                    &responder,
+                    chunks(&honest_request, &[0_u8; 64]).remove(0),
+                    now,
+                )
+                .expect("complete honest exact-reference response"),
+            ChunkIngestOutcome::Complete(_)
+        ));
+        let (deferred, _) = transport.finish_completed(
+            honest.entry_hash,
+            certified_merge_reference_digest(&honest),
+            true,
+            &requester,
+            now,
+        );
+        assert_eq!(deferred, vec![(honest_block, 2, 0)]);
+        assert_eq!(
+            transport.inbound_len(),
+            1,
+            "honest completion must not mutate the isolated attacker session"
+        );
+    }
+
+    #[test]
+    fn same_hash_variant_saturation_cannot_crowd_out_decided_fetch() {
+        let now = Instant::now();
+        let requester = peer(b"requester");
+        let mut transport = MergeSidecarTransport::new();
+        let honest = reference(64, 3);
+        for index in 0..MAX_INBOUND_SESSIONS - RESERVED_DECIDED_INBOUND_SESSIONS {
+            let mut attacker = honest.clone();
+            attacker.encoded_len = u64::try_from(index + 1).expect("fixture length fits u64");
+            transport
+                .defer_block(
+                    HashOf::from_untyped_unchecked(Hash::new([index as u8, 0xA1])),
+                    2,
+                    0,
+                    attacker,
+                    &requester,
+                    1,
+                    now,
+                )
+                .expect("ordinary attacker variant remains within its bounded partition");
+        }
+        assert_eq!(
+            transport.defer_block(
+                HashOf::from_untyped_unchecked(Hash::new(b"ordinary honest block")),
+                2,
+                0,
+                honest.clone(),
+                &requester,
+                1,
+                now,
+            ),
+            Err(MergeSidecarError::Capacity("inbound session count"))
+        );
+        assert!(
+            transport
+                .defer_decided_block(
+                    HashOf::from_untyped_unchecked(Hash::new(b"decided honest block")),
+                    2,
+                    0,
+                    honest,
+                    &requester,
+                    1,
+                    now,
+                )
+                .expect("decided same-hash reference bypasses ordinary variant saturation")
+                .is_some()
+        );
+        assert_eq!(transport.inbound_len(), MAX_INBOUND_SESSIONS);
+    }
+
+    #[test]
+    fn unsent_request_restores_holder_and_backoff_state() {
+        let (mut transport, requester, reference, first, now) = start_session(1, 3);
+        transport.release_unsent_request(&first);
+        let key = (
+            reference.entry_hash,
+            certified_merge_reference_digest(&reference),
+        );
+        let assembly = transport.inbound.get(&key).expect("retained exact session");
+        assert_eq!(assembly.attempts, 0);
+        assert_eq!(assembly.holder_cursor, 0);
+
+        let reissued = transport
+            .tick_bounded(&requester, now, 1)
+            .into_iter()
+            .find_map(|post| match post.message {
+                CertifiedMergeSidecarMessage::Request(request) => Some(request),
+                CertifiedMergeSidecarMessage::Chunk(_) => None,
+            })
+            .expect("unsent request is immediately reissued");
+        assert_eq!(reissued.responder, first.responder);
+        assert_ne!(reissued.request_id, first.request_id);
+
+        let rotated = transport
+            .tick_bounded(&requester, now + REQUEST_TIMEOUT, 1)
+            .into_iter()
+            .find_map(|post| match post.message {
+                CertifiedMergeSidecarMessage::Request(request) => Some(request),
+                CertifiedMergeSidecarMessage::Chunk(_) => None,
+            })
+            .expect("first real attempt expires at the base timeout");
+        assert_ne!(rotated.responder, reissued.responder);
+    }
+
+    #[test]
+    fn idle_request_retry_starts_strictly_after_the_fairness_cursor() {
+        let now = Instant::now();
+        let requester = peer(b"requester");
+        let mut transport = MergeSidecarTransport::new();
+        for index in 0..4_u8 {
+            let mut candidate = reference(1, 1);
+            candidate.entry_hash = HashOf::from_untyped_unchecked(Hash::new([0xF2, index]));
+            transport
+                .defer_block(
+                    HashOf::from_untyped_unchecked(Hash::new([0xB2, index])),
+                    2,
+                    0,
+                    candidate,
+                    &requester,
+                    1,
+                    now,
+                )
+                .expect("retain bounded session");
+        }
+        let cursor = transport
+            .inbound_cursor
+            .expect("at least one request was activated");
+        let keys = transport.inbound.keys().copied().collect::<Vec<_>>();
+        let start = keys.partition_point(|candidate| *candidate <= cursor);
+        let expected = keys.get(start).copied().unwrap_or(keys[0]);
+
+        let request = transport
+            .tick_bounded(&requester, now + REQUEST_TIMEOUT, 1)
+            .into_iter()
+            .find_map(|post| match post.message {
+                CertifiedMergeSidecarMessage::Request(request) => Some(request),
+                CertifiedMergeSidecarMessage::Chunk(_) => None,
+            })
+            .expect("one timed-out or idle request is scheduled");
+        assert_eq!((request.entry_hash, request.reference_digest), expected);
     }
 
     #[test]

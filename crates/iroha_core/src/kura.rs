@@ -62,7 +62,7 @@ use iroha_data_model::{
         MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES, MAX_MERGE_LEDGER_ENTRY_BYTES, MergeExecutionBatch,
         MergeLaneExecution, MergeLedgerEntry,
     },
-    nexus::{DataSpaceId, LaneId},
+    nexus::{DataSpaceId, LaneCatalog, LaneId, LaneLifecycleParameterV1},
     peer::PeerId,
     transaction::signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
 };
@@ -358,6 +358,9 @@ pub struct Kura {
     /// Test hook for forcing the next lane-geometry catalog publication to fail.
     #[cfg(test)]
     fail_next_lane_geometry_publication: AtomicBool,
+    /// Test hook for failing catalog publication after its journal target was replaced.
+    #[cfg(test)]
+    fail_next_lane_geometry_publication_after_write: AtomicBool,
     /// Test hook selecting a crash boundary in lane-geometry archive garbage collection.
     #[cfg(test)]
     fail_lane_geometry_gc_stage: AtomicUsize,
@@ -1684,7 +1687,44 @@ impl Kura {
     /// to access the block store indicated by the provided
     /// path.
     pub fn new(config: &Config, lane_config: &LaneConfig) -> Result<(Arc<Self>, BlockCount)> {
+        Self::new_inner(config, lane_config, None)
+    }
+
+    /// Initialize Kura after authenticating the process-configured lane catalog.
+    ///
+    /// Unlike [`Self::new`], this production startup boundary checks an existing
+    /// lane-geometry journal before opening or reconciling any lane-derived
+    /// block, merge-ledger, or sidecar path. A missing journal denotes the first
+    /// startup; once a journal exists, its exact configured-catalog commitment
+    /// must be present and match.
+    ///
+    /// # Errors
+    ///
+    /// Fails without mutating Kura storage when an existing journal is invalid,
+    /// lacks its configured-catalog baseline, or commits a different catalog.
+    pub fn new_with_configured_lane_catalog(
+        config: &Config,
+        lane_config: &LaneConfig,
+        configured_lane_catalog: &LaneCatalog,
+    ) -> Result<(Arc<Self>, BlockCount)> {
+        Self::new_inner(
+            config,
+            lane_config,
+            Some(LaneLifecycleParameterV1::catalog_hash(
+                configured_lane_catalog,
+            )),
+        )
+    }
+
+    fn new_inner(
+        config: &Config,
+        lane_config: &LaneConfig,
+        configured_catalog_hash: Option<Hash>,
+    ) -> Result<(Arc<Self>, BlockCount)> {
         let store_dir = config.store_dir.resolve_relative_path();
+        if let Some(configured_catalog_hash) = configured_catalog_hash {
+            Self::preflight_configured_lane_catalog_baseline(&store_dir, configured_catalog_hash)?;
+        }
         let store_root = store_dir.clone();
         let primary_lane = lane_config.primary();
         let roster_retention = config.block_sync_roster_retention;
@@ -1843,6 +1883,8 @@ impl Kura {
             #[cfg(test)]
             fail_next_lane_geometry_publication: AtomicBool::new(false),
             #[cfg(test)]
+            fail_next_lane_geometry_publication_after_write: AtomicBool::new(false),
+            #[cfg(test)]
             fail_lane_geometry_gc_stage: AtomicUsize::new(0),
             #[cfg(test)]
             fail_next_v2_finality_write: AtomicBool::new(false),
@@ -1974,6 +2016,8 @@ impl Kura {
             fail_next_commit_manifest_write: AtomicBool::new(false),
             #[cfg(test)]
             fail_next_lane_geometry_publication: AtomicBool::new(false),
+            #[cfg(test)]
+            fail_next_lane_geometry_publication_after_write: AtomicBool::new(false),
             #[cfg(test)]
             fail_lane_geometry_gc_stage: AtomicUsize::new(0),
             #[cfg(test)]
@@ -4027,11 +4071,9 @@ impl Kura {
         Ok(Some(entry))
     }
 
-    fn prune_pending_certified_merge_entries_not_bound_to_unlocked(
+    fn retain_pending_certified_merge_entries_unlocked(
         &self,
-        carrier_height: u64,
-        carrier_parent_hash: HashOf<BlockHeader>,
-        view: u64,
+        mut retain: impl FnMut(&MergeLedgerEntry) -> bool,
     ) -> Result<usize> {
         let directory = self.pending_merge_entry_dir();
         let (paths, _) = self.pending_merge_entry_paths_unlocked()?;
@@ -4041,10 +4083,7 @@ impl Kura {
             let Some(entry) = self.read_pending_merge_entry_path(&path, None)? else {
                 continue;
             };
-            if entry.merge_qc.carrier_height == carrier_height
-                && entry.merge_qc.carrier_parent_hash == carrier_parent_hash
-                && entry.merge_qc.view == view
-            {
+            if retain(&entry) {
                 continue;
             }
             removed_bytes = removed_bytes
@@ -4057,6 +4096,19 @@ impl Kura {
             self.sub_disk_usage_bytes(removed_bytes);
         }
         Ok(removed)
+    }
+
+    fn prune_pending_certified_merge_entries_not_bound_to_unlocked(
+        &self,
+        carrier_height: u64,
+        carrier_parent_hash: HashOf<BlockHeader>,
+        view: u64,
+    ) -> Result<usize> {
+        self.retain_pending_certified_merge_entries_unlocked(|entry| {
+            entry.merge_qc.carrier_height == carrier_height
+                && entry.merge_qc.carrier_parent_hash == carrier_parent_hash
+                && entry.merge_qc.view == view
+        })
     }
 
     /// Remove pending certificates that can no longer be carried by the exact current round.
@@ -4076,6 +4128,35 @@ impl Kura {
             carrier_parent_hash,
             view,
         )
+    }
+
+    /// At a locked carrier, retain only the exact full entry referenced by the
+    /// immutable body. With no reference, remove every losing sidecar for that
+    /// carrier height while leaving other heights untouched.
+    pub(crate) fn retain_pending_certified_merge_entry_for_locked_carrier(
+        &self,
+        carrier_height: u64,
+        reference: Option<&iroha_data_model::block::CertifiedMergeLedgerReference>,
+    ) -> Result<usize> {
+        let _guard = self.sidecar_lock.lock();
+        self.reconcile_pending_merge_temp_files_unlocked()?;
+        self.retain_pending_certified_merge_entries_unlocked(|entry| {
+            entry.merge_qc.carrier_height != carrier_height
+                || reference.is_some_and(|reference| reference.matches_entry(entry))
+        })
+    }
+
+    /// Remove every pending merge sidecar whose carrier height is already
+    /// finalized. No losing sidecar can become canonical after height rollover.
+    pub(crate) fn prune_finalized_pending_certified_merge_entries(
+        &self,
+        finalized_height: u64,
+    ) -> Result<usize> {
+        let _guard = self.sidecar_lock.lock();
+        self.reconcile_pending_merge_temp_files_unlocked()?;
+        self.retain_pending_certified_merge_entries_unlocked(|entry| {
+            entry.merge_qc.carrier_height > finalized_height
+        })
     }
 
     /// Persist a fully certified entry in the hash-addressed pending sidecar
@@ -17811,6 +17892,13 @@ pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
 pub enum Error {
     /// Failed reading/writing {1:?} from disk
     IO(#[source] std::io::Error, PathBuf),
+    /// Lane-geometry publication failed and exact prior-journal restoration was not proven: publication={publication}; restoration={restoration}
+    LaneGeometryPublicationRestoreFailed {
+        /// Original catalog-publication error.
+        publication: String,
+        /// Exact prior-journal restoration error.
+        restoration: String,
+    },
     /// Failed to create the directory {1:?}
     MkDir(#[source] std::io::Error, PathBuf),
     /// Failed to serialize/deserialize versioned payloads
@@ -17920,6 +18008,7 @@ impl<T> AddErrContextExt<T> for Result<T, std::io::Error> {
 mod tests {
     use std::{
         borrow::Cow,
+        collections::BTreeMap,
         fs,
         io::{Read, Seek, SeekFrom, Write},
         num::{NonZeroU32, NonZeroUsize},
@@ -18845,6 +18934,142 @@ mod tests {
         }
     }
 
+    fn configured_primary_catalog(alias: &str) -> LaneCatalog {
+        LaneCatalog::new(
+            nonzero!(1_u32),
+            vec![ModelLaneConfig {
+                alias: alias.to_owned(),
+                ..ModelLaneConfig::default()
+            }],
+        )
+        .expect("configured primary-lane catalog")
+    }
+
+    fn publish_configured_catalog_baseline(kura: &Kura, catalog: &LaneCatalog) {
+        let lane_config = RuntimeLaneConfig::from_catalog(catalog);
+        let incarnations =
+            BTreeMap::from([(LaneId::SINGLE, Hash::prehashed([0xA1; Hash::LENGTH]))]);
+        let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
+        kura.mark_lane_geometry_catalog_published(
+            &lane_config,
+            &incarnations,
+            &activation_heights,
+            Some(LaneLifecycleParameterV1::catalog_hash(catalog)),
+        )
+        .expect("publish configured lane catalog baseline");
+    }
+
+    fn assert_catalog_paths_absent(store_root: &Path, catalog: &LaneCatalog) {
+        let lane_config = RuntimeLaneConfig::from_catalog(catalog);
+        let primary = lane_config.primary();
+        assert!(
+            !primary.blocks_dir(store_root).exists(),
+            "rejected startup must not create the attempted block-store path"
+        );
+        assert!(
+            !primary.merge_log_path(store_root).exists(),
+            "rejected startup must not create the attempted merge-ledger path"
+        );
+    }
+
+    #[test]
+    fn configured_catalog_preflight_rejects_zero_block_reopen_before_path_mutation() {
+        let dir = TempDir::new().expect("temporary Kura root");
+        let config = kura_config_for_dir(&dir, BLOCKS_IN_MEMORY);
+        let configured_a = configured_primary_catalog("configured-a");
+        let configured_b = configured_primary_catalog("configured-b");
+        let lane_config_a = RuntimeLaneConfig::from_catalog(&configured_a);
+
+        let (kura, BlockCount(count)) =
+            Kura::new_with_configured_lane_catalog(&config, &lane_config_a, &configured_a)
+                .expect("an absent journal is an authenticated first startup");
+        assert_eq!(count, 0);
+        publish_configured_catalog_baseline(&kura, &configured_a);
+        drop(kura);
+
+        let lane_config_b = RuntimeLaneConfig::from_catalog(&configured_b);
+        let error = Kura::new_with_configured_lane_catalog(&config, &lane_config_b, &configured_b)
+            .expect_err("a reconstructed process must reject configured catalog drift");
+        assert!(matches!(
+            error,
+            Error::IO(ref source, _) if source.to_string().contains("baseline mismatch")
+        ));
+        assert_catalog_paths_absent(dir.path(), &configured_b);
+
+        let (_, BlockCount(reopened_count)) =
+            Kura::new_with_configured_lane_catalog(&config, &lane_config_a, &configured_a)
+                .expect("the exact configured catalog must reopen");
+        assert_eq!(reopened_count, 0);
+    }
+
+    #[test]
+    fn configured_catalog_preflight_rejects_drift_with_durable_genesis_and_state_zero() {
+        let dir = TempDir::new().expect("temporary Kura root");
+        let config = kura_config_for_dir(&dir, BLOCKS_IN_MEMORY);
+        let configured_a = configured_primary_catalog("durable-a");
+        let configured_b = configured_primary_catalog("durable-b");
+        let lane_config_a = RuntimeLaneConfig::from_catalog(&configured_a);
+        let (kura, _) =
+            Kura::new_with_configured_lane_catalog(&config, &lane_config_a, &configured_a)
+                .expect("first startup");
+        publish_configured_catalog_baseline(&kura, &configured_a);
+        let block: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+            .chain(0, None)
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+            .unpack(|_| {})
+            .into();
+        kura.store_block(Arc::new(block))
+            .expect("persist genesis before State reconstruction");
+        drop(kura);
+
+        let lane_config_b = RuntimeLaneConfig::from_catalog(&configured_b);
+        let error = Kura::new_with_configured_lane_catalog(&config, &lane_config_b, &configured_b)
+            .expect_err("durable Kura with State at height zero must not rebase its catalog");
+        assert!(matches!(
+            error,
+            Error::IO(ref source, _) if source.to_string().contains("baseline mismatch")
+        ));
+        assert_catalog_paths_absent(dir.path(), &configured_b);
+
+        let (_, BlockCount(reopened_count)) =
+            Kura::new_with_configured_lane_catalog(&config, &lane_config_a, &configured_a)
+                .expect("the exact configured catalog must recover durable genesis");
+        assert_eq!(reopened_count, 1);
+    }
+
+    #[test]
+    fn configured_catalog_preflight_rejects_existing_journal_without_baseline() {
+        let dir = TempDir::new().expect("temporary Kura root");
+        let config = kura_config_for_dir(&dir, BLOCKS_IN_MEMORY);
+        let configured_a = configured_primary_catalog("unbound-a");
+        let configured_b = configured_primary_catalog("unbound-b");
+        let lane_config_a = RuntimeLaneConfig::from_catalog(&configured_a);
+        let (kura, _) = Kura::new(&config, &lane_config_a).expect("legacy internal Kura open");
+        let incarnations =
+            BTreeMap::from([(LaneId::SINGLE, Hash::prehashed([0xB1; Hash::LENGTH]))]);
+        let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
+        kura.mark_lane_geometry_catalog_published(
+            &lane_config_a,
+            &incarnations,
+            &activation_heights,
+            None,
+        )
+        .expect("persist a v4 journal without a configured baseline");
+        drop(kura);
+
+        let lane_config_b = RuntimeLaneConfig::from_catalog(&configured_b);
+        let error = Kura::new_with_configured_lane_catalog(&config, &lane_config_b, &configured_b)
+            .expect_err("first-release startup must reject an unbound existing journal");
+        assert!(matches!(
+            error,
+            Error::IO(ref source, _)
+                if source
+                    .to_string()
+                    .contains("has no configured lane catalog baseline")
+        ));
+        assert_catalog_paths_absent(dir.path(), &configured_b);
+    }
+
     fn populate_store(dir: &TempDir, count: usize) {
         let blocks_dir = primary_blocks_dir(dir);
         let mut block_store = BlockStore::new(&blocks_dir);
@@ -19167,6 +19392,53 @@ mod tests {
             .pending_certified_merge_entries()
             .expect("pending merge store remains readable after pruning");
         assert_eq!(pending, vec![(current_hash, current)]);
+    }
+
+    #[test]
+    fn locked_and_finalized_carrier_cleanup_preserves_only_authorized_sidecars() {
+        let kura = Kura::blank_kura_for_testing();
+        let parent = HashOf::from_untyped_unchecked(Hash::new(b"cleanup carrier parent"));
+        let mut locked = sample_merge_entry(1);
+        locked.merge_qc.carrier_height = 9;
+        locked.merge_qc.carrier_parent_hash = parent;
+        locked.merge_qc.view = 2;
+        let mut losing = sample_merge_entry(2);
+        losing.merge_qc.carrier_height = 9;
+        losing.merge_qc.carrier_parent_hash = parent;
+        losing.merge_qc.view = 3;
+        let mut future = sample_merge_entry(3);
+        future.merge_qc.carrier_height = 10;
+        future.merge_qc.carrier_parent_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"future cleanup parent"));
+        future.merge_qc.view = 0;
+
+        for entry in [&locked, &losing, &future] {
+            kura.persist_pending_certified_merge_entry(entry)
+                .expect("persist cleanup fixture");
+        }
+        let reference = CertifiedMergeLedgerReference::new(&locked);
+        assert_eq!(
+            kura.retain_pending_certified_merge_entry_for_locked_carrier(9, Some(&reference))
+                .expect("retain exact locked sidecar"),
+            1
+        );
+        let pending = kura
+            .pending_certified_merge_entries()
+            .expect("read retained locked sidecars");
+        assert_eq!(pending.len(), 2);
+        assert!(pending.iter().any(|(_, entry)| entry == &locked));
+        assert!(pending.iter().any(|(_, entry)| entry == &future));
+
+        assert_eq!(
+            kura.prune_finalized_pending_certified_merge_entries(9)
+                .expect("retire finalized carrier sidecars"),
+            1
+        );
+        assert_eq!(
+            kura.pending_certified_merge_entries()
+                .expect("read future sidecars"),
+            vec![(future.canonical_hash(), future)]
+        );
     }
 
     #[test]
