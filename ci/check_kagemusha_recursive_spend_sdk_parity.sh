@@ -103,12 +103,43 @@ ABI18_V2_ALL_C_SYMBOLS = (
     ABI18_V2_C_SYMBOLS + ABI18_V2_NON_RECURSIVE_C_SYMBOLS
 )
 
-ADDITIVE_ABI18_V3_C_SYMBOLS = (
+ABI18_V3_SDK_C_SYMBOLS = (
     "connect_norito_kagemusha_recursive_spend_capabilities_v1",
     "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
     "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
     "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
     "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_install_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3",
+)
+
+ADDITIVE_ABI18_V3_C_SYMBOLS = ABI18_V3_SDK_C_SYMBOLS
+
+V3_RELEASE_FILE_NAMES = frozenset(
+    (
+        "manifest.json",
+        "manifest.norito",
+        "manifest.norito.sha256",
+        "transition-eq.parameters.krv3",
+        "transition-eq.proving-key.krv3",
+        "transition-eq.verifying-key.krv3",
+        "state-ep.parameters.krv3",
+        "state-ep.proving-key.krv3",
+        "state-ep.verifying-key.krv3",
+        "topup-finality-roster.norito",
+    )
+)
+
+V3_RELEASE_ARTIFACT_CONSTANTS = frozenset(
+    (
+        "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PARAMETERS_FILE_NAME_V3",
+        "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROVING_KEY_FILE_NAME_V3",
+        "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_VERIFYING_KEY_FILE_NAME_V3",
+        "KAGEMUSHA_RECURSIVE_SPEND_STATE_PARAMETERS_FILE_NAME_V3",
+        "KAGEMUSHA_RECURSIVE_SPEND_STATE_PROVING_KEY_FILE_NAME_V3",
+        "KAGEMUSHA_RECURSIVE_SPEND_STATE_VERIFYING_KEY_FILE_NAME_V3",
+    )
 )
 
 ABI18_V2_PROOF_C_SYMBOLS = (
@@ -123,7 +154,7 @@ REQUIRED_ABI18_V2_PROTOCOL_C_SYMBOLS = tuple(
     symbol
     for symbol in ABI18_V2_ALL_C_SYMBOLS
     if symbol not in ABI18_V2_PROOF_C_SYMBOLS
-) + ADDITIVE_ABI18_V3_C_SYMBOLS
+) + ABI18_V3_SDK_C_SYMBOLS
 
 CURRENT_KAGEMUSHA_C_SYMBOLS = (
     REQUIRED_C_SYMBOLS
@@ -501,6 +532,7 @@ SOURCE_PATHS = (
     "crates/connect_norito_bridge/include/connect_norito_bridge.h",
     "crates/connect_norito_bridge/include/NoritoBridge.h",
     "crates/iroha_core/Cargo.toml",
+    "crates/iroha_core/src/bin/kagemusha_recursive_spend_v3_bundle.rs",
     "crates/iroha_core/src/zk.rs",
     "crates/iroha_core/src/smartcontracts/isi/offline.rs",
     "crates/iroha_core/examples/confidential_v2_vk_json.rs",
@@ -530,6 +562,7 @@ SOURCE_PATHS = (
     "docs/source/offline_kagemusha_v2_contract.md",
     "docs/source/offline_kagemusha_recursion_adapter.md",
     "ci/check_kagemusha_recursive_spend_swift_sdk.sh",
+    "ci/check_kagemusha_v3_release_contract.sh",
     "ci/check_swift_confidential_unshield_redeem_e2e.sh",
     "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
     "IrohaSwift/Sources/IrohaSwift/Norito.swift",
@@ -562,6 +595,7 @@ SOURCE_PATHS = (
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift",
+    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2Native.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendV2Tests.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift",
@@ -575,7 +609,6 @@ SOURCE_PATHS = (
     "IrohaSwift/Sources/IrohaSwift/OfflineCashLifecycle.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineCashModels.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineIssuerPublicKey.swift",
-    "IrohaSwift/Sources/IrohaSwift/OfflineKagemushaAbi7CapabilityContract.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineNoritoDecoding.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineNoritoEncoding.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineNote.swift",
@@ -641,7 +674,6 @@ SOURCE_PATHS = (
     "IrohaSwift/Tests/IrohaSwiftTests/VerifyingKeyBackendTagTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineCashLifecycleTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineIssuerPublicKeyTests.swift",
-    "IrohaSwift/Tests/IrohaSwiftTests/OfflineKagemushaAbi7CapabilityContractTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoritoEncodingTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteNfcApduPayloadBudgetTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteRedeemPlannerTests.swift",
@@ -1294,8 +1326,14 @@ PUBLIC_KAGEMUSHA_READINESS_DOC_TRIGGER_PATHS = (
 PUBLIC_KAGEMUSHA_READINESS_DOC_ROOTS = tuple(
     path[:-3] for path in PUBLIC_KAGEMUSHA_READINESS_DOC_TRIGGER_PATHS
 )
-REMOVED_KAGEMUSHA_READINESS_ALIAS = "offline_kagemusha_abi7"
-CANONICAL_KAGEMUSHA_READINESS_FIELD = "offline_kagemusha_recursive_compact_available"
+REMOVED_KAGEMUSHA_READINESS_ALIASES = (
+    "offline_kagemusha_abi7",
+    "offline_kagemusha_recursive_compact_available",
+)
+NEGATIVE_CONTROL_REMOVED_KAGEMUSHA_READINESS_ALIAS = (
+    "offline_kagemusha_recursive_compact_available"
+)
+CANONICAL_KAGEMUSHA_READINESS_FIELD = "ready"
 SDK_NATIVE_MATERIAL_README_NEEDLES = (
     "generic proof-state (`proofState`, `ProofState`, `proof_state`)",
     "recursive/lineage proof-state",
@@ -2289,7 +2327,7 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-c-bridge-abi-version",
     ),
     (
-        "ABI-18 Pasta-cycle mode V2 negative control",
+        "ABI-18 Pasta-cycle first-release mode V2 negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-abi18-pasta-cycle-mode-v2",
     ),
     (
@@ -4714,6 +4752,17 @@ def check_c_bridge(texts, errors):
             f"{artifact_inventory_path} complete ABI-18 V2/V3 symbol inventory",
             errors,
         )
+    for release_inventory_path in (
+        "scripts/build_norito_xcframework.sh",
+        "scripts/check_mobile_sdk_artifacts.sh",
+    ):
+        require_not_regex(
+            texts,
+            release_inventory_path,
+            r"connect_norito_kagemusha_recursive_spend_(?:init|append|verify|redeem|topup|lineage_witness_from_init_result|lineage_witness_append_result)(?:[\"'\s,]|$)",
+            f"{release_inventory_path} retired unsuffixed symbols cannot enter the first-release artifact inventory",
+            errors,
+        )
     rust_record_exports = names_from_matches(
         rust,
         r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+'
@@ -4804,6 +4853,7 @@ def check_c_bridge(texts, errors):
             "pub struct KagemushaRecursiveSpendNativeCapabilitiesV1",
             "self.proof_backend_available != KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE",
             "self.missing_gates != kagemusha_v3_missing_gates()",
+            '"authenticated_release_envelope",',
             "pub fn kagemusha_recursive_spend_native_capabilities_v1()",
             "proof_backend_available: KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE",
             "fn kagemusha_pasta_cycle_capability_is_explicitly_fail_closed()",
@@ -4811,6 +4861,15 @@ def check_c_bridge(texts, errors):
             "assert!(forged.validate().is_err());",
         ),
         "Rust ABI-18 V3 fail-closed capability contract",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "crates/iroha_data_model/src/offline/mod.rs",
+        "fn kagemusha_v3_missing_gates() -> Vec<String> {",
+        "/// Return whether `value` is a canonical cross-platform V3 artifact identifier.",
+        ('"authenticated_release_envelope",',),
+        "Rust ABI-18 authenticated release-envelope gate",
         errors,
     )
     require_contains(
@@ -4840,6 +4899,8 @@ def check_c_bridge(texts, errors):
             "The ABI-18 Kagemusha recursive spend V2 bridge is unavailable.",
             "requiredNativeBridgeAbiVersion: UInt32 = 18",
             "isProofBackendAvailable = false",
+            "cachedNativeCapabilities?.proofBackendAvailable == true",
+            '"authenticated_release_envelope",',
             "connect_norito_kagemusha_recursive_spend_capabilities_v1",
             "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
             "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
@@ -4847,6 +4908,15 @@ def check_c_bridge(texts, errors):
             "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
         ),
         "Swift ABI-18 V3 fail-closed capability contract",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift",
+        "    public static let unavailableProofBackendGates = [",
+        "    public static let scaledAmountWireName",
+        ('"authenticated_release_envelope",',),
+        "Swift ABI-18 authenticated release-envelope gate",
         errors,
     )
     require_contains(
@@ -6202,20 +6272,6 @@ def check_recursive_compact_surface(texts, errors):
         "Android Java recursive compact projection availability gate",
         errors,
         flags=re.S,
-    )
-    require_contains(
-        texts,
-        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
-        ("KagemushaRecursiveCompactPaymentTokenProver.isNativeAvailable()",),
-        "Kotlin recursive compact spend-mode selector",
-        errors,
-    )
-    require_contains(
-        texts,
-        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
-        ("KagemushaRecursiveCompactPaymentTokenProver.isNativeAvailable()",),
-        "Android Java recursive compact spend-mode selector",
-        errors,
     )
     require_contains(
         texts,
@@ -8944,7 +9000,7 @@ def check_mobile_offline_readiness_coverage(texts, errors):
         "crates/iroha_torii/src/lib.rs",
         (
             "async fn handler_offline_readiness(",
-            "NoritoQuery<OfflineKagemushaReadinessQuery>",
+            "NoritoStringQuery<OfflineKagemushaReadinessQuery>",
             "asset_definition_id: asset_definition_id.to_string(),",
             "evaluated_block_height: block_height,",
             "ready: blockers.is_empty(),",
@@ -24448,7 +24504,6 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
         "IrohaSwift/Sources/IrohaSwift/OfflineCashLifecycle.swift",
         "IrohaSwift/Sources/IrohaSwift/OfflineCashModels.swift",
         "IrohaSwift/Sources/IrohaSwift/OfflineIssuerPublicKey.swift",
-        "IrohaSwift/Sources/IrohaSwift/OfflineKagemushaAbi7CapabilityContract.swift",
         "IrohaSwift/Sources/IrohaSwift/OfflineNoritoDecoding.swift",
         "IrohaSwift/Sources/IrohaSwift/OfflineNoritoEncoding.swift",
         "IrohaSwift/Sources/IrohaSwift/OfflineNote.swift",
@@ -24513,7 +24568,6 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
         "IrohaSwift/Tests/IrohaSwiftTests/VerifyingKeyBackendTagTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/OfflineCashLifecycleTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/OfflineIssuerPublicKeyTests.swift",
-        "IrohaSwift/Tests/IrohaSwiftTests/OfflineKagemushaAbi7CapabilityContractTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoritoEncodingTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteNfcApduPayloadBudgetTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteRedeemPlannerTests.swift",
@@ -32438,14 +32492,15 @@ def check_public_docs_removed_kagemusha_readiness_aliases(texts, errors):
             if not path.exists():
                 continue
             text = read(relative)
-        require(
-            REMOVED_KAGEMUSHA_READINESS_ALIAS not in text,
-            (
-                f"{relative} must not publish removed {REMOVED_KAGEMUSHA_READINESS_ALIAS} "
-                f"readiness alias; use {CANONICAL_KAGEMUSHA_READINESS_FIELD}"
-            ),
-            errors,
-        )
+        for removed_alias in REMOVED_KAGEMUSHA_READINESS_ALIASES:
+            require(
+                removed_alias not in text,
+                (
+                    f"{relative} must not publish removed {removed_alias} "
+                    f"readiness alias; use {CANONICAL_KAGEMUSHA_READINESS_FIELD}"
+                ),
+                errors,
+            )
 
 
 def check_sdk_readme_pallas_open_envelope_builder_surface(texts, errors):
@@ -32852,6 +32907,37 @@ def check_sdk_readme_recursive_compact_unavailable_boundary(texts, errors):
     }
     for relative in SDK_README_PATHS:
         text = re.sub(r"\s+", " ", texts[relative])
+        if relative == "IrohaSwift/README.md":
+            for needle in (
+                "The first release exposes one Kagemusha production mode: `recursive_spend_v2`.",
+                "exact native bridge ABI 18 capability archive",
+                "The release directory has exactly ten files:",
+                "manifest.json",
+                "manifest.norito",
+                "manifest.norito.sha256",
+                "transition-eq.parameters.krv3",
+                "transition-eq.proving-key.krv3",
+                "transition-eq.verifying-key.krv3",
+                "state-ep.parameters.krv3",
+                "state-ep.proving-key.krv3",
+                "state-ep.verifying-key.krv3",
+                "topup-finality-roster.norito",
+                "beginPastaCycleV3ArtifactIngest",
+                "Successful ingestion alone does not advertise proof readiness.",
+                "an ambiguous terminal outcome rather than submitting the same operation again",
+            ):
+                require(
+                    needle in text,
+                    f"{relative} missing ABI-18/V3 first-release boundary: {needle}",
+                    errors,
+                )
+            for retired in ("recursive_compact_v1", "recursive_spend_v1", "ABI 6", "ABI 7"):
+                require(
+                    retired not in text,
+                    f"{relative} publishes retired first-release selection: {retired}",
+                    errors,
+                )
+            continue
         for needle in (*common_required, *sdk_required[relative]):
             require(
                 needle in text,
@@ -33246,7 +33332,7 @@ def check_mobile_open_verify_public_input_hash_exactness(texts, errors):
 
 
 def check_cross_sdk_preferred_mode_fallback_policy(texts, errors):
-    """Pin preferred-mode selection: ABI-7 compact first, ABI-6 recursive spend, then no mode."""
+    """Keep non-release SDK selectors from falling back to checked-prefold mode."""
 
     require_contains(
         texts,
@@ -33337,6 +33423,7 @@ def check_cross_sdk_preferred_mode_fallback_policy(texts, errors):
             relative,
             (
                 'KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1 = "recursive_compact_v1"',
+                "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 6",
                 "preferredKagemushaOfflineSpendModeForCapabilities",
                 "if (recursiveCompactAvailable) {",
                 "return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1;",
@@ -33388,6 +33475,7 @@ def check_cross_sdk_preferred_mode_fallback_policy(texts, errors):
         "python/iroha_python/src/iroha_python/kagemusha.py",
         (
             'KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1 = "recursive_compact_v1"',
+            "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 6",
             "preferred_kagemusha_offline_spend_mode_for_capabilities",
             "if recursive_compact_available:",
             "return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1",
@@ -33439,106 +33527,9 @@ def check_cross_sdk_preferred_mode_fallback_policy(texts, errors):
         "crates/iroha_data_model/src/offline/mod.rs",
         (
             'KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1: &str = "recursive_compact_v1"',
-            "preferred_kagemusha_offline_spend_mode_for_capabilities(false, recursive_spend_available)",
-            "recursive_compact_available: bool",
-            "if recursive_compact_available {",
-            "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1",
-            "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1",
-            "None",
+            'KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: &str = "recursive_spend_v1"',
         ),
-        "Rust data-model preferred Kagemusha compact-first mode policy",
-        errors,
-    )
-    require_regex(
-        texts,
-        "crates/iroha_data_model/src/offline/mod.rs",
-        r"pub\s+const\s+fn\s+preferred_kagemusha_offline_spend_mode_for_capabilities"
-        r"\(\s*recursive_compact_available:\s*bool,\s*recursive_spend_available:\s*bool,"
-        r"\s*\)\s*->\s*Option<&'static\s+str>\s*\{\s*"
-        r"if\s+recursive_compact_available\s*\{\s*"
-        r"Some\(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1\)\s*"
-        r"\}\s*else\s+if\s+recursive_spend_available\s*\{\s*"
-        r"Some\(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1\)\s*"
-        r"\}\s*else\s*\{\s*"
-        r"None\s*\}\s*\}",
-        "Rust data-model preferred Kagemusha compact-first mode policy",
-        errors,
-        flags=re.S,
-    )
-
-    require_contains(
-        texts,
-        "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
-        (
-            'case recursiveCompactV1 = "recursive_compact_v1"',
-            "recursiveCompactAvailable: KagemushaRecursiveCompactPaymentTokenProver.isNativeAvailable",
-            "if recursiveCompactAvailable {",
-            "return .recursiveCompactV1",
-            "return recursiveSpendAvailable ? .recursiveSpendV1 : nil",
-        ),
-        "Swift preferred Kagemusha compact-first mode policy",
-        errors,
-    )
-    require_not_regex(
-        texts,
-        "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
-        r"preferredMode\(\s*recursiveSpendAvailable:\s*Bool\s*\)",
-        "Swift preferred Kagemusha single-argument fallback removal",
-        errors,
-    )
-
-    require_contains(
-        texts,
-        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
-        (
-            'RECURSIVE_COMPACT_V1("recursive_compact_v1")',
-            "recursiveCompactAvailable = KagemushaRecursiveCompactPaymentTokenProver.isNativeAvailable()",
-            "if (recursiveCompactAvailable) {",
-            "return Mode.RECURSIVE_COMPACT_V1",
-            "null",
-        ),
-        "Kotlin preferred Kagemusha compact-first mode policy",
-        errors,
-    )
-    require_not_regex(
-        texts,
-        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
-        r"fun\s+preferredMode\(\s*recursiveSpendAvailable:\s*Boolean\s*\)",
-        "Kotlin preferred Kagemusha single-argument fallback removal",
-        errors,
-    )
-    require_regex(
-        texts,
-        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
-        r"fun\s+preferredMode\(\s*recursiveCompactAvailable:\s*Boolean,\s*"
-        r"recursiveSpendAvailable:\s*Boolean,\s*\):\s*Mode\?\s*\{\s*"
-        r"if\s*\(\s*recursiveCompactAvailable\s*\)\s*\{\s*"
-        r"return\s+Mode\.RECURSIVE_COMPACT_V1\s*\}\s*"
-        r"return\s+if\s*\(\s*recursiveSpendAvailable\s*\)\s*\{\s*"
-        r"Mode\.RECURSIVE_SPEND_V1\s*\}\s*else\s*\{\s*null\s*\}\s*\}",
-        "Kotlin preferred Kagemusha compact-first mode policy",
-        errors,
-        flags=re.S,
-    )
-
-    require_contains(
-        texts,
-        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
-        (
-            'RECURSIVE_COMPACT_V1("recursive_compact_v1")',
-            "KagemushaRecursiveCompactPaymentTokenProver.isNativeAvailable(), NATIVE_AVAILABLE",
-            "if (recursiveCompactAvailable) {",
-            "return Mode.RECURSIVE_COMPACT_V1;",
-            "return recursiveSpendAvailable ? Mode.RECURSIVE_SPEND_V1 : null;",
-        ),
-        "Android Java preferred Kagemusha compact-first mode policy",
-        errors,
-    )
-    require_not_regex(
-        texts,
-        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
-        r"preferredMode\(\s*final\s+boolean\s+recursiveSpendAvailable\s*\)",
-        "Android Java preferred Kagemusha single-argument fallback removal",
+        "Rust data-model retained legacy Kagemusha mode inventory",
         errors,
     )
 
@@ -33546,6 +33537,8 @@ def check_cross_sdk_preferred_mode_fallback_policy(texts, errors):
         texts,
         "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
         (
+            'RecursiveSpendV1WireName = "recursive_spend_v1"',
+            "RequiredNativeBridgeAbiVersion = 6",
             'RecursiveCompactV1WireName = "recursive_compact_v1"',
             "return PreferredMode(IsRecursiveCompactPaymentTokenProverAvailable(), IsAvailable());",
             "if (recursiveCompactAvailable)",
@@ -34431,96 +34424,219 @@ def check_mobile_offline_note_v2_retired_ios_app_attest_profile(texts, errors):
     )
 
 
+def rust_string_constant(text, name):
+    match = re.search(
+        rf"\b(?:pub\s+)?const\s+{re.escape(name)}\s*:[^=]+\s*=\s*\"([^\"]+)\"\s*;",
+        text,
+        flags=re.MULTILINE,
+    )
+    return None if match is None else match.group(1)
+
+
+def check_abi18_v3_release_inventory(texts, errors):
+    """Require the exact ten-file bundle and every streaming-ingest boundary."""
+
+    model_path = "crates/iroha_data_model/src/offline/mod.rs"
+    packager_path = "crates/iroha_core/src/bin/kagemusha_recursive_spend_v3_bundle.rs"
+    model = texts[model_path]
+    packager = texts[packager_path]
+    input_match = re.search(
+        r"const\s+INPUTS\s*:\s*&\[InputSpec\]\s*=\s*&\[(?P<body>[\s\S]*?)\n\];",
+        packager,
+    )
+    if input_match is None:
+        errors.append(f"{packager_path} canonical six-artifact INPUTS inventory is missing")
+        artifact_constants = set()
+    else:
+        artifact_constants = set(
+            re.findall(r"file_name:\s*([A-Z][A-Z0-9_]+)", input_match.group("body"))
+        )
+        require_same_set(
+            artifact_constants,
+            V3_RELEASE_ARTIFACT_CONSTANTS,
+            f"{packager_path} exact six-artifact V3 INPUTS inventory",
+            errors,
+        )
+
+    actual_files = {
+        value
+        for name in artifact_constants
+        if (value := rust_string_constant(model, name)) is not None
+    }
+    for name in (
+        "MANIFEST_JSON_FILE_NAME",
+        "MANIFEST_NORITO_FILE_NAME",
+        "MANIFEST_NORITO_SHA256_FILE_NAME",
+    ):
+        value = rust_string_constant(packager, name)
+        if value is not None:
+            actual_files.add(value)
+    roster = rust_string_constant(model, "KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2")
+    if roster is not None:
+        actual_files.add(roster)
+    require_same_set(
+        actual_files,
+        V3_RELEASE_FILE_NAMES,
+        f"{packager_path} exact ten-file V3 release inventory",
+        errors,
+    )
+    require(
+        len(actual_files) == 10,
+        f"{packager_path} V3 release inventory must contain exactly ten files",
+        errors,
+    )
+    require_contains(
+        texts,
+        packager_path,
+        (
+            "fn verify_inventory(&self) -> io::Result<()>",
+            "KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2",
+            "MANIFEST_NORITO_FILE_NAME",
+            "MANIFEST_NORITO_SHA256_FILE_NAME",
+            "MANIFEST_JSON_FILE_NAME",
+            "if actual != expected.into_iter().map(str::to_owned).collect()",
+            "publication file inventory is incomplete or excessive",
+        ),
+        "V3 packager exact post-write inventory gate",
+        errors,
+    )
+
+    for relative in (
+        "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2Native.swift",
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "nativeArtifactBeginV3",
+                "nativeArtifactWriteV3",
+                "nativeArtifactFinalizeV3",
+                "nativeArtifactCancelV3",
+            ) if not relative.endswith("KagemushaRecursiveSpendV2Native.swift") else ABI18_V3_SDK_C_SYMBOLS[1:],
+            f"{relative} complete ABI-18/V3 native artifact-ingest boundary",
+            errors,
+        )
+
+    retired_mode_declarations = {
+        "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift":
+            r"case\s+(?:recursiveSpendV1|recursiveCompactV1)\s*=",
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt":
+            r"(?:RECURSIVE_SPEND_V1\(\"recursive_spend_v1\"\)|RECURSIVE_COMPACT_V1\(\"recursive_compact_v1\"\))",
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java":
+            r"(?:RECURSIVE_SPEND_V1\(\"recursive_spend_v1\"\)|RECURSIVE_COMPACT_V1\(\"recursive_compact_v1\"\))",
+    }
+    for relative, pattern in retired_mode_declarations.items():
+        require_not_regex(
+            texts,
+            relative,
+            pattern,
+            f"{relative} non-product mode cannot be selected by the first release",
+            errors,
+        )
+
+
 def check_abi18_pasta_cycle_mode_v2(texts, errors):
-    """Pin ABI-18 Pasta-cycle mode V2 without changing the ABI-6 V1 mode."""
+    """Pin the V2 product selector used by the ABI-18/V3 release."""
 
     rust_model = "crates/iroha_data_model/src/offline/mod.rs"
     require_contains(
         texts,
         rust_model,
         (
-            'pub const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: &str = "recursive_spend_v1";',
             'pub const KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";',
+            "pub const KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3: u32 = 18;",
             "self.mode != KAGEMUSHA_RECURSIVE_SPEND_MODE_V2",
             "mode: KAGEMUSHA_RECURSIVE_SPEND_MODE_V2.to_owned(),",
+            "preferred_kagemusha_offline_spend_mode(true)",
+            "Some(KAGEMUSHA_RECURSIVE_SPEND_MODE_V2)",
         ),
-        "Rust ABI-18 Pasta-cycle mode V2 contract",
+        "Rust ABI-18 Pasta-cycle first-release mode V2 contract",
         errors,
     )
     require_contains(
         texts,
         "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
         (
-            'case recursiveSpendV1 = "recursive_spend_v1"',
             'case recursiveSpendV2 = "recursive_spend_v2"',
+            "pastaCycleV3BackendAvailable ? .recursiveSpendV2 : nil",
         ),
-        "Swift recursive-spend mode inventory",
+        "Swift ABI-18 Pasta-cycle first-release mode V2 selector",
         errors,
     )
     require_contains(
         texts,
         "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift",
         (
+            "public static let requiredNativeBridgeAbiVersion: UInt32 = 18",
             'public static let mode = "recursive_spend_v2"',
             "mode == KagemushaRecursiveSpendV2.mode",
             "proofBackendAvailable && nativeStubAvailable ? .recursiveSpendV2 : nil",
         ),
-        "Swift ABI-18 Pasta-cycle mode V2 contract",
+        "Swift ABI-18 Pasta-cycle first-release mode V2 contract",
         errors,
     )
     require_contains(
         texts,
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendV2Tests.swift",
         (
+            "XCTAssertEqual(KagemushaRecursiveSpendV2.requiredNativeBridgeAbiVersion, 18)",
             'XCTAssertEqual(KagemushaRecursiveSpendV2.mode, "recursive_spend_v2")',
             'XCTAssertEqual(KagemushaOfflineSpendMode.recursiveSpendV2.rawValue, "recursive_spend_v2")',
         ),
-        "Swift ABI-18 Pasta-cycle mode V2 tests",
+        "Swift ABI-18 Pasta-cycle first-release mode V2 tests",
         errors,
     )
     require_contains(
         texts,
         "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
         (
-            'RECURSIVE_SPEND_V1("recursive_spend_v1")',
             'RECURSIVE_SPEND_V2("recursive_spend_v2")',
+            "const val PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 18",
             'const val PASTA_CYCLE_V3_MODE: String = "recursive_spend_v2"',
+            "if (pastaCycleV3BackendAvailable) Mode.RECURSIVE_SPEND_V2 else null",
         ),
-        "Kotlin ABI-18 Pasta-cycle mode V2 contract",
+        "Kotlin ABI-18 Pasta-cycle first-release mode V2 contract",
         errors,
     )
     require_contains(
         texts,
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
         (
+            "KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
             'assertEquals("recursive_spend_v2", KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_MODE)',
-            'assertEquals("recursive_spend_v1", KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1.wireName)',
             'assertEquals("recursive_spend_v2", KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V2.wireName)',
+            "assertEquals(1, KagemushaRecursiveSpendProver.Mode.values().size)",
+            "KagemushaRecursiveSpendProver.preferredMode(true)",
         ),
-        "Kotlin ABI-18 Pasta-cycle mode V2 tests",
+        "Kotlin ABI-18 Pasta-cycle first-release mode V2 tests",
         errors,
     )
     require_contains(
         texts,
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
         (
+            "public static final int PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 18;",
             'public static final String PASTA_CYCLE_V3_MODE = "recursive_spend_v2";',
-            'RECURSIVE_SPEND_V1("recursive_spend_v1")',
             'RECURSIVE_SPEND_V2("recursive_spend_v2")',
+            "return pastaCycleV3BackendAvailable ? Mode.RECURSIVE_SPEND_V2 : null;",
         ),
-        "Android Java ABI-18 Pasta-cycle mode V2 contract",
+        "Android Java ABI-18 Pasta-cycle first-release mode V2 contract",
         errors,
     )
     require_contains(
         texts,
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
         (
+            "KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 18",
             'assert "recursive_spend_v2".equals(KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_MODE);',
-            'assert "recursive_spend_v1"',
             'assert "recursive_spend_v2"',
             "KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V2.wireName()",
+            "KagemushaRecursiveSpendProver.Mode.values().length == 1",
+            "KagemushaRecursiveSpendProver.preferredMode(true)",
         ),
-        "Android Java ABI-18 Pasta-cycle mode V2 tests",
+        "Android Java ABI-18 Pasta-cycle first-release mode V2 tests",
         errors,
     )
     require_block_contains(
@@ -34532,15 +34648,23 @@ def check_abi18_pasta_cycle_mode_v2(texts, errors):
             "KAGEMUSHA_RECURSIVE_SPEND_MODE_V2,",
             "mode: KAGEMUSHA_RECURSIVE_SPEND_MODE_V2.to_owned(),",
         ),
-        "native bridge ABI-18 Pasta-cycle mode V2 fixture",
+        "native bridge ABI-18 Pasta-cycle first-release mode V2 fixture",
+        errors,
+    )
+    require_regex(
+        texts,
+        "crates/connect_norito_bridge/src/lib.rs",
+        r"CONNECT_NORITO_BRIDGE_ABI_VERSION:\s*u32\s*=\s*18;",
+        "native bridge ABI-18 Pasta-cycle advertisement",
         errors,
     )
     require_regex(
         texts,
         "docs/source/offline_kagemusha_v2_contract.md",
-        r"artifact manifest\s+`kagemusha\.offline\.recursive_spend\.artifact_manifest\.v3`, mode\s+"
+        r"ABI 18 also\s+exports[\s\S]*?artifact manifest\s+"
+        r"`kagemusha\.offline\.recursive_spend\.artifact_manifest\.v3`, mode\s+"
         r"`recursive_spend_v2`, proof backend `halo2/ipa-pasta-cycle-v1`",
-        "ABI-18 Kagemusha V2 contract mode",
+        "ABI-18 Kagemusha first-release contract mode",
         errors,
         re.S,
     )
@@ -34572,6 +34696,7 @@ def run_checks(texts):
     check_javascript_sdk_script(errors)
     check_js_parity_meta_test(errors)
     check_c_bridge(texts, errors)
+    check_abi18_v3_release_inventory(texts, errors)
     check_abi18_pasta_cycle_mode_v2(texts, errors)
     check_recursive_compact_surface(texts, errors)
     check_recursive_compact_sdk_key_package_arity(texts, errors)
@@ -66069,7 +66194,7 @@ if mode == "--negative-control-public-docs-removed-readiness-aliases":
         original = mutated[target] if target_in_snapshot else read(target)
         updated = original.replace(
             "readiness." + CANONICAL_KAGEMUSHA_READINESS_FIELD,
-            "readiness." + REMOVED_KAGEMUSHA_READINESS_ALIAS,
+            "readiness." + NEGATIVE_CONTROL_REMOVED_KAGEMUSHA_READINESS_ALIAS,
             1,
         )
         if updated == original:
@@ -66082,7 +66207,8 @@ if mode == "--negative-control-public-docs-removed-readiness-aliases":
         else:
             text_overrides[target] = updated
         expected = (
-            f"{target} must not publish removed {REMOVED_KAGEMUSHA_READINESS_ALIAS} "
+            f"{target} must not publish removed "
+            f"{NEGATIVE_CONTROL_REMOVED_KAGEMUSHA_READINESS_ALIAS} "
             f"readiness alias; use {CANONICAL_KAGEMUSHA_READINESS_FIELD}"
         )
         try:
@@ -66114,7 +66240,6 @@ if mode == "--negative-control-public-docs-removed-readiness-aliases":
 
 if mode == "--negative-control-sdk-readme-recursive-compact-unavailable":
     targets = (
-        "IrohaSwift/README.md",
         "java/iroha_android/README.md",
         "kotlin/README.md",
         "csharp/README.md",
@@ -66122,6 +66247,33 @@ if mode == "--negative-control-sdk-readme-recursive-compact-unavailable":
         "python/iroha_python/README.md",
     )
     detected_messages = []
+    swift_target = "IrohaSwift/README.md"
+    mutated = dict(texts)
+    updated = mutated[swift_target].replace(
+        "The release directory has exactly ten files:",
+        "The release directory has an extensible file set:",
+        1,
+    )
+    if updated == mutated[swift_target]:
+        raise SystemExit(
+            "negative control failed: unable to mutate Swift ABI-18/V3 release inventory wording"
+        )
+    mutated[swift_target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        expected = f"{swift_target} missing ABI-18/V3 first-release boundary"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Swift ABI-18/V3 README drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
+        detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+    else:
+        raise SystemExit(
+            "negative control failed: Swift ABI-18/V3 README inventory drift was not detected"
+        )
     for replacement, expected_fragment in (
         ("ABI-7 native state", "missing recursive compact ABI-7 boundary"),
         ("legacy reserved ABI-7 state", "contains stale recursive compact ABI-7 README wording"),
@@ -66351,10 +66503,6 @@ if mode == "--negative-control-sdk-readme-retired-offline-note-wording":
 if mode == "--negative-control-sdk-readme-compact-projection-verifier":
     mutated = dict(texts)
     replacements = {
-        "IrohaSwift/README.md": (
-            "verifyRecursiveSpendCompactPaymentTokenProjection(compactTokenArchive:verifierRecordArchive:blockHeight:)",
-            "verifyRecursiveSpendCompactPaymentTokenProjection(compactTokenArchive:verifierRecordArchive:)",
-        ),
         "java/iroha_android/README.md": (
             "verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(...)",
             "verifyRecursiveSpendCompactPaymentTokenProjectionUnchecked(...)",
@@ -66600,12 +66748,6 @@ if mode == "--negative-control-cross-sdk-preferred-mode-fallback":
     mutated = dict(texts)
     mutations = (
         (
-            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
-            "        if recursiveCompactAvailable {\n            return .recursiveCompactV1\n        }\n",
-            "        _ = recursiveCompactAvailable\n",
-            "Swift preferred Kagemusha compact-first mode policy",
-        ),
-        (
             "javascript/iroha_js/src/crypto.js",
             "  if (recursiveCompactAvailable) {\n    return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1;\n  }\n",
             "  void recursiveCompactAvailable;\n",
@@ -66636,24 +66778,6 @@ if mode == "--negative-control-cross-sdk-preferred-mode-fallback":
             "Python preferred Kagemusha compact-first mode policy",
         ),
         (
-            "crates/iroha_data_model/src/offline/mod.rs",
-            "    if recursive_compact_available {\n        Some(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1)\n    } else ",
-            "    ",
-            "Rust data-model preferred Kagemusha compact-first mode policy",
-        ),
-        (
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
-            "            if (recursiveCompactAvailable) {\n                return Mode.RECURSIVE_COMPACT_V1\n            }\n",
-            "",
-            "Kotlin preferred Kagemusha compact-first mode policy",
-        ),
-        (
-            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
-            "    if (recursiveCompactAvailable) {\n      return Mode.RECURSIVE_COMPACT_V1;\n    }\n",
-            "",
-            "Android Java preferred Kagemusha compact-first mode policy",
-        ),
-        (
             "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
             "        if (recursiveCompactAvailable)\n        {\n            return KagemushaOfflineSpendMode.RecursiveCompactV1;\n        }\n\n",
             "",
@@ -66668,84 +66792,6 @@ if mode == "--negative-control-cross-sdk-preferred-mode-fallback":
             raise SystemExit(f"negative control failed: unable to mutate {target}")
         mutated[target] = updated
         expected_label = f"{label} missing {old.splitlines()[0].strip()}"
-        try:
-            detected_messages.extend(
-                detect_negative_control(
-                    mutated,
-                    (expected_label,),
-                    "cross-SDK first-release preferred-mode drift",
-                )
-            )
-        finally:
-            mutated[target] = current
-    fallback_mutations = (
-        (
-            "javascript/iroha_js/src/crypto.js",
-            "  return null;",
-            "  return KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1;",
-            "javascript/iroha_js/src/crypto.js preferred Kagemusha compact-first mode policy missing pattern",
-        ),
-        (
-            "javascript/iroha_js/dist/crypto.js",
-            "  return null;",
-            "  return KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1;",
-            "javascript/iroha_js/dist/crypto.js preferred Kagemusha compact-first mode policy missing pattern",
-        ),
-        (
-            "javascript/iroha_js/src/crypto.browser.js",
-            "  return null;",
-            "  return KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1;",
-            "javascript/iroha_js/src/crypto.browser.js preferred Kagemusha compact-first mode policy missing pattern",
-        ),
-        (
-            "javascript/iroha_js/dist/crypto.browser.js",
-            "  return null;",
-            "  return KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1;",
-            "javascript/iroha_js/dist/crypto.browser.js preferred Kagemusha compact-first mode policy missing pattern",
-        ),
-        (
-            "python/iroha_python/src/iroha_python/kagemusha.py",
-            "    if recursive_spend_available:\n        return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1\n    return None",
-            "    if recursive_spend_available:\n        return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1\n    return KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1",
-            "Python preferred Kagemusha compact-first mode policy missing pattern",
-        ),
-        (
-            "crates/iroha_data_model/src/offline/mod.rs",
-            "        None\n",
-            "        Some(KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1)\n",
-            "Rust data-model preferred Kagemusha compact-first mode policy missing pattern",
-        ),
-        (
-            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
-            "        return recursiveSpendAvailable ? .recursiveSpendV1 : nil",
-            "        return recursiveSpendAvailable ? .recursiveSpendV1 : .checkedPrefoldV1",
-            "Swift preferred Kagemusha compact-first mode policy missing return recursiveSpendAvailable ? .recursiveSpendV1 : nil",
-        ),
-        (
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
-            "                null",
-            "                Mode.CHECKED_PREFOLD_V1",
-            "Kotlin preferred Kagemusha compact-first mode policy missing pattern",
-        ),
-        (
-            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
-            "    return recursiveSpendAvailable ? Mode.RECURSIVE_SPEND_V1 : null;",
-            "    return recursiveSpendAvailable ? Mode.RECURSIVE_SPEND_V1 : Mode.CHECKED_PREFOLD_V1;",
-            "Android Java preferred Kagemusha compact-first mode policy missing return recursiveSpendAvailable ? Mode.RECURSIVE_SPEND_V1 : null;",
-        ),
-        (
-            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
-            "            : null;",
-            "            : KagemushaOfflineSpendMode.CheckedPrefoldV1;",
-            "C# preferred Kagemusha compact-first mode policy missing pattern",
-        ),
-    )
-    for target, old, new, expected_label in fallback_mutations:
-        current = mutated[target]
-        updated = current.replace(old, new, 1)
-        if updated == current:
-            raise SystemExit(f"negative control failed: unable to mutate {target}")
-        mutated[target] = updated
         try:
             detected_messages.extend(
                 detect_negative_control(
@@ -66836,16 +66882,16 @@ if mode == "--negative-control-cross-sdk-preferred-mode-fallback":
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
-            '        RECURSIVE_COMPACT_V1("recursive_compact_v1"),\n',
+            '        RECURSIVE_SPEND_V1("recursive_spend_v1"),\n',
             '        CHECKED_PREFOLD_V1("checked_prefold_v1"),\n'
-            '        RECURSIVE_COMPACT_V1("recursive_compact_v1"),\n',
+            '        RECURSIVE_SPEND_V1("recursive_spend_v1"),\n',
             "CHECKED_PREFOLD_V1",
         ),
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
-            '    RECURSIVE_COMPACT_V1("recursive_compact_v1"),\n',
+            '    RECURSIVE_SPEND_V1("recursive_spend_v1");\n',
             '    CHECKED_PREFOLD_V1("checked_prefold_v1"),\n'
-            '    RECURSIVE_COMPACT_V1("recursive_compact_v1"),\n',
+            '    RECURSIVE_SPEND_V1("recursive_spend_v1");\n',
             "CHECKED_PREFOLD_V1",
         ),
         (
@@ -66912,24 +66958,6 @@ if mode == "--negative-control-cross-sdk-preferred-mode-fallback":
             "    *,\n    recursive_compact_available: bool | None = None,\n",
             "    recursive_spend_available: bool | None = None,\n    recursive_compact_available: bool | None = None,\n",
             "Python preferred Kagemusha explicit capability arity missing pattern",
-        ),
-        (
-            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
-            "    public static func preferredMode(\n        recursiveCompactAvailable: Bool,\n",
-            "    public static func preferredMode(recursiveSpendAvailable: Bool) -> KagemushaOfflineSpendMode {\n        preferredMode(\n            recursiveCompactAvailable: false,\n            recursiveSpendAvailable: recursiveSpendAvailable\n        )\n    }\n\n    public static func preferredMode(\n        recursiveCompactAvailable: Bool,\n",
-            "Swift preferred Kagemusha single-argument fallback removal contains forbidden pattern preferredMode\\(\\s*recursiveSpendAvailable:\\s*Bool\\s*\\)",
-        ),
-        (
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
-            "        @JvmStatic\n        fun preferredMode(\n            recursiveCompactAvailable: Boolean,\n",
-            "        @JvmStatic\n        fun preferredMode(recursiveSpendAvailable: Boolean): Mode =\n            preferredMode(\n                recursiveCompactAvailable = false,\n                recursiveSpendAvailable = recursiveSpendAvailable,\n            )\n\n        @JvmStatic\n        fun preferredMode(\n            recursiveCompactAvailable: Boolean,\n",
-            "Kotlin preferred Kagemusha single-argument fallback removal contains forbidden pattern fun\\s+preferredMode\\(\\s*recursiveSpendAvailable:\\s*Boolean\\s*\\)",
-        ),
-        (
-            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
-            "  public static Mode preferredMode(\n      final boolean recursiveCompactAvailable, final boolean recursiveSpendAvailable) {\n",
-            "  public static Mode preferredMode(final boolean recursiveSpendAvailable) {\n    return preferredMode(false, recursiveSpendAvailable);\n  }\n\n  public static Mode preferredMode(\n      final boolean recursiveCompactAvailable, final boolean recursiveSpendAvailable) {\n",
-            "Android Java preferred Kagemusha single-argument fallback removal contains forbidden pattern preferredMode\\(\\s*final\\s+boolean\\s+recursiveSpendAvailable\\s*\\)",
         ),
         (
             "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
@@ -71806,43 +71834,43 @@ if mode == "--negative-control-abi18-pasta-cycle-mode-v2":
         (
             "crates/iroha_data_model/src/offline/mod.rs",
             'pub const KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";',
-            'pub const KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v1";',
-            "Rust ABI-18 Pasta-cycle mode V2 contract",
+            'pub const KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "unsupported_mode";',
+            "Rust ABI-18 Pasta-cycle first-release mode V2 contract",
         ),
         (
             "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift",
             'public static let mode = "recursive_spend_v2"',
-            'public static let mode = "recursive_spend_v1"',
-            "Swift ABI-18 Pasta-cycle mode V2 contract",
+            'public static let mode = "unsupported_mode"',
+            "Swift ABI-18 Pasta-cycle first-release mode V2 contract",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
             'const val PASTA_CYCLE_V3_MODE: String = "recursive_spend_v2"',
-            'const val PASTA_CYCLE_V3_MODE: String = "recursive_spend_v1"',
-            "Kotlin ABI-18 Pasta-cycle mode V2 contract",
+            'const val PASTA_CYCLE_V3_MODE: String = "unsupported_mode"',
+            "Kotlin ABI-18 Pasta-cycle first-release mode V2 contract",
         ),
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
             'public static final String PASTA_CYCLE_V3_MODE = "recursive_spend_v2";',
-            'public static final String PASTA_CYCLE_V3_MODE = "recursive_spend_v1";',
-            "Android Java ABI-18 Pasta-cycle mode V2 contract",
+            'public static final String PASTA_CYCLE_V3_MODE = "unsupported_mode";',
+            "Android Java ABI-18 Pasta-cycle first-release mode V2 contract",
         ),
         (
             "crates/connect_norito_bridge/src/lib.rs",
             "            mode: KAGEMUSHA_RECURSIVE_SPEND_MODE_V2.to_owned(),",
-            "            mode: KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1.to_owned(),",
-            "native bridge ABI-18 Pasta-cycle mode V2 fixture",
+            '            mode: "unsupported_mode".to_owned(),',
+            "native bridge ABI-18 Pasta-cycle first-release mode V2 fixture",
         ),
         (
             "docs/source/offline_kagemusha_v2_contract.md",
             "`recursive_spend_v2`, proof backend `halo2/ipa-pasta-cycle-v1`",
-            "`recursive_spend_v1`, proof backend `halo2/ipa-pasta-cycle-v1`",
-            "ABI-18 Kagemusha V2 contract mode",
+            "`unsupported_mode`, proof backend `halo2/ipa-pasta-cycle-v1`",
+            "ABI-18 Kagemusha first-release contract mode",
         ),
         (
             "docs/source/offline_kagemusha_recursion_adapter.md",
             "`recursive_spend_v2`, manifest schema",
-            "`recursive_spend_v1`, manifest schema",
+            "`unsupported_mode`, manifest schema",
             "ABI-18 recursion adapter contract mode",
         ),
     )
@@ -71869,12 +71897,12 @@ if mode == "--negative-control-abi18-pasta-cycle-mode-v2":
             detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
         else:
             raise SystemExit(
-                "negative control failed: ABI-18 Pasta-cycle V1 substitution was not detected for "
+                "negative control failed: ABI-18 Pasta-cycle V2 substitution was not detected for "
                 + target
             )
         finally:
             mutated_texts[target] = original
-    print("negative control rejected every one-sided ABI-18 Pasta-cycle V1 substitution")
+    print("negative control rejected every one-sided ABI-18 Pasta-cycle V2 substitution")
     for detected_message in detected_messages:
         print(detected_message)
     raise SystemExit(0)
@@ -71907,6 +71935,31 @@ if mode == "--negative-control-native-c-bridge-abi-version":
             "proof_backend_available: KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE,",
             "proof_backend_available: true,",
             ("Rust ABI-18 V3 fail-closed capability contract missing",),
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift",
+            "public static let isProofBackendAvailable = false",
+            "public static let isProofBackendAvailable = true",
+            ("Swift ABI-18 V3 fail-closed capability contract missing",),
+        ),
+        (
+            "crates/iroha_data_model/src/offline/mod.rs",
+            'fn kagemusha_v3_missing_gates() -> Vec<String> {\n    [\n'
+            '        "opposite_field_pasta_loader",\n'
+            '        "cross_field_poseidon_transcript",\n'
+            '        "two_layer_recursive_accumulator",\n'
+            '        "authenticated_release_envelope",\n',
+            'fn kagemusha_v3_missing_gates() -> Vec<String> {\n    [\n'
+            '        "opposite_field_pasta_loader",\n'
+            '        "cross_field_poseidon_transcript",\n'
+            '        "two_layer_recursive_accumulator",\n',
+            ("Rust ABI-18 authenticated release-envelope gate",),
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift",
+            '        "authenticated_release_envelope",\n',
+            "",
+            ("Swift ABI-18 authenticated release-envelope gate",),
         ),
     )
     detected_messages = []
@@ -72785,6 +72838,9 @@ if [[ -z "$MODE" && "$(uname -s)" == "Darwin" ]]; then
       "connect_norito_kagemusha_recursive_spend_artifact_write_v3"
       "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3"
       "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3"
+      "connect_norito_kagemusha_recursive_spend_artifact_set_install_v3"
+      "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3"
+      "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3"
       "connect_norito_kagemusha_recursive_spend_init_v2"
       "connect_norito_kagemusha_recursive_spend_append_v2"
       "connect_norito_kagemusha_recursive_spend_redeem_change_v2"

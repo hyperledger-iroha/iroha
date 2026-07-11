@@ -31,7 +31,7 @@ class KagemushaRecursiveSpendProverTest {
             "kagemusha.offline.recursive_spend.artifact_manifest.v3",
             KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_ARTIFACT_MANIFEST_SCHEMA,
         )
-        assertEquals("recursive_spend_v2", KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_MODE)
+        assertEquals("recursive_spend_v1", KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_MODE)
         assertEquals(
             "halo2/ipa-pasta-cycle-v1",
             KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_PROOF_BACKEND,
@@ -621,10 +621,10 @@ class KagemushaRecursiveSpendProverTest {
         )
         assertFalse(KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(null, 1))
         assertFalse(KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend("", 1))
-        assertEquals("recursive_spend_v2", KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V2.wireName)
+        assertEquals("recursive_spend_v1", KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1.wireName)
         assertEquals(1, KagemushaRecursiveSpendProver.Mode.values().size)
         assertEquals(
-            KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V2,
+            KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1,
             KagemushaRecursiveSpendProver.preferredMode(true),
         )
         assertEquals(null, KagemushaRecursiveSpendProver.preferredMode(false))

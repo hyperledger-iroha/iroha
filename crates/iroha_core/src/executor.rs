@@ -21,16 +21,16 @@ use iroha_data_model::{
     Identifiable as _, Registrable as _, ValidationFail,
     account::{AccountId, address::AccountAddress},
     asset::{
-        AssetBalancePolicy, AssetDefinition,
+        AssetBalancePolicy, AssetDefinition, AssetTransferControlWindow,
         id::{AssetBalanceScope, AssetDefinitionId, AssetId},
         value::Asset,
     },
     block::{BlockHeader, consensus::NexusFeeScheduleInputs},
     executor::{self as data_model_executor, ExecutorDataModel},
     isi::{
-        CustomInstruction, InstructionBox, InstructionBox as DMInstructionBox, RemoveKeyValueBox,
-        SetKeyValueBox, TransferBox, error::InstructionExecutionError, mint_burn::MintBox,
-        register::RegisterBox,
+        CustomInstruction, GrantBox, InstructionBox, InstructionBox as DMInstructionBox,
+        RemoveKeyValueBox, SetAssetTransferControl, SetAssetTransferFreeze, SetKeyValueBox,
+        TransferBox, error::InstructionExecutionError, mint_burn::MintBox, register::RegisterBox,
     },
     metadata::Metadata,
     name::Name,
@@ -1731,7 +1731,24 @@ impl ContractRuntimeExecutionContext {
         self.contract_alias.as_ref().is_some_and(|contract_alias| {
             contract_alias.name_segment() == "bisp_bisp"
                 && contract_alias.dataspace_segment() == "sbp"
-        }) && self.entrypoint == "grant_beneficiary_spend_permission"
+        }) && matches!(
+            self.entrypoint.as_str(),
+            "create_tranche" | "set_beneficiary_spend_authority"
+        )
+    }
+
+    fn allows_freeze_control_bypass(&self) -> bool {
+        self.contract_alias.as_ref().is_some_and(|contract_alias| {
+            contract_alias.name_segment() == "apps_freeze"
+                && contract_alias.dataspace_segment() == "sbp"
+        }) && self.entrypoint == "apply_freeze"
+    }
+
+    fn allows_daily_limit_control_bypass(&self) -> bool {
+        self.contract_alias.as_ref().is_some_and(|contract_alias| {
+            contract_alias.name_segment() == "apps_limits_update"
+                && contract_alias.dataspace_segment() == "sbp"
+        }) && self.entrypoint == "apply_limits"
     }
 }
 
@@ -5084,6 +5101,70 @@ impl Executor {
 
         let is_genesis =
             state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty();
+
+        if !is_genesis
+            && let Some(context) = contract_runtime_context
+        {
+            if let Some(GrantBox::Permission(grant)) =
+                instruction.as_any().downcast_ref::<GrantBox>()
+            {
+                if context.allows_bisp_spend_permission_grant_bypass()
+                    && grant.object().name() == "BispSpend"
+                {
+                    return grant
+                        .clone()
+                        .execute(authority, state_transaction)
+                        .map_err(ValidationFail::from);
+                }
+                return Err(ValidationFail::NotPermitted(format!(
+                    "contract alias/entrypoint `{}` cannot grant permission `{}`",
+                    context.entrypoint,
+                    grant.object().name()
+                )));
+            }
+
+            if let Some(freeze) = instruction.as_any().downcast_ref::<SetAssetTransferFreeze>() {
+                if !context.allows_freeze_control_bypass() {
+                    return Err(ValidationFail::NotPermitted(
+                        "only apps_freeze::sbp/apply_freeze may emit SetAssetTransferFreeze"
+                            .to_owned(),
+                    ));
+                }
+                let owner = state_transaction
+                    .world
+                    .asset_definition(&freeze.asset_definition_id)
+                    .map(|definition| definition.owned_by().clone())
+                    .map_err(|err| {
+                        ValidationFail::InstructionFailed(InstructionExecutionError::Find(err))
+                    })?;
+                return freeze
+                    .clone()
+                    .execute(&owner, state_transaction)
+                    .map_err(ValidationFail::from);
+            }
+
+            if let Some(control) = instruction.as_any().downcast_ref::<SetAssetTransferControl>() {
+                let daily_only = control.limits.len() == 1
+                    && control.limits[0].window == AssetTransferControlWindow::Day;
+                if !context.allows_daily_limit_control_bypass() || !daily_only {
+                    return Err(ValidationFail::NotPermitted(
+                        "only apps_limits_update::sbp/apply_limits may emit one daily SetAssetTransferControl"
+                            .to_owned(),
+                    ));
+                }
+                let owner = state_transaction
+                    .world
+                    .asset_definition(&control.asset_definition_id)
+                    .map(|definition| definition.owned_by().clone())
+                    .map_err(|err| {
+                        ValidationFail::InstructionFailed(InstructionExecutionError::Find(err))
+                    })?;
+                return control
+                    .clone()
+                    .execute(&owner, state_transaction)
+                    .map_err(ValidationFail::from);
+            }
+        }
 
         if let Some(register_role) = extract_register_role(instruction) {
             if let Some(multisig_account) =
@@ -9310,7 +9391,7 @@ mod tests {
             contract_subject: contract_address.subject_id(),
             contract_address,
             contract_alias: Some("bisp_bisp::sbp".parse().expect("bisp alias")),
-            entrypoint: "grant_beneficiary_spend_permission".to_owned(),
+            entrypoint: "create_tranche".to_owned(),
         };
         let mut stx = block.transaction();
         stx.tx_call_hash = Some(Hash::prehashed([0xE7; Hash::LENGTH]));
@@ -9328,6 +9409,214 @@ mod tests {
             ),
             "contract alias must not bypass the user-provided executor verdict: {result:?}"
         );
+    }
+
+    #[test]
+    fn initial_executor_scopes_bisp_spend_grants_to_v1_contract_entrypoints() {
+        fn execute_case(
+            alias: &str,
+            entrypoint: &str,
+            permission_name: &str,
+        ) -> Result<(), ValidationFail> {
+            let alice_id = ALICE_ID.clone();
+            let beneficiary = checked_account_id();
+            let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
+            let world = World::with(
+                [Domain::new(domain_id).build(&alice_id)],
+                [
+                    Account::new(alice_id.clone()).build(&alice_id),
+                    Account::new(beneficiary.clone()).build(&beneficiary),
+                ],
+                [],
+            );
+            let state = State::new(
+                world,
+                Kura::blank_kura_for_testing(),
+                query::store::LiveQueryStore::start_test(),
+            );
+            state
+                .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
+                .commit()
+                .expect("commit bootstrap block");
+            let mut block =
+                state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+            let contract_address = ContractAddress::derive(
+                iroha_config::parameters::defaults::common::chain_discriminant(),
+                &alice_id,
+                0,
+                DataSpaceId::UNIVERSAL,
+            )
+            .expect("contract address");
+            let context = ContractRuntimeExecutionContext {
+                contract_subject: contract_address.subject_id(),
+                contract_address,
+                contract_alias: Some(alias.parse().expect("contract alias")),
+                entrypoint: entrypoint.to_owned(),
+            };
+            let instruction = InstructionBox::from(Grant::account_permission(
+                Permission::new(permission_name.to_owned(), Json::new(())),
+                beneficiary,
+            ));
+            Executor::Initial.execute_instruction_with_contract_runtime_context(
+                &mut block.transaction(),
+                &alice_id,
+                instruction,
+                Some(&context),
+            )
+        }
+
+        for entrypoint in ["create_tranche", "set_beneficiary_spend_authority"] {
+            execute_case("bisp_bisp::sbp", entrypoint, "BispSpend")
+                .expect("V1 BISP entrypoint may grant only BispSpend");
+        }
+        for (alias, entrypoint, permission) in [
+            (
+                "bisp_bisp::sbp",
+                "grant_beneficiary_spend_permission",
+                "BispSpend",
+            ),
+            ("bisp_bisp::sbp", "unrelated", "BispSpend"),
+            ("unrelated::sbp", "create_tranche", "BispSpend"),
+            ("bisp_bisp::sbp", "create_tranche", "CanSetParameters"),
+        ] {
+            assert!(
+                matches!(
+                    execute_case(alias, entrypoint, permission),
+                    Err(ValidationFail::NotPermitted(_))
+                ),
+                "contract {alias}/{entrypoint} must not grant {permission}"
+            );
+        }
+    }
+
+    #[test]
+    fn initial_executor_scopes_contract_transfer_controls_to_branded_entrypoints() {
+        fn execute_case(
+            alias: &str,
+            entrypoint: &str,
+            instruction_kind: &str,
+            window: AssetTransferControlWindow,
+        ) -> Result<(), ValidationFail> {
+            let caller = ALICE_ID.clone();
+            let owner = checked_account_id();
+            let target = checked_account_id();
+            let domain_id = DomainId::try_new("cbdc", "sbp").expect("domain id");
+            let asset_definition_id =
+                AssetDefinitionId::new(domain_id.clone(), "pkr".parse().expect("asset name"));
+            let world = World::with(
+                [Domain::new(domain_id).build(&owner)],
+                [
+                    Account::new(caller.clone()).build(&caller),
+                    Account::new(owner.clone()).build(&owner),
+                    Account::new(target.clone()).build(&target),
+                ],
+                [AssetDefinition::numeric(asset_definition_id.clone())
+                    .with_name("PKR".to_owned())
+                    .build(&owner)],
+            );
+            let state = State::new(
+                world,
+                Kura::blank_kura_for_testing(),
+                query::store::LiveQueryStore::start_test(),
+            );
+            state
+                .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
+                .commit()
+                .expect("commit bootstrap block");
+            let mut block =
+                state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+            let instruction = match instruction_kind {
+                "freeze" => InstructionBox::from(SetAssetTransferFreeze::new(
+                    target,
+                    asset_definition_id,
+                    true,
+                )),
+                "limit" => InstructionBox::from(SetAssetTransferControl::new(
+                    target,
+                    asset_definition_id,
+                    vec![iroha_data_model::asset::AssetTransferLimit {
+                        window,
+                        cap_amount: Some(Numeric::from(100_u32)),
+                    }],
+                )),
+                other => panic!("unsupported test instruction kind {other}"),
+            };
+            let contract_address = ContractAddress::derive(
+                iroha_config::parameters::defaults::common::chain_discriminant(),
+                &caller,
+                0,
+                DataSpaceId::UNIVERSAL,
+            )
+            .expect("contract address");
+            let context = ContractRuntimeExecutionContext {
+                contract_subject: contract_address.subject_id(),
+                contract_address,
+                contract_alias: Some(alias.parse().expect("contract alias")),
+                entrypoint: entrypoint.to_owned(),
+            };
+            Executor::Initial.execute_instruction_with_contract_runtime_context(
+                &mut block.transaction(),
+                &caller,
+                instruction,
+                Some(&context),
+            )
+        }
+
+        execute_case(
+            "apps_freeze::sbp",
+            "apply_freeze",
+            "freeze",
+            AssetTransferControlWindow::Day,
+        )
+        .expect("freeze contract may emit the freeze instruction");
+        execute_case(
+            "apps_limits_update::sbp",
+            "apply_limits",
+            "limit",
+            AssetTransferControlWindow::Day,
+        )
+        .expect("limits contract may emit one daily limit instruction");
+
+        for (alias, entrypoint, kind, window) in [
+            (
+                "apps_freeze::sbp",
+                "wrong",
+                "freeze",
+                AssetTransferControlWindow::Day,
+            ),
+            (
+                "wrong::sbp",
+                "apply_freeze",
+                "freeze",
+                AssetTransferControlWindow::Day,
+            ),
+            (
+                "apps_freeze::sbp",
+                "apply_freeze",
+                "limit",
+                AssetTransferControlWindow::Day,
+            ),
+            (
+                "apps_limits_update::sbp",
+                "apply_limits",
+                "freeze",
+                AssetTransferControlWindow::Day,
+            ),
+            (
+                "apps_limits_update::sbp",
+                "apply_limits",
+                "limit",
+                AssetTransferControlWindow::Week,
+            ),
+        ] {
+            assert!(
+                matches!(
+                    execute_case(alias, entrypoint, kind, window),
+                    Err(ValidationFail::NotPermitted(_))
+                ),
+                "contract {alias}/{entrypoint} must not emit {kind}/{window}"
+            );
+        }
     }
 
     #[test]

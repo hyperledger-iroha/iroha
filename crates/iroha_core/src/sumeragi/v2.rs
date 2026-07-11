@@ -381,7 +381,7 @@ impl IngressSemanticKey {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum IngressFingerprint {
     Proposal(Hash),
-    Vote(wire::BlockSubject),
+    Vote(wire::BlockSubject, wire::ExecutionCommitment),
     TimeoutVote(Option<wire::QuorumCertificateRef>),
 }
 
@@ -500,6 +500,12 @@ pub(crate) enum AdapterError {
     /// A certificate reference could not be expanded to the full canonical QC.
     #[error("missing canonical Sumeragi v2 quorum certificate")]
     MissingCertificate,
+    /// No fsynced deterministic execution result exists for a signable vote or QC.
+    #[error("missing validated Sumeragi v2 execution commitment")]
+    MissingExecutionCommitment,
+    /// One round and subject were bound to different execution results.
+    #[error("conflicting Sumeragi v2 execution commitments for one round and subject")]
+    ConflictingExecutionCommitment,
     /// A proposal justification was structurally inconsistent.
     #[error("inconsistent Sumeragi v2 proposal justification")]
     InvalidProposalJustification,
@@ -671,7 +677,14 @@ impl SumeragiV2Adapter {
     /// missing value means WAL replay contains no durable CommitQC decision.
     pub(crate) fn replayed_decision_key(
         &self,
-    ) -> Result<Option<(wire::ConsensusRound, wire::BlockSubject)>, AdapterError> {
+    ) -> Result<
+        Option<(
+            wire::ConsensusRound,
+            wire::BlockSubject,
+            wire::ExecutionCommitment,
+        )>,
+        AdapterError,
+    > {
         self.reducer
             .durable_state()
             .decision()
@@ -679,6 +692,8 @@ impl SumeragiV2Adapter {
                 Ok((
                     self.registry.round_to_wire(certificate.round()),
                     self.registry.subject(certificate.subject())?,
+                    self.registry
+                        .execution_commitment(certificate.round(), certificate.subject())?,
                 ))
             })
             .transpose()
@@ -757,7 +772,7 @@ impl SumeragiV2Adapter {
                         phase: vote.phase,
                         signer: vote.signer,
                     },
-                    IngressFingerprint::Vote(vote.subject),
+                    IngressFingerprint::Vote(vote.subject, vote.execution_commitment),
                     vote.round,
                     vote.signer,
                     reducer::EquivocationKind::Vote,
@@ -1054,6 +1069,11 @@ impl SumeragiV2Adapter {
             .registry
             .round_to_core(manifest.round, &self.wire_context)?;
         let subject = core_manifest.subject();
+        self.registry.register_execution_commitment(
+            round,
+            subject,
+            validated_receipt.execution_commitment(),
+        )?;
         self.active_subject = Some((round, subject));
         self.step(reducer::Event::LocalProposalReady {
             tag,
@@ -1141,6 +1161,11 @@ impl SumeragiV2Adapter {
         if receipt.durable().manifest_hash() != HashOf::new(manifest) {
             return Err(AdapterError::DurableBodyMismatch);
         }
+        self.registry.register_execution_commitment(
+            round,
+            subject,
+            receipt.execution_commitment(),
+        )?;
         self.step(reducer::Event::ValidationCompleted {
             tag,
             round,
@@ -1755,6 +1780,8 @@ struct WireRegistry {
     validators: BTreeMap<reducer::ValidatorId, wire::ValidatorIndex>,
     subjects: BTreeMap<reducer::Subject, wire::BlockSubject>,
     manifests: BTreeMap<(reducer::Round, reducer::Subject), wire::PayloadManifest>,
+    execution_commitments:
+        BTreeMap<(reducer::Round, reducer::Subject), wire::ExecutionCommitment>,
     certificates: BTreeMap<reducer::CertificateRef, wire::QuorumCertificate>,
     timeouts: BTreeMap<reducer::Round, wire::TimeoutCertificate>,
     proposals: BTreeMap<(reducer::Round, reducer::Subject), wire::Proposal>,
@@ -1878,6 +1905,37 @@ impl WireRegistry {
             .ok_or(AdapterError::UnknownSubject(subject))
     }
 
+    fn register_execution_commitment(
+        &mut self,
+        round: reducer::Round,
+        subject: reducer::Subject,
+        commitment: wire::ExecutionCommitment,
+    ) -> Result<(), AdapterError> {
+        commitment.validate()?;
+        match self.execution_commitments.get(&(round, subject)) {
+            Some(existing) if *existing != commitment => {
+                Err(AdapterError::ConflictingExecutionCommitment)
+            }
+            Some(_) => Ok(()),
+            None => {
+                self.execution_commitments
+                    .insert((round, subject), commitment);
+                Ok(())
+            }
+        }
+    }
+
+    fn execution_commitment(
+        &self,
+        round: reducer::Round,
+        subject: reducer::Subject,
+    ) -> Result<wire::ExecutionCommitment, AdapterError> {
+        self.execution_commitments
+            .get(&(round, subject))
+            .copied()
+            .ok_or(AdapterError::MissingExecutionCommitment)
+    }
+
     fn round_to_core(
         &self,
         round: wire::ConsensusRound,
@@ -1920,6 +1978,7 @@ impl WireRegistry {
     ) -> Result<reducer::SignedVote, AdapterError> {
         let round = self.round_to_core(vote.round, context)?;
         let subject = self.register_subject(vote.subject)?;
+        self.register_execution_commitment(round, subject, vote.execution_commitment)?;
         let signer = self.validator_id(vote.signer)?;
         Ok(reducer::SignedVote::new(
             reducer::Vote::new(
@@ -1938,6 +1997,7 @@ impl WireRegistry {
             round: self.round_to_wire(vote.round()),
             phase: Self::phase_to_wire(vote.phase()),
             subject: self.subject(vote.subject())?,
+            execution_commitment: self.execution_commitment(vote.round(), vote.subject())?,
             signer: self.validator_index(vote.signer())?,
             signature: Vec::new(),
         })
@@ -1953,11 +2013,14 @@ impl WireRegistry {
         &mut self,
         reference: &wire::QuorumCertificateRef,
     ) -> Result<reducer::CertificateRef, AdapterError> {
+        let round = reducer::Round::new(reference.round.height, reference.round.view);
+        let subject = self.register_subject(reference.subject)?;
+        self.register_execution_commitment(round, subject, reference.execution_commitment)?;
         Ok(reducer::CertificateRef::new(
             context_id(reference.round.context_id),
-            reducer::Round::new(reference.round.height, reference.round.view),
+            round,
             Self::phase_to_core(reference.phase),
-            self.register_subject(reference.subject)?,
+            subject,
         ))
     }
 
@@ -2011,6 +2074,8 @@ impl WireRegistry {
             round: self.round_to_wire(certificate.round()),
             phase: Self::phase_to_wire(certificate.phase()),
             subject: self.subject(certificate.subject())?,
+            execution_commitment: self
+                .execution_commitment(certificate.round(), certificate.subject())?,
             signers,
             aggregate_signature,
         };
@@ -2477,8 +2542,14 @@ impl WireRegistry {
                 reducer::WalRecord::ProposalIntent(self.proposal_body_to_core(&proposal, &context)?)
             }
             WalRecordV2::PrepareIntent(vote) => {
+                vote.execution_commitment.validate()?;
                 let core_round = round(vote.round)?;
                 let subject = self.register_subject(vote.subject)?;
+                self.register_execution_commitment(
+                    core_round,
+                    subject,
+                    vote.execution_commitment,
+                )?;
                 reducer::WalRecord::PrepareIntent(reducer::Vote::new(
                     context_id(wire_context_id),
                     core_round,
@@ -2491,8 +2562,14 @@ impl WireRegistry {
                 reducer::WalRecord::ObservePrepare(self.qc_to_core_unchecked(&certificate)?)
             }
             WalRecordV2::LockAndCommit { prepare, vote } => {
+                vote.execution_commitment.validate()?;
                 let core_round = round(vote.round)?;
                 let subject = self.register_subject(vote.subject)?;
+                self.register_execution_commitment(
+                    core_round,
+                    subject,
+                    vote.execution_commitment,
+                )?;
                 reducer::WalRecord::LockAndCommit {
                     prepare: self.qc_to_core_unchecked(&prepare)?,
                     vote: reducer::Vote::new(
@@ -3061,6 +3138,7 @@ mod tests {
             round,
             phase: wire::GlobalPhase::Commit,
             subject: parent_subject,
+            execution_commitment: execution_commitment(0x21),
             signer: 0,
             signature: Vec::new(),
         }
@@ -3078,6 +3156,7 @@ mod tests {
             round,
             phase: wire::GlobalPhase::Commit,
             subject: parent_subject,
+            execution_commitment: execution_commitment(0x21),
             signers: vec![0, 1, 2],
             aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
                 .expect("aggregate parent CommitQC"),
@@ -3115,6 +3194,7 @@ mod tests {
             round: alternate_round,
             phase: wire::GlobalPhase::Commit,
             subject: parent_subject,
+            execution_commitment: execution_commitment(0x21),
             signer: 0,
             signature: Vec::new(),
         }
@@ -3135,6 +3215,7 @@ mod tests {
             round: alternate_round,
             phase: wire::GlobalPhase::Commit,
             subject: parent_subject,
+            execution_commitment: execution_commitment(0x21),
             signers: vec![0, 1, 2],
             aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&alternate_refs)
                 .expect("aggregate alternate parent CommitQC"),
@@ -3272,6 +3353,14 @@ mod tests {
             block_hash: HashOf::from_untyped_unchecked(Hash::new([byte, 1])),
             payload_hash: Hash::new([byte, 2]),
         }
+    }
+
+    fn execution_commitment(byte: u8) -> wire::ExecutionCommitment {
+        wire::ExecutionCommitment::without_topups(
+            Hash::new([byte, 3]),
+            Hash::new([byte, 4]),
+            Hash::new([byte, 5]),
+        )
     }
 
     fn proposal(
@@ -3650,6 +3739,7 @@ mod tests {
                 round,
                 phase: wire::GlobalPhase::Commit,
                 subject,
+                execution_commitment: execution_commitment(0xD4),
                 signers: vec![0, 1, 2],
                 aggregate_signature: vec![0xD4; 48],
             };
@@ -3663,7 +3753,7 @@ mod tests {
                 .wal
                 .append(&record)
                 .expect("append acknowledged Decision record");
-            expected = (round, subject);
+            expected = (round, subject, execution_commitment(0xD4));
         }
         OpenOptions::new()
             .append(true)
@@ -3718,6 +3808,7 @@ mod tests {
             },
             phase: wire::GlobalPhase::Prepare,
             subject,
+            execution_commitment: execution_commitment(3),
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0xAA; 96],
         };
@@ -3728,6 +3819,48 @@ mod tests {
             .qc_to_wire(&core, &TestAggregator)
             .expect("convert QC to wire");
         assert_eq!(roundtrip, certificate);
+    }
+
+    #[test]
+    fn registry_rejects_vote_or_qc_execution_commitment_drift_for_one_body() {
+        let context = context();
+        let mut registry = WireRegistry::new(&context).expect("registry");
+        let subject = subject(0xEC);
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+        let mut vote = wire::Vote {
+            round,
+            phase: wire::GlobalPhase::Prepare,
+            subject,
+            execution_commitment: execution_commitment(0xEC),
+            signer: 0,
+            signature: vec![1],
+        };
+        registry
+            .vote_to_core(&vote, &context)
+            .expect("first commitment binds body");
+        vote.signer = 1;
+        vote.execution_commitment = execution_commitment(0xED);
+        assert!(matches!(
+            registry.vote_to_core(&vote, &context),
+            Err(AdapterError::ConflictingExecutionCommitment)
+        ));
+
+        let certificate = wire::QuorumCertificate {
+            round,
+            phase: wire::GlobalPhase::Prepare,
+            subject,
+            execution_commitment: execution_commitment(0xED),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![2],
+        };
+        assert!(matches!(
+            registry.qc_to_core(&certificate, &context),
+            Err(AdapterError::ConflictingExecutionCommitment)
+        ));
     }
 
     #[test]
@@ -3743,6 +3876,7 @@ mod tests {
             },
             phase: wire::GlobalPhase::Prepare,
             subject,
+            execution_commitment: execution_commitment(5),
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0xAB; 96],
         };
@@ -3817,6 +3951,7 @@ mod tests {
             .body_stored(tag, round, decided_subject, &receipt)
             .expect("body stored");
         let validated = ValidatedBodyReceipt::for_test(receipt);
+        let decided_execution_commitment = validated.execution_commitment();
         let sign = adapter
             .validation_succeeded(tag, round, decided_subject, &validated)
             .expect("body valid")
@@ -3830,6 +3965,7 @@ mod tests {
             round,
             phase: wire::GlobalPhase::Prepare,
             subject: flood_subject(0),
+            execution_commitment: execution_commitment(0x41),
             signer: 1,
             signature: vec![0x41],
         };
@@ -3851,6 +3987,7 @@ mod tests {
                 round,
                 phase: wire::GlobalPhase::Prepare,
                 subject: flood_subject(counter),
+                execution_commitment: execution_commitment(0x42),
                 signer: 1,
                 signature: vec![0x42],
             };
@@ -3876,6 +4013,7 @@ mod tests {
             round,
             phase: wire::GlobalPhase::Commit,
             subject: decided_subject,
+            execution_commitment: decided_execution_commitment,
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0xC0; 96],
         };
@@ -3967,6 +4105,7 @@ mod tests {
             round,
             phase: wire::GlobalPhase::Prepare,
             subject,
+            execution_commitment: execution_commitment(12),
             signer: 0,
             signature: Vec::new(),
         };
@@ -3985,6 +4124,7 @@ mod tests {
             round,
             phase: wire::GlobalPhase::Prepare,
             subject,
+            execution_commitment: execution_commitment(12),
             signer: 0,
             signature: Vec::new(),
         }
@@ -4002,6 +4142,7 @@ mod tests {
             round,
             phase: wire::GlobalPhase::Prepare,
             subject,
+            execution_commitment: execution_commitment(12),
             signers: vec![0, 1, 2],
             aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&refs)
                 .expect("aggregate BLS votes"),
@@ -4046,6 +4187,7 @@ mod tests {
             round,
             phase: wire::GlobalPhase::Prepare,
             subject,
+            execution_commitment: execution_commitment(13),
             signer: 0,
             signature: Vec::new(),
         }
@@ -4063,6 +4205,7 @@ mod tests {
             round,
             phase: wire::GlobalPhase::Prepare,
             subject,
+            execution_commitment: execution_commitment(13),
             signers: vec![0, 1, 2],
             aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&prepare_refs)
                 .expect("aggregate PrepareQC"),

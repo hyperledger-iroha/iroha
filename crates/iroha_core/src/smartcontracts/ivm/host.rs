@@ -2977,6 +2977,83 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.current_entrypoint_authorization = Some(authorization);
     }
 
+    /// Resolve and bind an authenticated deployed-contract runtime context.
+    ///
+    /// The live state remains authoritative for the contract subject, alias, code binding, and
+    /// selected entrypoint permission. This keeps API-side view and simulation execution from
+    /// manufacturing the private authorization snapshot retained by queued effects.
+    ///
+    /// # Errors
+    /// Returns an error when the contract binding is absent or stale, the prepared artifact does
+    /// not match the live code hash, the entrypoint is invalid, or the host authority lacks the
+    /// entrypoint's live permission.
+    pub fn bind_deployed_contract_runtime_context<R: StateReadOnly>(
+        &mut self,
+        state: &R,
+        contract_address: &ContractAddress,
+        expected_code_hash: Hash,
+        prepared_contract: &ivm::PreparedContract,
+        selector: &str,
+    ) -> Result<(), ValidationFail> {
+        let selector = selector.trim();
+        if selector.is_empty() {
+            return Err(ValidationFail::NotPermitted(
+                "contract entrypoint must not be empty".to_owned(),
+            ));
+        }
+        let identity =
+            crate::smartcontracts::code::fetch_bound_contract_identity(state, contract_address)
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted(format!(
+                        "contract instance `{contract_address}` has no valid live binding"
+                    ))
+                })?;
+        if identity.code_hash != expected_code_hash {
+            return Err(ValidationFail::NotPermitted(format!(
+                "contract instance `{contract_address}` is not bound to prepared code `{expected_code_hash}`"
+            )));
+        }
+        let contract_subject =
+            crate::smartcontracts::code::fetch_bound_contract_subject(state, contract_address)
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted(format!(
+                        "contract instance `{contract_address}` has no valid subject binding"
+                    ))
+                })?;
+        let descriptor = prepared_contract
+            .entrypoint_descriptor(selector)
+            .ok_or_else(|| {
+                ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
+            })?;
+        let authorization = if descriptor.kind
+            == iroha_data_model::smart_contract::manifest::EntryPointKind::View
+        {
+            prepared_contract.entrypoint_pc(selector).ok_or_else(|| {
+                ValidationFail::NotPermitted(format!(
+                    "contract entrypoint `{selector}` has no validated program counter"
+                ))
+            })?;
+            let authorization = ContractEntrypointAuthorizationSnapshot::new(
+                self.authority.clone(),
+                selector.to_owned(),
+                descriptor.permission.clone(),
+                &identity,
+            );
+            authorization.validate(state.world())?;
+            authorization
+        } else {
+            crate::executor::authorize_prepared_contract_selector(
+                state.world(),
+                &self.authority,
+                prepared_contract,
+                selector,
+                &identity,
+            )?
+        };
+        self.bind_contract_runtime_context(contract_subject, authorization);
+        Ok(())
+    }
+
     /// Share the outer runtime's bounded immutable contract-artifact cache.
     pub fn set_prepared_contract_cache(&mut self, cache: PreparedContractCache) {
         self.prepared_contract_cache = cache;
@@ -9932,6 +10009,20 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     Some(ivm::host::reserve_available_syscall_gas(vm)?)
                 }
             }
+            ivm::syscalls::SYSCALL_SYSVAR_CONTRACT_SUBJECT => {
+                if let Some(context) = self.current_contract_runtime_context.as_ref() {
+                    if let Some(payload_len) =
+                        Self::norito_encoded_len_exact(&context.contract_subject)
+                            .and_then(|len| usize::try_from(len).ok())
+                    {
+                        Some(Self::sysvar_gas(payload_len))
+                    } else {
+                        Some(ivm::host::reserve_available_syscall_gas(vm)?)
+                    }
+                } else {
+                    return Err(ivm::VMError::PermissionDenied);
+                }
+            }
             ivm::syscalls::SYSCALL_CURRENT_TIME_MS
             | ivm::syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS
             | ivm::syscalls::SYSCALL_SYSVAR_BLOCK_HEIGHT => Some(Self::sysvar_gas(0)),
@@ -9994,6 +10085,12 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 Some(ivm::host::reserve_available_syscall_gas(vm)?)
             }
             ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION
+            | ivm::syscalls::SYSCALL_SET_ASSET_TRANSFER_FREEZE
+            | ivm::syscalls::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT
+            | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_PROPOSE
+            | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_APPROVE
+            | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_CANCEL
+            | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_FINALIZE
             | ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER
             | ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_ACCEPT
             | ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT
@@ -10275,6 +10372,82 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let isi = Transfer::asset_numeric(asset_id, amount, to);
                 let instr = InstructionBox::from(TransferBox::from(isi));
                 Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_SET_ASSET_TRANSFER_FREEZE => {
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::AccountId)?;
+                let asset_definition: AssetDefinitionId =
+                    Self::decode_tlv_typed(vm, vm.register(11), PointerType::AssetDefinitionId)?;
+                let frozen = match vm.register(12) {
+                    0 => false,
+                    1 => true,
+                    _ => return Err(ivm::VMError::DecodeError),
+                };
+                let instruction = iroha_data_model::isi::SetAssetTransferFreeze::new(
+                    account,
+                    asset_definition,
+                    frozen,
+                    None,
+                );
+                self.queue_instruction_after_preflight(vm, InstructionBox::from(instruction))
+            }
+            ivm::syscalls::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT => {
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::AccountId)?;
+                let asset_definition: AssetDefinitionId =
+                    Self::decode_tlv_typed(vm, vm.register(11), PointerType::AssetDefinitionId)?;
+                let cap = Self::decode_amount(vm, vm.register(12))?;
+                let instruction = iroha_data_model::isi::SetAssetTransferControl::new(
+                    account,
+                    asset_definition,
+                    vec![iroha_data_model::asset::AssetTransferLimit {
+                        window: iroha_data_model::asset::AssetTransferControlWindow::Day,
+                        cap_amount: Some(cap),
+                    }],
+                );
+                self.queue_instruction_after_preflight(vm, InstructionBox::from(instruction))
+            }
+            ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_PROPOSE => {
+                let alias_bytes = Self::decode_tlv_blob(vm, vm.register(10))?;
+                let alias_literal =
+                    std::str::from_utf8(&alias_bytes).map_err(|_| ivm::VMError::DecodeError)?;
+                let alias = self
+                    .query_state
+                    .get()
+                    .ok_or(ivm::VMError::PermissionDenied)?
+                    .parse_account_alias(alias_literal)?;
+                let replacement: AccountId =
+                    Self::decode_tlv_typed(vm, vm.register(11), PointerType::AccountId)?;
+                let instruction = iroha_data_model::isi::account_recovery::ProposeAccountRecovery {
+                    alias,
+                    new_controller: replacement.controller().clone(),
+                };
+                self.queue_instruction_after_preflight(vm, InstructionBox::from(instruction))
+            }
+            ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_APPROVE
+            | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_CANCEL
+            | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_FINALIZE => {
+                let alias_bytes = Self::decode_tlv_blob(vm, vm.register(10))?;
+                let alias_literal =
+                    std::str::from_utf8(&alias_bytes).map_err(|_| ivm::VMError::DecodeError)?;
+                let alias = self
+                    .query_state
+                    .get()
+                    .ok_or(ivm::VMError::PermissionDenied)?
+                    .parse_account_alias(alias_literal)?;
+                let instruction = match number {
+                    ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_APPROVE => InstructionBox::from(
+                        iroha_data_model::isi::account_recovery::ApproveAccountRecovery { alias },
+                    ),
+                    ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_CANCEL => InstructionBox::from(
+                        iroha_data_model::isi::account_recovery::CancelAccountRecovery { alias },
+                    ),
+                    ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_FINALIZE => InstructionBox::from(
+                        iroha_data_model::isi::account_recovery::FinalizeAccountRecovery { alias },
+                    ),
+                    _ => unreachable!("matched account-recovery syscall"),
+                };
+                self.queue_instruction_after_preflight(vm, instruction)
             }
             ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN => self.begin_fastpq_batch(),
             ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_END => self.finish_fastpq_batch(),
@@ -11501,6 +11674,17 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 vm.set_register(10, ptr);
                 Ok(Self::sysvar_gas(payload.len()))
             }
+            ivm::syscalls::SYSCALL_SYSVAR_CONTRACT_SUBJECT => {
+                let subject = self
+                    .current_contract_runtime_context
+                    .as_ref()
+                    .map(|context| &context.contract_subject)
+                    .ok_or(ivm::VMError::PermissionDenied)?;
+                let payload = norito::to_bytes(subject).map_err(|_| ivm::VMError::NoritoInvalid)?;
+                let ptr = Self::alloc_tlv_payload(vm, PointerType::AccountId, &payload)?;
+                vm.set_register(10, ptr);
+                Ok(Self::sysvar_gas(payload.len()))
+            }
             ivm::syscalls::SYSCALL_CURRENT_TIME_MS
             | ivm::syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS => {
                 vm.set_register(10, self.current_block_time_ms.unwrap_or(0));
@@ -11659,7 +11843,7 @@ mod pointer_abi_tests {
     use core::{num::NonZeroU16, str::FromStr};
 
     use iroha_crypto::{Algorithm, Hash as IrohaHash, KeyPair, PublicKey};
-    use iroha_data_model::smart_contract::manifest::ContractManifest;
+    use iroha_data_model::{proof::ProofAttachment, smart_contract::manifest::ContractManifest};
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use ivm::{
@@ -11692,6 +11876,18 @@ mod pointer_abi_tests {
         let h = IrohaHash::new(payload);
         v.extend_from_slice(h.as_ref());
         v
+    }
+
+    fn quantity_frame(value: &Numeric) -> Vec<u8> {
+        let quantity = Quantity::from_canonical_numeric(value.clone())
+            .expect("canonical non-negative quantity");
+        QuantityValueV1::new(quantity)
+            .encode_frame()
+            .expect("encode quantity frame")
+    }
+
+    fn store_quantity(vm: &mut IVM, value: &Numeric) -> u64 {
+        store_tlv(vm, PointerType::Quantity, &quantity_frame(value))
     }
 
     fn test_policy_snapshot(dsid: DataSpaceId, policy: AxtPolicyEntry) -> AxtPolicySnapshot {
@@ -15131,6 +15327,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn contract_subject_sysvar_returns_bound_subject_and_fails_outside_contract_scope() {
+        let authority = fixture_account("alice");
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            7,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let subject = contract_address.subject_id();
+        let mut host = CoreHost::new(authority.clone());
+        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
+            contract_address,
+            contract_subject: subject.clone(),
+            contract_alias: None,
+            entrypoint: "main".to_owned(),
+        }));
+        let mut vm = IVM::new(100_000);
+
+        host.syscall(ivm_sys::SYSCALL_SYSVAR_CONTRACT_SUBJECT, &mut vm)
+            .expect("read contract subject");
+        let observed: AccountId =
+            CoreHost::decode_tlv_typed(&vm, vm.register(10), PointerType::AccountId)
+                .expect("decode contract subject");
+        assert_eq!(observed, subject);
+
+        let mut host = CoreHost::new(authority);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_SYSVAR_CONTRACT_SUBJECT, &mut vm),
+            Err(ivm::VMError::PermissionDenied)
+        );
+    }
+
     fn build_fixture_account(id: &AccountId, authority: &AccountId) -> Account {
         Account::new(id.clone()).build(authority)
     }
@@ -15268,6 +15498,96 @@ mod tests {
         tx.apply();
         block.commit().expect("commit contract registration block");
         contract_address
+    }
+
+    #[test]
+    fn deployed_contract_runtime_binding_uses_live_identity_and_exact_artifact() {
+        let authority = ALICE_ID.clone();
+        let state = contract_test_state(&authority);
+        let contract_address = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku RuntimeBinding {
+  kotoage fn update() {}
+  view fn inspect() -> int { return 1; }
+}
+"#,
+            0,
+        );
+        let view = state.view();
+        let identity =
+            crate::smartcontracts::code::fetch_bound_contract_identity(&view, &contract_address)
+                .expect("installed contract identity");
+        let code = view
+            .world()
+            .contract_code()
+            .get(&identity.code_hash)
+            .expect("installed contract bytecode");
+        let mut cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let summary = cache
+            .summarize_program_with_hash(identity.code_hash, code.as_ref())
+            .expect("prepare installed contract");
+        let expected_subject =
+            crate::smartcontracts::code::fetch_bound_contract_subject(&view, &contract_address)
+                .expect("installed contract subject");
+        let mut host = CoreHost::new(authority.clone());
+
+        host.bind_deployed_contract_runtime_context(
+            &view,
+            &contract_address,
+            identity.code_hash,
+            summary.prepared_contract(),
+            "update",
+        )
+        .expect("bind callable entrypoint");
+        let call_context = host
+            .current_contract_runtime_context
+            .as_ref()
+            .expect("call context");
+        assert_eq!(call_context.contract_subject, expected_subject);
+        assert_eq!(call_context.entrypoint, "update");
+        assert_eq!(
+            host.current_entrypoint_authorization
+                .as_ref()
+                .expect("call authorization")
+                .code_hash,
+            identity.code_hash
+        );
+
+        host.bind_deployed_contract_runtime_context(
+            &view,
+            &contract_address,
+            identity.code_hash,
+            summary.prepared_contract(),
+            "inspect",
+        )
+        .expect("bind view entrypoint");
+        assert_eq!(
+            host.current_contract_runtime_context
+                .as_ref()
+                .expect("view context")
+                .entrypoint,
+            "inspect"
+        );
+
+        let error = host
+            .bind_deployed_contract_runtime_context(
+                &view,
+                &contract_address,
+                Hash::new(b"stale prepared contract"),
+                summary.prepared_contract(),
+                "update",
+            )
+            .expect_err("stale prepared code must fail closed");
+        assert!(error.to_string().contains("not bound to prepared code"));
+        assert_eq!(
+            host.current_contract_runtime_context
+                .as_ref()
+                .expect("failed rebinding preserves prior context")
+                .entrypoint,
+            "inspect"
+        );
     }
 
     fn grant_named_permission_to_account(
@@ -15886,11 +16206,7 @@ seiyaku OuterCaller {
             state,
             authority,
             &fixture_signing_keypair(authority),
-            iroha_data_model::transaction::executable::ContractInvocation {
-                contract_address: pool_contract.clone(),
-                entrypoint: "bind".to_owned(),
-                payload: Some(pool_bind_payload),
-            },
+            contract_invocation_from_json(state, pool_contract.clone(), "bind", &pool_bind_payload),
             &mut ivm_cache,
         );
         let binding_caller_payload = Json::from_str_norito(&format!(
@@ -15904,11 +16220,12 @@ seiyaku OuterCaller {
             state,
             authority,
             &fixture_signing_keypair(authority),
-            iroha_data_model::transaction::executable::ContractInvocation {
-                contract_address: binding_caller.clone(),
-                entrypoint: "bind".to_owned(),
-                payload: Some(binding_caller_payload),
-            },
+            contract_invocation_from_json(
+                state,
+                binding_caller.clone(),
+                "bind",
+                &binding_caller_payload,
+            ),
             &mut ivm_cache,
         );
 
@@ -15952,17 +16269,17 @@ seiyaku OuterCaller {
 
         let request = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
         let gas_ctx = QueryGasContext::from_request(&request);
+        let request_bytes = norito::to_bytes(&request).expect("encode query request");
         let expected_execution = execute_query_on_state_with_budget(
             &view,
             &authority,
-            request.clone(),
+            request,
             Some(
                 CoreHost::query_execution_budget(&gas_ctx, 1_000_000)
                     .expect("query execution budget"),
             ),
         )
         .expect("measure query execution");
-        let request_bytes = norito::to_bytes(&request).expect("encode query request");
         let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &request_bytes);
         vm.set_register(10, ptr);
 
@@ -15989,7 +16306,7 @@ seiyaku OuterCaller {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("oversized-query-authority");
         let mut account = build_fixture_account(&authority, &authority);
-        account.metadata_mut().insert(
+        account.metadata.insert(
             "oversized".parse().expect("metadata key"),
             Json::new("x".repeat(128 * 1024)),
         );
@@ -16044,7 +16361,7 @@ seiyaku OuterCaller {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
         let view = state.view();
-        let mut host = CoreHost::new(authority.clone());
+        let mut host: CoreHostImpl<QueryStateSlot<_>> = CoreHostImpl::new(authority.clone());
         host.set_query_state(&view);
         let mut vm = IVM::new(10_000);
 
@@ -16328,9 +16645,13 @@ seiyaku OuterCaller {
         let missing_domain_id =
             DomainId::try_new("missing", "universal").expect("missing domain id");
         let missing_nft_id: NftId = "missing$wonderland.universal".parse().expect("NFT id");
-        let mut world = World::with_assets([domain], [account], [asset_definition], [asset], [nft]);
-        *world.executor.get_mut() =
-            crate::executor::denying_executor_for_testing("queries disabled");
+        let world = World::with_assets([domain], [account], [asset_definition], [asset], [nft]);
+        {
+            let mut executor_block = world.executor.block();
+            *executor_block.get_mut() =
+                crate::executor::denying_executor_for_testing("queries disabled");
+            executor_block.commit();
+        }
         let state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -16406,9 +16727,13 @@ seiyaku OuterCaller {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let account = build_fixture_account(&authority, &authority);
-        let mut world = World::with([], [account], []);
-        *world.executor.get_mut() =
-            crate::executor::denying_executor_for_testing("queries disabled");
+        let world = World::with([], [account], []);
+        {
+            let mut executor_block = world.executor.block();
+            *executor_block.get_mut() =
+                crate::executor::denying_executor_for_testing("queries disabled");
+            executor_block.commit();
+        }
         let state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -16502,7 +16827,7 @@ seiyaku OuterCaller {
         let expected_execution = execute_bounded_query_on_state_with_budget(
             &view,
             &authority,
-            request.clone(),
+            request,
             Some(
                 CoreHost::query_execution_budget(&gas_ctx, 1_000_000)
                     .expect("query execution budget"),
@@ -16844,17 +17169,17 @@ seiyaku OuterCaller {
             }
         });
         let gas_ctx = QueryGasContext::from_request(&request);
+        let request_bytes = norito::to_bytes(&request).expect("encode query request");
         let expected_execution = execute_query_on_state_with_budget(
             &view,
             &authority,
-            request.clone(),
+            request,
             Some(
                 CoreHost::query_execution_budget(&gas_ctx, 1_000_000)
                     .expect("query execution budget"),
             ),
         )
         .expect("measure sorted query execution");
-        let request_bytes = norito::to_bytes(&request).expect("encode query request");
         let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &request_bytes);
         vm.set_register(10, ptr);
 
@@ -16936,17 +17261,17 @@ seiyaku OuterCaller {
             }
         });
         let gas_ctx = QueryGasContext::from_request(&request);
+        let request_bytes = norito::to_bytes(&request).expect("encode query request");
         let expected_execution = execute_query_on_state_with_budget(
             &view,
             &authority,
-            request.clone(),
+            request,
             Some(
                 CoreHost::query_execution_budget(&gas_ctx, 1_000_000)
                     .expect("query execution budget"),
             ),
         )
         .expect("measure sorted-offset query execution");
-        let request_bytes = norito::to_bytes(&request).expect("encode query request");
         let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &request_bytes);
         vm.set_register(10, ptr);
 
@@ -19943,7 +20268,12 @@ seiyaku Callee {
         );
         assert_eq!(
             record.atoms,
-            vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueAtomV1::Int(42)]
+            vec![
+                iroha_data_model::smart_contract::entrypoint::EntrypointValueAtomV1::Pointer(
+                    ivm::numeric_tlv::encode_int(&BigInt::from_i128(42))
+                        .expect("encode canonical V1 int return"),
+                ),
+            ]
         );
     }
 
@@ -20961,15 +21291,12 @@ seiyaku EffectfulView {
             1,
         );
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let seed_payload = Json::from_str_norito(r#"{"value":5}"#).expect("seed payload");
         execute_contract_call_transaction(
             &state,
             &authority,
             &fixture_signing_keypair(&authority),
-            iroha_data_model::transaction::executable::ContractInvocation {
-                contract_address: callee.clone(),
-                entrypoint: "seed".to_owned(),
-                payload: Some(Json::from_str_norito(r#"{"value":5}"#).expect("seed payload")),
-            },
+            contract_invocation_from_json(&state, callee.clone(), "seed", &seed_payload),
             &mut ivm_cache,
         );
 
@@ -21528,7 +21855,7 @@ seiyaku Callee {
             .len()
             .saturating_add(selector.len());
         let request_gas = ivm::gas::syscall_byte_gas(ivm::gas::G_CALL_CONTRACT, request_bytes, 0);
-        let mut host = CoreHostImpl::new(authority.clone());
+        let mut host = CoreHost::new(authority.clone());
         host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
             contract_address: contract_address.clone(),
             contract_subject: contract_address.subject_id(),

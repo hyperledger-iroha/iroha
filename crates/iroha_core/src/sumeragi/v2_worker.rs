@@ -1544,10 +1544,16 @@ mod tests {
             height: service.context.height,
             view: 0,
         };
+        let execution_commitment = wire::ExecutionCommitment::without_topups(
+            Hash::new(b"worker parent state"),
+            Hash::new(b"worker post state"),
+            Hash::new(b"worker ordinary writes"),
+        );
         let preimage = wire::Vote {
             round,
             phase: wire::GlobalPhase::Commit,
             subject,
+            execution_commitment,
             signer: 0,
             signature: Vec::new(),
         }
@@ -1568,6 +1574,7 @@ mod tests {
             round,
             phase: wire::GlobalPhase::Commit,
             subject,
+            execution_commitment,
             signers: vec![0, 1, 2],
             aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
                 .expect("aggregate valid worker CommitQC"),
@@ -2089,10 +2096,16 @@ mod tests {
             height: service.context.height,
             view: 0,
         };
+        let execution_commitment = wire::ExecutionCommitment::without_topups(
+            Hash::new(b"worker prepared parent state"),
+            Hash::new(b"worker prepared post state"),
+            Hash::new(b"worker prepared ordinary writes"),
+        );
         let vote = |phase| wire::Vote {
             round,
             phase,
             subject,
+            execution_commitment,
             signer: 0,
             signature: Vec::new(),
         };

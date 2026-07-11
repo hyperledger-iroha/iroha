@@ -6621,6 +6621,7 @@ seiyaku CompilerFixture {
 
 view fn main() {
   let _authority = context::authority();
+  let _subject = context::contract_subject();
   let _now = context::current_time_ms();
   let _height = context::block_height();
   let _block_time = context::block_time_ms();
@@ -6638,6 +6639,10 @@ view fn main() {
 
         for (syscall, label) in [
             (ivm_abi::syscalls::SYSCALL_GET_AUTHORITY, "GET_AUTHORITY"),
+            (
+                ivm_abi::syscalls::SYSCALL_SYSVAR_CONTRACT_SUBJECT,
+                "SYSVAR_CONTRACT_SUBJECT",
+            ),
             (
                 ivm_abi::syscalls::SYSCALL_CURRENT_TIME_MS,
                 "CURRENT_TIME_MS",
@@ -6690,6 +6695,14 @@ fn main() { let _authority = context::authority(1); }
             (
                 r#"
 seiyaku CompilerFixture {
+fn main() { let _subject = context::contract_subject(1); }
+}
+"#,
+                "context::contract_subject expects no arguments",
+            ),
+            (
+                r#"
+seiyaku CompilerFixture {
 fn main() { let _height = context::block_height(1); }
 }
 "#,
@@ -6714,6 +6727,136 @@ fn main() { let _chain = context::chain_id(1); }
         }
 
         assert_internal_source_names_rejected(&["sysvar_authority"]);
+    }
+
+    #[test]
+    fn native_control_and_recovery_builtins_emit_typed_syscalls() {
+        let compiler = test_mode_compiler();
+        let bytes = compiler
+            .compile_source(
+                r#"
+seiyaku CompilerFixture {
+kotoage fn apply(AccountId account, AssetDefinitionId asset, quantity cap, string alias, AccountId replacement) authorize("ControlAdmin") {
+  ledger::asset::set_transfer_freeze(account: account, asset_definition: asset, frozen: true);
+  ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: cap);
+  ledger::account::recovery::propose(alias: alias, replacement: replacement);
+  ledger::account::recovery::approve(alias: alias);
+  ledger::account::recovery::cancel(alias: alias);
+  ledger::account::recovery::finalize(alias: alias);
+}
+}
+"#,
+            )
+            .expect("compile typed native control and recovery calls");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_SET_ASSET_TRANSFER_FREEZE,
+                "SET_ASSET_TRANSFER_FREEZE",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT,
+                "SET_ASSET_TRANSFER_DAILY_LIMIT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ACCOUNT_RECOVERY_PROPOSE,
+                "ACCOUNT_RECOVERY_PROPOSE",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ACCOUNT_RECOVERY_APPROVE,
+                "ACCOUNT_RECOVERY_APPROVE",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ACCOUNT_RECOVERY_CANCEL,
+                "ACCOUNT_RECOVERY_CANCEL",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ACCOUNT_RECOVERY_FINALIZE,
+                "ACCOUNT_RECOVERY_FINALIZE",
+            ),
+        ] {
+            let needle = encoding::wide::encode_syscallx(syscall).to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall"
+            );
+        }
+    }
+
+    #[test]
+    fn native_control_and_recovery_builtins_reject_wrong_types_and_arity() {
+        for (source, expected) in [
+            (
+                r#"
+seiyaku CompilerFixture {
+fn apply(AccountId account, AssetDefinitionId asset) {
+  ledger::asset::set_transfer_freeze(account: account, asset_definition: asset, frozen: 1);
+}
+}
+"#,
+                "ledger::asset::set_transfer_freeze expects (AccountId, AssetDefinitionId, bool)",
+            ),
+            (
+                r#"
+seiyaku CompilerFixture {
+fn apply(AccountId account, AssetDefinitionId asset) {
+  ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: true);
+}
+}
+"#,
+                "ledger::asset::set_transfer_daily_limit expects (AccountId, AssetDefinitionId, quantity)",
+            ),
+            (
+                r#"
+seiyaku CompilerFixture {
+fn apply(AccountId replacement) {
+  ledger::account::recovery::propose(Name::parse("not_string"), replacement);
+}
+}
+"#,
+                "ledger::account::recovery::propose expects (string, AccountId)",
+            ),
+            (
+                r#"
+seiyaku CompilerFixture {
+fn apply(AccountId alias) {
+  ledger::account::recovery::approve(alias);
+}
+}
+"#,
+                "ledger::account::recovery::approve expects (string)",
+            ),
+            (
+                r#"
+seiyaku CompilerFixture {
+fn apply() {
+  ledger::account::recovery::cancel("alias@domain", "extra");
+}
+}
+"#,
+                "ledger::account::recovery::cancel expects (string)",
+            ),
+            (
+                r#"
+seiyaku CompilerFixture {
+fn apply() {
+  ledger::account::recovery::finalize();
+}
+}
+"#,
+                "ledger::account::recovery::finalize expects (string)",
+            ),
+        ] {
+            let parsed = parse(source).expect("parse invalid native control/recovery call");
+            let error = analyze(&parsed)
+                .expect_err("semantic analysis must reject invalid native control/recovery call");
+            assert!(
+                error.message.contains(expected),
+                "expected `{expected}`, got `{}`",
+                error.message
+            );
+        }
     }
 
     #[test]
@@ -21656,10 +21799,6 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         | ir::Instr::NumericRound { .. }
         | ir::Instr::DecimalToInt { .. }
         | ir::Instr::NumericCompare { .. }
-        // `DirectHelperSyscall` is reserved for compiler-owned codec, numeric,
-        // and argument-record helpers. World operations have dedicated IR
-        // variants below so their access cannot be hidden behind a raw number.
-        | ir::Instr::DirectHelperSyscall { .. }
         | ir::Instr::Min { .. }
         | ir::Instr::Max { .. }
         | ir::Instr::Abs { .. }
@@ -21729,15 +21868,11 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::Sm3Hash { .. } => access_class_for_builtin(Builtin::Sm3Hash),
         ir::Instr::Sha256Hash { .. } => access_class_for_builtin(Builtin::Sha256Hash),
         ir::Instr::Sha3Hash { .. } => access_class_for_builtin(Builtin::Sha3Hash),
-        ir::Instr::Blake2b256Hash { .. } => {
-            access_class_for_builtin(Builtin::Blake2b256Hash)
-        }
+        ir::Instr::Blake2b256Hash { .. } => access_class_for_builtin(Builtin::Blake2b256Hash),
         ir::Instr::Keccak256Hash { .. } => access_class_for_builtin(Builtin::Keccak256Hash),
         ir::Instr::IrohaHash { .. } => access_class_for_builtin(Builtin::IrohaHash),
         ir::Instr::Sm2Verify { .. } => access_class_for_builtin(Builtin::Sm2Verify),
-        ir::Instr::VerifySignature { .. } => {
-            access_class_for_builtin(Builtin::VerifySignature)
-        }
+        ir::Instr::VerifySignature { .. } => access_class_for_builtin(Builtin::VerifySignature),
         ir::Instr::Sm4GcmSeal { .. } => access_class_for_builtin(Builtin::Sm4GcmSeal),
         ir::Instr::Sm4GcmOpen { .. } => access_class_for_builtin(Builtin::Sm4GcmOpen),
         ir::Instr::Sm4CcmSeal { .. } => access_class_for_builtin(Builtin::Sm4CcmSeal),
@@ -21754,9 +21889,7 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         }
         ir::Instr::EscrowRelease { .. } => access_class_for_builtin(Builtin::EscrowRelease),
         ir::Instr::EscrowCancel { .. } => access_class_for_builtin(Builtin::EscrowCancel),
-        ir::Instr::EscrowOpenDispute { .. } => {
-            access_class_for_builtin(Builtin::EscrowOpenDispute)
-        }
+        ir::Instr::EscrowOpenDispute { .. } => access_class_for_builtin(Builtin::EscrowOpenDispute),
         ir::Instr::EscrowResolveDispute { .. } => {
             access_class_for_builtin(Builtin::EscrowResolveDispute)
         }
@@ -21781,9 +21914,7 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::AnonymousEscrowResolveDispute { .. } => {
             access_class_for_builtin(Builtin::AnonymousEscrowResolveDispute)
         }
-        ir::Instr::TransferBatchBegin => {
-            access_class_for_builtin(Builtin::TransferV1BatchBegin)
-        }
+        ir::Instr::TransferBatchBegin => access_class_for_builtin(Builtin::TransferV1BatchBegin),
         ir::Instr::TransferBatchEnd => access_class_for_builtin(Builtin::TransferV1BatchEnd),
         ir::Instr::TransferBatchApply { .. } => {
             access_class_for_builtin(Builtin::TransferV1BatchApply)
@@ -21796,13 +21927,9 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::CreateNftsForAllUsers => {
             access_class_for_builtin(Builtin::CreateNftsForAllUsers)
         }
-        ir::Instr::SetExecutionDepth { .. } => {
-            access_class_for_builtin(Builtin::SetExecutionDepth)
-        }
+        ir::Instr::SetExecutionDepth { .. } => access_class_for_builtin(Builtin::SetExecutionDepth),
         ir::Instr::SetVl { .. } => access_class_for_builtin(Builtin::SetVl),
-        ir::Instr::SetAccountDetail { .. } => {
-            access_class_for_builtin(Builtin::SetAccountDetail)
-        }
+        ir::Instr::SetAccountDetail { .. } => access_class_for_builtin(Builtin::SetAccountDetail),
         ir::Instr::CreateNft { .. } => access_class_for_builtin(Builtin::NftMintAsset),
         ir::Instr::SetNftData { .. } => access_class_for_builtin(Builtin::NftSetMetadata),
         ir::Instr::BurnNft { .. } => access_class_for_builtin(Builtin::NftBurnAsset),
@@ -21811,48 +21938,46 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::RegisterAccount { .. } => access_class_for_builtin(Builtin::RegisterAccount),
         ir::Instr::AddSignatory { .. } => access_class_for_builtin(Builtin::AddSignatory),
         ir::Instr::RemoveSignatory { .. } => access_class_for_builtin(Builtin::RemoveSignatory),
-        ir::Instr::SetAccountQuorum { .. } => {
-            access_class_for_builtin(Builtin::SetAccountQuorum)
-        }
-        ir::Instr::UnregisterDomain { .. } => {
-            access_class_for_builtin(Builtin::UnregisterDomain)
-        }
+        ir::Instr::SetAccountQuorum { .. } => access_class_for_builtin(Builtin::SetAccountQuorum),
+        ir::Instr::UnregisterDomain { .. } => access_class_for_builtin(Builtin::UnregisterDomain),
         ir::Instr::UnregisterAsset { .. } => access_class_for_builtin(Builtin::UnregisterAsset),
-        ir::Instr::UnregisterAccount { .. } => {
-            access_class_for_builtin(Builtin::UnregisterAccount)
-        }
+        ir::Instr::UnregisterAccount { .. } => access_class_for_builtin(Builtin::UnregisterAccount),
         ir::Instr::RegisterPeer { .. } => access_class_for_builtin(Builtin::RegisterPeer),
         ir::Instr::UnregisterPeer { .. } => access_class_for_builtin(Builtin::UnregisterPeer),
         ir::Instr::CreateTrigger { .. } => access_class_for_builtin(Builtin::CreateTrigger),
         ir::Instr::RemoveTrigger { .. } => access_class_for_builtin(Builtin::RemoveTrigger),
-        ir::Instr::SetTriggerEnabled { .. } => {
-            access_class_for_builtin(Builtin::SetTriggerEnabled)
-        }
-        ir::Instr::GrantPermission { .. } => {
-            access_class_for_builtin(Builtin::GrantPermission)
-        }
-        ir::Instr::RevokePermission { .. } => {
-            access_class_for_builtin(Builtin::RevokePermission)
-        }
+        ir::Instr::SetTriggerEnabled { .. } => access_class_for_builtin(Builtin::SetTriggerEnabled),
+        ir::Instr::GrantPermission { .. } => access_class_for_builtin(Builtin::GrantPermission),
+        ir::Instr::RevokePermission { .. } => access_class_for_builtin(Builtin::RevokePermission),
         ir::Instr::CreateRole { .. } => access_class_for_builtin(Builtin::CreateRole),
         ir::Instr::DeleteRole { .. } => access_class_for_builtin(Builtin::DeleteRole),
         ir::Instr::GrantRole { .. } => access_class_for_builtin(Builtin::GrantRole),
+        ir::Instr::DirectHelperSyscall { syscall, .. } => {
+            use ivm_abi::syscalls::SyscallAccess;
+            match ivm_abi::syscalls::registered_syscall_access(*syscall) {
+                Some(SyscallAccess::None) => IrAccessClass::None,
+                Some(SyscallAccess::StateRead) => IrAccessClass::Ledger(BuiltinAccess::StateRead),
+                Some(SyscallAccess::StateWrite) => IrAccessClass::Ledger(BuiltinAccess::StateWrite),
+                Some(SyscallAccess::LedgerRead) => IrAccessClass::Ledger(BuiltinAccess::LedgerRead),
+                Some(SyscallAccess::LedgerWrite) => {
+                    IrAccessClass::Ledger(BuiltinAccess::LedgerWrite)
+                }
+                Some(SyscallAccess::Dynamic) | None => {
+                    IrAccessClass::Ledger(BuiltinAccess::Dynamic)
+                }
+            }
+        }
         ir::Instr::RevokeRole { .. } => access_class_for_builtin(Builtin::RevokeRole),
         ir::Instr::TransferDomain { .. } => access_class_for_builtin(Builtin::TransferDomain),
         ir::Instr::ResolveAccountAlias { .. } => {
             access_class_for_builtin(Builtin::ResolveAccountAlias)
         }
-        ir::Instr::InvokeEntrypointAs { .. }
-        | ir::Instr::InvokeEntrypointAsMulti { .. } => {
+        ir::Instr::InvokeEntrypointAs { .. } | ir::Instr::InvokeEntrypointAsMulti { .. } => {
             access_class_for_builtin(Builtin::TestInvokeEntrypointAs)
         }
-        ir::Instr::ExpectRejectAs { .. } => {
-            access_class_for_builtin(Builtin::TestExpectRejectAs)
-        }
+        ir::Instr::ExpectRejectAs { .. } => access_class_for_builtin(Builtin::TestExpectRejectAs),
         ir::Instr::ActorAccount { .. } => access_class_for_builtin(Builtin::TestActorAccount),
-        ir::Instr::ActorPublicKey { .. } => {
-            access_class_for_builtin(Builtin::TestActorPublicKey)
-        }
+        ir::Instr::ActorPublicKey { .. } => access_class_for_builtin(Builtin::TestActorPublicKey),
         ir::Instr::ActorSign { .. } => access_class_for_builtin(Builtin::TestActorSign),
         ir::Instr::ZkVerify { number, .. } => match *number {
             ivm_abi::syscalls::SYSCALL_ZK_VERIFY_TRANSFER => {
@@ -21875,9 +22000,7 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::ProveExecution { .. } => access_class_for_builtin(Builtin::ProveExecution),
         ir::Instr::GrowHeap { .. } => access_class_for_builtin(Builtin::GrowHeap),
         ir::Instr::GetMerklePath { .. } => access_class_for_builtin(Builtin::GetMerklePath),
-        ir::Instr::GetMerkleCompact { .. } => {
-            access_class_for_builtin(Builtin::GetMerkleCompact)
-        }
+        ir::Instr::GetMerkleCompact { .. } => access_class_for_builtin(Builtin::GetMerkleCompact),
         ir::Instr::GetRegisterMerkleCompact { .. } => {
             access_class_for_builtin(Builtin::GetRegisterMerkleCompact)
         }
@@ -21894,13 +22017,9 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::QueryGet { .. } => access_class_for_builtin(Builtin::QueryGetParameter),
         ir::Instr::CoreQueryGet { .. } => access_class_for_builtin(Builtin::QueryGetAccount),
         ir::Instr::CoreQueryPage { .. } => access_class_for_builtin(Builtin::QueryPageAccounts),
-        ir::Instr::GetAccountBalance { .. } => {
-            access_class_for_builtin(Builtin::GetAccountBalance)
-        }
+        ir::Instr::GetAccountBalance { .. } => access_class_for_builtin(Builtin::GetAccountBalance),
         ir::Instr::Alloc { .. } => access_class_for_builtin(Builtin::Alloc),
-        ir::Instr::GetPrivateInput { .. } => {
-            access_class_for_builtin(Builtin::GetPrivateInput)
-        }
+        ir::Instr::GetPrivateInput { .. } => access_class_for_builtin(Builtin::GetPrivateInput),
         ir::Instr::UseNullifier { .. } => access_class_for_builtin(Builtin::UseNullifier),
         ir::Instr::CommitOutput => access_class_for_builtin(Builtin::CommitOutput),
         ir::Instr::SmartContractLifecycle { syscall, .. } => match *syscall {

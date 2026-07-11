@@ -7708,6 +7708,83 @@ fn analyze_surface_builtin_call(
                 ty: Type::Unit,
             })
         }
+        Builtin::SetAssetTransferFreeze => {
+            if arg_typed.len() != 3
+                || !(arg_typed[0].ty == Type::AccountId
+                    && arg_typed[1].ty == Type::AssetDefinitionId
+                    && arg_typed[2].ty == Type::Bool)
+            {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message:
+                        "ledger::asset::set_transfer_freeze expects (AccountId, AssetDefinitionId, bool)"
+                            .into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::SetAssetTransferDailyLimit => {
+            if arg_typed.len() != 3
+                || !(arg_typed[0].ty == Type::AccountId
+                    && arg_typed[1].ty == Type::AssetDefinitionId
+                    && arg_typed[2].ty == Type::Quantity)
+            {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message:
+                        "ledger::asset::set_transfer_daily_limit expects (AccountId, AssetDefinitionId, quantity)"
+                            .into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::AccountRecoveryPropose => {
+            if arg_typed.len() != 2
+                || !(arg_typed[0].ty == Type::String && arg_typed[1].ty == Type::AccountId)
+            {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: "ledger::account::recovery::propose expects (string, AccountId)"
+                        .into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::AccountRecoveryApprove
+        | Builtin::AccountRecoveryCancel
+        | Builtin::AccountRecoveryFinalize => {
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::String {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: format!("{} expects (string)", builtin.source_name()),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
         Builtin::NftMintAsset => {
             if arg_typed.len() != 2
                 || !(arg_typed[0].ty == Type::NftId && arg_typed[1].ty == Type::AccountId)
@@ -9334,7 +9411,7 @@ fn analyze_surface_builtin_call(
                 ty: Type::Json,
             })
         }
-        Builtin::Authority | Builtin::SysvarAuthority => {
+        Builtin::Authority | Builtin::SysvarAuthority | Builtin::ContractSubject => {
             if !arg_typed.is_empty() {
                 return Err(SemanticError {
                     code: "K2003",

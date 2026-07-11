@@ -20058,6 +20058,41 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         if requestBody.commitments.isEmpty {
             return []
         }
+        let response = try await fetchZkAssetMerklePathResponse(
+            asset: asset,
+            commitments: commitments
+        )
+        return try response.validatedPaths(expectedCommitments: commitments)
+    }
+
+    /// Fetch the complete authoritative path snapshot, including Torii's
+    /// padded next-zero path. Kagemusha uses this form so a one-input proof can
+    /// be built from two bounded paths without downloading the whole tree.
+    public func getZkAssetMerklePathSnapshot(
+        asset: String,
+        commitments: [Data]
+    ) async throws -> ToriiZkMerklePathResponse {
+        let response = try await fetchZkAssetMerklePathResponse(
+            asset: asset,
+            commitments: commitments
+        )
+        _ = try response.validatedPaths(expectedCommitments: commitments)
+        guard response.treeDepth == ToriiZkMerklePathResponse.confidentialTreeDepthV2 else {
+            throw ToriiClientError.invalidPayload(
+                "Torii returned a non-confidential-v2 Merkle tree depth."
+            )
+        }
+        if response.frontierLen < ToriiZkMerklePathResponse.confidentialTreeCapacityV2 {
+            _ = try response.validatedNextZeroPath()
+        }
+        return response
+    }
+
+    private func fetchZkAssetMerklePathResponse(
+        asset: String,
+        commitments: [Data]
+    ) async throws -> ToriiZkMerklePathResponse {
+        let requestBody = try ToriiZkMerklePathRequest(assetId: asset, commitments: commitments)
         let request = try makeRequest(path: "/v1/zk/merkle-path",
                                       method: .post,
                                       queryItems: nil,
@@ -20070,7 +20105,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         } catch {
             throw ToriiClientError.decoding(error)
         }
-        return try response.validatedPaths(expectedCommitments: requestBody.commitments)
+        return response
     }
 
     @discardableResult

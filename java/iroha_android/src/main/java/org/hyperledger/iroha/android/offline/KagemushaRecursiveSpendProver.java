@@ -18,7 +18,7 @@ public final class KagemushaRecursiveSpendProver {
   public static final int PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 18;
   public static final String PASTA_CYCLE_V3_ARTIFACT_MANIFEST_SCHEMA =
       "kagemusha.offline.recursive_spend.artifact_manifest.v3";
-  public static final String PASTA_CYCLE_V3_MODE = "recursive_spend_v2";
+  public static final String PASTA_CYCLE_V3_MODE = "recursive_spend_v1";
   public static final String PASTA_CYCLE_V3_PROOF_BACKEND =
       "halo2/ipa-pasta-cycle-v1";
   public static final String PASTA_CYCLE_V3_TRANSCRIPT_PROFILE =
@@ -91,7 +91,7 @@ public final class KagemushaRecursiveSpendProver {
   private static final boolean PASTA_CYCLE_V3_BACKEND_AVAILABLE = loadPastaCycleV3Backend();
 
   public enum Mode {
-    RECURSIVE_SPEND_V2("recursive_spend_v2");
+    RECURSIVE_SPEND_V1("recursive_spend_v1");
 
     private final String wireName;
 
@@ -129,7 +129,7 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   public static Mode preferredMode(final boolean pastaCycleV3BackendAvailable) {
-    return pastaCycleV3BackendAvailable ? Mode.RECURSIVE_SPEND_V2 : null;
+    return pastaCycleV3BackendAvailable ? Mode.RECURSIVE_SPEND_V1 : null;
   }
 
   /** Begin one manifest-bound, bounded streaming ingest session for a complete KRV3 package. */
@@ -927,12 +927,15 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   private static boolean loadPastaCycleV3Backend() {
-    return NATIVE_AVAILABLE
-        && detectNativeAvailability(
-            () -> {},
-            KagemushaRecursiveSpendProver::nativeBridgeAbiVersion,
-            KagemushaRecursiveSpendProver::nativePastaCycleV3BackendAvailable,
-            PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
+    if (!NATIVE_AVAILABLE) {
+      return false;
+    }
+    try {
+      return nativeBridgeAbiVersion() == PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION
+          && nativePastaCycleV3BackendAvailable();
+    } catch (final UnsatisfiedLinkError | RuntimeException unavailable) {
+      return false;
+    }
   }
 
   private static boolean loadPastaCycleV3ArtifactIngestBridge() {

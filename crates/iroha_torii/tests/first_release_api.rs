@@ -205,6 +205,54 @@ async fn assembled_router_canonicalizes_early_path_and_accept_failures() {
 }
 
 #[tokio::test]
+async fn offline_command_header_admission_precedes_body_decoding() {
+    let router = build_router();
+    for path in ["/v1/offline/top-up", "/v1/offline/redeem"] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(path)
+                    .extension(local_connect_info())
+                    .header(ACCEPT, "application/json")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from("{"))
+                    .expect("malformed command without idempotency key"),
+            )
+            .await
+            .expect("header rejection");
+        let (status, _, envelope) = decode_error_response(response).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "path={path}");
+        assert_eq!(envelope.code(), "idempotency_key_missing", "path={path}");
+
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(path)
+                    .extension(local_connect_info())
+                    .header(ACCEPT, "application/json")
+                    .header(CONTENT_TYPE, "application/json")
+                    .header("idempotency-key", "11".repeat(32))
+                    .header("x-iroha-account", "forbidden-before-body")
+                    .body(axum::body::Body::from("{"))
+                    .expect("malformed command with forbidden auth header"),
+            )
+            .await
+            .expect("header rejection");
+        let (status, _, envelope) = decode_error_response(response).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "path={path}");
+        assert_eq!(
+            envelope.code(),
+            "offline_auth_header_unsupported",
+            "path={path}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn wrong_methods_use_negotiated_typed_errors_and_retain_allow() {
     let router = build_router();
     for accept in ["application/json", "application/x-norito"] {

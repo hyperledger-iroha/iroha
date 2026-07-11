@@ -873,6 +873,12 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE
             | syscalls::SYSCALL_SORACLOUD_APPEND_JOURNAL
             | syscalls::SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT
+            | syscalls::SYSCALL_SET_ASSET_TRANSFER_FREEZE
+            | syscalls::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT
+            | syscalls::SYSCALL_ACCOUNT_RECOVERY_PROPOSE
+            | syscalls::SYSCALL_ACCOUNT_RECOVERY_APPROVE
+            | syscalls::SYSCALL_ACCOUNT_RECOVERY_CANCEL
+            | syscalls::SYSCALL_ACCOUNT_RECOVERY_FINALIZE
     ) {
         return Some(HostSyscallGasFormula::ConservativeEnvelope);
     }
@@ -941,6 +947,7 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS
             | syscalls::SYSCALL_SYSVAR_AUTHORITY
             | syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS
+            | syscalls::SYSCALL_SYSVAR_CONTRACT_SUBJECT
             | syscalls::SYSCALL_SYSVAR_ENTRYPOINT
             | syscalls::SYSCALL_DECODE_ARGUMENT_RECORD
             | syscalls::SYSCALL_STATE_MAP_KEY_AT

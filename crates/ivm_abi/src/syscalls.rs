@@ -503,6 +503,11 @@ pub const SYSCALL_SYSVAR_AUTHORITY: u32 = 0x01_0023;
 pub const SYSCALL_SYSVAR_CONTRACT_ADDRESS: u32 = 0x01_0024;
 /// Return the current contract entrypoint name as a `Blob` TLV, or zero when not in a contract scope.
 pub const SYSCALL_SYSVAR_ENTRYPOINT: u32 = 0x01_0025;
+/// Return the immutable subject account of the currently executing deployed contract.
+///
+/// The result is an `AccountId` TLV in `r10`. Calls outside a deployed-contract
+/// scope fail closed instead of falling back to transaction authority.
+pub const SYSCALL_SYSVAR_CONTRACT_SUBJECT: u32 = 0x01_0027;
 /// Decode a complete schema-bound public argument record.
 ///
 /// Args: r10 = `&NoritoBytes(EntrypointArgumentRecordV1)` for raw hosts, or
@@ -512,6 +517,31 @@ pub const SYSCALL_SYSVAR_ENTRYPOINT: u32 = 0x01_0025;
 /// declaration-ordered flattened words, which contain sum tags, canonical
 /// scalar bits, or validated pointer-ABI addresses.
 pub const SYSCALL_DECODE_ARGUMENT_RECORD: u32 = 0x01_0026;
+
+/// Set or clear native outbound-transfer freeze state for one account/asset pair.
+///
+/// Args: `r10 = &AccountId`, `r11 = &AssetDefinitionId`, `r12 = bool`.
+pub const SYSCALL_SET_ASSET_TRANSFER_FREEZE: u32 = 0x01_0200;
+/// Set the native UTC daily outbound-transfer cap for one account/asset pair.
+///
+/// Args: `r10 = &AccountId`, `r11 = &AssetDefinitionId`, `r12 = &Quantity`.
+pub const SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT: u32 = 0x01_0201;
+/// Propose native alias-based account recovery with a replacement controller.
+///
+/// Args: `r10 = &Blob(alias literal)`, `r11 = &AccountId(replacement controller)`.
+pub const SYSCALL_ACCOUNT_RECOVERY_PROPOSE: u32 = 0x01_0210;
+/// Approve the pending native recovery request for an alias.
+///
+/// Args: `r10 = &Blob(alias literal)`.
+pub const SYSCALL_ACCOUNT_RECOVERY_APPROVE: u32 = 0x01_0211;
+/// Cancel the pending native recovery request for an alias.
+///
+/// Args: `r10 = &Blob(alias literal)`.
+pub const SYSCALL_ACCOUNT_RECOVERY_CANCEL: u32 = 0x01_0212;
+/// Finalize the pending native recovery request for an alias.
+///
+/// Args: `r10 = &Blob(alias literal)`.
+pub const SYSCALL_ACCOUNT_RECOVERY_FINALIZE: u32 = 0x01_0213;
 
 // Kotodama V1 exact numeric families. These numbers are deliberately grouped
 // by value domain so admission, host dispatch, and generated SDK tables can
@@ -877,6 +907,12 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
             | SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE
             | SYSCALL_SORACLOUD_APPEND_JOURNAL
             | SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT
+            | SYSCALL_SET_ASSET_TRANSFER_FREEZE
+            | SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT
+            | SYSCALL_ACCOUNT_RECOVERY_PROPOSE
+            | SYSCALL_ACCOUNT_RECOVERY_APPROVE
+            | SYSCALL_ACCOUNT_RECOVERY_CANCEL
+            | SYSCALL_ACCOUNT_RECOVERY_FINALIZE
     ) {
         return Some(SyscallAccess::LedgerWrite);
     }
@@ -968,6 +1004,7 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
             | SYSCALL_SYSVAR_BLOCK_TIME_MS
             | SYSCALL_SYSVAR_AUTHORITY
             | SYSCALL_SYSVAR_CONTRACT_ADDRESS
+            | SYSCALL_SYSVAR_CONTRACT_SUBJECT
             | SYSCALL_SYSVAR_ENTRYPOINT
             | SYSCALL_DECODE_ARGUMENT_RECORD
     ) {
@@ -1231,11 +1268,18 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_SYSVAR_BLOCK_TIME_MS,
             SYSCALL_SYSVAR_AUTHORITY,
             SYSCALL_SYSVAR_CONTRACT_ADDRESS,
+            SYSCALL_SYSVAR_CONTRACT_SUBJECT,
             SYSCALL_SYSVAR_ENTRYPOINT,
             SYSCALL_DECODE_ARGUMENT_RECORD,
             SYSCALL_SUBSCRIPTION_BILL,
             SYSCALL_SUBSCRIPTION_RECORD_USAGE,
             SYSCALL_RESOLVE_ACCOUNT_ALIAS,
+            SYSCALL_SET_ASSET_TRANSFER_FREEZE,
+            SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT,
+            SYSCALL_ACCOUNT_RECOVERY_PROPOSE,
+            SYSCALL_ACCOUNT_RECOVERY_APPROVE,
+            SYSCALL_ACCOUNT_RECOVERY_CANCEL,
+            SYSCALL_ACCOUNT_RECOVERY_FINALIZE,
         ]);
         // Atomic cross-transaction (AXT) scaffolding
         v.extend_from_slice(&[
@@ -1454,6 +1498,7 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_SYSVAR_BLOCK_TIME_MS => "SYSVAR_BLOCK_TIME_MS",
         SYSCALL_SYSVAR_AUTHORITY => "SYSVAR_AUTHORITY",
         SYSCALL_SYSVAR_CONTRACT_ADDRESS => "SYSVAR_CONTRACT_ADDRESS",
+        SYSCALL_SYSVAR_CONTRACT_SUBJECT => "SYSVAR_CONTRACT_SUBJECT",
         SYSCALL_SYSVAR_ENTRYPOINT => "SYSVAR_ENTRYPOINT",
         SYSCALL_DECODE_ARGUMENT_RECORD => "DECODE_ARGUMENT_RECORD",
         SYSCALL_INT_FROM_I64 => "INT_FROM_I64",
@@ -1512,6 +1557,12 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_SUBSCRIPTION_BILL => "SUBSCRIPTION_BILL",
         SYSCALL_SUBSCRIPTION_RECORD_USAGE => "SUBSCRIPTION_RECORD_USAGE",
         SYSCALL_RESOLVE_ACCOUNT_ALIAS => "RESOLVE_ACCOUNT_ALIAS",
+        SYSCALL_SET_ASSET_TRANSFER_FREEZE => "SET_ASSET_TRANSFER_FREEZE",
+        SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT => "SET_ASSET_TRANSFER_DAILY_LIMIT",
+        SYSCALL_ACCOUNT_RECOVERY_PROPOSE => "ACCOUNT_RECOVERY_PROPOSE",
+        SYSCALL_ACCOUNT_RECOVERY_APPROVE => "ACCOUNT_RECOVERY_APPROVE",
+        SYSCALL_ACCOUNT_RECOVERY_CANCEL => "ACCOUNT_RECOVERY_CANCEL",
+        SYSCALL_ACCOUNT_RECOVERY_FINALIZE => "ACCOUNT_RECOVERY_FINALIZE",
         SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER => "ANONYMOUS_ESCROW_OPEN_OFFER",
         SYSCALL_ANONYMOUS_ESCROW_ACCEPT => "ANONYMOUS_ESCROW_ACCEPT",
         SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT => "ANONYMOUS_ESCROW_MARK_PAYMENT_SENT",

@@ -20,7 +20,7 @@ use super::{
 use crate::block::BlockHeader;
 
 /// Current Norito layout version of [`V2FinalityArtifact`].
-pub const V2_FINALITY_ARTIFACT_VERSION: u16 = 1;
+pub const V2_FINALITY_ARTIFACT_VERSION: u16 = 2;
 /// Maximum encoded BLS proof-of-possession bytes retained per validator.
 pub const MAX_VALIDATOR_POP_BYTES: usize = 256;
 
@@ -662,6 +662,17 @@ mod tests {
         }
     }
 
+    fn execution_commitment(seed: u8) -> super::super::ExecutionCommitment {
+        super::super::ExecutionCommitment::new(
+            Hash::new([seed, 3]),
+            Hash::new([seed, 4]),
+            Hash::new([seed, 5]),
+            None,
+            0,
+        )
+        .expect("canonical fixture execution commitment")
+    }
+
     fn artifact() -> V2FinalityArtifact {
         let context = context();
         let subject = subject(3);
@@ -675,6 +686,7 @@ mod tests {
             round,
             phase: GlobalPhase::Commit,
             subject,
+            execution_commitment: execution_commitment(3),
             signers,
             aggregate_signature: vec![0xA5; 48],
         };

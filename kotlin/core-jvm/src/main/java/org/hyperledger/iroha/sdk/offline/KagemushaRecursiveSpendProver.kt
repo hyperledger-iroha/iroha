@@ -8,7 +8,7 @@ import java.security.MessageDigest
 /** Exact ABI-18 Kagemusha recursive-spend bridge. */
 class KagemushaRecursiveSpendProver private constructor() {
     enum class Mode(val wireName: String) {
-        RECURSIVE_SPEND_V2("recursive_spend_v2"),
+        RECURSIVE_SPEND_V1("recursive_spend_v1"),
     }
 
     companion object {
@@ -18,7 +18,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         const val PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 18
         const val PASTA_CYCLE_V3_ARTIFACT_MANIFEST_SCHEMA: String =
             "kagemusha.offline.recursive_spend.artifact_manifest.v3"
-        const val PASTA_CYCLE_V3_MODE: String = "recursive_spend_v2"
+        const val PASTA_CYCLE_V3_MODE: String = "recursive_spend_v1"
         const val PASTA_CYCLE_V3_PROOF_BACKEND: String = "halo2/ipa-pasta-cycle-v1"
         const val PASTA_CYCLE_V3_TRANSCRIPT_PROFILE: String =
             "kagemusha-pasta-cycle-poseidon-v1"
@@ -95,14 +95,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         private val pastaCycleV3ArtifactIngestAvailable: Boolean =
             loadPastaCycleV3ArtifactIngestBridge()
         private val pastaCycleV3BackendAvailable: Boolean =
-            nativeAvailable &&
-                detectNativeAvailability(
-                    loadLibrary = {},
-                    nativeBridgeAbiVersionProbe = { nativeBridgeAbiVersion() },
-                    probeSymbol = { nativePastaCycleV3BackendAvailable() },
-                    requiredNativeBridgeAbiVersion =
-                        PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
-                )
+            loadPastaCycleV3Backend()
 
         private class LineageProvingKeyArchive(
             val version: Int,
@@ -141,7 +134,7 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         @JvmStatic
         fun preferredMode(pastaCycleV3BackendAvailable: Boolean): Mode? =
-            if (pastaCycleV3BackendAvailable) Mode.RECURSIVE_SPEND_V2 else null
+            if (pastaCycleV3BackendAvailable) Mode.RECURSIVE_SPEND_V1 else null
 
         /** Begin one manifest-bound, bounded streaming ingest of a complete KRV3 package. */
         @JvmStatic
@@ -939,6 +932,18 @@ class KagemushaRecursiveSpendProver private constructor() {
                 }
             } catch (_: IllegalArgumentException) {
                 true
+            } catch (_: UnsatisfiedLinkError) {
+                false
+            } catch (_: RuntimeException) {
+                false
+            }
+        }
+
+        private fun loadPastaCycleV3Backend(): Boolean {
+            if (!nativeAvailable) return false
+            return try {
+                nativeBridgeAbiVersion() == PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION &&
+                    nativePastaCycleV3BackendAvailable()
             } catch (_: UnsatisfiedLinkError) {
                 false
             } catch (_: RuntimeException) {

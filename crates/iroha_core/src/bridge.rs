@@ -2116,9 +2116,7 @@ mod tests {
     #[test]
     fn collect_sccp_messages_skips_decodable_but_invalid_payloads() {
         let invalid = sample_transfer_payload(4, [0x22; 20]);
-        let SccpPayloadV1::Transfer(mut invalid_transfer) = invalid else {
-            panic!("sample payload should be a transfer");
-        };
+        let SccpPayloadV1::Transfer(mut invalid_transfer) = invalid;
         invalid_transfer.amount = 0;
         let invalid_payload = SccpPayloadV1::Transfer(invalid_transfer);
         assert!(
@@ -2352,9 +2350,7 @@ mod tests {
     #[test]
     fn collect_sccp_messages_from_accepted_transactions_skips_empty_outbound_route() {
         let mut payload = sample_transfer_payload(12, [0x22; 20]);
-        let SccpPayloadV1::Transfer(transfer) = &mut payload else {
-            unreachable!("sample payload is a transfer");
-        };
+        let SccpPayloadV1::Transfer(transfer) = &mut payload;
         transfer.route_id.clear();
         let accepted =
             accepted_transaction_with_sccp_payload(canonical_test_sccp_payload_bytes(&payload));
@@ -2636,9 +2632,7 @@ mod tests {
     #[test]
     fn validate_sccp_commitment_root_for_signed_block_rejects_bare_transfer_payload() {
         let payload = sample_transfer_payload(20, [0x22; 20]);
-        let SccpPayloadV1::Transfer(transfer) = payload else {
-            unreachable!("sample payload is a transfer");
-        };
+        let SccpPayloadV1::Transfer(transfer) = payload;
         let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(
                 canonical_test_transfer_payload_bytes(&transfer),
@@ -2686,9 +2680,7 @@ mod tests {
     #[test]
     fn validate_sccp_commitment_root_for_signed_block_rejects_empty_outbound_route() {
         let mut payload = sample_transfer_payload(17, [0x22; 20]);
-        let SccpPayloadV1::Transfer(transfer) = &mut payload else {
-            unreachable!("sample payload is a transfer");
-        };
+        let SccpPayloadV1::Transfer(transfer) = &mut payload;
         transfer.route_id.clear();
         let payload = canonical_test_sccp_payload_bytes(&payload);
         let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![

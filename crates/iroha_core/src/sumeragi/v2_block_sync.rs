@@ -804,6 +804,7 @@ mod tests {
                 },
                 phase: wire::GlobalPhase::Commit,
                 subject,
+                execution_commitment: execution_commitment(0x41),
                 signers: vec![0, 1, 2],
                 aggregate_signature: vec![0xC1; 96],
             };
@@ -897,11 +898,20 @@ mod tests {
         HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH]))
     }
 
+    fn execution_commitment(seed: u8) -> wire::ExecutionCommitment {
+        wire::ExecutionCommitment::without_topups(
+            Hash::new([seed, 1]),
+            Hash::new([seed, 2]),
+            Hash::new([seed, 3]),
+        )
+    }
+
     fn aggregate_commit(certificate: &wire::QuorumCertificate, keys: &[KeyPair]) -> Vec<u8> {
         let preimage = wire::Vote {
             round: certificate.round,
             phase: certificate.phase,
             subject: certificate.subject,
+            execution_commitment: certificate.execution_commitment,
             signer: certificate.signers[0],
             signature: Vec::new(),
         }
@@ -1145,6 +1155,7 @@ mod tests {
             },
             phase: wire::GlobalPhase::Commit,
             subject: subject_two,
+            execution_commitment: execution_commitment(0x42),
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0xC2; 96],
         };
@@ -1425,6 +1436,7 @@ mod tests {
             },
             phase: wire::GlobalPhase::Commit,
             subject,
+            execution_commitment: execution_commitment(0x43),
             signers: vec![0, 1, 2],
             aggregate_signature: Vec::new(),
         };

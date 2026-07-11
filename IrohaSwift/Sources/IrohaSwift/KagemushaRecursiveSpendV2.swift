@@ -88,7 +88,7 @@ public enum KagemushaRecursiveSpendV2 {
     public static let requiredNativeBridgeAbiVersion: UInt32 = 18
     public static let artifactManifestSchema =
         "kagemusha.offline.recursive_spend.artifact_manifest.v3"
-    public static let mode = "recursive_spend_v2"
+    public static let mode = "recursive_spend_v1"
     public static let pastaCycleBackend = "halo2/ipa-pasta-cycle-v1"
     public static let pastaCycleTranscript = "kagemusha-pasta-cycle-poseidon-v1"
     public static let pastaCycleProofEnvelopeVersion: UInt16 = 1
@@ -228,6 +228,9 @@ public enum KagemushaRecursiveSpendV2 {
         "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
         "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
         "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
+        "connect_norito_kagemusha_recursive_spend_artifact_set_install_v3",
+        "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3",
+        "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3",
     ]
 
     /// Complete native-symbol inventory required by V2 readiness checks.
@@ -287,7 +290,7 @@ public enum KagemushaRecursiveSpendV2 {
         proofBackendAvailable: Bool,
         nativeStubAvailable: Bool
     ) -> KagemushaOfflineSpendMode? {
-        proofBackendAvailable && nativeStubAvailable ? .recursiveSpendV2 : nil
+        proofBackendAvailable && nativeStubAvailable ? .recursiveSpendV1 : nil
     }
 
     public static func initSpend(
@@ -324,16 +327,13 @@ public enum KagemushaRecursiveSpendV2 {
     public static func verifyTopUpFinality(
         proof: KagemushaTopUpFinalityProofArchiveV2,
         rosterArtifact: KagemushaTopUpFinalityRosterArtifactArchiveV2,
-        expectedRosterSHA256: Data
+        manifest: KagemushaRecursiveSpendArtifactManifestArchiveV3
     ) throws {
-        try requireNonzeroFixed32(
-            expectedRosterSHA256,
-            field: "topUpFinalityRosterArtifact.sha256"
-        )
         guard try NoritoNativeBridge.shared.kagemushaTopUpFinalityVerifyV2(
             proofArchive: proof.noritoArchive,
             rosterArtifactArchive: rosterArtifact.noritoArchive,
-            expectedRosterSHA256: expectedRosterSHA256
+            manifestArchive: manifest.noritoArchive,
+            expectedManifestSHA256: manifest.sha256
         ) else {
             throw KagemushaRecursiveSpendV2Error.nativeBridgeUnavailable
         }
@@ -773,15 +773,6 @@ public enum KagemushaRecursiveSpendArtifactRoleV2: UInt32, Equatable, Sendable {
     case lineageInitProver = 2
     case lineageAppendProver = 3
     case redeemChangeProver = 4
-
-    var nativeExpectedRole: UInt32? {
-        switch self {
-        case .lineageInitProver: return 3
-        case .lineageAppendProver: return 4
-        case .redeemChangeProver: return 5
-        default: return nil
-        }
-    }
 }
 
 public struct KagemushaRecursiveSpendArtifactReferenceV2: Equatable, Sendable {
@@ -2877,83 +2868,6 @@ public struct KagemushaRecursiveSpendRedeemResultV2: Equatable, Sendable {
     public let operationID: Data
 }
 
-/// Owns one native streaming handle. Chunks are written directly to the Rust
-/// spool; the Swift wrapper never concatenates the complete artifact.
-public final class KagemushaRecursiveSpendArtifactIngestV2: @unchecked Sendable {
-    public let reference: KagemushaRecursiveSpendArtifactReferenceV2
-    private var handle: UInt64?
-    private let lock = NSLock()
-
-    public init(reference: KagemushaRecursiveSpendArtifactReferenceV2) throws {
-        guard let expectedRole = reference.role.nativeExpectedRole else {
-            throw KagemushaRecursiveSpendV2Error.invalidField("artifact.role")
-        }
-        let archive = try KagemushaRecursiveSpendV2Codecs.encodeArtifactReference(reference)
-        guard let handle = try NoritoNativeBridge.shared.kagemushaRecursiveSpendArtifactBeginV2(
-            referenceArchive: archive,
-            expectedRole: expectedRole
-        ) else {
-            throw KagemushaRecursiveSpendV2Error.nativeBridgeUnavailable
-        }
-        self.reference = reference
-        self.handle = handle
-    }
-
-    deinit {
-        lock.lock()
-        let active = handle
-        handle = nil
-        lock.unlock()
-        if let active {
-            _ = try? NoritoNativeBridge.shared.kagemushaRecursiveSpendArtifactCancelV2(handle: active)
-        }
-    }
-
-    public func write(_ chunk: Data) throws {
-        guard !chunk.isEmpty else {
-            throw KagemushaRecursiveSpendV2Error.invalidField("artifact.chunk")
-        }
-        lock.lock()
-        defer { lock.unlock() }
-        guard let handle else {
-            throw KagemushaRecursiveSpendV2Error.invalidField("artifact.handle")
-        }
-        guard try NoritoNativeBridge.shared.kagemushaRecursiveSpendArtifactWriteV2(
-            handle: handle,
-            chunk: chunk
-        ) else {
-            throw KagemushaRecursiveSpendV2Error.nativeBridgeUnavailable
-        }
-    }
-
-    public func finalize() throws {
-        lock.lock()
-        defer { lock.unlock() }
-        guard let handle else {
-            throw KagemushaRecursiveSpendV2Error.invalidField("artifact.handle")
-        }
-        guard try NoritoNativeBridge.shared.kagemushaRecursiveSpendArtifactFinalizeV2(
-            handle: handle
-        ) else {
-            throw KagemushaRecursiveSpendV2Error.nativeBridgeUnavailable
-        }
-        // The finalized handle remains owned so deinit/cancel releases the
-        // local package after the caller finishes all proofs for this session.
-    }
-
-    public func cancel() throws {
-        lock.lock()
-        defer { lock.unlock() }
-        guard let active = handle else { return }
-        guard try NoritoNativeBridge.shared.kagemushaRecursiveSpendArtifactCancelV2(
-            handle: active
-        ) else {
-            throw KagemushaRecursiveSpendV2Error.nativeBridgeUnavailable
-        }
-        handle = nil
-    }
-}
-
 /// Owns one ABI-18 V3 streaming handle. `write` accepts chunks of the complete
 /// published `KRV3KEY` file and never exposes or parses its header or payload.
 /// Native finalization re-parses and authenticates the held file descriptor.
@@ -2961,6 +2875,7 @@ public final class KagemushaRecursiveSpendArtifactIngestV3: @unchecked Sendable 
     public let manifest: KagemushaRecursiveSpendArtifactManifestArchiveV3
     public let artifactSHA256: Data
     private var handle: UInt64?
+    private var finalized = false
     private let lock = NSLock()
 
     public init(
@@ -3004,6 +2919,9 @@ public final class KagemushaRecursiveSpendArtifactIngestV3: @unchecked Sendable 
         guard let handle else {
             throw KagemushaRecursiveSpendV2Error.invalidField("artifact.handle")
         }
+        guard !finalized else {
+            throw KagemushaRecursiveSpendV2Error.invalidField("artifact.finalized")
+        }
         do {
             guard try NoritoNativeBridge.shared.kagemushaRecursiveSpendArtifactWriteV3(
                 handle: handle,
@@ -3025,11 +2943,15 @@ public final class KagemushaRecursiveSpendArtifactIngestV3: @unchecked Sendable 
         guard let handle else {
             throw KagemushaRecursiveSpendV2Error.invalidField("artifact.handle")
         }
+        guard !finalized else {
+            throw KagemushaRecursiveSpendV2Error.invalidField("artifact.finalized")
+        }
         do {
             guard try NoritoNativeBridge.shared
                 .kagemushaRecursiveSpendArtifactFinalizeV3(handle: handle) else {
                 throw KagemushaRecursiveSpendV2Error.nativeBridgeUnavailable
             }
+            finalized = true
         } catch {
             // Native finalization removes a corrupt spool. Clear the Swift
             // owner as well so cancellation remains idempotent.
@@ -3049,6 +2971,158 @@ public final class KagemushaRecursiveSpendArtifactIngestV3: @unchecked Sendable 
             throw KagemushaRecursiveSpendV2Error.nativeBridgeUnavailable
         }
         handle = nil
+        finalized = false
+    }
+
+    fileprivate func finalizedHandle(
+        for expectedManifest: KagemushaRecursiveSpendArtifactManifestArchiveV3
+    ) throws -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        guard manifest == expectedManifest else {
+            throw KagemushaRecursiveSpendV2Error.invalidField("artifact.manifest")
+        }
+        guard finalized, let handle else {
+            throw KagemushaRecursiveSpendV2Error.invalidField("artifact.finalized")
+        }
+        return handle
+    }
+
+    fileprivate func relinquishInstalledHandle(_ expectedHandle: UInt64) {
+        lock.lock()
+        defer { lock.unlock() }
+        if handle == expectedHandle, finalized {
+            handle = nil
+            finalized = false
+        }
+    }
+}
+
+/// Coordinates a complete six-file V3 release installation.
+///
+/// Each artifact is still streamed independently, but `install()` is the only
+/// operation that transfers ownership to the prover. Native code revalidates
+/// all six anonymous files and either consumes every finalized handle or none.
+public final class KagemushaRecursiveSpendArtifactInstallSessionV3: @unchecked Sendable {
+    public let manifest: KagemushaRecursiveSpendArtifactManifestArchiveV3
+    private var artifacts: [Data: KagemushaRecursiveSpendArtifactIngestV3] = [:]
+    private var installed = false
+    private var closed = false
+    private let lock = NSLock()
+
+    public init(manifest: KagemushaRecursiveSpendArtifactManifestArchiveV3) {
+        self.manifest = manifest
+    }
+
+    deinit {
+        lock.lock()
+        let pending = installed ? [] : Array(artifacts.values)
+        artifacts.removeAll()
+        closed = true
+        lock.unlock()
+        for artifact in pending {
+            try? artifact.cancel()
+        }
+    }
+
+    /// Start one manifest-selected artifact stream. Native begin rejects a
+    /// digest not present exactly once in the canonical manifest.
+    public func beginArtifact(
+        expectedArtifactSHA256: Data
+    ) throws -> KagemushaRecursiveSpendArtifactIngestV3 {
+        try KagemushaRecursiveSpendV2.requireNonzeroFixed32(
+            expectedArtifactSHA256,
+            field: "artifact.sha256"
+        )
+        lock.lock()
+        defer { lock.unlock() }
+        guard !closed, !installed, artifacts.count < 6 else {
+            throw KagemushaRecursiveSpendV2Error.invalidField("artifactSet.state")
+        }
+        guard artifacts[expectedArtifactSHA256] == nil else {
+            throw KagemushaRecursiveSpendV2Error.invalidField("artifactSet.duplicate")
+        }
+        let artifact = try KagemushaRecursiveSpendArtifactIngestV3(
+            manifest: manifest,
+            expectedArtifactSHA256: expectedArtifactSHA256
+        )
+        artifacts[Data(expectedArtifactSHA256)] = artifact
+        return artifact
+    }
+
+    /// Atomically transfer one finalized handle for each of the six manifest
+    /// roles into the active native generation.
+    public func install() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !closed, !installed, artifacts.count == 6 else {
+            throw KagemushaRecursiveSpendV2Error.invalidField("artifactSet.count")
+        }
+        let orderedArtifacts = artifacts
+            .sorted { $0.key.lexicographicallyPrecedes($1.key) }
+            .map(\.value)
+        let handles = try orderedArtifacts.map { try $0.finalizedHandle(for: manifest) }
+        guard try NoritoNativeBridge.shared.kagemushaRecursiveSpendArtifactSetInstallV3(
+            manifestArchive: manifest.noritoArchive,
+            expectedManifestSHA256: manifest.sha256,
+            handles: handles
+        ) else {
+            throw KagemushaRecursiveSpendV2Error.nativeBridgeUnavailable
+        }
+        for (artifact, handle) in zip(orderedArtifacts, handles) {
+            artifact.relinquishInstalledHandle(handle)
+        }
+        artifacts.removeAll()
+        installed = true
+    }
+
+    public func isInstalled() throws -> Bool {
+        guard let result = try NoritoNativeBridge.shared
+            .kagemushaRecursiveSpendArtifactSetIsInstalledV3(
+                manifestArchive: manifest.noritoArchive,
+                expectedManifestSHA256: manifest.sha256
+            ) else {
+            throw KagemushaRecursiveSpendV2Error.nativeBridgeUnavailable
+        }
+        return result
+    }
+
+    /// Cancel only pending streams. An installed generation remains active
+    /// until `uninstall()` is explicitly requested.
+    public func cancel() throws {
+        lock.lock()
+        guard !installed else {
+            lock.unlock()
+            return
+        }
+        let pending = Array(artifacts.values)
+        artifacts.removeAll()
+        closed = true
+        lock.unlock()
+        var firstError: Error?
+        for artifact in pending {
+            do {
+                try artifact.cancel()
+            } catch where firstError == nil {
+                firstError = error
+            } catch {}
+        }
+        if let firstError { throw firstError }
+    }
+
+    /// Release this exact installed generation. The native digest guard makes
+    /// a stale session incapable of removing a newer generation.
+    public func uninstall() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        guard installed, !closed else { return }
+        guard try NoritoNativeBridge.shared.kagemushaRecursiveSpendArtifactSetUninstallV3(
+            expectedManifestSHA256: manifest.sha256
+        ) else {
+            throw KagemushaRecursiveSpendV2Error.nativeBridgeUnavailable
+        }
+        installed = false
+        closed = true
     }
 }
 

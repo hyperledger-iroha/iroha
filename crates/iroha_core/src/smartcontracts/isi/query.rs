@@ -1017,10 +1017,6 @@ fn preflight_singular_source_materialization(
                 charge(nft.value().as_ref(), &mut remaining)?;
             }
         }
-        #[cfg(test)]
-        SingularQueryBox::__TestFallback => {
-            return Err(reject_unbounded("__TestFallback"));
-        }
     }
     Ok(limit.saturating_sub(remaining))
 }
@@ -5731,7 +5727,7 @@ mod tests {
         let mut account = Account::new(account_id.clone())
             .with_label(Some(alias.clone()))
             .build(&account_id);
-        account.metadata_mut().insert(
+        account.metadata.insert(
             "oversized".parse().expect("metadata key"),
             Json::new("x".repeat(128 * 1024)),
         );

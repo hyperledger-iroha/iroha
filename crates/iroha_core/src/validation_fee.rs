@@ -13,7 +13,9 @@ use iroha_data_model::{
         InstructionBox, TransferAssetBatch, TransferBox,
         register::RegisterBox,
         repo::{RepoInstructionBox, RepoIsi, ReverseRepoIsi},
-        settlement::{DvpIsi, PvpIsi, SettlementInstructionBox},
+        settlement::{
+            DvpIsi, PvpIsi, SetFxCorridorPolicy, SettleFxCorridor, SettlementInstructionBox,
+        },
     },
     metadata::Metadata,
     prelude::*,
@@ -2231,7 +2233,16 @@ fn native_fee_asset_movement_wire_id(
             {
                 return Some(PvpIsi::WIRE_ID);
             }
-            SettlementInstructionBox::Dvp(_) | SettlementInstructionBox::Pvp(_) => {}
+            SettlementInstructionBox::SettleFxCorridor(isi)
+                if isi.source_asset_definition_id == *fee_asset_definition_id
+                    || isi.destination_asset_definition_id == *fee_asset_definition_id =>
+            {
+                return Some(SettleFxCorridor::WIRE_ID);
+            }
+            SettlementInstructionBox::Dvp(_)
+            | SettlementInstructionBox::Pvp(_)
+            | SettlementInstructionBox::SetFxCorridorPolicy(_)
+            | SettlementInstructionBox::SettleFxCorridor(_) => {}
         }
     }
 
@@ -2247,6 +2258,13 @@ fn native_fee_asset_movement_wire_id(
             || isi.counter_leg.asset_definition_id() == fee_asset_definition_id)
     {
         return Some(PvpIsi::WIRE_ID);
+    }
+
+    if let Some(isi) = instruction.as_any().downcast_ref::<SettleFxCorridor>()
+        && (isi.source_asset_definition_id == *fee_asset_definition_id
+            || isi.destination_asset_definition_id == *fee_asset_definition_id)
+    {
+        return Some(SettleFxCorridor::WIRE_ID);
     }
 
     None
@@ -2412,6 +2430,8 @@ fn native_instruction_ds_effect_disposition(
         SettlementInstructionBox,
         DvpIsi,
         PvpIsi,
+        SetFxCorridorPolicy,
+        SettleFxCorridor,
     );
 
     macro_rules! reject_fee_asset_transfer_control {
@@ -2937,9 +2957,11 @@ mod tests {
         };
         let entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
             name: "payout".to_owned(),
-            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
             params: Vec::new(),
+            argument_schema: None,
             return_type: None,
+            return_schema: None,
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -2948,6 +2970,7 @@ mod tests {
             triggers: Vec::new(),
         };
         let interface = ivm::EmbeddedContractInterfaceV1 {
+            seiyaku_name: "ValidationFeePayout".to_owned(),
             compiler_fingerprint: "validation-fee-bound-contract-test".to_owned(),
             features_bitmap: 0,
             access_set_hints: None,
@@ -2956,7 +2979,9 @@ mod tests {
                 name: entrypoint.name.clone(),
                 kind: entrypoint.kind,
                 params: entrypoint.params.clone(),
+                argument_schema: entrypoint.argument_schema.clone(),
                 return_type: entrypoint.return_type.clone(),
+                return_schema: entrypoint.return_schema.clone(),
                 permission: entrypoint.permission.clone(),
                 read_keys: entrypoint.read_keys.clone(),
                 write_keys: entrypoint.write_keys.clone(),
@@ -2965,6 +2990,7 @@ mod tests {
                 triggers: entrypoint.triggers.clone(),
                 entry_pc: 0,
             }],
+            error_codes: Vec::new(),
             states: Vec::new(),
         };
         let mut instructions = Vec::new();
@@ -3246,6 +3272,7 @@ mod tests {
             .into(),
             RegisterSmartContractCode {
                 manifest: ContractManifest {
+                    seiyaku_name: None,
                     code_hash: Some(code_hash),
                     abi_hash: None,
                     compiler_fingerprint: None,
@@ -3254,6 +3281,7 @@ mod tests {
                     entrypoints: None,
                     states: None,
                     kotoba: None,
+                    error_codes: None,
                     provenance: None,
                 },
             }

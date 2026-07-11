@@ -57,6 +57,9 @@ const REQUIRED_KAGEMUSHA_V2_PROTOCOL_SYMBOLS = Object.freeze([
   "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
   "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
   "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
+  "connect_norito_kagemusha_recursive_spend_artifact_set_install_v3",
+  "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3",
+  "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3",
 ]);
 
 const REQUIRED_KAGEMUSHA_V2_NATIVE_SYMBOLS = Object.freeze([
@@ -88,6 +91,9 @@ const ADDITIVE_ABI18_V3_C_SYMBOLS = Object.freeze([
   "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
   "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
   "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
+  "connect_norito_kagemusha_recursive_spend_artifact_set_install_v3",
+  "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3",
+  "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3",
 ]);
 
 const CURRENT_C_SYMBOLS = Object.freeze([
@@ -157,7 +163,6 @@ const REQUIRED_HEADER_NEGATIVE_CONTROL_MODES = Object.freeze([
   "--negative-control-missing-recursive-header",
   "--negative-control-bad-recursive-signature",
   "--negative-control-bad-recursive-v2-signature",
-  "--negative-control-bad-recursive-v2-artifact-signature",
   "--negative-control-missing-recursive-v2-export-pair",
   "--negative-control-missing-kagemusha-v2-protocol-export-pair",
   "--negative-control-bad-kagemusha-v2-receiver-key-signature",
@@ -679,7 +684,7 @@ test("recursive Kagemusha ABI-18 native host and SDK method names stay in parity
     ...swiftV2ProofInventory,
     ...swiftV2ProtocolInventory,
   ];
-  const kagemushaV2InventoryFamily = String.raw`connect_norito_kagemusha_(?:topup_finality_verify_v2|receiver_key_reference_v2|recipient_output_derive_v2|recipient_payment_request_(?:signing_bytes|create|verify)_v2|request_authorization_(?:signing_bytes|create)_v2|receiver_acknowledgement_(?:payload|signing_bytes|create|verify)_v2|recursive_spend_(?:capabilities_v1|(?:init|topup|append|redeem_change|verify|redeem|topup_unsigned_payload_digest|topup_finalize_request|redeem_unsigned_payload_digest|redeem_finalize_request|peer_payment_from_split|peer_payment_validate|bundle_summary|build_split_intent|build_redemption_intent)_v2|artifact_(?:begin|write|finalize|cancel)_v3))`;
+  const kagemushaV2InventoryFamily = String.raw`connect_norito_kagemusha_(?:topup_finality_verify_v2|receiver_key_reference_v2|recipient_output_derive_v2|recipient_payment_request_(?:signing_bytes|create|verify)_v2|request_authorization_(?:signing_bytes|create)_v2|receiver_acknowledgement_(?:payload|signing_bytes|create|verify)_v2|recursive_spend_(?:capabilities_v1|(?:init|topup|append|redeem_change|verify|redeem|topup_unsigned_payload_digest|topup_finalize_request|redeem_unsigned_payload_digest|redeem_finalize_request|peer_payment_from_split|peer_payment_validate|bundle_summary|build_split_intent|build_redemption_intent)_v2|artifact_(?:begin|write|finalize|cancel|set_(?:install|is_installed|uninstall))_v3))`;
   const rustV2Inventory = new Set(
     namesFromMatches(
       rustBridge,
@@ -703,8 +708,8 @@ test("recursive Kagemusha ABI-18 native host and SDK method names stay in parity
   );
   assert.equal(
     REQUIRED_KAGEMUSHA_V2_PROTOCOL_SYMBOLS.length,
-    27,
-    "ABI-18 must pin exactly twenty-seven Kagemusha V2 protocol symbols",
+    30,
+    "ABI-18 must pin exactly thirty Kagemusha V2 protocol symbols",
   );
   assert.equal(
     new Set(swiftV2NativeInventory).size,
@@ -772,8 +777,8 @@ test("recursive Kagemusha ABI-18 native host and SDK method names stay in parity
   );
   assert.equal(
     REQUIRED_KAGEMUSHA_V2_NATIVE_SYMBOLS.length,
-    32,
-    "ABI-18 must pin the complete five-proof and twenty-seven-protocol inventory",
+    35,
+    "ABI-18 must pin the complete five-proof and thirty-protocol inventory",
   );
   assert.match(
     headerGuard,
@@ -4392,6 +4397,9 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-lineage-proof-readiness-direct-hash-read-failure",
     "--negative-control-sdk-default",
     "--negative-control-sdk-default-cross-sdk",
+    "--negative-control-v3-release-inventory",
+    "--negative-control-v3-native-ingest",
+    "--negative-control-v3-legacy-mode",
     "--negative-control-readiness-script-configured-default-wording",
     "--negative-control-readiness-script-abi6-recursive-unavailable-mode",
     "--negative-control-pallas-envelope-type",
@@ -7066,13 +7074,28 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-sdk-default",
-      /if recursive_compact_available[\s\S]*?KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1[\s\S]*?"    ",/u,
-      "SDK default selector",
+      /Some\(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1\)[\s\S]*?"        None",/u,
+      "ABI-18 first-release selector",
     ],
     [
       "--negative-control-sdk-default-cross-sdk",
-      /KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1[\s\S]*?void recursiveCompactAvailable;[\s\S]*?_ = recursive_compact_available[\s\S]*?KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1[\s\S]*?\.recursiveCompactV1[\s\S]*?Mode\.RECURSIVE_COMPACT_V1[\s\S]*?KagemushaOfflineSpendMode\.RecursiveCompactV1/u,
-      "cross-SDK production default selector",
+      /KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1[\s\S]*?case recursiveSpendV1[\s\S]*?RECURSIVE_SPEND_V1[\s\S]*?unsupported_mode/u,
+      "cross-SDK ABI-18\/V1 production selector",
+    ],
+    [
+      "--negative-control-v3-release-inventory",
+      /exact ten-file V3 release inventory[\s\S]*?manifest-extra\.json/u,
+      "exact ten-file V3 release inventory",
+    ],
+    [
+      "--negative-control-v3-native-ingest",
+      /complete ABI-18\/V3 native artifact-ingest surface[\s\S]*?artifact_cancel_removed/u,
+      "complete ABI-18/V3 native artifact-ingest surface",
+    ],
+    [
+      "--negative-control-v3-legacy-mode",
+      /retired first-release mode rejection[\s\S]*?case recursiveSpendV1[\s\S]*?case recursiveSpendV2/u,
+      "retired first-release mode rejection",
     ],
     [
       "--negative-control-readiness-script-configured-default-wording",
@@ -17717,13 +17740,18 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     guard,
-    /KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";[\s\S]*?Swift ABI-18 Pasta-cycle mode V2 contract[\s\S]*?Kotlin ABI-18 Pasta-cycle mode V2 contract[\s\S]*?Android Java ABI-18 Pasta-cycle mode V2 contract[\s\S]*?native bridge ABI-18 Pasta-cycle mode V2 fixture[\s\S]*?ABI-18 recursion adapter contract mode/u,
+    /KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";[\s\S]*?Swift ABI-18 Pasta-cycle first-release mode V2 contract[\s\S]*?Kotlin ABI-18 Pasta-cycle first-release mode V2 contract[\s\S]*?Android Java ABI-18 Pasta-cycle first-release mode V2 contract[\s\S]*?native bridge ABI-18 Pasta-cycle first-release mode V2 fixture[\s\S]*?ABI-18 recursion adapter contract mode/u,
     "SDK parity guard must pin recursive_spend_v2 across every ABI-18 Pasta-cycle surface",
   );
   assert.match(
+    guard,
+    /KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3: u32 = 18;[\s\S]*?requiredNativeBridgeAbiVersion: UInt32 = 18[\s\S]*?PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 18[\s\S]*?PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 18;[\s\S]*?CONNECT_NORITO_BRIDGE_ABI_VERSION:\\s\*u32\\s\*=\\s\*18;[\s\S]*?ABI-18 recursion adapter contract mode/u,
+    "SDK parity guard must pin ABI 18 with the first-release V1 Pasta-cycle mode across Rust, Swift, Kotlin, Java, bridge, and docs",
+  );
+  assert.match(
     abi18PastaCycleModeBranch,
-    /recursive_spend_v2[\s\S]*?recursive_spend_v1[\s\S]*?for target, old, new, expected_label in cases:[\s\S]*?negative control rejected every one-sided ABI-18 Pasta-cycle V1 substitution/u,
-    "ABI-18 Pasta-cycle mode negative control must reject one-sided recursive_spend_v1 substitutions",
+    /recursive_spend_v2[\s\S]*?unsupported_mode[\s\S]*?for target, old, new, expected_label in cases:[\s\S]*?negative control rejected every one-sided ABI-18 Pasta-cycle V2 substitution/u,
+    "ABI-18 Pasta-cycle mode negative control must reject one-sided recursive_spend_v2 substitutions",
   );
   const nativeCBridgeAbiVersionBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-native-c-bridge-abi-version":'),
@@ -17750,8 +17778,12 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       'connect_norito_kagemusha_recursive_spend_capabilities_v1_removed',
       'KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE: bool = true;',
       'proof_backend_available: true,',
+      'authenticated_release_envelope',
       'Rust C recursive Kagemusha exports drifted',
       'Rust ABI-18 V3 fail-closed capability contract missing',
+      'Swift ABI-18 V3 fail-closed capability contract missing',
+      'Rust ABI-18 authenticated release-envelope gate',
+      'Swift ABI-18 authenticated release-envelope gate',
       'finally:',
       'mutated[target] = original',
       'negative control rejected ABI-18 native capability drift',
@@ -17993,8 +18025,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     preferredModeFallbackBranch,
-    /Swift preferred Kagemusha compact-first mode policy[\s\S]*void recursiveCompactAvailable[\s\S]*_ = recursive_compact_available[\s\S]*Rust data-model preferred Kagemusha compact-first mode policy[\s\S]*fallback_mutations[\s\S]*return KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1[\s\S]*\.checkedPrefoldV1[\s\S]*Mode\.CHECKED_PREFOLD_V1[\s\S]*KagemushaOfflineSpendMode\.CheckedPrefoldV1/u,
-    "preferred-mode fallback negative control must mutate compact-first and no-fallback policy across editable SDKs",
+    /javascript\/iroha_js\/src\/crypto\.js[\s\S]*void recursiveCompactAvailable[\s\S]*_ = recursive_compact_available[\s\S]*C# preferred Kagemusha compact-first mode policy[\s\S]*checked_prefold_export_mutations[\s\S]*KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1[\s\S]*CheckedPrefoldV1/u,
+    "preferred-mode fallback negative control must mutate retained ABI-6 selectors",
   );
   assert.match(
     guard,
@@ -18014,18 +18046,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "javascript/iroha_js/src/crypto.browser.js preferred Kagemusha compact-first mode policy",
       "javascript/iroha_js/dist/crypto.browser.js preferred Kagemusha compact-first mode policy",
       "Python preferred Kagemusha compact-first mode policy",
-      "preferred Kagemusha compact-first mode policy missing pattern",
       "preferred Kagemusha single-argument fallback removal",
       "Python preferred Kagemusha explicit capability arity",
-      "Rust data-model preferred Kagemusha compact-first mode policy",
       "C# preferred Kagemusha compact-first mode policy",
     ],
-    "preferred-mode fallback negative control must require every JS/Python/Rust/C# fallback drift label",
-  );
-  assert.match(
-    preferredModeFallbackBranch,
-    /Swift preferred Kagemusha compact-first mode policy[\s\S]*Android Java preferred Kagemusha compact-first mode policy[\s\S]*C# preferred Kagemusha compact-first mode policy/u,
-    "preferred-mode fallback negative control must expect compact-first labels across editable SDKs including C#",
+    "preferred-mode fallback negative control must require every retained JS/Python/C# fallback drift label",
   );
   assertPerMutationDetector(
     preferredModeFallbackBranch,
@@ -21702,7 +21727,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkReadmeRecursiveCompactUnavailableBranch,
-    /targets\s*=\s*\([\s\S]*?IrohaSwift\/README\.md[\s\S]*?java\/iroha_android\/README\.md[\s\S]*?kotlin\/README\.md[\s\S]*?csharp\/README\.md[\s\S]*?javascript\/iroha_js\/README\.md[\s\S]*?python\/iroha_python\/README\.md[\s\S]*?\)[\s\S]*?ABI-7 native state[\s\S]*?legacy reserved ABI-7 state[\s\S]*?reserved ABI-7 state[\s\S]*?run_checks\(mutated\)[\s\S]*?helper remains for older bridge[\s\S]*?run_checks\(mutated\)/u,
+    /targets\s*=\s*\([\s\S]*?java\/iroha_android\/README\.md[\s\S]*?kotlin\/README\.md[\s\S]*?csharp\/README\.md[\s\S]*?javascript\/iroha_js\/README\.md[\s\S]*?python\/iroha_python\/README\.md[\s\S]*?\)[\s\S]*?swift_target\s*=\s*"IrohaSwift\/README\.md"[\s\S]*?The release directory has exactly ten files:[\s\S]*?run_checks\(mutated\)[\s\S]*?ABI-7 native state[\s\S]*?legacy reserved ABI-7 state[\s\S]*?reserved ABI-7 state[\s\S]*?run_checks\(mutated\)[\s\S]*?helper remains for older bridge[\s\S]*?run_checks\(mutated\)/u,
     "SDK README recursive compact negative control must mutate the ABI-7 one-hop boundary across SDK READMEs",
   );
   assert.match(
@@ -24619,7 +24644,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "docs/source/sdk/python/index.md",
       "docs/portal/docs/sdks/python.md",
       "readiness.\" + CANONICAL_KAGEMUSHA_READINESS_FIELD",
-      "readiness.\" + REMOVED_KAGEMUSHA_READINESS_ALIAS",
+      "readiness.\" + NEGATIVE_CONTROL_REMOVED_KAGEMUSHA_READINESS_ALIAS",
       "must not publish removed",
       "public docs removed readiness alias drift was rejected",
       "for the wrong reason",
@@ -24628,12 +24653,12 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     guard,
-    /PUBLIC_KAGEMUSHA_READINESS_DOC_TRIGGER_PATHS = \([\s\S]*?docs\/source\/sdk\/\*\*[\s\S]*?docs\/portal\/docs\/sdks\/\*\*[\s\S]*?docs\/portal\/i18n\/\*\*[\s\S]*?PUBLIC_KAGEMUSHA_READINESS_DOC_ROOTS = tuple[\s\S]*?REMOVED_KAGEMUSHA_READINESS_ALIAS = "offline_kagemusha_abi7"[\s\S]*?CANONICAL_KAGEMUSHA_READINESS_FIELD = "offline_kagemusha_recursive_compact_available"/u,
+    /PUBLIC_KAGEMUSHA_READINESS_DOC_TRIGGER_PATHS = \([\s\S]*?docs\/source\/sdk\/\*\*[\s\S]*?docs\/portal\/docs\/sdks\/\*\*[\s\S]*?docs\/portal\/i18n\/\*\*[\s\S]*?PUBLIC_KAGEMUSHA_READINESS_DOC_ROOTS = tuple[\s\S]*?REMOVED_KAGEMUSHA_READINESS_ALIASES = \([\s\S]*?"offline_kagemusha_abi7"[\s\S]*?"offline_kagemusha_recursive_compact_available"[\s\S]*?NEGATIVE_CONTROL_REMOVED_KAGEMUSHA_READINESS_ALIAS[\s\S]*?CANONICAL_KAGEMUSHA_READINESS_FIELD = "ready"/u,
     "public docs removed readiness alias guard must scan source and portal SDK docs from workflow trigger paths",
   );
   assert.match(
     guard,
-    /def check_public_docs_removed_kagemusha_readiness_aliases\(texts, errors\):[\s\S]*?public_kagemusha_readiness_doc_paths\(\)[\s\S]*?REMOVED_KAGEMUSHA_READINESS_ALIAS not in text[\s\S]*?must not publish removed/u,
+    /def check_public_docs_removed_kagemusha_readiness_aliases\(texts, errors\):[\s\S]*?public_kagemusha_readiness_doc_paths\(\)[\s\S]*?for removed_alias in REMOVED_KAGEMUSHA_READINESS_ALIASES[\s\S]*?removed_alias not in text[\s\S]*?must not publish removed/u,
     "public docs removed readiness alias guard must reject stale ABI-7 aliases in public markdown",
   );
   assert.match(
@@ -24657,8 +24682,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkReadmeCompactProjectionVerifierBranch,
-    /IrohaSwift\/README\.md[\s\S]*?verifyRecursiveSpendCompactPaymentTokenProjection\(compactTokenArchive:verifierRecordArchive:blockHeight:\)[\s\S]*?java\/iroha_android\/README\.md[\s\S]*?verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight\(\.\.\.\)[\s\S]*?kotlin\/README\.md[\s\S]*?javascript\/iroha_js\/README\.md[\s\S]*?kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection\(\.\.\.\)[\s\S]*?python\/iroha_python\/README\.md[\s\S]*?kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height\(\.\.\.\)[\s\S]*?run_checks\(mutated\)/u,
-    "SDK README compact projection verifier negative control must mutate every non-C# README signature",
+    /java\/iroha_android\/README\.md[\s\S]*?verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight\(\.\.\.\)[\s\S]*?kotlin\/README\.md[\s\S]*?javascript\/iroha_js\/README\.md[\s\S]*?kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection\(\.\.\.\)[\s\S]*?python\/iroha_python\/README\.md[\s\S]*?kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height\(\.\.\.\)[\s\S]*?run_checks\(mutated\)/u,
+    "SDK README compact projection verifier negative control must mutate every maintained non-C#/Swift README signature",
   );
   assert.doesNotMatch(
     sdkReadmeCompactProjectionVerifierBranch,

@@ -42,7 +42,7 @@ public enum KagemushaRecursiveSpendProverError: Error, Equatable, LocalizedError
 }
 
 public enum KagemushaOfflineSpendMode: String, Equatable, CaseIterable {
-    case recursiveSpendV2 = "recursive_spend_v2"
+    case recursiveSpendV1 = "recursive_spend_v1"
 }
 
 public enum KagemushaRecursiveSpendProver {
@@ -116,7 +116,7 @@ public enum KagemushaRecursiveSpendProver {
     public static func preferredMode(
         pastaCycleV3BackendAvailable: Bool
     ) -> KagemushaOfflineSpendMode? {
-        pastaCycleV3BackendAvailable ? .recursiveSpendV2 : nil
+        pastaCycleV3BackendAvailable ? .recursiveSpendV1 : nil
     }
 
     /// The first release exposes the same single production mode for proving and spending.

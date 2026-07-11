@@ -2987,7 +2987,7 @@ mod tests {
             state
                 .world
                 .peers
-                .get()
+                .view()
                 .iter()
                 .all(|peer| peer.public_key() != historical_validator.public_key()),
             "historical validator must be absent from the live peer roster"
@@ -3194,7 +3194,7 @@ mod tests {
             let store_dir = tmp_root.path().join(label);
             try_write_snapshot(&state, &store_dir, &snapshot_key, TEST_CHUNK_SIZE)
                 .expect("write adversarially signed snapshot fixture");
-            let error = try_read_snapshot(
+            let error = match try_read_snapshot(
                 &store_dir,
                 &kura,
                 LiveQueryStore::start_test,
@@ -3204,8 +3204,10 @@ mod tests {
                 &state.chain_id,
                 #[cfg(feature = "telemetry")]
                 StateTelemetry::new(<_>::default(), true),
-            )
-            .expect_err("signed snapshot with malformed commit-QC archive must reject");
+            ) {
+                Ok(_) => panic!("signed snapshot with malformed commit-QC archive must reject"),
+                Err(error) => error,
+            };
             assert!(
                 matches!(error, TryReadError::Serialization(_)),
                 "unexpected {label} archive rejection: {error:?}"

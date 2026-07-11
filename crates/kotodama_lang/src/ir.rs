@@ -5507,7 +5507,14 @@ fn lower_surface_builtin_call(
         | Builtin::NumericLtDirect
         | Builtin::NumericLeDirect
         | Builtin::NumericGtDirect
-        | Builtin::NumericGeDirect => lower_direct_helper_call(ctx, builtin, args, vars),
+        | Builtin::NumericGeDirect
+        | Builtin::SetAssetTransferFreeze
+        | Builtin::SetAssetTransferDailyLimit
+        | Builtin::AccountRecoveryPropose
+        | Builtin::AccountRecoveryApprove
+        | Builtin::AccountRecoveryCancel
+        | Builtin::AccountRecoveryFinalize
+        | Builtin::ContractSubject => lower_direct_helper_call(ctx, builtin, args, vars),
         Builtin::SchemaEncode => {
             let schema = lower_expr(ctx, &args[0], vars);
             let json = lower_expr(ctx, &args[1], vars);

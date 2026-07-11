@@ -42500,6 +42500,49 @@ mod tiered_snapshot_diff_tests {
         SccpNativeTrustAnchorV1, SccpRegistryV1, SccpRouteActivationV1,
     };
 
+    use crate::query::store::LiveQueryStore;
+
+    const SCCP_SNAPSHOT_CHAIN_ID: &str = iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1;
+
+    fn sccp_state_snapshot_value(world: World, chain_id: &str) -> norito::json::Value {
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from(chain_id),
+        );
+        norito::json::to_value(&state).expect("serialize authoritative state snapshot")
+    }
+
+    fn decode_state_snapshot_value(
+        value: norito::json::Value,
+    ) -> Result<State, norito::json::Error> {
+        deserialize::KuraSeed {
+            kura: Kura::blank_kura_for_testing(),
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        }
+        .into_state_from_json(value)
+    }
+
+    fn state_snapshot_world_mut(snapshot: &mut norito::json::Value) -> &mut norito::json::Map {
+        let norito::json::Value::Object(state) = snapshot else {
+            panic!("state snapshot must be an object");
+        };
+        let norito::json::Value::Object(world) = state
+            .get_mut("world")
+            .expect("state snapshot must contain world")
+        else {
+            panic!("state snapshot world must be an object");
+        };
+        world
+    }
+
+    fn decode_sccp_world_snapshot(world: World) -> Result<State, norito::json::Error> {
+        decode_state_snapshot_value(sccp_state_snapshot_value(world, SCCP_SNAPSHOT_CHAIN_ID))
+    }
+
     fn sample_sccp_inbound() -> (SccpInboundMessageKeyV1, SccpInboundMessageRecordV1) {
         use iroha_data_model::bridge::sccp::{SccpLaneIdV1, SccpNetworkV1};
 
@@ -42593,7 +42636,7 @@ mod tiered_snapshot_diff_tests {
             .expect("inbound replay registry fixture must be valid");
         assert!(record.is_well_formed_for_lane(key.lane));
         let mut world = World::default();
-        *world.sccp_registry.get_mut() = registry;
+        world.sccp_registry = Cell::new(registry);
         world.sccp_inbound_messages.insert(key, record);
         rebuild_sccp_inbound_anchor_high_water(&mut world);
         (world, key, record, route, successor)
@@ -42718,7 +42761,7 @@ mod tiered_snapshot_diff_tests {
             .validate()
             .expect("outbound replay registry fixture must be valid");
         let mut world = World::default();
-        *world.sccp_registry.get_mut() = registry;
+        world.sccp_registry = Cell::new(registry);
         replace_complete_sccp_outbound_history(&mut world, key, message, proof);
         (world, key, message, proof, route, other_route)
     }
@@ -42850,7 +42893,10 @@ mod tiered_snapshot_diff_tests {
         {
             let mut block = world.block();
             {
-                let mut transaction = block.transaction();
+                let mut transaction = block.transaction_without_telemetry(
+                    iroha_config::parameters::actual::LaneConfig::default(),
+                    0,
+                );
                 transaction.sccp_inbound_messages.insert(key, record);
                 transaction
                     .sccp_inbound_anchor_high_water
@@ -42880,7 +42926,10 @@ mod tiered_snapshot_diff_tests {
         {
             let mut block = world.block();
             {
-                let mut transaction = block.transaction();
+                let mut transaction = block.transaction_without_telemetry(
+                    iroha_config::parameters::actual::LaneConfig::default(),
+                    0,
+                );
                 transaction.sccp_outbound_messages.insert(key, record);
                 transaction
                     .sccp_outbound_message_locator
@@ -42951,14 +43000,20 @@ mod tiered_snapshot_diff_tests {
         {
             let mut fork = world.block();
             {
-                let mut abandoned = fork.transaction();
+                let mut abandoned = fork.transaction_without_telemetry(
+                    iroha_config::parameters::actual::LaneConfig::default(),
+                    0,
+                );
                 abandoned.insert_proof_record(proof_record.clone());
                 abandoned.sccp_outbound_proofs.insert(key, outbound_proof);
                 assert!(abandoned.proofs.get(&proof_id).is_some());
                 assert!(abandoned.sccp_outbound_proofs.get(&key).is_some());
             }
 
-            let mut retry = fork.transaction();
+            let mut retry = fork.transaction_without_telemetry(
+                iroha_config::parameters::actual::LaneConfig::default(),
+                0,
+            );
             assert!(retry.proofs.get(&proof_id).is_none());
             assert!(retry.sccp_outbound_proofs.get(&key).is_none());
             retry.insert_proof_record(proof_record.clone());
@@ -42968,18 +43023,24 @@ mod tiered_snapshot_diff_tests {
             assert!(fork.sccp_outbound_proofs.get(&key).is_some());
         }
 
-        assert!(world.proofs.get(&proof_id).is_none());
-        assert!(world.sccp_outbound_proofs.get(&key).is_none());
+        assert!(world.proofs.view().get(&proof_id).is_none());
+        assert!(world.sccp_outbound_proofs.view().get(&key).is_none());
         {
             let mut retry_fork = world.block();
-            let mut retry = retry_fork.transaction();
+            let mut retry = retry_fork.transaction_without_telemetry(
+                iroha_config::parameters::actual::LaneConfig::default(),
+                0,
+            );
             retry.insert_proof_record(proof_record.clone());
             retry.sccp_outbound_proofs.insert(key, outbound_proof);
             retry.apply();
             retry_fork.commit();
         }
-        assert_eq!(world.proofs.get(&proof_id), Some(&proof_record));
-        assert_eq!(world.sccp_outbound_proofs.get(&key), Some(&outbound_proof));
+        assert_eq!(world.proofs.view().get(&proof_id), Some(&proof_record));
+        assert_eq!(
+            world.sccp_outbound_proofs.view().get(&key),
+            Some(&outbound_proof)
+        );
     }
 
     #[test]
@@ -43045,46 +43106,45 @@ mod tiered_snapshot_diff_tests {
 
     #[test]
     fn sccp_replay_snapshot_roundtrips_and_requires_each_replay_index() {
-        let (key, record) = sample_sccp_inbound();
-        let (outbound_key, outbound_record, outbound_index, proof_record) =
-            sample_sccp_outbound_proof();
-        let mut world = World::default();
-        world.sccp_inbound_messages.insert(key, record);
-        rebuild_sccp_inbound_anchor_high_water(&mut world);
-        world
-            .sccp_outbound_messages
-            .insert(outbound_key, outbound_record);
-        world
-            .sccp_outbound_message_locator
-            .insert(outbound_key.message_id, outbound_key);
-        world.sccp_outbound_message_index.insert(outbound_index, ());
-        world
-            .sccp_outbound_proofs
-            .insert(outbound_key, proof_record);
-
-        let encoded = norito::json::to_value(&world).expect("serialize world snapshot");
-        let decoded: World =
-            norito::json::from_value(encoded.clone()).expect("deserialize world snapshot");
-        assert_eq!(decoded.sccp_inbound_messages.get(&key), Some(&record));
+        let (inbound_world, key, record, _, _) = world_with_valid_sccp_inbound_history();
+        let decoded = decode_sccp_world_snapshot(inbound_world)
+            .expect("deserialize authoritative inbound state snapshot");
+        let decoded_world = decoded.world_view();
         assert_eq!(
-            decoded
-                .sccp_inbound_messages
+            decoded_world.sccp_inbound_messages().get(&key),
+            Some(&record)
+        );
+        assert_eq!(
+            decoded_world
+                .sccp_inbound_messages()
                 .get(&key)
                 .expect("roundtripped inbound record")
                 .anchor_interval_height,
             record.anchor_interval_height
         );
-        assert_eq!(
-            decoded.sccp_outbound_proofs.get(&outbound_key),
-            Some(&proof_record)
-        );
         let high_water_key =
             SccpInboundAnchorHighWaterKeyV1::new(key.lane, record.trust_anchor.anchor_hash)
                 .expect("valid roundtrip high-water key");
         assert_eq!(
-            decoded.sccp_inbound_anchor_high_water.get(&high_water_key),
+            decoded_world
+                .sccp_inbound_anchor_high_water()
+                .get(&high_water_key),
             Some(&record.anchor_interval_height)
         );
+
+        let (outbound_world, outbound_key, _, proof_record, _, _) =
+            world_with_valid_sccp_outbound_history();
+        let decoded = decode_sccp_world_snapshot(outbound_world)
+            .expect("deserialize authoritative outbound state snapshot");
+        assert_eq!(
+            decoded
+                .world_view()
+                .sccp_outbound_proofs()
+                .get(&outbound_key),
+            Some(&proof_record)
+        );
+
+        let encoded = sccp_state_snapshot_value(World::default(), SCCP_SNAPSHOT_CHAIN_ID);
 
         for field in [
             "sccp_outbound_messages",
@@ -43094,12 +43154,13 @@ mod tiered_snapshot_diff_tests {
             "sccp_inbound_messages",
             "sccp_inbound_anchor_high_water",
         ] {
-            let norito::json::Value::Object(mut object) = encoded.clone() else {
-                panic!("world snapshot must be a JSON object")
-            };
-            assert!(object.remove(field).is_some());
-            let error = match norito::json::from_value::<World>(norito::json::Value::Object(object))
-            {
+            let mut missing = encoded.clone();
+            assert!(
+                state_snapshot_world_mut(&mut missing)
+                    .remove(field)
+                    .is_some()
+            );
+            let error = match decode_state_snapshot_value(missing) {
                 Ok(_) => panic!("snapshot missing {field} must fail closed"),
                 Err(error) => error,
             };
@@ -43112,10 +43173,8 @@ mod tiered_snapshot_diff_tests {
 
     #[test]
     fn sccp_replay_snapshot_rejects_stripping_both_replay_indexes() {
-        let encoded = norito::json::to_value(&World::default()).expect("serialize world snapshot");
-        let norito::json::Value::Object(mut object) = encoded else {
-            panic!("world snapshot must be a JSON object")
-        };
+        let mut encoded = sccp_state_snapshot_value(World::default(), SCCP_SNAPSHOT_CHAIN_ID);
+        let world = state_snapshot_world_mut(&mut encoded);
         for field in [
             "sccp_outbound_messages",
             "sccp_outbound_message_locator",
@@ -43124,9 +43183,9 @@ mod tiered_snapshot_diff_tests {
             "sccp_inbound_messages",
             "sccp_inbound_anchor_high_water",
         ] {
-            assert!(object.remove(field).is_some());
+            assert!(world.remove(field).is_some());
         }
-        let error = match norito::json::from_value::<World>(norito::json::Value::Object(object)) {
+        let error = match decode_state_snapshot_value(encoded) {
             Ok(_) => panic!("snapshot stripped of both SCCP replay indexes must fail closed"),
             Err(error) => error,
         };
@@ -43160,9 +43219,8 @@ mod tiered_snapshot_diff_tests {
             (world, key, message, index, proof_record)
         }
 
-        fn assert_outbound_proof_snapshot_rejected(world: &World, label: &str) {
-            let encoded = norito::json::to_value(world).expect("serialize adversarial snapshot");
-            let error = match norito::json::from_value::<World>(encoded) {
+        fn assert_outbound_proof_snapshot_rejected(world: World, label: &str) {
+            let error = match decode_sccp_world_snapshot(world) {
                 Ok(_) => panic!("{label} outbound proof replay snapshot must fail closed"),
                 Err(error) => error,
             };
@@ -43174,12 +43232,22 @@ mod tiered_snapshot_diff_tests {
         }
 
         let (mut missing_message, key, _, index, _) = world_with_outbound_proof();
-        missing_message.sccp_outbound_messages.remove(key);
-        missing_message
-            .sccp_outbound_message_locator
-            .remove(key.message_id);
-        missing_message.sccp_outbound_message_index.remove(index);
-        assert_outbound_proof_snapshot_rejected(&missing_message, "missing authoritative message");
+        {
+            let mut messages = missing_message.sccp_outbound_messages.block();
+            messages.remove(key);
+            messages.commit();
+        }
+        {
+            let mut locator = missing_message.sccp_outbound_message_locator.block();
+            locator.remove(key.message_id);
+            locator.commit();
+        }
+        {
+            let mut index_storage = missing_message.sccp_outbound_message_index.block();
+            index_storage.remove(index);
+            index_storage.commit();
+        }
+        assert_outbound_proof_snapshot_rejected(missing_message, "missing authoritative message");
 
         let message_mutations: [(&str, fn(&mut SccpOutboundMessageRecordV1)); 3] = [
             ("post-admission outbox payload drift", |message| {
@@ -43203,11 +43271,15 @@ mod tiered_snapshot_diff_tests {
             mutate(&mut message);
             assert!(message.is_well_formed_for_key(&key));
             world.sccp_outbound_messages.insert(key, message);
-            assert_outbound_proof_snapshot_rejected(&world, label);
+            assert_outbound_proof_snapshot_rejected(world, label);
         }
 
         let (mut height_drift, key, mut message, old_index, _) = world_with_outbound_proof();
-        height_drift.sccp_outbound_message_index.remove(old_index);
+        {
+            let mut index_storage = height_drift.sccp_outbound_message_index.block();
+            index_storage.remove(old_index);
+            index_storage.commit();
+        }
         message.recorded_at_height += 1;
         let new_index = SccpOutboundMessageIndexKeyV1::new(key, message)
             .expect("drifted authoritative message remains structurally valid");
@@ -43215,10 +43287,7 @@ mod tiered_snapshot_diff_tests {
         height_drift
             .sccp_outbound_message_index
             .insert(new_index, ());
-        assert_outbound_proof_snapshot_rejected(
-            &height_drift,
-            "post-admission outbox height drift",
-        );
+        assert_outbound_proof_snapshot_rejected(height_drift, "post-admission outbox height drift");
 
         let mutations: [(&str, fn(&mut SccpOutboundProofRecordV1)); 7] = [
             ("payload drift", |record| record.payload_hash[0] ^= 0x01),
@@ -43245,33 +43314,33 @@ mod tiered_snapshot_diff_tests {
             let (mut world, key, _, _, mut proof_record) = world_with_outbound_proof();
             mutate(&mut proof_record);
             world.sccp_outbound_proofs.insert(key, proof_record);
-            assert_outbound_proof_snapshot_rejected(&world, label);
+            assert_outbound_proof_snapshot_rejected(world, label);
         }
     }
 
     #[test]
     fn sccp_outbound_proof_snapshot_rejects_duplicate_map_field() {
-        let (mut world, key, message, index, proof_record) = {
-            let (key, message, index, proof_record) = sample_sccp_outbound_proof();
-            (World::default(), key, message, index, proof_record)
-        };
-        world.sccp_outbound_messages.insert(key, message);
-        world
-            .sccp_outbound_message_locator
-            .insert(key.message_id, key);
-        world.sccp_outbound_message_index.insert(index, ());
-        world.sccp_outbound_proofs.insert(key, proof_record);
-
-        let canonical = norito::json::to_string(&world).expect("serialize canonical world");
-        let duplicate_value = norito::json::to_string(&world.sccp_outbound_proofs)
-            .expect("serialize duplicate outbound proof map");
-        let duplicated = format!(
-            "{{\"sccp_outbound_proofs\":{duplicate_value},{}",
-            canonical
-                .strip_prefix('{')
-                .expect("canonical world JSON starts with an object")
+        let (world, _, _, _, _, _) = world_with_valid_sccp_outbound_history();
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from(SCCP_SNAPSHOT_CHAIN_ID),
         );
-        let error = match norito::json::from_str::<World>(&duplicated) {
+        let canonical = norito::json::to_string(&state).expect("serialize canonical state");
+        let duplicate_value = norito::json::to_string(&state.world.sccp_outbound_proofs)
+            .expect("serialize duplicate outbound proof map");
+        let world_prefix = "\"world\":{";
+        let insertion = canonical
+            .find(world_prefix)
+            .map(|offset| offset + world_prefix.len())
+            .expect("canonical state contains a world object");
+        let duplicated = format!(
+            "{}\"sccp_outbound_proofs\":{duplicate_value},{}",
+            &canonical[..insertion],
+            &canonical[insertion..]
+        );
+        let error = match norito::json::from_str::<norito::json::Value>(&duplicated) {
             Ok(_) => panic!("duplicate outbound proof snapshot field must fail closed"),
             Err(error) => error,
         };
@@ -43354,8 +43423,7 @@ mod tiered_snapshot_diff_tests {
         ] {
             let mut world = World::default();
             world.sccp_inbound_messages.insert(key, invalid);
-            let encoded = norito::json::to_value(&world).expect("serialize adversarial snapshot");
-            let error = match norito::json::from_value::<World>(encoded) {
+            let error = match decode_sccp_world_snapshot(world) {
                 Ok(_) => panic!("invalid SCCP inbound evidence must not hydrate"),
                 Err(error) => error,
             };
@@ -43494,8 +43562,7 @@ mod tiered_snapshot_diff_tests {
         ] {
             let mut world = World::default();
             world.sccp_outbound_messages.insert(key, record);
-            let encoded = norito::json::to_value(&world).expect("serialize forged snapshot");
-            let error = match norito::json::from_value::<World>(encoded) {
+            let error = match decode_sccp_world_snapshot(world) {
                 Ok(_) => panic!("forged outbound replay entry must not hydrate"),
                 Err(error) => error,
             };
@@ -43533,8 +43600,7 @@ mod tiered_snapshot_diff_tests {
         ] {
             let mut world = World::default();
             world.sccp_inbound_messages.insert(key, record);
-            let encoded = norito::json::to_value(&world).expect("serialize malformed snapshot");
-            let error = match norito::json::from_value::<World>(encoded) {
+            let error = match decode_sccp_world_snapshot(world) {
                 Ok(_) => panic!("malformed inbound replay key must not hydrate"),
                 Err(error) => error,
             };
@@ -43569,15 +43635,14 @@ mod tiered_snapshot_diff_tests {
             },
         );
 
-        assert_eq!(world.sccp_inbound_messages.len(), 2);
+        let messages = world.sccp_inbound_messages.view();
+        assert_eq!(messages.len(), 2);
         assert_ne!(
-            world
-                .sccp_inbound_messages
+            messages
                 .get(&first)
                 .expect("first lane record")
                 .source_finality_height,
-            world
-                .sccp_inbound_messages
+            messages
                 .get(&second)
                 .expect("second lane record")
                 .source_finality_height
@@ -43588,20 +43653,7 @@ mod tiered_snapshot_diff_tests {
         world: World,
         chain_id: &str,
     ) -> Result<State, norito::json::Error> {
-        let state = State::new_with_chain(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-            ChainId::from(chain_id),
-        );
-        let value = norito::json::to_value(&state).expect("serialize SCCP profile test state");
-        deserialize::KuraSeed {
-            kura: Kura::blank_kura_for_testing(),
-            query_handle: LiveQueryStore::start_test(),
-            #[cfg(feature = "telemetry")]
-            telemetry: crate::telemetry::StateTelemetry::default(),
-        }
-        .into_state_from_json(value)
+        decode_state_snapshot_value(sccp_state_snapshot_value(world, chain_id))
     }
 
     #[test]
@@ -43664,7 +43716,7 @@ mod tiered_snapshot_diff_tests {
             iroha_data_model::bridge::sccp_source_identity_hash_v1(&other_route.source_identity)
                 .expect("other-lane source identity");
         assert!(record.is_well_formed_for_lane(key.lane));
-        let registry = world.sccp_registry.get_mut();
+        let mut registry = world.sccp_registry.view().get().clone();
         registry.lanes.push(SccpGovernedLaneV1 {
             lane_id: other_route.lane_id,
             native_trust_anchors: Vec::new(),
@@ -43675,6 +43727,7 @@ mod tiered_snapshot_diff_tests {
         registry
             .validate()
             .expect("cross-lane configuration fixture registry");
+        world.sccp_registry = Cell::new(registry);
         world.sccp_inbound_messages.insert(key, record);
         rebuild_sccp_inbound_anchor_high_water(&mut world);
         assert_rejected(
@@ -100799,6 +100852,10 @@ seiyaku IdentitylessRawCallback {
             .commit(&topology)
             .unpack(|_| {})
             .unwrap()
+    }
+
+    fn new_dummy_block() -> CommittedBlock {
+        new_dummy_block_with_payload(|_| {})
     }
 
     fn dummy_merge_qc() -> MergeQuorumCertificate {

@@ -11,6 +11,7 @@ on:
       - "ci/check_no_tracked_python_bytecode.sh"
       - "ci/check_kagemusha_production_readiness.sh"
       - "ci/check_kagemusha_recursive_spend_sdk_parity.sh"
+      - "ci/check_kagemusha_v3_release_contract.sh"
       - "ci/check_kagemusha_recursive_spend_policy.sh"
       - "ci/check_kagemusha_recursive_spend_python_sdk.sh"
       - "ci/check_kagemusha_recursive_spend_jvm_sdk.sh"
@@ -70,6 +71,7 @@ on:
       - "crates/iroha_cli/src/zk.rs"
       - "crates/iroha_core/src/zk.rs"
       - "crates/iroha_core/Cargo.toml"
+      - "crates/iroha_core/src/bin/kagemusha_recursive_spend_v3_bundle.rs"
       - "crates/iroha_core/src/smartcontracts/isi/offline.rs"
       - "crates/iroha_core/examples/confidential_v2_vk_json.rs"
       - "crates/iroha_core/tests/swift_confidential_unshield_redeem.rs"
@@ -134,7 +136,6 @@ on:
       - "IrohaSwift/Sources/IrohaSwift/OfflineCashLifecycle.swift"
       - "IrohaSwift/Sources/IrohaSwift/OfflineCashModels.swift"
       - "IrohaSwift/Sources/IrohaSwift/OfflineIssuerPublicKey.swift"
-      - "IrohaSwift/Sources/IrohaSwift/OfflineKagemushaAbi7CapabilityContract.swift"
       - "IrohaSwift/Sources/IrohaSwift/OfflineNoritoDecoding.swift"
       - "IrohaSwift/Sources/IrohaSwift/OfflineNoritoEncoding.swift"
       - "IrohaSwift/Sources/IrohaSwift/OfflineNote.swift"
@@ -202,7 +203,6 @@ on:
       - "IrohaSwift/Tests/IrohaSwiftTests/VerifyingKeyBackendTagTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/OfflineCashLifecycleTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/OfflineIssuerPublicKeyTests.swift"
-      - "IrohaSwift/Tests/IrohaSwiftTests/OfflineKagemushaAbi7CapabilityContractTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoritoEncodingTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteNfcApduPayloadBudgetTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteRedeemPlannerTests.swift"
@@ -992,8 +992,13 @@ jobs:
           cache-on-failure: "true"
       - name: NoritoBridge recursive spend header parity
         run: ci/check_connect_norito_bridge_header.sh
+      - name: Kagemusha ABI-18/V3 release contract
+        run: |
+          ci/check_kagemusha_v3_release_contract.sh
+          ci/check_kagemusha_v3_release_contract.sh --self-test
       - name: NoritoBridge recursive spend header negative controls
         run: |
+          ci/check_connect_norito_bridge_header.sh --negative-control-bad-bridge-abi
           ci/check_connect_norito_bridge_header.sh --negative-control-missing-recursive-header
           ci/check_connect_norito_bridge_header.sh --negative-control-bad-recursive-signature
           ci/check_connect_norito_bridge_header.sh --negative-control-bad-recursive-v2-signature
@@ -1514,6 +1519,9 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-ancestor-aliases
           ci/check_kagemusha_production_readiness.sh --negative-control-sdk-default
           ci/check_kagemusha_production_readiness.sh --negative-control-sdk-default-cross-sdk
+          ci/check_kagemusha_production_readiness.sh --negative-control-v3-release-inventory
+          ci/check_kagemusha_production_readiness.sh --negative-control-v3-native-ingest
+          ci/check_kagemusha_production_readiness.sh --negative-control-v3-legacy-mode
           ci/check_kagemusha_production_readiness.sh --negative-control-readiness-script-configured-default-wording
           ci/check_kagemusha_production_readiness.sh --negative-control-readiness-script-abi6-recursive-unavailable-mode
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-open

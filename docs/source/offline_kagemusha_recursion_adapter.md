@@ -226,7 +226,7 @@ runtime `CircuitAuthenticatedRecursionAdapter` must continue returning
 
 The fail-closed production contract is now explicit even though the loader is
 not yet available. Native capability negotiation reports bridge ABI `18`, mode
-`recursive_spend_v2`, manifest schema
+`recursive_spend_v1`, manifest schema
 `kagemusha.offline.recursive_spend.artifact_manifest.v3`, proof backend
 `halo2/ipa-pasta-cycle-v1`, and transcript profile
 `kagemusha-pasta-cycle-poseidon-v1`. The two fixed circuit roles are:
@@ -274,15 +274,17 @@ does not substitute deterministic or runtime key generation for the missing
 production prover. It opens each input once with no-follow/nonblocking safety,
 rejects non-regular files, empty or oversized inputs, duplicate paths,
 hardlinks, duplicate raw payloads, source mutation, non-canonical release
-fields, roster gaps, and an existing output directory before publication. It
-writes owner-only files, hashes both raw and complete framed bytes into the 2×3
-inventory and fsyncs them. It publishes canonical `manifest.norito`, the
-lowercase `manifest.norito.sha256` content identifier, and finally the
-human-readable `manifest.json` publication marker with atomic no-clobber links.
+fields, roster gaps, an untrusted output-parent chain, and an existing output
+entry before publication. It writes owner-only files into a private random
+staging directory, reads every staged file back through held no-follow
+descriptors, hashes both raw and complete framed bytes into the 2×3 inventory,
+and fsyncs the files and directory. Only then does it promote the complete
+directory with one descriptor-relative no-replace rename and fsync the parent.
 Runtime and proof-envelope validation consume the exact Norito bytes; JSON is
-an operator view and is never re-encoded into a trust anchor. A failure retains
-an incomplete owner-only directory for inspection instead of recursively
-deleting a path. The packager is deliberately an unsigned staging step:
+an operator view and is never re-encoded into a trust anchor. A failure removes
+the unpublished staging directory and never exposes a partial output path. The
+durable publication corridor currently supports Linux, Android, macOS, and iOS
+and fails closed elsewhere. The packager is deliberately an unsigned staging step:
 evidence digests and the Norito content address are recorded, but
 release-signature authentication happens in the separate release process.
 The small file header does not embed the manifest digest because a manifest
@@ -293,11 +295,15 @@ The bridge exports a capability archive plus bounded, manifest-bound V3
 streaming ingestion. Ingestion checks header/descriptor fields plus raw and
 framed hashes, but never authorizes proving. The capability record names every
 missing gate and reports `proof_backend_available = false`; all proof-gated
-entrypoints fail closed. Symbol presence, successful ingestion, and the older
-V2 artifact spool are not readiness signals. The availability constant may
-change only in the audited release that
+entrypoints fail closed. Symbol presence and successful ingestion are not
+readiness signals; the retired V2 artifact spool is not exported in the
+first-release surface. `authenticated_release_envelope` remains an explicit
+missing gate until a signer/policy-bound verifier produces the trusted manifest
+digest consumed by native verification. The availability constant may change
+only in the audited release that
 supplies both opposite-field loaders, the cross-field Poseidon transcript,
-the two-layer accumulator, substitution tests, review, and device evidence.
+the two-layer accumulator, release-envelope authentication, substitution tests,
+review, and device evidence.
 
 ## Branch-bound recipient and change proofs
 

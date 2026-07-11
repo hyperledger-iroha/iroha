@@ -11,7 +11,8 @@ pub use account::{
 /// Re-export asset visitor helpers used by the default executor.
 pub use asset::{
     visit_burn_asset_numeric, visit_mint_asset_numeric, visit_remove_asset_key_value,
-    visit_set_asset_key_value, visit_transfer_asset_numeric,
+    visit_set_asset_key_value, visit_set_asset_transfer_control, visit_set_asset_transfer_freeze,
+    visit_transfer_asset_numeric,
 };
 /// Re-export asset-definition visitor helpers used by the default executor.
 pub use asset_definition::{
@@ -264,6 +265,14 @@ impl InstructionDispatch for InstructionBox {
         }
         if let Some(isi) = any.downcast_ref::<SetAssetKeyValue>() {
             visit_set_asset_key_value(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<SetAssetTransferFreeze>() {
+            asset::visit_set_asset_transfer_freeze(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<SetAssetTransferControl>() {
+            asset::visit_set_asset_transfer_control(executor, isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<RemoveAssetKeyValue>() {
@@ -1508,6 +1517,45 @@ pub mod asset {
 
     use super::*;
     use crate::permission::{asset::is_asset_owner, asset_definition::is_asset_definition_owner};
+
+    fn execute_transfer_control<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        asset_definition_id: &AssetDefinitionId,
+        isi: &(impl BuiltInInstruction + NoritoSerialize),
+    ) {
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+        match is_asset_definition_owner(
+            asset_definition_id,
+            &executor.context().authority,
+            executor.host(),
+        ) {
+            Err(err) => deny!(executor, err),
+            Ok(true) => execute!(executor, isi),
+            Ok(false) => {}
+        }
+        deny!(
+            executor,
+            "Only the asset-definition owner can manage transfer controls"
+        );
+    }
+
+    /// Sets an account transfer freeze when genesis or the asset-definition owner invokes it.
+    pub fn visit_set_asset_transfer_freeze<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &SetAssetTransferFreeze,
+    ) {
+        execute_transfer_control(executor, &isi.asset_definition_id, isi);
+    }
+
+    /// Sets account transfer limits when genesis or the asset-definition owner invokes it.
+    pub fn visit_set_asset_transfer_control<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &SetAssetTransferControl,
+    ) {
+        execute_transfer_control(executor, &isi.asset_definition_id, isi);
+    }
 
     fn execute_mint_asset<V, Q>(executor: &mut V, isi: &Mint<Q, Asset>)
     where

@@ -1855,6 +1855,27 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     ) -> Result<(), EffectExecutorError> {
         match effect {
             AdapterEffect::Sign { tag, request } => {
+                if let SignRequest::Vote(vote) = &request {
+                    let validated = self
+                        .validated_bodies
+                        .get(&(vote.round, vote.subject))
+                        .ok_or_else(|| {
+                            EffectExecutorError::Contract(
+                                "vote signing requires a recovered fsynced validation marker"
+                                    .to_owned(),
+                            )
+                        })?;
+                    if validated.durable().context_id() != self.context.id()
+                        || validated.durable().round() != vote.round
+                        || validated.durable().subject() != vote.subject
+                        || validated.execution_commitment() != vote.execution_commitment
+                    {
+                        return Err(EffectExecutorError::Contract(
+                            "vote execution commitment differs from the durable validation marker"
+                                .to_owned(),
+                        ));
+                    }
+                }
                 self.ensure_pending_slot()?;
                 let id = self.allocate_work_id()?;
                 self.pending_signatures.insert(
@@ -2358,6 +2379,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 "Apply validation receipt differs from local durable body".to_owned(),
             ));
         }
+        if certificate.execution_commitment != validated_receipt.execution_commitment() {
+            return Err(EffectExecutorError::Contract(
+                "Apply CommitQC execution commitment differs from the durable validation marker"
+                    .to_owned(),
+            ));
+        }
         self.ensure_pending_slot()?;
         let id = self.allocate_work_id()?;
         let task = ApplyTask {
@@ -2713,7 +2740,11 @@ fn merge_sidecar_reference_matches_carrier(
 
 fn verify_pending_kura_apply_parts(
     context: &wire::HeightContext,
-    decision: Option<(wire::ConsensusRound, wire::BlockSubject)>,
+    decision: Option<(
+        wire::ConsensusRound,
+        wire::BlockSubject,
+        wire::ExecutionCommitment,
+    )>,
     recovered_bodies: &BTreeMap<
         (wire::ConsensusRound, wire::BlockSubject),
         (wire::PayloadManifest, DurableBodyReceipt),
@@ -2728,7 +2759,7 @@ fn verify_pending_kura_apply_parts(
             "recovered Kura tip belongs to a different frozen height context",
         ));
     }
-    let (round, subject) = decision.ok_or_else(|| {
+    let (round, subject, execution_commitment) = decision.ok_or_else(|| {
         mismatch("canonical Kura tip has no complete durable Decision WAL record")
     })?;
     if round.context_id != context.id()
@@ -2757,6 +2788,11 @@ fn verify_pending_kura_apply_parts(
     if validated.durable() != durable {
         return Err(mismatch(
             "durable validation marker differs from the recovered exact body frame",
+        ));
+    }
+    if validated.execution_commitment() != execution_commitment {
+        return Err(mismatch(
+            "durable Decision commitment differs from the recovered validation marker",
         ));
     }
     Ok(())
@@ -3010,12 +3046,13 @@ mod tests {
                 .find(|task| task.id() == work_id)
                 .expect("validation task");
             let rejection = self.validation_error.clone();
+            let execution_commitment = fixture_execution_commitment();
             self.body_store
                 .as_mut()
                 .expect("body store service")
                 .execute_validation_task(task, move |_| match rejection {
                     Some(reason) => Err(reason),
-                    None => Ok(()),
+                    None => Ok(execution_commitment),
                 })
                 .expect("execute deterministic validation task")
         }
@@ -3289,6 +3326,7 @@ mod tests {
                 round: self.manifest.round,
                 phase,
                 subject: self.manifest.subject,
+                execution_commitment: fixture_execution_commitment(),
                 signers: vec![0, 1, 2],
                 aggregate_signature: vec![1],
             }
@@ -3303,6 +3341,14 @@ mod tests {
         }
     }
 
+    fn fixture_execution_commitment() -> wire::ExecutionCommitment {
+        wire::ExecutionCommitment::without_topups(
+            Hash::new(b"effects fixture parent state"),
+            Hash::new(b"effects fixture post state"),
+            Hash::new(b"effects fixture ordinary writes"),
+        )
+    }
+
     fn tag(view: u64) -> EventTag {
         EventTag::new(1, view, Generation::new(7))
     }
@@ -3312,6 +3358,7 @@ mod tests {
             round: fixture.manifest.round,
             phase: wire::GlobalPhase::Prepare,
             subject: fixture.manifest.subject,
+            execution_commitment: fixture_execution_commitment(),
             signer: 0,
             signature: Vec::new(),
         }
@@ -4458,7 +4505,11 @@ mod tests {
             .store(fixture.manifest.clone(), fixture.body.clone())
             .expect("persist exact body");
         let validated = store
-            .validate(&durable, |_| Ok::<_, &'static str>(()))
+            .validate(&durable, |_| {
+                Ok::<_, &'static str>(
+                    ValidatedBodyReceipt::for_test(durable.clone()).execution_commitment(),
+                )
+            })
             .expect("persist validation marker");
         drop(store);
         let reopened = V2BodyStore::open_with_policy(
@@ -4791,6 +4842,7 @@ mod tests {
                 round: manifest.round,
                 phase: wire::GlobalPhase::Prepare,
                 subject: manifest.subject,
+                execution_commitment: fixture_execution_commitment(),
                 signers: vec![0, 1, 2],
                 aggregate_signature: vec![1],
             };
@@ -4845,6 +4897,7 @@ mod tests {
                             round: manifest.round,
                             phase: wire::GlobalPhase::Prepare,
                             subject: manifest.subject,
+                            execution_commitment: fixture_execution_commitment(),
                             signer: 0,
                             signature: Vec::new(),
                         }),

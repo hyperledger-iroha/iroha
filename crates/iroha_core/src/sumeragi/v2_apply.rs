@@ -166,6 +166,12 @@ impl V2ApplyService {
         {
             return Err(V2ApplyError::TaskMismatch);
         }
+        task.certificate().execution_commitment.validate()?;
+        if task.certificate().execution_commitment
+            != task.validated_receipt().execution_commitment()
+        {
+            return Err(V2ApplyError::ExecutionCommitmentMismatch);
+        }
         let body = body_store.load(task.validated_receipt().durable())?;
         if body.hash() != task.subject().block_hash
             || body.header().height().get() != context.height
@@ -211,7 +217,12 @@ impl V2ApplyService {
         self.retain_decided_merge_sidecar(context, &body)?;
 
         if state_height < height.get() {
-            self.validate_and_apply(context, body, durable_hash.is_none())?;
+            self.validate_and_apply(
+                context,
+                body,
+                durable_hash.is_none(),
+                task.validated_receipt().execution_commitment(),
+            )?;
         }
 
         // This is deliberately outside `validate_and_apply`: WSV commit and
@@ -257,7 +268,7 @@ impl V2ApplyService {
         &self,
         context: &wire::HeightContext,
         body: &SignedBlock,
-    ) -> Result<(), V2ApplyError> {
+    ) -> Result<wire::ExecutionCommitment, V2ApplyError> {
         self.validate_lane_payload_plan(context, body)?;
         let merge_reference = body
             .execution_context()
@@ -276,11 +287,14 @@ impl V2ApplyService {
             &mut voting_block,
         )
         .unpack(|_| {});
-        let (_valid, state_block) = result.map_err(|(_, error)| {
+        let (_valid, mut state_block) = result.map_err(|(_, error)| {
             Self::classify_candidate_validation_error(merge_reference, error.as_ref())
         })?;
-        drop(state_block);
-        Ok(())
+        let witness = state_block
+            .take_exec_witness()
+            .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;
+        crate::sumeragi::exec::execution_commitment_from_witness(&witness)
+            .map_err(|error| V2ApplyError::ExecutionCommitment(error.to_owned()))
     }
 
     fn validate_and_apply(
@@ -288,6 +302,7 @@ impl V2ApplyService {
         context: &wire::HeightContext,
         body: iroha_data_model::block::SignedBlock,
         store_block: bool,
+        expected_execution_commitment: wire::ExecutionCommitment,
     ) -> Result<(), V2ApplyError> {
         self.validate_lane_payload_plan(context, &body)?;
         let merge_reference = body
@@ -312,6 +327,15 @@ impl V2ApplyService {
             .map_err(|(_, error)| {
                 Self::classify_candidate_validation_error(merge_reference.as_ref(), error.as_ref())
             })?;
+        let witness = state_block
+            .take_exec_witness()
+            .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;
+        let actual_execution_commitment =
+            crate::sumeragi::exec::execution_commitment_from_witness(&witness)
+                .map_err(|error| V2ApplyError::ExecutionCommitment(error.to_owned()))?;
+        if actual_execution_commitment != expected_execution_commitment {
+            return Err(V2ApplyError::ExecutionCommitmentMismatch);
+        }
         let committed_block = valid_block
             .commit_with_certificate()
             .unpack(|event| pipeline_events.push(event))
@@ -426,6 +450,15 @@ pub(crate) enum V2ApplyError {
     /// Deterministic validation rejected the exact durable body.
     #[error("Sumeragi v2 application validation failed: {0}")]
     Validation(String),
+    /// Deterministic validation did not produce the StateBlock execution witness.
+    #[error("Sumeragi v2 validation produced no execution witness")]
+    ExecutionCommitmentUnavailable,
+    /// Execution-witness projection itself was malformed.
+    #[error("invalid Sumeragi v2 execution commitment: {0}")]
+    ExecutionCommitment(String),
+    /// The signed or persisted execution result differs from deterministic replay.
+    #[error("Sumeragi v2 execution commitment differs from deterministic validation")]
+    ExecutionCommitmentMismatch,
     /// The candidate is otherwise valid but its exact certified merge sidecar
     /// has not reached durable local storage yet.
     #[error("certified merge sidecar `{}` is not available locally yet", reference.entry_hash)]
@@ -657,10 +690,14 @@ mod tests {
                 std::slice::from_ref(&canonical_wire),
             )
             .expect("fixture manifest");
+            let execution_commitment = service
+                .validate_candidate(&context, &body)
+                .expect("derive exact fixture execution commitment");
             let mut certificate = wire::QuorumCertificate {
                 round,
                 phase: wire::GlobalPhase::Commit,
                 subject,
+                execution_commitment,
                 signers: vec![0, 1, 2],
                 aggregate_signature: Vec::new(),
             };
@@ -668,6 +705,7 @@ mod tests {
                 round,
                 phase: wire::GlobalPhase::Commit,
                 subject,
+                execution_commitment,
                 signer: 0,
                 signature: Vec::new(),
             }
@@ -1000,7 +1038,12 @@ mod tests {
         let fixture = ApplyFixture::new();
         fixture
             .service
-            .validate_and_apply(&fixture.context, fixture.body.clone(), false)
+            .validate_and_apply(
+                &fixture.context,
+                fixture.body.clone(),
+                false,
+                fixture.task.validated_receipt().execution_commitment(),
+            )
             .expect("model corrupted WSV-ahead crash image");
         assert_eq!(fixture.state.committed_height(), 1);
         assert_eq!(fixture.kura.durable_blocks_count(), 0);
@@ -1010,6 +1053,26 @@ mod tests {
             fixture.execute(&mut store),
             Err(V2ApplyError::StateAheadOfKura)
         ));
+        fixture.assert_no_post_apply_sidecars();
+    }
+
+    #[test]
+    fn apply_rejects_commit_qc_execution_commitment_drift_before_state_or_kura_write() {
+        let fixture = ApplyFixture::new();
+        let mut task = fixture.task.clone();
+        task.certificate.execution_commitment = wire::ExecutionCommitment::without_topups(
+            Hash::new(b"wrong parent state"),
+            Hash::new(b"wrong post state"),
+            Hash::new(b"wrong ordinary writes"),
+        );
+        let mut store = fixture.reopen_body_store();
+
+        assert!(matches!(
+            fixture.service.execute(&fixture.context, &mut store, &task),
+            Err(V2ApplyError::ExecutionCommitmentMismatch)
+        ));
+        assert_eq!(fixture.state.committed_height(), 0);
+        assert_eq!(fixture.kura.durable_blocks_count(), 0);
         fixture.assert_no_post_apply_sidecars();
     }
 

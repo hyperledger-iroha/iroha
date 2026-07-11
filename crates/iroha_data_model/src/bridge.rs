@@ -982,10 +982,17 @@ mod tests {
             height: 1,
             view: 0,
         };
+        let execution_commitment =
+            crate::block::consensus_v2::ExecutionCommitment::without_topups(
+                Hash::new(b"bridge v2 parent state"),
+                Hash::new(b"bridge v2 post state"),
+                Hash::new(b"bridge v2 ordinary writes"),
+            );
         let mut commit_qc = QuorumCertificate {
             round,
             phase: GlobalPhase::Commit,
             subject,
+            execution_commitment,
             signers: signer_indices.to_vec(),
             aggregate_signature: vec![1],
         };
@@ -993,6 +1000,7 @@ mod tests {
             round,
             phase: GlobalPhase::Commit,
             subject,
+            execution_commitment,
             signer: signer_indices.first().copied().unwrap_or(0),
             signature: Vec::new(),
         }
@@ -1762,7 +1770,8 @@ mod tests {
             .finality_artifact
             .commit_qc
             .aggregate_signature[0] ^= 0x80;
-        let mut verifier = BridgeFinalityVerifier::with_context(context.chain_id, context.id());
+        let context_id = context.id();
+        let mut verifier = BridgeFinalityVerifier::with_context(context.chain_id, context_id);
 
         assert!(matches!(
             verifier.verify(&fixture.proof),

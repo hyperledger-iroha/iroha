@@ -334,7 +334,7 @@ class OfflineNoteTest {
     @Test
     fun kagemushaRecursiveSpendNativeProverValidatesInput() {
         assertEquals(
-            KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V2,
+            KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1,
             KagemushaRecursiveSpendProver.preferredMode(true),
         )
         assertEquals(null, KagemushaRecursiveSpendProver.preferredMode(false))

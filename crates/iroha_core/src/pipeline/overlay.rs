@@ -36,7 +36,7 @@ use iroha_data_model::{
     executor::{ManifestAbiHashMismatchInfo, ManifestCodeHashMismatchInfo},
     isi::{
         InstructionBox,
-        settlement::{DvpIsi, PvpIsi},
+        settlement::{DvpIsi, PvpIsi, SettleFxCorridor},
         smart_contract_code::{
             ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
         },
@@ -67,7 +67,9 @@ use crate::{
     },
     smartcontracts::{
         code,
-        isi::settlement::{admission_validate_dvp, admission_validate_pvp},
+        isi::settlement::{
+            admission_validate_dvp, admission_validate_fx_corridor, admission_validate_pvp,
+        },
         ivm::{
             cache::{IvmCache, ProgramSummary},
             host::{AmxBudgetViolation, HostOutputLimits, QueryStateSource},
@@ -1853,6 +1855,9 @@ impl TxOverlay {
                             .map_err(ValidationFail::from)?;
                     } else if let Some(pvp) = instr.as_any().downcast_ref::<PvpIsi>() {
                         admission_validate_pvp(effect_authority, state_tx, pvp)
+                            .map_err(ValidationFail::from)?;
+                    } else if let Some(fx) = instr.as_any().downcast_ref::<SettleFxCorridor>() {
+                        admission_validate_fx_corridor(effect_authority, state_tx, fx)
                             .map_err(ValidationFail::from)?;
                     }
                     if let Some(reg_asset_definition) = extract_register_asset_definition(instr) {
@@ -4354,7 +4359,7 @@ seiyaku ProtectedParameterizedOverlay {
             .expect_err("missing named permission must reject before the VM runs");
         assert!(
             matches!(
-                denied,
+                &denied,
                 OverlayBuildError::ContractCall(message)
                     if message.contains(REQUIRED_PERMISSION) && message.contains("main")
             ),
@@ -5257,6 +5262,7 @@ mod tests {
     };
     use iroha_primitives::json::Json;
     use iroha_test_samples::gen_account_in;
+    use nonzero_ext::nonzero;
 
     use super::*;
     use crate::state::State;
@@ -7493,7 +7499,8 @@ seiyaku ReplayCallee {
             TEST_GAS_LIMIT,
             overlay_hash,
         )
-        .expect_err("ABI V1 must reject nested proved authorization contexts");
+        .err()
+        .expect("ABI V1 must reject nested proved authorization contexts");
         assert!(
             matches!(
                 &error,
@@ -7844,6 +7851,7 @@ seiyaku ProtectedProved {
         world.contract_manifests.insert(
             code_hash,
             ContractManifest {
+                seiyaku_name: None,
                 code_hash: Some(code_hash),
                 abi_hash: Some(abi_hash),
                 compiler_fingerprint: None,
@@ -7852,6 +7860,7 @@ seiyaku ProtectedProved {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
+                error_codes: None,
                 provenance: None,
             }
             .signed(&kp),
@@ -7952,6 +7961,7 @@ seiyaku ProtectedProved {
         world.contract_manifests.insert(
             code_hash,
             ContractManifest {
+                seiyaku_name: None,
                 code_hash: Some(code_hash),
                 abi_hash: Some(abi_hash),
                 compiler_fingerprint: None,
@@ -7960,6 +7970,7 @@ seiyaku ProtectedProved {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
+                error_codes: None,
                 provenance: None,
             }
             .signed(&kp),

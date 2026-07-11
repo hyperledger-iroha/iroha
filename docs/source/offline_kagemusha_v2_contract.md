@@ -203,9 +203,10 @@ exports `connect_norito_kagemusha_recursive_spend_capabilities_v1`; callers
 must require its `proof_backend_available` field and must not infer readiness
 from symbols. It selects artifact manifest
 `kagemusha.offline.recursive_spend.artifact_manifest.v3`, mode
-`recursive_spend_v2`, proof backend `halo2/ipa-pasta-cycle-v1`, and transcript
+`recursive_spend_v1`, proof backend `halo2/ipa-pasta-cycle-v1`, and transcript
 profile `kagemusha-pasta-cycle-poseidon-v1`. V3 artifact files are framed with
-`KRV3KEY\0`; the older V2 artifact spool is not a production release contract.
+`KRV3KEY\0`; the retired V2 artifact spool is not exported by the first-release
+bridge.
 Use the maintained `kagemusha_recursive_spend_v3_bundle` binary documented in
 `offline_kagemusha_recursion_adapter.md` to frame an externally generated,
 reviewed 2×3 artifact set and its canonical top-up finality roster; ABI-7
@@ -215,6 +216,9 @@ staging step. Its canonical `manifest.norito` is the runtime input and
 the separate release envelope; `manifest.json` is an operator view. Wallets
 and native verification must use the authenticated manifest SHA and exact
 roster/artifact digests, never generation labels alone.
+Until that signer/policy-bound release-envelope verifier exists,
+`authenticated_release_envelope` remains a canonical missing capability gate
+and the proof backend remains unavailable.
 The
 proof-independent `connect_norito_kagemusha_recursive_spend_topup_v2` path is
 part of the protocol-symbol inventory and validates the finalized transfer and
@@ -253,10 +257,13 @@ pair as the recent-block anchor for device-attestation registration; they must
 not combine a height and hash from independent reads.
 
 The POST body is the typed `OfflineTopUpRequest` or `OfflineRedeemRequest`
-itself. With `Content-Type: application/json`, clients send its structured JSON
-representation. With `Content-Type: application/x-norito`, clients send the
-canonical typed Norito value directly. There is no object whose purpose is to
-wrap the entire request in a `*_norito_base64` field.
+itself. With `Content-Type: application/json` (optionally one
+`charset=utf-8` parameter), clients send its structured JSON representation.
+With the parameter-free `Content-Type: application/x-norito`, clients send the
+canonical typed Norito value directly. Other request media types, suffix JSON
+types, and unrecognized parameters are rejected rather than interpreted by
+fallback. There is no object whose purpose is to wrap the entire request in a
+`*_norito_base64` field.
 
 The public Norito headers use stable schema names rather than Rust module or
 implementation-type names:
@@ -348,10 +355,33 @@ merge entry is unavailable, Torii returns `503` with
 `offline_operation_index_unavailable` or `offline_operation_history_unavailable`;
 an index/body/result disagreement returns
 `offline_operation_index_inconsistent`. These states never guess a `404`. The
-auxiliary admission registry is a process-local optimization, is not
-restart-persistent, and is pruned opportunistically on admitted-record lookup
-after the signed authorization's expiry plus 24 hours. Committed results remain
-discoverable while the corresponding block is retained.
+auxiliary admission registry is a process-local optimization and is not
+restart-persistent. It retains only a fixed-size binding: command kind,
+operation id, the hash of the canonical Norito request bytes, transaction hash,
+and signed submission/expiry timestamps. It never retains the proof-bearing
+request DTO; status and replay checks recover that complete request from the
+transaction queue or the indexed Kura carrier block. Accepted bindings and
+in-flight reservations share one atomic registry and the same capacity. It is
+bounded by both `torii.offline_issuer.operation_registry_max_entries` (default
+4,096) and `torii.offline_issuer.operation_registry_max_bytes` (default 524,288
+canonical accounted bytes). Entry count and byte budget must be positive, and
+the byte budget must fit at least one binding. Canonical accounting reserves
+113 bytes for every accepted binding or in-flight identity independently of
+allocator or host architecture; the entry limit separately bounds map and
+coordination-object overhead. Expired accepted bindings are pruned
+opportunistically only after signed expiry plus 24 hours. Active and retained
+bindings are never evicted for capacity: a new unique operation instead gets
+`503 offline_operation_capacity_exhausted`, while identical accepted replays
+and in-flight followers bypass the capacity check. Dropping a failed or
+cancelled leader atomically releases its reservation, and admission atomically
+replaces a successful reservation with its accepted binding. Torii also repeats
+authoritative queue/Kura recovery after electing a leader, so expiry pruning
+cannot create a replacement-submission interval. If an already queued command
+cannot complete that reservation-to-binding transition, its leader fails
+closed with `503 offline_operation_admission_inconsistent` and followers retry
+authoritative recovery; Torii never publishes a cache-only accepted result.
+Committed results remain discoverable while the corresponding block is
+retained.
 
 Both the pending lookup and Kura index bind the signed operation id to the
 configured outer Offline issuer authority. A different transaction authority
@@ -377,8 +407,11 @@ instance affinity must not expose these command routes until it provides shared
 admission coordination.
 
 Accepted operation references and pending status responses include
-`Retry-After: 1`. Accepted operation references and successful status responses
-use `Cache-Control: no-store`. Economic command authorization is carried by the
+`Retry-After: 1`. Accepted operation references and every response from the
+operation-status resource—including `400`, `401`, `404`, and `503`—use
+`Cache-Control: no-store`, so a pre-submission or cross-instance miss cannot be
+reused after the operation becomes visible. Economic command authorization is
+carried by the
 signed request body. Separately, when Torii's API-token policy is enabled, all
 four lifecycle routes require the configured `x-api-token`; a missing or invalid
 token returns `401 api_token_required` with
@@ -395,7 +428,8 @@ asset-definition address literal or a currently live asset alias; the response
 always contains the resolved canonical id. When Torii evaluates the requested
 asset but offline payments are not ready, it returns `200 OK` with
 `ready: false`, typed blockers, the evaluated block height, and
-representation-specific `ETag`, the header
+representation-specific strong `ETag` computed over the exact selected JSON
+or Norito response octets, the header
 `Cache-Control: private, max-age=0, must-revalidate`, and `Vary: Accept`.
 `If-None-Match` supports a matching strong or weak validator and `*`;
 a match returns `304 Not Modified` without a body. A
