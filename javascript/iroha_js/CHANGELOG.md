@@ -6,6 +6,24 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [0.0.3] - 2026-07-11
 
+- Hardened Nexus wallet-signing boundaries: signables are now copied and
+  independently validated as canonical `Transfer::Asset` payloads before any
+  signer callback, Connect and transfer alias conflicts fail closed, polling
+  options are validated before Torii submission, and non-canonical scaled
+  numeric archives with trailing zeros are rejected. The exported
+  `validateBrowserTransferSignable` helper and executable Nexus recipe smoke
+  test expose and lock the same validation contract for integrators.
+- Made the complete public `./browser` aggregate bundle-safe without global
+  shims: browser Buffer edges resolve through the declared `buffer` dependency,
+  while browser-safe modules import a package-local crypto adapter that maps to
+  streaming `@noble/hashes` SHA-256 and securely chunked Web Crypto entropy;
+  Node consumers retain native crypto semantics. The `./canonical-request`
+  subpath now supports secure default nonce generation in browser builds and
+  ships standalone strict-DOM declarations without ambient Node types.
+  Release checks bundle both that subpath and the full browser namespace,
+  reject Node-only graph inputs, and enforce measured 75 KiB and 300 KiB
+  production bundle ceilings respectively.
+
 - Hardened Nexus custom-codec boundaries with descriptor snapshots, exact and
   recomputed payload hashes, independently finalized canonical signed bytes,
   conflict-checked local/Torii aliases, and pre-copy byte limits. Release

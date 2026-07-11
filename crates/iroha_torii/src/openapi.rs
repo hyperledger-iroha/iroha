@@ -692,31 +692,63 @@ fn offline_paths() -> Map {
             })],
         )),
     );
-    for (path, summary, description, request_schema) in [
+    for (path, summary, description, request_schema, currently_unavailable) in [
         (
             "/v1/offline/v2/kagemusha/topup",
             "Top up recursive Kagemusha offline cash.",
             "Submit exactly one canonical standard-base64 KagemushaRecursiveSpendTopUpRequestV2 archive in topup_request_norito_base64. The archive carries its signed payer/device authorization, exact atomic u128 amount and live asset scale. Unknown or retired Offline Note fields are rejected; no legacy issue fallback is mounted.",
             "#/components/schemas/KagemushaTopUpRequestV2Body",
+            false,
         ),
         (
             "/v1/offline/v2/notes/redeem",
             "Redeem recursive Kagemusha offline cash.",
-            "Submit exactly one canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV2 archive in redeem_request_norito_base64. The archive carries its signed recipient/device authorization, exact atomic u128 credit amount, proof-bound optional offline change, and Reserved or verified semantic lineage data. Unknown, compact-projection, and retired Offline Note fields are rejected.",
+            "Submit exactly one canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV2 archive in redeem_request_norito_base64. The archive carries its signed recipient/device authorization, exact atomic u128 credit amount, proof-bound optional offline change, and Reserved lineage data without a lineage witness. Semantic lineage and witness-bearing redemption remain disabled and fail closed. Unknown, compact-projection, and retired Offline Note fields are rejected. Current runtime state: every otherwise-valid redeem request fails closed with HTTP 503 before state mutation because the production proof backend and atomic operation-receipt persistence are unavailable. The typed HTTP 200 finality receipt is a conditional future contract and is unreachable until both dependencies are implemented and enabled.",
             "#/components/schemas/KagemushaRedeemRequestV2Body",
+            true,
         ),
     ] {
-        paths.insert(
-            path.to_owned(),
-            Value::Object(json_post_operation(
-                "Offline",
-                summary,
-                description,
-                request_schema,
-                "#/components/schemas/JsonValue",
-                Vec::new(),
-            )),
+        let mut operation = json_post_operation(
+            "Offline",
+            summary,
+            description,
+            request_schema,
+            "#/components/schemas/KagemushaV2TerminalFinalityResponse",
+            Vec::new(),
         );
+        if currently_unavailable {
+            let post = operation
+                .get_mut("post")
+                .and_then(Value::as_object_mut)
+                .expect("JSON post helper must return a post operation");
+            post.insert(
+                "x-iroha-current-runtime-status".to_owned(),
+                Value::String("fail-closed-503".to_owned()),
+            );
+            let responses = post
+                .get_mut("responses")
+                .and_then(Value::as_object_mut)
+                .expect("JSON post helper must return response metadata");
+            responses
+                .get_mut("200")
+                .and_then(Value::as_object_mut)
+                .expect("JSON post helper must return a typed 200 response")
+                .insert(
+                    "description".to_owned(),
+                    Value::String(
+                        "Conditional future success contract; unreachable in the current runtime until the production proof backend and atomic operation-receipt persistence are implemented and enabled."
+                            .to_owned(),
+                    ),
+                );
+            responses.insert(
+                "503".to_owned(),
+                json_response(
+                    "Current runtime fails closed before state mutation because the production proof backend and atomic operation-receipt persistence are unavailable.",
+                    error_schema_reference(),
+                ),
+            );
+        }
+        paths.insert(path.to_owned(), Value::Object(operation));
     }
     paths
 }
@@ -10075,6 +10107,53 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "KagemushaV2TerminalFinalityResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "description": "Finalized Kagemusha V2 operation receipt. operation_id and transaction_hash are lowercase 64-hex strings; height and server time are positive. Top-up responses set both topup anchor fields, while redeem responses set both to null.",
+            "required": [
+                "version",
+                "operation_id",
+                "transaction_hash",
+                "finalized_block_height",
+                "status",
+                "server_time_ms",
+                "topup_anchor_norito_base64",
+                "topup_anchor_digest_hex"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "enum": [2] },
+                "operation_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "transaction_hash": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "finalized_block_height": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1
+                },
+                "status": { "type": "string", "enum": ["Applied"] },
+                "server_time_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1
+                },
+                "topup_anchor_norito_base64": {
+                    "type": ["string", "null"]
+                },
+                "topup_anchor_digest_hex": {
+                    "type": ["string", "null"],
+                    "pattern": "^[0-9a-f]{64}$"
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "PipelineTransactionStatus".to_owned(),
         norito::json!({
             "type": "object",
@@ -13963,6 +14042,10 @@ mod tests {
         assert!(redeem_description.contains("redeem_request_norito_base64"));
         assert!(redeem_description.contains("KagemushaRecursiveSpendRedeemRequestV2"));
         assert!(redeem_description.contains("signed recipient/device authorization"));
+        assert!(redeem_description.contains("Reserved lineage data without a lineage witness"));
+        assert!(redeem_description.contains(
+            "Semantic lineage and witness-bearing redemption remain disabled and fail closed"
+        ));
         let topup_request_schema = topup_post
             .get("requestBody")
             .and_then(Value::as_object)
@@ -13979,6 +14062,26 @@ mod tests {
             topup_request_schema,
             "#/components/schemas/KagemushaTopUpRequestV2Body"
         );
+        for post in [topup_post, redeem_post] {
+            let response_schema = post
+                .get("responses")
+                .and_then(Value::as_object)
+                .and_then(|responses| responses.get("200"))
+                .and_then(Value::as_object)
+                .and_then(|response| response.get("content"))
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("application/json"))
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str)
+                .expect("Kagemusha V2 finality response schema");
+            assert_eq!(
+                response_schema,
+                "#/components/schemas/KagemushaV2TerminalFinalityResponse"
+            );
+        }
     }
 
     #[test]
@@ -14010,7 +14113,152 @@ mod tests {
                 Some(&vec![Value::String(field.to_owned())])
             );
         }
+        let finality = schemas
+            .get("KagemushaV2TerminalFinalityResponse")
+            .and_then(Value::as_object)
+            .expect("Kagemusha V2 terminal finality response schema");
+        assert_eq!(
+            finality.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+        let required = finality
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("Kagemusha V2 finality required fields");
+        for field in [
+            "operation_id",
+            "transaction_hash",
+            "finalized_block_height",
+            "server_time_ms",
+            "topup_anchor_norito_base64",
+            "topup_anchor_digest_hex",
+        ] {
+            assert!(required.contains(&Value::String(field.to_owned())));
+        }
+        let properties = finality
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("Kagemusha V2 finality properties");
+        for field in ["operation_id", "transaction_hash"] {
+            assert_eq!(
+                properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|property| property.get("pattern"))
+                    .and_then(Value::as_str),
+                Some("^[0-9a-f]{64}$")
+            );
+        }
+        for field in ["finalized_block_height", "server_time_ms"] {
+            assert_eq!(
+                properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|property| property.get("minimum")),
+                Some(&Value::from(1_u64))
+            );
+        }
         assert!(!schemas.contains_key("OfflineIssuerBodyAuthRequest"));
+    }
+
+    #[test]
+    fn generated_spec_marks_kagemusha_v2_redeem_fail_closed_until_backends_exist() {
+        let doc = generate_spec();
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("OpenAPI paths");
+        let redeem_post = paths
+            .get("/v1/offline/v2/notes/redeem")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("offline redeem post operation");
+        assert_eq!(
+            redeem_post
+                .get("x-iroha-current-runtime-status")
+                .and_then(Value::as_str),
+            Some("fail-closed-503")
+        );
+        let description = redeem_post
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("offline redeem description");
+        for marker in [
+            "every otherwise-valid redeem request fails closed with HTTP 503 before state mutation",
+            "production proof backend",
+            "atomic operation-receipt persistence",
+            "typed HTTP 200 finality receipt is a conditional future contract",
+        ] {
+            assert!(
+                description.contains(marker),
+                "redeem description is missing current-runtime marker: {marker}"
+            );
+        }
+
+        let responses = redeem_post
+            .get("responses")
+            .and_then(Value::as_object)
+            .expect("offline redeem responses");
+        let future_success = responses
+            .get("200")
+            .and_then(Value::as_object)
+            .expect("conditional future 200 response");
+        assert!(
+            future_success
+                .get("description")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.contains("unreachable in the current runtime"))
+        );
+        assert_eq!(
+            future_success
+                .get("content")
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("application/json"))
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/KagemushaV2TerminalFinalityResponse")
+        );
+        let unavailable = responses
+            .get("503")
+            .and_then(Value::as_object)
+            .expect("current fail-closed 503 response");
+        assert!(
+            unavailable
+                .get("description")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.contains("before state mutation"))
+        );
+        assert_eq!(
+            unavailable
+                .get("content")
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("application/json"))
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/ErrorEnvelope")
+        );
+
+        let topup_post = paths
+            .get("/v1/offline/v2/kagemusha/topup")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("offline Kagemusha top-up post operation");
+        assert!(!topup_post.contains_key("x-iroha-current-runtime-status"));
+        assert!(
+            !topup_post
+                .get("responses")
+                .and_then(Value::as_object)
+                .is_some_and(|responses| responses.contains_key("503")),
+            "the redeem-only backend limitation must not be copied to top-up"
+        );
     }
 
     #[test]

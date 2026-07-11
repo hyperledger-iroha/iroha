@@ -223,11 +223,11 @@ SHARED_ABI7_FIXTURE_COVERAGE = {
         '"KagemushaRecursiveSpendVerifyResultV1"',
         '"KagemushaRecursiveSpendRedeemRequestV1"',
         '"RedeemKagemushaRecursive"',
-        '"sha256_hex": "e43ab6640942e2298c260556175c216eb652da5a79ab0454b4cc5e31bb7fecb0"',
-        '"sha256_hex": "d3246057aca2d9d47378af5f058c688f82a8be5abee60235206906a996235f43"',
+        '"sha256_hex": "42c7b1b0e2dc838a6660b3691e08474bb936fa001e446310930d387b00ba686b"',
+        '"sha256_hex": "829be9daba04c4c928a34e1502ad2f1e467853ad2f02cdac0b6735f852fff44e"',
         '"sha256_hex": "67eb9b1f7c89bd842dbfb769bb802c60464fba510b4db0ac4c83bcfbd5626d15"',
-        '"sha256_hex": "f26396b4ac03d38956dc94fa9bb4ec92c6b8f97b7e993f453d36431cfba67a0d"',
-        '"sha256_hex": "69ff4f0ae0f78c0acbfef9fe91c2ee4087af4f1b1b0ac664a089bf80bf1802c6"',
+        '"sha256_hex": "de704684a72f8e79264f62337327395c3ca426cbe26da57fc133aa97f4e240c0"',
+        '"sha256_hex": "bcd7306e54db93a09ffb013860adaae223655205d77651201cb49dd3a5d5d980"',
     ),
     "python/iroha_python/iroha_python_rs/src/lib.rs": (
         "KAGEMUSHA_RECURSIVE_SPEND_PRINT_ABI7_ARCHIVES",
@@ -2157,10 +2157,12 @@ CI_GUARD_PATHS = (
 )
 ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
     "docs/source/offline_kagemusha.md",
+    "docs/source/offline_kagemusha_v2_contract.md",
     ".github/workflows/pr_kagemusha_payload_bench.yml",
     "crates/iroha_cli/src/zk.rs",
     "crates/iroha_data_model/src/offline/mod.rs",
     "crates/iroha_core/src/zk.rs",
+    "crates/iroha_core/src/zk/kagemusha_v2.rs",
     "crates/iroha_core/src/tx.rs",
     "crates/iroha_core/src/smartcontracts/isi/offline.rs",
     "crates/iroha_data_model/src/isi/offline.rs",
@@ -2211,6 +2213,11 @@ ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendLineageWitnessVerifier.swift",
+    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift",
+    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2Codecs.swift",
+    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2Native.swift",
+    "IrohaSwift/Sources/IrohaSwift/KagemushaScaledAmount.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineKagemushaAbi7CapabilityContract.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift",
@@ -2218,6 +2225,9 @@ ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendV2Tests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaScaledAmountTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineKagemushaAbi7CapabilityContractTests.swift",
     "java/iroha_android/README.md",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java",
@@ -2242,6 +2252,7 @@ ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
     "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java",
     "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
     "crates/iroha_data_model/benches/kagemusha_recursive_spend_payload.rs",
+    "crates/iroha_data_model/tests/kagemusha_topup_kotlin_fixture.rs",
     "javascript/iroha_js/README.md",
     "javascript/iroha_js/src/crypto.browser.js",
     "javascript/iroha_js/src/crypto.js",
@@ -2305,13 +2316,17 @@ ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = (
     "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
     "IrohaSwift/Sources/IrohaSwift/ToriiOfflineNoteIssuerClient.swift",
     "IrohaSwift/Sources/IrohaSwift/TransactionEncoder.swift",
+    "IrohaSwift/Sources/IrohaSwift/TxBuilder.swift",
     "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConfidentialUnshieldRedeemNativeTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKConfidentialUnshieldWorkflowTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineCashLifecycleTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/VerifyingKeyBackendTagTests.swift",
     "crates/iroha_cli/src/main_shared.rs",
     "crates/iroha_core/src/executor.rs",
     "crates/iroha_core/src/gas.rs",
+    "crates/iroha_core/src/queue.rs",
     "crates/iroha_core/src/queue/router.rs",
     "crates/iroha_core/src/smartcontracts/isi/mod.rs",
     "crates/iroha_core/src/smartcontracts/isi/world.rs",
@@ -2323,6 +2338,7 @@ ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = (
     "crates/iroha_torii/src/explorer.rs",
     "crates/iroha_torii/src/offline_issuer.rs",
     "crates/iroha_torii/src/lib.rs",
+    "crates/iroha_torii/src/routing.rs",
     "csharp/README.md",
     "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionBuilder.cs",
     "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionInstruction.cs",
@@ -2472,123 +2488,170 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
         'path = "tests/offline_v2_kagemusha_redeem_smoke.rs"',
     ),
     "crates/iroha_torii/src/offline_v2_issuer.rs": (
-        "if has_kagemusha_redeem_payload(&parsed.value) {",
-        'value.get("redeem_request_norito_base64").is_some()',
-        'value.get("compact_payment_token_norito_base64").is_some()',
-        '.get("projection_verifier_record_norito_base64")',
-        "handle_kagemusha_recursive_notes_redeem",
-        "parse_kagemusha_recursive_redeem_request",
-        "KagemushaRecursiveSpendRedeemRequestV1",
-        "RedeemKagemushaRecursive::new_with_lineage_witness_and_change",
-        "required_kagemusha_redeem_archive_string",
-        "optional_kagemusha_echo_string",
-        "parse_kagemusha_amount_echo",
-        "reject_kagemusha_retired_redeem_fields",
-        "reject_kagemusha_retired_redeem_fields(&request.value)?;",
-        "reject_kagemusha_auxiliary_redeem_fields",
-        "reject_kagemusha_auxiliary_redeem_fields(&request.value)?;",
-        "if encoded != encoded.trim() {",
-        "raw.trim().is_empty() || raw != raw.trim()",
-        "if parsed.to_string() != raw {",
-        "must be a canonical base64 string",
-        "must use canonical Numeric text",
-        "ignored auxiliary field",
-        "retired Offline Note V2 field",
-        "must not contain surrounding whitespace",
+        'const ENDPOINT_NOTES_REDEEM: &str = "v1/offline/v2/notes/redeem";',
+        'const PATH_NOTES_REDEEM: &str = "/v1/offline/v2/notes/redeem";',
+        "pub(crate) async fn handle_notes_redeem(",
+        "reject_x_iroha_auth_headers(headers)?;",
+        "let redeem_request = parse_strict_kagemusha_v2_archive::<KagemushaRecursiveSpendRedeemRequestV2>(",
+        '        "redeem_request_norito_base64",',
+        '        "KagemushaRecursiveSpendRedeemRequestV2",',
+        "redeem_request.validate_public_binding().map_err(|source| {",
+        "validate_kagemusha_v2_redeem_snapshot(&app, &redeem_request)?;",
+        "optional_finalized_kagemusha_v2_anchor(",
+        "ensure_kagemusha_v2_topup_anchor_matches_request",
+        "finalized_kagemusha_v2_topup_anchor_finality",
+        "committed_transaction_height(&transaction_hash)",
+        "load_kagemusha_v2_redeem_operation_receipt(",
+        "let operation_id = redeem_request.authorization.operation_id;",
+        "RedeemKagemushaRecursiveV2::new(redeem_request)",
+        "wait_for_kagemusha_v2_finality(&app, tx_hash, operation_id).await?;",
+        "kagemusha_v2_terminal_response(finality, None)",
+        "pipeline_status_terminal_or_state_entry",
+        "ensure_kagemusha_v2_anchor_finality_binding",
+        "optional_finalized_kagemusha_v2_anchor",
+        "offline_v2_topup_anchor_canonical_reencode",
+        "operation_id: [u8; 32]",
+        "fn parse_strict_kagemusha_v2_archive<T>(",
+        "if object.len() != 1 || !object.contains_key(field) {",
+        "must contain exactly `{{{field}}}`",
+        "if encoded.is_empty() || encoded.trim() != encoded {",
+        "must be non-empty with no surrounding whitespace",
+        "BASE64_STANDARD.decode(encoded)",
+        "if BASE64_STANDARD.encode(&bytes) != encoded {",
+        "is not canonical standard base64",
+        "norito::decode_from_bytes(&bytes)",
+        "norito::to_bytes(&decoded)",
+        "if canonical != bytes {",
+        "does not round-trip to identical canonical Norito",
+        "fn validate_kagemusha_v2_redeem_snapshot(",
+        "KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE",
+        'code: "OFFLINE_KAGEMUSHA_V2_NOT_READY"',
+        "request.bundle.statement.chain_id != *app.chain_id",
+        "asset_definition(&request.bundle.statement.asset)",
+        "request.amount.scale != live_scale",
+        "request.bundle.statement.asset_scale != live_scale",
+        "validate_authorization_at(kagemusha_v2_snapshot_time_ms(app))",
         "redeem_request_norito_base64",
-        "compact_payment_token_norito_base64",
-        "projection_verifier_record_norito_base64",
-        "validate_public_binding()",
-        "OFFLINE_KAGEMUSHA_REDEEM_REQUEST_REQUIRED",
+        "OFFLINE_V2_INVALID_BODY",
+        "OFFLINE_V2_INVALID_ARCHIVE",
         "OFFLINE_KAGEMUSHA_REDEEM_INVALID",
-        "OFFLINE_KAGEMUSHA_REDEEM_ACCOUNT_MISMATCH",
-        "OFFLINE_KAGEMUSHA_REDEEM_CHAIN_MISMATCH",
-        "OFFLINE_KAGEMUSHA_REDEEM_ASSET_MISMATCH",
-        "OFFLINE_KAGEMUSHA_REDEEM_AMOUNT_MISMATCH",
-        "OFFLINE_KAGEMUSHA_REDEEM_SOURCE_MISMATCH",
-        "OFFLINE_KAGEMUSHA_REDEEM_RETIRED_FIELD",
-        "OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_FIELD",
-        "fn reject_kagemusha_retired_redeem_fields(value: &Value) -> Result<(), Error> {\n"
-        "    for field in [\n"
-        '        "redemption",\n'
-        '        "input_nullifiers",\n'
-        '        "sender_key_certificate",\n'
-        '        "recursive_proof",\n',
-        "let auxiliary_field_values =",
-        "Value::Null, Value::Array(Vec::new())",
-        "offline_v2_notes_redeem_accepts_kagemusha_recursive_redeem_request",
-        "offline_v2_notes_redeem_rejects_compact_token_without_recursive_redeem_request",
-        "offline_v2_notes_redeem_rejects_retired_redemption_smuggled_with_kagemusha_marker",
-        "offline_v2_notes_redeem_rejects_retired_fields_with_kagemusha_archive",
-        "offline_v2_notes_redeem_rejects_auxiliary_kagemusha_fields_with_redeem_archive",
-        "offline_v2_notes_redeem_rejects_present_but_malformed_kagemusha_fields",
-        "offline_v2_notes_redeem_rejects_malformed_kagemusha_archive",
-        "offline_v2_notes_redeem_rejects_kagemusha_optional_echo_field_shapes",
-        "offline_v2_notes_redeem_rejects_kagemusha_context_mismatches",
-        "offline_v2_notes_redeem_rejects_kagemusha_public_binding_tamper",
+        "OFFLINE_KAGEMUSHA_WRONG_CHAIN",
+        "OFFLINE_KAGEMUSHA_ASSET_NOT_FOUND",
+        "OFFLINE_KAGEMUSHA_SCALE_INVALID",
+        "OFFLINE_KAGEMUSHA_SCALE_MISMATCH",
+        "OFFLINE_KAGEMUSHA_AUTHORIZATION_INVALID",
+        "OFFLINE_KAGEMUSHA_ANCHOR_MISMATCH",
+        "OFFLINE_KAGEMUSHA_ANCHOR_INVALID",
+        "OFFLINE_KAGEMUSHA_REDEEM_RECEIPT_UNAVAILABLE",
+        "OFFLINE_KAGEMUSHA_FINALITY_INCOMPLETE",
+        "OFFLINE_KAGEMUSHA_TRANSACTION_REJECTED",
+        "OFFLINE_KAGEMUSHA_FINALITY_TIMEOUT",
     ),
     "crates/iroha_torii/src/openapi.rs": (
-        "Classic Offline V2 note issuance is retired and this retired route fails closed.",
-        "Classic Offline V2 audit is retired and this retired route fails closed.",
-        "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
-        "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64",
-        "Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive",
-        "compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are rejected as ignored auxiliary fields",
+        '"/v1/offline/v2/notes/redeem",',
+        "Submit exactly one canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV2 archive in redeem_request_norito_base64.",
+        "Reserved lineage data without a lineage witness",
+        "Semantic lineage and witness-bearing redemption remain disabled and fail closed.",
+        "Unknown, compact-projection, and retired Offline Note fields are rejected.",
+        '"#/components/schemas/KagemushaRedeemRequestV2Body",',
+        '"KagemushaRedeemRequestV2Body".to_owned()',
+        '"required": ["redeem_request_norito_base64"]',
+        '"additionalProperties": false',
+        '"#/components/schemas/KagemushaV2TerminalFinalityResponse"',
+        '"KagemushaV2TerminalFinalityResponse".to_owned()',
+        '"pattern": "^[0-9a-f]{64}$"',
+        '"minimum": 1',
+        '"Canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV2 bytes; surrounding whitespace, trailing Norito bytes, and non-canonical re-encodings are rejected."',
+        'assert!(!paths.contains_key("/v1/offline/v2/keys/refill"));',
+        'assert!(!paths.contains_key("/v1/offline/v2/notes/issue"));',
+        'assert!(!paths.contains_key("/v1/offline/v2/audit"));',
         'assert!(redeem_description.contains("redeem_request_norito_base64"));',
-        'assert!(redeem_description.contains("KagemushaRecursiveSpendRedeemRequestV1"));',
-        'assert!(redeem_description.contains("source_note_commitment"));',
-        'assert!(redeem_description.contains("ignored auxiliary fields"));',
+        'assert!(redeem_description.contains("KagemushaRecursiveSpendRedeemRequestV2"));',
+        'assert!(redeem_description.contains("signed recipient/device authorization"));',
+        'assert!(redeem_description.contains("Reserved lineage data without a lineage witness"));',
+        '"Semantic lineage and witness-bearing redemption remain disabled and fail closed"',
+        "fn generated_spec_documents_strict_kagemusha_v2_body_schemas()",
     ),
     "docs/portal/static/openapi/torii.json": (
-        "Classic Offline V2 note issuance is retired and this retired route fails closed.",
-        "Classic Offline V2 audit is retired and this retired route fails closed.",
-        "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
-        "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64",
-        "Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive",
-        "Optional amount and source_note_commitment echo fields",
-        "compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are rejected as ignored auxiliary fields",
+        '"/v1/offline/v2/notes/redeem"',
+        "Submit exactly one canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV2 archive in redeem_request_norito_base64.",
+        "Reserved lineage data without a lineage witness",
+        "Semantic lineage and witness-bearing redemption remain disabled and fail closed.",
+        "Unknown, compact-projection, and retired Offline Note fields are rejected.",
+        '"$ref": "#/components/schemas/KagemushaRedeemRequestV2Body"',
+        '"KagemushaRedeemRequestV2Body"',
+        '"additionalProperties": false',
+        '"$ref": "#/components/schemas/KagemushaV2TerminalFinalityResponse"',
+        '"KagemushaV2TerminalFinalityResponse"',
+        '"pattern": "^[0-9a-f]{64}$"',
+        '"minimum": 1',
+        '"required": [\n          "redeem_request_norito_base64"\n        ]',
+        "Canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV2 bytes; surrounding whitespace, trailing Norito bytes, and non-canonical re-encodings are rejected.",
     ),
     "docs/portal/static/openapi/versions/current/torii.json": (
-        "Classic Offline V2 note issuance is retired and this retired route fails closed.",
-        "Classic Offline V2 audit is retired and this retired route fails closed.",
-        "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
-        "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64",
-        "Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive",
-        "Optional amount and source_note_commitment echo fields",
-        "compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are rejected as ignored auxiliary fields",
+        '"/v1/offline/v2/notes/redeem"',
+        "Submit exactly one canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV2 archive in redeem_request_norito_base64.",
+        "Reserved lineage data without a lineage witness",
+        "Semantic lineage and witness-bearing redemption remain disabled and fail closed.",
+        "Unknown, compact-projection, and retired Offline Note fields are rejected.",
+        '"$ref": "#/components/schemas/KagemushaRedeemRequestV2Body"',
+        '"KagemushaRedeemRequestV2Body"',
+        '"additionalProperties": false',
+        '"$ref": "#/components/schemas/KagemushaV2TerminalFinalityResponse"',
+        '"KagemushaV2TerminalFinalityResponse"',
+        '"pattern": "^[0-9a-f]{64}$"',
+        '"minimum": 1',
+        '"required": [\n          "redeem_request_norito_base64"\n        ]',
+        "Canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV2 bytes; surrounding whitespace, trailing Norito bytes, and non-canonical re-encodings are rejected.",
     ),
     "docs/source/offline_kagemusha.md": (
-        "the optional `amount` or `source_note_commitment` echo fields",
-        "exact canonical `Numeric` text",
+        "strict Kagemusha V2 endpoint",
+        "exactly one non-empty `redeem_request_norito_base64` string and no other fields",
+        "KagemushaRecursiveSpendRedeemRequestV2",
+        "RedeemKagemushaRecursiveV2",
+        "Only Reserved lineage without a lineage witness is admissible",
+        "canonical atomic operation receipt",
+        "must never scan request-driven block history",
+        "Retired Offline Note, compact-token, projection-verifier, echo, and unknown fields",
     ),
     "crates/iroha_torii/tests/grouped/nexus_sorafs.rs": (
         "mod offline_v2_kagemusha_redeem_smoke;",
     ),
     "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs": (
         "offline_v2_notes_redeem_accepts_kagemusha_recursive_redeem_request",
-        "offline_v2_notes_redeem_rejects_compact_token_without_recursive_redeem_request",
+        "offline_v2_notes_redeem_rejects_noncanonical_or_ambiguous_v2_envelopes",
+        "offline_v2_notes_redeem_uses_direct_receipts_and_preserves_finality_integrity",
+        'const PATH_NOTES_REDEEM: &str = \\"/v1/offline/v2/notes/redeem\\";',
+        '!OFFLINE_V2_ISSUER_SOURCE.contains("/v1/offline/v2/kagemusha/redeem")',
         "redeem_request_norito_base64",
-        "required_kagemusha_redeem_archive_string",
-        "optional_kagemusha_echo_string",
-        "parse_kagemusha_amount_echo",
-        "reject_kagemusha_retired_redeem_fields",
-        "reject_kagemusha_auxiliary_redeem_fields",
-        "must be a canonical base64 string",
-        "must use canonical Numeric text",
-        "must not contain surrounding whitespace",
-        "OFFLINE_KAGEMUSHA_REDEEM_CHAIN_MISMATCH",
-        "OFFLINE_KAGEMUSHA_REDEEM_ASSET_MISMATCH",
-        "OFFLINE_KAGEMUSHA_REDEEM_AMOUNT_MISMATCH",
-        "OFFLINE_KAGEMUSHA_REDEEM_SOURCE_MISMATCH",
-        "OFFLINE_KAGEMUSHA_REDEEM_RETIRED_FIELD",
-        "OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_FIELD",
-        "let auxiliary_field_values =",
-        "Value::Null, Value::Array(Vec::new())",
-        "OFFLINE_KAGEMUSHA_REDEEM_INVALID",
-        "offline_v2_notes_redeem_rejects_kagemusha_optional_echo_field_shapes",
-        "offline_v2_notes_redeem_rejects_retired_redemption_smuggled_with_kagemusha_marker",
-        "offline_v2_notes_redeem_rejects_retired_fields_with_kagemusha_archive",
-        "offline_v2_notes_redeem_rejects_auxiliary_kagemusha_fields_with_redeem_archive",
+        "KagemushaRecursiveSpendRedeemRequestV2",
+        "parse_strict_kagemusha_v2_archive::<KagemushaRecursiveSpendRedeemRequestV2>(",
+        "RedeemKagemushaRecursiveV2::new(redeem_request)",
+        "validate_kagemusha_v2_redeem_snapshot",
+        "load_kagemusha_v2_redeem_operation_receipt",
+        "let operation_id = redeem_request.authorization.operation_id;",
+        "wait_for_kagemusha_v2_finality(&app, tx_hash, operation_id).await?",
+        "if object.len() != 1 || !object.contains_key(field)",
+        "must contain exactly",
+        "if encoded.is_empty() || encoded.trim() != encoded",
+        "must be non-empty with no surrounding whitespace",
+        "BASE64_STANDARD.encode(&bytes) != encoded",
+        "is not canonical standard base64",
+        "if canonical != bytes",
+        "does not round-trip to identical canonical Norito",
+        "optional_finalized_kagemusha_v2_anchor",
+        "finalized_kagemusha_v2_topup_anchor_finality",
+        "pipeline_status_terminal_or_state_entry",
+        "OFFLINE_KAGEMUSHA_REDEEM_RECEIPT_UNAVAILABLE",
+        "OFFLINE_KAGEMUSHA_FINALITY_INCOMPLETE",
+        "ensure_kagemusha_v2_anchor_finality_binding",
+        "newly_applied_kagemusha_v2_redeem_response_preserves_operation_id",
+        "replayed_kagemusha_v2_redeem_response_preserves_operation_id",
+        "kagemusha_v2_terminal_response_rejects_zero_or_non_applied_finality",
+        "kagemusha_v2_terminal_status_rejects_missing_height_or_block_time",
+        "kagemusha_v2_terminal_cache_rejection_and_expiry_do_not_timeout",
+        "kagemusha_v2_anchor_finality_binding_rejects_operation_hash_or_height_mismatch",
+        "refreshed_kagemusha_v2_authorization_keeps_direct_anchor_lookup_key",
     ),
 }
 TORII_OFFLINE_V2_RETIRED_REDEEM_ALIAS_COVERAGE = {
@@ -2820,6 +2883,8 @@ READINESS_SECTION_CONSISTENCY_COVERAGE = {
 }
 WORKFLOW_REQUIRED_PATHS = (
     WORKFLOW_PATH,
+    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift",
+    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2Native.swift",
     SHARED_FIXTURE_PATH,
     SHARED_ABI7_FIXTURE_PATH,
     *CI_GUARD_PATHS,
@@ -2863,6 +2928,38 @@ HEADER_NEGATIVE_CONTROL_COMMANDS = (
     (
         "bad recursive header signature negative control",
         "ci/check_connect_norito_bridge_header.sh --negative-control-bad-recursive-signature",
+    ),
+    (
+        "bad recursive V2 header signature negative control",
+        "ci/check_connect_norito_bridge_header.sh --negative-control-bad-recursive-v2-signature",
+    ),
+    (
+        "bad recursive V2 artifact header signature negative control",
+        "ci/check_connect_norito_bridge_header.sh --negative-control-bad-recursive-v2-artifact-signature",
+    ),
+    (
+        "missing paired recursive V2 export negative control",
+        "ci/check_connect_norito_bridge_header.sh --negative-control-missing-recursive-v2-export-pair",
+    ),
+    (
+        "missing paired Kagemusha V2 protocol export negative control",
+        "ci/check_connect_norito_bridge_header.sh --negative-control-missing-kagemusha-v2-protocol-export-pair",
+    ),
+    (
+        "bad Kagemusha V2 receiver-key algorithm signature negative control",
+        "ci/check_connect_norito_bridge_header.sh --negative-control-bad-kagemusha-v2-receiver-key-signature",
+    ),
+    (
+        "bad Kagemusha V2 verify-at-time signature negative control",
+        "ci/check_connect_norito_bridge_header.sh --negative-control-bad-kagemusha-v2-verify-at-time-signature",
+    ),
+    (
+        "bad Kagemusha V2 four-archive ACK-create signature negative control",
+        "ci/check_connect_norito_bridge_header.sh --negative-control-bad-kagemusha-v2-ack-create-signature",
+    ),
+    (
+        "bad connect_norito_free signature negative control",
+        "ci/check_connect_norito_bridge_header.sh --negative-control-bad-connect-norito-free-signature",
     ),
     (
         "missing Rust export negative control",
@@ -3051,6 +3148,10 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Torii offline-v2 Kagemusha redeem ingress negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-redeem",
+    ),
+    (
+        "Torii offline-v2 Kagemusha redeem route/telemetry negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-route",
     ),
     (
         "Torii offline-v2 Kagemusha exact-field negative control",
@@ -5321,25 +5422,179 @@ def extract_rust_const_str_array_body(source, name, label):
 
 
 def check_torii_offline_v2_kagemusha_redeem_coverage():
+    issuer_relative = "crates/iroha_torii/src/offline_v2_issuer.rs"
+    issuer_source = read(issuer_relative)
+    handler_start = issuer_source.find("pub(crate) async fn handle_notes_redeem(")
+    handler_end = issuer_source.find(
+        "async fn handle_kagemusha_recursive_notes_redeem(", handler_start
+    )
+    if handler_start < 0 or handler_end < 0:
+        fail(f"{issuer_relative} is missing the bounded Kagemusha V2 redeem handler")
+    redeem_handler = issuer_source[handler_start:handler_end]
+    for forbidden in (
+        "KagemushaRecursiveSpendRedeemRequestV1",
+        "RedeemKagemushaRecursive::",
+        "parse_kagemusha_recursive_redeem_request",
+    ):
+        if forbidden in redeem_handler:
+            fail(
+                f"{issuer_relative} current Kagemusha V2 redeem handler contains retired V1 dispatch: "
+                + forbidden
+            )
+    if '"/v1/offline/v2/kagemusha/redeem"' in issuer_source:
+        fail(
+            f"{issuer_relative} contains stale Kagemusha V2 redeem route/telemetry path: "
+            "/v1/offline/v2/kagemusha/redeem"
+        )
+    for forbidden in (
+        "find_committed_kagemusha_v2_operation",
+        "KAGEMUSHA_V2_REPLAY_SCAN_MAX_BLOCKS",
+        "if block_time_ms < authorization.issued_at_ms",
+        "operation_id: [0; 32]",
+    ):
+        if forbidden in issuer_source:
+            fail(
+                f"{issuer_relative} contains stale request-driven Kagemusha V2 replay/finality logic: "
+                + forbidden
+            )
+
+    openapi_relative = "crates/iroha_torii/src/openapi.rs"
+    openapi_source = read(openapi_relative)
+    schema_start = openapi_source.find('"KagemushaRedeemRequestV2Body".to_owned()')
+    schema_end = openapi_source.find(
+        '"KagemushaV2TerminalFinalityResponse".to_owned()', schema_start
+    )
+    if schema_start < 0 or schema_end < 0:
+        fail(f"{openapi_relative} is missing the bounded Kagemusha V2 redeem schema")
+    redeem_schema_source = openapi_source[schema_start:schema_end]
+    if '"additionalProperties": false' not in redeem_schema_source:
+        fail(
+            f"{openapi_relative} Kagemusha V2 redeem schema must set additionalProperties=false"
+        )
+    finality_schema_end = openapi_source.find(
+        '"PipelineTransactionStatus".to_owned()', schema_end
+    )
+    if finality_schema_end < 0:
+        fail(f"{openapi_relative} is missing the bounded Kagemusha V2 finality schema")
+    finality_schema_source = openapi_source[schema_end:finality_schema_end]
+    for needle in (
+        '"pattern": "^[0-9a-f]{64}$"',
+        '"minimum": 1',
+        '"topup_anchor_norito_base64"',
+        '"topup_anchor_digest_hex"',
+    ):
+        if needle not in finality_schema_source:
+            fail(f"{openapi_relative} Kagemusha V2 finality schema is missing: {needle}")
+    offline_paths_start = openapi_source.find("fn offline_paths() -> Map {")
+    offline_paths_end = openapi_source.find("fn list_filter_query_parameters()", offline_paths_start)
+    if offline_paths_start < 0 or offline_paths_end < 0:
+        fail(f"{openapi_relative} is missing the bounded offline path generator")
+    offline_paths_source = openapi_source[offline_paths_start:offline_paths_end]
+    if '"#/components/schemas/KagemushaV2TerminalFinalityResponse"' not in offline_paths_source:
+        fail(
+            f"{openapi_relative} Kagemusha V2 routes must return KagemushaV2TerminalFinalityResponse"
+        )
+
     for relative in (
-        "crates/iroha_torii/src/openapi.rs",
+        openapi_relative,
         "docs/portal/static/openapi/torii.json",
         "docs/portal/static/openapi/versions/current/torii.json",
     ):
-        if "Legacy X-Iroha-* app-auth headers are rejected" in read(relative):
-            fail(
-                f"{relative} contains stale Offline V2 X-Iroha header wording: "
-                "Legacy X-Iroha-* app-auth headers"
+        source = read(relative)
+        for forbidden in (
+            "KagemushaRecursiveSpendRedeemRequestV1",
+            "Kagemusha recursive redemption is selected when the body carries",
+            "Classic Offline V2 note issuance is retired",
+            "Classic Offline V2 audit is retired",
+            "/v1/offline/v2/kagemusha/redeem",
+            "Reserved or verified semantic lineage",
+        ):
+            if forbidden in source:
+                fail(
+                    f"{relative} contains stale pre-V2 Kagemusha OpenAPI contract: "
+                    + forbidden
+                )
+
+    for relative in (
+        "docs/portal/static/openapi/torii.json",
+        "docs/portal/static/openapi/versions/current/torii.json",
+    ):
+        try:
+            spec = json.loads(read(relative))
+        except (TypeError, json.JSONDecodeError) as error:
+            fail(f"{relative} is not valid OpenAPI JSON: {error}")
+        paths = spec.get("paths", {})
+        if "/v1/offline/v2/notes/redeem" not in paths:
+            fail(f"{relative} is missing the mounted Kagemusha V2 redeem route")
+        if "/v1/offline/v2/kagemusha/redeem" in paths:
+            fail(f"{relative} exposes the stale Kagemusha V2 redeem route")
+        for path in (
+            "/v1/offline/v2/kagemusha/topup",
+            "/v1/offline/v2/notes/redeem",
+        ):
+            response_ref = (
+                paths.get(path, {})
+                .get("post", {})
+                .get("responses", {})
+                .get("200", {})
+                .get("content", {})
+                .get("application/json", {})
+                .get("schema", {})
+                .get("$ref")
             )
-        if "compatibility route fails closed" in read(relative):
+            if response_ref != "#/components/schemas/KagemushaV2TerminalFinalityResponse":
+                fail(
+                    f"{relative} {path} must return KagemushaV2TerminalFinalityResponse"
+                )
+        schemas = spec.get("components", {}).get("schemas", {})
+        schema = schemas.get("KagemushaRedeemRequestV2Body")
+        if not isinstance(schema, dict):
+            fail(f"{relative} is missing KagemushaRedeemRequestV2Body")
+        if schema.get("additionalProperties") is not False:
+            fail(f"{relative} Kagemusha V2 redeem schema must set additionalProperties=false")
+        if schema.get("required") != ["redeem_request_norito_base64"]:
             fail(
-                f"{relative} contains stale Offline V2 retired route wording: "
-                "compatibility route fails closed"
+                f"{relative} Kagemusha V2 redeem schema must require only redeem_request_norito_base64"
             )
+        properties = schema.get("properties")
+        if not isinstance(properties, dict) or set(properties) != {
+            "redeem_request_norito_base64"
+        }:
+            fail(
+                f"{relative} Kagemusha V2 redeem schema must expose only redeem_request_norito_base64"
+            )
+        finality = schemas.get("KagemushaV2TerminalFinalityResponse")
+        if not isinstance(finality, dict) or finality.get("additionalProperties") is not False:
+            fail(f"{relative} is missing the strict Kagemusha V2 finality response schema")
+        finality_properties = finality.get("properties", {})
+        for field in ("operation_id", "transaction_hash"):
+            if finality_properties.get(field, {}).get("pattern") != "^[0-9a-f]{64}$":
+                fail(f"{relative} Kagemusha V2 finality {field} must be lowercase 64-hex")
+        for field in ("finalized_block_height", "server_time_ms"):
+            if finality_properties.get(field, {}).get("minimum") != 1:
+                fail(f"{relative} Kagemusha V2 finality {field} must be positive")
+        required_finality = finality.get("required")
+        if not isinstance(required_finality, list) or not {
+            "topup_anchor_norito_base64",
+            "topup_anchor_digest_hex",
+        }.issubset(required_finality):
+            fail(f"{relative} Kagemusha V2 finality must pair both top-up anchor fields")
     require_needles(
         TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE,
         "is missing Torii offline-v2 Kagemusha redeem ingress coverage",
     )
+    canonical_base64_diagnostic = (
+        "Kagemusha V2 `{field}` is not canonical standard base64."
+    )
+    if issuer_source.count(canonical_base64_diagnostic) != 2:
+        fail(
+            f"{issuer_relative} must retain both Kagemusha V2 canonical-base64 rejection diagnostics"
+        )
+    smoke_relative = "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs"
+    if read(smoke_relative).count("load_kagemusha_v2_redeem_operation_receipt") != 2:
+        fail(
+            f"{smoke_relative} must retain both direct Kagemusha V2 receipt-loader assertions"
+        )
 
 
 def check_torii_offline_v2_retired_redeem_alias_coverage():
@@ -5975,13 +6230,13 @@ def check_shared_abi7_archive_fixture_manifest():
             "append",
             "KagemushaRecursiveSpendBundleV1",
             13622,
-            "e43ab6640942e2298c260556175c216eb652da5a79ab0454b4cc5e31bb7fecb0",
+            "42c7b1b0e2dc838a6660b3691e08474bb936fa001e446310930d387b00ba686b",
         ),
         "verify_request": (
             "verify",
             "KagemushaRecursiveSpendVerifyRequestV1",
             13628,
-            "d3246057aca2d9d47378af5f058c688f82a8be5abee60235206906a996235f43",
+            "829be9daba04c4c928a34e1502ad2f1e467853ad2f02cdac0b6735f852fff44e",
         ),
         "verify_result": (
             "verify",
@@ -5993,13 +6248,13 @@ def check_shared_abi7_archive_fixture_manifest():
             "redeem",
             "KagemushaRecursiveSpendRedeemRequestV1",
             26275,
-            "f26396b4ac03d38956dc94fa9bb4ec92c6b8f97b7e993f453d36431cfba67a0d",
+            "de704684a72f8e79264f62337327395c3ca426cbe26da57fc133aa97f4e240c0",
         ),
         "redeem_instruction": (
             "redeem",
             "RedeemKagemushaRecursive",
             26262,
-            "69ff4f0ae0f78c0acbfef9fe91c2ee4087af4f1b1b0ac664a089bf80bf1802c6",
+            "bcd7306e54db93a09ffb013860adaae223655205d77651201cb49dd3a5d5d980",
         ),
     }
     by_name = {
@@ -6915,8 +7170,8 @@ if mode == "--negative-control-shared-abi7-archive-fixture":
     target = SHARED_ABI7_ARCHIVE_FIXTURE_PATH
     source = read(target)
     mutated = source.replace(
-        '"sha256_hex": "e43ab6640942e2298c260556175c216eb652da5a79ab0454b4cc5e31bb7fecb0"',
-        '"sha256_hex": "003ab6640942e2298c260556175c216eb652da5a79ab0454b4cc5e31bb7fecb0"',
+        '"sha256_hex": "42c7b1b0e2dc838a6660b3691e08474bb936fa001e446310930d387b00ba686b"',
+        '"sha256_hex": "00c7b1b0e2dc838a6660b3691e08474bb936fa001e446310930d387b00ba686b"',
         1,
     )
     if mutated == source:
@@ -6928,7 +7183,7 @@ if mode == "--negative-control-shared-abi7-archive-fixture":
         message = str(error)
         expected = (
             f'{target} is missing shared recursive spend ABI-7 fixture coverage: '
-            '"sha256_hex": "e43ab6640942e2298c260556175c216eb652da5a79ab0454b4cc5e31bb7fecb0"'
+            '"sha256_hex": "42c7b1b0e2dc838a6660b3691e08474bb936fa001e446310930d387b00ba686b"'
         )
         if expected not in message:
             raise SystemExit(
@@ -8796,8 +9051,8 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-redeem":
     target = "crates/iroha_torii/src/offline_v2_issuer.rs"
     source = read(target)
     mutated = source.replace(
-        "if has_kagemusha_redeem_payload(&parsed.value) {",
-        "if false {",
+        "let redeem_request = parse_strict_kagemusha_v2_archive::<KagemushaRecursiveSpendRedeemRequestV2>(",
+        "let redeem_request = parse_rejected_kagemusha_v2_archive::<KagemushaRecursiveSpendRedeemRequestV2>(",
         1,
     )
     if mutated == source:
@@ -8809,7 +9064,7 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-redeem":
         message = str(error)
         expected = (
             f"{target} is missing Torii offline-v2 Kagemusha redeem ingress coverage: "
-            "if has_kagemusha_redeem_payload(&parsed.value) {"
+            "let redeem_request = parse_strict_kagemusha_v2_archive::<KagemushaRecursiveSpendRedeemRequestV2>("
         )
         if expected not in message:
             raise SystemExit(
@@ -8821,24 +9076,81 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-redeem":
         raise SystemExit(0)
     raise SystemExit("negative control failed: Torii offline-v2 Kagemusha redeem ingress drift was not detected")
 
+if mode == "--negative-control-torii-offline-v2-kagemusha-route":
+    target = "crates/iroha_torii/src/offline_v2_issuer.rs"
+    source = read(target)
+    cases = (
+        (
+            'const ENDPOINT_NOTES_REDEEM: &str = "v1/offline/v2/notes/redeem";',
+            'const ENDPOINT_NOTES_REDEEM: &str = "v1/offline/v2/kagemusha/redeem";',
+        ),
+        (
+            'const PATH_NOTES_REDEEM: &str = "/v1/offline/v2/notes/redeem";',
+            'const PATH_NOTES_REDEEM: &str = "/v1/offline/v2/kagemusha/redeem";',
+        ),
+    )
+    detected_messages = []
+    for before, after in cases:
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
+            raise SystemExit(
+                "negative control failed: unable to mutate Torii offline-v2 Kagemusha route/telemetry marker: "
+                + before
+            )
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            expected_coverage = (
+                f"{target} is missing Torii offline-v2 Kagemusha redeem ingress coverage: "
+                + before
+            )
+            expected_stale_route = (
+                f"{target} contains stale Kagemusha V2 redeem route/telemetry path: "
+                "/v1/offline/v2/kagemusha/redeem"
+            )
+            if expected_coverage not in message and expected_stale_route not in message:
+                raise SystemExit(
+                    "negative control failed: Torii offline-v2 Kagemusha route/telemetry drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(message.splitlines()[0])
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: Torii offline-v2 Kagemusha route/telemetry drift was not detected for "
+            + before
+        )
+    print("negative control rejected Torii offline-v2 Kagemusha route/telemetry drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
 if mode == "--negative-control-torii-offline-v2-kagemusha-exact-fields":
     target = "crates/iroha_torii/src/offline_v2_issuer.rs"
     source = read(target)
     cases = (
         (
-            "    if encoded != encoded.trim() {\n",
-            "    if false {\n",
-            "if encoded != encoded.trim() {",
+            "    if object.len() != 1 || !object.contains_key(field) {\n",
+            "    if !object.contains_key(field) {\n",
+            "if object.len() != 1 || !object.contains_key(field) {",
         ),
         (
-            "    if raw.trim().is_empty() || raw != raw.trim() {\n",
-            "    if false {\n",
-            "raw.trim().is_empty() || raw != raw.trim()",
+            "    if encoded.is_empty() || encoded.trim() != encoded {\n",
+            "    if encoded.is_empty() {\n",
+            "if encoded.is_empty() || encoded.trim() != encoded {",
         ),
         (
-            "    if parsed.to_string() != raw {\n",
+            "    if BASE64_STANDARD.encode(&bytes) != encoded {\n",
             "    if false {\n",
-            "if parsed.to_string() != raw {",
+            "if BASE64_STANDARD.encode(&bytes) != encoded {",
+        ),
+        (
+            "    if canonical != bytes {\n",
+            "    if false {\n",
+            "if canonical != bytes {",
         ),
     )
     first_message = None
@@ -8883,19 +9195,24 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-archive-field-shape":
     source = read(target)
     cases = (
         (
-            "Offline Kagemusha redeem_request_norito_base64 must be a canonical base64 string.",
-            "Offline Kagemusha recursive redemption requires redeem_request_norito_base64.",
-            "must be a canonical base64 string",
+            "Kagemusha V2 request body must contain exactly `{{{field}}}`.",
+            "Kagemusha V2 request body may contain additional fields around `{{{field}}}`.",
+            "must contain exactly `{{{field}}}`",
         ),
         (
-            "Offline Kagemusha redeem_request_norito_base64 must not contain surrounding whitespace.",
-            "Offline Kagemusha redeem_request_norito_base64 may contain surrounding whitespace.",
-            "must not contain surrounding whitespace",
+            "Kagemusha V2 `{field}` must be non-empty with no surrounding whitespace.",
+            "Kagemusha V2 `{field}` may contain surrounding whitespace.",
+            "must be non-empty with no surrounding whitespace",
         ),
         (
-            "Offline Kagemusha redeem amount must use canonical Numeric text.",
-            "Offline Kagemusha redeem amount may use noncanonical Numeric text.",
-            "must use canonical Numeric text",
+            "Kagemusha V2 `{field}` is not canonical standard base64.",
+            "Kagemusha V2 `{field}` is not decodable base64.",
+            "is not canonical standard base64",
+        ),
+        (
+            "Kagemusha V2 `{field}` does not round-trip to identical canonical Norito.",
+            "Kagemusha V2 `{field}` failed a permissive Norito round-trip.",
+            "does not round-trip to identical canonical Norito",
         ),
     )
     first_message = None
@@ -8915,6 +9232,11 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-archive-field-shape":
                 f"{target} is missing Torii offline-v2 Kagemusha redeem ingress coverage: "
                 + expected_marker
             )
+            expected_count = (
+                f"{target} must retain both Kagemusha V2 canonical-base64 rejection diagnostics"
+            )
+            if expected_count in message:
+                expected = expected_count
             if expected not in message:
                 raise SystemExit(
                     "negative control failed: Torii offline-v2 Kagemusha archive-field shape drift was rejected for the wrong reason: "
@@ -8936,55 +9258,40 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-archive-field-shape":
     raise SystemExit(0)
 
 if mode == "--negative-control-torii-offline-v2-kagemusha-retired-fields":
-    target = "crates/iroha_torii/src/offline_v2_issuer.rs"
-    source = read(target)
-    retired_field_block = (
-        "fn reject_kagemusha_retired_redeem_fields(value: &Value) -> Result<(), Error> {\n"
-        "    for field in [\n"
-        '        "redemption",\n'
-        '        "input_nullifiers",\n'
-        '        "sender_key_certificate",\n'
-        '        "recursive_proof",\n'
-    )
     cases = (
         (
-            "reject_kagemusha_retired_redeem_fields",
-            "allow_kagemusha_retired_redeem_fields",
-            "reject_kagemusha_retired_redeem_fields",
-            True,
+            "crates/iroha_torii/src/openapi.rs",
+            "Unknown, compact-projection, and retired Offline Note fields are rejected.",
+            "Unknown and compact-projection fields are rejected.",
+            "Unknown, compact-projection, and retired Offline Note fields are rejected.",
         ),
         (
-            "    reject_kagemusha_retired_redeem_fields(&request.value)?;\n",
-            "",
-            "reject_kagemusha_retired_redeem_fields(&request.value)?;",
-            False,
+            "docs/portal/static/openapi/torii.json",
+            "Unknown, compact-projection, and retired Offline Note fields are rejected.",
+            "Unknown and compact-projection fields are rejected.",
+            "Unknown, compact-projection, and retired Offline Note fields are rejected.",
         ),
         (
-            "retired Offline Note V2 field",
-            "retired Offline Note V2 payload",
-            "retired Offline Note V2 field",
-            False,
+            "docs/portal/static/openapi/versions/current/torii.json",
+            "Unknown, compact-projection, and retired Offline Note fields are rejected.",
+            "Unknown and compact-projection fields are rejected.",
+            "Unknown, compact-projection, and retired Offline Note fields are rejected.",
         ),
         (
-            "OFFLINE_KAGEMUSHA_REDEEM_RETIRED_FIELD",
-            "OFFLINE_KAGEMUSHA_REDEEM_RETIRED_ACCEPTED",
-            "OFFLINE_KAGEMUSHA_REDEEM_RETIRED_FIELD",
-            True,
+            "docs/source/offline_kagemusha.md",
+            "Retired Offline Note, compact-token, projection-verifier, echo, and unknown fields",
+            "Compact-token, projection-verifier, echo, and unknown fields",
+            "Retired Offline Note, compact-token, projection-verifier, echo, and unknown fields",
         ),
-        (
-            retired_field_block,
-            retired_field_block.replace('        "input_nullifiers",\n', ""),
-            retired_field_block,
-            False,
-        )
     )
     first_message = None
-    for before, after, expected_marker, replace_all in cases:
-        mutated = source.replace(before, after) if replace_all else source.replace(before, after, 1)
+    for target, before, after, expected_marker in cases:
+        source = read(target)
+        mutated = source.replace(before, after, 1)
         if mutated == source:
             raise SystemExit(
-                "negative control failed: unable to mutate Torii offline-v2 Kagemusha retired-field rejection: "
-                + before
+                "negative control failed: unable to mutate Torii offline-v2 Kagemusha V2 retired-field contract: "
+                + target
             )
         text_overrides[target] = mutated
         try:
@@ -9007,7 +9314,7 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-retired-fields":
             text_overrides.pop(target, None)
         raise SystemExit(
             "negative control failed: Torii offline-v2 Kagemusha retired-field drift was not detected for "
-            + before
+            + target
         )
     if first_message is None:
         raise SystemExit("negative control failed: Torii offline-v2 Kagemusha retired-field drift was not detected")
@@ -9135,53 +9442,59 @@ if mode == "--negative-control-torii-offline-v2-retired-redeem-aliases":
     raise SystemExit(0)
 
 if mode == "--negative-control-torii-offline-v2-kagemusha-auxiliary-fields":
-    target = "crates/iroha_torii/src/offline_v2_issuer.rs"
-    source = read(target)
     cases = (
         (
-            "reject_kagemusha_auxiliary_redeem_fields",
-            "allow_kagemusha_auxiliary_redeem_fields",
-            "reject_kagemusha_auxiliary_redeem_fields",
-            True,
+            "crates/iroha_torii/src/offline_v2_issuer.rs",
+            "fn parse_strict_kagemusha_v2_archive<T>(",
+            "    if object.len() != 1 || !object.contains_key(field) {\n",
+            "    if !object.contains_key(field) {\n",
+            "if object.len() != 1 || !object.contains_key(field) {",
         ),
         (
-            "    reject_kagemusha_auxiliary_redeem_fields(&request.value)?;\n",
-            "",
-            "reject_kagemusha_auxiliary_redeem_fields(&request.value)?;",
-            False,
+            "crates/iroha_torii/src/openapi.rs",
+            '"KagemushaRedeemRequestV2Body".to_owned()',
+            '"additionalProperties": false',
+            '"additionalProperties": true',
+            "Kagemusha V2 redeem schema must set additionalProperties=false",
         ),
         (
-            "ignored auxiliary field",
-            "accepted auxiliary field",
-            "ignored auxiliary field",
-            False,
+            "docs/portal/static/openapi/torii.json",
+            '"KagemushaRedeemRequestV2Body"',
+            '"additionalProperties": false',
+            '"additionalProperties": true',
+            "Kagemusha V2 redeem schema must set additionalProperties=false",
         ),
         (
-            "OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_FIELD",
-            "OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_ACCEPTED",
-            "OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_FIELD",
-            True,
+            "docs/portal/static/openapi/versions/current/torii.json",
+            '"KagemushaRedeemRequestV2Body"',
+            '"additionalProperties": false',
+            '"additionalProperties": true',
+            "Kagemusha V2 redeem schema must set additionalProperties=false",
         ),
         (
-            "let auxiliary_field_values =",
-            "let unchecked_auxiliary_field_values =",
-            "let auxiliary_field_values =",
-            False,
-        ),
-        (
-            "Value::Null, Value::Array(Vec::new())",
-            "Value::Array(Vec::new())",
-            "Value::Null, Value::Array(Vec::new())",
-            False,
+            "docs/source/offline_kagemusha.md",
+            "Torii offline-v2 redeem ingress mounts",
+            "exactly one non-empty `redeem_request_norito_base64` string and no other fields",
+            "at least one non-empty `redeem_request_norito_base64` string",
+            "exactly one non-empty `redeem_request_norito_base64` string and no other fields",
         ),
     )
     first_message = None
-    for before, after, expected_marker, replace_all in cases:
-        mutated = source.replace(before, after) if replace_all else source.replace(before, after, 1)
+    for target, anchor, before, after, expected_marker in cases:
+        source = read(target)
+        anchor_index = source.find(anchor)
+        if anchor_index < 0:
+            raise SystemExit(
+                "negative control failed: unable to locate Torii offline-v2 Kagemusha V2 auxiliary-field anchor: "
+                + target
+            )
+        suffix = source[anchor_index:]
+        mutated_suffix = suffix.replace(before, after, 1)
+        mutated = source[:anchor_index] + mutated_suffix
         if mutated == source:
             raise SystemExit(
-                "negative control failed: unable to mutate Torii offline-v2 Kagemusha auxiliary-field rejection: "
-                + before
+                "negative control failed: unable to mutate Torii offline-v2 Kagemusha V2 auxiliary-field rejection: "
+                + target
             )
         text_overrides[target] = mutated
         try:
@@ -9189,7 +9502,9 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-auxiliary-fields":
         except PolicyError as error:
             message = str(error)
             expected = (
-                f"{target} is missing Torii offline-v2 Kagemusha redeem ingress coverage: "
+                f"{target} {expected_marker}"
+                if expected_marker.startswith("Kagemusha V2 redeem schema")
+                else f"{target} is missing Torii offline-v2 Kagemusha redeem ingress coverage: "
                 + expected_marker
             )
             if expected not in message:
@@ -9204,7 +9519,7 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-auxiliary-fields":
             text_overrides.pop(target, None)
         raise SystemExit(
             "negative control failed: Torii offline-v2 Kagemusha auxiliary-field drift was not detected for "
-            + before
+            + target
         )
     if first_message is None:
         raise SystemExit("negative control failed: Torii offline-v2 Kagemusha auxiliary-field drift was not detected")
@@ -9216,114 +9531,119 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-openapi":
     cases = (
         (
             "crates/iroha_torii/src/openapi.rs",
-            "Classic Offline V2 note issuance is retired and this retired route fails closed.",
-            "Classic Offline V2 note issuance is retired and this compatibility route fails closed.",
-            "compatibility route fails closed",
+            '"/v1/offline/v2/notes/redeem",',
+            "Submit exactly one canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV2 archive",
+            "Submit a permissive recursive redemption archive",
+            "Submit exactly one canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV2 archive in redeem_request_norito_base64.",
+            "coverage",
         ),
         (
             "crates/iroha_torii/src/openapi.rs",
-            "Classic Offline V2 audit is retired and this retired route fails closed.",
-            "Classic Offline V2 audit is retired and this compatibility route fails closed.",
-            "compatibility route fails closed",
+            '"KagemushaRedeemRequestV2Body".to_owned()',
+            '"additionalProperties": false',
+            '"additionalProperties": true',
+            "Kagemusha V2 redeem schema must set additionalProperties=false",
+            "direct",
         ),
         (
             "crates/iroha_torii/src/openapi.rs",
-            "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
-            "Legacy X-Iroha-* app-auth headers are rejected on this endpoint",
-            "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
+            '"/v1/offline/v2/notes/redeem",',
+            "Reserved lineage data without a lineage witness",
+            "Reserved or verified semantic lineage data",
+            "contains stale pre-V2 Kagemusha OpenAPI contract: Reserved or verified semantic lineage",
+            "direct",
         ),
         (
             "crates/iroha_torii/src/openapi.rs",
-            "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64",
-            "Kagemusha recursive redemption uses an archive field",
-            "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64",
+            '"#/components/schemas/KagemushaV2TerminalFinalityResponse"',
+            '"#/components/schemas/KagemushaV2TerminalFinalityResponse"',
+            '"#/components/schemas/JsonValue"',
+            "Kagemusha V2 routes must return KagemushaV2TerminalFinalityResponse",
+            "direct",
         ),
         (
             "crates/iroha_torii/src/openapi.rs",
-            "Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive",
-            "Production Kagemusha redemption accepts a recursive archive",
-            "Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive",
+            "fn generated_spec_includes_documented_paths() {",
+            'assert!(redeem_description.contains("KagemushaRecursiveSpendRedeemRequestV2"));',
+            'assert!(redeem_description.contains("KagemushaRecursiveSpendRedeemRequestV1"));',
+            "contains stale pre-V2 Kagemusha OpenAPI contract: KagemushaRecursiveSpendRedeemRequestV1",
+            "direct",
         ),
-        (
-            "crates/iroha_torii/src/openapi.rs",
-            "compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are rejected as ignored auxiliary fields",
-            "compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are accepted as optional auxiliary fields",
-            "compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are rejected as ignored auxiliary fields",
-        ),
-        (
-            "crates/iroha_torii/src/openapi.rs",
-            'assert!(redeem_description.contains("source_note_commitment"));',
-            'assert!(redeem_description.contains("amount"));',
-            'assert!(redeem_description.contains("source_note_commitment"));',
-        ),
-        (
-            "docs/portal/static/openapi/torii.json",
-            "Classic Offline V2 note issuance is retired and this retired route fails closed.",
-            "Classic Offline V2 note issuance is retired and this compatibility route fails closed.",
-            "compatibility route fails closed",
-        ),
-        (
-            "docs/portal/static/openapi/torii.json",
-            "Classic Offline V2 audit is retired and this retired route fails closed.",
-            "Classic Offline V2 audit is retired and this compatibility route fails closed.",
-            "compatibility route fails closed",
-        ),
-        (
-            "docs/portal/static/openapi/torii.json",
-            "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
-            "Legacy X-Iroha-* app-auth headers are rejected on this endpoint",
-            "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
-        ),
-        (
-            "docs/portal/static/openapi/torii.json",
-            "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64",
-            "Kagemusha recursive redemption uses an archive field",
-            "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64",
-        ),
-        (
-            "docs/portal/static/openapi/torii.json",
-            "Optional amount and source_note_commitment echo fields",
-            "Optional amount echo fields",
-            "Optional amount and source_note_commitment echo fields",
-        ),
-        (
-            "docs/portal/static/openapi/versions/current/torii.json",
-            "Classic Offline V2 note issuance is retired and this retired route fails closed.",
-            "Classic Offline V2 note issuance is retired and this compatibility route fails closed.",
-            "compatibility route fails closed",
-        ),
-        (
-            "docs/portal/static/openapi/versions/current/torii.json",
-            "Classic Offline V2 audit is retired and this retired route fails closed.",
-            "Classic Offline V2 audit is retired and this compatibility route fails closed.",
-            "compatibility route fails closed",
-        ),
-        (
-            "docs/portal/static/openapi/versions/current/torii.json",
-            "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
-            "Legacy X-Iroha-* app-auth headers are rejected on this endpoint",
-            "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
-        ),
-        (
-            "docs/portal/static/openapi/versions/current/torii.json",
-            "Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive",
-            "Production Kagemusha redemption accepts a recursive archive",
-            "Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive",
-        ),
-        (
-            "docs/portal/static/openapi/versions/current/torii.json",
-            "compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are rejected as ignored auxiliary fields",
-            "compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are accepted as optional auxiliary fields",
-            "compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are rejected as ignored auxiliary fields",
+        *(
+            case
+            for target in (
+                "docs/portal/static/openapi/torii.json",
+                "docs/portal/static/openapi/versions/current/torii.json",
+            )
+            for case in (
+                (
+                    target,
+                    '"paths"',
+                    '"/v1/offline/v2/notes/redeem":',
+                    '"/v1/offline/v2/kagemusha/redeem":',
+                    "contains stale pre-V2 Kagemusha OpenAPI contract: /v1/offline/v2/kagemusha/redeem",
+                    "direct",
+                ),
+                (
+                    target,
+                    '"KagemushaRedeemRequestV2Body"',
+                    '"additionalProperties": false',
+                    '"additionalProperties": true',
+                    "Kagemusha V2 redeem schema must set additionalProperties=false",
+                    "direct",
+                ),
+                (
+                    target,
+                    '"/v1/offline/v2/notes/redeem"',
+                    '"$ref": "#/components/schemas/KagemushaV2TerminalFinalityResponse"',
+                    '"$ref": "#/components/schemas/JsonValue"',
+                    "/v1/offline/v2/notes/redeem must return KagemushaV2TerminalFinalityResponse",
+                    "direct",
+                ),
+                (
+                    target,
+                    '"KagemushaV2TerminalFinalityResponse"',
+                    '"pattern": "^[0-9a-f]{64}$"',
+                    '"pattern": "^[0-9A-F]{64}$"',
+                    "Kagemusha V2 finality operation_id must be lowercase 64-hex",
+                    "direct",
+                ),
+                (
+                    target,
+                    '"KagemushaV2TerminalFinalityResponse"',
+                    '"minimum": 1',
+                    '"minimum": 0',
+                    "Kagemusha V2 finality finalized_block_height must be positive",
+                    "direct",
+                ),
+                (
+                    target,
+                    '"KagemushaRedeemRequestV2Body"',
+                    '"required": [\n          "redeem_request_norito_base64"\n        ]',
+                    '"required": [\n          "redeem_request_norito_base64",\n          "amount"\n        ]',
+                    "Kagemusha V2 redeem schema must require only redeem_request_norito_base64",
+                    "direct",
+                ),
+            )
         ),
     )
-    first_message = None
-    for target, before, after, expected_marker in cases:
+    detected_messages = []
+    for target, anchor, before, after, expected_marker, diagnostic_kind in cases:
         source = read(target)
-        mutated = source.replace(before, after, 1)
+        anchor_index = source.find(anchor)
+        if anchor_index < 0:
+            raise SystemExit(
+                "negative control failed: unable to locate Torii offline-v2 Kagemusha V2 OpenAPI anchor: "
+                + target
+                + ": "
+                + anchor
+            )
+        suffix = source[anchor_index:]
+        mutated_suffix = suffix.replace(before, after, 1)
+        mutated = source[:anchor_index] + mutated_suffix
         if mutated == source:
             raise SystemExit(
-                "negative control failed: unable to mutate Torii offline-v2 Kagemusha OpenAPI contract: "
+                "negative control failed: unable to mutate Torii offline-v2 Kagemusha V2 OpenAPI contract: "
                 + target
                 + ": "
                 + before
@@ -9333,43 +9653,31 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-openapi":
             run_checks()
         except PolicyError as error:
             message = str(error)
-            if expected_marker == "Retired X-Iroha-* app-auth headers are rejected on this endpoint":
-                expected = (
-                    f"{target} contains stale Offline V2 X-Iroha header wording: "
-                    "Legacy X-Iroha-* app-auth headers"
-                )
-            elif expected_marker == "compatibility route fails closed":
-                expected = (
-                    f"{target} contains stale Offline V2 retired route wording: "
-                    "compatibility route fails closed"
-                )
-            else:
-                expected = (
-                    f"{target} is missing Torii offline-v2 Kagemusha redeem ingress coverage: "
-                    + expected_marker
-                )
+            expected = (
+                f"{target} is missing Torii offline-v2 Kagemusha redeem ingress coverage: "
+                + expected_marker
+                if diagnostic_kind == "coverage"
+                else f"{target} {expected_marker}"
+            )
             if expected not in message:
                 raise SystemExit(
-                    "negative control failed: Torii offline-v2 Kagemusha OpenAPI drift was rejected for the wrong reason: "
+                    "negative control failed: Torii offline-v2 Kagemusha V2 OpenAPI drift was rejected for the wrong reason: "
                     + message.splitlines()[0]
                 )
-            if first_message is None:
-                first_message = message
+            detected_messages.append(message.splitlines()[0])
             continue
         finally:
             text_overrides.pop(target, None)
         raise SystemExit(
-            "negative control failed: Torii offline-v2 Kagemusha OpenAPI drift was not detected for "
+            "negative control failed: Torii offline-v2 Kagemusha V2 OpenAPI drift was not detected for "
             + target
             + ": "
             + before
         )
-    if first_message is None:
-        raise SystemExit("negative control failed: Torii offline-v2 Kagemusha OpenAPI drift was not detected")
-    print("negative control rejected Torii offline-v2 Kagemusha OpenAPI drift")
-    print(first_message.splitlines()[0])
+    print("negative control rejected Torii offline-v2 Kagemusha V2 OpenAPI drift")
+    for detected_message in detected_messages:
+        print(detected_message)
     raise SystemExit(0)
-
 if mode == "--negative-control-torii-offline-v2-kagemusha-smoke":
     target = "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs"
     source = read(target)
@@ -9380,67 +9688,82 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-smoke":
             "offline_v2_notes_redeem_accepts_kagemusha_recursive_redeem_request",
         ),
         (
-            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("redeem_request_norito_base64"));',
-            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("redeem_request_archive"));',
-            "redeem_request_norito_base64",
+            '!OFFLINE_V2_ISSUER_SOURCE.contains("/v1/offline/v2/kagemusha/redeem")',
+            'OFFLINE_V2_ISSUER_SOURCE.contains("/v1/offline/v2/kagemusha/redeem")',
+            '!OFFLINE_V2_ISSUER_SOURCE.contains("/v1/offline/v2/kagemusha/redeem")',
         ),
         (
-            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("required_kagemusha_redeem_archive_string"));',
-            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("parse_kagemusha_redeem_archive_string"));',
-            "required_kagemusha_redeem_archive_string",
+            "parse_strict_kagemusha_v2_archive::<KagemushaRecursiveSpendRedeemRequestV2>(",
+            "parse_permissive_kagemusha_v2_archive::<KagemushaRecursiveSpendRedeemRequestV2>(",
+            "parse_strict_kagemusha_v2_archive::<KagemushaRecursiveSpendRedeemRequestV2>(",
         ),
         (
-            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("optional_kagemusha_echo_string"));',
-            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("optional_kagemusha_echo_value"));',
-            "optional_kagemusha_echo_string",
+            "validate_kagemusha_v2_redeem_snapshot(&app, &redeem_request)?;",
+            "accept_unchecked_kagemusha_v2_redeem_snapshot(&app, &redeem_request)?;",
+            "validate_kagemusha_v2_redeem_snapshot",
         ),
         (
-            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("parse_kagemusha_amount_echo"));',
-            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("parse_kagemusha_amount_value"));',
-            "parse_kagemusha_amount_echo",
+            "RedeemKagemushaRecursiveV2::new(redeem_request)",
+            "RedeemKagemushaRecursive::new(redeem_request)",
+            "RedeemKagemushaRecursiveV2::new(redeem_request)",
         ),
         (
-            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("reject_kagemusha_retired_redeem_fields"));',
-            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("allow_kagemusha_retired_redeem_fields"));',
-            "reject_kagemusha_retired_redeem_fields",
+            "offline_v2_notes_redeem_rejects_noncanonical_or_ambiguous_v2_envelopes",
+            "offline_v2_notes_redeem_accepts_noncanonical_or_ambiguous_v2_envelopes",
+            "offline_v2_notes_redeem_rejects_noncanonical_or_ambiguous_v2_envelopes",
         ),
         (
-            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("reject_kagemusha_auxiliary_redeem_fields"));',
-            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("allow_kagemusha_auxiliary_redeem_fields"));',
-            "reject_kagemusha_auxiliary_redeem_fields",
+            "offline_v2_notes_redeem_uses_direct_receipts_and_preserves_finality_integrity",
+            "offline_v2_notes_redeem_scans_history_and_accepts_incomplete_finality",
+            "offline_v2_notes_redeem_uses_direct_receipts_and_preserves_finality_integrity",
         ),
         (
-            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_KAGEMUSHA_REDEEM_CHAIN_MISMATCH"));',
-            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_KAGEMUSHA_REDEEM_CHAIN_ACCEPTED"));',
-            "OFFLINE_KAGEMUSHA_REDEEM_CHAIN_MISMATCH",
+            "optional_finalized_kagemusha_v2_anchor",
+            "scan_finalized_kagemusha_v2_anchor",
+            "optional_finalized_kagemusha_v2_anchor",
         ),
         (
-            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_KAGEMUSHA_REDEEM_RETIRED_FIELD"));',
-            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_KAGEMUSHA_REDEEM_RETIRED_ACCEPTED"));',
-            "OFFLINE_KAGEMUSHA_REDEEM_RETIRED_FIELD",
+            "load_kagemusha_v2_redeem_operation_receipt",
+            "scan_kagemusha_v2_redeem_operation_history",
+            "load_kagemusha_v2_redeem_operation_receipt",
         ),
         (
-            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_FIELD"));',
-            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_ACCEPTED"));',
-            "OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_FIELD",
+            "pipeline_status_terminal_or_state_entry",
+            "pipeline_status_from_state",
+            "pipeline_status_terminal_or_state_entry",
         ),
         (
-            "offline_v2_notes_redeem_rejects_kagemusha_optional_echo_field_shapes",
-            "offline_v2_notes_redeem_accepts_kagemusha_optional_echo_field_shapes",
-            "offline_v2_notes_redeem_rejects_kagemusha_optional_echo_field_shapes",
+            "OFFLINE_KAGEMUSHA_FINALITY_INCOMPLETE",
+            "OFFLINE_KAGEMUSHA_FINALITY_ACCEPTED",
+            "OFFLINE_KAGEMUSHA_FINALITY_INCOMPLETE",
         ),
         (
-            "offline_v2_notes_redeem_rejects_compact_token_without_recursive_redeem_request",
-            "offline_v2_notes_redeem_accepts_compact_token_without_recursive_redeem_request",
-            "offline_v2_notes_redeem_rejects_compact_token_without_recursive_redeem_request",
+            "refreshed_kagemusha_v2_authorization_keeps_direct_anchor_lookup_key",
+            "refreshed_kagemusha_v2_authorization_changes_anchor_lookup_key",
+            "refreshed_kagemusha_v2_authorization_keeps_direct_anchor_lookup_key",
+        ),
+        (
+            "if object.len() != 1 || !object.contains_key(field)",
+            "if !object.contains_key(field)",
+            "if object.len() != 1 || !object.contains_key(field)",
+        ),
+        (
+            "BASE64_STANDARD.encode(&bytes) != encoded",
+            "BASE64_STANDARD.encode(&bytes) == encoded",
+            "BASE64_STANDARD.encode(&bytes) != encoded",
+        ),
+        (
+            "if canonical != bytes",
+            "if canonical == bytes",
+            "if canonical != bytes",
         ),
     )
-    first_message = None
+    detected_messages = []
     for before, after, expected_marker in cases:
         mutated = source.replace(before, after, 1)
         if mutated == source:
             raise SystemExit(
-                "negative control failed: unable to mutate Torii offline-v2 Kagemusha redeem smoke coverage: "
+                "negative control failed: unable to mutate Torii offline-v2 Kagemusha V2 redeem smoke coverage: "
                 + before
             )
         text_overrides[target] = mutated
@@ -9452,26 +9775,28 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-smoke":
                 f"{target} is missing Torii offline-v2 Kagemusha redeem ingress coverage: "
                 + expected_marker
             )
+            expected_count = (
+                f"{target} must retain both direct Kagemusha V2 receipt-loader assertions"
+            )
+            if expected_count in message:
+                expected = expected_count
             if expected not in message:
                 raise SystemExit(
-                    "negative control failed: Torii offline-v2 Kagemusha redeem smoke drift was rejected for the wrong reason: "
+                    "negative control failed: Torii offline-v2 Kagemusha V2 redeem smoke drift was rejected for the wrong reason: "
                     + message.splitlines()[0]
                 )
-            if first_message is None:
-                first_message = message
+            detected_messages.append(message.splitlines()[0])
             continue
         finally:
             text_overrides.pop(target, None)
         raise SystemExit(
-            "negative control failed: Torii offline-v2 Kagemusha redeem smoke drift was not detected for "
+            "negative control failed: Torii offline-v2 Kagemusha V2 redeem smoke drift was not detected for "
             + before
         )
-    if first_message is None:
-        raise SystemExit("negative control failed: Torii offline-v2 Kagemusha redeem smoke drift was not detected")
-    print("negative control rejected Torii offline-v2 Kagemusha redeem smoke drift")
-    print(first_message.splitlines()[0])
+    print("negative control rejected Torii offline-v2 Kagemusha V2 redeem smoke drift")
+    for detected_message in detected_messages:
+        print(detected_message)
     raise SystemExit(0)
-
 if mode == "--negative-control-active-kagemusha-todo":
     todo_prefix = "TO" "DO:"
     cases = (

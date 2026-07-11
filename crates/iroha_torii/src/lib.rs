@@ -6421,14 +6421,14 @@ fn offline_kagemusha_readiness_verifier_entry(
     Ok(Some(json_object([
         json_entry("role", role),
         json_entry("purpose", purpose),
-        (
+        json_entry(
             "id",
             json_object([
                 json_entry("backend", id.backend.clone()),
                 json_entry("name", id.name.clone()),
             ]),
         ),
-        json_entry("circuit_id", record.circuit_id),
+        json_entry("circuit_id", record.circuit_id.clone()),
         json_entry(
             "record_norito_base64",
             BASE64_STANDARD.encode(record_archive),
@@ -6522,7 +6522,7 @@ async fn handler_offline_v2_note_readiness(
         json_entry("available", available),
         json_entry("required_bridge_abi", 17_u64),
         json_entry("artifact_set", "kagemusha_recursive_spend_v2"),
-        ("artifact_generation", norito::json::Value::Null),
+        json_entry("artifact_generation", norito::json::Value::Null),
         json_entry("artifacts_ready", artifacts_ready),
         json_entry("supports_multi_input", supports_multi_input),
         json_entry("v2_proof_backend_available", proof_backend_available),
@@ -6536,7 +6536,7 @@ async fn handler_offline_v2_note_readiness(
             "max_hops",
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2,
         ),
-        (
+        json_entry(
             "verifiers",
             json_object([
                 json_entry("transfer", transfer),
@@ -6545,10 +6545,10 @@ async fn handler_offline_v2_note_readiness(
                 json_entry("lineage_append", lineage_append),
             ]),
         ),
-        (
+        json_entry(
             "artifacts",
             json_object([
-                (
+                json_entry(
                     "transfer_prover",
                     json_object([
                         json_entry(
@@ -6566,12 +6566,12 @@ async fn handler_offline_v2_note_readiness(
                         ),
                         json_entry("artifact_type", "halo2_ipa_proving_key"),
                         json_entry("size_bytes", 0_u64),
-                        ("sha256_hex", norito::json::Value::Null),
-                        ("url", norito::json::Value::Null),
+                        json_entry("sha256_hex", norito::json::Value::Null),
+                        json_entry("url", norito::json::Value::Null),
                         json_entry("ready", false),
                     ]),
                 ),
-                (
+                json_entry(
                     "unshield_prover",
                     json_object([
                         json_entry(
@@ -6589,12 +6589,12 @@ async fn handler_offline_v2_note_readiness(
                         ),
                         json_entry("artifact_type", "halo2_ipa_proving_key"),
                         json_entry("size_bytes", 0_u64),
-                        ("sha256_hex", norito::json::Value::Null),
-                        ("url", norito::json::Value::Null),
+                        json_entry("sha256_hex", norito::json::Value::Null),
+                        json_entry("url", norito::json::Value::Null),
                         json_entry("ready", false),
                     ]),
                 ),
-                (
+                json_entry(
                     "lineage_init_prover",
                     json_object([
                         json_entry(
@@ -6615,12 +6615,12 @@ async fn handler_offline_v2_note_readiness(
                             "KagemushaRecursiveSpendLineageKeyArtifactsV2",
                         ),
                         json_entry("size_bytes", 0_u64),
-                        ("sha256_hex", norito::json::Value::Null),
-                        ("url", norito::json::Value::Null),
+                        json_entry("sha256_hex", norito::json::Value::Null),
+                        json_entry("url", norito::json::Value::Null),
                         json_entry("ready", false),
                     ]),
                 ),
-                (
+                json_entry(
                     "lineage_append_prover",
                     json_object([
                         json_entry(
@@ -6641,8 +6641,8 @@ async fn handler_offline_v2_note_readiness(
                             "KagemushaRecursiveSpendLineageKeyArtifactsV2",
                         ),
                         json_entry("size_bytes", 0_u64),
-                        ("sha256_hex", norito::json::Value::Null),
-                        ("url", norito::json::Value::Null),
+                        json_entry("sha256_hex", norito::json::Value::Null),
+                        json_entry("url", norito::json::Value::Null),
                         json_entry("ready", false),
                     ]),
                 ),

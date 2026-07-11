@@ -125,8 +125,7 @@ const I_UNSHIELD_PUBLIC_INPUTS_DIGEST: usize = I_REDEMPTION_RECIPIENT_DIGEST + 4
 const I_UNSHIELD_PUBLIC_AMOUNT: usize = I_UNSHIELD_PUBLIC_INPUTS_DIGEST + 4;
 
 /// Number of rows in the V2 transition public-instance column.
-pub const KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS: usize =
-    I_UNSHIELD_PUBLIC_AMOUNT + 1;
+pub const KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS: usize = I_UNSHIELD_PUBLIC_AMOUNT + 1;
 
 const PATH_SELECTOR_COUNT: usize = 64;
 
@@ -208,7 +207,7 @@ impl KagemushaRecursiveSpendTransitionValuesV2 {
 }
 
 /// Constraint-system columns for the V2 transition relation.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct KagemushaRecursiveSpendTransitionConfigV2 {
     public_advice: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
     public_instance: halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>,
@@ -318,9 +317,8 @@ impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
             constraints.push(enabled.clone() * branch.clone() * (one.clone() - has_change.clone()));
             constraints.push(enabled.clone() * append.clone() * redemption.clone());
             constraints.push(enabled.clone() * redemption.clone() * (one.clone() - branch.clone()));
-            constraints.push(
-                enabled.clone() * redemption.clone() * (one.clone() - has_change.clone()),
-            );
+            constraints
+                .push(enabled.clone() * redemption.clone() * (one.clone() - has_change.clone()));
             constraints.push(enabled.clone() * redemption.clone() * record_swap.clone());
             constraints.push(enabled.clone() * redemption.clone() * transfer_swap.clone());
             constraints.push(
@@ -487,12 +485,8 @@ impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
                 enabled.clone()
                     * append.clone()
                     * (p(I_TRANSFER_OUTPUT_COUNT) - one.clone() - has_change.clone()),
-                enabled.clone()
-                    * redemption.clone()
-                    * (p(I_RECORD_OUTPUT_COUNT) - one.clone()),
-                enabled.clone()
-                    * redemption.clone()
-                    * (p(I_TRANSFER_OUTPUT_COUNT) - one.clone()),
+                enabled.clone() * redemption.clone() * (p(I_RECORD_OUTPUT_COUNT) - one.clone()),
+                enabled.clone() * redemption.clone() * (p(I_TRANSFER_OUTPUT_COUNT) - one.clone()),
                 enabled.clone()
                     * redemption.clone()
                     * (p(I_RECORD_OUTPUT_0) - p(I_CHANGE_COMMITMENT)),
@@ -1235,8 +1229,7 @@ pub fn kagemusha_recursive_spend_redeem_change_transition_values_v2(
     let unshield =
         KagemushaConfidentialUnshieldPublicInputsV3::from_proof(&step.attachment.proof.bytes)?;
     let binding = redemption.unshield_public_inputs;
-    if unshield.input_commitments
-        != [binding.input_commitment_0, binding.input_commitment_1]
+    if unshield.input_commitments != [binding.input_commitment_0, binding.input_commitment_1]
         || unshield.nullifiers != [binding.nullifier_0, binding.nullifier_1]
         || unshield.change_commitment != binding.change_output_commitment
         || unshield.root != binding.root
@@ -1272,11 +1265,7 @@ pub fn kagemusha_recursive_spend_redeem_change_transition_values_v2(
         &redemption.parent_branch_path.lineage_root,
     );
     write_limb_group(&mut values.public, I_SPLIT_DIGEST, &binding_digest);
-    write_limb_group(
-        &mut values.public,
-        I_OPERATION_ID,
-        &redemption.operation_id,
-    );
+    write_limb_group(&mut values.public, I_OPERATION_ID, &redemption.operation_id);
     write_limb_group(
         &mut values.public,
         I_PARENT_BUNDLE_DIGEST,
@@ -1607,9 +1596,7 @@ impl<const LEN: usize> Circuit<Scalar> for KagemushaRecursiveSpendAppendKeygenSh
     }
 }
 
-impl<const LEN: usize> Circuit<Scalar>
-    for KagemushaRecursiveSpendRedeemChangeKeygenShapeV2<LEN>
-{
+impl<const LEN: usize> Circuit<Scalar> for KagemushaRecursiveSpendRedeemChangeKeygenShapeV2<LEN> {
     type Config = KagemushaRecursiveSpendRedeemChangeConfigV2;
     type FloorPlanner = SimpleFloorPlanner;
     type Params = ();

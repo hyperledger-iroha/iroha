@@ -238,14 +238,18 @@ test("browser Nexus snapshots transfer descriptors before alias resolution", () 
 });
 
 test("browser Nexus snapshots Connect options, sessions, and approvals", async () => {
+  const approvedAccount = fixture.transfer_input.authority;
+  const approvedSigningPublicKey = hexBytes(
+    fixture.connect.approval_frame.signing_public_key_hex,
+  );
   const client = new NexusAppClient({
-    signingPublicKey: new Uint8Array(32),
+    signingPublicKey: approvedSigningPublicKey,
     connectTransport: {
       startConnect(options) {
         return { sid: options.sid };
       },
       awaitApproval() {
-        return { accountId: "approved-account" };
+        return { accountId: approvedAccount };
       },
     },
   });
@@ -276,7 +280,7 @@ test("browser Nexus snapshots Connect options, sessions, and approvals", async (
       },
     ),
   );
-  assert.equal(approval.accountId, "approved-account");
+  assert.equal(approval.accountId, approvedAccount);
   assert.equal(sessionGets, 0);
 
   let optionAccessorGets = 0;
@@ -457,6 +461,27 @@ test("browser Nexus Torii polling fails closed on rejection and status-set overl
     }),
     /cannot be both success and failure/u,
   );
+});
+
+test("browser Nexus counts duplicate raw statuses before any fetch", async () => {
+  let fetchCalls = 0;
+  const client = new NexusAppClient({
+    toriiBaseUrl: "https://torii.example",
+    async fetchImpl() {
+      fetchCalls += 1;
+      return mockResponse(200, JSON.stringify({ status: "Committed" }));
+    },
+  });
+  for (const options of [
+    { successStatuses: new Array(33).fill("Committed") },
+    { failureStatuses: new Array(33).fill("Rejected") },
+  ]) {
+    await assert.rejects(
+      client.toriiClient.waitForTransactionStatus(HASH_HEX, options),
+      /must not contain more than 32 statuses/u,
+    );
+    assert.equal(fetchCalls, 0, "invalid raw status iterables must not fetch");
+  }
 });
 
 test("browser Nexus Torii status polling propagates an already-aborted signal", async () => {

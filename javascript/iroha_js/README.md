@@ -1420,6 +1420,9 @@ const request = await buildCanonicalJsonRequest({
 const response = await fetch(`${toriiBaseUrl}/v1/aliases/resolve`, request);
 ```
 
+The `canonical-request` subpath ships standalone DOM declarations, so browser
+TypeScript consumers do not need ambient Node types.
+
 > **Recipe:** run `node javascript/iroha_js/recipes/iso_alias.mjs` to exercise
 > the VOPRF and lookup endpoints from the CLI. The script accepts
 > `ISO_VOPRF_INPUT`, `ISO_ALIAS_LABEL`, and `ISO_ALIAS_INDEX` so ISO bridge gate

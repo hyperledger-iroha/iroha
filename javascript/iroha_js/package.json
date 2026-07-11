@@ -54,8 +54,9 @@
       "types": "./index.d.ts"
     },
     "./canonical-request": {
+      "browser": "./dist/canonicalRequest.js",
       "import": "./dist/canonicalRequest.js",
-      "types": "./index.d.ts"
+      "types": "./canonical-request.d.ts"
     },
     "./sccp": {
       "import": "./dist/sccp.js",
@@ -118,7 +119,7 @@
         "./index.d.ts"
       ],
       "canonical-request": [
-        "./index.d.ts"
+        "./canonical-request.d.ts"
       ],
       "sccp": [
         "./index.d.ts"
@@ -182,6 +183,7 @@
   "files": [
     "README.md",
     "index.d.ts",
+    "canonical-request.d.ts",
     "transaction-codec.d.ts",
     "connect.browser.d.ts",
     "nexus-app.d.ts",
@@ -195,6 +197,7 @@
   ],
   "browser": {
     "./dist/crypto.js": "./dist/crypto.browser.js",
+    "./dist/cryptoHash.js": "./dist/cryptoHash.browser.js",
     "./dist/native.js": "./dist/native.browser.js"
   },
   "publishConfig": {

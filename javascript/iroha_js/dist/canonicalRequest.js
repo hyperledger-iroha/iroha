@@ -1,5 +1,5 @@
-import { Buffer } from "node:buffer";
-import { createHash, randomBytes } from "node:crypto";
+import { Buffer } from "buffer";
+import { createHash, randomBytes } from "./cryptoHash.js";
 import { signEd25519 } from "./crypto.js";
 
 const DEFAULT_JSON_HEADERS = Object.freeze({

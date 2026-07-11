@@ -28,6 +28,8 @@ use iroha_crypto::sm::{Sm2PublicKey, SmIntrinsicPolicy};
 use iroha_crypto::{
     Algorithm, Hash, HashOf, MerkleTree as CanonMerkleTree, PublicKey, blake2::Blake2b512,
 };
+#[cfg(test)]
+use iroha_data_model::events::pipeline::MergeLedgerEvent;
 use iroha_data_model::{
     IntoKeyValue,
     account::{
@@ -66,7 +68,7 @@ use iroha_data_model::{
             governance as governance_events, prelude as data_pre,
             space_directory::{SpaceDirectoryEvent, SpaceDirectoryManifestExpired},
         },
-        pipeline::{BlockEvent, MergeLedgerEvent, PipelineEventBox},
+        pipeline::{BlockEvent, PipelineEventBox},
         time::TimeEvent,
         trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
     },

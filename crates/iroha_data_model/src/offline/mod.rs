@@ -245,8 +245,7 @@ pub const KAGEMUSHA_TOPUP_PAYLOAD_DIGEST_DOMAIN_V2: &str = "iroha:kagemusha:v2:t
 /// Domain separator for unsigned V2 redemption payload digests.
 pub const KAGEMUSHA_REDEEM_PAYLOAD_DIGEST_DOMAIN_V2: &str = "iroha:kagemusha:v2:redeem-payload";
 /// Domain separator for finalized chain top-up anchor receipts.
-pub const KAGEMUSHA_TOPUP_ANCHOR_DIGEST_DOMAIN_V2: &str =
-    "iroha:kagemusha:v2:topup-anchor";
+pub const KAGEMUSHA_TOPUP_ANCHOR_DIGEST_DOMAIN_V2: &str = "iroha:kagemusha:v2:topup-anchor";
 /// Domain separator for a V2 redemption transition binding.
 pub const KAGEMUSHA_REDEMPTION_TRANSITION_DIGEST_DOMAIN_V2: &str =
     "iroha:kagemusha:v2:redemption-transition";
@@ -2764,7 +2763,11 @@ mod model {
         pub authority: AccountId,
         /// Registered device identifier used for policy/App-Attest lookup.
         pub device_id: String,
-        /// Stable idempotency/replay identifier.
+        /// Globally unique chain idempotency/replay identifier.
+        ///
+        /// Unlike nonces and payload digests, this identifier is not scoped by
+        /// `authority`; every Kagemusha V2 chain operation shares one replay
+        /// namespace.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
         /// Request creation time in Unix milliseconds.
@@ -2804,7 +2807,7 @@ mod model {
         pub current_note: KagemushaSpendableNoteDescriptorV2,
         /// Streamed Reserved-lineage init proving package.
         pub lineage_artifact: KagemushaRecursiveSpendArtifactReferenceV2,
-        /// Replay-stable operation identifier bound by the V2 circuit.
+        /// Globally unique replay-stable operation identifier bound by the V2 circuit.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
     }
@@ -3526,7 +3529,7 @@ mod model {
         pub offline_change: Option<KagemushaRecursiveSpendRedeemChangeBranchV2>,
         /// Height used for verifier activation-window checks.
         pub block_height: u64,
-        /// Stable idempotency identifier for finality-safe retries.
+        /// Globally unique idempotency identifier for finality-safe retries.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
         /// Self-contained recipient/device authorization.
@@ -9488,9 +9491,7 @@ impl KagemushaRecursiveSpendTopUpAnchorV2 {
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         self.amount.validate()?;
         self.current_note.validate_public_binding()?;
-        validate_kagemusha_recursive_spend_topup_anchor_nullifiers(
-            &self.topup_anchor_nullifiers,
-        )?;
+        validate_kagemusha_recursive_spend_topup_anchor_nullifiers(&self.topup_anchor_nullifiers)?;
         if self.version != 2
             || self.asset_scale != self.amount.scale
             || self.current_note.amount != self.amount
@@ -9730,9 +9731,8 @@ impl KagemushaRecursiveSpendRedemptionIntentV2 {
         }
         let input_amount = self.input_note.amount.atomic_units;
         match &self.change_output {
-            None
-                if self.public_amount.atomic_units == input_amount
-                    && self.unshield_public_inputs.change_output_commitment == zero => {}
+            None if self.public_amount.atomic_units == input_amount
+                && self.unshield_public_inputs.change_output_commitment == zero => {}
             Some(change) if self.public_amount.atomic_units < input_amount => {
                 change.validate_public_binding()?;
                 if change.chain_id != self.chain_id {
@@ -9911,7 +9911,9 @@ impl KagemushaRecursiveSpendRedeemChangeBuildRequestV2 {
             || self.redemption.input_root != self.previous_bundle.statement.final_root
             || self.previous_lineage_verifier_record.circuit_id
                 != self.previous_bundle.recursive_proof.verifier_key_id.name
-            || self.previous_recursive_proof_open_envelopes_archive.is_empty()
+            || self
+                .previous_recursive_proof_open_envelopes_archive
+                .is_empty()
             || self.pallas_open_envelopes_archive.is_empty()
         {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
@@ -10050,12 +10052,12 @@ impl KagemushaRecursiveSpendPublicStatementV2 {
             });
         }
         match &self.transition {
-            None
-                if self.peer_hop_count == 0
-                    && self.branch_path.depth == 0
-                    && self.proof_step_count == 1 => {}
+            None if self.peer_hop_count == 0
+                && self.branch_path.depth == 0
+                && self.proof_step_count == 1 => {}
             Some(KagemushaRecursiveSpendTransitionV2::PeerSplit(transition))
-                if self.peer_hop_count > 0 => {
+                if self.peer_hop_count > 0 =>
+            {
                 let split = &transition.intent;
                 let branch = transition.branch;
                 split.validate_public_binding()?;
@@ -10346,9 +10348,7 @@ impl KagemushaRecursiveSpendVerifyRequestV2 {
         let Some(KagemushaRecursiveSpendTransitionV2::PeerSplit(transition)) =
             self.bundle.statement.transition.as_ref()
         else {
-            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
-                field: "split",
-            });
+            return Err(KagemushaFoldError::InvalidRecursiveSpendProof { field: "split" });
         };
         if transition.branch != KagemushaRecursiveSpendBranchV2::Recipient
             || self.bundle.statement.current_note != self.recipient_request.recipient_output

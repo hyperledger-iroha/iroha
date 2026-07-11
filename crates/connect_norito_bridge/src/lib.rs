@@ -9377,13 +9377,9 @@ pub unsafe extern "C" fn connect_norito_kagemusha_receiver_key_reference_v2(
             unsafe { read_kagemusha_archive_bytes(public_key_ptr, public_key_len) }?;
         let public_key = PublicKey::from_bytes(algorithm, &public_key_bytes)
             .map_err(|_| BridgeError::KagemushaProve)?;
-        let reference = iroha_data_model::offline::kagemusha_receiver_key_reference_v2(
-            &public_key,
-        )
-        .map_err(|_| BridgeError::KagemushaProve)?;
-        unsafe {
-            write_kagemusha_archive_bridge(out_reference_ptr, out_reference_len, &reference)
-        }
+        let reference = iroha_data_model::offline::kagemusha_receiver_key_reference_v2(&public_key)
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe { write_kagemusha_archive_bridge(out_reference_ptr, out_reference_len, &reference) }
     })();
     bridge_result_to_code(result)
 }
@@ -9419,9 +9415,9 @@ fn kagemusha_recipient_payment_request_verify_v2(
 fn kagemusha_request_authorization_template_v2(
     template_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRequestAuthorizationV2> {
-    decode_canonical_kagemusha_archive::<
-        iroha_data_model::offline::KagemushaRequestAuthorizationV2,
-    >(template_archive)
+    decode_canonical_kagemusha_archive::<iroha_data_model::offline::KagemushaRequestAuthorizationV2>(
+        template_archive,
+    )
 }
 
 fn kagemusha_receiver_acknowledgement_payload_v2(
@@ -9582,19 +9578,14 @@ pub unsafe extern "C" fn connect_norito_kagemusha_request_authorization_create_v
         let signature_bytes =
             unsafe { read_kagemusha_archive_bytes(signature_ptr, signature_len) }?;
         let mut authorization = kagemusha_request_authorization_template_v2(&template_bytes)?;
-        authorization.signature = Signature::try_from_bytes(&signature_bytes)
-            .map_err(|_| BridgeError::KagemushaProve)?;
+        authorization.signature =
+            Signature::try_from_bytes(&signature_bytes).map_err(|_| BridgeError::KagemushaProve)?;
         authorization
             .validate_for_payload(authorization.payload_digest)
             .map_err(|_| BridgeError::KagemushaProve)?;
-        let archive =
-            norito::to_bytes(&authorization).map_err(|_| BridgeError::KagemushaProve)?;
+        let archive = norito::to_bytes(&authorization).map_err(|_| BridgeError::KagemushaProve)?;
         unsafe {
-            write_kagemusha_archive_bridge(
-                out_authorization_ptr,
-                out_authorization_len,
-                &archive,
-            )
+            write_kagemusha_archive_bridge(out_authorization_ptr, out_authorization_len, &archive)
         }
     })();
     bridge_result_to_code(result)
@@ -10084,8 +10075,8 @@ mod offline_note_prover_tests {
             KagemushaRecursiveAggregationProofBundle, KagemushaRecursiveCompactKeyArtifactEntryV1,
             KagemushaRecursiveCompactKeyArtifactsV1, KagemushaRecursiveCompactVerifierKeyEntryV1,
             KagemushaRecursiveCompactVerifierKeysV1, KagemushaRecursiveSpendAccumulatorV1,
-            KagemushaRecursiveSpendAppendRequestV1, KagemushaRecursiveSpendBundleV1,
-            KagemushaRecursiveSpendArtifactReferenceV2, KagemushaRecursiveSpendArtifactRoleV2,
+            KagemushaRecursiveSpendAppendRequestV1, KagemushaRecursiveSpendArtifactReferenceV2,
+            KagemushaRecursiveSpendArtifactRoleV2, KagemushaRecursiveSpendBundleV1,
             KagemushaRecursiveSpendInitRequestV1, KagemushaRecursiveSpendLineageWitnessV1,
             KagemushaRecursiveSpendRedeemRequestV1, KagemushaRecursiveSpendTopUpRequestV1,
             KagemushaRecursiveSpendVerifyRequestV1, KagemushaRecursiveSpendVerifyResultV1,
@@ -11595,7 +11586,9 @@ mod offline_note_prover_tests {
         let mut reader =
             kagemusha_recursive_spend_artifact_reader_v2(&reference).expect("ready reader");
         let mut actual = Vec::new();
-        reader.read_to_end(&mut actual).expect("read spooled artifact");
+        reader
+            .read_to_end(&mut actual)
+            .expect("read spooled artifact");
         assert_eq!(actual, bytes);
         assert_eq!(
             unsafe {

@@ -19,6 +19,7 @@ export {
   browserTransactionPayloadHashHex,
   buildBrowserTransferPayload,
   finalizeBrowserSignedTransaction,
+  validateBrowserTransferSignable,
 } from "./transactionCodec.js";
 
 export {

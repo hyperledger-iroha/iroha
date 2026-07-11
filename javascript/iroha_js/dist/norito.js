@@ -1,4 +1,4 @@
-import { Buffer } from "node:buffer";
+import { Buffer } from "buffer";
 import { blake3 } from "@noble/hashes/blake3";
 import { sha256 } from "@noble/hashes/sha2";
 import {

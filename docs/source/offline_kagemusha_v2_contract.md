@@ -39,9 +39,12 @@ atomic note with a different scale is invalid. Top-up chain execution must also
 compare the request scale to the live asset definition before debiting funds.
 
 The init, top-up, and redeem requests bind a nonzero stable operation id so a
-retry cannot create a second economic operation. The append request binds the
-receiver's nonce-bearing request digest, the parent lineage digest, recipient
-output, optional change output, exact transfer amount, and operation id.
+retry cannot create a second economic operation. Chain operation ids occupy one
+global namespace across authorities and operation kinds, matching the globally
+keyed top-up-anchor receipt. Nonces, payload digests, and exact-request replay
+markers remain authority-scoped. The append request binds the receiver's
+nonce-bearing request digest, the parent lineage digest, recipient output,
+optional change output, exact transfer amount, and operation id.
 
 Before a sender reserves inputs or performs proof work, it validates the
 receiver-device signature on `KagemushaRecipientPaymentRequestV2`. The signed

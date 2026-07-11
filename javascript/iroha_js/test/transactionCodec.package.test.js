@@ -18,6 +18,7 @@ const EXPECTED_EXPORTS = [
   "browserTransactionPayloadHashHex",
   "buildBrowserTransferPayload",
   "finalizeBrowserSignedTransaction",
+  "validateBrowserTransferSignable",
 ];
 
 test("transaction codec is identical across root, browser, dist, and package subpath exports", () => {

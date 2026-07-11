@@ -30,14 +30,14 @@ use norito::codec::{Decode, Encode};
 use super::{
     AUTONOMOUS_LANE_BLOCKS_DATA_FILE, AUTONOMOUS_LANE_BLOCKS_INDEX_FILE,
     AutonomousLaneBlockArtifact, BlockStore, CERTIFIED_LANE_BLOCKS_DATA_FILE,
-    CERTIFIED_LANE_BLOCKS_INDEX_FILE, CertifiedLaneBlockArtifact, Error, Kura,
-    LANE_ARTIFACTS_DATA_FILE, LANE_ARTIFACTS_DIR_NAME, LANE_ARTIFACTS_INDEX_FILE,
-    LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE, LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE,
-    LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE, LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE,
-    LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE, LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE,
-    LaneBlockApplicationReceiptArtifact, LaneBlockApplicationReceiptArtifactFormat,
-    MergeLedgerCarrierRecord, PIPELINE_INDEX_ENTRY_SIZE, RecoveredLaneBlockPayload, Result,
-    SidecarIndexEntry, SidecarIndexLayout, create_dir_all_with_context, sync_dir,
+    CERTIFIED_LANE_BLOCKS_INDEX_FILE, Error, Kura, LANE_ARTIFACTS_DATA_FILE,
+    LANE_ARTIFACTS_DIR_NAME, LANE_ARTIFACTS_INDEX_FILE, LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE,
+    LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE, LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE,
+    LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE, LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE,
+    LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE, LaneBlockApplicationReceiptArtifact,
+    LaneBlockApplicationReceiptArtifactFormat, MergeLedgerCarrierRecord, PIPELINE_INDEX_ENTRY_SIZE,
+    RecoveredLaneBlockPayload, Result, SidecarIndexEntry, SidecarIndexLayout,
+    create_dir_all_with_context, sync_dir,
 };
 
 const LEGACY_JOURNAL_VERSION: u8 = 1;
@@ -4278,6 +4278,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::kura::CertifiedLaneBlockArtifact;
     use crate::{
         block::BlockBuilder,
         lane_consensus::{
